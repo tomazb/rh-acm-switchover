@@ -867,6 +867,41 @@ def _not_applicable_artifact(status: str = "not_applicable") -> dict:
     return {"schema_version": 1, "status": status, "comparisons": []}
 
 
+def _short_circuit_finalize(
+    *,
+    artifacts: ReleaseArtifacts,
+    release_options: ReleaseOptions,
+    matrix,
+    manifest: dict,
+    certification_eligible: bool,
+    results: list[dict],
+    recovery: dict,
+    mandatory_argocd: dict,
+    release_metadata: dict,
+    matrix_validation: dict,
+    finalize_run_fn: Callable[..., dict] = _finalize_run,
+) -> dict:
+    """Write not-applicable runtime-parity/final-baseline artifacts and finalize an aborted run."""
+    runtime_parity = _not_applicable_artifact()
+    artifacts.write_json("runtime-parity.json", runtime_parity)
+    final_baseline = {"status": "not_applicable", "assertions": []}
+    artifacts.write_json("final-baseline.json", {"schema_version": 1, **final_baseline})
+    return finalize_run_fn(
+        artifacts=artifacts,
+        release_options=release_options,
+        matrix=matrix,
+        manifest=manifest,
+        certification_eligible=certification_eligible,
+        results=results,
+        runtime_parity=runtime_parity,
+        final_baseline=final_baseline,
+        recovery=recovery,
+        mandatory_argocd=mandatory_argocd,
+        release_metadata=release_metadata,
+        matrix_validation=matrix_validation,
+    )
+
+
 def _run_release_certification(
     *,
     release_options: ReleaseOptions,
@@ -936,19 +971,13 @@ def _run_release_certification(
         manifest = build_manifest(certification_eligible)
         artifacts.write_json("manifest.json", manifest)
         results = matrix_validation_results(matrix_validation_result)
-        runtime_parity = _not_applicable_artifact()
-        artifacts.write_json("runtime-parity.json", runtime_parity)
-        final_baseline = {"status": "not_applicable", "assertions": []}
-        artifacts.write_json("final-baseline.json", {"schema_version": 1, **final_baseline})
-        return _finalize_run(
+        return _short_circuit_finalize(
             artifacts=artifacts,
             release_options=release_options,
             matrix=matrix,
             manifest=manifest,
             certification_eligible=certification_eligible,
             results=results,
-            runtime_parity=runtime_parity,
-            final_baseline=final_baseline,
             recovery=recovery,
             mandatory_argocd=({"status": "not_applicable"} if profile.argocd.mandatory else {"status": "passed"}),
             release_metadata=release_metadata,
@@ -989,19 +1018,13 @@ def _run_release_certification(
             )
         )
         if status == "failed" and scenarios_by_id["static-gates"].required:
-            runtime_parity = _not_applicable_artifact()
-            artifacts.write_json("runtime-parity.json", runtime_parity)
-            final_baseline = {"status": "not_applicable", "assertions": []}
-            artifacts.write_json("final-baseline.json", {"schema_version": 1, **final_baseline})
-            return _finalize_run(
+            return _short_circuit_finalize(
                 artifacts=artifacts,
                 release_options=release_options,
                 matrix=matrix,
                 manifest=manifest,
                 certification_eligible=certification_eligible,
                 results=results,
-                runtime_parity=runtime_parity,
-                final_baseline=final_baseline,
                 recovery=recovery,
                 mandatory_argocd=({"status": "not_applicable"} if profile.argocd.mandatory else {"status": "passed"}),
                 release_metadata=release_metadata,
@@ -1054,19 +1077,13 @@ def _run_release_certification(
         lab_readiness_status=lab_readiness.status,
         initial_baseline_status=initial_baseline.status,
     ):
-        runtime_parity = _not_applicable_artifact()
-        artifacts.write_json("runtime-parity.json", runtime_parity)
-        final_baseline = {"status": "not_applicable", "assertions": []}
-        artifacts.write_json("final-baseline.json", {"schema_version": 1, **final_baseline})
-        return _finalize_run(
+        return _short_circuit_finalize(
             artifacts=artifacts,
             release_options=release_options,
             matrix=matrix,
             manifest=manifest,
             certification_eligible=certification_eligible,
             results=results,
-            runtime_parity=runtime_parity,
-            final_baseline=final_baseline,
             recovery=recovery,
             mandatory_argocd={"status": "passed" if not profile.argocd.mandatory else lab_readiness.status},
             release_metadata=release_metadata,
