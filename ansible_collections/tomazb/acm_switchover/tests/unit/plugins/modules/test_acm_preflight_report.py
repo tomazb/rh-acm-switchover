@@ -206,7 +206,7 @@ def test_run_module_check_mode_rejects_unsafe_report_path(monkeypatch):
     assert captured["fail"]["path"] == "./artifacts/../outside/preflight-report.json"
 
 
-def test_run_module_check_mode_does_not_write_report_and_returns_unchanged(tmp_path, monkeypatch):
+def test_run_module_check_mode_does_not_write_report_but_reports_would_change(tmp_path, monkeypatch):
     captured = {}
     destination = tmp_path / "artifacts" / "preflight-report.json"
     destination.parent.mkdir()
@@ -245,11 +245,47 @@ def test_run_module_check_mode_does_not_write_report_and_returns_unchanged(tmp_p
         main()
 
     assert mock_open.called is False
-    assert captured["exit"]["changed"] is False
+    assert captured["exit"]["changed"] is True
     assert captured["exit"]["path"] == str(destination)
     assert captured["exit"]["report"]["phase"] == "preflight"
     assert captured["exit"]["report"]["status"] == "fail"
     assert not destination.exists()
+
+
+def test_run_module_changed_verdict_is_mode_independent_for_create(tmp_path, monkeypatch):
+    """check_mode and execute mode must agree on the changed verdict for a would-be create."""
+    verdicts = {}
+    for check_mode in (True, False):
+        captured = {}
+        destination = tmp_path / f"artifacts-{check_mode}" / "preflight-report.json"
+        destination.parent.mkdir()
+
+        class FakeModule:
+            def __init__(self, *args, **kwargs):
+                self.params = {
+                    "phase": "preflight",
+                    "results": [],
+                    "hubs": {"secondary": {"context": "secondary-hub"}},
+                    "path": str(destination),
+                }
+                self.check_mode = check_mode
+
+            def exit_json(self, **kwargs):
+                captured["exit"] = kwargs
+
+            def fail_json(self, **kwargs):
+                raise AssertionError(f"unexpected fail_json: {kwargs}")
+
+        monkeypatch.setattr(
+            "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_preflight_report.AnsibleModule",
+            FakeModule,
+        )
+        main()
+        verdicts[check_mode] = captured["exit"]["changed"]
+        assert destination.exists() is (not check_mode)
+
+    assert verdicts[True] is True
+    assert verdicts[False] is True
 
 
 def test_run_module_check_mode_reports_unchanged_when_artifact_matches(tmp_path, monkeypatch):
