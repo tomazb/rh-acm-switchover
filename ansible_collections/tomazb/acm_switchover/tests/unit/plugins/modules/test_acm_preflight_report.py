@@ -308,7 +308,9 @@ def test_run_module_check_mode_reports_unchanged_when_artifact_matches(tmp_path,
         "phase": "preflight",
         "status": "pass",
         "summary": {"passed": True, "critical_failures": 0, "warning_failures": 0},
-        "hubs": {"secondary": {"context": "secondary-hub"}},
+        # sanitize_report_hubs adds cluster_uid; the on-disk artifact must match
+        # the sanitized form byte-for-byte to count as unchanged.
+        "hubs": {"secondary": {"context": "secondary-hub", "cluster_uid": ""}},
         "results": [],
     }
     destination.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
