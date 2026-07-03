@@ -172,12 +172,12 @@ def test_pause_mode_raises_on_empty_version():
         backup_schedule_pause_mode("")
 
 
-def test_run_module_check_mode_returns_planned_pause_without_change(monkeypatch):
+def test_run_module_check_mode_reports_would_change_for_planned_pause(monkeypatch):
     schedules = [{"metadata": {"name": "acm-hub-backup"}, "spec": {"paused": False}}]
 
     result = _run_module(monkeypatch, schedules=schedules, check_mode=True)
 
-    assert result["exit"]["changed"] is False
+    assert result["exit"]["changed"] is True
     assert result["exit"]["operation"]["action"] == "patch"
     assert result["exit"]["operation"]["patch"] == {"spec": {"paused": True}}
     assert schedules == [{"metadata": {"name": "acm-hub-backup"}, "spec": {"paused": False}}]

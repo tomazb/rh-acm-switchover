@@ -254,7 +254,7 @@ def test_build_restore_activation_plan_for_passive_patch_mode():
     assert plan["restore_phase"] == "Enabled"
 
 
-def test_run_module_check_mode_returns_planned_operation_without_change(monkeypatch):
+def test_run_module_check_mode_reports_would_change_for_planned_operation(monkeypatch):
     result = _run_module(
         monkeypatch,
         check_mode=True,
@@ -275,7 +275,7 @@ def test_run_module_check_mode_returns_planned_operation_without_change(monkeypa
         backup_name="latest",
     )
 
-    assert result["exit"]["changed"] is False
+    assert result["exit"]["changed"] is True
     assert result["exit"]["operation"]["action"] == "patch"
     assert result["exit"]["operation"]["patch"] == {
         "metadata": {"resourceVersion": "42"},
