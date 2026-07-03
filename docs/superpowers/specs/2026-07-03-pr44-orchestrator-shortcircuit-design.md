@@ -87,7 +87,7 @@ red while the helper doesn't exist.
 ## Acceptance criteria
 
 1. Exactly one place in `orchestrator.py` builds the not-applicable
-   runtime-parity/final-baseline pair (`grep -c '_not_applicable_artifact()' `
+   runtime-parity/final-baseline pair (the count of `_not_applicable_artifact()` calls
    inside `_run_release_certification` drops to 0).
 2. New helper unit test passes; `tests/release/test_orchestrator.py` and
    `tests/release/test_release_certification.py` pass unchanged.
