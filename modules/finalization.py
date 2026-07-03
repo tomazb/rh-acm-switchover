@@ -23,11 +23,18 @@ from lib.constants import (
     BACKUP_SCHEDULE_DEFAULT_NAME,
     BACKUP_SCHEDULE_DELETE_INTERVAL,
     BACKUP_SCHEDULE_DELETE_TIMEOUT,
+    BACKUP_SCHEDULE_PLURAL,
     BACKUP_VERIFY_TIMEOUT,
     CLEANUP_BEFORE_RESTORE_VALUE,
+    CLUSTER_BACKUP_API_GROUP,
+    CLUSTER_BACKUP_API_VERSION,
+    CLUSTER_BACKUP_API_VERSION_FULL,
     DELETE_REQUEST_TIMEOUT,
     IMPORT_CONTROLLER_CONFIG_CM,
     LOCAL_CLUSTER_NAME,
+    MANAGED_CLUSTER_API_GROUP,
+    MANAGED_CLUSTER_API_VERSION,
+    MANAGED_CLUSTER_PLURAL,
     MANAGED_CLUSTER_RESTORE_NAME,
     MCE_NAMESPACE,
     MCH_VERIFY_INTERVAL,
@@ -39,6 +46,7 @@ from lib.constants import (
     RESTORE_FAST_POLL_TIMEOUT,
     RESTORE_FULL_NAME,
     RESTORE_PASSIVE_SYNC_NAME,
+    RESTORE_PLURAL,
     RESTORE_POLL_INTERVAL,
     RESTORE_WAIT_TIMEOUT,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
@@ -297,9 +305,9 @@ class Finalization:
 
         # List all restores in the namespace
         all_restores = self.secondary.list_custom_resources(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="restores",
+            group=CLUSTER_BACKUP_API_GROUP,
+            version=CLUSTER_BACKUP_API_VERSION,
+            plural=RESTORE_PLURAL,
             namespace=BACKUP_NAMESPACE,
         )
 
@@ -336,9 +344,9 @@ class Finalization:
 
                 logger.info("Deleting restore resource: %s", restore_name)
                 self.secondary.delete_custom_resource(
-                    group="cluster.open-cluster-management.io",
-                    version="v1beta1",
-                    plural="restores",
+                    group=CLUSTER_BACKUP_API_GROUP,
+                    version=CLUSTER_BACKUP_API_VERSION,
+                    plural=RESTORE_PLURAL,
                     name=restore_name,
                     namespace=BACKUP_NAMESPACE,
                     timeout_seconds=DELETE_REQUEST_TIMEOUT,
@@ -890,9 +898,9 @@ class Finalization:
         """
         if self._cached_schedules is None or force_refresh:
             self._cached_schedules = self.secondary.list_custom_resources(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="backupschedules",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=BACKUP_SCHEDULE_PLURAL,
                 namespace=BACKUP_NAMESPACE,
                 max_items=2,
             )
@@ -1161,9 +1169,9 @@ class Finalization:
         # already says "skip", stale status/controller state can leave the old hub
         # without a usable passive-sync restore for the next failback.
         existing_restore = self.primary.get_custom_resource(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="restores",
+            group=CLUSTER_BACKUP_API_GROUP,
+            version=CLUSTER_BACKUP_API_VERSION,
+            plural=RESTORE_PLURAL,
             name=RESTORE_PASSIVE_SYNC_NAME,
             namespace=BACKUP_NAMESPACE,
         )
@@ -1177,9 +1185,9 @@ class Finalization:
             )
             try:
                 self.primary.delete_custom_resource(
-                    group="cluster.open-cluster-management.io",
-                    version="v1beta1",
-                    plural="restores",
+                    group=CLUSTER_BACKUP_API_GROUP,
+                    version=CLUSTER_BACKUP_API_VERSION,
+                    plural=RESTORE_PLURAL,
                     name=RESTORE_PASSIVE_SYNC_NAME,
                     namespace=BACKUP_NAMESPACE,
                     timeout_seconds=DELETE_REQUEST_TIMEOUT,
@@ -1191,7 +1199,7 @@ class Finalization:
 
         # Create passive sync restore on old primary
         restore_body = {
-            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "apiVersion": CLUSTER_BACKUP_API_VERSION_FULL,
             "kind": "Restore",
             "metadata": {
                 "name": RESTORE_PASSIVE_SYNC_NAME,
@@ -1209,9 +1217,9 @@ class Finalization:
 
         try:
             self.primary.create_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="restores",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=RESTORE_PLURAL,
                 body=restore_body,
                 namespace=BACKUP_NAMESPACE,
             )
@@ -1227,9 +1235,9 @@ class Finalization:
 
         def _poll():
             restore = self.primary.get_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="restores",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=RESTORE_PLURAL,
                 name=restore_name,
                 namespace=BACKUP_NAMESPACE,
             )
@@ -1297,9 +1305,9 @@ class Finalization:
 
         # Re-verify schedule still exists before deletion (handles race conditions)
         current_schedule = self.secondary.get_custom_resource(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="backupschedules",
+            group=CLUSTER_BACKUP_API_GROUP,
+            version=CLUSTER_BACKUP_API_VERSION,
+            plural=BACKUP_SCHEDULE_PLURAL,
             name=schedule_name,
             namespace=BACKUP_NAMESPACE,
         )
@@ -1325,9 +1333,9 @@ class Finalization:
             # Delete the old schedule
             try:
                 self.secondary.delete_custom_resource(
-                    group="cluster.open-cluster-management.io",
-                    version="v1beta1",
-                    plural="backupschedules",
+                    group=CLUSTER_BACKUP_API_GROUP,
+                    version=CLUSTER_BACKUP_API_VERSION,
+                    plural=BACKUP_SCHEDULE_PLURAL,
                     name=schedule_name,
                     namespace=BACKUP_NAMESPACE,
                     timeout_seconds=DELETE_REQUEST_TIMEOUT,
@@ -1345,7 +1353,7 @@ class Finalization:
         # Recreate the schedule
         try:
             new_schedule = {
-                "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+                "apiVersion": CLUSTER_BACKUP_API_VERSION_FULL,
                 "kind": "BackupSchedule",
                 "metadata": {
                     "name": schedule_name,
@@ -1355,9 +1363,9 @@ class Finalization:
             }
 
             self.secondary.create_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="backupschedules",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=BACKUP_SCHEDULE_PLURAL,
                 body=new_schedule,
                 namespace=BACKUP_NAMESPACE,
             )
@@ -1374,9 +1382,9 @@ class Finalization:
                 schedule_name,
             )
             current_schedule = self.secondary.get_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="backupschedules",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=BACKUP_SCHEDULE_PLURAL,
                 name=schedule_name,
                 namespace=BACKUP_NAMESPACE,
             )
@@ -1421,9 +1429,9 @@ class Finalization:
 
         def _poll_schedule_absence() -> WaitConditionResult:
             schedule = self.secondary.get_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="backupschedules",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=BACKUP_SCHEDULE_PLURAL,
                 name=schedule_name,
                 namespace=BACKUP_NAMESPACE,
             )
@@ -1451,9 +1459,9 @@ class Finalization:
 
         self._cached_schedules = None
         schedule_after_delete = self.secondary.get_custom_resource(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="backupschedules",
+            group=CLUSTER_BACKUP_API_GROUP,
+            version=CLUSTER_BACKUP_API_VERSION,
+            plural=BACKUP_SCHEDULE_PLURAL,
             name=schedule_name,
             namespace=BACKUP_NAMESPACE,
         )
@@ -1476,9 +1484,9 @@ class Finalization:
         logger.info("Running regression checks on old primary hub...")
 
         clusters = self.primary.list_custom_resources(
-            group="cluster.open-cluster-management.io",
-            version="v1",
-            plural="managedclusters",
+            group=MANAGED_CLUSTER_API_GROUP,
+            version=MANAGED_CLUSTER_API_VERSION,
+            plural=MANAGED_CLUSTER_PLURAL,
         )
 
         still_available = []
@@ -1503,9 +1511,9 @@ class Finalization:
             logger.info("All ManagedClusters show as disconnected from old hub")
 
         schedules = self.primary.list_custom_resources(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="backupschedules",
+            group=CLUSTER_BACKUP_API_GROUP,
+            version=CLUSTER_BACKUP_API_VERSION,
+            plural=BACKUP_SCHEDULE_PLURAL,
             namespace=BACKUP_NAMESPACE,
         )
         if schedules:

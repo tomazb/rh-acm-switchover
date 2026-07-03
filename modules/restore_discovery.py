@@ -6,6 +6,9 @@ from typing import Dict, Optional
 from lib.constants import (
     BACKUP_NAMESPACE,
     BENIGN_ALREADY_AVAILABLE_MESSAGE_PATTERN,
+    CLUSTER_BACKUP_API_GROUP,
+    CLUSTER_BACKUP_API_VERSION,
+    RESTORE_PLURAL,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
 )
 from lib.kube_client import KubeClient
@@ -21,9 +24,9 @@ def find_passive_sync_restore(client: KubeClient, namespace: str = BACKUP_NAMESP
     non-deterministic results from unordered Kubernetes API list responses.
     """
     restores = client.list_custom_resources(
-        group="cluster.open-cluster-management.io",
-        version="v1beta1",
-        plural="restores",
+        group=CLUSTER_BACKUP_API_GROUP,
+        version=CLUSTER_BACKUP_API_VERSION,
+        plural=RESTORE_PLURAL,
         namespace=namespace,
     )
 
