@@ -38,6 +38,9 @@ from lib.constants import (
     KLUSTERLET_WORKER_TIMEOUT_MESSAGE,
     LOCAL_CLUSTER_NAME,
     MANAGED_CLUSTER_AGENT_NAMESPACE,
+    MANAGED_CLUSTER_API_GROUP,
+    MANAGED_CLUSTER_API_VERSION,
+    MANAGED_CLUSTER_PLURAL,
     MAX_KUBECONFIG_SIZE,
     OBSERVABILITY_NAMESPACE,
     OBSERVABILITY_POD_TIMEOUT,
@@ -93,9 +96,9 @@ class PostActivationVerification:
         """
         if self._cached_managed_clusters is None or force_refresh:
             self._cached_managed_clusters = self.secondary.list_custom_resources(
-                group="cluster.open-cluster-management.io",
-                version="v1",
-                plural="managedclusters",
+                group=MANAGED_CLUSTER_API_GROUP,
+                version=MANAGED_CLUSTER_API_VERSION,
+                plural=MANAGED_CLUSTER_PLURAL,
             )
         return self._cached_managed_clusters
 
@@ -220,9 +223,9 @@ class PostActivationVerification:
         def _poll_clusters():
             nonlocal latest_status
             managed_clusters = self.secondary.list_custom_resources(
-                group="cluster.open-cluster-management.io",
-                version="v1",
-                plural="managedclusters",
+                group=MANAGED_CLUSTER_API_GROUP,
+                version=MANAGED_CLUSTER_API_VERSION,
+                plural=MANAGED_CLUSTER_PLURAL,
             )
 
             if not managed_clusters:
@@ -316,9 +319,9 @@ class PostActivationVerification:
     def _non_local_managed_cluster_names(self) -> List[str]:
         """Return non-local ManagedCluster names visible on the secondary hub."""
         clusters = self.secondary.list_custom_resources(
-            group="cluster.open-cluster-management.io",
-            version="v1",
-            plural="managedclusters",
+            group=MANAGED_CLUSTER_API_GROUP,
+            version=MANAGED_CLUSTER_API_VERSION,
+            plural=MANAGED_CLUSTER_PLURAL,
         )
         return sorted(
             item.get("metadata", {}).get("name")
@@ -708,9 +711,9 @@ class PostActivationVerification:
                 try:
                     patch = {"metadata": {"annotations": {DISABLE_AUTO_IMPORT_ANNOTATION: None}}}
                     self.secondary.patch_custom_resource(
-                        group="cluster.open-cluster-management.io",
-                        version="v1",
-                        plural="managedclusters",
+                        group=MANAGED_CLUSTER_API_GROUP,
+                        version=MANAGED_CLUSTER_API_VERSION,
+                        plural=MANAGED_CLUSTER_PLURAL,
                         name=mc_name,
                         patch=patch,
                     )

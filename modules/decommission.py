@@ -18,8 +18,11 @@ from lib.constants import (
     HIVE_CLUSTERDEPLOYMENT_API_VERSION,
     HIVE_CLUSTERDEPLOYMENT_PLURAL,
     LOCAL_CLUSTER_NAME,
+    MANAGED_CLUSTER_API_GROUP,
+    MANAGED_CLUSTER_API_VERSION,
     MANAGED_CLUSTER_DELETE_INTERVAL,
     MANAGED_CLUSTER_DELETE_TIMEOUT,
+    MANAGED_CLUSTER_PLURAL,
     OBSERVABILITY_NAMESPACE,
     OBSERVABILITY_TERMINATE_INTERVAL,
     OBSERVABILITY_TERMINATE_TIMEOUT,
@@ -197,9 +200,9 @@ class Decommission:
             logger.info("Deleting ManagedCluster: %s", mc_name)
 
             self.primary.delete_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1",
-                plural="managedclusters",
+                group=MANAGED_CLUSTER_API_GROUP,
+                version=MANAGED_CLUSTER_API_VERSION,
+                plural=MANAGED_CLUSTER_PLURAL,
                 name=mc_name,
                 timeout_seconds=DELETE_REQUEST_TIMEOUT,
             )

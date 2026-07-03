@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from lib.constants import ACM_BACKUP_SCHEDULE_TYPE_LABEL
 from modules.preflight.backup_validators import (
     BackupScheduleValidator,
     BackupStorageLocationValidator,
@@ -1298,6 +1299,48 @@ class TestManagedClusterBackupValidator:
         results = reporter.results
         warning_results = [r for r in results if "after backup" in r.get("check", "").lower()]
         assert len(warning_results) == 0
+
+    def test_ignores_backups_with_non_mapping_labels(self, reporter, mock_kube_client):
+        """Malformed backup labels should not prevent finding valid managed-clusters backups."""
+        validator = ManagedClusterBackupValidator(reporter)
+
+        mock_kube_client.list_custom_resources.side_effect = [
+            [
+                {
+                    "metadata": {"name": "cluster-1", "creationTimestamp": "2025-12-01T10:00:00Z"},
+                    "status": {"conditions": [{"type": "ManagedClusterJoined", "status": "True"}]},
+                }
+            ],
+            [
+                {
+                    "metadata": {
+                        "name": "backup-with-invalid-labels",
+                        "creationTimestamp": "2025-12-11T10:00:00Z",
+                        "labels": ["not", "a", "mapping"],
+                    },
+                    "status": {"phase": "Completed", "completionTimestamp": "2025-12-11T10:05:00Z"},
+                },
+                {
+                    "metadata": {
+                        "name": "acm-managed-clusters-schedule-20251210100000",
+                        "creationTimestamp": "2025-12-10T10:00:00Z",
+                        "labels": {ACM_BACKUP_SCHEDULE_TYPE_LABEL: "managedClusters"},
+                    },
+                    "status": {"phase": "Completed", "completionTimestamp": "2025-12-10T10:05:00Z"},
+                },
+            ],
+        ]
+        mock_kube_client.get_custom_resource.return_value = {
+            "metadata": {"name": "cluster-1", "creationTimestamp": "2025-12-01T10:00:00Z"}
+        }
+
+        validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["check"] == "ManagedClusters in backup"
+        assert results[0]["passed"] is True
+        assert "latest backup completed successfully" in results[0]["message"]
 
 
 class TestVersionValidator:
