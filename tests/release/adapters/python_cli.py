@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
@@ -21,21 +19,8 @@ from lib.constants import (
     REPORT_TYPE_RESTORE,
     REPORT_TYPE_SWITCHOVER,
 )
-from tests.release.reporting.artifacts import write_capture_artifact
 
-from .common import AssertionRecord, ReportArtifact, StreamResult
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _decode(data: str | bytes | None) -> str:
-    """Decode partial subprocess capture, handling bytes or None from TimeoutExpired."""
-    if isinstance(data, bytes):
-        return data.decode("utf-8", errors="replace")
-    return data or ""
-
+from .common import ReportArtifact, StreamResult, run_stream_subprocess
 
 REPORT_NAMES: dict[str, tuple[str, str]] = {
     "preflight": (REPORT_TYPE_PREFLIGHT, REPORT_FILENAME_PREFLIGHT),
@@ -172,124 +157,18 @@ class PythonCliAdapter:
         env: Mapping[str, str] | None = None,
         extra_args: tuple[str, ...] = (),
     ) -> StreamResult:
-        output_dir = self.scenario_dir(scenario_id)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        command = self.build_command(scenario_id, extra_args=extra_args)
-        stdout_path = output_dir / "stdout.txt"
-        stderr_path = output_dir / "stderr.txt"
-        started_at = _now()
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=self.repo_root,
-                text=True,
-                capture_output=True,
-                check=False,
-                timeout=timeout_seconds or 3600,
-                env=self._build_env(scenario_id, env),
-            )
-        except subprocess.TimeoutExpired as exc:
-            ended_at = _now()
-            _, stdout_written = write_capture_artifact(
-                run_dir=self.artifact_dir,
-                relative_path=stdout_path.relative_to(self.artifact_dir),
-                content=_decode(exc.stdout),
-                rejected_placeholder="",
-            )
-            _, stderr_written = write_capture_artifact(
-                run_dir=self.artifact_dir,
-                relative_path=stderr_path.relative_to(self.artifact_dir),
-                content=_decode(exc.stderr),
-                rejected_placeholder="Captured output was rejected by the sanitizer\n",
-            )
-            timeout_assertions: list[AssertionRecord] = [
-                AssertionRecord(
-                    capability=scenario_id,
-                    name="exit-code",
-                    status="failed",
-                    expected="0",
-                    actual="timeout",
-                    evidence_path=str(stderr_path),
-                    message=f"Python CLI timed out after {timeout_seconds or 3600} seconds",
-                )
-            ]
-            if not stdout_written or not stderr_written:
-                timeout_assertions.append(
-                    AssertionRecord(
-                        capability=scenario_id,
-                        name="artifact-redaction",
-                        status="failed",
-                        expected="clean",
-                        actual="rejected",
-                        evidence_path="",
-                        message="Captured output was rejected by the sanitizer",
-                    )
-                )
-            return StreamResult(
-                stream="python",
-                scenario_id=scenario_id,
-                status="failed",
-                command=command,
-                returncode=-1,
-                stdout_path=str(stdout_path),
-                stderr_path=str(stderr_path),
-                reports=self.discover_reports(scenario_id),
-                assertions=timeout_assertions,
-                started_at=started_at,
-                ended_at=ended_at,
-            )
-        ended_at = _now()
-        _, stdout_written = write_capture_artifact(
-            run_dir=self.artifact_dir,
-            relative_path=stdout_path.relative_to(self.artifact_dir),
-            content=completed.stdout,
-            rejected_placeholder="",
-        )
-        _, stderr_written = write_capture_artifact(
-            run_dir=self.artifact_dir,
-            relative_path=stderr_path.relative_to(self.artifact_dir),
-            content=completed.stderr,
-            rejected_placeholder="Captured output was rejected by the sanitizer\n",
-        )
-        status = "passed" if completed.returncode == 0 else "failed"
-        assertions: list[AssertionRecord] = [
-            AssertionRecord(
-                capability=scenario_id,
-                name="exit-code",
-                status=status,
-                expected="0",
-                actual=str(completed.returncode),
-                evidence_path=str(stderr_path) if status == "failed" else str(stdout_path),
-                message=(
-                    "Python CLI exited with expected code"
-                    if status == "passed"
-                    else "Python CLI returned a non-zero exit code"
-                ),
-            )
-        ]
-        if not stdout_written or not stderr_written:
-            status = "failed"
-            assertions.append(
-                AssertionRecord(
-                    capability=scenario_id,
-                    name="artifact-redaction",
-                    status="failed",
-                    expected="clean",
-                    actual="rejected",
-                    evidence_path="",
-                    message="Captured output was rejected by the sanitizer",
-                )
-            )
-        return StreamResult(
+        return run_stream_subprocess(
             stream="python",
             scenario_id=scenario_id,
-            status=status,
-            command=command,
-            returncode=completed.returncode,
-            stdout_path=str(stdout_path),
-            stderr_path=str(stderr_path),
-            reports=self.discover_reports(scenario_id),
-            assertions=assertions,
-            started_at=started_at,
-            ended_at=ended_at,
+            command=self.build_command(scenario_id, extra_args=extra_args),
+            cwd=self.repo_root,
+            artifact_dir=self.artifact_dir,
+            scenario_dir=self.scenario_dir(scenario_id),
+            capability=scenario_id,
+            timeout_message_template="Python CLI timed out after {timeout} seconds",
+            success_message="Python CLI exited with expected code",
+            failure_message="Python CLI returned a non-zero exit code",
+            timeout_seconds=timeout_seconds,
+            env=self._build_env(scenario_id, env),
+            reports=lambda: self.discover_reports(scenario_id),
         )

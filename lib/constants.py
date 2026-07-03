@@ -347,3 +347,6 @@ REPORT_SEVERITY_CRITICAL = "critical"
 REPORT_SEVERITY_WARNING = "warning"
 REPORT_DEFAULT_CHECK = "validation"
 REPORT_ID_PREFIX_PREFLIGHT = "preflight-"
+
+# Release-tooling capture sanitization
+CAPTURE_REDACTION_REJECTED_MESSAGE = "Captured output was rejected by the sanitizer"
