@@ -420,7 +420,9 @@ def test_evaluate_permissions_polarity_matrix(
 
     monkeypatch.setattr(module, "_check_permission_via_sar", fake_sar)
     hub = HubProfile(kubeconfig="kc", context="ctx")
-    permission = _get_required_permissions(role="switchover", include_decommission=False, include_old_hub_finalization=False)[0]
+    permission = _get_required_permissions(
+        role="validator", include_decommission=False, include_old_hub_finalization=False
+    )[0]
 
     assertions, unexpected, errors = _evaluate_permissions(
         permissions=[permission],

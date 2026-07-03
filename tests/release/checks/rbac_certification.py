@@ -17,7 +17,7 @@ import subprocess
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Literal
+from typing import Iterable, Literal
 
 from lib.rbac_validator import RBACValidator
 from tests.release.contracts.models import HubProfile
@@ -336,6 +336,81 @@ def _certification_enabled() -> bool:
     }
 
 
+def _evaluate_permissions(
+    *,
+    permissions: Iterable[PermissionCheck],
+    expect_allowed: bool,
+    hub: HubProfile,
+    service_account: str,
+    artifact_dir: Path,
+) -> tuple[list[CertificationAssertion], int, int]:
+    """Run SAR checks for permissions; return (assertions, unexpected_count, error_count).
+
+    expect_allowed=True evaluates required permissions (denied = failure);
+    expect_allowed=False evaluates forbidden permissions (allowed = failure).
+    """
+    expected = "allowed" if expect_allowed else "denied"
+    assertions: list[CertificationAssertion] = []
+    unexpected_count = 0
+    error_count = 0
+    for permission in permissions:
+        sar_result = _check_permission_via_sar(
+            kubeconfig=hub.kubeconfig,
+            context=hub.context,
+            permission=permission,
+            service_account=service_account,
+            artifact_dir=artifact_dir,
+        )
+        perm_name = _permission_name(permission)
+        if sar_result.error:
+            error_count += 1
+            assertions.append(
+                CertificationAssertion(
+                    capability="rbac-certification",
+                    name=perm_name,
+                    status="failed",
+                    expected=expected,
+                    actual="error",
+                    evidence_path=sar_result.evidence_path,
+                    message=f"SAR check failed for {service_account}: {sar_result.error}",
+                )
+            )
+        elif sar_result.allowed != expect_allowed:
+            unexpected_count += 1
+            assertions.append(
+                CertificationAssertion(
+                    capability="rbac-certification",
+                    name=perm_name,
+                    status="failed",
+                    expected=expected,
+                    actual="allowed" if sar_result.allowed else "denied",
+                    evidence_path=sar_result.evidence_path,
+                    message=(
+                        f"Permission denied for {service_account}"
+                        if expect_allowed
+                        else f"Forbidden permission allowed for {service_account}"
+                    ),
+                )
+            )
+        else:
+            assertions.append(
+                CertificationAssertion(
+                    capability="rbac-certification",
+                    name=perm_name,
+                    status="passed",
+                    expected=expected,
+                    actual=expected,
+                    evidence_path=sar_result.evidence_path,
+                    message=(
+                        f"Permission allowed for {service_account}"
+                        if expect_allowed
+                        else f"Forbidden permission denied for {service_account}"
+                    ),
+                )
+            )
+    return assertions, unexpected_count, error_count
+
+
 def certify_rbac_permissions(
     *,
     hub: HubProfile,
@@ -414,110 +489,24 @@ def certify_rbac_permissions(
 
     sa_full_name = RBAC_SERVICE_ACCOUNT_FORMAT.format(namespace=namespace, name=service_account)
 
-    assertions: list[CertificationAssertion] = []
-    denied_count = 0
+    assertions, denied_count, error_count = _evaluate_permissions(
+        permissions=permissions,
+        expect_allowed=True,
+        hub=hub,
+        service_account=sa_full_name,
+        artifact_dir=artifact_dir,
+    )
     forbidden_allowed_count = 0
-    error_count = 0
-
-    for permission in permissions:
-        sar_result = _check_permission_via_sar(
-            kubeconfig=hub.kubeconfig,
-            context=hub.context,
-            permission=permission,
+    if include_forbidden_permissions:
+        forbidden_assertions, forbidden_allowed_count, forbidden_errors = _evaluate_permissions(
+            permissions=_get_forbidden_permissions(),
+            expect_allowed=False,
+            hub=hub,
             service_account=sa_full_name,
             artifact_dir=artifact_dir,
         )
-
-        perm_name = _permission_name(permission)
-
-        if sar_result.error:
-            error_count += 1
-            assertions.append(
-                CertificationAssertion(
-                    capability="rbac-certification",
-                    name=perm_name,
-                    status="failed",
-                    expected="allowed",
-                    actual="error",
-                    evidence_path=sar_result.evidence_path,
-                    message=f"SAR check failed for {sa_full_name}: {sar_result.error}",
-                )
-            )
-        elif not sar_result.allowed:
-            denied_count += 1
-            assertions.append(
-                CertificationAssertion(
-                    capability="rbac-certification",
-                    name=perm_name,
-                    status="failed",
-                    expected="allowed",
-                    actual="denied",
-                    evidence_path=sar_result.evidence_path,
-                    message=f"Permission denied for {sa_full_name}",
-                )
-            )
-        else:
-            assertions.append(
-                CertificationAssertion(
-                    capability="rbac-certification",
-                    name=perm_name,
-                    status="passed",
-                    expected="allowed",
-                    actual="allowed",
-                    evidence_path=sar_result.evidence_path,
-                    message=f"Permission allowed for {sa_full_name}",
-                )
-            )
-
-    if include_forbidden_permissions:
-        for permission in _get_forbidden_permissions():
-            sar_result = _check_permission_via_sar(
-                kubeconfig=hub.kubeconfig,
-                context=hub.context,
-                permission=permission,
-                service_account=sa_full_name,
-                artifact_dir=artifact_dir,
-            )
-
-            perm_name = _permission_name(permission)
-            if sar_result.error:
-                error_count += 1
-                assertions.append(
-                    CertificationAssertion(
-                        capability="rbac-certification",
-                        name=perm_name,
-                        status="failed",
-                        expected="denied",
-                        actual="error",
-                        evidence_path=sar_result.evidence_path,
-                        message=f"SAR check failed for {sa_full_name}: {sar_result.error}",
-                    )
-                )
-            elif sar_result.allowed:
-                forbidden_allowed_count += 1
-                assertions.append(
-                    CertificationAssertion(
-                        capability="rbac-certification",
-                        name=perm_name,
-                        status="failed",
-                        expected="denied",
-                        actual="allowed",
-                        evidence_path=sar_result.evidence_path,
-                        message=f"Forbidden permission allowed for {sa_full_name}",
-                    )
-                )
-            else:
-                assertions.append(
-                    CertificationAssertion(
-                        capability="rbac-certification",
-                        name=perm_name,
-                        status="passed",
-                        expected="denied",
-                        actual="denied",
-                        evidence_path=sar_result.evidence_path,
-                        message=f"Forbidden permission denied for {sa_full_name}",
-                    )
-                )
+        assertions.extend(forbidden_assertions)
+        error_count += forbidden_errors
 
     failed_count = denied_count + forbidden_allowed_count + error_count
     status = "passed" if failed_count == 0 else "failed"
