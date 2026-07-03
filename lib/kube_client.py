@@ -500,7 +500,7 @@ class KubeClient:
             logger.info("[DRY-RUN] Would delete ConfigMap %s/%s", namespace, name)
             return True
 
-        self.core_v1.delete_namespaced_config_map(name=name, namespace=namespace)
+        self.core_v1.delete_namespaced_config_map(name=name, namespace=namespace, **self._request_timeout_kwargs())
         return True
 
     @api_call(not_found_value=True, resource_desc="delete pod")
@@ -523,7 +523,7 @@ class KubeClient:
             logger.info("[DRY-RUN] Would delete Pod %s/%s", namespace, name)
             return True
 
-        self.core_v1.delete_namespaced_pod(name=name, namespace=namespace)
+        self.core_v1.delete_namespaced_pod(name=name, namespace=namespace, **self._request_timeout_kwargs())
         return True
 
     @api_call(not_found_value=None, resource_desc="read Route")
