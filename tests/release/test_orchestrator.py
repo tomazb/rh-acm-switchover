@@ -1408,3 +1408,40 @@ def test_orchestrator_marks_manifest_failed_on_unexpected_exception(
     assert manifest["status"] == "failed"
     assert summary["status"] == "failed"
     assert manifest["failure_reasons"][0].startswith("release certification failed: KeyError")
+
+
+def test_short_circuit_finalize_writes_not_applicable_artifacts_and_delegates(tmp_path: Path, monkeypatch) -> None:
+    from tests.release import orchestrator as orch_module
+    from tests.release.orchestrator import _short_circuit_finalize
+
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="short-circuit-test")
+    captured: dict = {}
+
+    def fake_finalize_run(**kwargs):
+        captured.update(kwargs)
+        return {"finalized": True}
+
+    monkeypatch.setattr(orch_module, "_finalize_run", fake_finalize_run)
+
+    result = _short_circuit_finalize(
+        artifacts=artifacts,
+        release_options=object(),
+        matrix=object(),
+        manifest={"status": "running"},
+        certification_eligible=False,
+        results=[{"scenario": "static-gates"}],
+        recovery={"budget": 0},
+        mandatory_argocd={"status": "not_applicable"},
+        release_metadata={"tag": "test"},
+        matrix_validation={"blocked": False},
+    )
+
+    assert result == {"finalized": True}
+    runtime_parity = json.loads((artifacts.run_dir / "runtime-parity.json").read_text())
+    assert runtime_parity["status"] == "not_applicable"
+    final_baseline = json.loads((artifacts.run_dir / "final-baseline.json").read_text())
+    assert final_baseline == {"schema_version": 1, "status": "not_applicable", "assertions": []}
+    assert captured["runtime_parity"] == runtime_parity
+    assert captured["final_baseline"] == {"status": "not_applicable", "assertions": []}
+    assert captured["mandatory_argocd"] == {"status": "not_applicable"}
+    assert captured["results"] == [{"scenario": "static-gates"}]
