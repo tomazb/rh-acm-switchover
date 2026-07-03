@@ -58,3 +58,71 @@ def test_report_artifact_schema_version_variants() -> None:
     assert ReportArtifact(type="preflight", path="p", schema_version=1, required=True).schema_version == 1
     assert ReportArtifact(type="preflight", path="p", schema_version="1", required=True).schema_version == "1"
     assert ReportArtifact(type="preflight", path="p", schema_version=None, required=True).schema_version is None
+
+
+def _run_helper(tmp_path, command, **overrides):
+    from tests.release.adapters.common import run_stream_subprocess
+
+    scenario_dir = tmp_path / "scenarios" / "demo" / "stream"
+    kwargs = dict(
+        stream="demo",
+        scenario_id="demo-scenario",
+        command=command,
+        cwd=tmp_path,
+        artifact_dir=tmp_path,
+        scenario_dir=scenario_dir,
+        capability="demo-capability",
+        timeout_message_template="Demo timed out after {timeout} seconds",
+        success_message="Demo completed",
+        failure_message="Demo returned a non-zero exit code",
+    )
+    kwargs.update(overrides)
+    return run_stream_subprocess(**kwargs), scenario_dir
+
+
+def test_run_stream_subprocess_success_writes_captures_and_passes(tmp_path):
+    result, scenario_dir = _run_helper(tmp_path, ["sh", "-c", "echo out; echo err >&2"])
+
+    assert result.status == "passed"
+    assert result.stream == "demo"
+    assert result.returncode == 0
+    assert result.reports == []
+    assert (scenario_dir / "stdout.txt").read_text() == "out\n"
+    assert (scenario_dir / "stderr.txt").read_text() == "err\n"
+    (assertion,) = result.assertions
+    assert assertion.capability == "demo-capability"
+    assert assertion.name == "exit-code"
+    assert assertion.status == "passed"
+    assert assertion.actual == "0"
+    assert assertion.message == "Demo completed"
+    assert assertion.evidence_path == str(scenario_dir / "stdout.txt")
+
+
+def test_run_stream_subprocess_failure_uses_stderr_evidence(tmp_path):
+    result, scenario_dir = _run_helper(tmp_path, ["sh", "-c", "exit 3"])
+
+    assert result.status == "failed"
+    assert result.returncode == 3
+    (assertion,) = result.assertions
+    assert assertion.status == "failed"
+    assert assertion.actual == "3"
+    assert assertion.message == "Demo returned a non-zero exit code"
+    assert assertion.evidence_path == str(scenario_dir / "stderr.txt")
+
+
+def test_run_stream_subprocess_timeout_reports_formatted_message(tmp_path):
+    result, scenario_dir = _run_helper(tmp_path, ["sleep", "5"], timeout_seconds=1)
+
+    assert result.status == "failed"
+    assert result.returncode == -1
+    (assertion,) = result.assertions
+    assert assertion.actual == "timeout"
+    assert assertion.message == "Demo timed out after 1 seconds"
+    assert assertion.evidence_path == str(scenario_dir / "stderr.txt")
+
+
+def test_run_stream_subprocess_evaluates_reports_callable(tmp_path):
+    report = ReportArtifact(type="demo", path="p.json", schema_version=1, required=True)
+    result, _ = _run_helper(tmp_path, ["true"], reports=lambda: [report])
+
+    assert result.reports == [report]
