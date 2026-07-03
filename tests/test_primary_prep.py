@@ -19,6 +19,7 @@ import modules.primary_prep as primary_prep_module
 from lib import argocd as argocd_lib
 from lib.constants import (
     BACKUP_NAMESPACE,
+    DELETE_REQUEST_TIMEOUT,
     DISABLE_AUTO_IMPORT_ANNOTATION,
     OBSERVABILITY_NAMESPACE,
     OBSERVABILITY_TERMINATE_INTERVAL,
@@ -773,6 +774,7 @@ class TestPrimaryPreparation:
             plural="backupschedules",
             name="schedule-rhacm",
             namespace=BACKUP_NAMESPACE,
+            timeout_seconds=DELETE_REQUEST_TIMEOUT,
         )
         mock_primary_client.patch_custom_resource.assert_not_called()
 
