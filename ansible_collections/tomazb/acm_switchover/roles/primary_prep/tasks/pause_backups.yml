@@ -107,7 +107,7 @@
         {{
           (_backup_patch_results.changed | default(false))
           or (_backup_delete_results.changed | default(false))
-          or (((acm_switchover_execution.mode | default('dry_run') == 'dry_run') or ansible_check_mode)
+          or ((((acm_switchover_execution | default({})).get('mode', 'dry_run') == 'dry_run') or ansible_check_mode)
               and acm_backup_schedule_operation.operation.action != 'none')
         }}
       operation: "{{ acm_backup_schedule_operation.operation }}"

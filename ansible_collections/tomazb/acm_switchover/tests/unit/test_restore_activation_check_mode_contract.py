@@ -2,7 +2,15 @@
 
 from pathlib import Path
 
-ROLES_DIR = Path(__file__).resolve().parents[2] / "roles"
+
+def _roles_dir() -> Path:
+    resolved_path = Path(__file__).resolve()
+    if len(resolved_path.parents) < 3:
+        raise ValueError(f"Path {resolved_path} does not have enough parent directories to find roles")
+    return resolved_path.parents[2] / "roles"
+
+
+ROLES_DIR = _roles_dir()
 ACTIVATE_RESTORE = ROLES_DIR / "activation" / "tasks" / "activate_restore.yml"
 
 
