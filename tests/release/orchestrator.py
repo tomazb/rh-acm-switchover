@@ -844,13 +844,14 @@ def _short_circuit_finalize(
     mandatory_argocd: dict,
     release_metadata: dict,
     matrix_validation: dict,
+    finalize_run_fn: Callable[..., dict] = _finalize_run,
 ) -> dict:
     """Write not-applicable runtime-parity/final-baseline artifacts and finalize an aborted run."""
     runtime_parity = _not_applicable_artifact()
     artifacts.write_json("runtime-parity.json", runtime_parity)
     final_baseline = {"status": "not_applicable", "assertions": []}
     artifacts.write_json("final-baseline.json", {"schema_version": 1, **final_baseline})
-    return _finalize_run(
+    return finalize_run_fn(
         artifacts=artifacts,
         release_options=release_options,
         matrix=matrix,
