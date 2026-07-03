@@ -1178,7 +1178,9 @@ class TestDeleteOperationsNormalMode:
         result = kube_client.delete_pod("test-ns", "test-pod")
 
         assert result is True
-        mock_k8s_apis["core_api"].delete_namespaced_pod.assert_called_once_with(name="test-pod", namespace="test-ns")
+        mock_k8s_apis["core_api"].delete_namespaced_pod.assert_called_once_with(
+            name="test-pod", namespace="test-ns", _request_timeout=30
+        )
 
     def test_delete_pod_404_returns_true(self, kube_client, mock_k8s_apis):
         """Test 404 on pod delete returns True (already absent)."""
@@ -1205,7 +1207,7 @@ class TestDeleteOperationsNormalMode:
 
         assert result is True
         mock_k8s_apis["core_api"].delete_namespaced_config_map.assert_called_once_with(
-            name="test-cm", namespace="test-ns"
+            name="test-cm", namespace="test-ns", _request_timeout=30
         )
 
     def test_delete_configmap_404_returns_true(self, kube_client, mock_k8s_apis):
