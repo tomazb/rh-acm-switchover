@@ -1443,3 +1443,52 @@ def test_short_circuit_finalize_writes_not_applicable_artifacts_and_delegates(tm
     assert captured["final_baseline"] == {"status": "not_applicable", "assertions": []}
     assert captured["mandatory_argocd"] == {"status": "not_applicable"}
     assert captured["results"] == [{"scenario": "static-gates"}]
+
+
+def test_certify_hub_rbac_prefixes_assertions_and_scopes_artifact_dir(tmp_path: Path, monkeypatch) -> None:
+    from tests.release import orchestrator as orch_module
+    from tests.release.checks.rbac_certification import CertificationAssertion
+    from tests.release.orchestrator import _certify_hub_rbac
+
+    captured: dict = {}
+
+    def fake_certify(**kwargs):
+        captured.update(kwargs)
+        return CertificationResult(
+            status="passed",
+            assertions=[
+                CertificationAssertion(
+                    capability="rbac",
+                    name="read-backups",
+                    status="passed",
+                    expected="allowed",
+                    actual="allowed",
+                    evidence_path="evidence.json",
+                    message="ok",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(orch_module, "certify_rbac_permissions", fake_certify)
+
+    result, assertions = _certify_hub_rbac(
+        hub={"context": "primary-hub"},
+        hub_name="primary",
+        scenario_profiles={},
+        rbac_cert_dir=tmp_path,
+    )
+
+    assert result.status == "passed"
+    assert captured["hub_name"] == "primary"
+    assert captured["artifact_dir"] == tmp_path / "primary"
+    assert assertions == [
+        {
+            "capability": "rbac",
+            "name": "primary:read-backups",
+            "status": "passed",
+            "expected": "allowed",
+            "actual": "allowed",
+            "evidence_path": "evidence.json",
+            "message": "ok",
+        }
+    ]
