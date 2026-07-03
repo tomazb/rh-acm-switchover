@@ -25,6 +25,7 @@ from tenacity import (
 from urllib3.exceptions import HTTPError, MaxRetryError, NewConnectionError
 from urllib3.exceptions import TimeoutError as Urllib3TimeoutError
 
+from lib.constants import MANAGED_CLUSTER_API_GROUP, MANAGED_CLUSTER_API_VERSION, MANAGED_CLUSTER_PLURAL
 from lib.validation import InputValidator, ValidationError
 
 logger = logging.getLogger("acm_switchover")
@@ -980,17 +981,17 @@ class KubeClient:
     def list_managed_clusters(self) -> List[Dict]:
         """List all ManagedCluster resources."""
         return self.list_custom_resources(
-            group="cluster.open-cluster-management.io",
-            version="v1",
-            plural="managedclusters",
+            group=MANAGED_CLUSTER_API_GROUP,
+            version=MANAGED_CLUSTER_API_VERSION,
+            plural=MANAGED_CLUSTER_PLURAL,
         )
 
     def patch_managed_cluster(self, name: str, patch: Dict[str, Any]) -> Dict:
         """Patch a ManagedCluster resource."""
         return self.patch_custom_resource(
-            group="cluster.open-cluster-management.io",
-            version="v1",
-            plural="managedclusters",
+            group=MANAGED_CLUSTER_API_GROUP,
+            version=MANAGED_CLUSTER_API_VERSION,
+            plural=MANAGED_CLUSTER_PLURAL,
             name=name,
             patch=patch,
         )

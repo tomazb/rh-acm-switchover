@@ -12,6 +12,9 @@ from kubernetes.client.rest import ApiException
 from lib.argocd_coordinator import ArgoCDPauseCoordinator
 from lib.constants import (
     BACKUP_NAMESPACE,
+    BACKUP_SCHEDULE_PLURAL,
+    CLUSTER_BACKUP_API_GROUP,
+    CLUSTER_BACKUP_API_VERSION,
     DELETE_REQUEST_TIMEOUT,
     DISABLE_AUTO_IMPORT_ANNOTATION,
     HUB_ROLE_PRIMARY,
@@ -134,9 +137,9 @@ class PrimaryPreparation:
 
         # Get BackupSchedule
         backup_schedules = self.primary.list_custom_resources(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="backupschedules",
+            group=CLUSTER_BACKUP_API_GROUP,
+            version=CLUSTER_BACKUP_API_VERSION,
+            plural=BACKUP_SCHEDULE_PLURAL,
             namespace=BACKUP_NAMESPACE,
             max_items=2,
         )
@@ -174,9 +177,9 @@ class PrimaryPreparation:
 
             patch = {"spec": {"paused": True}}
             self.primary.patch_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="backupschedules",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=BACKUP_SCHEDULE_PLURAL,
                 name=bs_name,
                 patch=patch,
                 namespace=BACKUP_NAMESPACE,
@@ -188,9 +191,9 @@ class PrimaryPreparation:
             logger.info("ACM %s requires deleting BackupSchedule", self.acm_version)
 
             self.primary.delete_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="backupschedules",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=BACKUP_SCHEDULE_PLURAL,
                 name=bs_name,
                 namespace=BACKUP_NAMESPACE,
                 timeout_seconds=DELETE_REQUEST_TIMEOUT,
