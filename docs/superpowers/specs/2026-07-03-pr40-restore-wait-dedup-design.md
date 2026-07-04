@@ -132,6 +132,17 @@ raises `FatalError` containing the `where` suffix; `dry_run=True` skips
 polling entirely. Existing `tests/test_activation.py` /
 `tests/test_finalization.py` suites characterize the delegating methods.
 
+Seam note (found during implementation): two existing tests patched
+`modules.<mod>.wait_for_condition` specifically to control the
+restore-deletion wait
+(`test_activate_passive_restore_method`,
+`test_setup_old_hub_as_secondary_raises_on_deletion_timeout`); since the
+poll now lives in `lib.waiter`, those two patch `lib.waiter.wait_for_condition`
+(the activation test adds it alongside its existing module patch, which
+still governs the module's other waits). All other
+`modules.<mod>.wait_for_condition` patches cover waits that remain in the
+modules and are untouched.
+
 ## Acceptance criteria
 
 1. One restore-deletion polling implementation, in `lib/waiter.py`; the

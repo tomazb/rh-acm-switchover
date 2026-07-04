@@ -913,8 +913,11 @@ class TestSecondaryActivation:
         )
         assert activation_passive._require_new_velero_restore_signal is False
 
+    @patch("lib.waiter.wait_for_condition", return_value=True)
     @patch("modules.activation.wait_for_condition")
-    def test_activate_passive_restore_method(self, mock_wait, mock_secondary_client, mock_state_manager):
+    def test_activate_passive_restore_method(
+        self, mock_wait, _mock_waiter_wait, mock_secondary_client, mock_state_manager
+    ):
         """Test passive activation using restore-acm-activate (Option B)."""
         mock_wait.return_value = True
         mock_state_manager.get_config.return_value = "2.13.0"

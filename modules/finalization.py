@@ -58,7 +58,7 @@ from lib.exceptions import FatalError, SwitchoverError, TransientError
 from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient, is_retryable_error
 from lib.utils import Phase, StateManager, dry_run_skip, is_acm_version_ge
-from lib.waiter import WaitConditionResult, wait_for_condition
+from lib.waiter import WaitConditionResult, wait_for_condition, wait_for_restore_deletion
 
 from .backup_schedule import BackupScheduleManager, fail_on_multiple_backup_schedules
 from .decommission import Decommission
@@ -1229,34 +1229,9 @@ class Finalization:
 
     def _wait_for_primary_restore_deletion(self, restore_name: str, timeout: int = RESTORE_WAIT_TIMEOUT) -> None:
         """Wait until a restore resource is fully deleted from the old primary hub."""
-        if self.dry_run:
-            logger.info("[DRY-RUN] Skipping wait for deletion of %s on primary", restore_name)
-            return
-
-        def _poll():
-            restore = self.primary.get_custom_resource(
-                group=CLUSTER_BACKUP_API_GROUP,
-                version=CLUSTER_BACKUP_API_VERSION,
-                plural=RESTORE_PLURAL,
-                name=restore_name,
-                namespace=BACKUP_NAMESPACE,
-            )
-            if not restore:
-                return WaitConditionResult.complete("deleted")
-            phase = restore.get("status", {}).get("phase", "unknown")
-            return WaitConditionResult.pending(f"still present (phase={phase})")
-
-        completed = wait_for_condition(
-            f"deletion of restore {restore_name} on primary",
-            _poll,
-            timeout=timeout,
-            interval=RESTORE_POLL_INTERVAL,
-            fast_interval=RESTORE_FAST_POLL_INTERVAL,
-            fast_timeout=RESTORE_FAST_POLL_TIMEOUT,
-            logger=logger,
+        wait_for_restore_deletion(
+            self.primary, restore_name, dry_run=self.dry_run, timeout=timeout, where=" on primary", logger=logger
         )
-        if not completed:
-            raise FatalError(f"Timeout waiting for restore {restore_name} to be deleted on primary after {timeout}s")
 
     @dry_run_skip(message="Would recreate BackupSchedule to prevent collision")
     def _fix_backup_schedule_collision(self):
