@@ -12,8 +12,9 @@ def test_absolute_path_passes_through():
 
 def test_relative_path_joins_base_dir_without_normalization():
     assert acm_abs_path("artifacts/summary.json", "/work") == "/work/artifacts/summary.json"
-    # exact concatenation semantics of the historical inline expression
-    assert acm_abs_path("./summary.json", "/work/") == "/work/./summary.json"
+    # exact concatenation semantics of the historical inline expression:
+    # base_dir ~ '/' ~ path, so a trailing slash on base_dir doubles up
+    assert acm_abs_path("./summary.json", "/work/") == "/work//./summary.json"
 
 
 @pytest.mark.parametrize("bad", ["", None, 7])
