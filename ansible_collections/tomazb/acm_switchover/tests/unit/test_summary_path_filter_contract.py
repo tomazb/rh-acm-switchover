@@ -2,7 +2,14 @@
 
 from pathlib import Path
 
-COLLECTION_ROOT = Path(__file__).resolve().parents[2]
+
+def _parent_at(path: Path, index: int) -> Path:
+    if len(path.parents) <= index:
+        raise ValueError(f"Path {path} does not have enough parent directories to access index {index}")
+    return path.parents[index]
+
+
+COLLECTION_ROOT = _parent_at(Path(__file__).resolve(), 2)
 SITES = (
     COLLECTION_ROOT / "roles" / "discovery" / "tasks" / "main.yml",
     COLLECTION_ROOT / "roles" / "decommission" / "tasks" / "main.yml",
