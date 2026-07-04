@@ -228,3 +228,69 @@ class TestWaitForCondition:
 
         assert result is False
         mock_logger.warning.assert_called_once_with("%s not complete before timeout", "test no last chance")
+
+
+@pytest.mark.unit
+class TestWaitForRestoreDeletion:
+    def _client(self, side_effect):
+        client = Mock()
+        client.get_custom_resource.side_effect = side_effect
+        return client
+
+    def test_completes_when_restore_absent(self):
+        from lib.waiter import wait_for_restore_deletion
+
+        client = self._client([None])
+        wait_for_restore_deletion(client, "restore-x", dry_run=False, timeout=5)
+        client.get_custom_resource.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="restores",
+            name="restore-x",
+            namespace="open-cluster-management-backup",
+        )
+
+    def test_polls_until_absent(self):
+        from lib.waiter import wait_for_restore_deletion
+
+        client = self._client([{"status": {"phase": "Deleting"}}, None])
+        with patch("lib.waiter.time.sleep", lambda _s: None):
+            wait_for_restore_deletion(client, "restore-x", dry_run=False, timeout=30)
+        assert client.get_custom_resource.call_count == 2
+
+    def test_handles_malformed_restore_status_until_absent(self):
+        from lib.waiter import wait_for_restore_deletion
+
+        client = self._client([{"status": None}, {"status": "Deleting"}, object(), None])
+        with patch("lib.waiter.time.sleep", lambda _s: None):
+            wait_for_restore_deletion(client, "restore-x", dry_run=False, timeout=30)
+        assert client.get_custom_resource.call_count == 4
+
+    def test_timeout_raises_fatal_error_with_where_suffix(self):
+        from lib.exceptions import FatalError
+        from lib.waiter import wait_for_restore_deletion
+
+        client = self._client(lambda **_kw: {"status": {"phase": "Deleting"}})
+        clock = iter(range(0, 100_000, 60))
+        with patch("lib.waiter.time.sleep", lambda _s: None), patch("lib.waiter.time.time", lambda: next(clock)):
+            with pytest.raises(FatalError, match=r"restore restore-x to be deleted on primary after 120s"):
+                wait_for_restore_deletion(client, "restore-x", dry_run=False, timeout=120, where=" on primary")
+
+    def test_dry_run_skips_polling(self):
+        from lib.waiter import wait_for_restore_deletion
+
+        client = self._client(AssertionError("must not poll in dry run"))
+        wait_for_restore_deletion(client, "restore-x", dry_run=True)
+        client.get_custom_resource.assert_not_called()
+
+    def test_dry_run_preserves_historical_log_templates(self, mock_logger):
+        from lib.waiter import wait_for_restore_deletion
+
+        client = self._client(AssertionError("must not poll in dry run"))
+
+        wait_for_restore_deletion(client, "restore-x", dry_run=True, logger=mock_logger)
+        mock_logger.info.assert_called_once_with("[DRY-RUN] Skipping wait for deletion of %s", "restore-x")
+
+        mock_logger.reset_mock()
+        wait_for_restore_deletion(client, "restore-x", dry_run=True, where=" on primary", logger=mock_logger)
+        mock_logger.info.assert_called_once_with("[DRY-RUN] Skipping wait for deletion of %s on primary", "restore-x")

@@ -1959,7 +1959,7 @@ class TestFinalization:
             old_hub_action="secondary",
         )
 
-        with patch("modules.finalization.wait_for_condition", return_value=False):
+        with patch("lib.waiter.wait_for_condition", return_value=False):
             with pytest.raises(FatalError, match="Timeout waiting for restore"):
                 fin._setup_old_hub_as_secondary()
 

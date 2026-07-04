@@ -7,6 +7,18 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from lib.constants import (
+    BACKUP_NAMESPACE,
+    CLUSTER_BACKUP_API_GROUP,
+    CLUSTER_BACKUP_API_VERSION,
+    RESTORE_FAST_POLL_INTERVAL,
+    RESTORE_FAST_POLL_TIMEOUT,
+    RESTORE_PLURAL,
+    RESTORE_POLL_INTERVAL,
+    RESTORE_WAIT_TIMEOUT,
+)
+from lib.exceptions import FatalError
+
 
 @dataclass(frozen=True)
 class WaitConditionResult:
@@ -96,3 +108,55 @@ def wait_for_condition(
     else:
         logger.warning("%s not complete before timeout", description)
     return False
+
+
+def wait_for_restore_deletion(
+    client,
+    restore_name: str,
+    *,
+    dry_run: bool,
+    timeout: int = RESTORE_WAIT_TIMEOUT,
+    where: str = "",
+    logger: Optional[logging.Logger] = None,
+) -> None:
+    """Wait until an ACM Restore resource is fully deleted.
+
+    where is a display suffix (e.g. " on primary") used in the dry-run log,
+    wait description, and timeout error, matching the historical per-caller
+    wording.
+    """
+    log = logger or logging.getLogger("acm_switchover")
+    if dry_run:
+        if where == " on primary":
+            log.info("[DRY-RUN] Skipping wait for deletion of %s on primary", restore_name)
+        elif where:
+            log.info("[DRY-RUN] Skipping wait for deletion of %s%s", restore_name, where)
+        else:
+            log.info("[DRY-RUN] Skipping wait for deletion of %s", restore_name)
+        return
+
+    def _poll_restore_deletion() -> WaitConditionResult:
+        restore = client.get_custom_resource(
+            group=CLUSTER_BACKUP_API_GROUP,
+            version=CLUSTER_BACKUP_API_VERSION,
+            plural=RESTORE_PLURAL,
+            name=restore_name,
+            namespace=BACKUP_NAMESPACE,
+        )
+        if not restore:
+            return WaitConditionResult.complete("deleted")
+        status = restore.get("status") if isinstance(restore, dict) else None
+        phase = status.get("phase", "unknown") if isinstance(status, dict) else "unknown"
+        return WaitConditionResult.pending(f"still present (phase={phase})")
+
+    completed = wait_for_condition(
+        f"deletion of restore {restore_name}{where}",
+        _poll_restore_deletion,
+        timeout=timeout,
+        interval=RESTORE_POLL_INTERVAL,
+        fast_interval=RESTORE_FAST_POLL_INTERVAL,
+        fast_timeout=RESTORE_FAST_POLL_TIMEOUT,
+        logger=log,
+    )
+    if not completed:
+        raise FatalError(f"Timeout waiting for restore {restore_name} to be deleted{where} after {timeout}s")
