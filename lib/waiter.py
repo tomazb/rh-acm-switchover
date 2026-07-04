@@ -127,7 +127,12 @@ def wait_for_restore_deletion(
     """
     log = logger or logging.getLogger("acm_switchover")
     if dry_run:
-        log.info("[DRY-RUN] Skipping wait for deletion of %s%s", restore_name, where)
+        if where == " on primary":
+            log.info("[DRY-RUN] Skipping wait for deletion of %s on primary", restore_name)
+        elif where:
+            log.info("[DRY-RUN] Skipping wait for deletion of %s%s", restore_name, where)
+        else:
+            log.info("[DRY-RUN] Skipping wait for deletion of %s", restore_name)
         return
 
     def _poll_restore_deletion() -> WaitConditionResult:
@@ -140,7 +145,8 @@ def wait_for_restore_deletion(
         )
         if not restore:
             return WaitConditionResult.complete("deleted")
-        phase = restore.get("status", {}).get("phase", "unknown")
+        status = restore.get("status") if isinstance(restore, dict) else None
+        phase = status.get("phase", "unknown") if isinstance(status, dict) else "unknown"
         return WaitConditionResult.pending(f"still present (phase={phase})")
 
     completed = wait_for_condition(
