@@ -47,7 +47,7 @@ from lib.exceptions import FatalError, SwitchoverError
 from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.utils import Phase, StateManager, is_acm_version_ge
-from lib.waiter import WaitConditionResult, wait_for_condition
+from lib.waiter import WaitConditionResult, wait_for_condition, wait_for_restore_deletion
 
 from .restore_discovery import find_passive_sync_restore, restore_messages_are_benign_already_available
 
@@ -411,37 +411,9 @@ class SecondaryActivation:
 
     def _wait_for_restore_deletion(self, restore_name: str, timeout: int = RESTORE_WAIT_TIMEOUT) -> None:
         """Wait until a restore resource is fully deleted."""
-        if self.secondary.dry_run:
-            logger.info("[DRY-RUN] Skipping wait for deletion of %s", restore_name)
-            return
-
-        def _poll_restore_deletion():
-            restore = self.secondary.get_custom_resource(
-                group=CLUSTER_BACKUP_API_GROUP,
-                version=CLUSTER_BACKUP_API_VERSION,
-                plural=RESTORE_PLURAL,
-                name=restore_name,
-                namespace=BACKUP_NAMESPACE,
-            )
-
-            if not restore:
-                return WaitConditionResult.complete("deleted")
-
-            phase = restore.get("status", {}).get("phase", "unknown")
-            return WaitConditionResult.pending(f"still present (phase={phase})")
-
-        completed = wait_for_condition(
-            f"deletion of restore {restore_name}",
-            _poll_restore_deletion,
-            timeout=timeout,
-            interval=RESTORE_POLL_INTERVAL,
-            fast_interval=RESTORE_FAST_POLL_INTERVAL,
-            fast_timeout=RESTORE_FAST_POLL_TIMEOUT,
-            logger=logger,
+        wait_for_restore_deletion(
+            self.secondary, restore_name, dry_run=self.secondary.dry_run, timeout=timeout, logger=logger
         )
-
-        if not completed:
-            raise FatalError(f"Timeout waiting for restore {restore_name} to be deleted after {timeout}s")
 
     def _get_restore_or_raise(self, restore_name: str) -> Dict:
         """Fetch restore resource or raise a fatal error if missing."""
