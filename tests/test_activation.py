@@ -930,7 +930,11 @@ class TestSecondaryActivation:
         )
 
         mock_secondary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": RESTORE_PASSIVE_SYNC_NAME}, "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True}}
+            {
+                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+                "status": {"phase": "Enabled"},
+            }
         ]
 
         def get_custom_resource_side_effect(**kwargs):
@@ -979,6 +983,7 @@ class TestSecondaryActivation:
                     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True,
                     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_SKIP,
                 },
+                "status": {"phase": "Enabled"},
             }
         ]
         mock_secondary_client.get_custom_resource.return_value = None
@@ -1012,6 +1017,7 @@ class TestSecondaryActivation:
                     "namespace": BACKUP_NAMESPACE,
                 },
                 "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+                "status": {"phase": "Enabled"},
             }
         ]
         mock_secondary_client.get_custom_resource.return_value = None
@@ -1041,6 +1047,7 @@ class TestSecondaryActivation:
             {
                 "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
                 "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+                "status": {"phase": "Enabled"},
             }
         ]
         mock_secondary_client.get_custom_resource.return_value = None

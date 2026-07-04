@@ -203,6 +203,16 @@ class SecondaryActivation:
             metadata=metadata,
         )
 
+        self._assert_passive_restore_ready(restore, restore_name)
+
+    def _assert_passive_restore_ready(self, restore: Dict, restore_name: str) -> None:
+        """Raise FatalError unless the passive-sync restore is in an activation-ready phase.
+
+        Shared by the verify_passive_sync step and the activation paths' resume
+        re-validation (Thermos R2-M2): a crash between the verify step completing
+        and activation completing must not let a resumed run activate against a
+        degraded restore.
+        """
         status = restore.get("status", {})
         phase = status.get("phase", "unknown")
         message = status.get("lastMessage", "")
@@ -212,7 +222,8 @@ class SecondaryActivation:
         # "Running" = actively syncing a new backup (transient, restore still functional)
         if phase in ("Enabled", "Finished", "Completed", "Running"):
             logger.info("Passive sync verified (%s): %s", phase, message)
-        elif phase == "FinishedWithErrors":
+            return
+        if phase == "FinishedWithErrors":
             messages = status.get("messages", [])
             if restore_messages_are_benign_already_available(messages):
                 logger.warning(
@@ -222,10 +233,8 @@ class SecondaryActivation:
                     restore_name,
                     phase,
                 )
-            else:
-                raise FatalError(f"Passive sync restore not ready: {phase} - {message}")
-        else:
-            raise FatalError(f"Passive sync restore not ready: {phase} - {message}")
+                return
+        raise FatalError(f"Passive sync restore not ready: {phase} - {message}")
 
     def _activate_via_passive_sync(self):
         """Activate managed clusters by patching passive sync restore."""
@@ -239,6 +248,10 @@ class SecondaryActivation:
             self.state.set_config(PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME, None)
             self._require_new_velero_restore_signal = False
             return
+
+        # Thermos R2-M2: re-validate freshness on entry so a crash-resume
+        # cannot activate against a degraded restore.
+        self._assert_passive_restore_ready(restore_before, restore_name)
 
         self.state.set_config(
             PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME,
@@ -284,6 +297,9 @@ class SecondaryActivation:
         passive_restore_deleted = False
 
         if restore_name:
+            # Thermos R2-M2: never delete a passive restore that is not
+            # activation-ready (crash-resume re-validation).
+            self._assert_passive_restore_ready(restore, restore_name)
             passive_restore_snapshot = self._build_restore_snapshot(restore)
             try:
                 logger.info("Deleting passive sync restore %s before activation restore", restore_name)
