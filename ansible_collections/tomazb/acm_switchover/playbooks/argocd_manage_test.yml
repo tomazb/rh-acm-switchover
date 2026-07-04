@@ -31,12 +31,7 @@
 
     - name: Resolve summary path to absolute
       ansible.builtin.set_fact:
-        _acm_summary_path_abs: >-
-          {{
-            summary_path
-            if summary_path.startswith('/')
-            else (lookup('env', 'PWD') ~ '/' ~ summary_path)
-          }}
+        _acm_summary_path_abs: "{{ summary_path | tomazb.acm_switchover.acm_abs_path(lookup('env', 'PWD')) }}"
       when: summary_path is defined
 
     - name: Write summary file
