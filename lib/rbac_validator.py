@@ -936,6 +936,56 @@ class RBACValidator:
         return "\n".join(report)
 
 
+def _validate_hub(
+    hub_role: str,
+    client: KubeClient,
+    *,
+    include_decommission: bool,
+    include_old_hub_finalization: bool,
+    skip_observability: bool,
+    argocd_mode: str,
+    argocd_install_type: str,
+    include_error_count: bool,
+) -> None:
+    """Validate RBAC permissions on one hub, preserving per-hub message shapes.
+
+    include_error_count encodes the secondary-only failure-message behavior;
+    every other primary/secondary asymmetry is passed in explicitly by the
+    caller's hub table.
+    """
+    logger.info("Validating RBAC permissions on %s hub...", hub_role)
+    validator = RBACValidator(client)
+    try:
+        valid, errors = validator.validate_all_permissions(
+            include_decommission=include_decommission,
+            include_old_hub_finalization=include_old_hub_finalization,
+            skip_observability=skip_observability,
+            argocd_mode=argocd_mode,
+            argocd_install_type=argocd_install_type,
+        )
+    except ValidationError as exc:
+        raise ValidationError(f"RBAC permission validation could not be completed on {hub_role} hub: {exc}") from exc
+
+    if valid:
+        return
+
+    report = validator.generate_permission_report(
+        include_decommission=include_decommission,
+        include_old_hub_finalization=include_old_hub_finalization,
+        skip_observability=skip_observability,
+        argocd_mode=argocd_mode,
+        argocd_install_type=argocd_install_type,
+    )
+    logger.error("\n%s", report)
+    if include_error_count:
+        error_count = sum(len(errs) for errs in errors.values())
+        raise ValidationError(
+            f"RBAC permission validation failed on {hub_role} hub ({error_count} error(s)). "
+            "See report above for details."
+        )
+    raise ValidationError(f"RBAC permission validation failed on {hub_role} hub. See report above for details.")
+
+
 def validate_rbac_permissions(
     primary_client: Optional[KubeClient] = None,
     secondary_client: Optional[KubeClient] = None,
@@ -977,65 +1027,52 @@ def validate_rbac_permissions(
     logger.info("Starting RBAC permission validation...")
     _validate_argocd_mode(argocd_mode)
 
-    # Validate primary hub (when available)
-    if primary_client is not None:
-        logger.info("Validating RBAC permissions on primary hub...")
-        primary_validator = RBACValidator(primary_client)
-        try:
-            primary_valid, primary_errors = primary_validator.validate_all_permissions(
-                include_decommission=include_decommission,
-                include_old_hub_finalization=include_old_hub_finalization,
-                skip_observability=skip_observability,
-                argocd_mode=argocd_mode,
-                argocd_install_type=argocd_install_type,
-            )
-        except ValidationError as exc:
-            raise ValidationError(f"RBAC permission validation could not be completed on primary hub: {exc}") from exc
+    # Per-hub validation table. Asymmetries are explicit data:
+    # - decommission/old-hub-finalization checks apply to the primary hub only;
+    # - the secondary hub honors secondary_argocd_install_type when provided;
+    # - only the secondary failure message includes the error count.
+    hub_validations = (
+        (
+            HUB_ROLE_PRIMARY,
+            primary_client,
+            include_decommission,
+            include_old_hub_finalization,
+            argocd_install_type,
+            False,
+        ),
+        (
+            HUB_ROLE_SECONDARY,
+            secondary_client,
+            False,
+            False,
+            secondary_argocd_install_type or argocd_install_type,
+            True,
+        ),
+    )
 
-        if not primary_valid:
-            report = primary_validator.generate_permission_report(
-                include_decommission=include_decommission,
-                include_old_hub_finalization=include_old_hub_finalization,
-                skip_observability=skip_observability,
-                argocd_mode=argocd_mode,
-                argocd_install_type=argocd_install_type,
-            )
-            logger.error("\n%s", report)
-            raise ValidationError("RBAC permission validation failed on primary hub. " "See report above for details.")
-    else:
-        logger.info("Primary hub not available; skipping primary RBAC validation")
-
-    # Validate secondary hub if provided
-    if secondary_client:
-        logger.info("Validating RBAC permissions on secondary hub...")
-        secondary_validator = RBACValidator(secondary_client)
-        secondary_install_type = secondary_argocd_install_type or argocd_install_type
-        try:
-            secondary_valid, secondary_errors = secondary_validator.validate_all_permissions(
-                include_decommission=False,  # Decommission only on primary
-                include_old_hub_finalization=False,  # Old-hub finalization delete only applies to primary
-                skip_observability=skip_observability,
-                argocd_mode=argocd_mode,
-                argocd_install_type=secondary_install_type,
-            )
-        except ValidationError as exc:
-            raise ValidationError(f"RBAC permission validation could not be completed on secondary hub: {exc}") from exc
-
-        if not secondary_valid:
-            report = secondary_validator.generate_permission_report(
-                include_decommission=False,
-                include_old_hub_finalization=False,
-                skip_observability=skip_observability,
-                argocd_mode=argocd_mode,
-                argocd_install_type=secondary_install_type,
-            )
-            logger.error("\n%s", report)
-            # Include error count in exception message for debugging
-            error_count = sum(len(errs) for errs in secondary_errors.values())
-            raise ValidationError(
-                f"RBAC permission validation failed on secondary hub ({error_count} error(s)). "
-                "See report above for details."
-            )
+    for (
+        hub_role,
+        client,
+        hub_include_decommission,
+        hub_include_old_hub_finalization,
+        hub_argocd_install_type,
+        include_error_count,
+    ) in hub_validations:
+        if hub_role == HUB_ROLE_PRIMARY and client is None:
+            logger.info("Primary hub not available; skipping primary RBAC validation")
+            continue
+        if hub_role == HUB_ROLE_SECONDARY and not client:
+            continue
+        _validate_hub(
+            hub_role,
+            client,
+            include_decommission=hub_include_decommission,
+            include_old_hub_finalization=hub_include_old_hub_finalization,
+            skip_observability=skip_observability,
+            argocd_mode=argocd_mode,
+            argocd_install_type=hub_argocd_install_type,
+            include_error_count=include_error_count,
+        )
 
     logger.info("✓ RBAC permission validation completed successfully")
 

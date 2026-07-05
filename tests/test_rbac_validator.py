@@ -1112,6 +1112,111 @@ class TestValidateRBACPermissions:
             validate_rbac_permissions(None, mock_secondary_client)
 
 
+class TestValidateHubLoop:
+    """H1: primary/secondary validation routes through one hub-parameterized helper."""
+
+    @pytest.fixture
+    def mock_primary_client(self):
+        client = MagicMock()
+        client.context = "primary-hub"
+        return client
+
+    @pytest.fixture
+    def mock_secondary_client(self):
+        client = MagicMock()
+        client.context = "secondary-hub"
+        return client
+
+    def test_both_hubs_route_through_validate_hub_with_explicit_asymmetries(
+        self, mock_primary_client, mock_secondary_client, monkeypatch
+    ):
+        calls = []
+        monkeypatch.setattr(
+            rbac_validator,
+            "_validate_hub",
+            lambda hub_role, client, **kwargs: calls.append((hub_role, client, kwargs)),
+        )
+        validate_rbac_permissions(
+            mock_primary_client,
+            mock_secondary_client,
+            include_decommission=True,
+            include_old_hub_finalization=True,
+            skip_observability=True,
+            argocd_mode="check",
+            argocd_install_type="operator",
+            secondary_argocd_install_type="vanilla",
+        )
+        assert [(hub_role, client) for hub_role, client, _ in calls] == [
+            ("primary", mock_primary_client),
+            ("secondary", mock_secondary_client),
+        ]
+        primary_kwargs = calls[0][2]
+        secondary_kwargs = calls[1][2]
+        # Primary-only asymmetries: decommission/old-hub-finalization pass through.
+        assert primary_kwargs["include_decommission"] is True
+        assert primary_kwargs["include_old_hub_finalization"] is True
+        assert primary_kwargs["argocd_install_type"] == "operator"
+        assert primary_kwargs["include_error_count"] is False
+        # Secondary-only asymmetries: flags forced off, install-type override, error count.
+        assert secondary_kwargs["include_decommission"] is False
+        assert secondary_kwargs["include_old_hub_finalization"] is False
+        assert secondary_kwargs["argocd_install_type"] == "vanilla"
+        assert secondary_kwargs["include_error_count"] is True
+        # Shared flags reach both hubs unchanged.
+        for kwargs in (primary_kwargs, secondary_kwargs):
+            assert kwargs["skip_observability"] is True
+            assert kwargs["argocd_mode"] == "check"
+
+    def test_secondary_install_type_falls_back_to_primary_install_type(self, mock_secondary_client, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            rbac_validator,
+            "_validate_hub",
+            lambda hub_role, client, **kwargs: calls.append((hub_role, kwargs)),
+        )
+        validate_rbac_permissions(None, mock_secondary_client, argocd_install_type="operator")
+        assert calls[0][0] == "secondary"
+        assert calls[0][1]["argocd_install_type"] == "operator"
+
+    def test_primary_absent_logs_skip_and_still_validates_secondary(self, mock_secondary_client, monkeypatch, caplog):
+        calls = []
+        monkeypatch.setattr(
+            rbac_validator,
+            "_validate_hub",
+            lambda hub_role, client, **kwargs: calls.append(hub_role),
+        )
+        with caplog.at_level(logging.INFO, logger="acm_switchover"):
+            validate_rbac_permissions(None, mock_secondary_client)
+        assert calls == ["secondary"]
+        assert "Primary hub not available; skipping primary RBAC validation" in caplog.text
+
+    @patch("lib.rbac_validator.RBACValidator")
+    def test_secondary_failure_message_includes_error_count(self, mock_validator_class, mock_secondary_client):
+        mock_validator = MagicMock()
+        mock_validator.validate_all_permissions.return_value = (
+            False,
+            {"cluster": ["err one", "err two"], "namespaces": ["err three"]},
+        )
+        mock_validator.generate_permission_report.return_value = "Error report"
+        mock_validator_class.return_value = mock_validator
+        with pytest.raises(ValidationError) as exc_info:
+            validate_rbac_permissions(None, mock_secondary_client)
+        assert (
+            str(exc_info.value)
+            == "RBAC permission validation failed on secondary hub (3 error(s)). See report above for details."
+        )
+
+    @patch("lib.rbac_validator.RBACValidator")
+    def test_primary_failure_message_has_no_error_count(self, mock_validator_class, mock_primary_client):
+        mock_validator = MagicMock()
+        mock_validator.validate_all_permissions.return_value = (False, {"cluster": ["err one"]})
+        mock_validator.generate_permission_report.return_value = "Error report"
+        mock_validator_class.return_value = mock_validator
+        with pytest.raises(ValidationError) as exc_info:
+            validate_rbac_permissions(mock_primary_client)
+        assert str(exc_info.value) == "RBAC permission validation failed on primary hub. See report above for details."
+
+
 class TestValidateDecommissionPermissions:
     """Tests for standalone decommission RBAC validation."""
 
