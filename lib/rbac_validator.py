@@ -62,6 +62,11 @@ VALIDATOR_CLUSTER_VERB_EXCEPTIONS: Dict[Tuple[str, str], FrozenSet[str]] = {
 }
 
 
+def _format_verb_removals(removals: Dict[Tuple[str, str], FrozenSet[str]]) -> Dict[Tuple[str, str], List[str]]:
+    """Render a removals mapping with deterministic ordering for error messages."""
+    return {key: sorted(verbs) for key, verbs in sorted(removals.items())}
+
+
 def _derive_read_only_permissions(
     operator_permissions: List[Tuple[str, str, List[str]]],
     expected_removals: Dict[Tuple[str, str], FrozenSet[str]],
@@ -84,7 +89,8 @@ def _derive_read_only_permissions(
     if removed != expected_removals:
         raise ValueError(
             "Validator cluster permission derivation drifted from the documented exceptions: "
-            f"removed {sorted(removed)!r}, expected {sorted(expected_removals)!r}. "
+            f"removed {_format_verb_removals(removed)!r}, "
+            f"expected {_format_verb_removals(expected_removals)!r}. "
             "Update VALIDATOR_CLUSTER_VERB_EXCEPTIONS deliberately when changing "
             "mutating verbs in OPERATOR_CLUSTER_PERMISSIONS."
         )
@@ -1061,7 +1067,7 @@ def validate_rbac_permissions(
         if hub_role == HUB_ROLE_PRIMARY and client is None:
             logger.info("Primary hub not available; skipping primary RBAC validation")
             continue
-        if hub_role == HUB_ROLE_SECONDARY and not client:
+        if hub_role == HUB_ROLE_SECONDARY and client is None:
             continue
         _validate_hub(
             hub_role,

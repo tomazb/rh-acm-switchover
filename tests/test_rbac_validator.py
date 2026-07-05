@@ -820,14 +820,18 @@ class TestValidatorClusterTableDerivation:
 
     def test_unexpected_mutating_verb_fails_derivation(self):
         perms = [("group.example.io", "widgets", ["get", "delete"])]
-        with pytest.raises(ValueError, match="drifted"):
+        with pytest.raises(ValueError, match="drifted") as exc_info:
             rbac_validator._derive_read_only_permissions(perms, {})
+        # The error must name the stripped verbs, not just the resource keys,
+        # so an import-time drift failure is diagnosable from the message alone.
+        assert "'delete'" in str(exc_info.value)
 
     def test_stale_exception_entry_fails_derivation(self):
         perms = [("group.example.io", "widgets", ["get", "list"])]
         expected = {("group.example.io", "widgets"): frozenset({"delete"})}
-        with pytest.raises(ValueError, match="drifted"):
+        with pytest.raises(ValueError, match="drifted") as exc_info:
             rbac_validator._derive_read_only_permissions(perms, expected)
+        assert "'delete'" in str(exc_info.value)
 
     def test_mutating_verbs_match_write_verb_helper(self):
         client = MagicMock()
