@@ -21,7 +21,8 @@ static-contract tests, fixture-driven `ansible-playbook` integration tests.
 
 ## Global Constraints
 
-- No Python source changes; `lib/rbac_validator.py` untouched.
+- No production Python source changes (test files are intentionally updated);
+  `lib/rbac_validator.py` untouched.
 - No changes to `docs/ACM_SWITCHOVER_RUNBOOK.md` or `.claude/skills/**/*.skill.md`.
 - Rendered operator-facing messages byte-identical to today.
 - Registered-fact names preserved: `_rbac_argocd_app_crd_<hub>`,
