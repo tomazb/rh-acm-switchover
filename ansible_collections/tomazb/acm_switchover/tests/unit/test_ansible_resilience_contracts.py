@@ -84,24 +84,26 @@ def test_full_restore_waits_for_managed_cluster_presence_after_acm_restore():
 
 def test_preflight_validate_rbac_detects_argocd_install_type():
     """preflight RBAC validation must detect Argo CD install type instead of hardcoding unknown."""
-    tasks = _load_yaml(PREFLIGHT_TASKS / "validate_rbac.yml")
-    text = (PREFLIGHT_TASKS / "validate_rbac.yml").read_text()
+    hub_tasks = _load_yaml(PREFLIGHT_TASKS / "validate_rbac_hub.yml")
+    hub_text = (PREFLIGHT_TASKS / "validate_rbac_hub.yml").read_text()
+    main_text = (PREFLIGHT_TASKS / "validate_rbac.yml").read_text()
     argocds_crd = ".".join(("argocds", "argoproj", "io"))
     applications_crd = ".".join(("applications", "argoproj", "io"))
 
     crd_queries = [
-        task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "CustomResourceDefinition"
+        task for task in hub_tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "CustomResourceDefinition"
     ]
-    assert crd_queries, "validate_rbac.yml must query Argo CD CRDs to determine install type"
-    assert argocds_crd in text, "validate_rbac.yml must detect operator installs via the argocds CRD"
+    assert crd_queries, "validate_rbac_hub.yml must query Argo CD CRDs to determine install type"
+    assert argocds_crd in hub_text, "validate_rbac_hub.yml must detect operator installs via the argocds CRD"
+    for text in (main_text, hub_text):
+        assert (
+            "argocd_install_type: unknown" not in text
+        ), "RBAC validation must stop widening permissions with a hardcoded unknown install type"
     assert (
-        "argocd_install_type: unknown" not in text
-    ), "validate_rbac.yml must stop widening permissions with a hardcoded unknown install type"
-    assert (
-        applications_crd in text
-    ), "validate_rbac.yml must probe the applications CRD to distinguish vanilla Argo CD from no install"
-    assert "'check'" in text, "validate_rbac.yml must support the read-only Argo CD RBAC check mode"
-    assert "skip_gitops_check" in text, "validate_rbac.yml must derive Argo CD RBAC mode from skip_gitops_check"
+        applications_crd in hub_text
+    ), "validate_rbac_hub.yml must probe the applications CRD to distinguish vanilla Argo CD from no install"
+    assert "'check'" in main_text, "validate_rbac.yml must support the read-only Argo CD RBAC check mode"
+    assert "skip_gitops_check" in main_text, "validate_rbac.yml must derive Argo CD RBAC mode from skip_gitops_check"
 
 
 def test_decommission_validates_rbac_before_destructive_steps():
@@ -545,12 +547,18 @@ def test_collection_rbac_validation_runs_ssars_in_dry_run():
     """Dry-run must still validate RBAC with non-mutating SSAR/SAR requests."""
     for path in [
         PREFLIGHT_TASKS / "validate_rbac.yml",
+        PREFLIGHT_TASKS / "validate_rbac_hub.yml",
         DECOMMISSION_TASKS / "validate_rbac.yml",
     ]:
         text = path.read_text()
         assert "mode | default('dry_run') == 'dry_run'" not in text
         assert "mode | default('dry_run') != 'dry_run'" not in text
-        assert "run_ssar" in text
+
+    for path in [
+        PREFLIGHT_TASKS / "validate_rbac_hub.yml",
+        DECOMMISSION_TASKS / "validate_rbac.yml",
+    ]:
+        assert "run_ssar" in path.read_text()
 
 
 def test_fixture_playbook_runs_use_per_test_ansible_temp_dirs():
@@ -763,39 +771,50 @@ def test_argocd_resume_splits_checkpoint_path_facts():
 
 
 def test_preflight_validate_rbac_fails_closed_on_argocd_401():
-    """validate_rbac.yml must fail closed on HTTP 401 during Argo CD CRD discovery.
+    """The shared hub RBAC task file must fail closed on HTTP 401 during Argo CD CRD discovery.
 
     401 indicates broken/expired credentials, not merely missing CRD read permission
     (which is 403). Silently deferring 401 to RBAC validation would hide auth problems
     and potentially produce misleading "missing permissions" results. This mirrors the
-    Python CLI behavior in preflight_coordinator.py.
+    Python CLI behavior in preflight_coordinator.py. Since the hub-loop refactor
+    (Thermos PR 39 / R2-H3), both hubs run the same shared fail-closed tasks, driven
+    by the _rbac_hub_validations table in validate_rbac.yml.
     """
-    tasks = _load_yaml(PREFLIGHT_TASKS / "validate_rbac.yml")
+    hub_tasks = _load_yaml(PREFLIGHT_TASKS / "validate_rbac_hub.yml")
+    main_tasks = _load_yaml(PREFLIGHT_TASKS / "validate_rbac.yml")
 
-    fail_tasks = [t for t in tasks if "ansible.builtin.fail" in t]
+    loop_task = next(t for t in main_tasks if t.get("ansible.builtin.include_tasks") == "validate_rbac_hub.yml")
+    assert loop_task["loop"] == "{{ _rbac_hub_validations }}"
+    table_task = next(t for t in main_tasks if "_rbac_hub_validations" in t.get("ansible.builtin.set_fact", {}))
+    hubs = [entry["hub"] for entry in table_task["ansible.builtin.set_fact"]["_rbac_hub_validations"]]
+    assert hubs == ["primary", "secondary"], "the 401 fail-closed path must cover both hubs via the hub table"
+
+    fail_tasks = [t for t in hub_tasks if "ansible.builtin.fail" in t]
     auth_fail_tasks = [
         t
         for t in fail_tasks
         if "authorization denied" in t.get("ansible.builtin.fail", {}).get("msg", "").lower()
         or "401" in t.get("ansible.builtin.fail", {}).get("msg", "")
     ]
-    assert len(auth_fail_tasks) >= 2, "validate_rbac.yml must have fail-closed tasks for 401/unauthorized on both hubs"
-
-    for hub in ("primary", "secondary"):
-        hub_auth_fails = [t for t in auth_fail_tasks if hub in t.get("ansible.builtin.fail", {}).get("msg", "").lower()]
-        assert hub_auth_fails, f"validate_rbac.yml must have a 401 fail-closed task for the {hub} hub"
+    assert auth_fail_tasks, "validate_rbac_hub.yml must have a fail-closed task for 401/unauthorized"
+    for task in auth_fail_tasks:
+        assert (
+            "{{ rbac_hub.hub }}" in task["ansible.builtin.fail"]["msg"]
+        ), "401 fail-closed message must name the hub being validated"
 
     unexpected_fail_tasks = [
         t for t in fail_tasks if "unable to inspect" in t.get("ansible.builtin.fail", {}).get("msg", "").lower()
     ]
+    assert unexpected_fail_tasks, "validate_rbac_hub.yml must fail on unexpected CRD discovery errors"
     for task in unexpected_fail_tasks:
+        assert "{{ rbac_hub.hub }}" in task["ansible.builtin.fail"]["msg"]
         when = _when_text(task)
         assert (
             "'401' not in" not in when
-        ), "Unexpected-error fail task must not exclude 401 — dedicated 401 tasks handle it"
+        ), "Unexpected-error fail task must not exclude 401 — the dedicated 401 task handles it"
         assert (
             "'unauthorized' not in" not in when
-        ), "Unexpected-error fail task must not exclude unauthorized — dedicated 401 tasks handle it"
+        ), "Unexpected-error fail task must not exclude unauthorized — the dedicated 401 task handles it"
         assert "'403' not in" in when, "Unexpected-error fail task must still exclude 403 (deferred to RBAC validation)"
 
     for task in auth_fail_tasks + unexpected_fail_tasks:
@@ -811,18 +830,7 @@ def test_preflight_validate_rbac_fails_closed_on_argocd_401():
             "Unexpected-error fail task must gate on .msg presence " "since failed_when: false overrides .failed"
         )
 
-    for hub in ("primary", "secondary"):
-        hub_401_indices = [
-            i
-            for i, t in enumerate(tasks)
-            if t in auth_fail_tasks and hub in t.get("ansible.builtin.fail", {}).get("msg", "").lower()
-        ]
-        hub_unexpected_indices = [
-            i
-            for i, t in enumerate(tasks)
-            if t in unexpected_fail_tasks and hub in t.get("ansible.builtin.fail", {}).get("msg", "").lower()
-        ]
-        if hub_401_indices and hub_unexpected_indices:
-            assert (
-                hub_401_indices[0] < hub_unexpected_indices[0]
-            ), f"401 fail task for {hub} hub must precede the unexpected-error fail task"
+    auth_indices = [i for i, t in enumerate(hub_tasks) if t in auth_fail_tasks]
+    unexpected_indices = [i for i, t in enumerate(hub_tasks) if t in unexpected_fail_tasks]
+    assert auth_indices and unexpected_indices
+    assert auth_indices[0] < unexpected_indices[0], "401 fail task must precede the unexpected-error fail task"
