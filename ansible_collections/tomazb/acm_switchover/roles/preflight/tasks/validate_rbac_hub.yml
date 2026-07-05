@@ -1,0 +1,128 @@
+---
+# Shared per-hub RBAC validation, driven by the _rbac_hub_validations table in
+# validate_rbac.yml. Mirrors Python H1's _validate_hub(...) helper in
+# lib/rbac_validator.py: one parameterized body, per-hub asymmetries supplied
+# as data by the caller's hub table.
+#
+# Input (rbac_hub loop entry):
+#   - rbac_hub.hub: 'primary' or 'secondary'
+#   - rbac_hub.kubeconfig / rbac_hub.context: hub connection details
+#   - rbac_hub.include_decommission: primary-only decommission permission checks
+#   - rbac_hub.include_old_hub_finalization: primary-only old-hub finalization checks
+# Output (per-hub facts, names preserved from the pre-loop implementation):
+#   - _rbac_argocd_app_crd_<hub>, _rbac_argocd_instance_crd_<hub>
+#   - _rbac_argocd_install_type_<hub>
+#   - _rbac_expanded_<hub>, _rbac_denied_permissions_<hub>
+#   - acm_<hub>_rbac_validation
+
+- name: Default Argo CD install type for {{ rbac_hub.hub }} hub when checks are disabled
+  ansible.builtin.set_fact:
+    _rbac_argocd_install_type_hub: unknown
+  when: _rbac_requested_argocd_mode == 'none'
+
+- name: Detect Argo CD Applications CRD on {{ rbac_hub.hub }} hub
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: applications.argoproj.io
+    kubeconfig: "{{ rbac_hub.kubeconfig }}"
+    context: "{{ rbac_hub.context }}"
+  register: _rbac_argocd_app_crd_hub
+  failed_when: false
+  when: _rbac_requested_argocd_mode != 'none'
+
+- name: Detect Argo CD operator CRD on {{ rbac_hub.hub }} hub
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: argocds.argoproj.io
+    kubeconfig: "{{ rbac_hub.kubeconfig }}"
+    context: "{{ rbac_hub.context }}"
+  register: _rbac_argocd_instance_crd_hub
+  failed_when: false
+  when:
+    - _rbac_requested_argocd_mode != 'none'
+    - (_rbac_argocd_app_crd_hub.msg | default('')) | length == 0
+    - (_rbac_argocd_app_crd_hub.resources | default([]) | length) > 0
+
+- name: Fail closed on authorization denied during Argo CD CRD discovery for {{ rbac_hub.hub }} hub
+  ansible.builtin.fail:
+    msg: >-
+      Authorization denied while inspecting Argo CD CRDs on the {{ rbac_hub.hub }} hub
+      (HTTP 401). This usually means the kubeconfig credentials are expired or
+      invalid. Fix the credentials and retry.
+      Detail: {{ _rbac_argocd_app_crd_hub.msg | default('no detail') }}
+  when:
+    - _rbac_requested_argocd_mode != 'none'
+    - >-
+      '401' in ((_rbac_argocd_app_crd_hub.msg | default('')) | lower)
+      or 'unauthorized' in ((_rbac_argocd_app_crd_hub.msg | default('')) | lower)
+
+- name: Fail on unexpected Argo CD Applications CRD discovery error for {{ rbac_hub.hub }} hub
+  ansible.builtin.fail:
+    msg: >-
+      Unable to inspect applications.argoproj.io on the {{ rbac_hub.hub }} hub during RBAC preflight:
+      {{ _rbac_argocd_app_crd_hub.msg | default(_rbac_argocd_app_crd_hub | string) }}
+  when:
+    - _rbac_requested_argocd_mode != 'none'
+    - (_rbac_argocd_app_crd_hub.msg | default('')) | length > 0
+    - "'403' not in ((_rbac_argocd_app_crd_hub.msg | default('')) | lower)"
+    - "'forbidden' not in ((_rbac_argocd_app_crd_hub.msg | default('')) | lower)"
+
+- name: Record Argo CD install type for {{ rbac_hub.hub }} hub
+  ansible.builtin.set_fact:
+    _rbac_argocd_install_type_hub: >-
+      {%- set app_msg = (_rbac_argocd_app_crd_hub.msg | default('')) | lower -%}
+      {%- if app_msg | length > 0 -%}
+      unknown
+      {%- elif (_rbac_argocd_app_crd_hub.resources | default([]) | length) == 0 -%}
+      none
+      {%- elif (_rbac_argocd_instance_crd_hub.msg | default('')) | length > 0 -%}
+      unknown
+      {%- elif (_rbac_argocd_instance_crd_hub.resources | default([]) | length) > 0 -%}
+      operator
+      {%- else -%}
+      vanilla
+      {%- endif -%}
+  when: _rbac_requested_argocd_mode != 'none'
+
+- name: Expand required RBAC permissions for {{ rbac_hub.hub }} hub
+  tomazb.acm_switchover.acm_rbac_validate:
+    hub: "{{ rbac_hub.hub }}"
+    include_decommission: "{{ rbac_hub.include_decommission }}"
+    include_old_hub_finalization: "{{ rbac_hub.include_old_hub_finalization }}"
+    skip_observability: "{{ _rbac_skip_observability }}"
+    argocd_mode: "{{ _rbac_requested_argocd_mode }}"
+    argocd_install_type: "{{ _rbac_argocd_install_type_hub | default('unknown') }}"
+  register: _rbac_expanded_hub
+
+- name: Run SelfSubjectAccessReview checks for {{ rbac_hub.hub }} hub
+  ansible.builtin.include_tasks: run_ssar.yml
+  vars:
+    acm_rbac_permissions: "{{ _rbac_expanded_hub.permissions }}"
+    _ssar_target_kubeconfig: "{{ rbac_hub.kubeconfig }}"
+    _ssar_target_context: "{{ rbac_hub.context }}"
+
+- name: Collect denied permissions for {{ rbac_hub.hub }} hub
+  ansible.builtin.set_fact:
+    _rbac_denied_permissions_hub: "{{ _rbac_denied_permissions }}"
+
+- name: Summarize RBAC validation results for {{ rbac_hub.hub }} hub
+  tomazb.acm_switchover.acm_rbac_validate:
+    hub: "{{ rbac_hub.hub }}"
+    include_decommission: "{{ rbac_hub.include_decommission }}"
+    include_old_hub_finalization: "{{ rbac_hub.include_old_hub_finalization }}"
+    skip_observability: "{{ _rbac_skip_observability }}"
+    argocd_mode: "{{ _rbac_requested_argocd_mode }}"
+    argocd_install_type: "{{ _rbac_argocd_install_type_hub | default('unknown') }}"
+    denied_permissions: "{{ _rbac_denied_permissions_hub | default([]) }}"
+  register: _rbac_hub_validation_result
+
+- name: Publish RBAC validation facts for {{ rbac_hub.hub }} hub
+  ansible.builtin.set_fact:
+    "_rbac_argocd_app_crd_{{ rbac_hub.hub }}": "{{ _rbac_argocd_app_crd_hub | default({}) }}"
+    "_rbac_argocd_instance_crd_{{ rbac_hub.hub }}": "{{ _rbac_argocd_instance_crd_hub | default({}) }}"
+    "_rbac_argocd_install_type_{{ rbac_hub.hub }}": "{{ _rbac_argocd_install_type_hub | default('unknown') }}"
+    "_rbac_expanded_{{ rbac_hub.hub }}": "{{ _rbac_expanded_hub }}"
+    "_rbac_denied_permissions_{{ rbac_hub.hub }}": "{{ _rbac_denied_permissions_hub }}"
+    "acm_{{ rbac_hub.hub }}_rbac_validation": "{{ _rbac_hub_validation_result }}"
