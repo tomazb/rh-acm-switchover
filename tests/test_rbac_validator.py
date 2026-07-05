@@ -2,15 +2,19 @@
 Unit tests for RBAC validator module.
 """
 
+import logging
 from unittest.mock import MagicMock, call, patch
 
 import pytest
 from kubernetes.client.rest import ApiException
 
+from lib import rbac_validator
 from lib.constants import (
     ACM_NAMESPACE,
     BACKUP_NAMESPACE,
     MANAGED_CLUSTER_AGENT_NAMESPACE,
+    MANAGED_CLUSTER_API_GROUP,
+    MANAGED_CLUSTER_PLURAL,
     MCE_NAMESPACE,
     OBSERVABILITY_NAMESPACE,
 )
@@ -767,6 +771,74 @@ class TestRBACValidator:
         assert "patch" not in verbs_checked
         assert "delete" not in verbs_checked
         assert "get" in verbs_checked
+
+
+class TestValidatorClusterTableDerivation:
+    """H1: VALIDATOR_CLUSTER_PERMISSIONS is derived from OPERATOR_CLUSTER_PERMISSIONS."""
+
+    EXPECTED_VALIDATOR_TABLE = [
+        ("", "namespaces", ["get", "list"]),
+        ("", "nodes", ["get", "list"]),
+        ("config.openshift.io", "clusteroperators", ["get", "list"]),
+        ("config.openshift.io", "clusterversions", ["get", "list"]),
+        ("cluster.open-cluster-management.io", "managedclusters", ["get", "list"]),
+        ("hive.openshift.io", "clusterdeployments", ["get", "list"]),
+        ("operator.open-cluster-management.io", "multiclusterhubs", ["get", "list"]),
+        ("observability.open-cluster-management.io", "multiclusterobservabilities", ["get", "list"]),
+    ]
+
+    def test_validator_table_matches_pre_derivation_literal(self):
+        """Regression pin: derived table equals the exact table shipped before H1."""
+        assert RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS == self.EXPECTED_VALIDATOR_TABLE
+
+    def test_validator_table_is_derived_from_operator_table(self):
+        derived = rbac_validator._derive_read_only_permissions(
+            RBACValidator.OPERATOR_CLUSTER_PERMISSIONS,
+            rbac_validator.VALIDATOR_CLUSTER_VERB_EXCEPTIONS,
+        )
+        assert derived == RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS
+
+    def test_managedclusters_patch_exception_is_explicit_data(self):
+        assert rbac_validator.VALIDATOR_CLUSTER_VERB_EXCEPTIONS == {
+            (MANAGED_CLUSTER_API_GROUP, MANAGED_CLUSTER_PLURAL): frozenset({"patch"})
+        }
+
+    def test_managedclusters_patch_stripped_for_validator(self):
+        operator_rule = next(
+            r
+            for r in RBACValidator.OPERATOR_CLUSTER_PERMISSIONS
+            if (r[0], r[1]) == (MANAGED_CLUSTER_API_GROUP, MANAGED_CLUSTER_PLURAL)
+        )
+        validator_rule = next(
+            r
+            for r in RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS
+            if (r[0], r[1]) == (MANAGED_CLUSTER_API_GROUP, MANAGED_CLUSTER_PLURAL)
+        )
+        assert "patch" in operator_rule[2]
+        assert "patch" not in validator_rule[2]
+        assert [v for v in operator_rule[2] if v != "patch"] == validator_rule[2]
+
+    def test_unexpected_mutating_verb_fails_derivation(self):
+        perms = [("group.example.io", "widgets", ["get", "delete"])]
+        with pytest.raises(ValueError, match="drifted"):
+            rbac_validator._derive_read_only_permissions(perms, {})
+
+    def test_stale_exception_entry_fails_derivation(self):
+        perms = [("group.example.io", "widgets", ["get", "list"])]
+        expected = {("group.example.io", "widgets"): frozenset({"delete"})}
+        with pytest.raises(ValueError, match="drifted"):
+            rbac_validator._derive_read_only_permissions(perms, expected)
+
+    def test_mutating_verbs_match_write_verb_helper(self):
+        client = MagicMock()
+        client.context = "test-context"
+        validator = RBACValidator(client)
+        for verb in ("create", "update", "patch", "delete"):
+            assert validator._is_write_verb(verb)
+            assert verb in rbac_validator.MUTATING_VERBS
+        for verb in ("get", "list", "watch"):
+            assert not validator._is_write_verb(verb)
+            assert verb not in rbac_validator.MUTATING_VERBS
 
 
 class TestValidateRBACPermissions:

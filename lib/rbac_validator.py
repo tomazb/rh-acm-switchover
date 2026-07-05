@@ -11,7 +11,7 @@ The module supports two roles:
 
 import logging
 from copy import deepcopy
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple, Union
 
 from kubernetes.client.rest import ApiException
 
@@ -21,7 +21,11 @@ from lib.constants import (
     BACKUP_NAMESPACE,
     HIVE_CLUSTERDEPLOYMENT_API_GROUP,
     HIVE_CLUSTERDEPLOYMENT_PLURAL,
+    HUB_ROLE_PRIMARY,
+    HUB_ROLE_SECONDARY,
     MANAGED_CLUSTER_AGENT_NAMESPACE,
+    MANAGED_CLUSTER_API_GROUP,
+    MANAGED_CLUSTER_PLURAL,
     MCE_NAMESPACE,
     MULTICLUSTEROBSERVABILITIES_PLURAL,
     OBSERVABILITY_API_GROUP,
@@ -43,6 +47,48 @@ def _validate_argocd_mode(argocd_mode: str) -> None:
     """Validate Argo CD RBAC mode."""
     if argocd_mode not in VALID_ARGOCD_MODES:
         raise ValueError(f"Invalid argocd_mode '{argocd_mode}'. Must be one of: {VALID_ARGOCD_MODES}")
+
+
+# Verbs that mutate cluster state. Single source for validator-table derivation
+# and RBACValidator._is_write_verb().
+MUTATING_VERBS = frozenset({"create", "update", "patch", "delete"})
+
+# The one intentional operator-vs-validator cluster-table difference: the
+# operator activates managed clusters during switchover via "patch"; the
+# read-only validator role must never receive it. Any other mutating verb added
+# to OPERATOR_CLUSTER_PERMISSIONS must be recorded here deliberately.
+VALIDATOR_CLUSTER_VERB_EXCEPTIONS: Dict[Tuple[str, str], FrozenSet[str]] = {
+    (MANAGED_CLUSTER_API_GROUP, MANAGED_CLUSTER_PLURAL): frozenset({"patch"}),
+}
+
+
+def _derive_read_only_permissions(
+    operator_permissions: List[Tuple[str, str, List[str]]],
+    expected_removals: Dict[Tuple[str, str], FrozenSet[str]],
+) -> List[Tuple[str, str, List[str]]]:
+    """Derive a read-only permission table by stripping mutating verbs.
+
+    Fails fast (at import time for the class tables) when the stripped verbs do
+    not exactly match the documented exception data, so validator-table changes
+    are always a conscious decision rather than silent drift.
+    """
+    derived: List[Tuple[str, str, List[str]]] = []
+    removed: Dict[Tuple[str, str], FrozenSet[str]] = {}
+    for api_group, resource, verbs in operator_permissions:
+        read_verbs = [verb for verb in verbs if verb not in MUTATING_VERBS]
+        stripped = frozenset(verbs) - frozenset(read_verbs)
+        if stripped:
+            removed[(api_group, resource)] = stripped
+        if read_verbs:
+            derived.append((api_group, resource, read_verbs))
+    if removed != expected_removals:
+        raise ValueError(
+            "Validator cluster permission derivation drifted from the documented exceptions: "
+            f"removed {sorted(removed)!r}, expected {sorted(expected_removals)!r}. "
+            "Update VALIDATOR_CLUSTER_VERB_EXCEPTIONS deliberately when changing "
+            "mutating verbs in OPERATOR_CLUSTER_PERMISSIONS."
+        )
+    return derived
 
 
 class RBACValidator:
@@ -76,25 +122,13 @@ class RBACValidator:
         ),
     ]
 
-    # Required cluster-scoped permissions for VALIDATOR role (read-only)
-    VALIDATOR_CLUSTER_PERMISSIONS = [
-        ("", "namespaces", ["get", "list"]),
-        ("", "nodes", ["get", "list"]),
-        ("config.openshift.io", "clusteroperators", ["get", "list"]),
-        ("config.openshift.io", "clusterversions", ["get", "list"]),
-        (
-            "cluster.open-cluster-management.io",
-            "managedclusters",
-            ["get", "list"],
-        ),  # No patch
-        ("hive.openshift.io", "clusterdeployments", ["get", "list"]),
-        ("operator.open-cluster-management.io", "multiclusterhubs", ["get", "list"]),
-        (
-            "observability.open-cluster-management.io",
-            "multiclusterobservabilities",
-            ["get", "list"],
-        ),
-    ]
+    # Required cluster-scoped permissions for VALIDATOR role (read-only),
+    # derived from the operator table by stripping mutating verbs. The only
+    # verb stripped today is managedclusters "patch"
+    # (see VALIDATOR_CLUSTER_VERB_EXCEPTIONS).
+    VALIDATOR_CLUSTER_PERMISSIONS = _derive_read_only_permissions(
+        OPERATOR_CLUSTER_PERMISSIONS, VALIDATOR_CLUSTER_VERB_EXCEPTIONS
+    )
 
     # Alias for backwards compatibility
     CLUSTER_PERMISSIONS = OPERATOR_CLUSTER_PERMISSIONS
@@ -313,7 +347,7 @@ class RBACValidator:
 
     def _is_write_verb(self, verb: str) -> bool:
         """Check if a verb is a write operation."""
-        return verb in ("create", "patch", "delete", "update")
+        return verb in MUTATING_VERBS
 
     def _get_argocd_cluster_permissions(
         self, argocd_mode: str, argocd_install_type: str = "unknown"
