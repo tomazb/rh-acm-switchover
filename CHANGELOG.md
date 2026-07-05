@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Python RBAC validator cluster table (`VALIDATOR_CLUSTER_PERMISSIONS`) is now derived from the operator table by stripping mutating verbs, with the managedclusters `patch` exception recorded as explicit, import-time-verified data; primary/secondary hub RBAC validation is deduplicated behind a hub-parameterized `_validate_hub()` loop. No behavior change: permission sets, fail-closed semantics, and operator-facing messages are unchanged (Thermos `H1`).
 - Python state and collection checkpoints now bind resume validation to live hub cluster identities, rejecting same-context retargeting to a different cluster before mutation.
 - Collection preflight now refreshes MultiClusterHub discovery during execute-mode runs even when tests or callers pre-seed discovery variables, preventing stale cached MCH data from satisfying live mutation validation.
 - Live RBAC certification now derives its positive permission matrix from the Python RBAC validator, supports profile-driven hub scopes, treats explicitly selected live certification as blocking, and records collision-safe SAR request/evidence artifacts.
