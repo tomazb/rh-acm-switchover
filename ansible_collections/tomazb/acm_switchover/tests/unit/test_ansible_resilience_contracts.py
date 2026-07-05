@@ -801,6 +801,11 @@ def test_preflight_validate_rbac_fails_closed_on_argocd_401():
         assert (
             "{{ rbac_hub.hub }}" in task["ansible.builtin.fail"]["msg"]
         ), "401 fail-closed message must name the hub being validated"
+        when = _when_text(task).lower()
+        assert ".msg" in when, "401 fail-closed task must inspect the CRD discovery error message"
+        assert (
+            "'401'" in when and "unauthorized" in when
+        ), "401 fail-closed task must be gated on 401/unauthorized discovery errors"
 
     unexpected_fail_tasks = [
         t for t in fail_tasks if "unable to inspect" in t.get("ansible.builtin.fail", {}).get("msg", "").lower()

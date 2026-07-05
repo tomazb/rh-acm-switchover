@@ -197,7 +197,7 @@ already uses for managed clusters).
 | --- | --- | --- |
 | Restore-only skips primary validation entirely | `when: not (…restore_only…)` on every primary task | `enabled: not restore_only` on the primary table entry; loop-level `when: rbac_hub.enabled` |
 | Decommission permissions primary-only | inline `include_decommission:` expression on primary calls; literal `false` + comment on secondary | table data: primary expression, secondary `false` with the same comment |
-| Old-hub finalization primary-only | `_rbac_include_old_hub_finalization_primary` computed in main file, passed on primary calls only; secondary omits the arg | same fact computed in main file (unchanged); table data primary `{{ _rbac_include_old_hub_finalization_primary | default(false) }}`, secondary `false` (module default — identical) |
+| Old-hub finalization primary-only | `_rbac_include_old_hub_finalization_primary` computed in main file, passed on primary calls only; secondary omits the arg | same fact computed in main file (unchanged); table data primary `{{ _rbac_include_old_hub_finalization_primary \| default(false) }}`, secondary `false` (module default — identical) |
 | SSAR target vars | secondary passes `_ssar_target_*`; primary relies on defaults (which are the primary values) | both hubs pass explicit `_ssar_target_*` from table data; rendered values unchanged |
 | Secondary error-count failure message | lives in `acm_rbac_validate` (`hub:` param drives message/result shape), not the task file | unchanged — module behavior, `hub: "{{ rbac_hub.hub }}"` |
 | Install-type override (Python `secondary_argocd_install_type`) | no Ansible analog: each hub detects its own install type independently | unchanged — per-hub detection inside the shared block |

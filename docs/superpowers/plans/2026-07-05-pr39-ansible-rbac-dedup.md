@@ -12,9 +12,9 @@ H1's `hub_validations` table + `_validate_hub(...)` loop.
 the main file keeps mode derivation, primary-only old-hub-finalization
 determination, the once-computed observability skip state, the managed-cluster
 section, the merge task, and the completion marker; a new shared hub task file
-holds the 10-task per-hub sequence once, registering generic `*_hub`
-intermediates and re-publishing every existing per-hub fact name via templated
-`set_fact` keys.
+holds the per-hub sequence once (10 shared validation tasks plus a final
+publish task), registering generic `*_hub` intermediates and re-publishing
+every existing per-hub fact name via templated `set_fact` keys.
 
 **Tech Stack:** Ansible task files (collection `tomazb.acm_switchover`), pytest
 static-contract tests, fixture-driven `ansible-playbook` integration tests.
