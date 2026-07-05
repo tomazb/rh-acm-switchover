@@ -930,7 +930,11 @@ class TestSecondaryActivation:
         )
 
         mock_secondary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": RESTORE_PASSIVE_SYNC_NAME}, "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True}}
+            {
+                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+                "status": {"phase": "Enabled"},
+            }
         ]
 
         def get_custom_resource_side_effect(**kwargs):
@@ -979,6 +983,7 @@ class TestSecondaryActivation:
                     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True,
                     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_SKIP,
                 },
+                "status": {"phase": "Enabled"},
             }
         ]
         mock_secondary_client.get_custom_resource.return_value = None
@@ -1012,6 +1017,7 @@ class TestSecondaryActivation:
                     "namespace": BACKUP_NAMESPACE,
                 },
                 "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+                "status": {"phase": "Enabled"},
             }
         ]
         mock_secondary_client.get_custom_resource.return_value = None
@@ -1041,6 +1047,7 @@ class TestSecondaryActivation:
             {
                 "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
                 "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+                "status": {"phase": "Enabled"},
             }
         ]
         mock_secondary_client.get_custom_resource.return_value = None
@@ -1718,3 +1725,75 @@ class TestActivateResumeAndEdgeCases:
 
         with pytest.raises(TypeError, match="bad type"):
             activation.activate()
+
+
+class TestActivationResumeStalenessGuard:
+    """Thermos R2-M2: activation paths must re-validate passive-restore readiness on entry."""
+
+    def _activation(self, mock_secondary_client, mock_state_manager, activation_method):
+        return SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            method="passive",
+            activation_method=activation_method,
+        )
+
+    def test_patch_activation_fails_closed_on_degraded_restore(self, mock_secondary_client, mock_state_manager):
+        """Resume after crash-mid-verification must not patch a degraded passive restore."""
+        activation = self._activation(mock_secondary_client, mock_state_manager, "patch")
+        degraded = {
+            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+            "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+            "status": {"phase": "Error", "lastMessage": "sync broke"},
+        }
+        mock_secondary_client.list_custom_resources.return_value = [degraded]
+        mock_secondary_client.get_custom_resource.return_value = degraded
+        mock_secondary_client.get_custom_resource.side_effect = None
+
+        with pytest.raises(FatalError, match="Passive sync restore not ready: Error"):
+            activation._activate_via_passive_sync()
+
+        mock_secondary_client.patch_custom_resource.assert_not_called()
+        mock_state_manager.set_config.assert_not_called()
+
+    def test_patch_activation_already_applied_skips_revalidation(self, mock_secondary_client, mock_state_manager):
+        """A patched restore legitimately transitions phases; already-applied must stay an early return."""
+        activation = self._activation(mock_secondary_client, mock_state_manager, "patch")
+        applied = {
+            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+            "spec": {
+                SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True,
+                SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST,
+            },
+            "status": {"phase": "FinishedWithErrors", "lastMessage": "post-patch churn"},
+        }
+        mock_secondary_client.list_custom_resources.return_value = [applied]
+        mock_secondary_client.get_custom_resource.return_value = applied
+        mock_secondary_client.get_custom_resource.side_effect = None
+
+        activation._activate_via_passive_sync()
+
+        mock_secondary_client.patch_custom_resource.assert_not_called()
+
+    def test_restore_activation_fails_closed_on_degraded_passive_restore(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """Option B must never delete a passive restore that is not activation-ready."""
+        activation = self._activation(mock_secondary_client, mock_state_manager, "restore")
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+                "status": {"phase": "Error", "lastMessage": "sync broke"},
+            }
+        ]
+
+        # Bound the pre-fix behavior: without the guard the path proceeds to
+        # delete + wait; patch the waiter so the red run fails fast instead of
+        # polling forever.
+        with patch("lib.waiter.wait_for_condition", return_value=True):
+            with pytest.raises(FatalError, match="Passive sync restore not ready: Error"):
+                activation._activate_via_restore_resource()
+
+        mock_secondary_client.delete_custom_resource.assert_not_called()
+        mock_secondary_client.create_custom_resource.assert_not_called()
