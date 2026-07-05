@@ -2,15 +2,19 @@
 Unit tests for RBAC validator module.
 """
 
+import logging
 from unittest.mock import MagicMock, call, patch
 
 import pytest
 from kubernetes.client.rest import ApiException
 
+from lib import rbac_validator
 from lib.constants import (
     ACM_NAMESPACE,
     BACKUP_NAMESPACE,
     MANAGED_CLUSTER_AGENT_NAMESPACE,
+    MANAGED_CLUSTER_API_GROUP,
+    MANAGED_CLUSTER_PLURAL,
     MCE_NAMESPACE,
     OBSERVABILITY_NAMESPACE,
 )
@@ -769,6 +773,78 @@ class TestRBACValidator:
         assert "get" in verbs_checked
 
 
+class TestValidatorClusterTableDerivation:
+    """H1: VALIDATOR_CLUSTER_PERMISSIONS is derived from OPERATOR_CLUSTER_PERMISSIONS."""
+
+    EXPECTED_VALIDATOR_TABLE = [
+        ("", "namespaces", ["get", "list"]),
+        ("", "nodes", ["get", "list"]),
+        ("config.openshift.io", "clusteroperators", ["get", "list"]),
+        ("config.openshift.io", "clusterversions", ["get", "list"]),
+        ("cluster.open-cluster-management.io", "managedclusters", ["get", "list"]),
+        ("hive.openshift.io", "clusterdeployments", ["get", "list"]),
+        ("operator.open-cluster-management.io", "multiclusterhubs", ["get", "list"]),
+        ("observability.open-cluster-management.io", "multiclusterobservabilities", ["get", "list"]),
+    ]
+
+    def test_validator_table_matches_pre_derivation_literal(self):
+        """Regression pin: derived table equals the exact table shipped before H1."""
+        assert RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS == self.EXPECTED_VALIDATOR_TABLE
+
+    def test_validator_table_is_derived_from_operator_table(self):
+        derived = rbac_validator._derive_read_only_permissions(
+            RBACValidator.OPERATOR_CLUSTER_PERMISSIONS,
+            rbac_validator.VALIDATOR_CLUSTER_VERB_EXCEPTIONS,
+        )
+        assert derived == RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS
+
+    def test_managedclusters_patch_exception_is_explicit_data(self):
+        assert rbac_validator.VALIDATOR_CLUSTER_VERB_EXCEPTIONS == {
+            (MANAGED_CLUSTER_API_GROUP, MANAGED_CLUSTER_PLURAL): frozenset({"patch"})
+        }
+
+    def test_managedclusters_patch_stripped_for_validator(self):
+        operator_rule = next(
+            r
+            for r in RBACValidator.OPERATOR_CLUSTER_PERMISSIONS
+            if (r[0], r[1]) == (MANAGED_CLUSTER_API_GROUP, MANAGED_CLUSTER_PLURAL)
+        )
+        validator_rule = next(
+            r
+            for r in RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS
+            if (r[0], r[1]) == (MANAGED_CLUSTER_API_GROUP, MANAGED_CLUSTER_PLURAL)
+        )
+        assert "patch" in operator_rule[2]
+        assert "patch" not in validator_rule[2]
+        assert [v for v in operator_rule[2] if v != "patch"] == validator_rule[2]
+
+    def test_unexpected_mutating_verb_fails_derivation(self):
+        perms = [("group.example.io", "widgets", ["get", "delete"])]
+        with pytest.raises(ValueError, match="drifted") as exc_info:
+            rbac_validator._derive_read_only_permissions(perms, {})
+        # The error must name the stripped verbs, not just the resource keys,
+        # so an import-time drift failure is diagnosable from the message alone.
+        assert "'delete'" in str(exc_info.value)
+
+    def test_stale_exception_entry_fails_derivation(self):
+        perms = [("group.example.io", "widgets", ["get", "list"])]
+        expected = {("group.example.io", "widgets"): frozenset({"delete"})}
+        with pytest.raises(ValueError, match="drifted") as exc_info:
+            rbac_validator._derive_read_only_permissions(perms, expected)
+        assert "'delete'" in str(exc_info.value)
+
+    def test_mutating_verbs_match_write_verb_helper(self):
+        client = MagicMock()
+        client.context = "test-context"
+        validator = RBACValidator(client)
+        for verb in ("create", "update", "patch", "delete"):
+            assert validator._is_write_verb(verb)
+            assert verb in rbac_validator.MUTATING_VERBS
+        for verb in ("get", "list", "watch"):
+            assert not validator._is_write_verb(verb)
+            assert verb not in rbac_validator.MUTATING_VERBS
+
+
 class TestValidateRBACPermissions:
     """Test cases for validate_rbac_permissions function."""
 
@@ -1038,6 +1114,111 @@ class TestValidateRBACPermissions:
 
         with pytest.raises(ValidationError, match="secondary hub"):
             validate_rbac_permissions(None, mock_secondary_client)
+
+
+class TestValidateHubLoop:
+    """H1: primary/secondary validation routes through one hub-parameterized helper."""
+
+    @pytest.fixture
+    def mock_primary_client(self):
+        client = MagicMock()
+        client.context = "primary-hub"
+        return client
+
+    @pytest.fixture
+    def mock_secondary_client(self):
+        client = MagicMock()
+        client.context = "secondary-hub"
+        return client
+
+    def test_both_hubs_route_through_validate_hub_with_explicit_asymmetries(
+        self, mock_primary_client, mock_secondary_client, monkeypatch
+    ):
+        calls = []
+        monkeypatch.setattr(
+            rbac_validator,
+            "_validate_hub",
+            lambda hub_role, client, **kwargs: calls.append((hub_role, client, kwargs)),
+        )
+        validate_rbac_permissions(
+            mock_primary_client,
+            mock_secondary_client,
+            include_decommission=True,
+            include_old_hub_finalization=True,
+            skip_observability=True,
+            argocd_mode="check",
+            argocd_install_type="operator",
+            secondary_argocd_install_type="vanilla",
+        )
+        assert [(hub_role, client) for hub_role, client, _ in calls] == [
+            ("primary", mock_primary_client),
+            ("secondary", mock_secondary_client),
+        ]
+        primary_kwargs = calls[0][2]
+        secondary_kwargs = calls[1][2]
+        # Primary-only asymmetries: decommission/old-hub-finalization pass through.
+        assert primary_kwargs["include_decommission"] is True
+        assert primary_kwargs["include_old_hub_finalization"] is True
+        assert primary_kwargs["argocd_install_type"] == "operator"
+        assert primary_kwargs["include_error_count"] is False
+        # Secondary-only asymmetries: flags forced off, install-type override, error count.
+        assert secondary_kwargs["include_decommission"] is False
+        assert secondary_kwargs["include_old_hub_finalization"] is False
+        assert secondary_kwargs["argocd_install_type"] == "vanilla"
+        assert secondary_kwargs["include_error_count"] is True
+        # Shared flags reach both hubs unchanged.
+        for kwargs in (primary_kwargs, secondary_kwargs):
+            assert kwargs["skip_observability"] is True
+            assert kwargs["argocd_mode"] == "check"
+
+    def test_secondary_install_type_falls_back_to_primary_install_type(self, mock_secondary_client, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            rbac_validator,
+            "_validate_hub",
+            lambda hub_role, client, **kwargs: calls.append((hub_role, kwargs)),
+        )
+        validate_rbac_permissions(None, mock_secondary_client, argocd_install_type="operator")
+        assert calls[0][0] == "secondary"
+        assert calls[0][1]["argocd_install_type"] == "operator"
+
+    def test_primary_absent_logs_skip_and_still_validates_secondary(self, mock_secondary_client, monkeypatch, caplog):
+        calls = []
+        monkeypatch.setattr(
+            rbac_validator,
+            "_validate_hub",
+            lambda hub_role, client, **kwargs: calls.append(hub_role),
+        )
+        with caplog.at_level(logging.INFO, logger="acm_switchover"):
+            validate_rbac_permissions(None, mock_secondary_client)
+        assert calls == ["secondary"]
+        assert "Primary hub not available; skipping primary RBAC validation" in caplog.text
+
+    @patch("lib.rbac_validator.RBACValidator")
+    def test_secondary_failure_message_includes_error_count(self, mock_validator_class, mock_secondary_client):
+        mock_validator = MagicMock()
+        mock_validator.validate_all_permissions.return_value = (
+            False,
+            {"cluster": ["err one", "err two"], "namespaces": ["err three"]},
+        )
+        mock_validator.generate_permission_report.return_value = "Error report"
+        mock_validator_class.return_value = mock_validator
+        with pytest.raises(ValidationError) as exc_info:
+            validate_rbac_permissions(None, mock_secondary_client)
+        assert (
+            str(exc_info.value)
+            == "RBAC permission validation failed on secondary hub (3 error(s)). See report above for details."
+        )
+
+    @patch("lib.rbac_validator.RBACValidator")
+    def test_primary_failure_message_has_no_error_count(self, mock_validator_class, mock_primary_client):
+        mock_validator = MagicMock()
+        mock_validator.validate_all_permissions.return_value = (False, {"cluster": ["err one"]})
+        mock_validator.generate_permission_report.return_value = "Error report"
+        mock_validator_class.return_value = mock_validator
+        with pytest.raises(ValidationError) as exc_info:
+            validate_rbac_permissions(mock_primary_client)
+        assert str(exc_info.value) == "RBAC permission validation failed on primary hub. See report above for details."
 
 
 class TestValidateDecommissionPermissions:

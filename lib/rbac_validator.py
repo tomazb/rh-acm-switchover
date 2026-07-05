@@ -11,7 +11,7 @@ The module supports two roles:
 
 import logging
 from copy import deepcopy
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple, Union
 
 from kubernetes.client.rest import ApiException
 
@@ -21,7 +21,11 @@ from lib.constants import (
     BACKUP_NAMESPACE,
     HIVE_CLUSTERDEPLOYMENT_API_GROUP,
     HIVE_CLUSTERDEPLOYMENT_PLURAL,
+    HUB_ROLE_PRIMARY,
+    HUB_ROLE_SECONDARY,
     MANAGED_CLUSTER_AGENT_NAMESPACE,
+    MANAGED_CLUSTER_API_GROUP,
+    MANAGED_CLUSTER_PLURAL,
     MCE_NAMESPACE,
     MULTICLUSTEROBSERVABILITIES_PLURAL,
     OBSERVABILITY_API_GROUP,
@@ -43,6 +47,54 @@ def _validate_argocd_mode(argocd_mode: str) -> None:
     """Validate Argo CD RBAC mode."""
     if argocd_mode not in VALID_ARGOCD_MODES:
         raise ValueError(f"Invalid argocd_mode '{argocd_mode}'. Must be one of: {VALID_ARGOCD_MODES}")
+
+
+# Verbs that mutate cluster state. Single source for validator-table derivation
+# and RBACValidator._is_write_verb().
+MUTATING_VERBS = frozenset({"create", "update", "patch", "delete"})
+
+# The one intentional operator-vs-validator cluster-table difference: the
+# operator activates managed clusters during switchover via "patch"; the
+# read-only validator role must never receive it. Any other mutating verb added
+# to OPERATOR_CLUSTER_PERMISSIONS must be recorded here deliberately.
+VALIDATOR_CLUSTER_VERB_EXCEPTIONS: Dict[Tuple[str, str], FrozenSet[str]] = {
+    (MANAGED_CLUSTER_API_GROUP, MANAGED_CLUSTER_PLURAL): frozenset({"patch"}),
+}
+
+
+def _format_verb_removals(removals: Dict[Tuple[str, str], FrozenSet[str]]) -> Dict[Tuple[str, str], List[str]]:
+    """Render a removals mapping with deterministic ordering for error messages."""
+    return {key: sorted(verbs) for key, verbs in sorted(removals.items())}
+
+
+def _derive_read_only_permissions(
+    operator_permissions: List[Tuple[str, str, List[str]]],
+    expected_removals: Dict[Tuple[str, str], FrozenSet[str]],
+) -> List[Tuple[str, str, List[str]]]:
+    """Derive a read-only permission table by stripping mutating verbs.
+
+    Fails fast (at import time for the class tables) when the stripped verbs do
+    not exactly match the documented exception data, so validator-table changes
+    are always a conscious decision rather than silent drift.
+    """
+    derived: List[Tuple[str, str, List[str]]] = []
+    removed: Dict[Tuple[str, str], FrozenSet[str]] = {}
+    for api_group, resource, verbs in operator_permissions:
+        read_verbs = [verb for verb in verbs if verb not in MUTATING_VERBS]
+        stripped = frozenset(verbs) - frozenset(read_verbs)
+        if stripped:
+            removed[(api_group, resource)] = stripped
+        if read_verbs:
+            derived.append((api_group, resource, read_verbs))
+    if removed != expected_removals:
+        raise ValueError(
+            "Validator cluster permission derivation drifted from the documented exceptions: "
+            f"removed {_format_verb_removals(removed)!r}, "
+            f"expected {_format_verb_removals(expected_removals)!r}. "
+            "Update VALIDATOR_CLUSTER_VERB_EXCEPTIONS deliberately when changing "
+            "mutating verbs in OPERATOR_CLUSTER_PERMISSIONS."
+        )
+    return derived
 
 
 class RBACValidator:
@@ -76,25 +128,13 @@ class RBACValidator:
         ),
     ]
 
-    # Required cluster-scoped permissions for VALIDATOR role (read-only)
-    VALIDATOR_CLUSTER_PERMISSIONS = [
-        ("", "namespaces", ["get", "list"]),
-        ("", "nodes", ["get", "list"]),
-        ("config.openshift.io", "clusteroperators", ["get", "list"]),
-        ("config.openshift.io", "clusterversions", ["get", "list"]),
-        (
-            "cluster.open-cluster-management.io",
-            "managedclusters",
-            ["get", "list"],
-        ),  # No patch
-        ("hive.openshift.io", "clusterdeployments", ["get", "list"]),
-        ("operator.open-cluster-management.io", "multiclusterhubs", ["get", "list"]),
-        (
-            "observability.open-cluster-management.io",
-            "multiclusterobservabilities",
-            ["get", "list"],
-        ),
-    ]
+    # Required cluster-scoped permissions for VALIDATOR role (read-only),
+    # derived from the operator table by stripping mutating verbs. The only
+    # verb stripped today is managedclusters "patch"
+    # (see VALIDATOR_CLUSTER_VERB_EXCEPTIONS).
+    VALIDATOR_CLUSTER_PERMISSIONS = _derive_read_only_permissions(
+        OPERATOR_CLUSTER_PERMISSIONS, VALIDATOR_CLUSTER_VERB_EXCEPTIONS
+    )
 
     # Alias for backwards compatibility
     CLUSTER_PERMISSIONS = OPERATOR_CLUSTER_PERMISSIONS
@@ -313,7 +353,7 @@ class RBACValidator:
 
     def _is_write_verb(self, verb: str) -> bool:
         """Check if a verb is a write operation."""
-        return verb in ("create", "patch", "delete", "update")
+        return verb in MUTATING_VERBS
 
     def _get_argocd_cluster_permissions(
         self, argocd_mode: str, argocd_install_type: str = "unknown"
@@ -902,6 +942,56 @@ class RBACValidator:
         return "\n".join(report)
 
 
+def _validate_hub(
+    hub_role: str,
+    client: KubeClient,
+    *,
+    include_decommission: bool,
+    include_old_hub_finalization: bool,
+    skip_observability: bool,
+    argocd_mode: str,
+    argocd_install_type: str,
+    include_error_count: bool,
+) -> None:
+    """Validate RBAC permissions on one hub, preserving per-hub message shapes.
+
+    include_error_count encodes the secondary-only failure-message behavior;
+    every other primary/secondary asymmetry is passed in explicitly by the
+    caller's hub table.
+    """
+    logger.info("Validating RBAC permissions on %s hub...", hub_role)
+    validator = RBACValidator(client)
+    try:
+        valid, errors = validator.validate_all_permissions(
+            include_decommission=include_decommission,
+            include_old_hub_finalization=include_old_hub_finalization,
+            skip_observability=skip_observability,
+            argocd_mode=argocd_mode,
+            argocd_install_type=argocd_install_type,
+        )
+    except ValidationError as exc:
+        raise ValidationError(f"RBAC permission validation could not be completed on {hub_role} hub: {exc}") from exc
+
+    if valid:
+        return
+
+    report = validator.generate_permission_report(
+        include_decommission=include_decommission,
+        include_old_hub_finalization=include_old_hub_finalization,
+        skip_observability=skip_observability,
+        argocd_mode=argocd_mode,
+        argocd_install_type=argocd_install_type,
+    )
+    logger.error("\n%s", report)
+    if include_error_count:
+        error_count = sum(len(errs) for errs in errors.values())
+        raise ValidationError(
+            f"RBAC permission validation failed on {hub_role} hub ({error_count} error(s)). "
+            "See report above for details."
+        )
+    raise ValidationError(f"RBAC permission validation failed on {hub_role} hub. See report above for details.")
+
+
 def validate_rbac_permissions(
     primary_client: Optional[KubeClient] = None,
     secondary_client: Optional[KubeClient] = None,
@@ -943,65 +1033,52 @@ def validate_rbac_permissions(
     logger.info("Starting RBAC permission validation...")
     _validate_argocd_mode(argocd_mode)
 
-    # Validate primary hub (when available)
-    if primary_client is not None:
-        logger.info("Validating RBAC permissions on primary hub...")
-        primary_validator = RBACValidator(primary_client)
-        try:
-            primary_valid, primary_errors = primary_validator.validate_all_permissions(
-                include_decommission=include_decommission,
-                include_old_hub_finalization=include_old_hub_finalization,
-                skip_observability=skip_observability,
-                argocd_mode=argocd_mode,
-                argocd_install_type=argocd_install_type,
-            )
-        except ValidationError as exc:
-            raise ValidationError(f"RBAC permission validation could not be completed on primary hub: {exc}") from exc
+    # Per-hub validation table. Asymmetries are explicit data:
+    # - decommission/old-hub-finalization checks apply to the primary hub only;
+    # - the secondary hub honors secondary_argocd_install_type when provided;
+    # - only the secondary failure message includes the error count.
+    hub_validations = (
+        (
+            HUB_ROLE_PRIMARY,
+            primary_client,
+            include_decommission,
+            include_old_hub_finalization,
+            argocd_install_type,
+            False,
+        ),
+        (
+            HUB_ROLE_SECONDARY,
+            secondary_client,
+            False,
+            False,
+            secondary_argocd_install_type or argocd_install_type,
+            True,
+        ),
+    )
 
-        if not primary_valid:
-            report = primary_validator.generate_permission_report(
-                include_decommission=include_decommission,
-                include_old_hub_finalization=include_old_hub_finalization,
-                skip_observability=skip_observability,
-                argocd_mode=argocd_mode,
-                argocd_install_type=argocd_install_type,
-            )
-            logger.error("\n%s", report)
-            raise ValidationError("RBAC permission validation failed on primary hub. " "See report above for details.")
-    else:
-        logger.info("Primary hub not available; skipping primary RBAC validation")
-
-    # Validate secondary hub if provided
-    if secondary_client:
-        logger.info("Validating RBAC permissions on secondary hub...")
-        secondary_validator = RBACValidator(secondary_client)
-        secondary_install_type = secondary_argocd_install_type or argocd_install_type
-        try:
-            secondary_valid, secondary_errors = secondary_validator.validate_all_permissions(
-                include_decommission=False,  # Decommission only on primary
-                include_old_hub_finalization=False,  # Old-hub finalization delete only applies to primary
-                skip_observability=skip_observability,
-                argocd_mode=argocd_mode,
-                argocd_install_type=secondary_install_type,
-            )
-        except ValidationError as exc:
-            raise ValidationError(f"RBAC permission validation could not be completed on secondary hub: {exc}") from exc
-
-        if not secondary_valid:
-            report = secondary_validator.generate_permission_report(
-                include_decommission=False,
-                include_old_hub_finalization=False,
-                skip_observability=skip_observability,
-                argocd_mode=argocd_mode,
-                argocd_install_type=secondary_install_type,
-            )
-            logger.error("\n%s", report)
-            # Include error count in exception message for debugging
-            error_count = sum(len(errs) for errs in secondary_errors.values())
-            raise ValidationError(
-                f"RBAC permission validation failed on secondary hub ({error_count} error(s)). "
-                "See report above for details."
-            )
+    for (
+        hub_role,
+        client,
+        hub_include_decommission,
+        hub_include_old_hub_finalization,
+        hub_argocd_install_type,
+        include_error_count,
+    ) in hub_validations:
+        if hub_role == HUB_ROLE_PRIMARY and client is None:
+            logger.info("Primary hub not available; skipping primary RBAC validation")
+            continue
+        if hub_role == HUB_ROLE_SECONDARY and client is None:
+            continue
+        _validate_hub(
+            hub_role,
+            client,
+            include_decommission=hub_include_decommission,
+            include_old_hub_finalization=hub_include_old_hub_finalization,
+            skip_observability=skip_observability,
+            argocd_mode=argocd_mode,
+            argocd_install_type=hub_argocd_install_type,
+            include_error_count=include_error_count,
+        )
 
     logger.info("✓ RBAC permission validation completed successfully")
 
