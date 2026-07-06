@@ -462,8 +462,18 @@ git commit -m "test: pin hub-loop contract for preflight RBAC validation (red)"
       # - decommission/old-hub-finalization checks apply to the primary hub only.
       - hub: primary
         enabled: "{{ not (acm_switchover_operation.restore_only | default(false)) }}"
-        kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-        context: "{{ acm_switchover_hubs.primary.context }}"
+        kubeconfig: >-
+          {{
+            ''
+            if (acm_switchover_operation.restore_only | default(false))
+            else acm_switchover_hubs.primary.kubeconfig
+          }}
+        context: >-
+          {{
+            ''
+            if (acm_switchover_operation.restore_only | default(false))
+            else acm_switchover_hubs.primary.context
+          }}
         include_decommission: "{{ acm_switchover_operation.old_hub_action | default('secondary') == 'decommission' }}"
         include_old_hub_finalization: "{{ _rbac_include_old_hub_finalization_primary | default(false) }}"
       - hub: secondary
