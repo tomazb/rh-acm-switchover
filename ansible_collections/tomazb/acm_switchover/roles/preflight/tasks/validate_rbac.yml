@@ -48,13 +48,13 @@
         kubeconfig: >-
           {{
             ''
-            if (acm_switchover_operation.restore_only | default(false) | bool)
+            if (acm_switchover_operation.restore_only | default(false))
             else acm_switchover_hubs.primary.kubeconfig
           }}
         context: >-
           {{
             ''
-            if (acm_switchover_operation.restore_only | default(false) | bool)
+            if (acm_switchover_operation.restore_only | default(false))
             else acm_switchover_hubs.primary.context
           }}
         include_decommission: "{{ acm_switchover_operation.old_hub_action | default('secondary') == 'decommission' }}"

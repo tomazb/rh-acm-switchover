@@ -106,6 +106,19 @@ def test_preflight_rbac_validates_hubs_through_shared_hub_loop():
     assert secondary["enabled"] is True, "secondary hub validation must be unconditional"
 
 
+def test_preflight_rbac_primary_restore_only_skip_expression_is_consistent():
+    """The disabled primary row must not evaluate primary hub fields through a different restore-only rule."""
+    tasks = _load_yaml("validate_rbac.yml")
+    table_task = next(t for t in tasks if "_rbac_hub_validations" in t.get("ansible.builtin.set_fact", {}))
+    primary = table_task["ansible.builtin.set_fact"]["_rbac_hub_validations"][0]
+    restore_only_expression = "acm_switchover_operation.restore_only | default(false)"
+
+    assert primary["enabled"] == "{{ not (%s) }}" % restore_only_expression
+    for field in ("kubeconfig", "context"):
+        assert "if (%s)" % restore_only_expression in primary[field]
+        assert "if (%s | bool)" % restore_only_expression not in primary[field]
+
+
 def test_preflight_rbac_hub_loop_preserves_registered_fact_names():
     """The shared hub file must re-publish every per-hub fact the pre-loop file registered."""
     hub_text = (PREFLIGHT_TASKS / "validate_rbac_hub.yml").read_text()
