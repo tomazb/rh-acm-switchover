@@ -97,6 +97,32 @@ class TestArgParsing:
             with pytest.raises(SystemExit):
                 parse_args()
 
+    def test_required_args_still_apply_to_decommission(self):
+        """Decommission is not a standalone mode; method and old-hub-action remain required."""
+        with patch("sys.argv", ["script.py", "--decommission", "--primary-context", "old-hub"]):
+            with pytest.raises(SystemExit):
+                parse_args()
+
+    def test_restore_only_abbreviation_does_not_require_primary_or_method(self):
+        """Argparse abbreviation handling must run before standalone required-argument checks."""
+        with patch("sys.argv", ["script.py", "--restore-on", "--secondary-context", "secondary"]):
+            args = parse_args()
+
+        assert args.restore_only is True
+        assert args.primary_context is None
+        assert args.method is None
+        assert args.old_hub_action is None
+
+    def test_argocd_resume_only_abbreviation_does_not_require_primary_or_method(self):
+        """Argparse-recognized resume-only abbreviations should not be blocked by a pre-scan."""
+        with patch("sys.argv", ["script.py", "--argocd-resume-onl", "--secondary-context", "secondary"]):
+            args = parse_args()
+
+        assert args.argocd_resume_only is True
+        assert args.primary_context is None
+        assert args.method is None
+        assert args.old_hub_action is None
+
     def test_mutually_exclusive_modes(self):
         """Test that mutually exclusive flags raise error."""
         with patch(

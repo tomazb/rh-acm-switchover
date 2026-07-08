@@ -30,7 +30,7 @@ from lib.constants import (
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
 from lib.utils import confirm_action
-from lib.waiter import WaitConditionResult, wait_for_condition
+from lib.waiter import WaitConditionResult, format_public_list, wait_for_condition
 
 logger = logging.getLogger("acm_switchover")
 
@@ -227,7 +227,9 @@ class Decommission:
                 if not non_local:
                     return WaitConditionResult.complete("all ManagedClusters removed (except local-cluster)")
                 names = [mc.get("metadata", {}).get("name") for mc in non_local]
-                return WaitConditionResult.pending(f"{len(non_local)} ManagedCluster(s) remaining: {', '.join(names)}")
+                return WaitConditionResult.pending(
+                    f"{len(non_local)} ManagedCluster(s) remaining: {format_public_list(names)}"
+                )
 
             success = wait_for_condition(
                 "ManagedCluster removal",
@@ -305,7 +307,7 @@ class Decommission:
 
         logger.info(
             "Verified ClusterDeployment preserveOnDelete safety for ManagedCluster(s): %s",
-            ", ".join(managed_cluster_names),
+            format_public_list(managed_cluster_names),
         )
 
     @staticmethod

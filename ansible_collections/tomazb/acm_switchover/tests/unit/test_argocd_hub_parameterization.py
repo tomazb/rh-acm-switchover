@@ -334,17 +334,32 @@ def test_standalone_argocd_resume_guards_checkpoint_load_by_enabled_flag():
 
     A checkpoint file may exist from a previous run at the configured path even
     when checkpoint.enabled is false for the current run (no fresh write happened).
-    Loading it would seed a wrong run_id. All three checkpoint pre_tasks must
-    require checkpoint.enabled before touching the file.
+    Loading it would seed a wrong run_id. Checkpoint file tasks must consume the
+    shared lookup predicate, which itself requires checkpoint.enabled.
     """
-    text = (PLAYBOOKS_DIR / "argocd_resume.yml").read_text()
+    playbook = yaml.safe_load((PLAYBOOKS_DIR / "argocd_resume.yml").read_text())
+    pre_tasks = playbook[0].get("pre_tasks", [])
     enabled_guard = "acm_switchover_execution.checkpoint.enabled | default(false)"
-    # Count occurrences — one per pre_task (stat, load, seed)
-    count = text.count(enabled_guard)
-    assert count >= 3, (
-        f"argocd_resume.yml must guard all three checkpoint pre_tasks with "
-        f"'{enabled_guard}', found {count} occurrence(s)"
+    lookup_task = next(
+        task
+        for task in pre_tasks
+        if "_argocd_resume_checkpoint_lookup_required" in task.get("ansible.builtin.set_fact", {})
     )
+    lookup_expr = lookup_task["ansible.builtin.set_fact"]["_argocd_resume_checkpoint_lookup_required"]
+    assert enabled_guard in lookup_expr
+
+    checkpoint_file_task_names = {
+        "Resolve checkpoint path value",
+        "Resolve checkpoint path to absolute path (controller-side)",
+        "Validate persisted checkpoint path",
+        "Check for persisted checkpoint with Argo CD run_id",
+        "Read persisted checkpoint file",
+        "Parse persisted checkpoint JSON",
+        "Seed Argo CD run_id from checkpoint",
+    }
+    for task in pre_tasks:
+        if task.get("name") in checkpoint_file_task_names:
+            assert "_argocd_resume_checkpoint_lookup_required | default(false)" in task.get("when", [])
 
 
 def test_standalone_argocd_resume_validates_checkpoint_path_before_file_reads():

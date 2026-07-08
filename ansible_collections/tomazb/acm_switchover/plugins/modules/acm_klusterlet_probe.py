@@ -9,6 +9,7 @@ short_description: Probe managed cluster klusterlet hub connections with bounded
 description:
   - Compares managed-cluster klusterlet hub kubeconfigs with the new hub import secret.
   - Returns per-cluster structured probe results.
+  - Probe hard failures are surfaced through C(failed=true) and C(failed_clusters), so callers may add role-specific failure messages without reclassifying probe results.
 options:
   secondary_hub:
     description: Secondary hub kubeconfig and optional context.

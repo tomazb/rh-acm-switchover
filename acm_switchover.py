@@ -72,16 +72,26 @@ from modules import (
 from modules.preflight_coordinator import PreflightValidator
 
 
+def _missing_parse_required_args(args: argparse.Namespace) -> list[str]:
+    """Return conditionally required arguments missing after argparse parses modes."""
+
+    standalone_mode_requested = args.setup or args.argocd_resume_only or args.restore_only
+    missing: list[str] = []
+
+    if not (args.restore_only or args.argocd_resume_only) and not args.primary_context:
+        missing.append("--primary-context")
+
+    if not standalone_mode_requested:
+        if not args.method:
+            missing.append("--method")
+        if not args.old_hub_action:
+            missing.append("--old-hub-action")
+
+    return missing
+
+
 def parse_args():
     """Parse command line arguments."""
-    # Keep switchover/decommission CLI contracts intact while allowing
-    # standalone modes that do not perform a switchover flow.
-    standalone_mode_requested = any(
-        flag in sys.argv[1:] for flag in ("--setup", "--argocd-resume-only", "--restore-only")
-    )
-    restore_only_requested = "--restore-only" in sys.argv[1:]
-    argocd_resume_only_requested = "--argocd-resume-only" in sys.argv[1:]
-
     parser = argparse.ArgumentParser(
         description="ACM Hub Switchover Automation",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -119,7 +129,6 @@ Examples:
     # Context arguments
     parser.add_argument(
         "--primary-context",
-        required=not (restore_only_requested or argocd_resume_only_requested),
         help="Kubernetes context for primary hub",
     )
     parser.add_argument(
@@ -169,7 +178,6 @@ Examples:
     parser.add_argument(
         "--method",
         choices=["passive", "full"],
-        required=not standalone_mode_requested,
         help="Switchover method: passive (continuous sync) or full (one-time restore)",
     )
 
@@ -230,7 +238,6 @@ Examples:
     parser.add_argument(
         "--old-hub-action",
         choices=["secondary", "decommission", "none"],
-        required=not standalone_mode_requested,
         help=(
             "Action for old primary hub after switchover (REQUIRED): "
             "'secondary' sets up passive sync for failback capability, "
@@ -336,7 +343,12 @@ Examples:
         help="Log output format (text or json)",
     )
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    missing_required_args = _missing_parse_required_args(args)
+    if missing_required_args:
+        parser.error("the following arguments are required: " + ", ".join(missing_required_args))
+
+    return args
 
 
 def validate_args(args: argparse.Namespace, logger: logging.Logger) -> None:

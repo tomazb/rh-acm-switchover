@@ -19,6 +19,9 @@ from lib.constants import (
 )
 from lib.exceptions import FatalError
 
+PUBLIC_DETAIL_MAX_LENGTH = 500
+PUBLIC_LIST_MAX_ITEMS = 20
+
 
 @dataclass(frozen=True)
 class WaitConditionResult:
@@ -36,6 +39,44 @@ class WaitConditionResult:
     def pending(cls, public_detail: str = "") -> "WaitConditionResult":
         """Build an in-progress wait result."""
         return cls(done=False, public_detail=public_detail)
+
+
+def format_public_detail(detail: str, *, max_length: int = PUBLIC_DETAIL_MAX_LENGTH) -> str:
+    """Return a deterministic, bounded public detail string for operator logs."""
+
+    text = str(detail)
+    if len(text) <= max_length:
+        return text
+    if max_length <= 0:
+        return ""
+
+    omitted = len(text)
+    while True:
+        marker = f"... [truncated {omitted} chars]"
+        if len(marker) >= max_length:
+            return marker[:max_length]
+
+        keep = max_length - len(marker)
+        new_omitted = len(text) - keep
+        if new_omitted == omitted:
+            return text[:keep] + marker
+        omitted = new_omitted
+
+
+def format_public_list(
+    values: list[str],
+    *,
+    max_items: int = PUBLIC_LIST_MAX_ITEMS,
+    max_length: int = PUBLIC_DETAIL_MAX_LENGTH,
+) -> str:
+    """Format a bounded comma-separated list for public log detail."""
+
+    shown = [str(value) for value in values[:max_items]]
+    omitted = len(values) - len(shown)
+    text = ", ".join(shown)
+    if omitted > 0:
+        text = f"{text}, ... ({omitted} more)"
+    return format_public_detail(text, max_length=max_length)
 
 
 ConditionFn = Callable[[], WaitConditionResult]
@@ -73,7 +114,7 @@ def wait_for_condition(
 
         if result.done:
             if result.public_detail:
-                logger.info("%s complete: %s", description, result.public_detail)
+                logger.info("%s complete: %s", description, format_public_detail(result.public_detail))
             else:
                 logger.info("%s complete", description)
             return True
@@ -81,7 +122,12 @@ def wait_for_condition(
         elapsed_seconds = time.time() - start_time
         elapsed = int(elapsed_seconds)
         if result.public_detail:
-            logger.debug("%s in progress: %s (elapsed: %ss)", description, result.public_detail, elapsed)
+            logger.debug(
+                "%s in progress: %s (elapsed: %ss)",
+                description,
+                format_public_detail(result.public_detail),
+                elapsed,
+            )
         else:
             logger.debug("%s in progress (elapsed: %ss)", description, elapsed)
 
@@ -98,13 +144,17 @@ def wait_for_condition(
         last_result = result
         if result.done:
             if result.public_detail:
-                logger.info("%s complete: %s", description, result.public_detail)
+                logger.info("%s complete: %s", description, format_public_detail(result.public_detail))
             else:
                 logger.info("%s complete", description)
             return True
 
     if last_result and last_result.public_detail:
-        logger.warning("%s not complete before timeout: %s", description, last_result.public_detail)
+        logger.warning(
+            "%s not complete before timeout: %s",
+            description,
+            format_public_detail(last_result.public_detail),
+        )
     else:
         logger.warning("%s not complete before timeout", description)
     return False
