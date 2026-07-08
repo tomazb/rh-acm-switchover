@@ -1,0 +1,475 @@
+# Property-Based Testing — Implementation Specification
+
+Status: PBT-01 (documentation only). Part of issue #136.
+Companion documents: [`property-based-testing.md`](property-based-testing.md)
+(plan) and
+[`property-based-testing-pr-workflow.md`](property-based-testing-pr-workflow.md)
+(process contract).
+
+This specification defines the seven property-based testing (PBT) suites to
+be implemented by PRs PBT-03 through PBT-09, after PBT-02 lands the shared
+scaffolding. It is the acceptance authority for those PRs: a suite PR is
+complete when it satisfies its section here.
+
+## Conventions that apply to every suite
+
+- **Safety model** (normative, from the plan): pure functions and local
+  fixtures only. No kubeconfig, no network, no live cluster. Kubernetes
+  interaction is exercised only through mocked clients (the
+  mocked-`KubeClient` fixture pattern used throughout `tests/` for the
+  Python CLI; dictionaries
+  shaped like `kubernetes.core.k8s_info` results for the collection) and
+  pytest temporary directories.
+- **Semantic generators**: generators produce valid-shaped domain objects
+  plus targeted near-valid mutations — never arbitrary byte blobs.
+- **Parity posture**: where a suite covers a dual-supported behavior, it
+  targets **both** the Python CLI and the Ansible collection and asserts
+  agreement. A discovered disagreement is a parity bug to fix under the
+  `AGENTS.md` parity rules, never grounds for weakening the property or for
+  documenting divergence.
+- **Determinism**: suites run derandomized/seeded in CI; counterexamples
+  are pinned as explicit regression examples when fixed.
+- **Layout** (established by PBT-02): property tests live under
+  `tests/property/` with a dedicated pytest marker (`property`), so they run
+  in the default gate and can also be selected in isolation.
+- **Verification commands** listed per suite are for the future suite PRs.
+  PBT-01 adds no tooling and no tests; the commands are not expected to work
+  until PBT-02/PBT-0N land.
+
+---
+
+## Suite 1 — Validation parity (PBT-03)
+
+**Target code**
+- Python: `lib/validation.py` — `InputValidator.validate_kubernetes_name`,
+  `validate_kubernetes_namespace`, `validate_kubernetes_label_key`,
+  `validate_kubernetes_label_value`, `validate_context_name`,
+  `validate_non_empty_string`, `sanitize_context_identifier`,
+  `_validate_choice`-backed CLI choice validators.
+- Collection: `ansible_collections/tomazb/acm_switchover/plugins/module_utils/validation.py`
+  — `validate_context_name`, `validate_operation_inputs`, `_validate_choice`;
+  entry module `ansible_collections/tomazb/acm_switchover/plugins/modules/acm_input_validate.py`.
+- Existing example-based parity mechanism (kept, not replaced): the shared
+  fixture `tests/fixtures/validation_parity_cases.yml` consumed by both
+  `tests/test_validation_parity.py` and
+  `ansible_collections/tomazb/acm_switchover/tests/unit/test_validation_parity_fixture.py`.
+  This suite generalizes those hand-picked cases into generated-input
+  agreement properties; counterexamples found by PBT are pinned back into
+  the shared fixture.
+
+**Generated input domain**
+- Valid RFC 1123 labels/subdomains of varying lengths (1..253), plus
+  near-valid mutations: uppercase characters, leading/trailing hyphens or
+  dots, over-length names, embedded whitespace, unicode, empty strings.
+- Kubeconfig context names: realistic `cluster/user`-style identifiers plus
+  mutations with shell metacharacters, path separators, and control
+  characters.
+- Choice fields: values drawn from each validator's documented choice set
+  plus case variants and misspellings.
+
+**Properties / invariants**
+- **Cross-form-factor agreement**: for every generated candidate, the Python
+  validator and the collection validator for the same dual-supported rule
+  (context names; shared choice fields validated by
+  `validate_operation_inputs`) either both accept or both reject.
+- **Soundness**: any string accepted as a Kubernetes name/namespace conforms
+  to the RFC 1123 constraints the validator documents (charset, length,
+  boundary characters).
+- **Rejection is an exception, never a mutation**: validators raise
+  (`SecurityValidationError` / `ValidationError`) and never return a
+  "cleaned" value, except `sanitize_context_identifier`, whose property is
+  idempotence (`sanitize(sanitize(x)) == sanitize(x)`) and output-charset
+  safety.
+
+**Non-goals**
+- No property coverage of `validate_all_cli_args` cross-argument rules
+  beyond what example tests in `tests/test_validation.py` already pin
+  (argparse namespace combinatorics stay example-based).
+- No testing of Ansible argument-spec plumbing (AnsibleModule boilerplate).
+
+**Acceptance criteria**
+- Properties above implemented for both form factors, agreement property
+  included; no live-cluster or network use; suite passes derandomized;
+  existing `tests/test_validation.py` untouched or extended only with
+  pinned counterexamples.
+
+**Verification commands** (future PR)
+```bash
+pytest tests/property/test_validation_properties.py -q
+pytest -m property tests/property/ -q
+```
+
+---
+
+## Suite 2 — Path safety (PBT-04)
+
+**Target code**
+- Python: `lib/path_safety.py` — `validate_path_syntax`,
+  `validate_safe_filesystem_path`, `validate_report_artifact_path`,
+  `validate_report_artifact_directory` (re-exported via
+  `lib/report_artifacts.py` and `lib/validation.py`).
+- Collection: `ansible_collections/tomazb/acm_switchover/plugins/module_utils/path_safety.py`
+  — `validate_path_syntax`, `validate_safe_path`,
+  `validate_report_artifact_path`, `validate_report_artifact_directory`;
+  entry module `plugins/modules/acm_safe_path_validate.py` and filter
+  plugin `plugins/filter/paths.py`.
+
+**Generated input domain**
+- Path candidates assembled from generated segments: benign names, `.` and
+  `..` components, absolute prefixes, repeated separators, trailing
+  separators, NUL and control characters, over-long components, home (`~`)
+  prefixes.
+- Local symlink fixtures under `tmp_path`: links pointing inside and outside
+  a designated safe root (symlinks are created only in pytest temporary
+  directories).
+
+**Properties / invariants**
+- **Containment**: any path accepted by the safe-path/report-artifact
+  validators resolves (via the same ancestor-resolution logic) to a location
+  under an allowed safe root; no accepted input escapes.
+- **Traversal rejection**: any candidate whose resolved form leaves the safe
+  root — including via `..` sequences and via symlink indirection — is
+  rejected.
+- **Cross-form-factor agreement**: for generated candidates evaluated under
+  identical safe-root fixtures, `lib/path_safety.py` and the collection
+  `module_utils/path_safety.py` agree accept/reject.
+- **Syntax gate totality**: `validate_path_syntax` never raises anything
+  other than its documented validation error type, for any string input.
+
+**Non-goals**
+- No testing of OS permission errors, filesystem races, or non-POSIX
+  platforms.
+- No property coverage of artifact *content* (that is Suite 4).
+
+**Acceptance criteria**
+- All four properties implemented; symlink cases restricted to `tmp_path`;
+  agreement property runs both implementations on the same candidates;
+  suite passes derandomized.
+
+**Verification commands** (future PR)
+```bash
+pytest tests/property/test_path_safety_properties.py -q
+pytest tests/test_path_safety.py -q   # existing example suite stays green
+```
+
+---
+
+## Suite 3 — Checkpoint / resume (PBT-05)
+
+**Target code**
+- Python: `lib/utils.py` — `StateManager` (`mark_step_completed`,
+  `clear_step_completed`, `is_step_completed`, `set_phase`,
+  `get_current_phase`, `save_state`, `flush_state`,
+  `capture_state_snapshot`/`restore_state_snapshot`,
+  `ensure_contexts`, `ensure_hub_identities`), `Phase` enum,
+  `StateIdentityMismatch`.
+- Collection: `ansible_collections/tomazb/acm_switchover/plugins/module_utils/checkpoint.py`
+  — `build_operation_identity`, `normalize_operation_identity`,
+  `build_checkpoint_record`, `validate_operation_identity`,
+  `reset_completed_phases_from`, `is_unsafe_legacy_checkpoint`,
+  `should_resume_phase`, `CheckpointIdentityMismatch`; entry modules
+  `plugins/modules/acm_checkpoint.py`,
+  `plugins/modules/acm_checkpoint_identity_validate.py`, and action plugin
+  `plugins/action/checkpoint_phase.py`.
+
+**Generated input domain**
+- Sequences of `StateManager` operations (mark/clear steps, set phase,
+  snapshot/restore) over generated step names and phases drawn from the real
+  `Phase` enum, against a `tmp_path` state file.
+- Checkpoint records: generated completed-phase lists (subsets/permutations
+  of real phase names), operation identities with matching and deliberately
+  mismatched hub identifiers, legacy-shaped records missing identity fields.
+
+**Properties / invariants**
+- **Round-trip durability**: after any generated operation sequence,
+  writing state and constructing a fresh `StateManager` on the same file
+  yields the same phase, completed steps, and config.
+- **Idempotence**: `mark_step_completed` twice equals once;
+  `is_step_completed` reflects exactly the marked-minus-cleared set.
+- **Resume monotonicity (collection)**: `should_resume_phase` returns True
+  exactly for phases recorded as completed in a safe checkpoint;
+  `reset_completed_phases_from(phases, p)` removes `p` and everything after
+  it in workflow order and nothing before it.
+- **Identity safety**: any identity mismatch in generated
+  checkpoint-vs-expected pairs is detected (`validate_operation_identity`
+  fails / `CheckpointIdentityMismatch`, and `StateIdentityMismatch` on the
+  Python side via `ensure_hub_identities`); legacy records without identity
+  are flagged by `is_unsafe_legacy_checkpoint`.
+
+**Non-goals**
+- No signal-handling, file-locking-contention, or multi-process crash
+  simulation (covered by `tests/test_reliability.py`-style example tests).
+- No cross-form-factor byte-level state-file compatibility claim: the CLI
+  state file and the collection checkpoint are distinct dual-supported
+  mechanisms; the shared property is the *resume semantics contract*, and
+  nothing in this suite changes either mechanism's parity status.
+
+**Acceptance criteria**
+- Round-trip, idempotence, resume, and identity properties implemented; all
+  filesystem activity in `tmp_path`; phase inputs sourced from the real
+  `Phase` enum rather than hard-coded strings; suite passes derandomized.
+
+**Verification commands** (future PR)
+```bash
+pytest tests/property/test_checkpoint_properties.py -q
+python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q  # collection suite stays green
+```
+
+---
+
+## Suite 4 — Report artifacts (PBT-06)
+
+**Target code**
+- Python: `lib/report_artifacts.py` — `build_operation_report`,
+  `write_json_report_artifact`, `_normalise_validation_result`,
+  `_summarize_state`.
+- Collection: `ansible_collections/tomazb/acm_switchover/plugins/module_utils/artifacts.py`
+  — `build_report_ref`, `write_json_artifact`, `_parse_file_mode`,
+  `ArtifactWriteError`; entry modules `plugins/modules/acm_report_artifact.py`
+  and `plugins/modules/acm_preflight_report.py`.
+
+**Generated input domain**
+- Validation-result dictionaries of domain shape: generated pass/fail
+  flags, error/warning string lists (including empty, unicode, very long
+  entries), state snapshots with generated phases/steps.
+- Destination paths drawn from Suite 2's generator (valid under a safe
+  root, plus hostile candidates expected to be rejected).
+- File modes: valid octal strings/ints plus malformed values for
+  `_parse_file_mode`.
+
+**Properties / invariants**
+- **Serializability and round-trip**: `build_operation_report` output is
+  always JSON-serializable; `write_json_report_artifact` /
+  `write_json_artifact` followed by `json.load` reproduces the report
+  exactly.
+- **Schema stability**: every generated report contains the stable top-level
+  keys the tooling documents (operation/hub/status/summary sections), with
+  types independent of input variation.
+- **Normalization totality**: `_normalise_validation_result` accepts any
+  domain-shaped result dict without raising and never drops error entries.
+- **Path-safety composition**: artifact writes only ever succeed at
+  destinations that pass the Suite 2 validators; hostile destinations raise
+  the documented error and create no file.
+- **Mode enforcement (collection)**: files written by `write_json_artifact`
+  carry exactly the requested mode; invalid modes raise `ArtifactWriteError`
+  without writing.
+
+**Non-goals**
+- No property coverage of human-readable console report formatting
+  (`modules/preflight/reporter.py` stays example-tested).
+- No compatibility promises about report schema evolution beyond the stable
+  keys asserted.
+
+**Acceptance criteria**
+- Round-trip, schema, totality, path-composition, and mode properties
+  implemented for both form factors; writes confined to `tmp_path`; suite
+  passes derandomized; `tests/test_report_artifacts.py` stays green.
+
+**Verification commands** (future PR)
+```bash
+pytest tests/property/test_report_artifact_properties.py -q
+pytest tests/test_report_artifacts.py -q
+```
+
+---
+
+## Suite 5 — BackupSchedule (PBT-07)
+
+**Target code**
+- Python: `modules/backup_schedule.py` —
+  `acm_supports_backup_schedule_pause`,
+  `fail_on_multiple_backup_schedules`, `_backup_schedule_names`,
+  `BackupScheduleManager.ensure_enabled` and `_clean_metadata` (with a
+  mocked `KubeClient` and `StateManager` on `tmp_path`).
+- Collection: `ansible_collections/tomazb/acm_switchover/plugins/modules/acm_backup_schedule.py`
+  and its helpers.
+
+**Generated input domain**
+- ACM version strings: valid `X.Y.Z`/`X.Y` forms across the 2.10–2.14
+  range, plus malformed candidates (empty, non-numeric, extra segments,
+  suffixes).
+- BackupSchedule resource dictionaries: valid-shaped
+  `BackupSchedule` objects with generated names, `spec.paused` booleans,
+  schedule strings, and runtime metadata
+  (`resourceVersion`, `uid`, `creationTimestamp`, `managedFields`, `status`).
+- Lists of 0..N schedules for the multiplicity rules.
+
+**Properties / invariants**
+- **Version gate**: `acm_supports_backup_schedule_pause` returns True iff
+  the parsed version is `>= (2, 12, 0)`; for any unparsable version it
+  raises `SwitchoverError` (never silently picks a mutation path).
+- **Multiplicity safety**: `fail_on_multiple_backup_schedules` raises for
+  every generated list with more than one schedule and never raises for
+  zero or one.
+- **Metadata cleaning**: `_clean_metadata` strips only runtime metadata
+  (never `name`, `namespace`, labels, or `spec`), and is idempotent.
+- **Cross-form-factor agreement**: for generated version strings and
+  schedule sets, the Python helpers and the collection module's
+  corresponding decision logic agree on pause-support and multiplicity
+  outcomes.
+
+**Non-goals**
+- No property coverage of live pause/resume API sequencing, wait loops, or
+  Velero behavior (mocked-client example tests and E2E own those).
+- No cron-expression semantic validation beyond what the code enforces.
+
+**Acceptance criteria**
+- Version-gate, multiplicity, metadata, and agreement properties
+  implemented; only mocked clients used; suite passes derandomized;
+  `tests/test_backup_schedule.py` stays green.
+
+**Verification commands** (future PR)
+```bash
+pytest tests/property/test_backup_schedule_properties.py -q
+pytest tests/test_backup_schedule.py -q
+```
+
+---
+
+## Suite 6 — Argo CD safety (PBT-08)
+
+**Target code**
+- Python: `lib/argocd.py` — `is_resume_noop`,
+  `_pause_ground_truth_applied`, discovery/pause/resume result dataclasses;
+  `lib/gitops_detector.py` — `detect_gitops_markers`;
+  coordination surfaces in `lib/argocd_coordinator.py` and
+  `lib/argocd_resume.py` where pure.
+- Collection: `ansible_collections/tomazb/acm_switchover/plugins/module_utils/argocd.py`
+  — `is_autosync_enabled`, `is_acm_touching_application`,
+  `filter_acm_applications`, `find_argocd_pause_blockers`,
+  `build_pause_patch`, `has_applicationset_owner`;
+  `plugins/module_utils/gitops.py`; entry module
+  `plugins/modules/acm_argocd_filter.py`.
+
+**Generated input domain**
+- Argo CD `Application` dictionaries with generated `metadata`
+  (labels/annotations including GitOps markers and the unreliable
+  `app.kubernetes.io/instance` label), `ownerReferences` (with and without
+  `ApplicationSet` owners), `spec.syncPolicy` (absent, empty, `automated`
+  present with generated flags), and `status.resources` lists mixing
+  ACM-relevant and unrelated kinds, including stale/absent status.
+
+**Properties / invariants**
+- **Pause patch safety**: for any generated `syncPolicy`,
+  `build_pause_patch` output never contains an enabled `automated` sync
+  policy (an existing `automated` key is nulled, never preserved enabled)
+  and always records the paused-by annotation with the given run id.
+- **Filter conservatism**: `filter_acm_applications(apps)` returns a subset
+  of its input; every application it drops is provably not ACM-touching per
+  `is_acm_touching_application`; unknown-impact applications are never
+  silently dropped.
+- **Blocker completeness**: every generated application with an
+  `ApplicationSet` owner or unknown ACM impact appears in
+  `find_argocd_pause_blockers` output.
+- **Marker reliability contract**: `detect_gitops_markers` (and the
+  collection GitOps helpers) never classify an application as definitively
+  GitOps-managed based solely on `app.kubernetes.io/instance` — that marker
+  stays flagged `UNRELIABLE` for any generated metadata combination.
+- **Resume no-op soundness**: `is_resume_noop` is True only for results
+  whose outcome made no cluster-visible change.
+
+**Non-goals**
+- No property coverage of live pause/resume orchestration, retries, or the
+  `scripts/argocd-manage.sh` Bash path (script tests own that).
+- No modeling of Argo CD controller reconciliation behavior.
+
+**Acceptance criteria**
+- Patch-safety, conservatism, blocker, marker, and no-op properties
+  implemented; both form factors covered with agreement asserted where the
+  rule is shared (ACM-touching classification, blocker rules); suite passes
+  derandomized; `tests/test_argocd.py` and
+  `tests/test_argocd_constants_parity.py` stay green.
+
+**Verification commands** (future PR)
+```bash
+pytest tests/property/test_argocd_safety_properties.py -q
+pytest tests/test_argocd.py tests/test_argocd_constants_parity.py -q
+```
+
+---
+
+## Suite 7 — RBAC set properties (PBT-09)
+
+**Target code**
+- Python: `lib/rbac_validator.py` — `_derive_read_only_permissions`,
+  `MUTATING_VERBS`, `OPERATOR_CLUSTER_PERMISSIONS`,
+  `VALIDATOR_CLUSTER_VERB_EXCEPTIONS`, `RBACValidator._is_write_verb`,
+  permission-table accessors (`_get_cluster_permissions`,
+  `_get_hub_namespace_permissions`,
+  `_get_managed_cluster_namespace_permissions`,
+  `_get_argocd_cluster_permissions`), `_format_verb_removals`.
+- Collection: `ansible_collections/tomazb/acm_switchover/plugins/modules/acm_rbac_validate.py`
+  permission catalog.
+- Existing guardrail: `tests/test_rbac_collection_parity.py` (remains
+  authoritative for exact catalog equality; this suite adds set-algebra
+  properties on top).
+
+**Generated input domain**
+- Synthetic operator permission tables: generated lists of
+  `(api_group, resource, verbs)` tuples with verbs drawn from the real verb
+  vocabulary (read verbs plus `MUTATING_VERBS`), including duplicates,
+  empty verb lists, and resources present only with mutating verbs.
+- Matching and deliberately drifted `expected_removals` mappings.
+- Role selectors (`operator` / `validator`) and argocd-mode inputs for the
+  table accessors.
+
+**Properties / invariants**
+- **Read-only containment**: for any generated operator table, the derived
+  read-only table is a subset relation per resource — every derived verb
+  set is the original minus `MUTATING_VERBS`, contains no mutating verb,
+  and no new `(api_group, resource)` keys appear.
+- **Drift detection soundness**: `_derive_read_only_permissions` succeeds
+  iff the actually-stripped verbs exactly equal `expected_removals`; any
+  generated drift (extra, missing, or different stripped verbs) raises
+  `ValueError`.
+- **Verb classification consistency**: `RBACValidator._is_write_verb`
+  agrees with membership in `MUTATING_VERBS` for the whole generated verb
+  vocabulary.
+- **Real-table invariants**: applied to the actual shipped tables — the
+  validator role's permissions per resource are a subset of the operator
+  role's, and the exceptions recorded in
+  `VALIDATOR_CLUSTER_VERB_EXCEPTIONS` account for exactly the stripped
+  verbs.
+- **Cross-form-factor set agreement**: the permission sets checked by the
+  collection's `acm_rbac_validate.py` and the Python tables agree as sets
+  (generalizing the exact-equality guardrail; the guardrail test itself is
+  not modified or retired).
+
+**Non-goals**
+- No property coverage of live `SelfSubjectAccessReview` calls,
+  `check_permission` API behavior, or RBAC manifest YAML under
+  `deploy/rbac/` (manifest parity stays with the existing guardrail and
+  review process in `AGENTS.md`).
+- No generation of arbitrary RBAC verbs outside the project vocabulary.
+
+**Acceptance criteria**
+- Containment, drift, classification, real-table, and set-agreement
+  properties implemented; no live API calls; suite passes derandomized;
+  `tests/test_rbac_validator.py` and `tests/test_rbac_collection_parity.py`
+  stay green and unmodified (except optional pinned counterexamples added
+  as new tests).
+
+**Verification commands** (future PR)
+```bash
+pytest tests/property/test_rbac_set_properties.py -q
+pytest tests/test_rbac_validator.py tests/test_rbac_collection_parity.py -q
+```
+
+---
+
+## Scaffolding contract for PBT-02 (summary)
+
+PBT-02 provides what every suite above assumes, and nothing more:
+
+- The PBT dependency (Hypothesis) added to the appropriate dev/test
+  requirements, pinned per the project's dependency policy.
+- `tests/property/` package with a shared generator module
+  (`tests/property/strategies.py`) hosting the cross-suite generators
+  (Kubernetes names, paths, phases, Application dicts, permission tuples).
+- The `property` pytest marker registered in `setup.cfg`, wired into the
+  default `./run_tests.sh` gate, with derandomized CI profile settings.
+- No suite content: PBT-02 may include at most one trivial smoke property
+  proving the wiring runs in CI.
+
+Suite PRs must not restructure the scaffolding; scaffolding changes needed
+later go through their own reviewed change.
