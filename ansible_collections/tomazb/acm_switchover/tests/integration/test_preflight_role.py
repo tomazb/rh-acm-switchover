@@ -188,6 +188,25 @@ def test_preflight_rbac_failure_still_reports_backup_findings(
     assert results_by_id["preflight-passive-restore-secondary"]["status"] == "fail"
 
 
+def test_restore_only_rbac_with_secondary_only_hub_reports_secondary_validation(
+    run_preflight_fixture,
+    fixture_kubernetes_api_server,
+):
+    completed, report = run_preflight_fixture(
+        "restore_only_rbac_secondary_only.yml",
+        overrides={
+            "acm_switchover_test_overrides": {
+                "fixture_kubeconfig_server": fixture_kubernetes_api_server,
+            },
+        },
+    )
+    assert completed.returncode != 0
+    assert report, completed.stdout + completed.stderr
+    results_by_id = {item["id"]: item for item in report["results"]}
+    assert "preflight-rbac-primary" not in results_by_id
+    assert results_by_id["preflight-rbac-secondary"]["status"] == "fail"
+
+
 def test_preflight_fixture_without_execution_block_uses_defaults(run_preflight_fixture):
     completed, report = run_preflight_fixture("missing_execution_block.yml")
     assert completed.returncode == 0

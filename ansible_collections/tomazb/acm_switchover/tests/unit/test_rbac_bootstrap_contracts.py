@@ -46,14 +46,9 @@ def test_bootstrap_permission_validation_covers_shipped_argocd_rules():
 
 def test_preflight_primary_rbac_expansion_requests_old_hub_finalization_delete():
     tasks = yaml.safe_load((PREFLIGHT_TASKS / "validate_rbac.yml").read_text(encoding="utf-8"))
+    hub_tasks = yaml.safe_load((PREFLIGHT_TASKS / "validate_rbac_hub.yml").read_text(encoding="utf-8"))
     requirement_fact = next(
         task for task in tasks if task.get("name") == "Determine primary old-hub finalization RBAC requirement"
-    )
-    primary_expansion = next(
-        task for task in tasks if task.get("name") == "Expand required RBAC permissions for primary hub"
-    )
-    primary_summary = next(
-        task for task in tasks if task.get("name") == "Summarize RBAC validation results for primary hub"
     )
 
     expression = requirement_fact["ansible.builtin.set_fact"]["_rbac_include_old_hub_finalization_primary"]
@@ -62,12 +57,24 @@ def test_preflight_primary_rbac_expansion_requests_old_hub_finalization_delete()
     assert "skip_observability_checks" in expression
     assert "open-cluster-management-observability" in expression
 
-    module_args = primary_expansion["tomazb.acm_switchover.acm_rbac_validate"]
-    summary_args = primary_summary["tomazb.acm_switchover.acm_rbac_validate"]
+    table_task = next(task for task in tasks if task.get("name") == "Build hub RBAC validation table")
+    primary_entry, secondary_entry = table_task["ansible.builtin.set_fact"]["_rbac_hub_validations"]
+    assert primary_entry["hub"] == "primary"
+    assert "_rbac_include_old_hub_finalization_primary" in primary_entry["include_old_hub_finalization"]
+    assert secondary_entry["include_old_hub_finalization"] is False
+
+    expansion = next(
+        task for task in hub_tasks if task.get("name") == "Expand required RBAC permissions for {{ rbac_hub.hub }} hub"
+    )
+    summary = next(
+        task for task in hub_tasks if task.get("name") == "Summarize RBAC validation results for {{ rbac_hub.hub }} hub"
+    )
+    module_args = expansion["tomazb.acm_switchover.acm_rbac_validate"]
+    summary_args = summary["tomazb.acm_switchover.acm_rbac_validate"]
 
     assert "include_old_hub_finalization" in module_args
-    assert module_args["include_old_hub_finalization"] == "{{ _rbac_include_old_hub_finalization_primary }}"
-    assert summary_args["include_old_hub_finalization"] == "{{ _rbac_include_old_hub_finalization_primary }}"
+    assert module_args["include_old_hub_finalization"] == "{{ rbac_hub.include_old_hub_finalization }}"
+    assert summary_args["include_old_hub_finalization"] == "{{ rbac_hub.include_old_hub_finalization }}"
 
 
 def test_preflight_validates_configured_managed_cluster_rbac():

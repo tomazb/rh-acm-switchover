@@ -78,11 +78,91 @@ def test_preflight_persists_observability_detection_for_later_phases():
 def test_preflight_rbac_skips_observability_permissions_when_observability_absent():
     """Collection RBAC checks must mirror Python's automatic Observability absence handling."""
     text = (PREFLIGHT_TASKS / "validate_rbac.yml").read_text()
+    hub_text = (PREFLIGHT_TASKS / "validate_rbac_hub.yml").read_text()
 
     assert "_rbac_skip_observability" in text
     assert "not (acm_switchover_primary_has_observability | default(false) | bool)" in text
     assert "not (acm_switchover_secondary_has_observability | default(false) | bool)" in text
-    assert 'skip_observability: "{{ _rbac_skip_observability }}"' in text
+    assert 'skip_observability: "{{ _rbac_skip_observability }}"' in hub_text
+
+
+def test_preflight_rbac_validates_hubs_through_shared_hub_loop():
+    """Both hubs must flow through one parameterized include, mirroring Python H1's hub table + loop."""
+    tasks = _load_yaml("validate_rbac.yml")
+
+    hub_includes = [t for t in tasks if t.get("ansible.builtin.include_tasks") == "validate_rbac_hub.yml"]
+    assert len(hub_includes) == 1, "validate_rbac.yml must drive hub validation through exactly one shared include"
+    loop_task = hub_includes[0]
+    assert loop_task["loop"] == "{{ _rbac_hub_validations }}"
+    assert loop_task["loop_control"]["loop_var"] == "rbac_hub"
+    assert loop_task["when"] == "rbac_hub.enabled | bool"
+    assert (PREFLIGHT_TASKS / "validate_rbac_hub.yml").is_file()
+
+    table_task = next(t for t in tasks if "_rbac_hub_validations" in t.get("ansible.builtin.set_fact", {}))
+    entries = table_task["ansible.builtin.set_fact"]["_rbac_hub_validations"]
+    assert [entry["hub"] for entry in entries] == ["primary", "secondary"]
+    primary, secondary = entries
+    assert "restore_only" in str(primary["enabled"]), "primary hub entry must be disabled in restore-only mode"
+    assert secondary["enabled"] is True, "secondary hub validation must be unconditional"
+
+
+def test_preflight_rbac_primary_restore_only_skip_expression_is_consistent():
+    """The disabled primary row must not evaluate primary hub fields through a different restore-only rule."""
+    tasks = _load_yaml("validate_rbac.yml")
+    table_task = next(t for t in tasks if "_rbac_hub_validations" in t.get("ansible.builtin.set_fact", {}))
+    primary = table_task["ansible.builtin.set_fact"]["_rbac_hub_validations"][0]
+    restore_only_expression = "acm_switchover_operation.restore_only | default(false)"
+
+    assert primary["enabled"] == "{{ not (%s) }}" % restore_only_expression
+    for field in ("kubeconfig", "context"):
+        assert "if (%s)" % restore_only_expression in primary[field]
+        assert "if (%s | bool)" % restore_only_expression not in primary[field]
+
+
+def test_preflight_rbac_hub_loop_preserves_registered_fact_names():
+    """The shared hub file must re-publish every per-hub fact the pre-loop file registered."""
+    hub_text = (PREFLIGHT_TASKS / "validate_rbac_hub.yml").read_text()
+    main_text = (PREFLIGHT_TASKS / "validate_rbac.yml").read_text()
+
+    for published in [
+        '"_rbac_argocd_app_crd_{{ rbac_hub.hub }}"',
+        '"_rbac_argocd_instance_crd_{{ rbac_hub.hub }}"',
+        '"_rbac_argocd_install_type_{{ rbac_hub.hub }}"',
+        '"_rbac_expanded_{{ rbac_hub.hub }}"',
+        '"_rbac_denied_permissions_{{ rbac_hub.hub }}"',
+        '"acm_{{ rbac_hub.hub }}_rbac_validation"',
+    ]:
+        assert published in hub_text, f"validate_rbac_hub.yml must re-publish {published}"
+
+    assert "acm_primary_rbac_validation.results" in main_text
+    assert "acm_secondary_rbac_validation.results" in main_text
+    assert "acm_managed_cluster_rbac_validation.results" in main_text
+
+
+def test_preflight_rbac_hub_loop_keeps_primary_only_and_secondary_only_behavior():
+    """Asymmetries must live in the hub table as data, exactly like Python H1's hub_validations."""
+    tasks = _load_yaml("validate_rbac.yml")
+    table_task = next(t for t in tasks if "_rbac_hub_validations" in t.get("ansible.builtin.set_fact", {}))
+    primary, secondary = table_task["ansible.builtin.set_fact"]["_rbac_hub_validations"]
+
+    assert "'decommission'" in primary["include_decommission"]
+    assert "_rbac_include_old_hub_finalization_primary" in primary["include_old_hub_finalization"]
+    assert secondary["include_decommission"] is False
+    assert secondary["include_old_hub_finalization"] is False
+
+    old_hub_task = next(t for t in tasks if "old-hub finalization" in t["name"])
+    assert "restore_only" in str(old_hub_task.get("when", "")), "old-hub finalization must stay primary-only input"
+
+
+def test_preflight_rbac_managed_cluster_validation_stays_separate_from_hub_loop():
+    """Managed-cluster RBAC validation keeps its own scope/loop, matching Python's separate scope."""
+    tasks = _load_yaml("validate_rbac.yml")
+    includes = [t.get("ansible.builtin.include_tasks") for t in tasks if t.get("ansible.builtin.include_tasks")]
+    assert "validate_managed_cluster_rbac.yml" in includes
+
+    hub_text = (PREFLIGHT_TASKS / "validate_rbac_hub.yml").read_text()
+    assert "validate_managed_cluster_rbac" not in hub_text
+    assert "managed_cluster" not in hub_text
 
 
 def test_preflight_skip_requires_observability_checkpoint_data():
