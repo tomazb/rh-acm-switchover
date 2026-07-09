@@ -40,8 +40,10 @@ strengthen this in three ways:
 - **Invariants over examples.** Safety-critical logic — path traversal
   rejection in `lib/path_safety.py`, checkpoint/resume semantics in
   `lib/utils.py` (`StateManager`) and
-  `plugins/module_utils/checkpoint.py`, Argo CD pause safety in
-  `lib/argocd.py` and `plugins/module_utils/argocd.py` — has invariants
+  `ansible_collections/tomazb/acm_switchover/plugins/module_utils/checkpoint.py`,
+  Argo CD pause safety in `lib/argocd.py` and
+  `ansible_collections/tomazb/acm_switchover/plugins/module_utils/argocd.py`
+  — has invariants
   ("a validated path never resolves outside a safe root", "a pause patch
   never enables auto-sync") that hold for *all* inputs. PBT states them once
   and searches for counterexamples automatically.
@@ -82,12 +84,15 @@ strengthen this in three ways:
 
 ## Safety model
 
-Property-based tests are, by construction, incapable of touching live
-clusters:
+Property-based tests must never touch live clusters. This is a normative
+design constraint on every suite, enforced through the suite specs, the
+review gates in the PR workflow, and the mocked-client/fixture patterns
+below — not an automatic guarantee:
 
 - **Pure functions and local fixtures only.** Every property targets logic
   that is either a pure function (e.g. `lib/path_safety.py`,
-  `plugins/module_utils/checkpoint.py`, `plugins/module_utils/argocd.py`)
+  `ansible_collections/tomazb/acm_switchover/plugins/module_utils/checkpoint.py`,
+  `ansible_collections/tomazb/acm_switchover/plugins/module_utils/argocd.py`)
   or a class exercised against mocked clients and temporary directories
   (e.g. `StateManager` with a `tmp_path` state file,
   `BackupScheduleManager` with a mocked `KubeClient`, following the
@@ -114,7 +119,7 @@ know the domain's shape and then perturb it:
   characters, leading/trailing hyphens, over-length names, dotted subdomain
   forms) to probe both sides of every rule in
   `lib/validation.py` (`InputValidator`) and
-  `plugins/module_utils/validation.py`.
+  `ansible_collections/tomazb/acm_switchover/plugins/module_utils/validation.py`.
 - **BackupSchedule specs**: dictionaries shaped like real
   `cluster.open-cluster-management.io/v1beta1 BackupSchedule` resources with
   generated `spec` fields, schedule strings, paused flags, and runtime

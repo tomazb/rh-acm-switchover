@@ -82,7 +82,8 @@ The Builder implements exactly one PR from the table above.
 - Runs the PR's verification commands and records results.
 - Self-reviews the final diff before pushing.
 - Commits with repo-style messages and **no AI-attribution trailers**
-  (repo policy forbids `Co-Authored-By`/AI attribution).
+  (no `Co-Authored-By` or similar AI-attribution lines; this workflow
+  contract is the normative statement of that prohibition for PBT PRs).
 - Pushes the branch and opens a ready (non-draft) PR against `ansible`
   containing the hard-gate documentation defined above.
 - Returns a structured report (status, PR URL, branch, base commit, files,

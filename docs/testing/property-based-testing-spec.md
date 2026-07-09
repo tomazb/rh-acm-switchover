@@ -111,8 +111,10 @@ pytest -m property tests/property/ -q
 - Collection: `ansible_collections/tomazb/acm_switchover/plugins/module_utils/path_safety.py`
   — `validate_path_syntax`, `validate_safe_path`,
   `validate_report_artifact_path`, `validate_report_artifact_directory`;
-  entry module `plugins/modules/acm_safe_path_validate.py` and filter
-  plugin `plugins/filter/paths.py`.
+  entry module
+  `ansible_collections/tomazb/acm_switchover/plugins/modules/acm_safe_path_validate.py`
+  and filter plugin
+  `ansible_collections/tomazb/acm_switchover/plugins/filter/paths.py`.
 
 **Generated input domain**
 - Path candidates assembled from generated segments: benign names, `.` and
@@ -168,9 +170,10 @@ pytest tests/test_path_safety.py -q   # existing example suite stays green
   `build_checkpoint_record`, `validate_operation_identity`,
   `reset_completed_phases_from`, `is_unsafe_legacy_checkpoint`,
   `should_resume_phase`, `CheckpointIdentityMismatch`; entry modules
-  `plugins/modules/acm_checkpoint.py`,
-  `plugins/modules/acm_checkpoint_identity_validate.py`, and action plugin
-  `plugins/action/checkpoint_phase.py`.
+  `ansible_collections/tomazb/acm_switchover/plugins/modules/acm_checkpoint.py`,
+  `ansible_collections/tomazb/acm_switchover/plugins/modules/acm_checkpoint_identity_validate.py`,
+  and action plugin
+  `ansible_collections/tomazb/acm_switchover/plugins/action/checkpoint_phase.py`.
 
 **Generated input domain**
 - Sequences of `StateManager` operations (mark/clear steps, set phase,
@@ -187,7 +190,8 @@ pytest tests/test_path_safety.py -q   # existing example suite stays green
 - **Idempotence**: `mark_step_completed` twice equals once;
   `is_step_completed` reflects exactly the marked-minus-cleared set.
 - **Resume monotonicity (collection)**: `should_resume_phase` returns True
-  exactly for phases recorded as completed in a safe checkpoint;
+  exactly for phases **not** recorded as completed in a safe checkpoint
+  (completed phases are skipped on resume, never rerun);
   `reset_completed_phases_from(phases, p)` removes `p` and everything after
   it in workflow order and nothing before it.
 - **Identity safety**: any identity mismatch in generated
@@ -225,8 +229,10 @@ python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q  # col
   `_summarize_state`.
 - Collection: `ansible_collections/tomazb/acm_switchover/plugins/module_utils/artifacts.py`
   — `build_report_ref`, `write_json_artifact`, `_parse_file_mode`,
-  `ArtifactWriteError`; entry modules `plugins/modules/acm_report_artifact.py`
-  and `plugins/modules/acm_preflight_report.py`.
+  `ArtifactWriteError`; entry modules
+  `ansible_collections/tomazb/acm_switchover/plugins/modules/acm_report_artifact.py`
+  and
+  `ansible_collections/tomazb/acm_switchover/plugins/modules/acm_preflight_report.py`.
 
 **Generated input domain**
 - Validation-result dictionaries of domain shape: generated pass/fail
@@ -243,8 +249,10 @@ python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q  # col
   `write_json_artifact` followed by `json.load` reproduces the report
   exactly.
 - **Schema stability**: every generated report contains the stable top-level
-  keys the tooling documents (operation/hub/status/summary sections), with
-  types independent of input variation.
+  keys its builder actually ships (`schema_version`, `status`, `summary`,
+  and `hubs` in both form factors; the `operation` section additionally in
+  Python CLI operation reports — collection preflight reports have no
+  `operation` section), with types independent of input variation.
 - **Normalization totality**: `_normalise_validation_result` accepts any
   domain-shaped result dict without raising and never drops error entries.
 - **Path-safety composition**: artifact writes only ever succeed at
@@ -286,8 +294,9 @@ pytest tests/test_report_artifacts.py -q
 
 **Generated input domain**
 - ACM version strings: valid `X.Y.Z`/`X.Y` forms across the 2.10–2.14
-  range, plus malformed candidates (empty, non-numeric, extra segments,
-  suffixes).
+  range, including the accepted semver-style prerelease/build suffixes
+  (e.g. `2.14.3-rc1`), plus malformed candidates (empty, non-numeric,
+  extra segments, suffixes not introduced by `-`/`+` such as `2.14.3rc1`).
 - BackupSchedule resource dictionaries: valid-shaped
   `BackupSchedule` objects with generated names, `spec.paused` booleans,
   schedule strings, and runtime metadata
@@ -338,8 +347,9 @@ pytest tests/test_backup_schedule.py -q
   — `is_autosync_enabled`, `is_acm_touching_application`,
   `filter_acm_applications`, `find_argocd_pause_blockers`,
   `build_pause_patch`, `has_applicationset_owner`;
-  `plugins/module_utils/gitops.py`; entry module
-  `plugins/modules/acm_argocd_filter.py`.
+  `ansible_collections/tomazb/acm_switchover/plugins/module_utils/gitops.py`;
+  entry module
+  `ansible_collections/tomazb/acm_switchover/plugins/modules/acm_argocd_filter.py`.
 
 **Generated input domain**
 - Argo CD `Application` dictionaries with generated `metadata`
@@ -358,9 +368,11 @@ pytest tests/test_backup_schedule.py -q
   of its input; every application it drops is provably not ACM-touching per
   `is_acm_touching_application`; unknown-impact applications are never
   silently dropped.
-- **Blocker completeness**: every generated application with an
-  `ApplicationSet` owner or unknown ACM impact appears in
-  `find_argocd_pause_blockers` output.
+- **Blocker completeness**: every generated application that is
+  `ApplicationSet`-owned **and** ACM-touching appears in
+  `find_argocd_pause_blockers` output (regardless of auto-sync state), as
+  does every auto-sync-enabled application whose ACM impact is unknown;
+  applications matching neither rule are never reported as blockers.
 - **Marker reliability contract**: `detect_gitops_markers` (and the
   collection GitOps helpers) never classify an application as definitively
   GitOps-managed based solely on `app.kubernetes.io/instance` — that marker
@@ -392,8 +404,9 @@ pytest tests/test_argocd.py tests/test_argocd_constants_parity.py -q
 
 **Target code**
 - Python: `lib/rbac_validator.py` — `_derive_read_only_permissions`,
-  `MUTATING_VERBS`, `OPERATOR_CLUSTER_PERMISSIONS`,
-  `VALIDATOR_CLUSTER_VERB_EXCEPTIONS`, `RBACValidator._is_write_verb`,
+  module-level `MUTATING_VERBS` and `VALIDATOR_CLUSTER_VERB_EXCEPTIONS`,
+  the `RBACValidator.OPERATOR_CLUSTER_PERMISSIONS` class attribute,
+  `RBACValidator._is_write_verb`,
   permission-table accessors (`_get_cluster_permissions`,
   `_get_hub_namespace_permissions`,
   `_get_managed_cluster_namespace_permissions`,
