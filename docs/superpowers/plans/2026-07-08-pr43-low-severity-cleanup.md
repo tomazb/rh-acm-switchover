@@ -164,14 +164,17 @@ Add helper:
 
 ```python
 def _missing_parse_required_args(args) -> list[str]:
-    standalone = args.setup or args.argocd_resume_only or args.restore_only
+    setup_requested = getattr(args, "setup", False)
+    argocd_resume_only_requested = getattr(args, "argocd_resume_only", False)
+    restore_only_requested = getattr(args, "restore_only", False)
+    standalone = setup_requested or argocd_resume_only_requested or restore_only_requested
     missing = []
-    if not (args.restore_only or args.argocd_resume_only) and not args.primary_context:
+    if not (restore_only_requested or argocd_resume_only_requested) and not getattr(args, "primary_context", None):
         missing.append("--primary-context")
     if not standalone:
-        if not args.method:
+        if not getattr(args, "method", None):
             missing.append("--method")
-        if not args.old_hub_action:
+        if not getattr(args, "old_hub_action", None):
             missing.append("--old-hub-action")
     return missing
 ```
@@ -243,7 +246,7 @@ At the start of `pre_tasks`, add:
           {{
             ((acm_switchover_argocd | default({})).get('run_id', '') | length) == 0
             and ((acm_switchover_execution | default({})).get('run_id', '') | length) == 0
-            and (acm_switchover_execution.checkpoint.enabled | default(false))
+            and ((acm_switchover_execution | default({})).get('checkpoint', {}).get('enabled', false))
             and (((acm_switchover_execution | default({})).get('checkpoint', {}).get('path', '')) | length) > 0
           }}
 ```
@@ -267,8 +270,8 @@ Expected: pass.
 - R2-L3: `format_public_detail()` preserves the leading diagnostic text and appends a bounded truncation marker with omitted character count; it does not preserve a trailing suffix.
 - R2-L5: source reconciliation on the PR #149 base showed `acm_klusterlet_probe` already propagates `failed: true` for non-empty `failed_clusters`. The implementation documents and tests that structured failure contract instead of introducing a new `fail_json()` path or a soft-fail change.
 - R2-L5: no new `test_post_activation_klusterlet_contracts.py` file was created because `test_klusterlet_remediation.py` already contains the caller hard-fail contract test for initial probe `failed_clusters`.
-- R2-L7: the shared Argo CD resume predicate keeps the existing `acm_switchover_execution.checkpoint.enabled | default(false)` guard spelling so the checkpoint-enabled contract remains traceable in the existing playbook tests.
-- Validation V1: the shared Argo CD resume predicate intentionally uses bare Jinja truthiness for `checkpoint.enabled`; no `| bool` coercion is applied.
+- R2-L7: the shared Argo CD resume predicate keeps the checkpoint-enabled guard traceable through defensive dictionary access, so omitted role inputs do not produce undefined-variable errors.
+- Validation V1: the shared Argo CD resume predicate intentionally uses bare Jinja truthiness for `checkpoint.enabled`; no `| bool` coercion is applied. Review follow-up preserved that truthiness while switching the predicate to defensive `.get()` access.
 - Validation V2: parser behavior stays unchanged; help text now labels the mode-specific required arguments that parser-level `required=` can no longer express.
 - Validation V3: the Argo CD resume guard test now checks the exact matched checkpoint task-name set, not only membership for tasks that happen to match.
 - Validation V4: no additional V4-specific decommission public-detail change was made in this polish pass; the double-bounding comment is cosmetic and outside the V1-V3 required scope.

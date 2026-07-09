@@ -322,7 +322,7 @@ def test_standalone_argocd_resume_restores_run_id_from_checkpoint():
         "combine({" in text and "'run_id':" in text
     ), "argocd_resume.yml must seed acm_switchover_argocd.run_id from the persisted checkpoint"
     assert (
-        "(acm_switchover_argocd.run_id | default('')) | length == 0" in text
+        "(acm_switchover_argocd | default({})).get('run_id', '')" in text
     ), "argocd_resume.yml must not overwrite an explicit run_id supplied by the operator"
     assert (
         "get('run_id', '')" in text
@@ -339,13 +339,15 @@ def test_standalone_argocd_resume_guards_checkpoint_load_by_enabled_flag():
     """
     playbook = yaml.safe_load((PLAYBOOKS_DIR / "argocd_resume.yml").read_text())
     pre_tasks = playbook[0].get("pre_tasks", [])
-    enabled_guard = "acm_switchover_execution.checkpoint.enabled | default(false)"
+    run_id_guard = "(acm_switchover_argocd | default({})).get('run_id', '')"
+    enabled_guard = "(acm_switchover_execution | default({})).get('checkpoint', {}).get('enabled', false)"
     lookup_task = next(
         task
         for task in pre_tasks
         if "_argocd_resume_checkpoint_lookup_required" in task.get("ansible.builtin.set_fact", {})
     )
     lookup_expr = lookup_task["ansible.builtin.set_fact"]["_argocd_resume_checkpoint_lookup_required"]
+    assert run_id_guard in lookup_expr
     assert enabled_guard in lookup_expr
     assert "| bool" not in lookup_expr
 

@@ -24,6 +24,7 @@ from acm_switchover import (
     _fail_phase,
     _fail_unexpected_phase_state,
     _initialize_clients,
+    _missing_parse_required_args,
     _phase_report_from_state,
     _prepare_argocd_resume_clients,
     _prepare_runtime,
@@ -280,6 +281,16 @@ class TestArgParsing:
             assert args.method is None
             assert args.old_hub_action is None
             assert args.token_duration == TOKEN_DURATION_DEFAULT
+
+    def test_missing_parse_required_args_tolerates_partial_namespace(self):
+        """Helper callers using partial namespaces should get missing args, not AttributeError."""
+        args = SimpleNamespace(primary_context=None)
+
+        assert _missing_parse_required_args(args) == [
+            "--primary-context",
+            "--method",
+            "--old-hub-action",
+        ]
 
     def test_argocd_resume_only_rejects_dry_run_at_parse_time(self):
         """Resume-only is a standalone mode and must be mutually exclusive with dry-run."""

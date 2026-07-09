@@ -49,7 +49,7 @@ This is the recommended design. Include deterministic log-detail truncation (R2-
 
 ## Validation Polish Notes
 
-- V1 restores behavior-preserving equivalence for `argocd_resume.yml` by keeping `checkpoint.enabled` on bare Jinja truthiness instead of `| bool` coercion.
+- V1 restores behavior-preserving equivalence for `argocd_resume.yml` by keeping `checkpoint.enabled` on bare Jinja truthiness instead of `| bool` coercion; review follow-up keeps that truthiness while switching the shared predicate to defensive dictionary access.
 - V2 is CLI help text only; parser behavior and post-parse `parser.error()` validation remain unchanged.
 - V3 strengthens the Argo CD resume guard test so matched checkpoint task names must equal the expected set.
 - V4 remains documented as cosmetic and non-actionable in this pass.

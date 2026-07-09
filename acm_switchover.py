@@ -75,16 +75,20 @@ from modules.preflight_coordinator import PreflightValidator
 def _missing_parse_required_args(args: argparse.Namespace) -> list[str]:
     """Return conditionally required arguments missing after argparse parses modes."""
 
-    standalone_mode_requested = args.setup or args.argocd_resume_only or args.restore_only
+    setup_requested = getattr(args, "setup", False)
+    argocd_resume_only_requested = getattr(args, "argocd_resume_only", False)
+    restore_only_requested = getattr(args, "restore_only", False)
+
+    standalone_mode_requested = setup_requested or argocd_resume_only_requested or restore_only_requested
     missing: list[str] = []
 
-    if not (args.restore_only or args.argocd_resume_only) and not args.primary_context:
+    if not (restore_only_requested or argocd_resume_only_requested) and not getattr(args, "primary_context", None):
         missing.append("--primary-context")
 
     if not standalone_mode_requested:
-        if not args.method:
+        if not getattr(args, "method", None):
             missing.append("--method")
-        if not args.old_hub_action:
+        if not getattr(args, "old_hub_action", None):
             missing.append("--old-hub-action")
 
     return missing
