@@ -129,11 +129,11 @@ Examples:
     # Context arguments
     parser.add_argument(
         "--primary-context",
-        help="Kubernetes context for primary hub",
+        help="Kubernetes context for primary hub (required unless --restore-only/--argocd-resume-only)",
     )
     parser.add_argument(
         "--secondary-context",
-        help="Kubernetes context for secondary hub (required for switchover)",
+        help="Kubernetes context for secondary hub (required except --decommission/--setup)",
     )
 
     # Operation mode
@@ -178,7 +178,10 @@ Examples:
     parser.add_argument(
         "--method",
         choices=["passive", "full"],
-        help="Switchover method: passive (continuous sync) or full (one-time restore)",
+        help=(
+            "Switchover method: passive (continuous sync) or full (one-time restore) "
+            "(required unless --setup/--restore-only/--argocd-resume-only)"
+        ),
     )
 
     # Optional behavior
@@ -239,7 +242,8 @@ Examples:
         "--old-hub-action",
         choices=["secondary", "decommission", "none"],
         help=(
-            "Action for old primary hub after switchover (REQUIRED): "
+            "Action for old primary hub after switchover "
+            "(required unless --setup/--restore-only/--argocd-resume-only): "
             "'secondary' sets up passive sync for failback capability, "
             "'decommission' removes ACM components, "
             "'none' leaves it unchanged for manual handling"

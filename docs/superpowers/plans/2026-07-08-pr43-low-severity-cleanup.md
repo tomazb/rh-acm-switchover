@@ -50,7 +50,7 @@ def test_format_public_detail_truncates_deterministically():
     formatted = format_public_detail(detail, max_length=80)
     assert len(formatted) <= 80
     assert "truncated" in formatted
-    assert "truncated" in formatted
+    assert formatted.endswith("chars]")
 ```
 
 - [x] **Step 2: Run waiter tests red**
@@ -72,7 +72,7 @@ def format_public_detail(detail: str, *, max_length: int = PUBLIC_DETAIL_MAX_LEN
     text = str(detail)
     if len(text) <= max_length:
         return text
-    marker = f"... [truncated {len(text) - max_length} chars] ..."
+    marker = f"... [truncated {len(text) - max_length} chars]"
     keep = max(0, max_length - len(marker))
     return text[:keep] + marker
 
@@ -230,6 +230,8 @@ Expected: pass.
 
 Add a test that asserts `_argocd_resume_checkpoint_lookup_required` exists in `argocd_resume.yml` and that the repeated four-condition checkpoint lookup guard does not appear five times.
 
+Validation follow-up: the guard test also asserts that the matched checkpoint task names equal the expected set, so a renamed or missing checkpoint task cannot escape the guard assertion.
+
 - [x] **Step 2: Factor the repeated guard into one fact**
 
 At the start of `pre_tasks`, add:
@@ -241,7 +243,7 @@ At the start of `pre_tasks`, add:
           {{
             ((acm_switchover_argocd | default({})).get('run_id', '') | length) == 0
             and ((acm_switchover_execution | default({})).get('run_id', '') | length) == 0
-            and ((acm_switchover_execution | default({})).get('checkpoint', {}).get('enabled', false) | bool)
+            and (acm_switchover_execution.checkpoint.enabled | default(false))
             and (((acm_switchover_execution | default({})).get('checkpoint', {}).get('path', '')) | length) > 0
           }}
 ```
@@ -266,6 +268,10 @@ Expected: pass.
 - R2-L5: source reconciliation on the PR #149 base showed `acm_klusterlet_probe` already propagates `failed: true` for non-empty `failed_clusters`. The implementation documents and tests that structured failure contract instead of introducing a new `fail_json()` path or a soft-fail change.
 - R2-L5: no new `test_post_activation_klusterlet_contracts.py` file was created because `test_klusterlet_remediation.py` already contains the caller hard-fail contract test for initial probe `failed_clusters`.
 - R2-L7: the shared Argo CD resume predicate keeps the existing `acm_switchover_execution.checkpoint.enabled | default(false)` guard spelling so the checkpoint-enabled contract remains traceable in the existing playbook tests.
+- Validation V1: the shared Argo CD resume predicate intentionally uses bare Jinja truthiness for `checkpoint.enabled`; no `| bool` coercion is applied.
+- Validation V2: parser behavior stays unchanged; help text now labels the mode-specific required arguments that parser-level `required=` can no longer express.
+- Validation V3: the Argo CD resume guard test now checks the exact matched checkpoint task-name set, not only membership for tasks that happen to match.
+- Validation V4: no additional V4-specific decommission public-detail change was made in this polish pass; the double-bounding comment is cosmetic and outside the V1-V3 required scope.
 
 ### Task 5: R2-L9 Release Orchestrator `_as_dict()` Removal
 

@@ -347,6 +347,7 @@ def test_standalone_argocd_resume_guards_checkpoint_load_by_enabled_flag():
     )
     lookup_expr = lookup_task["ansible.builtin.set_fact"]["_argocd_resume_checkpoint_lookup_required"]
     assert enabled_guard in lookup_expr
+    assert "| bool" not in lookup_expr
 
     checkpoint_file_task_names = {
         "Resolve checkpoint path value",
@@ -357,9 +358,12 @@ def test_standalone_argocd_resume_guards_checkpoint_load_by_enabled_flag():
         "Parse persisted checkpoint JSON",
         "Seed Argo CD run_id from checkpoint",
     }
+    matched_checkpoint_file_task_names = set()
     for task in pre_tasks:
         if task.get("name") in checkpoint_file_task_names:
+            matched_checkpoint_file_task_names.add(task["name"])
             assert "_argocd_resume_checkpoint_lookup_required | default(false)" in task.get("when", [])
+    assert matched_checkpoint_file_task_names == checkpoint_file_task_names
 
 
 def test_standalone_argocd_resume_validates_checkpoint_path_before_file_reads():

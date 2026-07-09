@@ -123,6 +123,22 @@ class TestArgParsing:
         assert args.method is None
         assert args.old_hub_action is None
 
+    def test_help_marks_conditionally_required_args(self, capsys):
+        """Help text should describe mode-specific required arguments after parser-level required= removal."""
+        with patch("sys.argv", ["script.py", "--help"]):
+            with pytest.raises(SystemExit) as exc_info:
+                parse_args()
+
+        assert exc_info.value.code == 0
+        help_text = " ".join(capsys.readouterr().out.split()).replace("--restore- only", "--restore-only")
+        assert "Kubernetes context for primary hub (required unless --restore-only/--argocd-resume-only)" in help_text
+        assert "Kubernetes context for secondary hub (required except --decommission/--setup)" in help_text
+        assert (
+            "Switchover method: passive (continuous sync) or full (one-time restore) "
+            "(required unless --setup/--restore-only/--argocd-resume-only)"
+        ) in help_text
+        assert "Action for old primary hub after switchover (required unless" in help_text
+
     def test_mutually_exclusive_modes(self):
         """Test that mutually exclusive flags raise error."""
         with patch(
