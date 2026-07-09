@@ -106,8 +106,12 @@ pytest -m property tests/property/ -q
 **Target code**
 - Python: `lib/path_safety.py` — `validate_path_syntax`,
   `validate_safe_filesystem_path`, `validate_report_artifact_path`,
-  `validate_report_artifact_directory` (re-exported via
-  `lib/report_artifacts.py` and `lib/validation.py`).
+  `validate_report_artifact_directory`. Callers reach these through two
+  wrappers: `lib/report_artifacts.py` re-exports
+  `validate_report_artifact_path` and `validate_report_artifact_directory`,
+  and `lib/validation.py` wraps `validate_safe_filesystem_path` as
+  `InputValidator.validate_safe_filesystem_path`. Import property-test
+  targets from `lib.path_safety` directly.
 - Collection: `ansible_collections/tomazb/acm_switchover/plugins/module_utils/path_safety.py`
   — `validate_path_syntax`, `validate_safe_path`,
   `validate_report_artifact_path`, `validate_report_artifact_directory`;
@@ -365,9 +369,14 @@ pytest tests/test_backup_schedule.py -q
   policy (an existing `automated` key is nulled, never preserved enabled)
   and always records the paused-by annotation with the given run id.
 - **Filter conservatism**: `filter_acm_applications(apps)` returns a subset
-  of its input; every application it drops is provably not ACM-touching per
-  `is_acm_touching_application`; unknown-impact applications are never
-  silently dropped.
+  of its input; every application it drops reports no ACM resources per
+  `is_acm_touching_application`. Note that the filter alone drops
+  applications with absent or stale `status.resources` (their ACM impact is
+  unknown, not provably absent); the "never silently dropped" guarantee is
+  a pipeline-level property — any dropped unknown-impact application that
+  has auto-sync enabled must be surfaced by `find_argocd_pause_blockers`
+  (next bullet), while unknown-impact applications without auto-sync are
+  safely out of scope for pause.
 - **Blocker completeness**: every generated application that is
   `ApplicationSet`-owned **and** ACM-touching appears in
   `find_argocd_pause_blockers` output (regardless of auto-sync state), as
@@ -438,11 +447,17 @@ pytest tests/test_argocd.py tests/test_argocd_constants_parity.py -q
 - **Verb classification consistency**: `RBACValidator._is_write_verb`
   agrees with membership in `MUTATING_VERBS` for the whole generated verb
   vocabulary.
-- **Real-table invariants**: applied to the actual shipped tables — the
-  validator role's permissions per resource are a subset of the operator
-  role's, and the exceptions recorded in
+- **Real-table invariants**: applied to the actual shipped **cluster**
+  tables — `VALIDATOR_CLUSTER_PERMISSIONS` is per resource a subset of
+  `OPERATOR_CLUSTER_PERMISSIONS`, and the exceptions recorded in
   `VALIDATOR_CLUSTER_VERB_EXCEPTIONS` account for exactly the stripped
-  verbs.
+  verbs. The subset relation is **not** asserted for the hub-namespace
+  tables: those are hand-maintained per role, and the validator
+  intentionally holds verbs the operator lacks (e.g. `list` on
+  `apps/deployments` and `apps/statefulsets` in the observability
+  namespace, where the operator has `get`/`patch` only). Namespace-table
+  properties are limited to the mutating-verb rule: the validator
+  namespace tables contain no verb from `MUTATING_VERBS`.
 - **Cross-form-factor set agreement**: the permission sets checked by the
   collection's `acm_rbac_validate.py` and the Python tables agree as sets
   (generalizing the exact-equality guardrail; the guardrail test itself is
