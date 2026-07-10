@@ -554,6 +554,28 @@ class TestDecommission:
 
         assert "ManagedClusters not fully removed" in str(exc_info.value)
 
+    @patch("modules.decommission.wait_for_condition")
+    def test_delete_managed_clusters_wait_detail_is_bounded(
+        self, mock_wait, decommission_with_obs, mock_primary_client
+    ):
+        """Large ManagedCluster sets should not produce oversized wait-detail log lines."""
+        mock_wait.return_value = True
+        delete_targets = [{"metadata": {"name": "cluster-delete-target"}}]
+        remaining_clusters = [{"metadata": {"name": f"cluster-{idx:03d}"}} for idx in range(60)]
+        mock_primary_client.list_managed_clusters.side_effect = [delete_targets, remaining_clusters]
+        mock_primary_client.list_custom_resources.return_value = []
+
+        decommission_with_obs._delete_managed_clusters()
+
+        condition_fn = mock_wait.call_args.args[1]
+        result = condition_fn()
+        assert result.done is False
+        assert "60 ManagedCluster(s) remaining" in result.public_detail
+        assert "cluster-000" in result.public_detail
+        assert "cluster-020" not in result.public_detail
+        assert "40 more" in result.public_detail
+        assert len(result.public_detail) <= 560
+
     def test_delete_managed_clusters_none_found(self, decommission_with_obs, mock_primary_client):
         """Test when no managed clusters exist."""
         mock_primary_client.list_custom_resources.return_value = []

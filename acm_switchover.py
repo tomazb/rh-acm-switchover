@@ -72,16 +72,30 @@ from modules import (
 from modules.preflight_coordinator import PreflightValidator
 
 
+def _missing_parse_required_args(args: argparse.Namespace) -> list[str]:
+    """Return conditionally required arguments missing after argparse parses modes."""
+
+    setup_requested = getattr(args, "setup", False)
+    argocd_resume_only_requested = getattr(args, "argocd_resume_only", False)
+    restore_only_requested = getattr(args, "restore_only", False)
+
+    standalone_mode_requested = setup_requested or argocd_resume_only_requested or restore_only_requested
+    missing: list[str] = []
+
+    if not (restore_only_requested or argocd_resume_only_requested) and not getattr(args, "primary_context", None):
+        missing.append("--primary-context")
+
+    if not standalone_mode_requested:
+        if not getattr(args, "method", None):
+            missing.append("--method")
+        if not getattr(args, "old_hub_action", None):
+            missing.append("--old-hub-action")
+
+    return missing
+
+
 def parse_args():
     """Parse command line arguments."""
-    # Keep switchover/decommission CLI contracts intact while allowing
-    # standalone modes that do not perform a switchover flow.
-    standalone_mode_requested = any(
-        flag in sys.argv[1:] for flag in ("--setup", "--argocd-resume-only", "--restore-only")
-    )
-    restore_only_requested = "--restore-only" in sys.argv[1:]
-    argocd_resume_only_requested = "--argocd-resume-only" in sys.argv[1:]
-
     parser = argparse.ArgumentParser(
         description="ACM Hub Switchover Automation",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -119,12 +133,11 @@ Examples:
     # Context arguments
     parser.add_argument(
         "--primary-context",
-        required=not (restore_only_requested or argocd_resume_only_requested),
-        help="Kubernetes context for primary hub",
+        help="Kubernetes context for primary hub (required unless --restore-only/--argocd-resume-only)",
     )
     parser.add_argument(
         "--secondary-context",
-        help="Kubernetes context for secondary hub (required for switchover)",
+        help="Kubernetes context for secondary hub (required except --decommission/--setup)",
     )
 
     # Operation mode
@@ -169,8 +182,10 @@ Examples:
     parser.add_argument(
         "--method",
         choices=["passive", "full"],
-        required=not standalone_mode_requested,
-        help="Switchover method: passive (continuous sync) or full (one-time restore)",
+        help=(
+            "Switchover method: passive (continuous sync) or full (one-time restore) "
+            "(required unless --setup/--restore-only/--argocd-resume-only)"
+        ),
     )
 
     # Optional behavior
@@ -230,9 +245,9 @@ Examples:
     parser.add_argument(
         "--old-hub-action",
         choices=["secondary", "decommission", "none"],
-        required=not standalone_mode_requested,
         help=(
-            "Action for old primary hub after switchover (REQUIRED): "
+            "Action for old primary hub after switchover "
+            "(required unless --setup/--restore-only/--argocd-resume-only): "
             "'secondary' sets up passive sync for failback capability, "
             "'decommission' removes ACM components, "
             "'none' leaves it unchanged for manual handling"
@@ -336,7 +351,12 @@ Examples:
         help="Log output format (text or json)",
     )
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    missing_required_args = _missing_parse_required_args(args)
+    if missing_required_args:
+        parser.error("the following arguments are required: " + ", ".join(missing_required_args))
+
+    return args
 
 
 def validate_args(args: argparse.Namespace, logger: logging.Logger) -> None:

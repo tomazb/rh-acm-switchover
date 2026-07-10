@@ -918,6 +918,43 @@ def test_probe_module_main_allows_omitted_candidate_clusters(monkeypatch):
     assert captured["candidate_clusters"] is None
 
 
+def test_probe_module_main_preserves_failed_probe_contract(monkeypatch):
+    class FakeModule:
+        params = {
+            "secondary_hub": {"kubeconfig": "hub"},
+            "managed_clusters": {"cluster-a": {"kubeconfig": "cluster-a"}},
+            "candidate_clusters": ["cluster-a"],
+            "workers": 10,
+        }
+        check_mode = False
+
+        def __init__(self, **kwargs):
+            pass
+
+        def exit_json(self, **kwargs):
+            raise _ExitJson(kwargs)
+
+        def fail_json(self, **kwargs):
+            raise AssertionError(f"unexpected fail_json: {kwargs}")
+
+    def fake_probe(**kwargs):
+        return {
+            "changed": False,
+            "failed": True,
+            "failed_clusters": ["cluster-a"],
+            "results": [{"cluster": "cluster-a", "status": "failed", "reason": "forbidden"}],
+        }
+
+    monkeypatch.setattr(probe_module, "AnsibleModule", FakeModule)
+    monkeypatch.setattr(probe_module, "probe_klusterlet_connections", fake_probe)
+
+    with pytest.raises(_ExitJson) as exc:
+        probe_module.main()
+
+    assert exc.value.payload["failed"] is True
+    assert exc.value.payload["failed_clusters"] == ["cluster-a"]
+
+
 def test_module_entrypoints_map_unexpected_errors_to_fail_json(monkeypatch):
     class FakeModule:
         params = {

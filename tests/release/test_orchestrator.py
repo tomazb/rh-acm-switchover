@@ -19,13 +19,19 @@ from tests.release.contracts.models import (
 )
 from tests.release.orchestrator import (
     OcDiscoveryClient,
+    _execute_stream_scenarios,
     _finalize_run,
     _normalized_runtime_sources,
     _runtime_parity,
     run_release_certification,
 )
 from tests.release.reporting.artifacts import ReleaseArtifacts
-from tests.release.scenarios.catalog import select_release_matrix
+from tests.release.scenarios.catalog import (
+    ScenarioDefinition,
+    ScenarioLifecycle,
+    ScenarioSupport,
+    select_release_matrix,
+)
 
 
 class FakeDiscoveryClient:
@@ -160,6 +166,57 @@ class SwitchingAdapter(FakeAdapter):
         self.primary_client.primary = False
         self.secondary_client.primary = True
         return result
+
+
+def test_execute_stream_scenarios_serializes_stream_result_contract() -> None:
+    scenario = ScenarioDefinition(
+        id="contract-scenario",
+        required=True,
+        streams=("python",),
+        mutates_lab=False,
+        runtime_parity_required=False,
+        lifecycle=ScenarioLifecycle(
+            initial_primary=None,
+            final_primary=None,
+            mutates_lab=False,
+            reset_required=False,
+        ),
+        support=ScenarioSupport(),
+    )
+
+    results = _execute_stream_scenarios(
+        scenarios=(scenario,),
+        scenario_profiles={},
+        stream_profiles={},
+        adapters={"python": FakeAdapter("python")},
+    )
+
+    assert results == [
+        {
+            "stream": "python",
+            "scenario_id": "contract-scenario",
+            "status": "passed",
+            "command": ["python", "contract-scenario"],
+            "returncode": 0,
+            "stdout_path": None,
+            "stderr_path": None,
+            "reports": [],
+            "assertions": [
+                {
+                    "capability": "contract-scenario",
+                    "name": "exit-code",
+                    "status": "passed",
+                    "expected": "0",
+                    "actual": "0",
+                    "evidence_path": None,
+                    "message": "passed",
+                }
+            ],
+            "started_at": "2026-05-05T00:00:00+00:00",
+            "ended_at": "2026-05-05T00:00:01+00:00",
+            "required": True,
+        }
+    ]
 
 
 def _release_options(tmp_path: Path, *, mode: str = "certification") -> ReleaseOptions:

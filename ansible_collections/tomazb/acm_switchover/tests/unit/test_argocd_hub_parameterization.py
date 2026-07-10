@@ -322,7 +322,7 @@ def test_standalone_argocd_resume_restores_run_id_from_checkpoint():
         "combine({" in text and "'run_id':" in text
     ), "argocd_resume.yml must seed acm_switchover_argocd.run_id from the persisted checkpoint"
     assert (
-        "(acm_switchover_argocd.run_id | default('')) | length == 0" in text
+        "(acm_switchover_argocd | default({})).get('run_id', '')" in text
     ), "argocd_resume.yml must not overwrite an explicit run_id supplied by the operator"
     assert (
         "get('run_id', '')" in text
@@ -334,17 +334,38 @@ def test_standalone_argocd_resume_guards_checkpoint_load_by_enabled_flag():
 
     A checkpoint file may exist from a previous run at the configured path even
     when checkpoint.enabled is false for the current run (no fresh write happened).
-    Loading it would seed a wrong run_id. All three checkpoint pre_tasks must
-    require checkpoint.enabled before touching the file.
+    Loading it would seed a wrong run_id. Checkpoint file tasks must consume the
+    shared lookup predicate, which itself requires checkpoint.enabled.
     """
-    text = (PLAYBOOKS_DIR / "argocd_resume.yml").read_text()
-    enabled_guard = "acm_switchover_execution.checkpoint.enabled | default(false)"
-    # Count occurrences — one per pre_task (stat, load, seed)
-    count = text.count(enabled_guard)
-    assert count >= 3, (
-        f"argocd_resume.yml must guard all three checkpoint pre_tasks with "
-        f"'{enabled_guard}', found {count} occurrence(s)"
+    playbook = yaml.safe_load((PLAYBOOKS_DIR / "argocd_resume.yml").read_text())
+    pre_tasks = playbook[0].get("pre_tasks", [])
+    run_id_guard = "(acm_switchover_argocd | default({})).get('run_id', '')"
+    enabled_guard = "(acm_switchover_execution | default({})).get('checkpoint', {}).get('enabled', false)"
+    lookup_task = next(
+        task
+        for task in pre_tasks
+        if "_argocd_resume_checkpoint_lookup_required" in task.get("ansible.builtin.set_fact", {})
     )
+    lookup_expr = lookup_task["ansible.builtin.set_fact"]["_argocd_resume_checkpoint_lookup_required"]
+    assert run_id_guard in lookup_expr
+    assert enabled_guard in lookup_expr
+    assert "| bool" not in lookup_expr
+
+    checkpoint_file_task_names = {
+        "Resolve checkpoint path value",
+        "Resolve checkpoint path to absolute path (controller-side)",
+        "Validate persisted checkpoint path",
+        "Check for persisted checkpoint with Argo CD run_id",
+        "Read persisted checkpoint file",
+        "Parse persisted checkpoint JSON",
+        "Seed Argo CD run_id from checkpoint",
+    }
+    matched_checkpoint_file_task_names = set()
+    for task in pre_tasks:
+        if task.get("name") in checkpoint_file_task_names:
+            matched_checkpoint_file_task_names.add(task["name"])
+            assert "_argocd_resume_checkpoint_lookup_required | default(false)" in task.get("when", [])
+    assert matched_checkpoint_file_task_names == checkpoint_file_task_names
 
 
 def test_standalone_argocd_resume_validates_checkpoint_path_before_file_reads():

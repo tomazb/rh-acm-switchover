@@ -24,6 +24,7 @@ from acm_switchover import (
     _fail_phase,
     _fail_unexpected_phase_state,
     _initialize_clients,
+    _missing_parse_required_args,
     _phase_report_from_state,
     _prepare_argocd_resume_clients,
     _prepare_runtime,
@@ -96,6 +97,48 @@ class TestArgParsing:
         ):
             with pytest.raises(SystemExit):
                 parse_args()
+
+    def test_required_args_still_apply_to_decommission(self):
+        """Decommission is not a standalone mode; method and old-hub-action remain required."""
+        with patch("sys.argv", ["script.py", "--decommission", "--primary-context", "old-hub"]):
+            with pytest.raises(SystemExit):
+                parse_args()
+
+    def test_restore_only_abbreviation_does_not_require_primary_or_method(self):
+        """Argparse abbreviation handling must run before standalone required-argument checks."""
+        with patch("sys.argv", ["script.py", "--restore-on", "--secondary-context", "secondary"]):
+            args = parse_args()
+
+        assert args.restore_only is True
+        assert args.primary_context is None
+        assert args.method is None
+        assert args.old_hub_action is None
+
+    def test_argocd_resume_only_abbreviation_does_not_require_primary_or_method(self):
+        """Argparse-recognized resume-only abbreviations should not be blocked by a pre-scan."""
+        with patch("sys.argv", ["script.py", "--argocd-resume-onl", "--secondary-context", "secondary"]):
+            args = parse_args()
+
+        assert args.argocd_resume_only is True
+        assert args.primary_context is None
+        assert args.method is None
+        assert args.old_hub_action is None
+
+    def test_help_marks_conditionally_required_args(self, capsys):
+        """Help text should describe mode-specific required arguments after parser-level required= removal."""
+        with patch("sys.argv", ["script.py", "--help"]):
+            with pytest.raises(SystemExit) as exc_info:
+                parse_args()
+
+        assert exc_info.value.code == 0
+        help_text = " ".join(capsys.readouterr().out.split()).replace("--restore- only", "--restore-only")
+        assert "Kubernetes context for primary hub (required unless --restore-only/--argocd-resume-only)" in help_text
+        assert "Kubernetes context for secondary hub (required except --decommission/--setup)" in help_text
+        assert (
+            "Switchover method: passive (continuous sync) or full (one-time restore) "
+            "(required unless --setup/--restore-only/--argocd-resume-only)"
+        ) in help_text
+        assert "Action for old primary hub after switchover (required unless" in help_text
 
     def test_mutually_exclusive_modes(self):
         """Test that mutually exclusive flags raise error."""
@@ -238,6 +281,16 @@ class TestArgParsing:
             assert args.method is None
             assert args.old_hub_action is None
             assert args.token_duration == TOKEN_DURATION_DEFAULT
+
+    def test_missing_parse_required_args_tolerates_partial_namespace(self):
+        """Helper callers using partial namespaces should get missing args, not AttributeError."""
+        args = SimpleNamespace(primary_context=None)
+
+        assert _missing_parse_required_args(args) == [
+            "--primary-context",
+            "--method",
+            "--old-hub-action",
+        ]
 
     def test_argocd_resume_only_rejects_dry_run_at_parse_time(self):
         """Resume-only is a standalone mode and must be mutually exclusive with dry-run."""

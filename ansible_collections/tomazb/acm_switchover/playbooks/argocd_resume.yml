@@ -3,14 +3,21 @@
   hosts: localhost
   gather_facts: false
   pre_tasks:
+    - name: Resolve whether Argo CD resume checkpoint lookup is needed
+      ansible.builtin.set_fact:
+        _argocd_resume_checkpoint_lookup_required: >-
+          {{
+            (((acm_switchover_argocd | default({})).get('run_id', '')) | length == 0)
+            and (((acm_switchover_execution | default({})).get('run_id', '') | length) == 0)
+            and ((acm_switchover_execution | default({})).get('checkpoint', {}).get('enabled', false))
+            and ((((acm_switchover_execution | default({})).get('checkpoint', {}).get('path', '')) | length) > 0)
+          }}
+
     - name: Resolve checkpoint path value
       ansible.builtin.set_fact:
         _argocd_resume_checkpoint_path: "{{ (acm_switchover_execution | default({})).get('checkpoint', {}).get('path', '') }}"
       when:
-        - (acm_switchover_argocd.run_id | default('')) | length == 0
-        - ((acm_switchover_execution | default({})).get('run_id', '') | length) == 0
-        - acm_switchover_execution.checkpoint.enabled | default(false)
-        - ((acm_switchover_execution | default({})).get('checkpoint', {}).get('path', '')) | length > 0
+        - _argocd_resume_checkpoint_lookup_required | default(false)
 
     - name: Resolve checkpoint path to absolute path (controller-side)
       ansible.builtin.set_fact:
@@ -21,19 +28,14 @@
             else (lookup('env', 'PWD') ~ '/' ~ _argocd_resume_checkpoint_path)
           }}
       when:
-        - (acm_switchover_argocd.run_id | default('')) | length == 0
-        - ((acm_switchover_execution | default({})).get('run_id', '') | length) == 0
-        - acm_switchover_execution.checkpoint.enabled | default(false)
-        - ((acm_switchover_execution | default({})).get('checkpoint', {}).get('path', '')) | length > 0
+        - _argocd_resume_checkpoint_lookup_required | default(false)
 
     - name: Validate persisted checkpoint path
       tomazb.acm_switchover.acm_safe_path_validate:
         path: "{{ _argocd_resume_checkpoint_path_abs }}"
         path_type: artifact
       when:
-        - (acm_switchover_argocd.run_id | default('')) | length == 0
-        - ((acm_switchover_execution | default({})).get('run_id', '') | length) == 0
-        - acm_switchover_execution.checkpoint.enabled | default(false)
+        - _argocd_resume_checkpoint_lookup_required | default(false)
         - (_argocd_resume_checkpoint_path_abs | default('')) | length > 0
 
     - name: Check for persisted checkpoint with Argo CD run_id
@@ -41,9 +43,7 @@
         path: "{{ _argocd_resume_checkpoint_path_abs }}"
       register: _argocd_resume_checkpoint_stat
       when:
-        - (acm_switchover_argocd.run_id | default('')) | length == 0
-        - ((acm_switchover_execution | default({})).get('run_id', '') | length) == 0
-        - acm_switchover_execution.checkpoint.enabled | default(false)
+        - _argocd_resume_checkpoint_lookup_required | default(false)
         - (_argocd_resume_checkpoint_path_abs | default('')) | length > 0
 
     - name: Read persisted checkpoint file
@@ -51,18 +51,14 @@
         src: "{{ _argocd_resume_checkpoint_path_abs }}"
       register: _argocd_resume_checkpoint_slurp
       when:
-        - (acm_switchover_argocd.run_id | default('')) | length == 0
-        - ((acm_switchover_execution | default({})).get('run_id', '') | length) == 0
-        - acm_switchover_execution.checkpoint.enabled | default(false)
+        - _argocd_resume_checkpoint_lookup_required | default(false)
         - (_argocd_resume_checkpoint_stat.stat.exists | default(false))
 
     - name: Parse persisted checkpoint JSON
       ansible.builtin.set_fact:
         _argocd_resume_checkpoint: "{{ _argocd_resume_checkpoint_slurp.content | b64decode | from_json }}"
       when:
-        - (acm_switchover_argocd.run_id | default('')) | length == 0
-        - ((acm_switchover_execution | default({})).get('run_id', '') | length) == 0
-        - acm_switchover_execution.checkpoint.enabled | default(false)
+        - _argocd_resume_checkpoint_lookup_required | default(false)
         - (_argocd_resume_checkpoint_stat.stat.exists | default(false))
 
     - name: Seed Argo CD run_id from checkpoint
@@ -75,9 +71,7 @@
               })
           }}
       when:
-        - (acm_switchover_argocd.run_id | default('')) | length == 0
-        - ((acm_switchover_execution | default({})).get('run_id', '') | length) == 0
-        - acm_switchover_execution.checkpoint.enabled | default(false)
+        - _argocd_resume_checkpoint_lookup_required | default(false)
         - _argocd_resume_checkpoint is defined
         - ((_argocd_resume_checkpoint | default({})).get('operational_data', {}).get('argocd_run_id', '')) | length > 0
 

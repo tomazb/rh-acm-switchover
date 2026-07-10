@@ -255,14 +255,6 @@ def _certify_hub_rbac(
     return result, assertions
 
 
-def _as_dict(value: Any) -> dict:
-    if hasattr(value, "to_dict"):
-        return value.to_dict()
-    if hasattr(value, "__dataclass_fields__"):
-        return asdict(value)
-    return dict(value)
-
-
 def _local_result(scenario_id: str, status: str, assertions: list[dict], required: bool) -> dict:
     return {
         "stream": "local",
@@ -410,7 +402,7 @@ def _execute_stream_scenarios(
                     }
                 )
                 continue
-            payload = _as_dict(result)
+            payload = result.to_dict()
             payload["required"] = scenario.required
             results.append(payload)
     return results

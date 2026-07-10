@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from lib.waiter import WaitConditionResult, wait_for_condition
+from lib.waiter import WaitConditionResult, format_public_detail, format_public_list, wait_for_condition
 
 
 @pytest.fixture
@@ -20,6 +20,30 @@ def mock_logger():
 @pytest.mark.unit
 class TestWaitForCondition:
     """Tests for wait_for_condition function."""
+
+    def test_format_public_detail_preserves_short_detail(self):
+        assert format_public_detail("deleted") == "deleted"
+
+    def test_format_public_detail_truncates_deterministically(self):
+        detail = "cluster-" + ("x" * 600)
+
+        formatted = format_public_detail(detail, max_length=80)
+
+        assert len(formatted) <= 80
+        assert formatted.startswith("cluster-")
+        assert "truncated" in formatted
+        assert formatted.endswith("chars]")
+
+    def test_format_public_list_limits_items_and_length(self):
+        names = [f"cluster-{idx}" for idx in range(30)]
+
+        formatted = format_public_list(names, max_items=5, max_length=90)
+
+        assert "cluster-0" in formatted
+        assert "cluster-4" in formatted
+        assert "cluster-5" not in formatted
+        assert "25 more" in formatted
+        assert len(formatted) <= 90
 
     @patch("lib.waiter.time")
     def test_wait_success_immediate_logs_description_and_public_detail(self, mock_time, mock_logger):
@@ -36,6 +60,22 @@ class TestWaitForCondition:
         mock_logger.info.assert_any_call("%s complete: %s", "test wait", "done")
         mock_logger.debug.assert_not_called()
         mock_time.sleep.assert_not_called()
+
+    @patch("lib.waiter.time")
+    def test_wait_logs_truncated_public_detail(self, mock_time, mock_logger):
+        """Long public details should not produce oversized single-line logs."""
+        mock_time.time.return_value = 0
+        detail = "cluster-" + ("x" * 600)
+
+        def condition():
+            return WaitConditionResult.complete(detail)
+
+        result = wait_for_condition(description="test wait", condition_fn=condition, logger=mock_logger)
+
+        assert result is True
+        logged_detail = mock_logger.info.call_args_list[-1].args[2]
+        assert len(logged_detail) <= 500
+        assert "truncated" in logged_detail
 
     @patch("lib.waiter.time")
     def test_wait_success_after_retry(self, mock_time, mock_logger):
