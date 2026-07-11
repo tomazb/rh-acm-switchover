@@ -137,37 +137,45 @@ pytest -m property tests/property/ -q
   `ansible_collections/tomazb/acm_switchover/plugins/filter/paths.py`.
 
 **Generated input domain**
-- Path candidates assembled from generated segments: benign names, `.` and
-  `..` components, absolute prefixes, repeated separators, trailing
-  separators, NUL and control characters, over-long components, and home
-  (`~`) prefixes.
+- **Syntax/agreement candidates** assembled from benign names, `.` and `..`
+  components, absolute prefixes, repeated separators, trailing separators,
+  NUL and control characters, over-long components, and home (`~`) prefixes.
+  This broad string domain is used for syntax totality and cross-form
+  accept/reject classification even when a value cannot be represented by
+  the host filesystem.
+- **Filesystem-resolvable candidates** are the subset used by containment and
+  symlink properties. They exclude embedded NUL and platform-overlong path
+  components, remain within host filename/path limits, and are created only
+  under `tmp_path` or another helper-allowed root.
 - Local symlink fixtures under `tmp_path`: links pointing inside and outside
   a designated safe root. Relative parent-symlink cases are generated for
   the report-artifact validators; absolute symlink cases also exercise the
-  general safe-path validators. Symlinks are created only in pytest
-  temporary directories.
+  general safe-path validators.
 
 **Properties / invariants**
-- **General absolute-path containment**: any absolute path accepted by
-  `validate_safe_filesystem_path` / `validate_safe_path` resolves, using the
-  helpers' nearest-existing-ancestor rules, under an allowed safe root.
+- **General absolute-path containment**: any filesystem-resolvable absolute
+  path accepted by `validate_safe_filesystem_path` / `validate_safe_path`
+  resolves, using the helpers' nearest-existing-ancestor rules, under an
+  allowed safe root.
 - **General relative-path contract**: relative candidates are subject to the
   syntax gate only. The shipped general safe-path helpers return before
   filesystem or symlink resolution for relative paths, so this suite does
   not assert relative-path containment or parent-symlink rejection for those
   two helpers.
-- **Artifact-path containment**: any relative or absolute path accepted by
-  `validate_report_artifact_path` / `validate_report_artifact_directory`
-  resolves under the artifact root selected by the helper. Relative parent
-  symlinks and absolute symlinks that escape that root are rejected.
+- **Artifact-path containment**: any filesystem-resolvable relative or
+  absolute path accepted by `validate_report_artifact_path` /
+  `validate_report_artifact_directory` resolves under the artifact root
+  selected by the helper. Relative parent symlinks and absolute symlinks
+  that escape that root are rejected.
 - **Traversal rejection**: every candidate containing `..` as a path
   component is rejected by the shared syntax gate. Symlink-indirection
-  rejection is asserted for artifact paths and for absolute general paths,
-  matching the behavior each helper actually enforces.
-- **Cross-form-factor agreement**: for generated candidates evaluated under
-  identical safe-root fixtures, `lib/path_safety.py` and the collection
-  `module_utils/path_safety.py` agree accept/reject for corresponding
-  general-path and artifact-path validators.
+  rejection is asserted for filesystem-resolvable artifact paths and for
+  filesystem-resolvable absolute general paths, matching the behavior each
+  helper actually enforces.
+- **Cross-form-factor agreement**: for every syntax/agreement candidate,
+  `lib/path_safety.py` and the collection `module_utils/path_safety.py`
+  agree on accept/reject for corresponding general-path and artifact-path
+  validators. Filesystem-based cases use identical `tmp_path` fixtures.
 - **Syntax gate totality**: `validate_path_syntax` never raises anything
   other than its documented validation error type for any generated string
   input.
@@ -179,17 +187,17 @@ pytest -m property tests/property/ -q
   parent symlinks. Strengthening that production contract requires a
   separate parity-sensitive implementation PR before the stronger property
   can be added.
-- NUL-containing and platform-overlong paths remain in the validation domain
-  to characterize validator behavior, but they are excluded from Suite 4's
-  successful file-write domain because the operating system cannot create
-  them even when syntax validation accepts them.
+- NUL-containing and platform-overlong candidates are characterized by the
+  syntax/agreement properties; no containment or successful-write property
+  attempts to call host filesystem resolution on an unrepresentable value.
 - No property coverage of artifact *content* (that is Suite 4).
 
 **Acceptance criteria**
 - Absolute general-path containment, relative syntax-only behavior,
   artifact containment, traversal, agreement, and totality properties are
-  implemented; symlink cases are restricted to `tmp_path`; both form
-  factors run on the same candidates; suite passes derandomized.
+  implemented over their documented subdomains; symlink cases are
+  restricted to `tmp_path`; both form factors run on the same candidates;
+  suite passes derandomized.
 
 **Verification commands** (future PR)
 ```bash
