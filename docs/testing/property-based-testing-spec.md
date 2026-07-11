@@ -126,31 +126,49 @@ pytest -m property tests/property/ -q
   separators, NUL and control characters, over-long components, home (`~`)
   prefixes.
 - Local symlink fixtures under `tmp_path`: links pointing inside and outside
-  a designated safe root (symlinks are created only in pytest temporary
-  directories).
+  a designated safe root. Relative parent-symlink cases are generated for
+  the report-artifact validators; absolute symlink cases also exercise the
+  general safe-path validators. Symlinks are created only in pytest
+  temporary directories.
 
 **Properties / invariants**
-- **Containment**: any path accepted by the safe-path/report-artifact
-  validators resolves (via the same ancestor-resolution logic) to a location
-  under an allowed safe root; no accepted input escapes.
-- **Traversal rejection**: any candidate whose resolved form leaves the safe
-  root — including via `..` sequences and via symlink indirection — is
-  rejected.
+- **General absolute-path containment**: any absolute path accepted by
+  `validate_safe_filesystem_path` / `validate_safe_path` resolves, using the
+  helpers' nearest-existing-ancestor rules, under an allowed safe root.
+- **General relative-path contract**: relative candidates are subject to the
+  syntax gate only. The shipped general safe-path helpers return before
+  filesystem or symlink resolution for relative paths, so this suite does
+  not assert relative-path containment or parent-symlink rejection for those
+  two helpers.
+- **Artifact-path containment**: any relative or absolute path accepted by
+  `validate_report_artifact_path` / `validate_report_artifact_directory`
+  resolves under the artifact root selected by the helper. Relative parent
+  symlinks and absolute symlinks that escape that root are rejected.
+- **Traversal rejection**: every candidate containing `..` as a path
+  component is rejected by the shared syntax gate. Symlink-indirection
+  rejection is asserted for artifact paths and for absolute general paths,
+  matching the behavior each helper actually enforces.
 - **Cross-form-factor agreement**: for generated candidates evaluated under
   identical safe-root fixtures, `lib/path_safety.py` and the collection
-  `module_utils/path_safety.py` agree accept/reject.
+  `module_utils/path_safety.py` agree accept/reject for corresponding
+  general-path and artifact-path validators.
 - **Syntax gate totality**: `validate_path_syntax` never raises anything
   other than its documented validation error type, for any string input.
 
 **Non-goals**
 - No testing of OS permission errors, filesystem races, or non-POSIX
   platforms.
+- No claim that the current general safe-path helpers resolve relative
+  parent symlinks. Strengthening that production contract requires a
+  separate parity-sensitive implementation PR before the stronger property
+  can be added.
 - No property coverage of artifact *content* (that is Suite 4).
 
 **Acceptance criteria**
-- All four properties implemented; symlink cases restricted to `tmp_path`;
-  agreement property runs both implementations on the same candidates;
-  suite passes derandomized.
+- Absolute general-path containment, relative syntax-only behavior,
+  artifact containment, traversal, agreement, and totality properties are
+  implemented; symlink cases are restricted to `tmp_path`; both form
+  factors run on the same candidates; suite passes derandomized.
 
 **Verification commands** (future PR)
 ```bash
@@ -185,7 +203,9 @@ pytest tests/test_path_safety.py -q   # existing example suite stays green
   `Phase` enum, against a `tmp_path` state file.
 - Checkpoint records: generated completed-phase lists (subsets/permutations
   of real phase names), operation identities with matching and deliberately
-  mismatched hub identifiers, legacy-shaped records missing identity fields.
+  mismatched hub identifiers, schema 1.0 records with and without completed
+  phases, and schema 2.0 records missing `operation_identity` with and
+  without completed phases.
 
 **Properties / invariants**
 - **Round-trip durability**: after any generated operation sequence,
@@ -198,11 +218,18 @@ pytest tests/test_path_safety.py -q   # existing example suite stays green
   (completed phases are skipped on resume, never rerun);
   `reset_completed_phases_from(phases, p)` removes `p` and everything after
   it in workflow order and nothing before it.
-- **Identity safety**: any identity mismatch in generated
-  checkpoint-vs-expected pairs is detected (`validate_operation_identity`
-  fails / `CheckpointIdentityMismatch`, and `StateIdentityMismatch` on the
-  Python side via `ensure_hub_identities`); legacy records without identity
-  are flagged by `is_unsafe_legacy_checkpoint`.
+- **Identity mismatch safety**: any present identity that differs from the
+  expected operation identity is detected by
+  `validate_operation_identity` / `CheckpointIdentityMismatch`, and by
+  `StateIdentityMismatch` on the Python side via `ensure_hub_identities`.
+- **Missing-identity and legacy classification**:
+  `is_unsafe_legacy_checkpoint` is True exactly for schema 1.0 checkpoints
+  with a non-empty `completed_phases` list. Direct identity validation
+  raises for a missing identity unless `allow_missing=True`, in which case
+  it returns False. At the action-plugin normalization boundary, a schema
+  2.0 checkpoint with completed phases but no identity fails closed unless
+  an explicit reset/reset-from is requested, while a no-progress schema
+  2.0 checkpoint may be safely backfilled with the expected identity.
 
 **Non-goals**
 - No signal-handling, file-locking-contention, or multi-process crash
@@ -213,9 +240,10 @@ pytest tests/test_path_safety.py -q   # existing example suite stays green
   nothing in this suite changes either mechanism's parity status.
 
 **Acceptance criteria**
-- Round-trip, idempotence, resume, and identity properties implemented; all
-  filesystem activity in `tmp_path`; phase inputs sourced from the real
-  `Phase` enum rather than hard-coded strings; suite passes derandomized.
+- Round-trip, idempotence, resume, identity-mismatch, legacy classification,
+  and missing-identity properties implemented; all filesystem activity in
+  `tmp_path`; phase inputs sourced from the real `Phase` enum rather than
+  hard-coded strings; suite passes derandomized.
 
 **Verification commands** (future PR)
 ```bash
@@ -239,11 +267,17 @@ python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q  # col
   `ansible_collections/tomazb/acm_switchover/plugins/modules/acm_preflight_report.py`.
 
 **Generated input domain**
-- Validation-result dictionaries of domain shape: generated pass/fail
-  flags, error/warning string lists (including empty, unicode, very long
-  entries), state snapshots with generated phases/steps.
-- Destination paths drawn from Suite 2's generator (valid under a safe
-  root, plus hostile candidates expected to be rejected).
+- Validation-result dictionaries in the two shapes the normalizer supports:
+  legacy `ValidationReporter` entries (`check`, `passed`, `message`,
+  `critical`) and structured entries containing at least `id`, `severity`,
+  `status`, and `message`, with optional `details` and
+  `recommended_action`. Generated string fields include empty, unicode, and
+  very long values while remaining JSON-serializable.
+- State snapshots with generated phases, completed-step lists, and aggregate
+  `errors` lists. Aggregate errors belong to the state/report summary domain,
+  not to an individual legacy validation-result entry.
+- Destination paths drawn from Suite 2's artifact-path generator (valid
+  under a safe root, plus hostile candidates expected to be rejected).
 - File modes: valid octal strings/ints plus malformed values for
   `_parse_file_mode`.
 
@@ -257,11 +291,18 @@ python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q  # col
   and `hubs` in both form factors; the `operation` section additionally in
   Python CLI operation reports — collection preflight reports have no
   `operation` section), with types independent of input variation.
-- **Normalization totality**: `_normalise_validation_result` accepts any
-  domain-shaped result dict without raising and never drops error entries.
+- **Normalization shape and preservation**: `_normalise_validation_result`
+  accepts either supported result shape without raising. Structured entries
+  are returned unchanged. Legacy entries map `check`, `passed`, `message`,
+  and `critical` deterministically into the structured schema, preserve the
+  message/check meaning, and do not mutate their input. No property assumes
+  unsupported aggregate `errors` or `warnings` fields on a legacy entry.
+- **State-summary accounting**: `_summarize_state` reports exactly the number
+  of generated completed steps and state-level errors and preserves the
+  generated current phase.
 - **Path-safety composition**: artifact writes only ever succeed at
-  destinations that pass the Suite 2 validators; hostile destinations raise
-  the documented error and create no file.
+  destinations that pass Suite 2's artifact validators; hostile
+  destinations raise the documented error and create no file.
 - **Mode enforcement (collection)**: files written by `write_json_artifact`
   carry exactly the requested mode; invalid modes raise `ArtifactWriteError`
   without writing.
@@ -271,11 +312,14 @@ python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q  # col
   (`modules/preflight/reporter.py` stays example-tested).
 - No compatibility promises about report schema evolution beyond the stable
   keys asserted.
+- No requirement to preserve arbitrary keys that are outside the two input
+  shapes accepted by `_normalise_validation_result`.
 
 **Acceptance criteria**
-- Round-trip, schema, totality, path-composition, and mode properties
-  implemented for both form factors; writes confined to `tmp_path`; suite
-  passes derandomized; `tests/test_report_artifacts.py` stays green.
+- Round-trip, schema, normalization, state-summary, path-composition, and
+  mode properties implemented for both form factors; writes confined to
+  `tmp_path`; suite passes derandomized; `tests/test_report_artifacts.py`
+  stays green.
 
 **Verification commands** (future PR)
 ```bash
@@ -368,15 +412,19 @@ pytest tests/test_backup_schedule.py -q
   `build_pause_patch` output never contains an enabled `automated` sync
   policy (an existing `automated` key is nulled, never preserved enabled)
   and always records the paused-by annotation with the given run id.
-- **Filter conservatism**: `filter_acm_applications(apps)` returns a subset
-  of its input; every application it drops reports no ACM resources per
-  `is_acm_touching_application`. Note that the filter alone drops
-  applications with absent or stale `status.resources` (their ACM impact is
-  unknown, not provably absent); the "never silently dropped" guarantee is
-  a pipeline-level property — any dropped unknown-impact application that
-  has auto-sync enabled must be surfaced by `find_argocd_pause_blockers`
-  (next bullet), while unknown-impact applications without auto-sync are
-  safely out of scope for pause.
+- **Filter selection and enrichment**: let `selected` be the input
+  Applications for which `is_acm_touching_application` is true, in input
+  order. `filter_acm_applications(apps)` returns one enriched shallow copy
+  for each item in `selected`, in the same order — not the original input
+  dictionaries as a literal subset. Each output preserves the selected
+  input's original top-level fields, adds the correct `acm_resource_count`,
+  `namespace`, and `name`, and the function does not mutate the input list or
+  dictionaries.
+- **Unknown-impact pipeline safety**: the filter alone omits Applications
+  with absent or stale `status.resources` because their ACM impact is
+  unknown. Every omitted unknown-impact Application with auto-sync enabled
+  is surfaced by `find_argocd_pause_blockers`; unknown-impact Applications
+  without auto-sync are outside the managed-pause mutation path.
 - **Blocker completeness**: every generated application that is
   `ApplicationSet`-owned **and** ACM-touching appears in
   `find_argocd_pause_blockers` output (regardless of auto-sync state), as
@@ -395,10 +443,10 @@ pytest tests/test_backup_schedule.py -q
 - No modeling of Argo CD controller reconciliation behavior.
 
 **Acceptance criteria**
-- Patch-safety, conservatism, blocker, marker, and no-op properties
-  implemented; both form factors covered with agreement asserted where the
-  rule is shared (ACM-touching classification, blocker rules); suite passes
-  derandomized; `tests/test_argocd.py` and
+- Patch-safety, selection/enrichment, unknown-impact pipeline, blocker,
+  marker, and no-op properties implemented; both form factors covered with
+  agreement asserted where the rule is shared (ACM-touching classification,
+  blocker rules); suite passes derandomized; `tests/test_argocd.py` and
   `tests/test_argocd_constants_parity.py` stay green.
 
 **Verification commands** (future PR)
@@ -427,19 +475,19 @@ pytest tests/test_argocd.py tests/test_argocd_constants_parity.py -q
   properties on top).
 
 **Generated input domain**
-- Synthetic operator permission tables: generated lists of
-  `(api_group, resource, verbs)` tuples with verbs drawn from the real verb
-  vocabulary (read verbs plus `MUTATING_VERBS`), including duplicates,
-  empty verb lists, and resources present only with mutating verbs.
+- Synthetic operator permission tables with **unique**
+  `(api_group, resource)` keys. Each row's verb list is drawn from the real
+  vocabulary (read verbs plus `MUTATING_VERBS`) and may contain duplicate
+  verbs, an empty verb list, or only mutating verbs.
 - Matching and deliberately drifted `expected_removals` mappings.
 - Role selectors (`operator` / `validator`) and argocd-mode inputs for the
   table accessors.
 
 **Properties / invariants**
-- **Read-only containment**: for any generated operator table, the derived
-  read-only table is a subset relation per resource — every derived verb
-  set is the original minus `MUTATING_VERBS`, contains no mutating verb,
-  and no new `(api_group, resource)` keys appear.
+- **Read-only containment**: for any generated unique-key operator table,
+  the derived read-only table is a subset relation per resource — every
+  derived verb set is the original minus `MUTATING_VERBS`, contains no
+  mutating verb, and no new `(api_group, resource)` keys appear.
 - **Drift detection soundness**: `_derive_read_only_permissions` succeeds
   iff the actually-stripped verbs exactly equal `expected_removals`; any
   generated drift (extra, missing, or different stripped verbs) raises
@@ -469,13 +517,18 @@ pytest tests/test_argocd.py tests/test_argocd_constants_parity.py -q
   `deploy/rbac/` (manifest parity stays with the existing guardrail and
   review process in `AGENTS.md`).
 - No generation of arbitrary RBAC verbs outside the project vocabulary.
+- No duplicate `(api_group, resource)` rows in a synthetic table. The
+  current helper stores removals in a mapping keyed by resource, so duplicate
+  rows overwrite prior removal bookkeeping rather than aggregating it.
+  Supporting duplicate resource rows requires a separate RBAC-sensitive
+  production change before an aggregation property can be added.
 
 **Acceptance criteria**
 - Containment, drift, classification, real-table, and set-agreement
-  properties implemented; no live API calls; suite passes derandomized;
-  `tests/test_rbac_validator.py` and `tests/test_rbac_collection_parity.py`
-  stay green and unmodified (except optional pinned counterexamples added
-  as new tests).
+  properties implemented over the documented unique-key domain; no live API
+  calls; suite passes derandomized; `tests/test_rbac_validator.py` and
+  `tests/test_rbac_collection_parity.py` stay green and unmodified (except
+  optional pinned counterexamples added as new tests).
 
 **Verification commands** (future PR)
 ```bash
