@@ -187,6 +187,13 @@ A PBT PR may merge only when all of the following hold:
 
 ## Skills as process mechanics
 
+Before acting, each role must read the current `AGENTS.md` from `ansible`,
+select and read the applicable Superpowers/Obra skills for that stage, and
+map each selected skill to a concrete verification checkpoint. If a required
+skill instruction cannot be found, opened, or applied, the role hard-fails
+using the format above before making changes; manual substitution does not
+satisfy this prerequisite.
+
 Each prompt stage uses the applicable Superpowers/Obra skills as **process
 mechanics** mapped to concrete checkpoints — they structure how the agent
 works, and they are **not PR-body content** (PR bodies never narrate skill
@@ -209,7 +216,3 @@ usage):
   for any defect a comment reveals), scoped fixes (allowed-files discipline),
   testing (rerun verification and CI after every change), and final review
   (verification-before-completion before declaring merge-ready).
-
-If a listed skill is unavailable in a given environment, the agent performs
-the same checkpoint substance manually and records that substitution in its
-structured report (not in the PR body).
