@@ -57,9 +57,15 @@ hard-gate expectations:
 3. **Parity statement**: an explicit statement of the PR's parity impact.
    PBT PRs must not change any capability's parity status and must not
    imply divergence between the Python CLI and the Ansible collection. If a
-   property exposes a genuine cross-form-factor disagreement, the suite PR
-   marks that property as an expected failure referencing a filed parity
-   bug, and the fix goes through the normal `AGENTS.md` parity process.
+   property exposes a genuine disagreement in dual-supported behavior, the
+   suite PR is `BLOCKED` until a separate parity-preserving fix restores
+   agreement and the property passes. Because suite PRs cannot modify
+   production code, that fix lands through the normal `AGENTS.md` parity
+   process with both implementations, tests, and documentation updated
+   together. A temporary expected failure may merge only after explicit
+   operator approval under the `AGENTS.md` intentional-parity-change gate
+   and after the approved divergence is recorded in the required in-repo
+   parity documentation. Filing a parity bug alone is not approval.
 4. **Verification evidence**: the exact commands run (from the spec's
    per-suite verification commands plus the repo-standard gates, e.g.
    `./run_tests.sh`) and their observed results, pasted or summarized in
@@ -167,6 +173,10 @@ A PBT PR may merge only when all of the following hold:
 - The Validator verdict is `PASS` or `PASS WITH NON-BLOCKING COMMENTS`;
   `BLOCKED` and `HARD FAIL` verdicts bar merging until remediated and
   re-validated.
+- No property covering dual-supported behavior remains an expected failure
+  for a parity disagreement unless the operator explicitly approved the
+  intentional divergence under the `AGENTS.md` parity gate and the required
+  in-repo parity documentation records that approval.
 - Every review thread is handled: resolved with a pushed fix, or answered
   with a pushed/pinned rationale that the thread participant can evaluate;
   no actionable comment is left unaddressed or silently dismissed.
