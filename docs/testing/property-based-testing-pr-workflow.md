@@ -199,32 +199,51 @@ A PBT PR may merge only when all of the following hold:
 
 ## Skills as process mechanics
 
-Before acting, each role must read the current `AGENTS.md` from `ansible`,
-select and read the applicable Superpowers/Obra skills for that stage, and
-map each selected skill to a concrete verification checkpoint. If a required
-skill instruction cannot be found, opened, or applied, the role hard-fails
-with `HARD FAIL — Superpowers skill prerequisite` before making changes;
-manual substitution does not satisfy this prerequisite.
+The required Superpowers/Obra process skills are **execution-environment
+prerequisites**, not files vendored by this repository. The authoritative
+source is the agent host's installed skill registry/catalog, or an explicit
+skill path/URI supplied by the operator in the prompt or environment. The
+protected repository `.claude/skills/**` tree contains project operational
+skills and must not be assumed to provide these process skills.
 
-Each prompt stage uses the applicable Superpowers/Obra skills as **process
+Before acting, each role must:
+
+1. Query the host agent's available-skill registry/catalog (or inspect the
+   explicit operator-supplied skill path/URI).
+2. Resolve each required checkpoint below to an installed skill by exact
+   identifier or documented alias.
+3. Open/read that skill's instructions.
+4. Record the resolved skill identifier and source path/URI in the role's
+   structured report, together with the concrete checkpoint it governs.
+
+Preferred upstream identifiers include `writing-plans`,
+`using-git-worktrees`, `verification-before-completion`,
+`requesting-code-review`, `receiving-code-review`, and
+`systematic-debugging`; hosts may expose documented aliases, but matching a
+name without opening the underlying instructions is not sufficient.
+
+Each role must also read the current `AGENTS.md` from `ansible`. If the host
+provides no skill registry/catalog, an identifier cannot be resolved to
+readable instructions, or the instructions cannot be applied, the role
+hard-fails with `HARD FAIL — Superpowers skill prerequisite` before making
+changes. Manual substitution does not satisfy this prerequisite. This is an
+intentional fail-closed gate from issue #136; the repository does not bundle
+placeholder copies merely to bypass it.
+
+Each prompt stage uses the resolved applicable skills as **process
 mechanics** mapped to concrete checkpoints — they structure how the agent
 works, and they are **not PR-body content** (PR bodies never narrate skill
 usage):
 
-- **Builder**: planning (a written plan before edits — writing-plans),
-  git/worktree hygiene (isolated worktree, correct base — using-git-worktrees),
-  testing (verification commands executed before any completion claim —
-  verification-before-completion, test-driven habits for suite PRs), and
-  code review (self-review of the final diff via a code-review skill before
-  push — requesting-code-review).
-- **Validator**: independent review (fresh-context review of the diff
-  against the spec), code review (code-review skill over the PR diff),
-  test-quality review (suite PRs judged against the repo's test-quality
-  guidelines — meaningful properties, no superficial tests), and
-  parity/safety review (explicit check of the parity statement and the
-  PBT safety model against the diff).
-- **Resolver**: comment resolution mechanics (receiving-code-review:
-  verify before implementing), root-cause validation (systematic-debugging
-  for any defect a comment reveals), scoped fixes (allowed-files discipline),
-  testing (rerun verification and CI after every change), and final review
-  (verification-before-completion before declaring merge-ready).
+- **Builder**: planning (a written plan before edits — `writing-plans`),
+  git/worktree hygiene (isolated worktree and correct base —
+  `using-git-worktrees`), testing (commands executed before completion
+  claims — `verification-before-completion`, plus test-driven habits for
+  suite PRs), and final self-review (`requesting-code-review`).
+- **Validator**: fresh-context independent review, code review, test-quality
+  review, and parity/safety review. Resolve the installed review skills that
+  cover those checkpoints and record their identifiers/sources; do not infer
+  that a similarly named repository document is a process skill.
+- **Resolver**: comment-resolution mechanics (`receiving-code-review`),
+  root-cause validation (`systematic-debugging`), scoped fixes, testing, and
+  final completion proof (`verification-before-completion`).
