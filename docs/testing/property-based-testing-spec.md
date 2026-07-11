@@ -195,7 +195,8 @@ pytest tests/test_path_safety.py -q   # existing example suite stays green
   `ansible_collections/tomazb/acm_switchover/plugins/modules/acm_checkpoint.py`,
   `ansible_collections/tomazb/acm_switchover/plugins/modules/acm_checkpoint_identity_validate.py`,
   and action plugin
-  `ansible_collections/tomazb/acm_switchover/plugins/action/checkpoint_phase.py`.
+  `ansible_collections/tomazb/acm_switchover/plugins/action/checkpoint_phase.py`
+  (`ActionModule._normalize_checkpoint_data`).
 
 **Generated input domain**
 - Sequences of `StateManager` operations (mark/clear steps, set phase,
@@ -278,8 +279,8 @@ python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q  # col
   not to an individual legacy validation-result entry.
 - Destination paths drawn from Suite 2's artifact-path generator (valid
   under a safe root, plus hostile candidates expected to be rejected).
-- File modes: valid octal strings/ints plus malformed values for
-  `_parse_file_mode`.
+- File modes: valid octal strings such as `"0644"`, integer mode values in
+  `0..0o777`, and malformed or out-of-range values for `_parse_file_mode`.
 
 **Properties / invariants**
 - **Serializability and round-trip**: `build_operation_report` output is
@@ -417,19 +418,22 @@ pytest tests/test_backup_schedule.py -q
   order. `filter_acm_applications(apps)` returns one enriched shallow copy
   for each item in `selected`, in the same order — not the original input
   dictionaries as a literal subset. Each output preserves the selected
-  input's original top-level fields, adds the correct `acm_resource_count`,
-  `namespace`, and `name`, and the function does not mutate the input list or
+  input's original top-level fields except the enrichment keys
+  `acm_resource_count`, `namespace`, and `name`, which are set to the
+  computed values. The function does not mutate the input list or input
   dictionaries.
-- **Unknown-impact pipeline safety**: the filter alone omits Applications
-  with absent or stale `status.resources` because their ACM impact is
-  unknown. Every omitted unknown-impact Application with auto-sync enabled
-  is surfaced by `find_argocd_pause_blockers`; unknown-impact Applications
-  without auto-sync are outside the managed-pause mutation path.
+- **Filter freshness boundary**: `filter_acm_applications` classifies from
+  the reported `status.resources` contents and does not consult
+  `observedGeneration`. Absent or empty resource lists yield no selection;
+  stale lists may still yield selection when they report ACM resources. No
+  property treats filter omission as proof that ACM impact is known to be
+  absent.
 - **Blocker completeness**: every generated application that is
   `ApplicationSet`-owned **and** ACM-touching appears in
   `find_argocd_pause_blockers` output (regardless of auto-sync state), as
-  does every auto-sync-enabled application whose ACM impact is unknown;
-  applications matching neither rule are never reported as blockers.
+  does every auto-sync-enabled application whose ACM impact is unknown due
+  to absent, empty, or stale `status.resources`; applications matching
+  neither rule are never reported as blockers.
 - **Marker reliability contract**: `detect_gitops_markers` (and the
   collection GitOps helpers) never classify an application as definitively
   GitOps-managed based solely on `app.kubernetes.io/instance` — that marker
@@ -443,10 +447,10 @@ pytest tests/test_backup_schedule.py -q
 - No modeling of Argo CD controller reconciliation behavior.
 
 **Acceptance criteria**
-- Patch-safety, selection/enrichment, unknown-impact pipeline, blocker,
-  marker, and no-op properties implemented; both form factors covered with
-  agreement asserted where the rule is shared (ACM-touching classification,
-  blocker rules); suite passes derandomized; `tests/test_argocd.py` and
+- Patch-safety, selection/enrichment, filter-freshness, blocker, marker, and
+  no-op properties implemented; both form factors covered with agreement
+  asserted where the rule is shared (ACM-touching classification, blocker
+  rules); suite passes derandomized; `tests/test_argocd.py` and
   `tests/test_argocd_constants_parity.py` stay green.
 
 **Verification commands** (future PR)
