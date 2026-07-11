@@ -104,6 +104,10 @@ below — not an automatic guarantee:
   run to completion on a developer laptop and in CI with no cluster access
   whatsoever. Any suite that would require a cluster is out of scope for PBT
   and belongs to the existing E2E/live validation layers instead.
+- **Root-test import safety.** Root property-test collection must not depend
+  on `ansible-core` being installed. Collection entry modules/action plugins
+  are loaded with the repository's existing lazy-import/stub pattern rather
+  than by executing Ansible runtime plumbing.
 - **No mutation of real operator state.** Filesystem interaction is limited
   to pytest-managed temporary directories.
 - **Deterministic CI behavior.** Suites run with fixed derandomization
@@ -167,7 +171,7 @@ PBT is an additional layer, not a replacement. The layers and their roles:
 | Layer | Location / entry point | Role | PBT relationship |
 | --- | --- | --- | --- |
 | Python unit/integration tests | `tests/` via `./run_tests.sh` or `pytest tests/` | Example-based verification of business logic with mocked `KubeClient` | PBT suites live alongside them and reuse the mocked-client fixture pattern; counterexamples found by PBT get pinned here as regression examples |
-| Collection unit tests | `ansible_collections/tomazb/acm_switchover/tests/unit/` (plain pytest) | Example-based verification of plugins and `module_utils` | Parity properties import the same `module_utils` functions these tests cover |
+| Collection unit tests | `ansible_collections/tomazb/acm_switchover/tests/unit/` (plain pytest) | Example-based verification of plugins and `module_utils` | PBT imports pure `module_utils` directly and uses the established import-safe stub pattern for entry modules/action plugins; it does not execute Ansible runtime plumbing |
 | Parity guardrail tests | e.g. `tests/test_constants_parity.py`, `tests/test_rbac_collection_parity.py`, `tests/test_argocd_constants_parity.py` | Deliberate dual-support guardrails pinning cross-form-factor agreement | PBT generalizes point checks into generated-input agreement properties; the guardrails remain authoritative and are never retired by PBT work |
 | Release tests | `tests/release/` | Release validation framework | Unchanged; PBT does not gate releases beyond the normal test run |
 | E2E tests | `tests/e2e/`, opt-in via `RUN_E2E=1 ./run_tests.sh` | End-to-end workflow verification | Unchanged; anything needing a cluster stays here, never in PBT |
@@ -178,8 +182,10 @@ PBT is an additional layer, not a replacement. The layers and their roles:
 Every PBT suite that targets dual-supported behavior tests **both** form
 factors and, where the behavior is a shared rule, asserts cross-form-factor
 agreement. Nothing in this plan changes any capability's parity status as
-recorded in `docs/ansible-collection/parity-matrix.md`, and no PBT PR may
-imply divergence between the Python CLI and the Ansible collection. If a
-property ever exposes a real behavioral difference, that is a parity bug to
-be fixed under the normal parity rules in `AGENTS.md` — not a reason to
-weaken the property.
+recorded in `docs/ansible-collection/parity-matrix.md`. By default, a real
+behavioral difference blocks the suite PR until a parity-preserving fix
+lands; it is not a reason to weaken the property. A temporary expected
+failure may merge only after explicit operator approval under the
+`AGENTS.md` intentional-parity-change gate and after the approved divergence
+is recorded in the required in-repo parity documentation. Filing a bug alone
+is not approval.
