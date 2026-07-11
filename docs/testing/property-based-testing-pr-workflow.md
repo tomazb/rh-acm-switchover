@@ -99,22 +99,28 @@ The Builder implements exactly one PR from the table above.
 
 The Validator reviews a Builder PR it did not write.
 
+- Uses a fresh clean checkout/worktree and records the exact PR head SHA and
+  current `origin/ansible` SHA it validated.
 - Read-only with respect to the branch: the Validator **never pushes**
   commits, never amends, never rebases, and never edits the PR.
 - Independently re-derives the gate checks: base branch correctness,
   allowed-file compliance, protected files untouched, parity statement
   accuracy against the actual diff, spec-section satisfaction, and
   verification evidence reproducibility (re-running the stated commands).
+- Treats its verdict as applying only to the recorded head SHA. Any later
+  commit invalidates that merge-readiness verdict and requires a fresh
+  Independent Validator pass on the new head.
 - Issues exactly one verdict:
-  - `PASS` — merge-ready as-is.
-  - `PASS WITH NON-BLOCKING COMMENTS` — merge-ready; comments are
-    suggestions only.
+  - `PASS` — merge-ready as-is at the recorded head.
+  - `PASS WITH NON-BLOCKING COMMENTS` — merge-ready at the recorded head;
+    comments are suggestions only.
   - `BLOCKED` — specific, actionable defects must be resolved before
     merge; each defect cites file/line or a failing command.
   - `HARD FAIL` — a gate violation (wrong base, forbidden file touched,
     parity misstatement, unreproducible evidence); the PR must not merge
     and the Builder or Resolver must remediate from the gate level up.
-- Records the verdict and findings as PR review content.
+- Records the verdict, exact head/base SHAs, verification, and findings as
+  PR review content.
 
 ### PR Comments Resolver prompt contract
 
@@ -123,7 +129,7 @@ feedback exists.
 
 1. **Fetch everything first**: top-level issue-style PR comments, review
    comments, review submissions, review threads (including resolution
-   state), and CI/check status for the head commit.
+   state), and CI/check status for the exact head commit.
 2. **Validate before changing**: every actionable comment is validated
    against the actual source before any edit — the Resolver confirms the
    claim is true (or false) in the code, and never applies a suggested
@@ -132,15 +138,18 @@ feedback exists.
    files and spec scope. Out-of-scope requests get a reply with rationale
    and, where warranted, a filed follow-up issue — not a code change.
 4. **Rerun checks**: after any change, rerun the PR's verification commands
-   and confirm CI/checks on the new head commit.
-5. **Re-fetch threads**: after pushing, re-fetch review threads to catch
-   new or updated feedback.
+   and confirm CI/checks on the new exact head commit.
+5. **Re-fetch feedback**: after pushing, re-fetch top-level comments,
+   reviews, and review threads to catch new or updated feedback.
 6. **Resolve/reply discipline**: a thread is resolved or replied to only
    after the corresponding fix or rationale is pushed — never
    preemptively.
-7. **Hard fail** if actionable feedback cannot be resolved within scope, or
-   if required checks are failing, pending, or in an unknown state at the
-   end of the pass.
+7. **Re-validate the new head**: after substantive fixes, obtain a fresh
+   Independent Validator verdict covering the exact new head. A verdict on
+   an earlier head cannot be reused.
+8. **Hard fail** if actionable feedback cannot be resolved within scope, if
+   required checks are failing, pending, or unknown, or if a current-head
+   Validator verdict is missing at the end of the pass.
 
 ### Hard-fail message format
 
@@ -159,6 +168,9 @@ Next required operator action:
 - <action>
 ```
 
+For a missing, unreadable, or unusable required Superpowers/Obra skill, the
+reason category is exactly `Superpowers skill prerequisite`.
+
 (For the Resolver, "No code/docs changes were made" covers changes beyond
 those already pushed and reported.)
 
@@ -168,11 +180,11 @@ A PBT PR may merge only when all of the following hold:
 
 - Base branch is `ansible` and the branch is current enough to merge
   cleanly.
-- All required CI checks on the head commit are green — not pending, not
-  unknown.
-- The Validator verdict is `PASS` or `PASS WITH NON-BLOCKING COMMENTS`;
-  `BLOCKED` and `HARD FAIL` verdicts bar merging until remediated and
-  re-validated.
+- All required CI checks on the exact head commit are green — not pending,
+  not unknown.
+- The most recent Independent Validator verdict covers that exact head and
+  is `PASS` or `PASS WITH NON-BLOCKING COMMENTS`; a later commit, `BLOCKED`,
+  or `HARD FAIL` bars merging until the current head is re-validated.
 - No property covering dual-supported behavior remains an expected failure
   for a parity disagreement unless the operator explicitly approved the
   intentional divergence under the `AGENTS.md` parity gate and the required
@@ -191,8 +203,8 @@ Before acting, each role must read the current `AGENTS.md` from `ansible`,
 select and read the applicable Superpowers/Obra skills for that stage, and
 map each selected skill to a concrete verification checkpoint. If a required
 skill instruction cannot be found, opened, or applied, the role hard-fails
-using the format above before making changes; manual substitution does not
-satisfy this prerequisite.
+with `HARD FAIL — Superpowers skill prerequisite` before making changes;
+manual substitution does not satisfy this prerequisite.
 
 Each prompt stage uses the applicable Superpowers/Obra skills as **process
 mechanics** mapped to concrete checkpoints — they structure how the agent
