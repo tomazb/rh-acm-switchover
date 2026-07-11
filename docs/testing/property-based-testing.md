@@ -43,10 +43,13 @@ strengthen this in three ways:
   `ansible_collections/tomazb/acm_switchover/plugins/module_utils/checkpoint.py`,
   Argo CD pause safety in `lib/argocd.py` and
   `ansible_collections/tomazb/acm_switchover/plugins/module_utils/argocd.py`
-  — has invariants
-  ("a validated path never resolves outside a safe root", "a pause patch
-  never enables auto-sync") that hold for *all* inputs. PBT states them once
-  and searches for counterexamples automatically.
+  — has invariants such as "an artifact path accepted for writing never
+  resolves outside its selected artifact root" and "a pause patch never
+  enables auto-sync." Properties are scoped to the behavior each helper
+  actually enforces: the current general safe-path helpers apply a
+  syntax-only contract to relative paths, while the report-artifact
+  validators also enforce relative parent-symlink containment. PBT states
+  those contracts explicitly and searches for counterexamples automatically.
 - **Edge-case discovery.** Generated inputs routinely find boundary bugs
   (length limits, unicode, empty collections, metadata corner cases) that
   hand-written examples miss.
