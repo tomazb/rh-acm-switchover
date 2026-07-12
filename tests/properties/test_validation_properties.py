@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from typing import Any
 
 import pytest
@@ -51,9 +51,13 @@ from tests.properties.strategies import (
     old_hub_action_candidates,
 )
 
-CONTEXT_ALLOWED = set(ASCII_ALNUM + "_.:-/@")
-DNS_ALLOWED = set(LOWER_ALNUM + "-")
-LABEL_ALLOWED = set(LABEL_INTERIOR)
+ASCII_ALNUM_SET = frozenset(ASCII_ALNUM)
+CONTEXT_ALLOWED = frozenset(ASCII_ALNUM + "_.:-/@")
+DNS_ALLOWED = frozenset(LOWER_ALNUM + "-")
+LABEL_ALLOWED = frozenset(LABEL_INTERIOR)
+LOWER_ALNUM_SET = frozenset(LOWER_ALNUM)
+LOWERCASE_SET = frozenset("abcdefghijklmnopqrstuvwxyz")
+SAFE_IDENTIFIER_CHARS_SET = frozenset(SAFE_IDENTIFIER_CHARS)
 
 
 def _python_outcome(validator: Callable[[Any], Any], candidate: Any) -> tuple[bool, Any]:
@@ -79,8 +83,8 @@ def _bounded_components_sound(
     *,
     max_length: int,
     separator: str | None,
-    allowed: set[str],
-    boundary: set[str],
+    allowed: Collection[str],
+    boundary: Collection[str],
 ) -> bool:
     """Independent character/boundary oracle, intentionally not a regex copy."""
     if not 1 <= len(candidate) <= max_length:
@@ -101,18 +105,21 @@ def _kubernetes_name_sound(candidate: str) -> bool:
         max_length=253,
         separator=".",
         allowed=DNS_ALLOWED,
-        boundary=set(LOWER_ALNUM),
+        boundary=LOWER_ALNUM_SET,
     )
 
 
 def _namespace_sound(candidate: str) -> bool:
-    return _bounded_components_sound(
-        candidate,
-        max_length=63,
-        separator=None,
-        allowed=DNS_ALLOWED,
-        boundary=set(LOWER_ALNUM),
-    ) and candidate[0] in set("abcdefghijklmnopqrstuvwxyz")
+    return (
+        _bounded_components_sound(
+            candidate,
+            max_length=63,
+            separator=None,
+            allowed=DNS_ALLOWED,
+            boundary=LOWER_ALNUM_SET,
+        )
+        and candidate[0] in LOWERCASE_SET
+    )
 
 
 def _label_key_sound(candidate: str) -> bool:
@@ -129,7 +136,7 @@ def _label_key_sound(candidate: str) -> bool:
         max_length=63,
         separator="/",
         allowed=LABEL_ALLOWED,
-        boundary=set(ASCII_ALNUM),
+        boundary=ASCII_ALNUM_SET,
     )
 
 
@@ -139,8 +146,8 @@ def _label_value_sound(candidate: str | None) -> bool:
     if candidate == "":
         return True
     return (
-        candidate[0] in set(ASCII_ALNUM)
-        and candidate[-1] in set(ASCII_ALNUM)
+        candidate[0] in ASCII_ALNUM_SET
+        and candidate[-1] in ASCII_ALNUM_SET
         and all(character in LABEL_ALLOWED for character in candidate)
     )
 
@@ -148,8 +155,8 @@ def _label_value_sound(candidate: str | None) -> bool:
 def _context_name_sound(candidate: str) -> bool:
     return (
         1 <= len(candidate) <= 128
-        and candidate[0] in set(ASCII_ALNUM)
-        and candidate[-1] in set(ASCII_ALNUM)
+        and candidate[0] in ASCII_ALNUM_SET
+        and candidate[-1] in ASCII_ALNUM_SET
         and all(character in CONTEXT_ALLOWED for character in candidate)
     )
 
@@ -270,6 +277,43 @@ def test_non_empty_string_rejects_only_empty_or_whitespace(candidate: str) -> No
         validator=lambda value: InputValidator.validate_non_empty_string(value, "property field"),
         candidate=candidate,
         expected_acceptance=bool(candidate and candidate.strip()),
+    )
+
+
+@pytest.mark.property
+@pytest.mark.parametrize(
+    ("field", "python_choices", "collection_choices"),
+    (
+        pytest.param(
+            "method",
+            PYTHON_METHOD_CHOICES,
+            COLLECTION_METHOD_CHOICES,
+            id="method",
+        ),
+        pytest.param(
+            "activation_method",
+            PYTHON_ACTIVATION_METHOD_CHOICES,
+            COLLECTION_ACTIVATION_METHOD_CHOICES,
+            id="activation-method",
+        ),
+        pytest.param(
+            "old_hub_action",
+            PYTHON_OLD_HUB_ACTION_CHOICES,
+            COLLECTION_OLD_HUB_ACTION_CHOICES,
+            id="old-hub-action",
+        ),
+    ),
+)
+def test_choice_domains_match(
+    field: str,
+    python_choices: Sequence[str],
+    collection_choices: Sequence[str],
+) -> None:
+    python_domain = set(python_choices)
+    collection_domain = set(collection_choices)
+
+    assert python_domain == collection_domain, (
+        f"field={field}, python_choices={sorted(python_domain)!r}, " f"collection_choices={sorted(collection_domain)!r}"
     )
 
 
@@ -395,6 +439,6 @@ def test_context_identifier_sanitizer_is_idempotent_and_safe(value: str) -> None
         InputValidator.sanitize_context_identifier(sanitized) == sanitized
     ), f"sanitizer input={value!r}, first_result={sanitized!r}"
     assert sanitized, f"sanitizer input={value!r} produced an empty result"
-    assert set(sanitized) <= set(SAFE_IDENTIFIER_CHARS), f"sanitizer input={value!r}, unsafe_output={sanitized!r}"
+    assert set(sanitized) <= SAFE_IDENTIFIER_CHARS_SET, f"sanitizer input={value!r}, unsafe_output={sanitized!r}"
     if value == "":
         assert sanitized == "unknown"
