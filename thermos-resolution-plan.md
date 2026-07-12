@@ -33,7 +33,7 @@ Before implementation begins for any remaining Thermos slice:
 
 This gate applies to the remaining deep-scan queue (`PR 24` onward) and to any new Thermos follow-up slice added later.
 
-**Last Updated:** 2026-07-11
+**Last Updated:** 2026-07-12
 
 ## Post-Merge Revalidation (2026-06-03)
 
@@ -209,7 +209,7 @@ The Review #2 queue extended the earlier backlog rather than replacing it.
 `PR 35` / PR #128 respectively. `H3` is the only remaining structural item from
 that earlier set and is tracked separately in issue #158.
 
-## Current Completion Summary (2026-07-11)
+## Current Completion Summary (2026-07-12)
 
 ### Completed main queue
 
