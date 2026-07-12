@@ -48,7 +48,7 @@ complete when it satisfies its section here.
   in the default gate and can also be selected in isolation.
 - **Verification commands** listed per suite are for the future suite PRs.
   PBT-01 adds no tooling and no tests; the commands are not expected to work
-  until PBT-02/PBT-0N land.
+  until PBT-02 and the corresponding PBT-03 through PBT-09 suite PR land.
 
 ---
 
@@ -232,10 +232,11 @@ pytest tests/test_path_safety.py -q   # existing example suite stays green
   names and phases drawn from the real `Phase` enum, against a `tmp_path`
   state file.
 - Checkpoint records: generated completed-phase lists (subsets/permutations
-  of real phase names), operation identities with matching and deliberately
-  mismatched hub identifiers, schema 1.0 records with and without completed
-  phases, and schema 2.0 records missing `operation_identity` with and
-  without completed phases.
+  of real phase names), collection operation identities with matching and
+  deliberately mismatched fields, Python context/hub-identity maps with
+  matching and deliberately mismatched context names and cluster UIDs,
+  schema 1.0 records with and without completed phases, and schema 2.0
+  records missing `operation_identity` with and without completed phases.
 - Legacy operation identities containing the historical
   `primary_kubeconfig` / `secondary_kubeconfig` fields, plus ordinary
   identity fields and unrelated non-sensitive extension fields.
@@ -255,10 +256,16 @@ pytest tests/test_path_safety.py -q   # existing example suite stays green
   (completed phases are skipped on resume, never rerun);
   `reset_completed_phases_from(phases, p)` removes `p` and everything after
   it in workflow order and nothing before it.
-- **Identity mismatch safety**: any present identity that differs from the
-  expected operation identity is detected by
-  `validate_operation_identity` / `CheckpointIdentityMismatch`, and by
-  `StateIdentityMismatch` on the Python side via `ensure_hub_identities`.
+- **Collection operation-identity mismatch safety**: any present normalized
+  operation identity that differs from the expected normalized identity is
+  detected by `validate_operation_identity` /
+  `CheckpointIdentityMismatch`.
+- **Python context and hub-identity safety**: `ensure_contexts` resets state
+  when stored context names differ from the current invocation;
+  `ensure_hub_identities` rejects a missing live cluster UID and any
+  stored-vs-live cluster-UID mismatch for the same hub role. A context-only
+  change with the same cluster UID is not itself a `StateIdentityMismatch`;
+  context changes are governed separately by `ensure_contexts`.
 - **Identity sanitization**: `normalize_operation_identity` removes exactly
   the two legacy kubeconfig fields, preserves ordinary/non-sensitive fields,
   does not mutate its input, and is idempotent. `build_operation_identity`
@@ -596,8 +603,9 @@ pytest tests/test_argocd.py tests/test_argocd_constants_parity.py -q
   mappings the same sorted key/verb representation regardless of insertion
   order.
 - **Real-table invariants**: applied to the actual shipped **cluster**
-  tables — `VALIDATOR_CLUSTER_PERMISSIONS` is per resource a subset of
-  `OPERATOR_CLUSTER_PERMISSIONS`, and the exceptions recorded in
+  tables — `RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS` is per resource a
+  subset of `RBACValidator.OPERATOR_CLUSTER_PERMISSIONS`, and the exceptions
+  recorded in
   `VALIDATOR_CLUSTER_VERB_EXCEPTIONS` account for exactly the stripped
   verbs. The subset relation is **not** asserted for the hub-namespace
   tables: those are hand-maintained per role, and the validator intentionally
