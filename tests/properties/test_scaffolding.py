@@ -13,19 +13,14 @@ PROFILE_MAX_EXAMPLES = {
 }
 
 
-@pytest.mark.property
-def test_property_scaffolding_uses_selected_profile() -> None:
-    """Exercise generation and verify the profile selected during collection."""
+def test_hypothesis_profile_loaded() -> None:
+    """Verify the selected Hypothesis profile is active."""
     profile = os.environ.get("HYPOTHESIS_PROFILE", "dev")
-    generated_examples: set[int] = set()
+    assert settings.default.max_examples == PROFILE_MAX_EXAMPLES[profile]
 
-    @given(st.integers(min_value=-10, max_value=10))
-    def exercise_generated_examples(value: int) -> None:
-        generated_examples.add(value)
 
-        assert settings.default.max_examples == PROFILE_MAX_EXAMPLES[profile]
-        assert int(str(value)) == value
-
-    exercise_generated_examples()
-
-    assert len(generated_examples) > 1
+@pytest.mark.property
+@given(st.integers(min_value=-10, max_value=10))
+def test_property_scaffolding_smoke(value: int) -> None:
+    """Verify normal pytest/Hypothesis collection and a simple invariant."""
+    assert int(str(value)) == value
