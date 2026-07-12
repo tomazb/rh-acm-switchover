@@ -1,5 +1,6 @@
 # Test dependencies
 pytest>=7.4.0
+hypothesis>=6.100.0
 # Mutation testing (on-demand only; do not add to run_tests.sh or CI required path)
 mutmut>=3.6.0,<4
 pytest-cov>=4.1.0
