@@ -1,4 +1,4 @@
-"""Bounded semantic strategies shared by validation property tests.
+"""Bounded semantic strategies shared by property tests.
 
 The generators start with valid-shaped domain values, then apply small,
 targeted mutations.  This keeps counterexamples readable and exercises the
@@ -24,6 +24,9 @@ DNS_LABEL_INTERIOR = LOWER_ALNUM + "-"
 LABEL_INTERIOR = ASCII_ALNUM + "-_."
 CONTEXT_INTERIOR = ASCII_ALNUM + "_.:-/@"
 SAFE_IDENTIFIER_CHARS = ASCII_ALNUM + "._-"
+UNSAFE_PATH_CHARS = "~${}|&;<>`"
+CONTROL_PATH_CHARS = "\x01\t\n\r"
+OVERLONG_PATH_COMPONENT_SIZE = 300
 
 
 @st.composite
@@ -305,3 +308,108 @@ def old_hub_action_candidates() -> SearchStrategy[str]:
         VALIDATION_OLD_HUB_ACTION_CHOICES,
         ("keep", "remove", "decommision", "invalid"),
     )
+
+
+def safe_path_components() -> SearchStrategy[str]:
+    """Generate short, readable path components with no hostile syntax."""
+    return _bounded_token(
+        first_alphabet=ASCII_ALNUM,
+        interior_alphabet=SAFE_IDENTIFIER_CHARS,
+        last_alphabet=ASCII_ALNUM,
+        max_size=16,
+    )
+
+
+def safe_relative_paths() -> SearchStrategy[str]:
+    """Generate bounded relative paths composed only of safe components."""
+    return st.lists(safe_path_components(), min_size=1, max_size=4).map("/".join)
+
+
+@st.composite
+def _relative_traversal_path_candidates(draw: st.DrawFn) -> str:
+    """Generate relative paths with ``..`` as an exact path component."""
+    prefix = draw(safe_path_components())
+    suffix = draw(safe_path_components())
+    template = draw(
+        st.sampled_from(
+            (
+                "../{suffix}",
+                "{prefix}/../{suffix}",
+                "{prefix}/..",
+                "tmp/../{suffix}",
+                "{prefix}//..//{suffix}",
+                "{prefix}/../{suffix}/",
+                "../../{suffix}",
+            )
+        )
+    )
+    return template.format(prefix=prefix, suffix=suffix)
+
+
+def traversal_path_candidates() -> SearchStrategy[str]:
+    """Generate relative and absolute paths containing exact traversal components."""
+    absolute = st.sampled_from(("/tmp/../etc", "/tmp//../etc/"))
+    return st.one_of(_relative_traversal_path_candidates(), absolute)
+
+
+@st.composite
+def unsafe_metacharacter_paths(draw: st.DrawFn) -> str:
+    """Generate paths with one shipped shell metacharacter and no traversal."""
+    prefix = draw(safe_path_components())
+    suffix = draw(safe_path_components())
+    unsafe = draw(st.sampled_from(tuple(UNSAFE_PATH_CHARS)))
+    template = draw(st.sampled_from(("{unsafe}{prefix}", "{prefix}{unsafe}{suffix}", "{prefix}/{unsafe}{suffix}")))
+    return template.format(prefix=prefix, suffix=suffix, unsafe=unsafe)
+
+
+def broad_path_syntax_candidates() -> SearchStrategy[str]:
+    """Generate bounded syntax-only candidates, including OS-unrepresentable values."""
+    safe = safe_relative_paths()
+    controls = st.tuples(safe_path_components(), st.sampled_from(tuple(CONTROL_PATH_CHARS))).map(
+        lambda pair: pair[0] + pair[1] + "tail"
+    )
+    overlong = st.sampled_from(
+        (
+            "a" * OVERLONG_PATH_COMPONENT_SIZE,
+            f"prefix/{'b' * OVERLONG_PATH_COMPONENT_SIZE}/suffix",
+        )
+    )
+    return st.one_of(
+        st.just(""),
+        safe,
+        safe.map(lambda value: f"/tmp/{value}"),
+        safe.map(lambda value: f"./{value}"),
+        safe.map(lambda value: f"prefix/./{value}"),
+        safe.map(lambda value: value.replace("/", "//", 1) if "/" in value else f"{value}//tail"),
+        safe.map(lambda value: value + "/"),
+        safe.map(lambda value: f"~/{value}"),
+        traversal_path_candidates(),
+        unsafe_metacharacter_paths(),
+        safe.map(lambda value: value + "\x00tail"),
+        controls,
+        overlong,
+    )
+
+
+def filesystem_resolvable_relative_paths() -> SearchStrategy[str]:
+    """Generate host-representable relative candidates without NUL or long names."""
+    structural = st.sampled_from(("", ".", "./safe", "safe//nested", "safe/nested/"))
+    return st.one_of(
+        safe_relative_paths(),
+        _relative_traversal_path_candidates(),
+        unsafe_metacharacter_paths(),
+        structural,
+    )
+
+
+def missing_descendant_suffixes() -> SearchStrategy[str]:
+    """Generate bounded safe suffixes below an existing directory ancestor."""
+    return st.lists(safe_path_components(), min_size=1, max_size=3).map("/".join)
+
+
+@st.composite
+def artifact_relative_paths(draw: st.DrawFn) -> str:
+    """Generate safe relative JSON artifact destinations with bounded nesting."""
+    directories = draw(st.lists(safe_path_components(), min_size=0, max_size=3))
+    filename = draw(safe_path_components()) + ".json"
+    return "/".join([*directories, filename])
