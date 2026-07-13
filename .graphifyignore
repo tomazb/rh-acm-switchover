@@ -1,4 +1,6 @@
 .worktrees/
+.claude/
+.graphify_*.json
 # Added for Graphify-assisted ACM switchover review
 .git/
 .venv/
