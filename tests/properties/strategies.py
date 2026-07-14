@@ -8,15 +8,19 @@ interesting boundaries instead of spending examples on arbitrary blobs.
 from __future__ import annotations
 
 import string
+from dataclasses import dataclass
+from typing import Any
 
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import KNOWN_PHASES
 from lib.constants import (
     VALIDATION_ACTIVATION_METHOD_CHOICES,
     VALIDATION_METHOD_CHOICES,
     VALIDATION_OLD_HUB_ACTION_CHOICES,
 )
+from lib.utils import Phase
 
 ASCII_ALNUM = string.ascii_letters + string.digits
 LOWER_ALNUM = string.ascii_lowercase + string.digits
@@ -27,6 +31,62 @@ SAFE_IDENTIFIER_CHARS = ASCII_ALNUM + "._-"
 UNSAFE_PATH_CHARS = "~${}|&;<>`"
 CONTROL_PATH_CHARS = "\x01\t\n\r"
 OVERLONG_PATH_COMPONENT_SIZE = 300
+
+
+@dataclass(frozen=True)
+class OperationIdentityCase:
+    """Semantic inputs and independent expected output for one operation identity."""
+
+    hubs: dict
+    operation: dict
+    collection_version: str | None
+    hub_identities: dict
+    kubeconfig_canaries: tuple[str, str]
+    expected_identity: dict
+
+
+@dataclass(frozen=True)
+class LegacyIdentityCase:
+    """A normalized identity augmented with legacy secrets and safe extensions."""
+
+    identity: dict
+    normalized: dict
+    kubeconfig_canaries: tuple[str, str]
+
+
+@dataclass(frozen=True)
+class IdentityMismatchCase:
+    """Two normalized identities differing in exactly one named field."""
+
+    checkpoint: dict
+    expected_identity: dict
+    field: str
+
+
+@dataclass(frozen=True)
+class StateOperation:
+    """One readable operation in a bounded StateManager command sequence."""
+
+    name: str
+    phase: Phase | None = None
+    key: str | None = None
+    value: Any = None
+
+
+@dataclass(frozen=True)
+class ContextPairCase:
+    """Stored/current context pairs and the role intentionally changed, if any."""
+
+    stored: dict[str, str]
+    current: dict[str, str]
+    changed_role: str | None
+
+
+@dataclass(frozen=True)
+class HubIdentityCase:
+    """Verified primary/secondary contexts and live cluster UIDs."""
+
+    identities: dict[str, dict[str, str]]
 
 
 @st.composite
@@ -413,3 +473,278 @@ def artifact_relative_paths(draw: st.DrawFn) -> str:
     directories = draw(st.lists(safe_path_components(), min_size=0, max_size=3))
     filename = draw(safe_path_components()) + ".json"
     return "/".join([*directories, filename])
+
+
+@st.composite
+def operation_identity_cases(draw: st.DrawFn) -> OperationIdentityCase:
+    """Generate bounded hub/operation inputs with kubeconfig canaries and defaults."""
+    primary_context = draw(_valid_context_name(max_size=32))
+    secondary_context = draw(_valid_context_name(max_size=32))
+    primary_hub_uid = "uid-primary-hub-" + draw(safe_path_components())
+    secondary_hub_uid = "uid-secondary-hub-" + draw(safe_path_components())
+    primary_fallback_uid = "uid-primary-fallback-" + draw(safe_path_components())
+    secondary_fallback_uid = "uid-secondary-fallback-" + draw(safe_path_components())
+    primary_canary = "pbt-primary-kubeconfig-canary-" + draw(safe_path_components())
+    secondary_canary = "pbt-secondary-kubeconfig-canary-" + draw(safe_path_components())
+    primary_uid_in_hub = draw(st.booleans())
+    secondary_uid_in_hub = draw(st.booleans())
+
+    hubs = {
+        "primary": {
+            "context": primary_context,
+            "kubeconfig": primary_canary,
+            **({"cluster_uid": primary_hub_uid} if primary_uid_in_hub else {}),
+        },
+        "secondary": {
+            "context": secondary_context,
+            "kubeconfig": secondary_canary,
+            **({"cluster_uid": secondary_hub_uid} if secondary_uid_in_hub else {}),
+        },
+    }
+    hub_identities = {
+        "primary": {"cluster_uid": primary_fallback_uid},
+        "secondary": {"cluster_uid": secondary_fallback_uid},
+    }
+    method = draw(st.one_of(st.none(), st.just(""), st.sampled_from(VALIDATION_METHOD_CHOICES)))
+    activation_method = draw(st.one_of(st.none(), st.just(""), st.sampled_from(VALIDATION_ACTIVATION_METHOD_CHOICES)))
+    restore_only = draw(st.one_of(st.none(), st.booleans()))
+    old_hub_action = draw(st.one_of(st.none(), st.just(""), st.sampled_from(VALIDATION_OLD_HUB_ACTION_CHOICES)))
+    collection_version = draw(
+        st.one_of(
+            st.none(),
+            st.just(""),
+            st.tuples(
+                st.integers(min_value=0, max_value=9),
+                st.integers(min_value=0, max_value=20),
+                st.integers(min_value=0, max_value=20),
+            ).map(lambda version: ".".join(map(str, version))),
+        )
+    )
+    operation = {
+        "method": method,
+        "activation_method": activation_method,
+        "restore_only": restore_only,
+        "old_hub_action": old_hub_action,
+    }
+    normalized_restore_only = False if restore_only is None else restore_only
+    expected_identity = {
+        "primary_context": primary_context,
+        "secondary_context": secondary_context,
+        "primary_cluster_uid": primary_hub_uid if primary_uid_in_hub else primary_fallback_uid,
+        "secondary_cluster_uid": secondary_hub_uid if secondary_uid_in_hub else secondary_fallback_uid,
+        "method": method or ("full" if normalized_restore_only else "passive"),
+        "activation_method": activation_method or "patch",
+        "restore_only": normalized_restore_only,
+        "old_hub_action": old_hub_action or ("none" if normalized_restore_only else "secondary"),
+        "collection_version": collection_version or "",
+    }
+    return OperationIdentityCase(
+        hubs=hubs,
+        operation=operation,
+        collection_version=collection_version,
+        hub_identities=hub_identities,
+        kubeconfig_canaries=(primary_canary, secondary_canary),
+        expected_identity=expected_identity,
+    )
+
+
+def json_native_values() -> SearchStrategy[Any]:
+    """Generate bounded values whose shape survives JSON serialization unchanged."""
+    scalar = st.one_of(
+        st.none(),
+        st.booleans(),
+        st.integers(min_value=-1000, max_value=1000),
+        st.floats(min_value=-1000, max_value=1000, allow_nan=False, allow_infinity=False),
+        st.text(alphabet=ASCII_ALNUM + " _-./", min_size=0, max_size=24),
+    )
+    keys = st.text(alphabet=string.ascii_lowercase + "_", min_size=1, max_size=12)
+    return st.recursive(
+        scalar,
+        lambda children: st.one_of(
+            st.lists(children, min_size=0, max_size=4),
+            st.dictionaries(keys, children, min_size=0, max_size=4),
+        ),
+        max_leaves=10,
+    )
+
+
+@st.composite
+def normalized_operation_identities(draw: st.DrawFn) -> dict:
+    """Generate complete normalized identities with one retained extension field."""
+    case = draw(operation_identity_cases())
+    extension_value = draw(json_native_values())
+    return {
+        **case.expected_identity,
+        "retained_extension": extension_value,
+    }
+
+
+@st.composite
+def legacy_operation_identities(draw: st.DrawFn) -> LegacyIdentityCase:
+    """Generate identities proving legacy secret removal is exact."""
+    normalized = draw(normalized_operation_identities())
+    primary_canary = "pbt-legacy-primary-canary-" + draw(safe_path_components())
+    secondary_canary = "pbt-legacy-secondary-canary-" + draw(safe_path_components())
+    identity = {
+        **normalized,
+        "primary_kubeconfig": primary_canary,
+        "secondary_kubeconfig": secondary_canary,
+    }
+    return LegacyIdentityCase(
+        identity=identity,
+        normalized=normalized,
+        kubeconfig_canaries=(primary_canary, secondary_canary),
+    )
+
+
+IDENTITY_MISMATCH_FIELDS = (
+    "primary_context",
+    "secondary_context",
+    "primary_cluster_uid",
+    "secondary_cluster_uid",
+    "method",
+    "activation_method",
+    "restore_only",
+    "old_hub_action",
+    "collection_version",
+    "retained_extension",
+)
+
+
+def retained_extension_mismatch_value(expected: Any, generated_component: str) -> Any:
+    """Return a readable retained-extension value guaranteed to differ from expected."""
+    candidate = {"mismatch": generated_component}
+    if candidate == expected:
+        return "forced-different-type-mismatch"
+    return candidate
+
+
+@st.composite
+def mismatched_operation_identities(draw: st.DrawFn, field: str) -> IdentityMismatchCase:
+    """Generate normalized identities differing in exactly ``field``."""
+    expected = draw(normalized_operation_identities())
+    actual = dict(expected)
+    if field == "restore_only":
+        actual[field] = not bool(expected[field])
+    elif field == "retained_extension":
+        actual[field] = retained_extension_mismatch_value(expected[field], draw(safe_path_components()))
+    else:
+        actual[field] = f"{expected[field]}-mismatch"
+    return IdentityMismatchCase(
+        checkpoint={"operation_identity": actual},
+        expected_identity=expected,
+        field=field,
+    )
+
+
+def completed_phase_lists(*, duplicates: bool = False, min_size: int = 0) -> SearchStrategy[list[str]]:
+    """Generate bounded phase lists from the collection's real workflow order domain."""
+    return st.lists(
+        st.sampled_from(KNOWN_PHASES),
+        min_size=min_size,
+        max_size=8 if duplicates else len(KNOWN_PHASES),
+        unique=not duplicates,
+    )
+
+
+@st.composite
+def semantic_checkpoints(draw: st.DrawFn) -> dict:
+    """Generate shaped checkpoint records without corrupt or arbitrary blob cases."""
+    schema_version = draw(st.sampled_from(("1.0", "2.0", "3.0")))
+    phase = draw(st.sampled_from(KNOWN_PHASES))
+    completed_phases = draw(completed_phase_lists())
+    identity = draw(st.one_of(st.none(), normalized_operation_identities()))
+    operational_data = draw(st.dictionaries(safe_path_components(), json_native_values(), max_size=4))
+    errors = draw(
+        st.lists(
+            st.fixed_dictionaries({"phase": st.sampled_from(KNOWN_PHASES), "error": safe_path_components()}),
+            max_size=3,
+        )
+    )
+    report_refs = draw(
+        st.lists(
+            st.fixed_dictionaries(
+                {
+                    "phase": st.sampled_from(KNOWN_PHASES),
+                    "path": artifact_relative_paths(),
+                    "kind": st.just("json-report"),
+                }
+            ),
+            max_size=3,
+        )
+    )
+    return {
+        "schema_version": schema_version,
+        "phase": phase,
+        "completed_phases": completed_phases,
+        "operation_identity": identity,
+        "operational_data": operational_data,
+        "errors": errors,
+        "report_refs": report_refs,
+    }
+
+
+def readable_step_names() -> SearchStrategy[str]:
+    """Generate short workflow-like StateManager step names."""
+    return st.sampled_from(
+        (
+            "validate_hubs",
+            "pause_backups",
+            "disable_auto_import",
+            "activate_restore",
+            "verify_clusters",
+            "enable_backups",
+        )
+    )
+
+
+def _state_mutations() -> SearchStrategy[StateOperation]:
+    config_keys = st.sampled_from(("method", "versions", "flags", "retry_count"))
+    return st.one_of(
+        st.sampled_from(tuple(Phase)).map(lambda phase: StateOperation("set_phase", phase=phase)),
+        readable_step_names().map(lambda step: StateOperation("mark_step", key=step)),
+        readable_step_names().map(lambda step: StateOperation("clear_step", key=step)),
+        st.tuples(config_keys, json_native_values()).map(
+            lambda item: StateOperation("set_config", key=item[0], value=item[1])
+        ),
+    )
+
+
+@st.composite
+def state_manager_operation_sequences(draw: st.DrawFn) -> list[StateOperation]:
+    """Generate readable valid histories, optionally including snapshot rollback."""
+    prefix = draw(st.lists(_state_mutations(), min_size=0, max_size=6))
+    suffix = draw(st.lists(_state_mutations(), min_size=0, max_size=4))
+    if not draw(st.booleans()):
+        return prefix + suffix
+    after_snapshot = draw(st.lists(_state_mutations(), min_size=1, max_size=5))
+    return [*prefix, StateOperation("capture_snapshot"), *after_snapshot, StateOperation("restore_snapshot"), *suffix]
+
+
+@st.composite
+def context_pair_cases(draw: st.DrawFn) -> ContextPairCase:
+    """Generate matching pairs or a pair differing in exactly one hub role."""
+    stored = {
+        "primary": draw(_valid_context_name(max_size=24)),
+        "secondary": draw(_valid_context_name(max_size=24)),
+    }
+    changed_role = draw(st.one_of(st.none(), st.sampled_from(("primary", "secondary"))))
+    current = dict(stored)
+    if changed_role is not None:
+        current[changed_role] = stored[changed_role] + "-changed"
+    return ContextPairCase(stored=stored, current=current, changed_role=changed_role)
+
+
+@st.composite
+def hub_identity_cases(draw: st.DrawFn) -> HubIdentityCase:
+    """Generate verified live identity bindings for both hub roles."""
+    primary_context = draw(_valid_context_name(max_size=24))
+    secondary_context = draw(_valid_context_name(max_size=24))
+    primary_uid = "uid-primary-" + draw(safe_path_components())
+    secondary_uid = "uid-secondary-" + draw(safe_path_components())
+    return HubIdentityCase(
+        identities={
+            "primary": {"context": primary_context, "cluster_uid": primary_uid},
+            "secondary": {"context": secondary_context, "cluster_uid": secondary_uid},
+        }
+    )
