@@ -30,6 +30,11 @@ def _parse_file_mode(mode: str | int) -> int:
     if file_mode < 0 or file_mode > 0o777:
         raise ArtifactWriteError(f"Invalid report artifact mode '{mode}'")
 
+    if file_mode & 0o600 != 0o600:
+        raise ArtifactWriteError(
+            f"Invalid report artifact mode '{mode}': owner read and write permissions are required"
+        )
+
     return file_mode
 
 
