@@ -576,11 +576,24 @@ When doing similar refactoring work:
 
 ## Version Management
 
-**IMPORTANT**: Python and Bash versions MUST always be in sync. When making changes to either Python or Bash code, update BOTH version files to the same version.
+Version management has two distinct modes: ordinary development work and explicit release/version-bump work.
 
-**REQUIRED**: Creating and pushing a git tag (`git tag vX.Y.Z && git push origin vX.Y.Z`) is a mandatory step of the release process. A version bump without a corresponding git tag is an incomplete release. The CHANGELOG `[Unreleased]` compare link must reference the new tag.
+### Ordinary Development Work
 
-Container image and Helm chart metadata follow the same version: the Containerfile `version` label and the Helm chart `appVersion` should match the Python/Bash tool version; bump the Helm chart `version` alongside releases.
+- Ordinary development PRs may modify code, tests, documentation, and tooling.
+- Record changelog-worthy development changes under `CHANGELOG.md` `## [Unreleased]`.
+- Do not change released version identifiers or create release tags unless the work is explicitly scoped as a release/version-bump PR.
+- PATCH/MINOR/MAJOR guidance selects the next explicit release version from accumulated changes; it does not require every individual development PR to bump a version.
+
+The governance correction for issue #165 is not a release. It must not change version identifiers or create a release tag.
+
+### Explicit Release Work
+
+- Python and Bash released versions must match whenever a version bump is performed.
+- Update the container version, Helm chart `version` and `appVersion`, README version badge, changelog release heading, and changelog comparison links together with the Python and Bash versions.
+- Run the release gates after all release metadata is synchronized.
+- Create and push a matching `vX.Y.Z` tag for the exact release commit.
+- A partial metadata bump, or a version bump without the matching release tag, is an incomplete release.
 
 ### Version Locations
 |
@@ -601,7 +614,7 @@ export SCRIPT_VERSION="X.Y.Z"
 export SCRIPT_VERSION_DATE="YYYY-MM-DD"
 ```
 
-**When to bump**:
+**How to select the next explicit release version**:
 - **PATCH (X.Y.Z → X.Y.Z+1)**: Bug fixes, minor improvements, documentation updates
 - **MINOR (X.Y.Z → X.Y+1.0)**: New checks, new features, significant improvements
 - **MAJOR (X.Y.Z → X+1.0.0)**: Breaking changes to script behavior or output format
@@ -620,7 +633,7 @@ __version__ = "X.Y.Z"
 __version_date__ = "YYYY-MM-DD"
 ```
 
-**When to bump**: Same rules as bash scripts (PATCH/MINOR/MAJOR).
+**Release selection**: Use the same PATCH/MINOR/MAJOR rules as the Bash scripts when choosing the next explicit release version.
 
 **Files that use this version**:
 - `acm_switchover.py` - displays at startup: `ACM Hub Switchover Automation vX.Y.Z (YYYY-MM-DD)`
@@ -639,7 +652,7 @@ Location: `CHANGELOG.md`
 
 ### Version Update Checklist
 
-For every version bump (apply all steps regardless of whether the change is to Bash scripts or Python):
+For every explicit release/version bump (apply all steps regardless of whether the accumulated changes affect Bash scripts or Python):
 
 1. [ ] Update `SCRIPT_VERSION` and `SCRIPT_VERSION_DATE` in `scripts/constants.sh`
 2. [ ] Update `__version__` and `__version_date__` in `lib/__init__.py`
@@ -647,10 +660,10 @@ For every version bump (apply all steps regardless of whether the change is to B
 4. [ ] Update container image label version in [container-bootstrap/Containerfile](container-bootstrap/Containerfile)
 5. [ ] Update Helm chart `version` and `appVersion` (appVersion = tool version) in [deploy/helm/acm-switchover-rbac/Chart.yaml](deploy/helm/acm-switchover-rbac/Chart.yaml)
 6. [ ] Update version badge in `README.md` (top of file)
-7. [ ] Add changelog entry in `CHANGELOG.md`
+7. [ ] Promote accumulated `[Unreleased]` entries into a new `## [X.Y.Z] - YYYY-MM-DD` release heading in `CHANGELOG.md`
 8. [ ] Update the CHANGELOG reference-link block (`[Unreleased]` and the new `[X.Y.Z]` link, plus any missing recent release links)
 9. [ ] Update `scripts/README.md` if new script features/checks were added
-10. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
+10. [ ] Run the release gates, then create and push a matching tag for the exact release commit (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
 
 ## Claude SKILLS
 

@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Clarified that ordinary development accumulates under `[Unreleased]` without version bumps or tags, while explicit releases synchronize every version location and tag the exact release commit.
 - Deduplicated the Ansible preflight RBAC validation task file: primary/secondary hub blocks now run through one hub-parameterized shared task file (`validate_rbac_hub.yml`) driven by an explicit per-hub table, mirroring the Python H1 hub-role loop (Thermos `R2-H3`); registered facts, fail-closed CRD discovery behavior, and operator-facing messages are unchanged.
 - Python RBAC validator cluster table (`VALIDATOR_CLUSTER_PERMISSIONS`) is now derived from the operator table by stripping mutating verbs, with the managedclusters `patch` exception recorded as explicit, import-time-verified data; primary/secondary hub RBAC validation is deduplicated behind a hub-parameterized `_validate_hub()` loop. No behavior change: permission sets, fail-closed semantics, and operator-facing messages are unchanged (Thermos `H1`).
 - Python state and collection checkpoints now bind resume validation to live hub cluster identities, rejecting same-context retargeting to a different cluster before mutation.
