@@ -480,8 +480,10 @@ def operation_identity_cases(draw: st.DrawFn) -> OperationIdentityCase:
     """Generate bounded hub/operation inputs with kubeconfig canaries and defaults."""
     primary_context = draw(_valid_context_name(max_size=32))
     secondary_context = draw(_valid_context_name(max_size=32))
-    primary_uid = "uid-primary-" + draw(safe_path_components())
-    secondary_uid = "uid-secondary-" + draw(safe_path_components())
+    primary_hub_uid = "uid-primary-hub-" + draw(safe_path_components())
+    secondary_hub_uid = "uid-secondary-hub-" + draw(safe_path_components())
+    primary_fallback_uid = "uid-primary-fallback-" + draw(safe_path_components())
+    secondary_fallback_uid = "uid-secondary-fallback-" + draw(safe_path_components())
     primary_canary = "pbt-primary-kubeconfig-canary-" + draw(safe_path_components())
     secondary_canary = "pbt-secondary-kubeconfig-canary-" + draw(safe_path_components())
     primary_uid_in_hub = draw(st.booleans())
@@ -491,17 +493,17 @@ def operation_identity_cases(draw: st.DrawFn) -> OperationIdentityCase:
         "primary": {
             "context": primary_context,
             "kubeconfig": primary_canary,
-            **({"cluster_uid": primary_uid} if primary_uid_in_hub else {}),
+            **({"cluster_uid": primary_hub_uid} if primary_uid_in_hub else {}),
         },
         "secondary": {
             "context": secondary_context,
             "kubeconfig": secondary_canary,
-            **({"cluster_uid": secondary_uid} if secondary_uid_in_hub else {}),
+            **({"cluster_uid": secondary_hub_uid} if secondary_uid_in_hub else {}),
         },
     }
     hub_identities = {
-        "primary": {"cluster_uid": primary_uid},
-        "secondary": {"cluster_uid": secondary_uid},
+        "primary": {"cluster_uid": primary_fallback_uid},
+        "secondary": {"cluster_uid": secondary_fallback_uid},
     }
     method = draw(st.one_of(st.none(), st.just(""), st.sampled_from(VALIDATION_METHOD_CHOICES)))
     activation_method = draw(st.one_of(st.none(), st.just(""), st.sampled_from(VALIDATION_ACTIVATION_METHOD_CHOICES)))
@@ -528,8 +530,8 @@ def operation_identity_cases(draw: st.DrawFn) -> OperationIdentityCase:
     expected_identity = {
         "primary_context": primary_context,
         "secondary_context": secondary_context,
-        "primary_cluster_uid": primary_uid,
-        "secondary_cluster_uid": secondary_uid,
+        "primary_cluster_uid": primary_hub_uid if primary_uid_in_hub else primary_fallback_uid,
+        "secondary_cluster_uid": secondary_hub_uid if secondary_uid_in_hub else secondary_fallback_uid,
         "method": method or ("full" if normalized_restore_only else "passive"),
         "activation_method": activation_method or "patch",
         "restore_only": normalized_restore_only,
@@ -609,6 +611,14 @@ IDENTITY_MISMATCH_FIELDS = (
 )
 
 
+def retained_extension_mismatch_value(expected: Any, generated_component: str) -> Any:
+    """Return a readable retained-extension value guaranteed to differ from expected."""
+    candidate = {"mismatch": generated_component}
+    if candidate == expected:
+        return "forced-different-type-mismatch"
+    return candidate
+
+
 @st.composite
 def mismatched_operation_identities(draw: st.DrawFn, field: str) -> IdentityMismatchCase:
     """Generate normalized identities differing in exactly ``field``."""
@@ -617,9 +627,7 @@ def mismatched_operation_identities(draw: st.DrawFn, field: str) -> IdentityMism
     if field == "restore_only":
         actual[field] = not bool(expected[field])
     elif field == "retained_extension":
-        actual[field] = {"mismatch": draw(safe_path_components())}
-        if actual[field] == expected[field]:
-            actual[field] = {"mismatch": "forced-different"}
+        actual[field] = retained_extension_mismatch_value(expected[field], draw(safe_path_components()))
     else:
         actual[field] = f"{expected[field]}-mismatch"
     return IdentityMismatchCase(
