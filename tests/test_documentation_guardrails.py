@@ -326,6 +326,34 @@ def test_changelog_unreleased_keeps_standard_groups():
         assert heading in unreleased
 
 
+def test_agents_version_policy_separates_development_from_release_work():
+    """Version policy must not turn every development PR into a release."""
+    content = _read("AGENTS.md")
+    policy = content.split("## Version Management", 1)[1].split("\n## Claude SKILLS", 1)[0]
+
+    required = (
+        "### Ordinary Development Work",
+        "may modify code, tests, documentation, and tooling",
+        "## [Unreleased]",
+        "Do not change released version identifiers or create release tags",
+        "next explicit release version from accumulated changes",
+        "does not require every individual development PR to bump a version",
+        "### Explicit Release Work",
+        "Python and Bash released versions must match whenever a version bump is performed",
+        "changelog release heading",
+        "changelog comparison links",
+        "matching `vX.Y.Z` tag for the exact release commit",
+        "A partial metadata bump",
+        "without the matching release tag",
+        "issue #165 is not a release",
+    )
+    for statement in required:
+        assert statement in policy
+
+    contradictory = "When making changes to either Python or Bash code, update BOTH version files"
+    assert contradictory not in policy
+
+
 def test_lab_role_controller_agent_instructions_document_non_live_authority_boundary():
     """Phase 7B Agent guidance must preserve the controller-owned non-live boundary."""
     content = _read("docs/development/lab-role-controller-agent-instructions.md")
