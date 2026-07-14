@@ -569,9 +569,10 @@ class StateManager:
 
     def set_config(self, key: str, value: Any) -> None:
         """Store configuration value."""
-        if self.state["config"].get(key) == value:
+        config = self.state["config"]
+        if key in config and config[key] == value:
             return
-        self.state["config"][key] = value
+        config[key] = value
         self._dirty = True
         self.save_state()
 

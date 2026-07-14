@@ -167,6 +167,44 @@ class TestStateManager:
         reloaded = StateManager(str(state_path))
         assert reloaded.get_config("key") == "value"
 
+    def test_set_config_persists_explicit_none(self, tmp_path):
+        """An explicit None config value must remain distinct from an absent key."""
+        state_path = tmp_path / "state-config-null.json"
+        sm = StateManager(str(state_path))
+        assert "method" not in sm.state["config"]
+
+        sm.set_config("method", None)
+
+        assert "method" in sm.state["config"]
+        assert sm.state["config"]["method"] is None
+
+        reloaded = StateManager(str(state_path))
+        assert "method" in reloaded.state["config"]
+        assert reloaded.state["config"]["method"] is None
+        sentinel = object()
+        assert reloaded.get_config("method", sentinel) is None
+
+    def test_set_config_repeated_none_is_idempotent(self, tmp_path):
+        """Equal present values must not trigger another durable write."""
+        state_path = tmp_path / "state-config-idempotent.json"
+        sm = StateManager(str(state_path))
+        sm.set_config("method", None)
+        assert "method" in sm.state["config"]
+
+        with patch.object(sm, "_write_state", wraps=sm._write_state) as mock_write:
+            sm.set_config("method", None)
+            mock_write.assert_not_called()
+            assert "method" in sm.state["config"]
+            assert sm.state["config"]["method"] is None
+
+            sm.set_config("method", "passive")
+            mock_write.assert_called_once()
+            assert StateManager(str(state_path)).get_config("method") == "passive"
+
+            mock_write.reset_mock()
+            sm.set_config("method", "passive")
+            mock_write.assert_not_called()
+
     def test_reentrant_flush_preserves_dirty_state(self, tmp_path):
         """State changed during a flush must be persisted by a follow-up flush."""
         state_path = tmp_path / "state-reentrant.json"
