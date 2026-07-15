@@ -89,6 +89,55 @@ class HubIdentityCase:
     identities: dict[str, dict[str, str]]
 
 
+@dataclass(frozen=True)
+class ReportStateCase:
+    """Python report inputs plus canaries that must stay outside artifacts."""
+
+    snapshot: dict
+    secret_canaries: tuple[str, str, str]
+
+
+@dataclass(frozen=True)
+class ReportArgsCase:
+    """Args-like report values and their independently normalized operation."""
+
+    values: dict
+    expected_operation: dict
+
+
+@dataclass(frozen=True)
+class CollectionPreflightCase:
+    """Collection preflight inputs with an independent sanitized-hub oracle."""
+
+    phase: str
+    results: list[dict]
+    hubs: dict
+    hub_identities: dict
+    expected_hubs: dict
+    secret_canaries: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ValidFileModeCase:
+    """One supported artifact mode and its expected integer value."""
+
+    value: str | int
+    expected: int
+
+
+@dataclass(frozen=True)
+class CheckModeCase:
+    """One explicit existing/desired artifact state for check-mode prediction."""
+
+    scenario: str
+    existing_report: object
+    desired_report: object
+    existing_mode: int
+    desired_mode: int
+    initially_exists: bool
+    expected_changed: bool
+
+
 @st.composite
 def _bounded_token(
     draw: st.DrawFn,
@@ -410,6 +459,15 @@ def traversal_path_candidates() -> SearchStrategy[str]:
     """Generate relative and absolute paths containing exact traversal components."""
     absolute = st.sampled_from(("/tmp/../etc", "/tmp//../etc/"))
     return st.one_of(_relative_traversal_path_candidates(), absolute)
+
+
+@st.composite
+def report_artifact_traversal_paths(draw: st.DrawFn) -> str:
+    """Generate writer traversal attempts whose lexical target stays under ``tmp_path``."""
+    prefix = draw(safe_path_components())
+    suffix = draw(safe_path_components())
+    template = draw(st.sampled_from(("../{suffix}.json", "{prefix}/../../{suffix}.json")))
+    return template.format(prefix=prefix, suffix=suffix)
 
 
 @st.composite
@@ -748,3 +806,298 @@ def hub_identity_cases(draw: st.DrawFn) -> HubIdentityCase:
             "secondary": {"context": secondary_context, "cluster_uid": secondary_uid},
         }
     )
+
+
+def report_text(*, min_size: int = 0, max_size: int = 32) -> SearchStrategy[str]:
+    """Generate bounded readable report text without credential-like material."""
+    return st.text(alphabet=ASCII_ALNUM + " _-./:@", min_size=min_size, max_size=max_size)
+
+
+def legacy_validation_results() -> SearchStrategy[dict]:
+    """Generate the legacy Python ValidationReporter result shape."""
+    return st.fixed_dictionaries(
+        {
+            "check": report_text(max_size=32),
+            "passed": st.booleans(),
+            "critical": st.booleans(),
+            "message": report_text(max_size=64),
+        },
+        optional={
+            "errors": st.lists(report_text(max_size=24), max_size=3),
+            "warnings": st.lists(report_text(max_size=24), max_size=3),
+            "unsupported_extension": json_native_values(),
+        },
+    )
+
+
+def structured_validation_results(*, include_extensions: bool = False) -> SearchStrategy[dict]:
+    """Generate complete structured validation findings with JSON-native detail."""
+    optional = {"structured_extension": json_native_values()} if include_extensions else None
+    return st.fixed_dictionaries(
+        {
+            "id": report_text(min_size=1, max_size=32),
+            "severity": st.sampled_from(("critical", "warning", "info")),
+            "status": st.sampled_from(("pass", "fail", "error", "warning")),
+            "message": report_text(max_size=64),
+            "details": st.dictionaries(
+                report_text(min_size=1, max_size=12),
+                json_native_values(),
+                max_size=4,
+            ),
+            "recommended_action": st.one_of(st.none(), report_text(max_size=48)),
+        },
+        optional=optional,
+    )
+
+
+def preflight_result_lists() -> SearchStrategy[list[dict]]:
+    """Generate small structured collection preflight result lists."""
+    return st.lists(structured_validation_results(), min_size=0, max_size=8)
+
+
+@st.composite
+def report_state_cases(draw: st.DrawFn) -> ReportStateCase:
+    """Generate state snapshots consumed by the Python operation report builder."""
+    errors = draw(st.one_of(st.none(), st.lists(json_native_values(), max_size=5)))
+    completed_steps = draw(
+        st.one_of(
+            st.none(),
+            st.lists(
+                st.fixed_dictionaries({"name": readable_step_names()}),
+                max_size=6,
+            ),
+        )
+    )
+    preflight_results = draw(
+        st.lists(
+            st.one_of(
+                legacy_validation_results(),
+                structured_validation_results(include_extensions=True),
+            ),
+            max_size=6,
+        )
+    )
+    argocd_run_id = draw(st.one_of(st.none(), st.just(""), report_text(min_size=1, max_size=24)))
+    paused_apps = draw(
+        st.one_of(
+            st.none(),
+            st.lists(
+                st.fixed_dictionaries(
+                    {
+                        "name": report_text(min_size=1, max_size=24),
+                        "namespace": report_text(min_size=1, max_size=24),
+                    }
+                ),
+                max_size=5,
+            ),
+        )
+    )
+    kubeconfig_canary = "PBT_KUBECONFIG_CANARY_" + draw(safe_path_components())
+    token_canary = "PBT_TOKEN_CANARY_" + draw(safe_path_components())
+    secret_canary = "PBT_SECRET_CANARY_" + draw(safe_path_components())
+    snapshot = {
+        "current_phase": draw(st.sampled_from(tuple(phase.value for phase in Phase))),
+        "errors": errors,
+        "completed_steps": completed_steps,
+        "config": {
+            "preflight_results": preflight_results,
+            "argocd_run_id": argocd_run_id,
+            "argocd_paused_apps": paused_apps,
+            "kubeconfig": kubeconfig_canary,
+            "token": token_canary,
+            "secret_path": secret_canary,
+        },
+    }
+    return ReportStateCase(
+        snapshot=snapshot,
+        secret_canaries=(kubeconfig_canary, token_canary, secret_canary),
+    )
+
+
+@st.composite
+def report_args_cases(draw: st.DrawFn) -> ReportArgsCase:
+    """Generate Python CLI args-like fields and their bool-normalized report form."""
+    primary_context = draw(st.one_of(st.none(), st.just(""), _valid_context_name(max_size=32)))
+    secondary_context = draw(st.one_of(st.none(), st.just(""), _valid_context_name(max_size=32)))
+    method = draw(st.one_of(st.none(), st.sampled_from(VALIDATION_METHOD_CHOICES)))
+    old_hub_action = draw(st.one_of(st.none(), st.sampled_from(VALIDATION_OLD_HUB_ACTION_CHOICES)))
+    restore_only = draw(json_native_values())
+    decommission = draw(json_native_values())
+    values = {
+        "primary_context": primary_context,
+        "secondary_context": secondary_context,
+        "method": method,
+        "old_hub_action": old_hub_action,
+        "restore_only": restore_only,
+        "decommission": decommission,
+    }
+    return ReportArgsCase(
+        values=values,
+        expected_operation={
+            "method": method,
+            "old_hub_action": old_hub_action,
+            "restore_only": bool(restore_only),
+            "decommission": bool(decommission),
+        },
+    )
+
+
+def phase_summary_dictionaries() -> SearchStrategy[dict[str, dict]]:
+    """Generate bounded phase-to-summary mappings for Python reports."""
+    phase_names = st.sampled_from(tuple(phase.value for phase in Phase))
+    summary = st.fixed_dictionaries(
+        {
+            "status": st.sampled_from(("pass", "fail", "skipped")),
+            "count": st.integers(min_value=0, max_value=20),
+        }
+    )
+    return st.dictionaries(phase_names, summary, min_size=0, max_size=4)
+
+
+@st.composite
+def collection_preflight_cases(draw: st.DrawFn) -> CollectionPreflightCase:
+    """Generate collection report inputs, including sensitive hub-only canaries."""
+    phase = draw(st.sampled_from(("preflight", "restore-only-preflight", "decommission-preflight")))
+    results = draw(preflight_result_lists())
+    primary_context = draw(report_text(min_size=1, max_size=24))
+    secondary_context = draw(report_text(min_size=1, max_size=24))
+    primary_hub_uid = "uid-primary-hub-" + draw(safe_path_components())
+    secondary_hub_uid = "uid-secondary-hub-" + draw(safe_path_components())
+    primary_identity_uid = "uid-primary-identity-" + draw(safe_path_components())
+    secondary_identity_uid = "uid-secondary-identity-" + draw(safe_path_components())
+    kubeconfig_canary = "PBT_KUBECONFIG_CANARY_" + draw(safe_path_components())
+    token_canary = "PBT_TOKEN_CANARY_" + draw(safe_path_components())
+    secret_canary = "PBT_SECRET_CANARY_" + draw(safe_path_components())
+    additional_canary = "PBT_ADDITIONAL_SECRET_CANARY_" + draw(safe_path_components())
+    secondary_kubeconfig_canary = kubeconfig_canary + "-secondary"
+    secondary_token_canary = token_canary + "-secondary"
+    additional_identity_canary = additional_canary + "-identity"
+    additional_role = draw(st.sampled_from(("standby", "recovery", "observer")))
+    additional_context = draw(report_text(min_size=1, max_size=24))
+    additional_hub_uid = "uid-additional-hub-" + draw(safe_path_components())
+    additional_identity_uid = "uid-additional-identity-" + draw(safe_path_components())
+    primary_context_in_hub = draw(st.booleans())
+    secondary_context_in_hub = draw(st.booleans())
+    primary_uid_in_hub = draw(st.booleans())
+    secondary_uid_in_hub = draw(st.booleans())
+    hubs = {
+        "primary": {
+            **({"context": primary_context} if primary_context_in_hub else {}),
+            **({"cluster_uid": primary_hub_uid} if primary_uid_in_hub else {}),
+            "kubeconfig": kubeconfig_canary,
+            "token": token_canary,
+            "secret_path": secret_canary,
+        },
+        "secondary": {
+            **({"context": secondary_context} if secondary_context_in_hub else {}),
+            **({"cluster_uid": secondary_hub_uid} if secondary_uid_in_hub else {}),
+            "kubeconfig": secondary_kubeconfig_canary,
+            "token": secondary_token_canary,
+            "secret": secret_canary,
+        },
+        additional_role: {
+            **({"context": additional_context} if draw(st.booleans()) else {}),
+            **({"cluster_uid": additional_hub_uid} if draw(st.booleans()) else {}),
+            "kubeconfig": additional_canary,
+        },
+    }
+    hub_identities = {
+        "primary": {"context": primary_context + "-identity", "cluster_uid": primary_identity_uid},
+        "secondary": {"context": secondary_context + "-identity", "cluster_uid": secondary_identity_uid},
+        additional_role: {
+            **({"context": additional_context + "-identity"} if draw(st.booleans()) else {}),
+            **({"cluster_uid": additional_identity_uid} if draw(st.booleans()) else {}),
+            "secret_path": additional_identity_canary,
+        },
+    }
+    expected_hubs = {
+        "primary": {
+            "context": primary_context if primary_context_in_hub else primary_context + "-identity",
+            "cluster_uid": primary_hub_uid if primary_uid_in_hub else primary_identity_uid,
+        },
+        "secondary": {
+            "context": secondary_context if secondary_context_in_hub else secondary_context + "-identity",
+            "cluster_uid": secondary_hub_uid if secondary_uid_in_hub else secondary_identity_uid,
+        },
+    }
+    additional_hub = hubs[additional_role]
+    additional_identity = hub_identities[additional_role]
+    expected_hubs[additional_role] = {
+        "context": additional_hub.get("context") or additional_identity.get("context") or "",
+        "cluster_uid": additional_hub.get("cluster_uid") or additional_identity.get("cluster_uid") or "",
+    }
+    return CollectionPreflightCase(
+        phase=phase,
+        results=results,
+        hubs=hubs,
+        hub_identities=hub_identities,
+        expected_hubs=expected_hubs,
+        secret_canaries=(
+            kubeconfig_canary,
+            token_canary,
+            secret_canary,
+            additional_canary,
+            secondary_kubeconfig_canary,
+            secondary_token_canary,
+            additional_identity_canary,
+        ),
+    )
+
+
+@st.composite
+def valid_file_modes(draw: st.DrawFn) -> ValidFileModeCase:
+    """Generate owner-manageable modes in every supported representation."""
+    expected = draw(st.integers(min_value=0o600, max_value=0o777))
+    representation = draw(st.sampled_from(("integer", "plain", "zero_padded", "prefixed")))
+    if representation == "integer":
+        value: str | int = expected
+    elif representation == "plain":
+        value = format(expected, "o")
+    elif representation == "zero_padded":
+        value = format(expected, "04o")
+    else:
+        value = "0o" + format(expected, "o")
+    return ValidFileModeCase(value=value, expected=expected)
+
+
+@st.composite
+def check_mode_cases(draw: st.DrawFn) -> CheckModeCase:
+    """Generate each documented check-mode state with deliberate differences."""
+    scenario = draw(st.sampled_from(("absent", "identical", "content-only", "mode-only", "combined")))
+    existing_report = draw(json_native_values())
+    changed_report = {"pbt_changed": existing_report}
+    existing_mode = draw(st.integers(min_value=0o600, max_value=0o777))
+    changed_mode = existing_mode ^ 0o040
+    desired_report = changed_report if scenario in {"content-only", "combined"} else existing_report
+    desired_mode = changed_mode if scenario in {"mode-only", "combined"} else existing_mode
+    return CheckModeCase(
+        scenario=scenario,
+        existing_report=existing_report,
+        desired_report=desired_report,
+        existing_mode=existing_mode,
+        desired_mode=desired_mode,
+        initially_exists=scenario != "absent",
+        expected_changed=scenario != "identical",
+    )
+
+
+def invalid_file_modes() -> SearchStrategy[str | int]:
+    """Generate non-manageable, malformed, negative, and out-of-range modes."""
+    malformed = st.sampled_from(("", " ", "not-octal", "08", "0o", "0x1ff", "+-1"))
+    negative = st.one_of(st.integers(max_value=-1, min_value=-4096), st.integers(-4096, -1).map(str))
+    above_range = st.one_of(
+        st.integers(min_value=0o1000, max_value=0o7777),
+        st.integers(min_value=0o1000, max_value=0o7777).map(lambda value: format(value, "o")),
+    )
+    non_manageable_integers = st.tuples(
+        st.sampled_from((0o000, 0o200, 0o400)),
+        st.integers(min_value=0, max_value=0o177),
+    ).map(lambda parts: parts[0] | parts[1])
+    non_manageable = st.one_of(
+        non_manageable_integers,
+        non_manageable_integers.map(lambda value: format(value, "o")),
+        non_manageable_integers.map(lambda value: format(value, "04o")),
+        non_manageable_integers.map(lambda value: "0o" + format(value, "o")),
+        st.sampled_from((0, "0000", 0o200, "0200", 0o400, "0400", 0o444, "0444", 0o066, "0066")),
+    )
+    return st.one_of(non_manageable, malformed, negative, above_range)
