@@ -204,12 +204,44 @@ def _files_beneath(root: Path) -> set[Path]:
     return {path.relative_to(root) for path in root.rglob("*") if path.is_file() and not path.is_symlink()}
 
 
-def test_absent_ansible_preflight_import_is_transactional_in_isolated_subprocess() -> None:
+def test_absent_ansible_preflight_import_is_transactional_in_isolated_subprocess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The narrow fallback restores modules, cache, and package attributes on all paths."""
+    test_file = Path(__file__).resolve()
+    expected_suffix = Path("tests/properties/test_report_artifact_properties.py")
+    if len(test_file.parents) < 3:
+        raise ValueError(f"Cannot resolve repository root from PBT-06 test path: {test_file}")
+    repo_root = test_file.parents[2]
+    if (repo_root / expected_suffix).resolve() != test_file:
+        raise ValueError(f"PBT-06 test is not located under the expected repository layout: {test_file}")
+
+    decoy_root = tmp_path / "ambient-pythonpath-decoy"
+    decoy_test = decoy_root / expected_suffix
+    decoy_collection = decoy_root / "ansible_collections/tomazb/acm_switchover/plugins/module_utils/artifacts.py"
+    for decoy_file in (decoy_test, decoy_collection):
+        decoy_file.parent.mkdir(parents=True, exist_ok=True)
+        decoy_file.write_text("raise AssertionError('ambient PYTHONPATH decoy imported')\n", encoding="utf-8")
+        for package in decoy_file.parents:
+            if package == decoy_root:
+                break
+            (package / "__init__.py").touch()
+    monkeypatch.setenv("PYTHONPATH", str(decoy_root))
+    monkeypatch.setenv("PYTHONHOME", str(tmp_path / "ambient-python-home"))
+
     script = r"""
 import importlib
 import importlib.abc
+import os
 import sys
+from pathlib import Path
+
+expected_root = Path(os.environ["PBT06_EXPECTED_REPO_ROOT"]).resolve()
+decoy_root = Path(os.environ["PBT06_DECOY_PYTHONPATH"]).resolve()
+assert os.environ["PYTHONPATH"] == str(expected_root)
+assert "PYTHONHOME" not in os.environ
+assert os.environ["PYTHONSAFEPATH"] == "1"
+assert all(Path(entry).resolve() != decoy_root for entry in sys.path if entry)
 
 module_name = "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_preflight_report"
 parent_name = module_name.rpartition(".")[0]
@@ -229,6 +261,15 @@ class BlockAnsible(importlib.abc.MetaPathFinder):
 blocker = BlockAnsible()
 sys.meta_path.insert(0, blocker)
 import tests.properties.test_report_artifact_properties as tested
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils import artifacts as imported_collection
+
+tested_path = Path(tested.__file__).resolve()
+collection_path = Path(imported_collection.__file__).resolve()
+assert tested_path == expected_root / "tests/properties/test_report_artifact_properties.py"
+assert tested_path.is_relative_to(expected_root)
+assert collection_path.is_relative_to(expected_root)
+print(f"PBT06_TEST_MODULE_PATH={tested_path}")
+print(f"PBT06_COLLECTION_MODULE_PATH={collection_path}")
 assert tested.summarize_preflight_results([]) == {
     "passed": True, "critical_failures": 0, "warning_failures": 0,
 }
@@ -294,14 +335,22 @@ assert all(sys.modules[name] is module for name, module in preexisting.items())
 assert sys.modules[module_name] is preexisting_target
 assert parent.acm_preflight_report is preexisting_attribute
 """
-    environment = {
-        **os.environ,
-        "ANSIBLE_LOCAL_TEMP": "/tmp/ansible-local-pbt06-import",
-        "ANSIBLE_REMOTE_TMP": "/tmp/ansible-remote-pbt06-import",
-    }
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    environment.pop("PYTHONHOME", None)
+    environment.update(
+        {
+            "PYTHONPATH": str(repo_root),
+            "PYTHONSAFEPATH": "1",
+            "PBT06_EXPECTED_REPO_ROOT": str(repo_root),
+            "PBT06_DECOY_PYTHONPATH": str(decoy_root),
+            "ANSIBLE_LOCAL_TEMP": "/tmp/ansible-local-pbt06-import",
+            "ANSIBLE_REMOTE_TMP": "/tmp/ansible-remote-pbt06-import",
+        }
+    )
     result = subprocess.run(
         [sys.executable, "-c", script],
-        cwd=Path(__file__).parents[2],
+        cwd=repo_root,
         env=environment,
         text=True,
         capture_output=True,
@@ -309,6 +358,11 @@ assert parent.acm_preflight_report is preexisting_attribute
         check=False,
     )
     assert result.returncode == 0, f"isolated import probe failed:\nstdout={result.stdout}\nstderr={result.stderr}"
+    assert f"PBT06_TEST_MODULE_PATH={test_file}" in result.stdout
+    collection_path = (
+        repo_root / "ansible_collections/tomazb/acm_switchover/plugins/module_utils/artifacts.py"
+    ).resolve()
+    assert f"PBT06_COLLECTION_MODULE_PATH={collection_path}" in result.stdout
 
 
 @pytest.mark.property
@@ -598,42 +652,44 @@ def test_parse_file_mode_complete_integer_domain_matches_manageable_oracle(mode:
 @given(mode=invalid_file_modes())
 @example(mode=0)
 def test_invalid_file_modes_raise_before_path_or_filesystem_access(tmp_path: Path, mode: str | int) -> None:
-    example_root = Path(tempfile.mkdtemp(prefix="invalid-mode-", dir=tmp_path))
-    destination = example_root / "nested" / "report.json"
-    report = {"status": "pass", "details": [mode]}
-    before = copy.deepcopy(report)
-    root_mode = example_root.stat().st_mode & 0o777
-    root_tree = _files_beneath(example_root)
+    with tempfile.TemporaryDirectory(dir=tmp_path, prefix="invalid-mode-") as example_directory:
+        example_root = Path(example_directory)
+        destination = example_root / "nested" / "report.json"
+        report = {"status": "pass", "details": [mode]}
+        before = copy.deepcopy(report)
+        root_mode = example_root.stat().st_mode & 0o777
+        root_tree = _files_beneath(example_root)
 
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("invalid mode reached path or filesystem access")
+        def forbidden(*_args, **_kwargs):
+            raise AssertionError("invalid mode reached path or filesystem access")
 
-    with patch.object(collection_artifacts, "validate_report_artifact_path", side_effect=forbidden), patch.object(
-        collection_artifacts, "Path", side_effect=forbidden
-    ), patch.object(collection_artifacts.os, "open", side_effect=forbidden), patch.object(
-        collection_artifacts.os, "read", side_effect=forbidden
-    ), patch.object(
-        collection_artifacts.os, "stat", side_effect=forbidden
-    ), patch.object(
-        collection_artifacts.os, "mkdir", side_effect=forbidden
-    ), patch.object(
-        collection_artifacts.os, "chmod", side_effect=forbidden
-    ):
-        with pytest.raises(ArtifactWriteError, match="Invalid report artifact mode") as exc_info:
-            write_json_artifact(report, str(destination), mode=mode)
+        with patch.object(collection_artifacts, "validate_report_artifact_path", side_effect=forbidden), patch.object(
+            collection_artifacts, "Path", side_effect=forbidden
+        ), patch.object(collection_artifacts.os, "open", side_effect=forbidden), patch.object(
+            collection_artifacts.os, "read", side_effect=forbidden
+        ), patch.object(
+            collection_artifacts.os, "stat", side_effect=forbidden
+        ), patch.object(
+            collection_artifacts.os, "mkdir", side_effect=forbidden
+        ), patch.object(
+            collection_artifacts.os, "chmod", side_effect=forbidden
+        ):
+            with pytest.raises(ArtifactWriteError, match="Invalid report artifact mode") as exc_info:
+                write_json_artifact(report, str(destination), mode=mode)
 
-    assert "mode" in str(exc_info.value).lower()
-    try:
-        parsed_mode = mode if isinstance(mode, int) else int(mode, 8)
-    except ValueError:
-        parsed_mode = None
-    if parsed_mode is not None and 0 <= parsed_mode <= 0o777:
-        assert "owner read and write permissions" in str(exc_info.value)
-    assert not os.path.exists(destination)
-    assert not os.path.exists(destination.parent)
-    assert _files_beneath(example_root) == root_tree
-    assert example_root.stat().st_mode & 0o777 == root_mode
-    assert report == before
+        assert "mode" in str(exc_info.value).lower()
+        try:
+            parsed_mode = mode if isinstance(mode, int) else int(mode, 8)
+        except ValueError:
+            parsed_mode = None
+        if parsed_mode is not None and 0 <= parsed_mode <= 0o777:
+            assert "owner read and write permissions" in str(exc_info.value)
+        assert not os.path.exists(destination)
+        assert not os.path.exists(destination.parent)
+        assert _files_beneath(example_root) == root_tree
+        assert example_root.stat().st_mode & 0o777 == root_mode
+        assert report == before
+    assert not example_root.exists()
 
 
 @pytest.mark.property
@@ -642,17 +698,21 @@ def test_invalid_file_modes_raise_before_path_or_filesystem_access(tmp_path: Pat
 def test_python_writer_safe_nested_destination_round_trips_with_one_final_newline(
     tmp_path: Path, report: object, relative: str
 ) -> None:
-    destination = tmp_path / "python-writes" / relative
-    before = copy.deepcopy(report)
+    with tempfile.TemporaryDirectory(dir=tmp_path, prefix="python-report-example-") as example_directory:
+        example_root = Path(example_directory)
+        destination = example_root / relative
+        before = copy.deepcopy(report)
 
-    written = write_json_report_artifact(report, str(destination))
+        written = write_json_report_artifact(report, str(destination))
 
-    content = destination.read_text(encoding="utf-8")
-    assert written == str(destination)
-    assert destination.parent.is_dir()
-    assert content.endswith("\n") and not content.endswith("\n\n")
-    assert json.loads(content) == report
-    assert report == before
+        content = destination.read_text(encoding="utf-8")
+        assert written == str(destination)
+        assert destination.is_relative_to(tmp_path)
+        assert destination.parent.is_dir()
+        assert content.endswith("\n") and not content.endswith("\n\n")
+        assert json.loads(content) == report
+        assert report == before
+    assert not example_root.exists()
 
 
 @pytest.mark.property
@@ -661,16 +721,19 @@ def test_python_writer_safe_nested_destination_round_trips_with_one_final_newlin
 def test_python_writer_rejects_traversal_without_creating_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, report: object, candidate: str
 ) -> None:
-    example_root = Path(tempfile.mkdtemp(prefix="python-traversal-", dir=tmp_path))
-    workspace = example_root / "workspace"
-    workspace.mkdir()
-    monkeypatch.chdir(workspace)
-    before = _files_beneath(tmp_path)
+    with tempfile.TemporaryDirectory(dir=tmp_path, prefix="python-traversal-") as example_directory:
+        example_root = Path(example_directory)
+        workspace = example_root / "workspace"
+        workspace.mkdir()
+        with monkeypatch.context() as example_monkeypatch:
+            example_monkeypatch.chdir(workspace)
+            before = _files_beneath(tmp_path)
 
-    with pytest.raises(SecurityValidationError):
-        write_json_report_artifact(report, candidate)
+            with pytest.raises(SecurityValidationError):
+                write_json_report_artifact(report, candidate)
 
-    assert _files_beneath(tmp_path) == before
+            assert _files_beneath(tmp_path) == before
+    assert not example_root.exists()
 
 
 @pytest.mark.parametrize("writer", (write_json_report_artifact, write_json_artifact))
@@ -714,19 +777,22 @@ def test_report_writers_reject_final_symlink_without_modifying_target(
 def test_collection_writer_safe_write_round_trips_and_enforces_exact_mode(
     tmp_path: Path, report: object, relative: str, mode_case
 ) -> None:
-    example_root = Path(tempfile.mkdtemp(prefix="collection-write-", dir=tmp_path))
-    destination = example_root / relative
-    before = copy.deepcopy(report)
+    with tempfile.TemporaryDirectory(dir=tmp_path, prefix="collection-write-") as example_directory:
+        example_root = Path(example_directory)
+        destination = example_root / relative
+        before = copy.deepcopy(report)
 
-    written, changed = write_json_artifact(report, str(destination), mode=mode_case.value)
+        written, changed = write_json_artifact(report, str(destination), mode=mode_case.value)
 
-    assert written == str(destination)
-    assert changed is True
-    assert destination.stat().st_mode & 0o777 == mode_case.expected
-    content = destination.read_text(encoding="utf-8")
-    assert content.endswith("\n") and not content.endswith("\n\n")
-    assert json.loads(content) == report
-    assert report == before
+        assert written == str(destination)
+        assert changed is True
+        assert destination.is_relative_to(tmp_path)
+        assert destination.stat().st_mode & 0o777 == mode_case.expected
+        content = destination.read_text(encoding="utf-8")
+        assert content.endswith("\n") and not content.endswith("\n\n")
+        assert json.loads(content) == report
+        assert report == before
+    assert not example_root.exists()
 
 
 @pytest.mark.property
@@ -739,31 +805,33 @@ def test_collection_writer_safe_write_round_trips_and_enforces_exact_mode(
 def test_collection_writer_changed_contract_for_repeat_content_and_mode_updates(
     tmp_path: Path, first_report: object, first_mode
 ) -> None:
-    example_root = Path(tempfile.mkdtemp(prefix="changed-contract-", dir=tmp_path))
-    destination = example_root / "report.json"
-    content_update = {"pbt_content_update": first_report}
-    second_mode = first_mode.expected ^ 0o040
-    combined_update = {"pbt_combined_update": content_update}
-    inputs_before = copy.deepcopy((first_report, content_update, combined_update))
+    with tempfile.TemporaryDirectory(dir=tmp_path, prefix="changed-contract-") as example_directory:
+        example_root = Path(example_directory)
+        destination = example_root / "report.json"
+        content_update = {"pbt_content_update": first_report}
+        second_mode = first_mode.expected ^ 0o040
+        combined_update = {"pbt_combined_update": content_update}
+        inputs_before = copy.deepcopy((first_report, content_update, combined_update))
 
-    _, first_changed = write_json_artifact(first_report, str(destination), mode=first_mode.value)
-    _, repeated_changed = write_json_artifact(first_report, str(destination), mode=first_mode.value)
-    _, content_changed = write_json_artifact(content_update, str(destination), mode=first_mode.value)
-    _, mode_changed = write_json_artifact(content_update, str(destination), mode=second_mode)
-    _, combined_changed = write_json_artifact(combined_update, str(destination), mode=first_mode.expected)
-    _, final_repeat_changed = write_json_artifact(combined_update, str(destination), mode=first_mode.expected)
+        _, first_changed = write_json_artifact(first_report, str(destination), mode=first_mode.value)
+        _, repeated_changed = write_json_artifact(first_report, str(destination), mode=first_mode.value)
+        _, content_changed = write_json_artifact(content_update, str(destination), mode=first_mode.value)
+        _, mode_changed = write_json_artifact(content_update, str(destination), mode=second_mode)
+        _, combined_changed = write_json_artifact(combined_update, str(destination), mode=first_mode.expected)
+        _, final_repeat_changed = write_json_artifact(combined_update, str(destination), mode=first_mode.expected)
 
-    assert first_changed is True
-    assert repeated_changed is False
-    assert content_changed is True
-    assert mode_changed is True
-    assert combined_changed is True
-    assert final_repeat_changed is False
-    assert destination.stat().st_mode & 0o777 == first_mode.expected
-    content = destination.read_text(encoding="utf-8")
-    assert content.endswith("\n") and not content.endswith("\n\n")
-    assert json.loads(content) == combined_update
-    assert (first_report, content_update, combined_update) == inputs_before
+        assert first_changed is True
+        assert repeated_changed is False
+        assert content_changed is True
+        assert mode_changed is True
+        assert combined_changed is True
+        assert final_repeat_changed is False
+        assert destination.stat().st_mode & 0o777 == first_mode.expected
+        content = destination.read_text(encoding="utf-8")
+        assert content.endswith("\n") and not content.endswith("\n\n")
+        assert json.loads(content) == combined_update
+        assert (first_report, content_update, combined_update) == inputs_before
+    assert not example_root.exists()
 
 
 def _seed_artifact(path: Path, report: object, mode: int) -> None:
@@ -784,39 +852,43 @@ def test_collection_check_mode_predicts_execute_and_never_writes_or_chmods(
     tmp_path: Path,
     case: CheckModeCase,
 ) -> None:
-    example_root = Path(tempfile.mkdtemp(prefix=f"check-mode-{case.scenario}-", dir=tmp_path))
-    check_path = example_root / "check-parent" / "report.json"
-    execute_path = example_root / "execute-parent" / "report.json"
-    if case.initially_exists:
-        _seed_artifact(check_path, case.existing_report, case.existing_mode)
-        _seed_artifact(execute_path, case.existing_report, case.existing_mode)
-    check_bytes = check_path.read_bytes() if check_path.exists() else None
-    check_mode_before = check_path.stat().st_mode & 0o777 if check_path.exists() else None
-    desired_bytes = (json.dumps(case.desired_report, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    desired_before = copy.deepcopy(case.desired_report)
+    with tempfile.TemporaryDirectory(dir=tmp_path, prefix=f"check-mode-{case.scenario}-") as example_directory:
+        example_root = Path(example_directory)
+        check_path = example_root / "check-parent" / "report.json"
+        execute_path = example_root / "execute-parent" / "report.json"
+        if case.initially_exists:
+            _seed_artifact(check_path, case.existing_report, case.existing_mode)
+            _seed_artifact(execute_path, case.existing_report, case.existing_mode)
+        check_bytes = check_path.read_bytes() if check_path.exists() else None
+        check_mode_before = check_path.stat().st_mode & 0o777 if check_path.exists() else None
+        desired_bytes = (json.dumps(case.desired_report, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        desired_before = copy.deepcopy(case.desired_report)
 
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("check mode attempted a write-side filesystem mutation")
+        def forbidden(*_args, **_kwargs):
+            raise AssertionError("check mode attempted a write-side filesystem mutation")
 
-    with patch.object(collection_artifacts.os, "open", side_effect=forbidden), patch.object(
-        collection_artifacts.Path, "mkdir", side_effect=forbidden
-    ), patch.object(collection_artifacts.Path, "chmod", side_effect=forbidden):
-        _, predicted = write_json_artifact(
-            case.desired_report, str(check_path), check_mode=True, mode=case.desired_mode
+        with patch.object(collection_artifacts.os, "open", side_effect=forbidden), patch.object(
+            collection_artifacts.Path, "mkdir", side_effect=forbidden
+        ), patch.object(collection_artifacts.Path, "chmod", side_effect=forbidden):
+            _, predicted = write_json_artifact(
+                case.desired_report, str(check_path), check_mode=True, mode=case.desired_mode
+            )
+        _, executed = write_json_artifact(
+            case.desired_report, str(execute_path), check_mode=False, mode=case.desired_mode
         )
-    _, executed = write_json_artifact(case.desired_report, str(execute_path), check_mode=False, mode=case.desired_mode)
 
-    assert predicted is executed is case.expected_changed
-    assert check_path.exists() is case.initially_exists
-    if case.initially_exists:
-        assert check_path.read_bytes() == check_bytes
-        assert check_path.stat().st_mode & 0o777 == check_mode_before
-    else:
-        assert not check_path.parent.exists()
-    assert execute_path.exists()
-    assert execute_path.read_bytes() == desired_bytes
-    assert execute_path.stat().st_mode & 0o777 == case.desired_mode
-    assert case.desired_report == desired_before
+        assert predicted is executed is case.expected_changed
+        assert check_path.exists() is case.initially_exists
+        if case.initially_exists:
+            assert check_path.read_bytes() == check_bytes
+            assert check_path.stat().st_mode & 0o777 == check_mode_before
+        else:
+            assert not check_path.parent.exists()
+        assert execute_path.exists()
+        assert execute_path.read_bytes() == desired_bytes
+        assert execute_path.stat().st_mode & 0o777 == case.desired_mode
+        assert case.desired_report == desired_before
+    assert not example_root.exists()
 
 
 @pytest.mark.property
@@ -825,16 +897,19 @@ def test_collection_check_mode_predicts_execute_and_never_writes_or_chmods(
 def test_collection_writer_rejects_traversal_without_creating_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, report: object, candidate: str
 ) -> None:
-    example_root = Path(tempfile.mkdtemp(prefix="collection-traversal-", dir=tmp_path))
-    workspace = example_root / "workspace"
-    workspace.mkdir()
-    monkeypatch.chdir(workspace)
-    before = _files_beneath(tmp_path)
+    with tempfile.TemporaryDirectory(dir=tmp_path, prefix="collection-traversal-") as example_directory:
+        example_root = Path(example_directory)
+        workspace = example_root / "workspace"
+        workspace.mkdir()
+        with monkeypatch.context() as example_monkeypatch:
+            example_monkeypatch.chdir(workspace)
+            before = _files_beneath(tmp_path)
 
-    with pytest.raises(CollectionValidationError):
-        write_json_artifact(report, candidate)
+            with pytest.raises(CollectionValidationError):
+                write_json_artifact(report, candidate)
 
-    assert _files_beneath(tmp_path) == before
+            assert _files_beneath(tmp_path) == before
+    assert not example_root.exists()
 
 
 @pytest.mark.property
@@ -843,15 +918,18 @@ def test_collection_writer_rejects_traversal_without_creating_files(
 def test_preflight_write_report_uses_real_writer_and_preserves_inputs(
     tmp_path: Path, report: object, relative: str
 ) -> None:
-    example_root = Path(tempfile.mkdtemp(prefix="preflight-wrapper-", dir=tmp_path))
-    destination = example_root / relative
-    before = copy.deepcopy(report)
+    with tempfile.TemporaryDirectory(dir=tmp_path, prefix="preflight-wrapper-") as example_directory:
+        example_root = Path(example_directory)
+        destination = example_root / relative
+        before = copy.deepcopy(report)
 
-    path, changed, error = write_report(report, str(destination), check_mode=False)
+        path, changed, error = write_report(report, str(destination), check_mode=False)
 
-    assert (path, changed, error) == (str(destination), True, None)
-    assert json.loads(destination.read_text(encoding="utf-8")) == report
-    assert report == before
+        assert (path, changed, error) == (str(destination), True, None)
+        assert destination.is_relative_to(tmp_path)
+        assert json.loads(destination.read_text(encoding="utf-8")) == report
+        assert report == before
+    assert not example_root.exists()
 
 
 def test_preflight_write_report_returns_validation_error_without_write(
