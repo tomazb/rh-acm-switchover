@@ -139,7 +139,7 @@ class RecordingKubeClient:
         self.patch_calls.append(kwargs)
 
     def __getattr__(self, name: str) -> Any:
-        raise AssertionError(f"unexpected KubeClient method accessed: {name}")
+        raise AttributeError(f"unexpected KubeClient method accessed: {name}")
 
 
 class RecordingStateManager:
@@ -152,6 +152,16 @@ class RecordingStateManager:
     def get_config(self, key: str) -> Any:
         self.get_config_calls.append(key)
         return self.saved_schedule
+
+
+def test_recording_kube_client_preserves_missing_attribute_protocol() -> None:
+    fake = RecordingKubeClient()
+    sentinel = object()
+
+    assert hasattr(fake, "unexpected_method") is False
+    assert getattr(fake, "unexpected_method", sentinel) is sentinel
+    with pytest.raises(AttributeError, match="unexpected KubeClient method accessed: unexpected_method"):
+        fake.unexpected_method()
 
 
 def _expected_pause_support(components: tuple[int, int, int]) -> bool:
