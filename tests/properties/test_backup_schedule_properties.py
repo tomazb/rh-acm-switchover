@@ -558,3 +558,144 @@ def test_falsey_saved_schedule_never_plans_or_performs_mutation(saved_schedule: 
     assert state.get_config_calls == ["saved_backup_schedule"]
     assert client.create_calls == []
     assert client.patch_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Nested alias-isolation regression (Suite 5 deep-copy contract)
+# ---------------------------------------------------------------------------
+
+
+def _nested_alias_saved_schedule() -> dict[str, Any]:
+    """Explicit fixture with preserved mutable containers at several nesting levels.
+
+    Includes runtime metadata fields that both recreation paths remove, plus
+    custom extension fields that must survive with full deep-copy isolation.
+    """
+    return {
+        "apiVersion": f"{CLUSTER_BACKUP_API_GROUP}/{CLUSTER_BACKUP_API_VERSION}",
+        "kind": "BackupSchedule",
+        "metadata": {
+            "name": "alias-isolation",
+            "namespace": BACKUP_NAMESPACE,
+            "labels": {"owner": "original"},
+            "annotations": {"note": "original"},
+            "pbtMetadataExtension": {
+                "nested": {
+                    "items": [{"value": "original"}],
+                }
+            },
+            # Runtime metadata fields that both recreation paths remove.
+            "uid": "uid-alias-isolation",
+            "resourceVersion": "999",
+            "creationTimestamp": "2026-01-01T00:00:00Z",
+            "generation": 1,
+            "managedFields": [{"manager": "controller"}],
+        },
+        "spec": {
+            "paused": True,
+            "veleroSchedule": "0 */6 * * *",
+            "pbtSpecExtension": {
+                "nested": [{"value": "original"}],
+            },
+        },
+        "pbtTopLevelExtension": {
+            "nested": {
+                "items": ["original"],
+            }
+        },
+        "status": {"phase": "Enabled"},
+    }
+
+
+def _python_recreated_body(saved_schedule: dict[str, Any]) -> tuple[dict[str, Any], RecordingKubeClient]:
+    """Run the Python recreation path and return (body, recording_client)."""
+    client = RecordingKubeClient()
+    BackupScheduleManager(
+        client, RecordingStateManager(saved_schedule), "alias-isolation-hub"
+    )._restore_saved_schedule()
+    return client.create_calls[0]["body"], client
+
+
+def _assert_alias_isolation_invariants(
+    saved: dict[str, Any],
+    body: dict[str, Any],
+    client: RecordingKubeClient | None = None,
+) -> None:
+    """Assert all nested alias-isolation invariants for a reconstructed BackupSchedule body.
+
+    Mutates both ``body`` and ``saved`` as part of invariants 4 and 5.
+    """
+    saved_snapshot = copy.deepcopy(saved)
+    expected = _expected_recreated_body(saved_snapshot)
+
+    # Invariant 1: reconstructed body equals independently expected sanitized body.
+    assert body == expected
+
+    # Invariant 2: not the same top-level object.
+    assert body is not saved
+
+    # Invariant 3: all preserved mutable containers are distinct objects.
+    assert body["metadata"] is not saved["metadata"]
+    assert body["metadata"]["labels"] is not saved["metadata"]["labels"]
+    assert body["metadata"]["annotations"] is not saved["metadata"]["annotations"]
+    meta_ext = "pbtMetadataExtension"
+    assert body["metadata"][meta_ext] is not saved["metadata"][meta_ext]
+    assert body["metadata"][meta_ext]["nested"] is not saved["metadata"][meta_ext]["nested"]
+    assert body["metadata"][meta_ext]["nested"]["items"] is not saved["metadata"][meta_ext]["nested"]["items"]
+    assert body["metadata"][meta_ext]["nested"]["items"][0] is not saved["metadata"][meta_ext]["nested"]["items"][0]
+    assert body["spec"] is not saved["spec"]
+    spec_ext = "pbtSpecExtension"
+    assert body["spec"][spec_ext] is not saved["spec"][spec_ext]
+    assert body["spec"][spec_ext]["nested"] is not saved["spec"][spec_ext]["nested"]
+    assert body["spec"][spec_ext]["nested"][0] is not saved["spec"][spec_ext]["nested"][0]
+    top_ext = "pbtTopLevelExtension"
+    assert body[top_ext] is not saved[top_ext]
+    assert body[top_ext]["nested"] is not saved[top_ext]["nested"]
+    assert body[top_ext]["nested"]["items"] is not saved[top_ext]["nested"]["items"]
+
+    # Invariant 4: mutating the reconstructed body does not mutate the saved schedule.
+    body["metadata"]["labels"]["owner"] = "mutated-label"
+    body["metadata"]["annotations"]["note"] = "mutated-annotation"
+    body["metadata"][meta_ext]["nested"]["items"][0]["value"] = "mutated-meta-ext-item"
+    body["metadata"][meta_ext]["nested"]["items"].append({"value": "appended-meta-ext"})
+    body["spec"][spec_ext]["nested"].append({"value": "appended-spec-ext"})
+    body[top_ext]["nested"]["items"].append("appended-top-ext")
+    body[top_ext]["nested"]["items"][0] = "mutated-top-ext-item"
+    assert saved == saved_snapshot, "mutating body must not affect the saved schedule"
+
+    # Invariant 5: mutating the saved schedule after reconstruction does not affect the body.
+    body_snapshot = copy.deepcopy(body)
+    saved["metadata"]["labels"]["owner"] = "saved-state-mutated"
+    saved["metadata"][meta_ext]["nested"]["items"].append({"value": "saved-appended"})
+    saved["spec"][spec_ext]["nested"].append({"value": "saved-spec-appended"})
+    saved[top_ext]["nested"]["items"].append("saved-top-appended")
+    assert body == body_snapshot, "mutating saved state after reconstruction must not affect the body"
+
+    # Invariant 7 (Python only): exactly one create call, no patches, correct API constants.
+    if client is not None:
+        assert len(client.create_calls) == 1
+        assert client.patch_calls == []
+        call = client.create_calls[0]
+        assert call["group"] == CLUSTER_BACKUP_API_GROUP
+        assert call["version"] == CLUSTER_BACKUP_API_VERSION
+        assert call["plural"] == BACKUP_SCHEDULE_PLURAL
+        assert call["namespace"] == BACKUP_NAMESPACE
+
+    # Invariant 8: status and all runtime metadata fields are absent.
+    assert "status" not in body
+    for field in RUNTIME_METADATA_FIELDS:
+        assert field not in body.get("metadata", {}), f"runtime field {field!r} must be absent"
+
+    # Invariant 9: spec.paused is exactly False.
+    assert body["spec"]["paused"] is False
+
+
+@pytest.mark.parametrize("form_factor", ("python", "collection"))
+def test_recreated_body_is_deeply_isolated_from_saved_schedule(form_factor: str) -> None:
+    saved = _nested_alias_saved_schedule()
+    if form_factor == "python":
+        body, client = _python_recreated_body(saved)
+        _assert_alias_isolation_invariants(saved, body, client)
+    else:
+        body = collection_build_saved_schedule_body(saved)
+        _assert_alias_isolation_invariants(saved, body)
