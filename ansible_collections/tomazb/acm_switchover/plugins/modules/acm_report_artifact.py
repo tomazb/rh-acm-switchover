@@ -9,7 +9,8 @@ short_description: Validate and write a controller-side JSON report artifact
 description:
   - Applies the collection safe-path policy to a report artifact path before touching the controller filesystem.
   - Writes structured JSON reports with stable pretty-print formatting.
-  - Supports check mode by validating the mode and path without creating directories or files.
+  - Supports check mode by validating the mode and path and reporting whether the artifact would change, without
+    creating directories, writing or truncating files, or changing permissions.
 author:
   - ACM Switchover Contributors (@tomazb)
 options:

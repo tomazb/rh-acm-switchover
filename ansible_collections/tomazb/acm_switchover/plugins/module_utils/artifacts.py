@@ -39,7 +39,7 @@ def _parse_file_mode(mode: str | int) -> int:
 
 
 def write_json_artifact(
-    report: dict, destination: str, check_mode: bool = False, mode: str = "0644"
+    report: dict, destination: str, check_mode: bool = False, mode: str | int = "0644"
 ) -> tuple[str, bool]:
     """Validate and optionally write a JSON artifact on the controller."""
     file_mode = _parse_file_mode(mode)
