@@ -16,6 +16,8 @@ from hypothesis.strategies import SearchStrategy
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import KNOWN_PHASES
 from lib.constants import (
+    CLUSTER_BACKUP_API_GROUP,
+    CLUSTER_BACKUP_API_VERSION,
     VALIDATION_ACTIVATION_METHOD_CHOICES,
     VALIDATION_METHOD_CHOICES,
     VALIDATION_OLD_HUB_ACTION_CHOICES,
@@ -136,6 +138,14 @@ class CheckModeCase:
     desired_mode: int
     initially_exists: bool
     expected_changed: bool
+
+
+@dataclass(frozen=True)
+class AcmVersionCase:
+    """A parseable ACM version paired with its independent numeric meaning."""
+
+    value: str
+    components: tuple[int, int, int]
 
 
 @st.composite
@@ -623,6 +633,177 @@ def json_native_values() -> SearchStrategy[Any]:
             st.dictionaries(keys, children, min_size=0, max_size=4),
         ),
         max_leaves=10,
+    )
+
+
+@st.composite
+def parseable_acm_versions(draw: st.DrawFn) -> AcmVersionCase:
+    """Generate readable accepted ACM versions with a retained numeric oracle."""
+    representative_pairs = st.sampled_from(tuple((2, minor) for minor in range(10, 18)))
+    bounded_pairs = st.tuples(
+        st.integers(min_value=0, max_value=4),
+        st.integers(min_value=0, max_value=20),
+    )
+    major, minor = draw(st.one_of(representative_pairs, bounded_pairs))
+    include_patch = draw(st.booleans())
+    patch = draw(st.integers(min_value=0, max_value=999)) if include_patch else 0
+    core = f"{major}.{minor}.{patch}" if include_patch else f"{major}.{minor}"
+    suffix = draw(
+        st.sampled_from(
+            (
+                "",
+                "-rc1",
+                "-beta.2",
+                "-candidate-3",
+                "+build",
+                "+build.7",
+                "-rc1+build.7",
+            )
+        )
+    )
+    leading, trailing = draw(st.sampled_from((("", ""), (" ", ""), ("", " "), (" \t", "\n"))))
+    return AcmVersionCase(
+        value=f"{leading}{core}{suffix}{trailing}",
+        components=(major, minor, patch),
+    )
+
+
+def unparseable_acm_versions() -> SearchStrategy[str]:
+    """Generate small targeted malformed versions that both parsers must reject."""
+    fixed = st.sampled_from(
+        (
+            "",
+            " ",
+            "\t\n",
+            "2",
+            "x.14",
+            "2.x",
+            "2.14.x",
+            "2.14.3.1",
+            "2.14.3rc1",
+            "2.14.-rc1",
+            "2.14.3-",
+            "2.14.3+",
+            "2..14",
+            ".2.14",
+            "v2.14.3",
+            "2.14.-3",
+            "2.14.3 rc1",
+        )
+    )
+    numeric = st.integers(min_value=0, max_value=20).map(str)
+    generated = st.one_of(
+        numeric,
+        st.tuples(numeric, numeric, numeric, numeric).map(".".join),
+        st.tuples(numeric, numeric, numeric).map(lambda parts: ".".join(parts) + "rc1"),
+        st.tuples(numeric, numeric).map(lambda parts: f"{parts[0]}.x{parts[1]}"),
+    )
+    return st.one_of(fixed, generated)
+
+
+def _backup_schedule_names() -> SearchStrategy[str]:
+    """Generate bounded Kubernetes-like BackupSchedule names."""
+    return _dns_label(max_size=24)
+
+
+def _backup_schedule_specs() -> SearchStrategy[dict[str, Any]]:
+    """Generate a small real-shaped BackupSchedule spec."""
+    schedules = st.sampled_from(("0 */6 * * *", "*/30 * * * *", "15 2 * * 1", "0 0 * * *"))
+    return st.fixed_dictionaries(
+        {"veleroSchedule": schedules},
+        optional={"paused": st.one_of(st.none(), st.booleans())},
+    )
+
+
+@st.composite
+def _backup_schedule_resources(draw: st.DrawFn) -> dict[str, Any]:
+    """Generate named and unnamed BackupSchedules without arbitrary blobs."""
+    metadata_shape = draw(st.sampled_from(("named", "missing_name", "empty_name", "null_name", "missing_metadata")))
+    schedule: dict[str, Any] = {
+        "apiVersion": f"{CLUSTER_BACKUP_API_GROUP}/{CLUSTER_BACKUP_API_VERSION}",
+        "kind": "BackupSchedule",
+        "spec": draw(_backup_schedule_specs()),
+    }
+    if metadata_shape == "named":
+        schedule["metadata"] = {"name": draw(_backup_schedule_names())}
+    elif metadata_shape == "missing_name":
+        schedule["metadata"] = {"labels": {"pbt-purpose": "multiplicity"}}
+    elif metadata_shape == "empty_name":
+        schedule["metadata"] = {"name": ""}
+    elif metadata_shape == "null_name":
+        schedule["metadata"] = {"name": None}
+    return schedule
+
+
+def backup_schedule_lists(*, min_size: int = 0) -> SearchStrategy[list[dict[str, Any]]]:
+    """Generate bounded BackupSchedule lists spanning every multiplicity class."""
+    return st.lists(_backup_schedule_resources(), min_size=min_size, max_size=5)
+
+
+def _string_map(*, max_size: int = 3) -> SearchStrategy[dict[str, str]]:
+    """Generate bounded harmless metadata maps."""
+    keys = _dns_label(max_size=16)
+    values = st.text(alphabet=ASCII_ALNUM + " ._-", min_size=0, max_size=24)
+    return st.dictionaries(keys, values, min_size=0, max_size=max_size)
+
+
+@st.composite
+def saved_backup_schedule_bodies(draw: st.DrawFn) -> dict[str, Any]:
+    """Generate semantic saved BackupSchedules with runtime and extension fields."""
+    metadata: dict[str, Any] = {
+        "name": draw(_backup_schedule_names()),
+        "labels": draw(_string_map()),
+        "annotations": draw(_string_map()),
+        "uid": "uid-" + draw(safe_path_components()),
+        "resourceVersion": str(draw(st.integers(min_value=1, max_value=9999))),
+        "creationTimestamp": draw(
+            st.sampled_from(("2024-01-02T03:04:05Z", "2025-06-15T12:30:00Z", "2026-12-31T23:59:59Z"))
+        ),
+        "generation": draw(st.integers(min_value=1, max_value=100)),
+        "managedFields": draw(
+            st.lists(
+                st.fixed_dictionaries(
+                    {
+                        "manager": safe_path_components(),
+                        "operation": st.sampled_from(("Apply", "Update")),
+                    }
+                ),
+                min_size=0,
+                max_size=3,
+            )
+        ),
+        "pbtMetadataExtension": draw(json_native_values()),
+    }
+    if draw(st.booleans()):
+        metadata["namespace"] = draw(_dns_label(max_size=24))
+
+    body: dict[str, Any] = {
+        "apiVersion": f"{CLUSTER_BACKUP_API_GROUP}/{CLUSTER_BACKUP_API_VERSION}",
+        "kind": "BackupSchedule",
+        "metadata": metadata,
+        "pbtTopLevelExtension": draw(json_native_values()),
+    }
+    if draw(st.booleans()):
+        spec = draw(_backup_schedule_specs())
+        spec["pbtSpecExtension"] = draw(json_native_values())
+        body["spec"] = spec
+    if draw(st.booleans()):
+        body["status"] = {
+            "phase": draw(st.sampled_from(("Enabled", "Paused", "Unknown"))),
+            "pbtStatusExtension": draw(json_native_values()),
+        }
+    return body
+
+
+def no_saved_backup_schedule_values() -> SearchStrategy[Any]:
+    """Generate every representative falsey value treated as no saved schedule."""
+    return st.one_of(
+        st.none(),
+        st.just(False),
+        st.just(0),
+        st.just(""),
+        st.just([]),
+        st.just({}),
     )
 
 
