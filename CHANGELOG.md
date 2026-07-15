@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed collection report artifact mode validation to reject permissions that omit owner read or owner write before filesystem mutation, preserving repeat-write idempotence and check-mode prediction. This collection-only mode-management correction does not change Python report content/path behavior or machine-readable report parity status.
 - Fixed `StateManager` configuration persistence so explicit `None` values are stored as present JSON nulls while repeated unchanged assignments remain write-free.
 - Fixed Python `--argocd-manage --dry-run` handling so switchover and restore-only flows still discover ACM-touching Argo CD Applications and report pause blockers instead of skipping the coordinator path entirely.
 - Hardened Python Argo CD resume paths so legacy state files without stored hub UID bindings now fail closed before any resume patch.

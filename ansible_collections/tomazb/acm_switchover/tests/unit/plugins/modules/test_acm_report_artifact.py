@@ -10,6 +10,7 @@ import pytest
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils import artifacts
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.artifacts import (
     ArtifactWriteError,
+    _parse_file_mode,
     write_json_artifact,
 )
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (
@@ -187,6 +188,142 @@ def test_write_json_artifact_accepts_octal_prefix_mode(tmp_path):
     assert destination.stat().st_mode & 0o777 == 0o600
 
 
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        (0o600, 0o600),
+        ("0600", 0o600),
+        ("0o600", 0o600),
+        (0o640, 0o640),
+        ("0640", 0o640),
+        (0o644, 0o644),
+        ("0644", 0o644),
+        (0o660, 0o660),
+        ("0660", 0o660),
+        (0o700, 0o700),
+        ("0700", 0o700),
+        (0o750, 0o750),
+        ("0750", 0o750),
+        (0o755, 0o755),
+        ("0755", 0o755),
+        (0o777, 0o777),
+        ("0777", 0o777),
+    ],
+)
+def test_parse_file_mode_accepts_owner_manageable_modes(mode, expected):
+    assert _parse_file_mode(mode) == expected
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        0,
+        "0000",
+        0o200,
+        "0200",
+        0o400,
+        "0400",
+        0o444,
+        "0444",
+        0o066,
+        "0066",
+    ],
+)
+def test_write_json_artifact_rejects_modes_without_owner_read_write_before_mutation(tmp_path, mode):
+    destination = tmp_path / "new-parent" / "report.json"
+    report = {"status": "pass"}
+
+    with pytest.raises(ArtifactWriteError, match="owner read and write permissions"):
+        write_json_artifact(report=report, destination=str(destination), mode=mode)
+
+    assert report == {"status": "pass"}
+    assert not destination.parent.exists()
+
+
+@pytest.mark.parametrize("mode", [0o600, "0644", "0777"])
+def test_write_json_artifact_manageable_modes_support_repeat_and_content_update(tmp_path, mode):
+    destination = tmp_path / "artifacts" / "report.json"
+
+    _output_path, first_changed = write_json_artifact(
+        report={"status": "pass"},
+        destination=str(destination),
+        mode=mode,
+    )
+    _output_path, repeat_changed = write_json_artifact(
+        report={"status": "pass"},
+        destination=str(destination),
+        mode=mode,
+    )
+    _output_path, update_changed = write_json_artifact(
+        report={"status": "fail"},
+        destination=str(destination),
+        mode=mode,
+    )
+
+    assert first_changed is True
+    assert repeat_changed is False
+    assert update_changed is True
+    assert json.loads(destination.read_text(encoding="utf-8")) == {"status": "fail"}
+    assert destination.read_text(encoding="utf-8").endswith("\n")
+
+
+@pytest.mark.parametrize(
+    ("existing_report", "existing_mode", "requested_report", "requested_mode", "expected_changed"),
+    [
+        (None, None, {"status": "pass"}, "0600", True),
+        ({"status": "pass"}, "0600", {"status": "pass"}, "0600", False),
+        ({"status": "pass"}, "0600", {"status": "fail"}, "0600", True),
+        ({"status": "pass"}, "0600", {"status": "pass"}, "0644", True),
+    ],
+)
+def test_write_json_artifact_check_mode_predicts_without_mutation(
+    tmp_path,
+    monkeypatch,
+    existing_report,
+    existing_mode,
+    requested_report,
+    requested_mode,
+    expected_changed,
+):
+    destination = tmp_path / "artifacts" / "report.json"
+    if existing_report is not None:
+        write_json_artifact(
+            report=existing_report,
+            destination=str(destination),
+            mode=existing_mode,
+        )
+
+    original_content = destination.read_bytes() if destination.exists() else None
+    original_mode = destination.stat().st_mode & 0o777 if destination.exists() else None
+
+    def fail_open(*args, **kwargs):
+        raise AssertionError("check mode must not open the artifact for writing")
+
+    def fail_mkdir(*args, **kwargs):
+        raise AssertionError("check mode must not create artifact directories")
+
+    def fail_chmod(*args, **kwargs):
+        raise AssertionError("check mode must not chmod the artifact")
+
+    monkeypatch.setattr(artifacts.os, "open", fail_open)
+    monkeypatch.setattr(artifacts.Path, "mkdir", fail_mkdir)
+    monkeypatch.setattr(artifacts.Path, "chmod", fail_chmod)
+
+    output_path, changed = write_json_artifact(
+        report=requested_report,
+        destination=str(destination),
+        check_mode=True,
+        mode=requested_mode,
+    )
+
+    assert output_path == str(destination)
+    assert changed is expected_changed
+    assert (destination.read_bytes() if destination.exists() else None) == original_content
+    assert (destination.stat().st_mode & 0o777 if destination.exists() else None) == original_mode
+    if existing_report is None:
+        assert not destination.parent.exists()
+
+
 def test_write_json_artifact_creates_file_with_requested_mode(tmp_path, monkeypatch):
     destination = tmp_path / "artifacts" / "decommission-summary.json"
     captured = {}
@@ -305,6 +442,7 @@ def test_write_json_artifact_rejects_invalid_mode_before_writing(tmp_path):
         )
 
     assert not destination.exists()
+    assert not destination.parent.exists()
 
 
 def test_write_json_artifact_rejects_negative_mode_before_writing(tmp_path):
@@ -318,6 +456,7 @@ def test_write_json_artifact_rejects_negative_mode_before_writing(tmp_path):
         )
 
     assert not destination.exists()
+    assert not destination.parent.exists()
 
 
 def test_write_json_artifact_rejects_out_of_range_mode_before_writing(tmp_path):
@@ -331,6 +470,7 @@ def test_write_json_artifact_rejects_out_of_range_mode_before_writing(tmp_path):
         )
 
     assert not destination.exists()
+    assert not destination.parent.exists()
 
 
 def test_run_module_fails_with_actionable_message_on_permission_denied(tmp_path, monkeypatch):

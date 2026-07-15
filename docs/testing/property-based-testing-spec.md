@@ -333,8 +333,10 @@ python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q  # col
   2. validator-accepted, OS-representable paths under `tmp_path` for
      successful write/round-trip properties. The latter excludes NUL bytes
      and overlong components and stays within platform filename limits.
-- File modes: valid octal strings such as `"0644"`, integer mode values in
-  `0..0o777`, and malformed or out-of-range values for `_parse_file_mode`.
+- File modes: valid octal strings such as `"0644"` and integer mode values in
+  `0..0o777` only when `(file_mode & 0o600) == 0o600`; modes missing owner read
+  or owner write permission, plus malformed or out-of-range values, form the
+  rejected domain for `_parse_file_mode`.
 
 **Properties / invariants**
 - **Serializability and round-trip**: generated reports are JSON-native;
@@ -361,9 +363,10 @@ python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q  # col
   OS-representable destinations; they do not reinterpret an operating-system
   filename error as a validator contract.
 - **Mode parsing and enforcement (collection)**: `_parse_file_mode` maps
-  valid octal strings and numeric integer modes to the expected mode. Files
-  written by `write_json_artifact` carry exactly that mode; malformed or
-  out-of-range modes raise `ArtifactWriteError` before a write.
+  valid owner-manageable octal strings and numeric integer modes to the
+  expected mode. Files written by `write_json_artifact` carry exactly that
+  mode; modes without owner read and write permissions, malformed modes, and
+  out-of-range modes raise `ArtifactWriteError` before filesystem mutation.
 - **Idempotent changed reporting (collection)**: a first differing write
   reports `changed=True`; repeating the same content and mode reports
   `changed=False`. Check mode predicts the same changed result without
@@ -374,6 +377,10 @@ python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q  # col
 **Non-goals**
 - No property coverage of human-readable console report formatting
   (`modules/preflight/reporter.py` stays example-tested).
+- No Python file-mode or check-mode management contract. Those controls are
+  collection-only extensions; Python report content, path safety, final
+  newline, and secret-exclusion behavior remain unchanged, with no parity
+  status change.
 - No compatibility promises about report schema evolution beyond the stable
   keys asserted.
 - No requirement to preserve arbitrary keys that are outside the two input
