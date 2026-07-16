@@ -1319,10 +1319,19 @@ ARGOCD_ACM_NAMESPACES = (
 )
 ARGOCD_ACM_KINDS = (
     "MultiClusterHub",
+    "MultiClusterEngine",
+    "MultiClusterObservability",
     "ManagedCluster",
+    "ManagedClusterSet",
+    "ManagedClusterSetBinding",
+    "Placement",
+    "PlacementBinding",
     "Policy",
+    "PolicySet",
     "BackupSchedule",
     "Restore",
+    "DataProtectionApplication",
+    "ClusterDeployment",
 )
 ARGOCD_UNRELATED_NAMESPACES = ("default", "tenant-a", "team-platform")
 ARGOCD_UNRELATED_KINDS = ("ConfigMap", "Deployment", "Secret", "Service")

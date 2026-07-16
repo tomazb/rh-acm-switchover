@@ -14,6 +14,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils import gitop
 from lib import argocd as python_argocd
 from lib import gitops_detector as python_gitops
 from tests.properties.strategies import (
+    ARGOCD_ACM_KINDS,
     ArgocdApplicationCase,
     ArgocdResumeCase,
     argocd_application_cases,
@@ -132,6 +133,13 @@ def test_resources_with_acm_kinds_are_detected(case: ArgocdApplicationCase) -> N
     assert case.acm_resource_count >= 1
     assert python_argocd._count_acm_resources(case.app) == case.acm_resource_count
     assert collection_argocd.count_acm_resources(case.app) == case.acm_resource_count
+
+
+def test_generated_acm_kind_domain_covers_the_shared_production_contract() -> None:
+    generated_kinds = frozenset(ARGOCD_ACM_KINDS)
+
+    assert generated_kinds == python_argocd.ARGOCD_ACM_KINDS
+    assert generated_kinds == collection_argocd.ARGOCD_ACM_KINDS
 
 
 @given(argocd_application_cases(resource_state="current", impact_mode="unrelated"))
