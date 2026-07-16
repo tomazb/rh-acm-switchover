@@ -20,9 +20,11 @@ returned the marker-missing result, which `is_resume_noop()` classifies as a
 no-op. That preserved an operational cleanup path, but it also mutated unowned
 metadata and hid the patch attempt behind no-op semantics.
 
-The Ansible collection already enforces the strict contract: its resume patch
-task runs only when the marker exactly equals the expected run ID and merely
-warns for foreign markers.
+The Ansible collection already enforces the stable-snapshot portion of the
+strict contract: its resume patch task runs only when the discovered marker
+exactly equals the expected run ID and merely warns for discovered foreign
+markers. The final resilience review additionally identified that both form
+factors need a mutation-time precondition to close the discovery-to-patch race.
 
 ## Options considered
 
@@ -73,28 +75,34 @@ historical recovery behavior is intentionally retired.
 
 | Marker state | Resume mutation | Result | `is_resume_noop()` |
 | --- | --- | --- | --- |
-| Equals current run ID | Restore recorded sync policy and remove marker | `restored=True` on success; patch failure on error | `False` |
+| Equals current run ID and observed resource version remains current | Restore recorded sync policy and remove marker | `restored=True` on success; patch failure on error | `False` |
 | Missing or empty | None | `RESUME_SKIP_REASON_MARKER_MISSING` | `True` |
 | Non-empty foreign value | None | `RESUME_SKIP_REASON_MARKER_MISMATCH` | `False` |
+| Same-run snapshot becomes stale before patch | None; Kubernetes rejects the conditional patch | actionable patch failure (normally `409 Conflict`) | `False` |
 
 The same-run patch must target the exact Application namespace and name supplied
 to `resume_autosync()`. Fetch and patch failures retain their existing
 fail-closed result semantics. No result following a patch attempt is classified
-as a no-op.
+as a no-op. The same-run check and patch are joined by an optimistic-concurrency
+precondition: both implementations send the `resourceVersion` observed with the
+matching marker, so a backup restore or concurrent run cannot replace ownership
+between discovery and mutation without causing the patch to fail.
 
 ## Components
 
 ### Python implementation
 
-`lib/argocd.py` removes the auto-sync-dependent foreign-marker cleanup branch.
-The existing same-run and missing-marker branches remain unchanged.
+`lib/argocd.py` removes the auto-sync-dependent foreign-marker cleanup branch
+and includes the live Application `resourceVersion` in the same-run merge
+patch. A malformed live response without `resourceVersion` fails closed before
+the patch call.
 
 ### Collection parity
 
-No collection production code changes are needed. The collection task in
-`roles/argocd_manage/tasks/resume.yml` already requires exact marker equality
-before patching and warns without mutation when the marker differs. Existing
-collection contract tests remain part of verification.
+The collection task in `roles/argocd_manage/tasks/resume.yml` already requires
+exact marker equality before patching and warns without mutation when the marker
+differs. It now also copies the discovered Application `resourceVersion` into
+the patch definition, giving the same conditional mutation boundary as Python.
 
 ### Tests
 
@@ -105,7 +113,10 @@ Deterministic Python unit tests cover:
 - missing marker with zero patches and true no-op classification;
 - foreign marker with auto-sync disabled and enabled, both with zero patches,
   mismatch results, and false no-op classification;
-- same-run patch failure remaining false for `is_resume_noop()`.
+- same-run patch failure remaining false for `is_resume_noop()`;
+- stale-resource `409 Conflict` remaining actionable and non-noop;
+- missing `resourceVersion` failing before any Python patch; and
+- collection patch definitions carrying the discovered `resourceVersion`.
 
 Mocks remain at the Kubernetes client boundary and include realistic
 `resourceVersion` metadata. No live cluster or Argo CD API is used.

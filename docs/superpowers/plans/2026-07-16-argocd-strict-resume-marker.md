@@ -2,9 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Realign Python Argo CD resume with the strict same-run marker contract and truthful no-op semantics already enforced by the Ansible collection.
+**Goal:** Realign Python and collection Argo CD resume with strict same-run
+marker ownership at discovery and mutation time, plus truthful no-op semantics.
 
-**Architecture:** Keep `resume_autosync()` as the single Python mutation boundary. Remove its implicit foreign-marker cleanup branch so only an exact run-ID match reaches the patch call; preserve existing missing-marker, same-run, fetch-error, and patch-error results. Document the intentional retirement of historical cleanup rather than adding a second automated mutation interface.
+**Architecture:** Keep `resume_autosync()` as the single Python mutation
+boundary. Remove its implicit foreign-marker cleanup branch so only an exact
+run-ID match reaches the patch call, then make Python and collection patches
+conditional on the Application `resourceVersion` observed with that marker.
+Preserve missing-marker, fetch-error, and patch-error semantics, and document
+the intentional retirement of historical cleanup rather than adding a second
+automated mutation interface.
 
 **Tech Stack:** Python, pytest, `unittest.mock`, Kubernetes custom-resource client boundary, Markdown operator documentation.
 
@@ -133,11 +140,43 @@ python -m pytest \
 
 Expected: all tests pass and the collection exact-run-ID guard remains intact.
 
+### Task 2B: Make marker ownership conditional at mutation time
+
+**Files:**
+- Modify: `lib/argocd.py`
+- Modify: `tests/test_argocd.py`
+- Modify: `ansible_collections/tomazb/acm_switchover/roles/argocd_manage/tasks/resume.yml`
+- Modify: `ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_resume_on_failure.py`
+
+**Interfaces:**
+- Consumes: the matching-marker live Application snapshot.
+- Produces: conditional patches that Kubernetes rejects if the Application changes after discovery.
+
+- [ ] **Step 1: Add deterministic RED tests**
+
+Require the Python patch and collection patch definition to carry the observed
+`metadata.resourceVersion`. Simulate a Python `409 Conflict` and assert the
+result is actionable and false for `is_resume_noop()`. Assert a matching marker
+without `resourceVersion` fails before the Python patch call.
+
+- [ ] **Step 2: Add optimistic-concurrency preconditions in both form factors**
+
+Include the observed `resourceVersion` in the Python merge patch and the
+collection `kubernetes.core.k8s` patch definition. Do not retry 409 conflicts
+inside resume; the caller must rediscover live ownership before another patch.
+
+- [ ] **Step 3: Run focused tests and verify GREEN**
+
+Run the Python resume test class and collection resume contract tests together.
+Expected: matching stable objects restore, stale versions fail closed, and no
+conflict result is classified as a no-op.
+
 ### Task 3: Document the operational decision
 
 **Files:**
 - Modify: `docs/operations/usage.md`
 - Modify: `docs/operations/quickref.md`
+- Modify: `ansible_collections/tomazb/acm_switchover/docs/coexistence.md`
 - Modify: `CHANGELOG.md`
 
 **Interfaces:**

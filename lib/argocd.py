@@ -799,7 +799,8 @@ def resume_autosync(
         )
     if not current:
         return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason="not found")
-    ann = (current.get("metadata") or {}).get("annotations") or {}
+    metadata = current.get("metadata") or {}
+    ann = metadata.get("annotations") or {}
     marker = ann.get(ARGOCD_PAUSED_BY_ANNOTATION)
     if marker != run_id:
         if not marker:
@@ -815,8 +816,24 @@ def resume_autosync(
             restored=False,
             skip_reason=RESUME_SKIP_REASON_MARKER_MISMATCH,
         )
+    resource_version = metadata.get("resourceVersion")
+    if not resource_version:
+        logger.warning(
+            "Application %s/%s has no resourceVersion; refusing unsafe resume patch",
+            namespace,
+            name,
+        )
+        return ResumeResult(
+            namespace=namespace,
+            name=name,
+            restored=False,
+            skip_reason="resourceVersion missing; refusing unsafe resume",
+        )
     patch = {
-        "metadata": {"annotations": {ARGOCD_PAUSED_BY_ANNOTATION: None}},
+        "metadata": {
+            "resourceVersion": resource_version,
+            "annotations": {ARGOCD_PAUSED_BY_ANNOTATION: None},
+        },
         "spec": {"syncPolicy": original_sync_policy},
     }
     try:

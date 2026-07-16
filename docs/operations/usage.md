@@ -636,7 +636,11 @@ run ID is left untouched and reported as a mismatch, even when auto-sync is
 already enabled; strict resume never restores the recorded sync policy or
 deletes a marker owned by another run. If a backup restored an older marker,
 inspect the live Application and explicitly remove the marker only after
-confirming that it is stale.
+confirming that it is stale. Matching-marker patches are conditional on the
+Application `resourceVersion` observed during the ownership check. If a backup
+restore or concurrent run changes the Application before the patch, Kubernetes
+rejects it (normally with `409 Conflict`); the result is actionable, not a
+no-op, and the operator must inspect the new live owner before retrying.
 
 Note: `--argocd-manage` is allowed with `--validate-only`, but it has no effect and the CLI emits a warning. `--argocd-resume-only` is not compatible with `--validate-only`, `--decommission`, or `--setup`. If `--argocd-manage` was run with `--dry-run`, resume is blocked because the pause was not actually applied—re-run without `--dry-run` to generate resumable state.
 

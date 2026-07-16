@@ -257,7 +257,9 @@ Safety: Managed pause blocks ApplicationSet-managed child Applications, auto-syn
 Note: Resume patches only Applications whose `paused-by` marker exactly matches
 the persisted run ID. A missing marker is an idempotent no-op. A different run
 ID is left untouched and reported as a mismatch; inspect and explicitly remove
-a confirmed stale marker rather than relying on strict resume to delete it. If
+a confirmed stale marker rather than relying on strict resume to delete it.
+Resume patches include the observed Application `resourceVersion`; a concurrent
+change causes an actionable conflict instead of overwriting new ownership. If
 pause was run with `--dry-run`, resume is blocked until a non-dry-run pause is
 executed.
 

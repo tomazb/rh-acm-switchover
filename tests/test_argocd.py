@@ -745,7 +745,10 @@ class TestResumeAutosync:
             plural=argocd_lib.ARGOCD_APP_PLURAL,
             name="acm-policy-app",
             patch={
-                "metadata": {"annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: None}},
+                "metadata": {
+                    "resourceVersion": "500",
+                    "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: None},
+                },
                 "spec": {"syncPolicy": {"automated": {"prune": True}}},
             },
             namespace="team-argocd",
@@ -789,6 +792,52 @@ class TestResumeAutosync:
         assert result.restored is False
         assert "patch failed" in (result.skip_reason or "").lower()
         assert argocd_lib.is_resume_noop(result) is False
+
+    def test_resource_version_conflict_is_actionable_non_noop(self):
+        client = MagicMock()
+        client.get_custom_resource.return_value = {
+            "metadata": {
+                "resourceVersion": "500",
+                "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "current-run"},
+            },
+        }
+        client.patch_custom_resource.side_effect = ApiException(status=409, reason="Conflict")
+
+        result = argocd_lib.resume_autosync(
+            client,
+            "team-argocd",
+            "acm-policy-app",
+            {"automated": {"prune": True}},
+            "current-run",
+        )
+
+        assert result.restored is False
+        assert "patch failed" in (result.skip_reason or "").lower()
+        assert "409" in (result.skip_reason or "")
+        assert argocd_lib.is_resume_noop(result) is False
+        patch = client.patch_custom_resource.call_args.kwargs["patch"]
+        assert patch["metadata"]["resourceVersion"] == "500"
+
+    def test_matching_marker_without_resource_version_fails_closed(self):
+        client = MagicMock()
+        client.get_custom_resource.return_value = {
+            "metadata": {
+                "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "current-run"},
+            },
+        }
+
+        result = argocd_lib.resume_autosync(
+            client,
+            "team-argocd",
+            "acm-policy-app",
+            {"automated": {"prune": True}},
+            "current-run",
+        )
+
+        assert result.restored is False
+        assert "resourceversion missing" in (result.skip_reason or "").lower()
+        assert argocd_lib.is_resume_noop(result) is False
+        client.patch_custom_resource.assert_not_called()
 
     def test_dry_run_resume_supports_keyword_arguments(self):
         client = MagicMock()
