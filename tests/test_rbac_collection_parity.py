@@ -229,6 +229,80 @@ def test_collection_rejects_validator_argocd_manage_like_python(argocd_install_t
         )
 
 
+# Operator-installed Argo CD ("operator") and undetermined installs ("unknown") both
+# require the argocds discovery permission; vanilla installs omit it because the CRD
+# is absent. Expressed as normalized (api_group, resource, verb, namespace) tuples.
+_ARGOCDS_DISCOVERY_PERMISSIONS = {
+    ("argoproj.io", "argocds", "get", None),
+    ("argoproj.io", "argocds", "list", None),
+}
+
+
+@pytest.mark.parametrize("role", ["operator", "validator"])
+@pytest.mark.parametrize(
+    ("argocd_install_type", "expect_argocds"),
+    [
+        ("unknown", True),
+        ("vanilla", False),
+    ],
+)
+def test_collection_argocd_check_install_type_permissions_match_python(role, argocd_install_type, expect_argocds):
+    """Argo CD check mode derives identical argocds discovery permissions on both sides.
+
+    For ``argocd_install_type="unknown"`` both the Python validator and the collection
+    expansion must include ``argoproj.io/argocds`` (get, list); for ``"vanilla"`` both
+    must omit it. This closes the ``check/unknown`` parity gap: without it the collection
+    condition ``!= "vanilla"`` could be mutated to ``== "operator"`` and silently drop the
+    argocds discovery permission for ``unknown`` installs while ``operator`` stayed intact.
+    """
+    python_permissions = set(
+        _python_hub_permissions(
+            role,
+            include_decommission=False,
+            include_old_hub_finalization=False,
+            skip_observability=False,
+            argocd_mode="check",
+            argocd_install_type=argocd_install_type,
+        )
+    )
+    collection_permissions = set(
+        expand_rbac_requirements(
+            role=role,
+            include_decommission=False,
+            include_old_hub_finalization=False,
+            skip_observability=False,
+            argocd_mode="check",
+            argocd_install_type=argocd_install_type,
+        )
+    )
+
+    assert collection_permissions == python_permissions, (
+        f"Python/Collection permission drift for role={role}, argocd_mode=check, "
+        f"install_type={argocd_install_type}: "
+        f"only-in-Python={sorted(python_permissions - collection_permissions)}, "
+        f"only-in-Collection={sorted(collection_permissions - python_permissions)}"
+    )
+
+    if expect_argocds:
+        assert _ARGOCDS_DISCOVERY_PERMISSIONS <= python_permissions, (
+            f"Python missing argocds discovery permissions for install_type={argocd_install_type}: "
+            f"{sorted(_ARGOCDS_DISCOVERY_PERMISSIONS - python_permissions)}"
+        )
+        assert _ARGOCDS_DISCOVERY_PERMISSIONS <= collection_permissions, (
+            f"Collection missing argocds discovery permissions for install_type={argocd_install_type}: "
+            f"{sorted(_ARGOCDS_DISCOVERY_PERMISSIONS - collection_permissions)}"
+        )
+    else:
+        assert not (_ARGOCDS_DISCOVERY_PERMISSIONS & python_permissions), (
+            f"Python unexpectedly grants argocds permissions for install_type={argocd_install_type}: "
+            f"{sorted(_ARGOCDS_DISCOVERY_PERMISSIONS & python_permissions)}"
+        )
+        assert not (_ARGOCDS_DISCOVERY_PERMISSIONS & collection_permissions), (
+            f"Collection unexpectedly grants argocds permissions for install_type={argocd_install_type}: "
+            f"{sorted(_ARGOCDS_DISCOVERY_PERMISSIONS & collection_permissions)}"
+        )
+
+
 def test_collection_decommission_only_expansion_matches_python():
     collection_permissions = sorted(
         expand_rbac_requirements(
