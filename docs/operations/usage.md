@@ -629,6 +629,15 @@ Applications that touch ACM namespaces/kinds are paused (auto-sync removed) and 
 - Resume-only auto-discovers the original state file when the swapped-context match is unambiguous. If both context orderings have state files, pass the original file explicitly with `--state-file`.
 - Resume-only now requires stored hub identity bindings when paused Applications are present. Legacy state files created before hub UID binding must be resumed with `--force` only after the operator manually verifies both hubs still point at the intended live clusters.
 
+Resume patches an Application only when its
+`acm-switchover.argoproj.io/paused-by` annotation exactly matches the persisted
+Argo CD run ID. A missing marker is an idempotent no-op. A different non-empty
+run ID is left untouched and reported as a mismatch, even when auto-sync is
+already enabled; strict resume never restores the recorded sync policy or
+deletes a marker owned by another run. If a backup restored an older marker,
+inspect the live Application and explicitly remove the marker only after
+confirming that it is stale.
+
 Note: `--argocd-manage` is allowed with `--validate-only`, but it has no effect and the CLI emits a warning. `--argocd-resume-only` is not compatible with `--validate-only`, `--decommission`, or `--setup`. If `--argocd-manage` was run with `--dry-run`, resume is blocked because the pause was not actually applied—re-run without `--dry-run` to generate resumable state.
 
 With `--argocd-manage --dry-run`, the Python CLI still discovers ACM-touching Applications and reports ApplicationSet or stale-status blockers during both switchover and restore-only flows before continuing. Dry-run suppresses the patch itself, but it no longer skips the discovery/reporting path.

@@ -88,6 +88,13 @@ in the collection. It is managed by the `argocd_manage` role:
   it loads a checkpoint for the pause `run_id`, live hub identity validation
   completes before any Application resume patch runs
 
+Python and collection resume share the same marker-ownership boundary: the
+`paused-by` annotation must exactly equal the expected run ID before either
+implementation restores sync policy or removes the marker. A missing marker is
+an idempotent no-op. A different non-empty run ID is reported and left
+untouched, including when auto-sync is already enabled; operators must inspect
+and explicitly remove a marker they have confirmed is stale.
+
 The `app.kubernetes.io/instance` label is treated as `UNRELIABLE` by the marker detector
 and must not be used as a definitive GitOps signal. Use `argocd.argoproj.io/instance`
 or `app.kubernetes.io/managed-by: argocd` instead.

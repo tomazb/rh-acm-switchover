@@ -254,7 +254,12 @@ Bash (deprecated): `./scripts/argocd-manage.sh` is deprecated. Use the Python CL
 
 Safety: Managed pause blocks ApplicationSet-managed child Applications, auto-sync Applications with empty or stale `status.resources`, and any Application that still has auto-sync after the pause patch is re-read. Remediate ApplicationSet cases by pausing/updating the parent ApplicationSet, generator, or template, not the child Application.
 
-Note: Resume treats already-resumed apps as idempotent no-ops and fails only when an Application cannot be restored for actionable reasons. If pause was run with `--dry-run`, resume is blocked until a non-dry-run pause is executed.
+Note: Resume patches only Applications whose `paused-by` marker exactly matches
+the persisted run ID. A missing marker is an idempotent no-op. A different run
+ID is left untouched and reported as a mismatch; inspect and explicitly remove
+a confirmed stale marker rather than relying on strict resume to delete it. If
+pause was run with `--dry-run`, resume is blocked until a non-dry-run pause is
+executed.
 
 ## Troubleshooting Commands
 

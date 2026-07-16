@@ -124,8 +124,9 @@ Protected runbook and skill files remain untouched.
 The change is code-only and has no persisted schema migration. Rolling back
 restores the previous implicit cleanup behavior. During normal operation, a
 foreign marker may remain visible on an already-enabled Application, but no
-sync behavior changes and no resume failure is introduced: the result remains a
-marker mismatch and the caller treats it as not restored/actionable.
+sync behavior changes. Resume returns `RESUME_SKIP_REASON_MARKER_MISMATCH`, and
+the caller treats the Application as not restored/actionable, which may require
+operator inspection and explicit marker removal.
 
 The safety gain is fail-closed ownership: backup-restored metadata cannot cause
 strict resume to mutate an Application unless the live marker proves the same
