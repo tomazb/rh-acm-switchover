@@ -367,12 +367,12 @@ class RBACValidator:
         """
         _validate_argocd_mode(argocd_mode)
 
+        if argocd_mode == "manage" and self.role == "validator":
+            raise ValueError("validator role cannot use argocd_mode='manage'")
         if argocd_mode == "none":
             return []
         if argocd_install_type == "none":
             return []
-        if argocd_mode == "manage" and self.role == "validator":
-            raise ValueError("validator role cannot use argocd_mode='manage'")
 
         permissions = list(self.ARGOCD_BASE_CLUSTER_PERMISSIONS)
         # F9: Only require argocds permissions when operator-installed Argo CD
