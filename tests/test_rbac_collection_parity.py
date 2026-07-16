@@ -230,8 +230,8 @@ def test_collection_rejects_validator_argocd_manage_like_python(argocd_install_t
 
 
 # Operator-installed Argo CD ("operator") and undetermined installs ("unknown") both
-# require the argocds discovery permission; vanilla installs omit it because the CRD
-# is absent. Expressed as normalized (api_group, resource, verb, namespace) tuples.
+# require the argocds discovery permission; "vanilla" (no argocds CRD) and "none"
+# (no Argo CD) omit it. Expressed as normalized (api_group, resource, verb, namespace) tuples.
 _ARGOCDS_DISCOVERY_PERMISSIONS = {
     ("argoproj.io", "argocds", "get", None),
     ("argoproj.io", "argocds", "list", None),
@@ -242,18 +242,22 @@ _ARGOCDS_DISCOVERY_PERMISSIONS = {
 @pytest.mark.parametrize(
     ("argocd_install_type", "expect_argocds"),
     [
-        ("unknown", True),
+        ("none", False),
         ("vanilla", False),
+        ("operator", True),
+        ("unknown", True),
     ],
 )
 def test_collection_argocd_check_install_type_permissions_match_python(role, argocd_install_type, expect_argocds):
     """Argo CD check mode derives identical argocds discovery permissions on both sides.
 
-    For ``argocd_install_type="unknown"`` both the Python validator and the collection
-    expansion must include ``argoproj.io/argocds`` (get, list); for ``"vanilla"`` both
-    must omit it. This closes the ``check/unknown`` parity gap: without it the collection
-    condition ``!= "vanilla"`` could be mutated to ``== "operator"`` and silently drop the
-    argocds discovery permission for ``unknown`` installs while ``operator`` stayed intact.
+    Across every install type in issue #176's invariant surface (none, vanilla, operator,
+    unknown), the Python validator and the collection expansion must agree on the full
+    permission set and on whether ``argoproj.io/argocds`` (get, list) is required:
+    ``operator`` and ``unknown`` require it, while ``vanilla`` and ``none`` omit it.
+    This closes the ``check/unknown`` parity gap: without it the collection condition
+    ``!= "vanilla"`` could be mutated to ``== "operator"`` and silently drop the argocds
+    discovery permission for ``unknown`` installs while ``operator`` stayed intact.
     """
     python_permissions = set(
         _python_hub_permissions(
