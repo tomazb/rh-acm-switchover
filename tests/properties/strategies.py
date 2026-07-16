@@ -211,6 +211,7 @@ class RbacSelectorCase:
 class InvalidRbacSelectorCase(RbacSelectorCase):
     """One deliberately invalid selector combination and its rejection token."""
 
+    invalid_kind: str
     expected_error: str
 
 
@@ -1783,6 +1784,7 @@ def invalid_rbac_selector_cases(draw: st.DrawFn) -> InvalidRbacSelectorCase:
         "argocd_mode": "none",
         "argocd_install_type": draw(argocd_install_types()),
         "decommission_only": False,
+        "invalid_kind": invalid_kind,
     }
     if invalid_kind == "validator_manage":
         common["argocd_mode"] = "manage"
@@ -1797,9 +1799,19 @@ def invalid_rbac_selector_cases(draw: st.DrawFn) -> InvalidRbacSelectorCase:
 
 
 @st.composite
-def collection_invalid_managed_selector_cases(draw: st.DrawFn) -> InvalidRbacSelectorCase:
-    """Generate managed-scope combinations rejected by the collection expander."""
-    invalid_kind = draw(st.sampled_from(("managed_argocd", "managed_decommission")))
+def collection_only_invalid_rbac_selector_cases(draw: st.DrawFn) -> InvalidRbacSelectorCase:
+    """Generate selector guards exposed only by the collection expander."""
+    invalid_kind = draw(
+        st.sampled_from(
+            (
+                "managed_argocd",
+                "managed_include_decommission",
+                "validator_decommission_only",
+                "managed_old_hub_finalization",
+                "managed_decommission_only",
+            )
+        )
+    )
     common = {
         "role": draw(rbac_roles()),
         "scope": "managed_cluster",
@@ -1809,11 +1821,23 @@ def collection_invalid_managed_selector_cases(draw: st.DrawFn) -> InvalidRbacSel
         "argocd_mode": "none",
         "argocd_install_type": draw(argocd_install_types()),
         "decommission_only": False,
+        "invalid_kind": invalid_kind,
     }
     if invalid_kind == "managed_argocd":
         common["argocd_mode"] = "check"
         expected_error = "argocd_mode"
-    else:
+    elif invalid_kind == "managed_include_decommission":
         common["include_decommission"] = True
         expected_error = "include_decommission"
+    elif invalid_kind == "validator_decommission_only":
+        common["role"] = "validator"
+        common["scope"] = "hub"
+        common["decommission_only"] = True
+        expected_error = "decommission_only"
+    elif invalid_kind == "managed_old_hub_finalization":
+        common["include_old_hub_finalization"] = True
+        expected_error = "include_old_hub_finalization"
+    else:
+        common["decommission_only"] = True
+        expected_error = "decommission_only"
     return InvalidRbacSelectorCase(**common, expected_error=expected_error)

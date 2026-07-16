@@ -34,7 +34,7 @@ from tests.properties.strategies import (
     PermissionTableCase,
     RbacSelectorCase,
     argocd_install_types,
-    collection_invalid_managed_selector_cases,
+    collection_only_invalid_rbac_selector_cases,
     drifted_expected_removals,
     invalid_argocd_modes,
     invalid_rbac_selector_cases,
@@ -59,6 +59,115 @@ ARGOCDS_DISCOVERY_READS = {
     ("argoproj.io", "argocds", "get", None),
     ("argoproj.io", "argocds", "list", None),
 }
+
+# This exact baseline is intentionally test-owned rather than derived from either
+# production permission catalog.  It independently pins the documented validator
+# read contract, including namespace scope, for every semantic selector domain.
+VALIDATOR_HUB_REQUIRED_READS: frozenset[Permission] = frozenset(
+    {
+        ("", "namespaces", "get", None),
+        ("", "namespaces", "list", None),
+        ("", "nodes", "get", None),
+        ("", "nodes", "list", None),
+        ("config.openshift.io", "clusteroperators", "get", None),
+        ("config.openshift.io", "clusteroperators", "list", None),
+        ("config.openshift.io", "clusterversions", "get", None),
+        ("config.openshift.io", "clusterversions", "list", None),
+        ("cluster.open-cluster-management.io", "managedclusters", "get", None),
+        ("cluster.open-cluster-management.io", "managedclusters", "list", None),
+        ("hive.openshift.io", "clusterdeployments", "get", None),
+        ("hive.openshift.io", "clusterdeployments", "list", None),
+        ("operator.open-cluster-management.io", "multiclusterhubs", "get", None),
+        ("operator.open-cluster-management.io", "multiclusterhubs", "list", None),
+        ("", "configmaps", "get", "open-cluster-management-backup"),
+        ("", "configmaps", "list", "open-cluster-management-backup"),
+        ("", "secrets", "get", "open-cluster-management-backup"),
+        ("", "pods", "get", "open-cluster-management-backup"),
+        ("", "pods", "list", "open-cluster-management-backup"),
+        (
+            "cluster.open-cluster-management.io",
+            "backupschedules",
+            "get",
+            "open-cluster-management-backup",
+        ),
+        (
+            "cluster.open-cluster-management.io",
+            "backupschedules",
+            "list",
+            "open-cluster-management-backup",
+        ),
+        (
+            "cluster.open-cluster-management.io",
+            "restores",
+            "get",
+            "open-cluster-management-backup",
+        ),
+        (
+            "cluster.open-cluster-management.io",
+            "restores",
+            "list",
+            "open-cluster-management-backup",
+        ),
+        ("velero.io", "backups", "get", "open-cluster-management-backup"),
+        ("velero.io", "backups", "list", "open-cluster-management-backup"),
+        ("velero.io", "restores", "get", "open-cluster-management-backup"),
+        ("velero.io", "restores", "list", "open-cluster-management-backup"),
+        ("velero.io", "backupstoragelocations", "get", "open-cluster-management-backup"),
+        ("velero.io", "backupstoragelocations", "list", "open-cluster-management-backup"),
+        ("oadp.openshift.io", "dataprotectionapplications", "get", "open-cluster-management-backup"),
+        ("oadp.openshift.io", "dataprotectionapplications", "list", "open-cluster-management-backup"),
+        ("", "pods", "get", "open-cluster-management"),
+        ("", "pods", "list", "open-cluster-management"),
+        ("", "configmaps", "get", "multicluster-engine"),
+        ("", "configmaps", "list", "multicluster-engine"),
+    }
+)
+VALIDATOR_OBSERVABILITY_REQUIRED_READS: frozenset[Permission] = frozenset(
+    {
+        (
+            "observability.open-cluster-management.io",
+            "multiclusterobservabilities",
+            "get",
+            None,
+        ),
+        (
+            "observability.open-cluster-management.io",
+            "multiclusterobservabilities",
+            "list",
+            None,
+        ),
+        ("", "pods", "get", "open-cluster-management-observability"),
+        ("", "pods", "list", "open-cluster-management-observability"),
+        ("", "secrets", "get", "open-cluster-management-observability"),
+        ("apps", "deployments", "get", "open-cluster-management-observability"),
+        ("apps", "deployments", "list", "open-cluster-management-observability"),
+        ("apps", "statefulsets", "get", "open-cluster-management-observability"),
+        ("apps", "statefulsets", "list", "open-cluster-management-observability"),
+        ("route.openshift.io", "routes", "get", "open-cluster-management-observability"),
+    }
+)
+VALIDATOR_MANAGED_CLUSTER_REQUIRED_READS: frozenset[Permission] = frozenset(
+    {
+        ("", "secrets", "get", "open-cluster-management-agent"),
+        ("apps", "deployments", "get", "open-cluster-management-agent"),
+    }
+)
+
+
+def _permission_sort_key(permission: Permission) -> tuple[str, str, str, int, str]:
+    """Sort cluster and namespace scopes without comparing ``None`` to strings."""
+    api_group, resource, verb, namespace = permission
+    return api_group, resource, verb, 0 if namespace is None else 1, namespace or ""
+
+
+def _sorted_permissions(permissions: Iterable[Permission]) -> list[Permission]:
+    """Return deterministic diagnostics while preserving original namespace values."""
+    return sorted(permissions, key=_permission_sort_key)
+
+
+def _sorted_permission_counts(counts: Mapping[Permission, int]) -> list[tuple[Permission, int]]:
+    """Render permission multiplicity with the shared mixed-scope ordering."""
+    return [(permission, counts[permission]) for permission in _sorted_permissions(counts)]
 
 
 def _load_collection_rbac_module() -> Any:
@@ -220,6 +329,20 @@ def _collection_permissions(case: RbacSelectorCase | InvalidRbacSelectorCase) ->
     )
 
 
+def _collection_permissions_raw(case: RbacSelectorCase) -> list[Permission]:
+    """Run the real Collection expander while preserving pre-normalization multiplicity."""
+    original_deduplicator = collection_rbac._deduplicate_permissions
+
+    def preserve_multiplicity(permissions: list[Permission]) -> list[Permission]:
+        return list(permissions)
+
+    collection_rbac._deduplicate_permissions = preserve_multiplicity
+    try:
+        return _collection_permissions(case)
+    finally:
+        collection_rbac._deduplicate_permissions = original_deduplicator
+
+
 def _run_python_invalid_cluster_validation(case: InvalidRbacSelectorCase) -> None:
     """Invoke the Python validator's real selector guards without Kubernetes I/O."""
     validator = _validator_for(case.role)
@@ -242,8 +365,8 @@ def _assert_permission_sets_equal(
     collection_set = set(collection_permissions)
     assert collection_set == python_set, (
         f"Unapproved Python/collection RBAC divergence for {case!r}.\n"
-        f"  Missing from collection: {sorted(python_set - collection_set)!r}\n"
-        f"  Unexpected in collection: {sorted(collection_set - python_set)!r}"
+        f"  Missing from collection: {_sorted_permissions(python_set - collection_set)!r}\n"
+        f"  Unexpected in collection: {_sorted_permissions(collection_set - python_set)!r}"
     )
 
 
@@ -253,6 +376,68 @@ def _permission_map(entries: Iterable[PermissionRow]) -> dict[tuple[str, str], s
 
 def _read_permissions(permissions: Iterable[Permission]) -> set[Permission]:
     return {permission for permission in permissions if permission[2] not in MUTATING_VERBS}
+
+
+def _expected_validator_reads(case: RbacSelectorCase) -> set[Permission]:
+    """Build the exact expected read baseline from independent test-owned sets."""
+    if case.scope == "managed_cluster":
+        return set(VALIDATOR_MANAGED_CLUSTER_REQUIRED_READS)
+
+    expected = set(VALIDATOR_HUB_REQUIRED_READS)
+    if not case.skip_observability:
+        expected.update(VALIDATOR_OBSERVABILITY_REQUIRED_READS)
+    if case.argocd_mode == "check" and case.argocd_install_type != "none":
+        expected.update(ARGOCD_BASE_READS)
+        if case.argocd_install_type != "vanilla":
+            expected.update(ARGOCDS_DISCOVERY_READS)
+    return expected
+
+
+def _assert_validator_read_contract(
+    implementation: str,
+    case: RbacSelectorCase,
+    permissions: Iterable[Permission],
+) -> None:
+    """Assert the independent baseline and diagnose missing or mis-scoped reads."""
+    expected = _expected_validator_reads(case)
+    actual = _read_permissions(permissions)
+    missing = expected - actual
+    unexpected = actual - expected
+    wrong_scope = []
+    for required in _sorted_permissions(missing):
+        observed = _sorted_permissions(
+            permission for permission in actual if permission[:3] == required[:3] and permission[3] != required[3]
+        )
+        if observed:
+            wrong_scope.append((required, observed))
+
+    assert actual == expected, (
+        f"{implementation} validator required-read contract mismatch for {case!r}.\n"
+        f"  Missing required reads: {_sorted_permissions(missing)!r}\n"
+        f"  Unexpected reads: {_sorted_permissions(unexpected)!r}\n"
+        f"  Wrong-scope matches: {wrong_scope!r}"
+    )
+
+
+def _expected_raw_duplicate_overlap(case: RbacSelectorCase) -> dict[Permission, int]:
+    """Return the one reviewed overlap produced before effective-set normalization."""
+    if (
+        case.role == "operator"
+        and case.scope == "hub"
+        and not case.decommission_only
+        and case.include_decommission
+        and case.include_old_hub_finalization
+        and not case.skip_observability
+    ):
+        return {
+            (
+                "observability.open-cluster-management.io",
+                "multiclusterobservabilities",
+                "delete",
+                None,
+            ): 2
+        }
+    return {}
 
 
 def _expected_operator_mutations(case: RbacSelectorCase) -> set[Permission]:
@@ -321,6 +506,37 @@ def _expected_operator_mutations(case: RbacSelectorCase) -> set[Permission]:
     if case.argocd_mode == "manage" and case.argocd_install_type != "none":
         expected.add(("argoproj.io", "applications", "patch", None))
     return expected
+
+
+def test_permission_diagnostics_stably_preserve_mixed_cluster_and_namespace_scopes() -> None:
+    mixed_scopes: set[Permission] = {
+        ("", "configmaps", "get", None),
+        ("", "configmaps", "get", "open-cluster-management-backups"),
+    }
+
+    ordered = _sorted_permissions(mixed_scopes)
+    assert ordered == [
+        ("", "configmaps", "get", None),
+        ("", "configmaps", "get", "open-cluster-management-backups"),
+    ]
+    assert ordered[0][3] is None
+
+    case = RbacSelectorCase(
+        role="operator",
+        scope="hub",
+        include_decommission=False,
+        include_old_hub_finalization=False,
+        skip_observability=False,
+        argocd_mode="none",
+        argocd_install_type="none",
+        decommission_only=False,
+    )
+    with pytest.raises(AssertionError, match="Missing from collection") as error:
+        _assert_permission_sets_equal(case, list(mixed_scopes), [])
+
+    message = str(error.value)
+    assert repr(("", "configmaps", "get", None)) in message
+    assert repr(("", "configmaps", "get", "open-cluster-management-backups")) in message
 
 
 @given(permission_table_cases())
@@ -417,7 +633,19 @@ def test_validator_expansions_never_contain_mutation_verbs(case: RbacSelectorCas
         ("Collection", collection_permissions),
     ):
         unexpected = {permission for permission in permissions if permission[2] in MUTATING_VERBS}
-        assert not unexpected, f"{implementation} validator mutation permissions for {case!r}: {sorted(unexpected)!r}"
+        assert not unexpected, (
+            f"{implementation} validator mutation permissions for {case!r}: " f"{_sorted_permissions(unexpected)!r}"
+        )
+    _assert_permission_sets_equal(case, python_permissions, collection_permissions)
+
+
+@given(rbac_selector_cases(role="validator"))
+def test_validator_expansions_match_independent_required_read_contract(case: RbacSelectorCase) -> None:
+    python_permissions = _python_permissions(case)
+    collection_permissions = _collection_permissions(case)
+
+    _assert_validator_read_contract("Python", case, python_permissions)
+    _assert_validator_read_contract("Collection", case, collection_permissions)
     _assert_permission_sets_equal(case, python_permissions, collection_permissions)
 
 
@@ -435,8 +663,8 @@ def test_operator_expansions_contain_exact_required_mutation_surfaces(case: Rbac
         actual = {permission for permission in permissions if permission[2] in MUTATING_VERBS}
         assert actual == expected, (
             f"{implementation} operator mutation surface mismatch for {case!r}.\n"
-            f"  Missing required mutations: {sorted(expected - actual)!r}\n"
-            f"  Unexpected mutations: {sorted(actual - expected)!r}"
+            f"  Missing required mutations: {_sorted_permissions(expected - actual)!r}\n"
+            f"  Unexpected mutations: {_sorted_permissions(actual - expected)!r}"
         )
 
 
@@ -468,7 +696,7 @@ def test_operator_cluster_reads_superset_validator_cluster_reads(
         "Operator cluster reads do not cover validator cluster reads for "
         f"mode={argocd_mode!r}, install_type={argocd_install_type!r}, "
         f"skip_observability={skip_observability!r}: "
-        f"missing={sorted(validator_cluster - operator_cluster)!r}"
+        f"missing={_sorted_permissions(validator_cluster - operator_cluster)!r}"
     )
 
 
@@ -482,6 +710,7 @@ def test_operator_cluster_reads_superset_validator_cluster_reads(
         argocd_mode="manage",
         argocd_install_type="none",
         decommission_only=False,
+        invalid_kind="validator_manage",
         expected_error="validator role cannot use",
     )
 )
@@ -496,8 +725,8 @@ def test_invalid_role_feature_combinations_are_rejected_by_both_forms(case: Inva
     assert case.expected_error in str(collection_error.value), f"Unexpected collection rejection for {case!r}"
 
 
-@given(collection_invalid_managed_selector_cases())
-def test_collection_rejects_invalid_managed_scope_feature_combinations(case: InvalidRbacSelectorCase) -> None:
+@given(collection_only_invalid_rbac_selector_cases())
+def test_collection_rejects_collection_only_invalid_selector_combinations(case: InvalidRbacSelectorCase) -> None:
     with pytest.raises(ValueError) as collection_error:
         _collection_permissions(case)
 
@@ -540,11 +769,12 @@ def test_vanilla_argocd_omits_argocds_but_keeps_base_reads(role_mode: tuple[str,
         permission_set = set(permissions)
         argocds = {permission for permission in permission_set if permission[1] == "argocds"}
         assert not argocds, (
-            f"{implementation} vanilla installation required argocds discovery for {case!r}: " f"{sorted(argocds)!r}"
+            f"{implementation} vanilla installation required argocds discovery for {case!r}: "
+            f"{_sorted_permissions(argocds)!r}"
         )
         assert ARGOCD_BASE_READS <= permission_set, (
             f"{implementation} vanilla installation lost Argo CD base reads for {case!r}: "
-            f"{sorted(ARGOCD_BASE_READS - permission_set)!r}"
+            f"{_sorted_permissions(ARGOCD_BASE_READS - permission_set)!r}"
         )
 
 
@@ -574,8 +804,8 @@ def _assert_operator_or_unknown_install_discovery_reads(
         argocds = {permission for permission in permissions if permission[1] == "argocds"}
         assert argocds == ARGOCDS_DISCOVERY_READS, (
             f"{implementation} Argo CD operator-install discovery mismatch for {case!r}: "
-            f"missing={sorted(ARGOCDS_DISCOVERY_READS - argocds)!r}, "
-            f"unexpected={sorted(argocds - ARGOCDS_DISCOVERY_READS)!r}"
+            f"missing={_sorted_permissions(ARGOCDS_DISCOVERY_READS - argocds)!r}, "
+            f"unexpected={_sorted_permissions(argocds - ARGOCDS_DISCOVERY_READS)!r}"
         )
 
 
@@ -619,13 +849,14 @@ def test_argocd_none_mode_preserves_base_and_adds_no_argocd_permissions(
     ):
         permission_set = set(permissions)
         unexpected = {permission for permission in permission_set if permission[1] in ARGOCD_RESOURCES}
-        assert (
-            not unexpected
-        ), f"{implementation} Argo CD none mode added permissions for {case!r}: {sorted(unexpected)!r}"
+        assert not unexpected, (
+            f"{implementation} Argo CD none mode added permissions for {case!r}: "
+            f"{_sorted_permissions(unexpected)!r}"
+        )
         assert permission_set == expected_base, (
             f"{implementation} Argo CD none mode changed unrelated base permissions for {case!r}: "
-            f"missing={sorted(expected_base - permission_set)!r}, "
-            f"unexpected={sorted(permission_set - expected_base)!r}"
+            f"missing={_sorted_permissions(expected_base - permission_set)!r}, "
+            f"unexpected={_sorted_permissions(permission_set - expected_base)!r}"
         )
 
 
@@ -644,24 +875,23 @@ def test_normalized_permission_expansions_contain_no_duplicate_tuples(case: Rbac
 def test_python_raw_expansion_contains_only_documented_duplicate_overlap(case: RbacSelectorCase) -> None:
     counts = Counter(_python_permissions_raw(case))
     duplicates = {permission: count for permission, count in counts.items() if count > 1}
-    expected: dict[Permission, int] = {}
-    if (
-        case.role == "operator"
-        and case.scope == "hub"
-        and not case.decommission_only
-        and case.include_decommission
-        and case.include_old_hub_finalization
-        and not case.skip_observability
-    ):
-        expected[
-            (
-                "observability.open-cluster-management.io",
-                "multiclusterobservabilities",
-                "delete",
-                None,
-            )
-        ] = 2
+    expected = _expected_raw_duplicate_overlap(case)
 
     assert duplicates == expected, (
-        f"Unexpected raw Python permission duplication for {case!r}: " f"expected={expected!r}, actual={duplicates!r}"
+        f"Unexpected raw Python permission duplication for {case!r}: "
+        f"expected={_sorted_permission_counts(expected)!r}, "
+        f"actual={_sorted_permission_counts(duplicates)!r}"
+    )
+
+
+@given(rbac_selector_cases())
+def test_collection_raw_expansion_contains_only_documented_duplicate_overlap(case: RbacSelectorCase) -> None:
+    counts = Counter(_collection_permissions_raw(case))
+    duplicates = {permission: count for permission, count in counts.items() if count > 1}
+    expected = _expected_raw_duplicate_overlap(case)
+
+    assert duplicates == expected, (
+        f"Unexpected raw Collection permission duplication for {case!r}: "
+        f"expected={_sorted_permission_counts(expected)!r}, "
+        f"actual={_sorted_permission_counts(duplicates)!r}"
     )
