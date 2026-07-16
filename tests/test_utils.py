@@ -4,6 +4,7 @@ Modernized pytest tests with fixtures, markers, and better organization.
 Tests cover StateManager, Phase enum, version comparison, and logging setup.
 """
 
+import json
 import os
 from unittest.mock import MagicMock, patch
 
@@ -204,6 +205,155 @@ class TestStateManager:
             mock_write.reset_mock()
             sm.set_config("method", "passive")
             mock_write.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "value,mutate",
+        [
+            pytest.param(
+                {"method": "passive"},
+                lambda item: item.__setitem__("method", "full"),
+                id="dictionary",
+            ),
+            pytest.param(
+                ["passive"],
+                lambda item: item.__setitem__(0, "full"),
+                id="list",
+            ),
+            pytest.param(
+                {"modes": [{"method": "passive"}]},
+                lambda item: item["modes"][0].__setitem__("method", "full"),
+                id="nested-dictionary-list",
+            ),
+        ],
+    )
+    def test_set_config_isolates_caller_owned_mutable_values(self, tmp_path, value, mutate):
+        """Mutating caller-owned input must not change memory or durable config."""
+        state_path = tmp_path / "state-config-set-alias.json"
+        sm = StateManager(str(state_path))
+        expected = json.loads(json.dumps(value))
+
+        sm.set_config("operation", value)
+        mutate(value)
+
+        assert sm.state["config"]["operation"] == expected
+        assert json.loads(state_path.read_text())["config"]["operation"] == expected
+
+    @pytest.mark.parametrize(
+        "stored,mutate",
+        [
+            pytest.param(
+                {"method": "passive"},
+                lambda item: item.__setitem__("method", "full"),
+                id="dictionary",
+            ),
+            pytest.param(
+                ["passive"],
+                lambda item: item.__setitem__(0, "full"),
+                id="list",
+            ),
+            pytest.param(
+                {"modes": [{"method": "passive"}]},
+                lambda item: item["modes"][0].__setitem__("method", "full"),
+                id="nested-dictionary-list",
+            ),
+        ],
+    )
+    def test_get_config_returns_isolated_mutable_values(self, tmp_path, stored, mutate):
+        """Mutating a retrieved value must not change memory or durable config."""
+        state_path = tmp_path / "state-config-get-alias.json"
+        sm = StateManager(str(state_path))
+        sm.set_config("operation", stored)
+        expected = json.loads(json.dumps(stored))
+
+        returned = sm.get_config("operation")
+        mutate(returned)
+
+        assert sm.state["config"]["operation"] == expected
+        assert json.loads(state_path.read_text())["config"]["operation"] == expected
+
+    def test_set_config_explicit_mutable_update_persists(self, tmp_path):
+        """A modified retrieved copy must persist when passed back explicitly."""
+        state_path = tmp_path / "state-config-explicit-update.json"
+        sm = StateManager(str(state_path))
+        sm.set_config("operation", {"modes": [{"method": "passive"}]})
+        updated = sm.get_config("operation")
+        updated["modes"][0]["method"] = "full"
+
+        sm.set_config("operation", updated)
+
+        expected = {"modes": [{"method": "full"}]}
+        assert sm.state["config"]["operation"] == expected
+        assert json.loads(state_path.read_text())["config"]["operation"] == expected
+
+    def test_set_config_repeated_equal_mutable_update_is_idempotent(self, tmp_path):
+        """An equal mutable value must remain write-free after ownership isolation."""
+        state_path = tmp_path / "state-config-mutable-idempotent.json"
+        sm = StateManager(str(state_path))
+        sm.set_config("operation", {"modes": ["passive"]})
+
+        with patch.object(sm, "_write_state", wraps=sm._write_state) as mock_write:
+            sm.set_config("operation", {"modes": ["passive"]})
+
+        mock_write.assert_not_called()
+
+    @pytest.mark.parametrize("value", [None, "passive", True, False, 0, 42, 1.5])
+    def test_set_get_config_preserves_json_scalar_behavior(self, state_manager, value):
+        """Immutable JSON scalars and explicit None retain their value semantics."""
+        state_manager.set_config("scalar", value)
+
+        assert "scalar" in state_manager.state["config"]
+        assert state_manager.get_config("scalar") == value
+
+    def test_get_config_returns_absent_mutable_default_without_retaining_it(self, state_manager):
+        """An absent-key default remains caller-owned and is never stored."""
+        default = {"modes": ["passive"]}
+
+        returned = state_manager.get_config("missing", default)
+        returned["modes"].append("full")
+
+        assert returned is default
+        assert "missing" not in state_manager.state["config"]
+
+    def test_capture_state_snapshot_isolates_nested_config(self, tmp_path):
+        """Mutating a captured snapshot must not change memory or durable state."""
+        state_path = tmp_path / "state-config-snapshot.json"
+        sm = StateManager(str(state_path))
+        sm.set_config("operation", {"modes": [{"method": "passive"}]})
+
+        snapshot = sm.capture_state_snapshot()
+        snapshot["config"]["operation"]["modes"][0]["method"] = "full"
+
+        expected = {"modes": [{"method": "passive"}]}
+        assert sm.state["config"]["operation"] == expected
+        assert json.loads(state_path.read_text())["config"]["operation"] == expected
+
+    def test_restore_state_snapshot_isolates_snapshot_input(self, tmp_path):
+        """Mutating a restored snapshot input must not change memory or disk."""
+        state_path = tmp_path / "state-config-restore-snapshot.json"
+        sm = StateManager(str(state_path))
+        sm.set_config("operation", {"modes": [{"method": "passive"}]})
+        snapshot = sm.capture_state_snapshot()
+
+        sm.set_config("operation", {"modes": [{"method": "temporary"}]})
+        sm.restore_state_snapshot(snapshot)
+        snapshot["config"]["operation"]["modes"][0]["method"] = "full"
+
+        expected = {"modes": [{"method": "passive"}]}
+        assert sm.state["config"]["operation"] == expected
+        assert json.loads(state_path.read_text())["config"]["operation"] == expected
+
+    def test_reloaded_config_values_follow_getter_ownership_contract(self, tmp_path):
+        """Values loaded from JSON must remain isolated when returned to callers."""
+        state_path = tmp_path / "state-config-reload.json"
+        StateManager(str(state_path)).set_config("operation", {"modes": [{"method": "passive"}]})
+        reloaded = StateManager(str(state_path))
+
+        returned = reloaded.get_config("operation")
+        returned["modes"][0]["method"] = "full"
+
+        expected = {"modes": [{"method": "passive"}]}
+        assert reloaded.state["config"]["operation"] == expected
+        assert json.loads(state_path.read_text())["config"]["operation"] == expected
 
     def test_reentrant_flush_preserves_dirty_state(self, tmp_path):
         """State changed during a flush must be persisted by a follow-up flush."""

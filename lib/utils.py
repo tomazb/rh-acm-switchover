@@ -568,17 +568,20 @@ class StateManager:
         return StepContext(self, step_name, logger)
 
     def set_config(self, key: str, value: Any) -> None:
-        """Store configuration value."""
+        """Store an owned copy of a JSON-native configuration value."""
         config = self.state["config"]
         if key in config and config[key] == value:
             return
-        config[key] = value
+        config[key] = copy.deepcopy(value)
         self._dirty = True
         self.save_state()
 
     def get_config(self, key: str, default: Any = None) -> Any:
-        """Retrieve configuration value."""
-        return self.state["config"].get(key, default)
+        """Return an isolated copy of a stored value, or the caller-owned default."""
+        config = self.state["config"]
+        if key not in config:
+            return default
+        return copy.deepcopy(config[key])
 
     def add_error(self, error: str, phase: Optional[str] = None) -> None:
         """Record an error."""
