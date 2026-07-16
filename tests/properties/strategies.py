@@ -33,6 +33,19 @@ SAFE_IDENTIFIER_CHARS = ASCII_ALNUM + "._-"
 UNSAFE_PATH_CHARS = "~${}|&;<>`"
 CONTROL_PATH_CHARS = "\x01\t\n\r"
 OVERLONG_PATH_COMPONENT_SIZE = 300
+RBAC_READ_VERBS = ("get", "list", "watch")
+RBAC_MUTATING_VERBS = ("create", "update", "patch", "delete")
+RBAC_PERMISSION_VERBS = RBAC_READ_VERBS + RBAC_MUTATING_VERBS
+RBAC_ROLES = ("operator", "validator")
+RBAC_SCOPES = ("hub", "managed_cluster")
+RBAC_ARGOCD_MODES = ("none", "check", "manage")
+RBAC_ARGOCD_INSTALL_TYPES = ("none", "vanilla", "operator", "unknown")
+RBAC_INVALID_ARGOCD_MODES = ("", "CHECK", "invalid", "manage ")
+RBAC_VALID_ARGOCD_ROLE_MODE_PAIRS = (
+    ("operator", "check"),
+    ("operator", "manage"),
+    ("validator", "check"),
+)
 
 
 @dataclass(frozen=True)
@@ -170,6 +183,36 @@ class ArgocdResumeCase:
     original_sync_policy: dict[str, Any]
     marker_mode: str
     autosync_enabled: bool
+
+
+@dataclass(frozen=True)
+class PermissionTableCase:
+    """Unique-key operator permissions and their exact mutating-verb removals."""
+
+    operator_permissions: list[tuple[str, str, list[str]]]
+    expected_removals: dict[tuple[str, str], frozenset[str]]
+
+
+@dataclass(frozen=True)
+class RbacSelectorCase:
+    """One valid bounded selector combination for RBAC expansion."""
+
+    role: str
+    scope: str
+    include_decommission: bool
+    include_old_hub_finalization: bool
+    skip_observability: bool
+    argocd_mode: str
+    argocd_install_type: str
+    decommission_only: bool
+
+
+@dataclass(frozen=True)
+class InvalidRbacSelectorCase(RbacSelectorCase):
+    """One deliberately invalid selector combination and its rejection token."""
+
+    invalid_kind: str
+    expected_error: str
 
 
 @st.composite
@@ -1567,3 +1610,234 @@ def gitops_marker_metadata(draw: st.DrawFn) -> dict[str, dict[str, str]]:
     if draw(st.booleans()):
         metadata["annotations"]["argocd.argoproj.io/tracking-id"] = draw(_dns_label(max_size=24))
     return metadata
+
+
+def rbac_roles() -> SearchStrategy[str]:
+    """Generate the two supported RBAC roles."""
+    return st.sampled_from(RBAC_ROLES)
+
+
+def argocd_install_types() -> SearchStrategy[str]:
+    """Generate every bounded Argo CD installation type understood by RBAC expansion."""
+    return st.sampled_from(RBAC_ARGOCD_INSTALL_TYPES)
+
+
+def invalid_argocd_modes() -> SearchStrategy[str]:
+    """Generate bounded mode values rejected by the Python RBAC helper contract."""
+    return st.sampled_from(RBAC_INVALID_ARGOCD_MODES)
+
+
+def valid_argocd_role_mode_pairs() -> SearchStrategy[tuple[str, str]]:
+    """Generate valid check/manage combinations without filtering examples."""
+    return st.sampled_from(RBAC_VALID_ARGOCD_ROLE_MODE_PAIRS)
+
+
+@st.composite
+def permission_table_cases(draw: st.DrawFn) -> PermissionTableCase:
+    """Generate unique resource rows with readable verbs and exact removal metadata."""
+    keys = draw(
+        st.lists(
+            st.tuples(
+                st.sampled_from(
+                    (
+                        "",
+                        "apps",
+                        "argoproj.io",
+                        "cluster.open-cluster-management.io",
+                        "observability.open-cluster-management.io",
+                    )
+                ),
+                st.sampled_from(
+                    (
+                        "applications",
+                        "backupschedules",
+                        "configmaps",
+                        "deployments",
+                        "managedclusters",
+                        "restores",
+                        "statefulsets",
+                    )
+                ),
+            ),
+            min_size=0,
+            max_size=8,
+            unique=True,
+        )
+    )
+    operator_permissions = []
+    expected_removals = {}
+    for api_group, resource in keys:
+        verbs = draw(
+            st.lists(
+                st.sampled_from(RBAC_PERMISSION_VERBS),
+                min_size=0,
+                max_size=8,
+            )
+        )
+        operator_permissions.append((api_group, resource, verbs))
+        stripped = frozenset(verbs) & frozenset(RBAC_MUTATING_VERBS)
+        if stripped:
+            expected_removals[(api_group, resource)] = stripped
+    return PermissionTableCase(
+        operator_permissions=operator_permissions,
+        expected_removals=expected_removals,
+    )
+
+
+@st.composite
+def drifted_expected_removals(
+    draw: st.DrawFn,
+    case: PermissionTableCase,
+) -> dict[tuple[str, str], frozenset[str]]:
+    """Generate an expected-removals map guaranteed to disagree with the table."""
+    drifted = dict(case.expected_removals)
+    options = ["extra"]
+    if drifted:
+        options.extend(("missing", "different"))
+    mutation = draw(st.sampled_from(options))
+
+    if mutation == "extra":
+        drifted[("pbt.invalid", "synthetic-resource")] = frozenset({"patch"})
+    else:
+        key = draw(st.sampled_from(tuple(drifted)))
+        if mutation == "missing":
+            del drifted[key]
+        else:
+            replacement = frozenset({"delete"})
+            if drifted[key] == replacement:
+                replacement = frozenset({"create"})
+            drifted[key] = replacement
+    return drifted
+
+
+@st.composite
+def rbac_selector_cases(draw: st.DrawFn, *, role: str | None = None) -> RbacSelectorCase:
+    """Generate valid role, scope, feature, and Argo CD selector combinations."""
+    selected_role = role or draw(rbac_roles())
+    scope = draw(st.sampled_from(RBAC_SCOPES))
+    skip_observability = draw(st.booleans())
+    argocd_install_type = draw(argocd_install_types())
+
+    if scope == "managed_cluster":
+        return RbacSelectorCase(
+            role=selected_role,
+            scope=scope,
+            include_decommission=False,
+            include_old_hub_finalization=False,
+            skip_observability=skip_observability,
+            argocd_mode="none",
+            argocd_install_type=argocd_install_type,
+            decommission_only=False,
+        )
+
+    decommission_only = selected_role == "operator" and draw(st.booleans())
+    if decommission_only:
+        return RbacSelectorCase(
+            role=selected_role,
+            scope=scope,
+            include_decommission=True,
+            include_old_hub_finalization=False,
+            skip_observability=skip_observability,
+            argocd_mode="none",
+            argocd_install_type=argocd_install_type,
+            decommission_only=True,
+        )
+
+    if selected_role == "validator":
+        include_decommission = False
+        include_old_hub_finalization = False
+        argocd_mode = draw(st.sampled_from(("none", "check")))
+    else:
+        include_decommission = draw(st.booleans())
+        include_old_hub_finalization = draw(st.booleans())
+        argocd_mode = draw(st.sampled_from(RBAC_ARGOCD_MODES))
+    return RbacSelectorCase(
+        role=selected_role,
+        scope=scope,
+        include_decommission=include_decommission,
+        include_old_hub_finalization=include_old_hub_finalization,
+        skip_observability=skip_observability,
+        argocd_mode=argocd_mode,
+        argocd_install_type=argocd_install_type,
+        decommission_only=False,
+    )
+
+
+@st.composite
+def invalid_rbac_selector_cases(draw: st.DrawFn) -> InvalidRbacSelectorCase:
+    """Generate readable combinations rejected by both permission expanders."""
+    invalid_kind = draw(
+        st.sampled_from(
+            (
+                "validator_manage",
+                "validator_decommission",
+                "validator_finalization",
+            )
+        )
+    )
+    common = {
+        "role": "validator",
+        "scope": "hub",
+        "include_decommission": False,
+        "include_old_hub_finalization": False,
+        "skip_observability": draw(st.booleans()),
+        "argocd_mode": "none",
+        "argocd_install_type": draw(argocd_install_types()),
+        "decommission_only": False,
+        "invalid_kind": invalid_kind,
+    }
+    if invalid_kind == "validator_manage":
+        common["argocd_mode"] = "manage"
+        expected_error = "validator role cannot use"
+    elif invalid_kind == "validator_decommission":
+        common["include_decommission"] = True
+        expected_error = "include_decommission"
+    elif invalid_kind == "validator_finalization":
+        common["include_old_hub_finalization"] = True
+        expected_error = "include_old_hub_finalization"
+    return InvalidRbacSelectorCase(**common, expected_error=expected_error)
+
+
+@st.composite
+def collection_only_invalid_rbac_selector_cases(draw: st.DrawFn) -> InvalidRbacSelectorCase:
+    """Generate selector guards exposed only by the collection expander."""
+    invalid_kind = draw(
+        st.sampled_from(
+            (
+                "managed_argocd",
+                "managed_include_decommission",
+                "validator_decommission_only",
+                "managed_old_hub_finalization",
+                "managed_decommission_only",
+            )
+        )
+    )
+    common = {
+        "role": draw(rbac_roles()),
+        "scope": "managed_cluster",
+        "include_decommission": False,
+        "include_old_hub_finalization": False,
+        "skip_observability": draw(st.booleans()),
+        "argocd_mode": "none",
+        "argocd_install_type": draw(argocd_install_types()),
+        "decommission_only": False,
+        "invalid_kind": invalid_kind,
+    }
+    if invalid_kind == "managed_argocd":
+        common["argocd_mode"] = "check"
+        expected_error = "argocd_mode"
+    elif invalid_kind == "managed_include_decommission":
+        common["include_decommission"] = True
+        expected_error = "include_decommission"
+    elif invalid_kind == "validator_decommission_only":
+        common["role"] = "validator"
+        common["scope"] = "hub"
+        common["decommission_only"] = True
+        expected_error = "decommission_only"
+    elif invalid_kind == "managed_old_hub_finalization":
+        common["include_old_hub_finalization"] = True
+        expected_error = "include_old_hub_finalization"
+    else:
+        common["decommission_only"] = True
+        expected_error = "decommission_only"
+    return InvalidRbacSelectorCase(**common, expected_error=expected_error)
