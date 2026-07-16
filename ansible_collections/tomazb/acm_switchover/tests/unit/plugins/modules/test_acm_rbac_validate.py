@@ -705,14 +705,15 @@ def test_validator_role_rejects_decommission_permissions():
         )
 
 
-def test_validator_role_rejects_argocd_manage_permissions():
+@pytest.mark.parametrize("argocd_install_type", ["none", "vanilla", "operator", "unknown"])
+def test_validator_role_rejects_argocd_manage_permissions(argocd_install_type):
     with pytest.raises(ValueError, match="validator.*manage"):
         expand_rbac_requirements(
             role="validator",
             include_decommission=False,
             skip_observability=False,
             argocd_mode="manage",
-            argocd_install_type="operator",
+            argocd_install_type=argocd_install_type,
         )
 
 

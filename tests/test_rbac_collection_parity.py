@@ -207,14 +207,25 @@ def test_collection_rejects_validator_old_hub_finalization_like_python():
         )
 
 
-def test_collection_rejects_validator_argocd_manage_like_python():
+@pytest.mark.parametrize("argocd_install_type", ["none", "vanilla", "operator", "unknown"])
+def test_collection_rejects_validator_argocd_manage_like_python(argocd_install_type):
+    validator = RBACValidator.__new__(RBACValidator)
+    validator.role = "validator"
+
+    with pytest.raises(ValueError, match="validator.*manage"):
+        RBACValidator._get_argocd_cluster_permissions(  # type: ignore[misc]
+            validator,
+            argocd_mode="manage",
+            argocd_install_type=argocd_install_type,
+        )
+
     with pytest.raises(ValueError, match="validator.*manage"):
         expand_rbac_requirements(
             role="validator",
             include_decommission=False,
             skip_observability=False,
             argocd_mode="manage",
-            argocd_install_type="operator",
+            argocd_install_type=argocd_install_type,
         )
 
 
