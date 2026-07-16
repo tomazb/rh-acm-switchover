@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed Python Argo CD resume marker ownership so only an exact pause `run_id` match can restore sync policy or remove the marker, matching the Ansible collection. Python and collection patches now also include the Application `resourceVersion` observed during marker validation, so a backup or concurrent-run ownership change fails closed with a conflict instead of being overwritten. Missing markers remain true no-ops, while foreign markers are left untouched and reported as mismatches even when auto-sync is already enabled. This intentionally retires the implicit stale-marker cleanup introduced by `73dd6c33`: strict resume cannot prove ownership of a foreign marker, so operators must inspect and explicitly remove one they confirm is stale.
 - Fixed collection report artifact mode validation to reject permissions that omit owner read or owner write before filesystem mutation, preserving repeat-write idempotence and check-mode prediction. This collection-only mode-management correction does not change Python report content/path behavior or machine-readable report parity status.
 - Fixed `StateManager` configuration persistence so explicit `None` values are stored as present JSON nulls while repeated unchanged assignments remain write-free.
 - Fixed Python `--argocd-manage --dry-run` handling so switchover and restore-only flows still discover ACM-touching Argo CD Applications and report pause blockers instead of skipping the coordinator path entirely.

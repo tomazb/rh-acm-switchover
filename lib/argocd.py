@@ -799,47 +799,11 @@ def resume_autosync(
         )
     if not current:
         return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason="not found")
-    ann = (current.get("metadata") or {}).get("annotations") or {}
+    metadata = current.get("metadata") or {}
+    ann = metadata.get("annotations") or {}
     marker = ann.get(ARGOCD_PAUSED_BY_ANNOTATION)
     if marker != run_id:
         if not marker:
-            return ResumeResult(
-                namespace=namespace,
-                name=name,
-                restored=False,
-                skip_reason=RESUME_SKIP_REASON_MARKER_MISSING,
-            )
-        # Marker mismatch: the passive-sync restore may have overwritten our
-        # marker with one from an older backup.  If auto-sync is already
-        # enabled the app is functional — just remove the stale marker.
-        current_policy = (current.get("spec") or {}).get("syncPolicy") or {}
-        if current_policy.get("automated") is not None:
-            logger.info(
-                "Application %s/%s has stale marker %s (expected %s) " "but auto-sync is already enabled; cleaning up",
-                namespace,
-                name,
-                marker,
-                run_id,
-            )
-            cleanup_patch = {
-                "metadata": {"annotations": {ARGOCD_PAUSED_BY_ANNOTATION: None}},
-            }
-            try:
-                client.patch_custom_resource(
-                    group=ARGOCD_APP_GROUP,
-                    version=ARGOCD_APP_VERSION,
-                    plural=ARGOCD_APP_PLURAL,
-                    name=name,
-                    patch=cleanup_patch,
-                    namespace=namespace or None,
-                )
-            except Exception as e:
-                logger.warning(
-                    "Failed to clean stale marker on %s/%s: %s",
-                    namespace,
-                    name,
-                    e,
-                )
             return ResumeResult(
                 namespace=namespace,
                 name=name,
@@ -852,8 +816,24 @@ def resume_autosync(
             restored=False,
             skip_reason=RESUME_SKIP_REASON_MARKER_MISMATCH,
         )
+    resource_version = metadata.get("resourceVersion")
+    if not resource_version:
+        logger.warning(
+            "Application %s/%s has no resourceVersion; refusing unsafe resume patch",
+            namespace,
+            name,
+        )
+        return ResumeResult(
+            namespace=namespace,
+            name=name,
+            restored=False,
+            skip_reason="resourceVersion missing; refusing unsafe resume",
+        )
     patch = {
-        "metadata": {"annotations": {ARGOCD_PAUSED_BY_ANNOTATION: None}},
+        "metadata": {
+            "resourceVersion": resource_version,
+            "annotations": {ARGOCD_PAUSED_BY_ANNOTATION: None},
+        },
         "spec": {"syncPolicy": original_sync_policy},
     }
     try:

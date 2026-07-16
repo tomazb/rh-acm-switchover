@@ -63,6 +63,7 @@
         name: "{{ item.metadata.name }}"
         definition:
           metadata:
+            resourceVersion: "{{ item.metadata.resourceVersion }}"
             annotations:
               acm-switchover.argoproj.io/paused-by: null
               acm-switchover.argoproj.io/original-sync-policy: null

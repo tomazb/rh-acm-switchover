@@ -391,3 +391,17 @@ def test_resume_patch_has_no_empty_run_id_wildcard():
     assert (
         "paused-by'] == _argocd_expected_run_id" in when_text
     ), "patch task must require exact run_id match on the paused-by annotation"
+
+
+def test_resume_patch_uses_discovered_resource_version_precondition():
+    """The patch must fail closed when Application ownership changes after discovery."""
+    tasks_list = _load_resume_tasks()
+    block_tasks = tasks_list[0]["block"]
+    patch_tasks = [t for t in block_tasks if "kubernetes.core.k8s" in t]
+    assert len(patch_tasks) == 1, "Expected exactly one k8s patch task in resume.yml"
+
+    patch_task = patch_tasks[0]
+    metadata = patch_task["kubernetes.core.k8s"]["definition"]["metadata"]
+    assert metadata["resourceVersion"] == "{{ item.metadata.resourceVersion }}"
+    assert patch_task.get("ignore_errors") is not True
+    assert "failed_when" not in patch_task
