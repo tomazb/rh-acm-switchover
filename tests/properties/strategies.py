@@ -148,6 +148,30 @@ class AcmVersionCase:
     components: tuple[int, int, int]
 
 
+@dataclass(frozen=True)
+class ArgocdApplicationCase:
+    """One semantic Argo CD Application and its independent safety oracle."""
+
+    app: dict[str, Any]
+    autosync_enabled: bool
+    resource_state: str
+    acm_resource_count: int
+    applicationset_owned: bool
+
+
+@dataclass(frozen=True)
+class ArgocdResumeCase:
+    """One resume target with explicit marker and auto-sync state."""
+
+    namespace: str
+    name: str
+    run_id: str
+    current_app: dict[str, Any]
+    original_sync_policy: dict[str, Any]
+    marker_mode: str
+    autosync_enabled: bool
+
+
 @st.composite
 def _bounded_token(
     draw: st.DrawFn,
@@ -1282,3 +1306,264 @@ def invalid_file_modes() -> SearchStrategy[str | int]:
         st.sampled_from((0, "0000", 0o200, "0200", 0o400, "0400", 0o444, "0444", 0o066, "0066")),
     )
     return st.one_of(non_manageable, malformed, negative, above_range)
+
+
+ARGOCD_ACM_NAMESPACES = (
+    "open-cluster-management",
+    "open-cluster-management-agent-addon",
+    "open-cluster-management-backups",
+    "open-cluster-management-observability",
+    "open-cluster-management-global-set",
+    "multicluster-engine",
+    "local-cluster",
+)
+ARGOCD_ACM_KINDS = (
+    "MultiClusterHub",
+    "MultiClusterEngine",
+    "MultiClusterObservability",
+    "ManagedCluster",
+    "ManagedClusterSet",
+    "ManagedClusterSetBinding",
+    "Placement",
+    "PlacementBinding",
+    "Policy",
+    "PolicySet",
+    "BackupSchedule",
+    "Restore",
+    "DataProtectionApplication",
+    "ClusterDeployment",
+)
+ARGOCD_UNRELATED_NAMESPACES = ("default", "tenant-a", "team-platform")
+ARGOCD_UNRELATED_KINDS = ("ConfigMap", "Deployment", "Secret", "Service")
+
+
+def argocd_run_ids() -> SearchStrategy[str]:
+    """Generate compact run identifiers suitable for pause-marker tests."""
+    return _bounded_token(
+        first_alphabet=LOWER_ALNUM,
+        interior_alphabet=DNS_LABEL_INTERIOR,
+        last_alphabet=LOWER_ALNUM,
+        max_size=24,
+    )
+
+
+def argocd_sync_policies() -> SearchStrategy[dict[str, Any]]:
+    """Generate bounded valid-shaped syncPolicy dictionaries."""
+    automated = st.one_of(
+        st.none(),
+        st.fixed_dictionaries(
+            {},
+            optional={
+                "prune": st.booleans(),
+                "selfHeal": st.booleans(),
+                "allowEmpty": st.booleans(),
+            },
+        ),
+    )
+    return st.fixed_dictionaries(
+        {},
+        optional={
+            "automated": automated,
+            "syncOptions": st.lists(
+                st.sampled_from(("CreateNamespace=true", "PruneLast=true", "ApplyOutOfSyncOnly=true")),
+                max_size=3,
+                unique=True,
+            ),
+            "retry": st.fixed_dictionaries({"limit": st.integers(min_value=0, max_value=5)}),
+        },
+    )
+
+
+@st.composite
+def _argocd_resource(draw: st.DrawFn, impact_mode: str) -> dict[str, str]:
+    """Build one valid-shaped Argo CD status.resources entry."""
+    if impact_mode == "acm_namespace":
+        namespace = draw(st.sampled_from(ARGOCD_ACM_NAMESPACES))
+        kind = draw(st.sampled_from(ARGOCD_UNRELATED_KINDS))
+    elif impact_mode == "acm_kind":
+        namespace = draw(st.sampled_from(ARGOCD_UNRELATED_NAMESPACES))
+        kind = draw(st.sampled_from(ARGOCD_ACM_KINDS))
+    else:
+        namespace = draw(st.sampled_from(ARGOCD_UNRELATED_NAMESPACES))
+        kind = draw(st.sampled_from(ARGOCD_UNRELATED_KINDS))
+    return {
+        "group": draw(st.sampled_from(("", "apps", "cluster.open-cluster-management.io"))),
+        "version": draw(st.sampled_from(("v1", "v1beta1", "v1alpha1"))),
+        "kind": kind,
+        "namespace": namespace,
+        "name": draw(_dns_label(max_size=24)),
+    }
+
+
+@st.composite
+def argocd_application_cases(
+    draw: st.DrawFn,
+    *,
+    namespace: str | None = None,
+    name: str | None = None,
+    autosync_mode: str | None = None,
+    resource_state: str | None = None,
+    applicationset_owned: bool | None = None,
+    impact_mode: str | None = None,
+) -> ArgocdApplicationCase:
+    """Generate a small semantic Application with an independent safety oracle."""
+    namespace = namespace or draw(_dns_label(max_size=24))
+    name = name or draw(_dns_label(max_size=24))
+    autosync_mode = autosync_mode or draw(st.sampled_from(("missing", "null", "enabled")))
+    resource_state = resource_state or draw(st.sampled_from(("missing", "empty", "stale", "current")))
+    if applicationset_owned is None:
+        applicationset_owned = draw(st.booleans())
+
+    sync_policy = draw(argocd_sync_policies())
+    if autosync_mode == "missing":
+        sync_policy.pop("automated", None)
+    elif autosync_mode == "null":
+        sync_policy["automated"] = None
+    else:
+        sync_policy["automated"] = draw(
+            st.fixed_dictionaries(
+                {},
+                optional={"prune": st.booleans(), "selfHeal": st.booleans()},
+            )
+        )
+
+    generation = draw(st.integers(min_value=1, max_value=20))
+    metadata: dict[str, Any] = {
+        "namespace": namespace,
+        "name": name,
+        "annotations": draw(_string_map(max_size=2)),
+        "generation": generation,
+        "resourceVersion": str(draw(st.integers(min_value=1, max_value=10_000))),
+    }
+    owner_references = []
+    if draw(st.booleans()):
+        owner_references.append({"apiVersion": "v1", "kind": "ConfigMap", "name": "unrelated-owner"})
+    if applicationset_owned:
+        owner_references.append(
+            {
+                "apiVersion": "argoproj.io/v1alpha1",
+                "kind": "ApplicationSet",
+                "name": draw(_dns_label(max_size=24)),
+            }
+        )
+    if owner_references:
+        metadata["ownerReferences"] = owner_references
+
+    app: dict[str, Any] = {"metadata": metadata, "spec": {"syncPolicy": sync_policy}}
+    acm_resource_count = 0
+    if resource_state == "missing":
+        if draw(st.booleans()):
+            app["status"] = {}
+    elif resource_state == "empty":
+        app["status"] = {"observedGeneration": generation, "resources": []}
+    else:
+        if impact_mode in {"acm_namespace", "acm_kind"}:
+            impact_modes = [impact_mode] + draw(
+                st.lists(st.sampled_from(("acm_namespace", "acm_kind", "unrelated")), max_size=4)
+            )
+        elif impact_mode == "unrelated":
+            impact_modes = ["unrelated"] * draw(st.integers(min_value=1, max_value=5))
+        else:
+            impact_modes = draw(
+                st.lists(
+                    st.sampled_from(("acm_namespace", "acm_kind", "unrelated")),
+                    min_size=1,
+                    max_size=5,
+                )
+            )
+        resources = [draw(_argocd_resource(mode)) for mode in impact_modes]
+        acm_resource_count = sum(mode != "unrelated" for mode in impact_modes)
+        observed_generation = generation - 1 if resource_state == "stale" else generation
+        app["status"] = {
+            "observedGeneration": observed_generation,
+            "resources": resources,
+        }
+
+    return ArgocdApplicationCase(
+        app=app,
+        autosync_enabled=autosync_mode == "enabled",
+        resource_state=resource_state,
+        acm_resource_count=acm_resource_count,
+        applicationset_owned=applicationset_owned,
+    )
+
+
+@st.composite
+def argocd_application_lists(draw: st.DrawFn) -> list[ArgocdApplicationCase]:
+    """Generate Applications with unique namespace/name identities."""
+    identities = draw(
+        st.lists(
+            st.tuples(_dns_label(max_size=16), _dns_label(max_size=16)),
+            min_size=0,
+            max_size=8,
+            unique=True,
+        )
+    )
+    return [draw(argocd_application_cases(namespace=namespace, name=name)) for namespace, name in identities]
+
+
+@st.composite
+def argocd_resume_cases(
+    draw: st.DrawFn,
+    *,
+    marker_mode: str | None = None,
+) -> ArgocdResumeCase:
+    """Generate resume inputs spanning matching, foreign, and missing markers."""
+    namespace = draw(_dns_label(max_size=24))
+    name = draw(_dns_label(max_size=24))
+    run_id = draw(argocd_run_ids())
+    marker_mode = marker_mode or draw(st.sampled_from(("matches", "mismatches", "missing")))
+    autosync_enabled = draw(st.booleans())
+
+    annotations = draw(_string_map(max_size=2))
+    if marker_mode == "matches":
+        annotations["acm-switchover.argoproj.io/paused-by"] = run_id
+    elif marker_mode == "mismatches":
+        foreign_run_id = draw(argocd_run_ids().filter(lambda candidate: candidate != run_id))
+        annotations["acm-switchover.argoproj.io/paused-by"] = foreign_run_id
+
+    current_sync_policy = draw(argocd_sync_policies())
+    if autosync_enabled:
+        current_sync_policy["automated"] = draw(
+            st.fixed_dictionaries({}, optional={"prune": st.booleans(), "selfHeal": st.booleans()})
+        )
+    else:
+        current_sync_policy.pop("automated", None)
+
+    current_app = {
+        "metadata": {
+            "namespace": namespace,
+            "name": name,
+            "annotations": annotations,
+            "resourceVersion": str(draw(st.integers(min_value=1, max_value=10_000))),
+        },
+        "spec": {"syncPolicy": current_sync_policy},
+    }
+    original_sync_policy = draw(argocd_sync_policies())
+    original_sync_policy["automated"] = draw(
+        st.fixed_dictionaries({}, optional={"prune": st.booleans(), "selfHeal": st.booleans()})
+    )
+    return ArgocdResumeCase(
+        namespace=namespace,
+        name=name,
+        run_id=run_id,
+        current_app=current_app,
+        original_sync_policy=original_sync_policy,
+        marker_mode=marker_mode,
+        autosync_enabled=autosync_enabled,
+    )
+
+
+@st.composite
+def gitops_marker_metadata(draw: st.DrawFn) -> dict[str, dict[str, str]]:
+    """Generate metadata containing the generic unreliable instance marker."""
+    source = draw(st.sampled_from(("labels", "annotations")))
+    metadata = {"labels": draw(_string_map(max_size=2)), "annotations": draw(_string_map(max_size=2))}
+    metadata[source]["app.kubernetes.io/instance"] = draw(_dns_label(max_size=24))
+    if draw(st.booleans()):
+        metadata["labels"]["app.kubernetes.io/managed-by"] = draw(
+            st.sampled_from(("argocd", "flux", "helm", "custom-controller"))
+        )
+    if draw(st.booleans()):
+        metadata["annotations"]["argocd.argoproj.io/tracking-id"] = draw(_dns_label(max_size=24))
+    return metadata
