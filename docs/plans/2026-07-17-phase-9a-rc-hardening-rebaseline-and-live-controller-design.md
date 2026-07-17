@@ -214,10 +214,14 @@ Every observation records:
 - controller source revision and collector contract version;
 - redaction decision and raw-response retention status.
 
-Reads are `get`/`list` only, use explicit per-request timeouts, a fixed resource/query allowlist, bounded list size,
-and a controller-enforced total discovery deadline. No watch, exec, proxy, logs, arbitrary URL, shell string, or
-inherited environment is permitted. Concrete timeout and age durations become normative only when the implementing
-slice provides tests and an operational rationale; Phase 9A does not guess a universal five-minute validity rule.
+Reads are `get`/`list` only, use explicit per-request timeouts, a fixed resource/query allowlist, deterministic
+pagination, bounded total results, and a controller-enforced total discovery deadline. Every list follows the
+server-provided continuation token until the server proves completion. Repeated/invalid continuation tokens, reaching
+the result/deadline bound before completion, or any inability to prove that the list is complete is `BLOCKED`; a
+truncated list can never satisfy identity, role, inventory, or absence-of-extra-clusters assertions. No watch, exec,
+proxy, logs, arbitrary URL, shell string, or inherited environment is permitted. Concrete timeout and age durations
+become normative only when the implementing slice provides tests and an operational rationale; Phase 9A does not
+guess a universal five-minute validity rule.
 
 Freshness is a versioned controller policy, not an unqualified duration. Every evidence/profile artifact records
 `freshness_policy_id`, `freshness_policy_version`, `collected_at`, `profile_issued_at`, `expires_at`,
@@ -233,17 +237,21 @@ mixed-run or mixed-origin evidence, and missing timestamps fail closed. Cross-pr
 prohibited unless a later implementation defines and independently validates a trusted handoff protocol; no such
 handoff exists in Phases 9B-9F.
 
-The nonce is consumed immediately before the mutating adapter handoff, at the same point the immutable
-`mutation_started` marker is written. Failed authorization, adapter-handoff failure, role or evidence change, retry,
-expiry, or prior nonce consumption invalidates the evidence set, profile, and authorization. Immediate
-pre-mutation identity, role, managed-cluster, GitOps, RBAC, backup/restore, compatibility, freshness, and nonce
-revalidation is mandatory regardless of artifact age.
+The nonce consumption and immutable `mutation_started` state are persisted together in one durable transactional or
+compare-and-swap journal record before the mutating adapter handoff. The handoff is prohibited unless that record is
+durable. Recovery treats the presence of either field in a legacy/partial record, an indeterminate journal result, or
+a failed journal read as `MUTATION_STARTED` and `RECOVERY_REQUIRED`; it never reconstructs pre-mutation authority.
+Failed authorization, adapter-handoff failure, role or evidence change, retry, expiry, or prior nonce consumption
+invalidates the evidence set, profile, and authorization. Immediate pre-mutation identity, role, managed-cluster,
+GitOps, RBAC, backup/restore, compatibility, freshness, and nonce revalidation is mandatory regardless of artifact
+age.
 
 ### 4. Managed-cluster proof
 
-Live certification supports exactly one, two, or three expected managed clusters. The generated profile binds the
-exact ordered set of names and a hash; count alone is insufficient. `local-cluster` is handled separately and cannot
-satisfy an expected managed-cluster entry.
+Live certification supports exactly one, two, or three expected managed clusters. Before hashing or comparison, the
+controller excludes `local-cluster` and canonically sorts both expected and observed entries by managed-cluster name,
+then UID hash. The generated profile binds that canonical exact set and its hash; count or caller-provided ordering is
+insufficient. `local-cluster` is handled separately and cannot satisfy an expected managed-cluster entry.
 
 For every expected cluster the controller requires:
 
@@ -355,10 +363,11 @@ most one catalog scenario classified `lab_mutating` is allowed. Non-mutating pre
 may surround it, but bootstrap, reset, recovery, failure injection, and decommission each count as their own
 lab-mutating scenario.
 
-`mutation_started` is set conservatively before control is handed to a mutating adapter, not after the adapter reports
-its first successful API mutation. Crossing this handoff permanently disables automatic retry for the segment even
-when the eventual error looks transient. A later segment cannot mutate until fresh discovery independently proves
-the prior final state and a newly generated profile passes all gates.
+Nonce consumption and `mutation_started` are durably recorded together in the crash-consistent journal before control
+is handed to a mutating adapter, not after the adapter reports its first successful API mutation. Any partial,
+indeterminate, or unreadable record is treated as mutation started. Crossing this handoff permanently disables
+automatic retry for the segment even when the eventual error looks transient. A later segment cannot mutate until
+fresh discovery independently proves the prior final state and a newly generated profile passes all gates.
 
 ### 9. Retry state machine
 
@@ -428,11 +437,13 @@ contact/observation only and cannot by itself make a run live-certification elig
 `purpose=lab_preparation`, `evidence_class=LAB_PREPARATION_ONLY`, `certification_eligible=false`,
 `live_certification_evidence=false`, and `may_have_mutated_lab=true`, plus the preparation plan/reference, source
 revision, controller decision, physical identity bindings, preparation actions, final observed state, redaction
-status, and writer/schema version. It writes to a separate preparation artifact namespace/directory. Writers accept
-only allowlisted evidence classes and reject relabeling or merging preparation output into certification scenario
-results. A certification run may reference preparation provenance, but must freshly discover identity, roles,
-managed clusters, GitOps, RBAC, backup/restore, and compatibility afterward. Redaction failure blocks publication.
-A successful preparation artifact never authorizes mutation or certification.
+status, writer/schema version, and `preparation_profile_hash`. That hash binds the preparation plan/reference, source
+revision, physical identity bindings, expected action set, and preparation artifact namespace; it is not a
+certification profile hash. The writer uses a separate preparation artifact namespace/directory. Writers accept only
+allowlisted evidence classes and reject relabeling or merging preparation output into certification scenario results.
+A certification run may reference preparation provenance, but must freshly discover identity, roles, managed
+clusters, GitOps, RBAC, backup/restore, and compatibility afterward. Redaction failure blocks publication. A
+successful preparation artifact never authorizes mutation or certification.
 
 Minimum segment artifacts:
 
@@ -451,10 +462,12 @@ Minimum segment artifacts:
 Minimum run artifacts add ordered segment references, role-transition graph, scenario-specific normalized parity,
 recovery state, eligibility decision, final summary, and human-readable report.
 
-Every artifact includes schema version, run/segment ID, source revision, profile hash, evidence-source type,
-collector/adapter version, started/completed timestamps, and parent artifact hashes. Failed redaction makes the bundle
-non-publishable and non-certification-eligible. A dirty checkout blocks certification. A future explicit diagnostic
-override may run read-only diagnostics, but the artifact class is `diagnostic_live` and eligibility remains false.
+Every artifact includes schema version, run/segment ID, source revision, the evidence-class-appropriate binding hash
+(`profile_hash` for certification/diagnostic artifacts or `preparation_profile_hash` for
+`LAB_PREPARATION_ONLY`), evidence-source type, collector/adapter version, started/completed timestamps, and parent
+artifact hashes. Failed redaction makes the bundle non-publishable and non-certification-eligible. A dirty checkout
+blocks certification. A future explicit diagnostic override may run read-only diagnostics, but the artifact class is
+`diagnostic_live` and eligibility remains false.
 
 ### 12. Controller versus Agent authority
 
@@ -554,9 +567,10 @@ validator/PR-comment-resolver workflow, and a separate reviewable PR. No slice m
 - **Expected files/modules:** new `tests/release/lab_controller/live_discovery.py`; minimal integration in
   `read_only_live_transport.py`/`read_only_backend.py`; controller artifact schema/writer updates; focused tests and
   design docs. No production CLI/collection changes.
-- **Tests:** typed real-client adapter with fake API server; timeouts/bounds; swapped/duplicate/changed/unreadable
-  identity; stale/skewed/mixed-origin evidence; one-to-three managed-cluster inventory; unsafe payload/redaction;
-  no-mutation static guards.
+- **Tests:** typed real-client adapter with fake API server; timeouts/bounds; complete multi-page reads and
+  repeated/invalid/truncated pagination rejection; swapped/duplicate/changed/unreadable identity;
+  stale/skewed/mixed-origin evidence; one-to-three canonically ordered managed-cluster inventory; unsafe
+  payload/redaction; no-mutation static guards.
 - **Artifact contract:** `live_read_only`, source/profile/config hashes, timestamps, origin, identity evidence hashes,
   query inventory, managed-cluster observations, recursive redaction audit; always
   `live_certification_evidence=false`.
@@ -620,8 +634,9 @@ validator/PR-comment-resolver workflow, and a separate reviewable PR. No slice m
 - **Artifact contract:** `purpose=lab_preparation`, `evidence_class=LAB_PREPARATION_ONLY`,
   `certification_eligible=false`, `live_certification_evidence=false`, `may_have_mutated_lab=true`, preparation
   plan/reference, source revision, controller decision, physical identity bindings, preparation actions, final
-  observed state, redaction status, writer/schema version, and final Phase 9B rediscovery reference. The writer uses a
-  separate namespace/directory and rejects relabeling or merge into certification scenario results.
+  observed state, redaction status, writer/schema version, `preparation_profile_hash`, and final Phase 9B rediscovery
+  reference. The writer uses a separate namespace/directory and rejects relabeling or merge into certification
+  scenario results.
 - **Entry gate:** disposable lab and one bootstrap segment explicitly authorized.
 - **Exit gate:** operator-proven preparation plus fresh Phase 9B/9C identity, role, managed-cluster, GitOps, RBAC,
   backup/restore, compatibility, and known-state proof. Preparation provenance may be referenced but never counted as
@@ -645,8 +660,9 @@ validator/PR-comment-resolver workflow, and a separate reviewable PR. No slice m
   failure injection, restore-only, decommission, or hostile GitOps lane.
 - **Expected files/modules:** controller-gated live entrypoint; immutable authorization/mutation marker; existing
   Python adapter integration; final-state evidence merger; no production Python CLI behavior changes.
-- **Tests:** gate ordering; no adapter call before authorization; mutation marker set before handoff; transport failure
-  after handoff becomes `RECOVERY_REQUIRED`; exact one-call invariant; final proof and redaction failure.
+- **Tests:** gate ordering; no adapter call before authorization; atomic nonce-consumption/mutation-start journal
+  durability before handoff; partial/indeterminate/unreadable journal recovery fails closed; transport failure after
+  handoff becomes `RECOVERY_REQUIRED`; exact one-call invariant; final proof and redaction failure.
 - **Artifact contract:** `live_mutating_segment`, full 9C inputs, operator authorization, one invocation, mutation
   marker, Python normalized evidence, final role/cluster/backup/GitOps proof, recursive redaction audit.
 - **Entry gate:** immediate full revalidation under the recognized freshness policy, with unconsumed one-use nonce,
@@ -723,6 +739,8 @@ designed slices after 9F. Their presence in the catalog or static fixtures does 
     cannot be relabeled or merged into passing scenario evidence.
 18. Read-only live evidence proves observation only, not release certification.
 19. The Agent cannot authorize, mutate, recover, retry, relabel, or override.
+20. Incomplete pagination, non-canonical managed-cluster inventory, or an indeterminate nonce/mutation journal blocks
+    authorization; an indeterminate journal after authorization is `RECOVERY_REQUIRED`.
 
 ## Rejected approaches
 
