@@ -5,6 +5,11 @@
 This document is both the design target for future live release validation and the implementation reference for
 the deterministic, non-live lab role controller now present under `tests/release/lab_controller/`.
 
+The authoritative Phase 9 sequencing, live trust boundary, and current-capability re-baseline are defined in
+[`Phase 9A — RC Hardening Re-baseline and Gated Live Lab-Controller Design`](../plans/2026-07-17-phase-9a-rc-hardening-rebaseline-and-live-controller-design.md).
+Its Phase 9A–9F numbering supersedes earlier Phase 9 labels in older readiness documents. This specification remains
+the implementation reference for completed non-live phases and does not itself authorize live execution.
+
 Phases 1 through 8P/8Q are implemented as non-live controller primitives, profile generation, provisional artifacts,
 dry-run request construction, non-executed invocation materialization, an explicitly gated local harness, a thin CLI
 wrapper for deterministic planning and redacted artifact emission, and static GitOps ownership/interference evidence
