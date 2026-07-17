@@ -364,6 +364,25 @@ Phase 7B Agent instructions for the non-live lab role controller live in
 They are orchestration guidance only: the Python controller owns truth, safety,
 and final decisions, and Phase 7A/7B does not authorize live execution.
 
+#### Phase 9 Live Controller Authority
+
+[`Phase 9A — RC Hardening Re-baseline and Gated Live Lab-Controller Design`](docs/plans/2026-07-17-phase-9a-rc-hardening-rebaseline-and-live-controller-design.md)
+is the authoritative Phase 9 sequencing and live trust-boundary design. Phase
+9B remains blocked until Phase 9A is merged and independently validated.
+
+- The Python lab controller owns lab truth, physical identity, logical roles,
+  profile binding, mutation authorization, recovery decisions, and GO/NO-GO.
+  Agent/Codex provides orchestration and explanation only and must not issue ad
+  hoc live mutations or override a controller decision.
+- A known-state segment may contain at most one lab-mutating scenario. Fresh
+  physical identity and logical-role proof is required before every mutation.
+- Fake, dry-run, static-fixture, injected-fake, and local-harness evidence is
+  not live certification evidence.
+- Phases 9B-9F each require a separate issue and the builder, independent
+  validator, and PR-comment-resolver/final-validator three-prompt workflow.
+- The protected-file rules above remain fully applicable to every Phase 9
+  slice.
+
 ### Pre-Push CI Guardrails
 
 **Run the CI-equivalent checks locally before opening a PR and again before merging it.** The `Code Quality Checks` job fails the PR if formatting drifts, so reproduce these exact commands locally first. The simplest path is `./run_tests.sh` (strict mode on by default runs `black`, `isort`, `mypy`, and `bandit`). To run the individual gates exactly as CI does — using the same scope `acm_switchover.py lib modules ansible_collections/tomazb/acm_switchover/plugins ansible_collections/tomazb/acm_switchover/tests tests`:
