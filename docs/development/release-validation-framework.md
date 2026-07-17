@@ -6,6 +6,17 @@ The release validation framework is a pytest-native certification path for ACM s
 
 Release validation is intentionally explicit. `./run_tests.sh` now runs the non-live `tests/release/` helper suite as its own local lane, and CI runs the same helper suite in a dedicated `Release Framework Tests` job. The live certification entrypoint is still marked `release` and is skipped unless an operator supplies a profile with `--release-profile` or `ACM_RELEASE_PROFILE`.
 
+The existing profile-driven entrypoint is not the future multi-segment live safety authority. The authoritative
+Phase 9 trust boundary and implementation gates are defined in
+[`Phase 9A — RC Hardening Re-baseline and Gated Live Lab-Controller Design`](../plans/2026-07-17-phase-9a-rc-hardening-rebaseline-and-live-controller-design.md).
+Until those later slices are implemented and independently validated, fake, dry-run, static-fixture, local-harness,
+and read-only-contact evidence cannot establish live ACM certification through the lab role controller.
+
+The existing profile-driven runner already supplies a live-capable `OcDiscoveryClient` for framework discovery.
+That read-only client capability is distinct from controller authority: current lab-controller integrations use
+fake/injected client paths, do not bind the required physical identity tuple into a live controller decision, and do
+not provide a controller entrypoint that emits certification-authoritative live discovery.
+
 ## Orchestration Flow
 
 The live certification entrypoint calls `tests.release.orchestrator.run_release_certification`, which wires:
@@ -135,6 +146,10 @@ Each run writes a timestamped artifact directory under the profile's artifact ro
 - `release-report.md` renders the operator-readable release validation report.
 
 The final `release-report.md` includes run identity, release metadata consistency, matrix validation, required and optional scenario results, mandatory Argo CD certification, runtime parity, recovery, artifact redaction, final baseline status, and the final GO/NO-GO decision.
+
+Future Phase 9 preparation output uses the separate allowlisted `LAB_PREPARATION_ONLY` evidence class and artifact
+namespace. It is always non-certification-eligible, cannot be relabeled or merged into passing scenario results, and
+may be referenced only as provenance before fresh controller discovery and authorization.
 
 ## Safety Notes
 
