@@ -507,9 +507,9 @@ class AutoImportStrategyValidator(BaseValidator):
 
         try:
             cm = client.get_configmap(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIGMAP)
-        except Exception as exc:
+        except Exception:
             # API / connection / RBAC issues - treat as non-critical
-            logger.debug("Error reading auto-import ConfigMap: %s", exc)
+            logger.debug("Unable to inspect the auto-import ConfigMap.")
             return "error"
 
         if not cm:
@@ -533,8 +533,8 @@ class AutoImportStrategyValidator(BaseValidator):
                 version=MANAGED_CLUSTER_API_VERSION,
                 plural=MANAGED_CLUSTER_PLURAL,
             )
-        except Exception as exc:
-            logger.debug("Error listing managedclusters for auto-import check: %s", exc)
+        except Exception:
+            logger.debug("Unable to inspect ManagedClusters for the auto-import check.")
             return 0
 
         return sum(1 for mc in mcs if mc.get("metadata", {}).get("name") != LOCAL_CLUSTER_NAME)

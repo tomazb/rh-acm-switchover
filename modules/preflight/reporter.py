@@ -3,7 +3,29 @@
 import logging
 from typing import Any, Dict, List
 
+from lib.constants import (
+    PREFLIGHT_PUBLIC_CHECK_CATEGORIES,
+    PREFLIGHT_PUBLIC_CHECK_FALLBACK,
+    PREFLIGHT_PUBLIC_CHECK_MAX_INPUT_LENGTH,
+)
+
 logger = logging.getLogger("acm_switchover")
+
+
+def _public_check_category(check: Any) -> str:
+    """Return a bounded, code-controlled category for public logging."""
+    if (
+        not isinstance(check, str)
+        or not check
+        or len(check) > PREFLIGHT_PUBLIC_CHECK_MAX_INPUT_LENGTH
+        or not check.isprintable()
+    ):
+        return PREFLIGHT_PUBLIC_CHECK_FALLBACK
+
+    for prefix, public_category in PREFLIGHT_PUBLIC_CHECK_CATEGORIES:
+        if check == prefix or check.startswith(f"{prefix} ") or check.startswith(f"{prefix} ("):
+            return public_category
+    return PREFLIGHT_PUBLIC_CHECK_FALLBACK
 
 
 class ValidationReporter:
@@ -36,12 +58,13 @@ class ValidationReporter:
             }
         )
 
+        public_check = _public_check_category(check)
         if passed:
-            logger.info(f"✓ {check}: {message}")
+            logger.info("✓ %s: passed", public_check)
         elif critical:
-            logger.error(f"✗ {check}: {message}")
+            logger.error("✗ %s: failed", public_check)
         else:
-            logger.warning(f"⚠ {check}: {message}")
+            logger.warning("⚠ %s: warning", public_check)
 
     def critical_failures(self) -> List[Dict[str, Any]]:
         """Get list of critical validation failures."""
@@ -60,7 +83,7 @@ class ValidationReporter:
             logger.error(f"{critical_failed} critical validation(s) failed!")
             logger.info("\nFailed checks:")
             for result in self.critical_failures():
-                logger.error(f"  ✗ {result['check']}: {result['message']}")
+                logger.error("  ✗ %s: failed", _public_check_category(result.get("check")))
         else:
             logger.info("All critical validations passed!")
 

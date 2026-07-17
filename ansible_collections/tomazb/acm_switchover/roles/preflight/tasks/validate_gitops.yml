@@ -41,9 +41,7 @@
   rescue:
     - name: Continue after primary hub Argo CD advisory discovery failure
       ansible.builtin.debug:
-        msg: >-
-          [primary] Unable to complete Argo CD check; continuing without blocking switchover:
-          {{ ansible_failed_result.msg | default(ansible_failed_result | string) }}
+        msg: "[primary] Unable to complete Argo CD check; continuing without private failure details"
 
     - name: Clear primary hub Argo CD advisory apps after discovery failure
       ansible.builtin.set_fact:
@@ -65,9 +63,7 @@
   rescue:
     - name: Continue after secondary hub Argo CD advisory discovery failure
       ansible.builtin.debug:
-        msg: >-
-          [secondary] Unable to complete Argo CD check; continuing without blocking switchover:
-          {{ ansible_failed_result.msg | default(ansible_failed_result | string) }}
+        msg: "[secondary] Unable to complete Argo CD check; continuing without private failure details"
 
     - name: Clear secondary hub Argo CD advisory apps after discovery failure
       ansible.builtin.set_fact:
@@ -98,36 +94,12 @@
     - not (acm_switchover_features.skip_gitops_check | default(false))
     - (_gitops_primary_argocd_acm_apps | default([]) | length) > 0
 
-- name: Report primary hub ACM-touching Argo CD Application details
-  ansible.builtin.debug:
-    msg: >-
-      - {{ app.namespace }}/{{ app.name }}
-      ({{ app.acm_resource_count | default(0) }} ACM resources)
-  loop: "{{ _gitops_primary_argocd_acm_apps | default([]) }}"
-  loop_control:
-    loop_var: app
-  when:
-    - not (acm_switchover_features.skip_gitops_check | default(false))
-    - (_gitops_primary_argocd_acm_apps | default([]) | length) > 0
-
 - name: Report secondary hub ACM-touching Argo CD Application count
   ansible.builtin.debug:
     msg: >-
       [secondary] ACM resources detected in
       {{ _gitops_secondary_argocd_acm_apps | default([]) | length }}
       Argo CD Application(s); pause/scope before switchover to avoid drift.
-  when:
-    - not (acm_switchover_features.skip_gitops_check | default(false))
-    - (_gitops_secondary_argocd_acm_apps | default([]) | length) > 0
-
-- name: Report secondary hub ACM-touching Argo CD Application details
-  ansible.builtin.debug:
-    msg: >-
-      - {{ app.namespace }}/{{ app.name }}
-      ({{ app.acm_resource_count | default(0) }} ACM resources)
-  loop: "{{ _gitops_secondary_argocd_acm_apps | default([]) }}"
-  loop_control:
-    loop_var: app
   when:
     - not (acm_switchover_features.skip_gitops_check | default(false))
     - (_gitops_secondary_argocd_acm_apps | default([]) | length) > 0

@@ -198,7 +198,7 @@
 
     - name: Re-raise failure
       ansible.builtin.fail:
-        msg: "{{ ansible_failed_result.msg | default('Phase preflight failed') }}"
+        msg: "Phase preflight failed; review the structured preflight evidence and private controller diagnostics."
 
 - name: Persist report and summary facts
   ansible.builtin.include_tasks: write_report.yml
@@ -208,7 +208,7 @@
   ansible.builtin.fail:
     msg: >-
       Preflight failed with {{ acm_switchover_preflight_summary.critical_failures }} critical finding(s).
-      See {{ acm_switchover_preflight_result.path }} for details.
+      See the structured preflight report artifact for details.
   when:
     - not ((_checkpoint_enter | default({})).skipped_phase | default(false))
     - not acm_switchover_preflight_summary.passed

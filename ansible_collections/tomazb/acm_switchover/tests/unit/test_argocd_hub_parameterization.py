@@ -5,10 +5,38 @@ import pathlib
 import yaml
 
 ROLE_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles" / "argocd_manage" / "tasks"
+PREFLIGHT_TASKS_DIR = ROLE_DIR.parents[1] / "preflight" / "tasks"
 
 
 def _load_yaml(name: str) -> list[dict]:
     return yaml.safe_load((ROLE_DIR / name).read_text())
+
+
+def _preflight_public_output() -> str:
+    """Collect every message Ansible can emit directly from preflight tasks."""
+    public_messages = []
+    for path in PREFLIGHT_TASKS_DIR.rglob("*.yml"):
+        pending = list(yaml.safe_load(path.read_text()) or [])
+        while pending:
+            task = pending.pop()
+            if isinstance(task, list):
+                pending.extend(task)
+                continue
+            if not isinstance(task, dict):
+                continue
+            pending.extend(task.get("block", []))
+            pending.extend(task.get("rescue", []))
+            pending.extend(task.get("always", []))
+            for action, field in (
+                ("ansible.builtin.debug", "msg"),
+                ("ansible.builtin.fail", "msg"),
+                ("ansible.builtin.assert", "fail_msg"),
+            ):
+                action_data = task.get(action)
+                if isinstance(action_data, dict) and field in action_data:
+                    public_messages.append(str(action_data[field]))
+
+    return "\n".join(public_messages)
 
 
 def test_pause_uses_parameterized_hub():
@@ -201,8 +229,19 @@ def test_preflight_gitops_runs_read_only_argocd_advisory_on_expected_hubs():
     assert "acm_switchover_operation.restore_only" in text
     assert "acm_switchover_features.argocd.manage" in text
     assert "ACM resources detected" in text
-    assert "app.namespace" in text
-    assert "app.name" in text
+    public_output = _preflight_public_output()
+    assert "ansible_failed_result.msg" not in public_output
+    assert "ansible_failed_result | string" not in public_output
+    assert "app.namespace" not in public_output
+    assert "app.name" not in public_output
+
+
+def test_preflight_public_output_omits_private_failure_and_path_fields():
+    """Collection debug/fail output must use stable public text."""
+    public_output = _preflight_public_output()
+    assert "ansible_failed_result" not in public_output
+    assert "_rbac_argocd_app_crd_hub.msg" not in public_output
+    assert "acm_switchover_preflight_result.path" not in public_output
 
 
 def test_finalization_does_not_auto_resume():

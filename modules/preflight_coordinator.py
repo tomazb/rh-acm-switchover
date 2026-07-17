@@ -122,10 +122,8 @@ class PreflightValidator:
             except ApiException as exc:
                 if exc.status == 403:
                     logger.info(
-                        "Unable to inspect Argo CD CRDs on %s hub (%s %s); deferring to RBAC validation.",
+                        "Unable to inspect Argo CD CRDs on %s hub; deferring to RBAC validation.",
                         hub_label,
-                        exc.status,
-                        exc.reason,
                     )
                     discovery_unknown = True
                     install_types[hub_label] = "unknown"
@@ -212,10 +210,8 @@ class PreflightValidator:
                     critical=True,
                 )
                 logger.warning(
-                    "RBAC validation could not complete due to an API error (%s %s). "
-                    "You can skip this check with --skip-rbac-validation.",
-                    e.status,
-                    e.reason,
+                    "RBAC validation could not complete due to an API error. "
+                    "You can skip this check with --skip-rbac-validation."
                 )
             else:
                 self.reporter.add_result(
@@ -306,11 +302,7 @@ class PreflightValidator:
                 f"Failed to list primary ManagedClusters for restore expectation: {e.status} {e.reason}",
                 critical=True,
             )
-            logger.warning(
-                "Unable to list primary ManagedClusters for restore expectation (%s %s).",
-                e.status,
-                e.reason,
-            )
+            logger.warning("Unable to list primary ManagedClusters for restore expectation.")
             return []
 
     def _expected_managed_cluster_names(self) -> List[str]:
