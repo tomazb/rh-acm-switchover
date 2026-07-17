@@ -46,9 +46,12 @@ an independently reviewed, gated lab execution supplies the required artifacts.
 
 Fake discovery, injected fake clients, fake executors, dry-run materialization, non-executed invocation plans, local
 command-runner harnesses, checked-in profiles, and static Kustomize fixtures are never live implementation or live
-certification evidence. The Phase 8J transport can invoke an injected client, but the repository supplies only fake
-clients in tests, the operator CLI does not integrate it, and its result forcibly keeps
-`live_certification_evidence=false`. It is therefore foundation code, not proven live discovery.
+certification evidence. The existing release framework has a live-capable `OcDiscoveryClient`, but the current lab
+controller does not integrate it as an authoritative identity collector. The Phase 8J controller transport accepts
+only an injected client protocol, its repository integrations and tests use fake/injected paths, the operator
+controller CLI does not integrate authoritative live discovery, and its result forcibly keeps
+`live_certification_evidence=false`. Read-only transport capability is therefore not controller-owned live identity
+proof or live certification authority.
 
 ## Current architecture and selected direction
 
@@ -125,7 +128,7 @@ Totals at the Phase 9A base: `IMPLEMENTED_AND_PROVEN=5`, `PARTIALLY_IMPLEMENTED=
 
 | Decision or activity | Authority | Inputs | Fail-closed result |
 | --- | --- | --- | --- |
-| Raw cluster reads and response adaptation | Future `tests/release/lab_controller/live_discovery.py` behind a typed, bounded client | Explicit runtime handles and allowlisted read queries | `BLOCKED` or pre-mutation `INFRA_RETRYABLE`; never infer missing facts |
+| Raw cluster reads and response adaptation | Future `tests/release/lab_controller/live_discovery.py` behind a typed, bounded client | Explicit runtime handles and allowlisted read queries | Apply the retry state machine below; never infer missing facts or retain evidence across attempts |
 | Physical identity decision | Python lab controller identity decision engine | Raw identity observations plus enrolled expected fingerprints | Mismatch/duplicate is `NO_GO`; unreadable is blocking |
 | Logical role and exact managed-cluster decision | Python lab controller role decision engine | Fresh normalized ACM, backup/restore, and managed-cluster evidence | Ambiguity is `NO_GO` or `RECOVERY_REQUIRED`; never default a role |
 | Compatibility approval | External compatibility evidence generator plus controller validator | Current official sources, versions, support category, expiry, hash | Missing, expired, contradictory, or unapproved evidence is `BLOCKED` |
@@ -157,8 +160,10 @@ identity tuples. Handling is deterministic:
 - duplicate live identity for both labels: `NO_GO`;
 - changed UID, trust anchor, or infrastructure identity: `NO_GO` and explicit operator re-enrollment; never silently
   update the expected record;
-- unreadable required identity before any mutation: `INFRA_RETRYABLE` only for a typed transient read failure within
-  the bounded read policy; otherwise `BLOCKED`;
+- unreadable required identity with no authoritative observation: `CONTACT_NOT_ESTABLISHED`; a typed transport failure
+  may be reported as `INFRA_RETRYABLE` only under the bounded retry state machine below;
+- any incomplete, stale, mismatched, duplicate, ambiguous, or contradictory identity observation:
+  `PARTIAL_OR_CONFLICTING_EVIDENCE`; never an ordinary transport retry;
 - identity loss or change after mutation was authorized: `RECOVERY_REQUIRED`;
 - context-name agreement without the required tuple: `BLOCKED`.
 
@@ -188,8 +193,8 @@ BackupSchedule or Restore presence alone is insufficient. Required evidence fami
 - both hubs active: `NO_GO` for suspected split brain;
 - neither active with both hubs readable: `RECOVERY_REQUIRED`;
 - exactly one active but secondary evidence contradicts it: `RECOVERY_REQUIRED`;
-- partial or unknown role evidence before mutation: `BLOCKED`, or `INFRA_RETRYABLE` only for a typed bounded
-  pre-mutation read failure;
+- partial or unknown role evidence before mutation: `PARTIAL_OR_CONFLICTING_EVIDENCE`, resulting in `BLOCKED`,
+  `NO_GO`, or `RECOVERY_REQUIRED` according to the evidence; never an ordinary transport retry;
 - role evidence changes during the authorization window: invalidate the profile and restart discovery.
 
 ### 3. Discovery authority, origin, and freshness
@@ -209,15 +214,30 @@ Every observation records:
 - controller source revision and collector contract version;
 - redaction decision and raw-response retention status.
 
-Reads are `get`/`list` only, use explicit timeouts no greater than 30 seconds per request, a fixed resource/query
-allowlist, bounded list size, and a total discovery deadline no greater than five minutes. No watch, exec, proxy,
-logs, arbitrary URL, shell string, or inherited environment is permitted.
+Reads are `get`/`list` only, use explicit per-request timeouts, a fixed resource/query allowlist, bounded list size,
+and a controller-enforced total discovery deadline. No watch, exec, proxy, logs, arbitrary URL, shell string, or
+inherited environment is permitted. Concrete timeout and age durations become normative only when the implementing
+slice provides tests and an operational rationale; Phase 9A does not guess a universal five-minute validity rule.
 
-One evidence set must complete within five minutes with no more than 60 seconds of timestamp skew among required
-role observations. It expires five minutes after collection, and identity/role/profile authorization must be
-reconfirmed within 60 seconds immediately before the mutation handoff. Future-dated, mixed-run, mixed-origin,
-missing-timestamp, excessive-skew, or expired evidence is rejected. A typed transient failure can yield
-pre-mutation `INFRA_RETRYABLE`; malformed, forbidden, or contradictory data cannot.
+Freshness is a versioned controller policy, not an unqualified duration. Every evidence/profile artifact records
+`freshness_policy_id`, `freshness_policy_version`, `collected_at`, `profile_issued_at`, `expires_at`,
+`configured_max_age`, `controller_hard_max_age`, and a one-use authorization nonce. A release profile may shorten
+`configured_max_age`, but it cannot extend it beyond `controller_hard_max_age`. A missing, invalid, or unrecognized
+policy fails closed. `expires_at` is computed from `profile_issued_at` under the validated policy, while evidence age
+is measured from collection completion; neither value permits mutation without immediate fresh revalidation.
+
+The controller uses its local trusted wall clock for UTC artifact timestamps and a monotonic clock for elapsed-time
+enforcement within one process. Server timestamps are corroborating evidence, not a replacement for the controller
+clock. Clock rollback, excessive policy-defined skew, unavailable/untrusted time provenance, future-dated evidence,
+mixed-run or mixed-origin evidence, and missing timestamps fail closed. Cross-process or cross-host reuse is
+prohibited unless a later implementation defines and independently validates a trusted handoff protocol; no such
+handoff exists in Phases 9B-9F.
+
+The nonce is consumed immediately before the mutating adapter handoff, at the same point the immutable
+`mutation_started` marker is written. Failed authorization, adapter-handoff failure, role or evidence change, retry,
+expiry, or prior nonce consumption invalidates the evidence set, profile, and authorization. Immediate
+pre-mutation identity, role, managed-cluster, GitOps, RBAC, backup/restore, compatibility, freshness, and nonce
+revalidation is mandatory regardless of artifact age.
 
 ### 4. Managed-cluster proof
 
@@ -297,12 +317,15 @@ A generated live profile is one-use and binds:
 - discovery evidence-set hash;
 - unique segment ID and artifact directory;
 - issue/approval reference;
-- issued-at and expires-at timestamps; and
+- freshness-policy identifier/version, collection/profile timestamps, configured/controller maximum ages,
+  one-use nonce, and consumption state; and
 - profile schema/contract version and profile SHA-256.
 
-The profile expires five minutes after issuance and the final mutation gate also requires identity/role evidence no
-older than 60 seconds. Any role transition, identity change, managed-cluster drift, scenario/stream change, source
-revision change, compatibility-evidence change, artifact-directory change, or expiry invalidates it.
+The validated freshness policy determines expiry; no release profile may extend the controller hard maximum.
+Immediate pre-mutation revalidation is mandatory regardless of age. Any role transition, evidence change, identity
+change, managed-cluster drift, scenario/stream change, source revision change, compatibility-evidence change,
+artifact-directory change, failed authorization, retry, adapter-handoff failure, expiry, or nonce consumption
+invalidates the profile.
 
 The raw generated profile stays outside version control and outside the default `.release/` output. The operator must
 supply a private runtime directory outside the checkout, created with owner-only permissions. Publishable artifacts
@@ -337,20 +360,54 @@ its first successful API mutation. Crossing this handoff permanently disables au
 when the eventual error looks transient. A later segment cannot mutate until fresh discovery independently proves
 the prior final state and a newly generated profile passes all gates.
 
-### 9. Decision semantics
+### 9. Retry state machine
+
+Retry classification is deterministic and cannot preserve mutation authority across attempts:
+
+1. `CONTACT_NOT_ESTABLISHED`
+   - No authoritative observation was obtained, no identity or role proof exists, no profile or mutation
+     authorization exists, and no mutation-start marker exists.
+   - Only typed transport/infrastructure failures qualify: connection timeout/refusal/reset, DNS resolution failure,
+     TLS handshake failure before a valid response, or controller/tool launch/resource failure before a response.
+     Authentication/authorization denial, malformed or forbidden payloads, and safety assertions do not qualify.
+   - The budget is the initial attempt plus at most one operator-authorized retry, both within the controller policy's
+     discovery deadline. The retry starts a new discovery run and cannot reuse any observation.
+2. `PARTIAL_OR_CONFLICTING_EVIDENCE`
+   - Any incomplete, stale, mismatched, duplicate, ambiguous, malformed, mixed-origin, or contradictory identity,
+     role, managed-cluster, GitOps, RBAC, backup/restore, compatibility, or freshness evidence exists.
+   - It is never an ordinary transport retry. The controller emits `BLOCKED`, `NO_GO`, or `RECOVERY_REQUIRED`
+     according to whether the evidence is absent/invalid, definitively unsafe, or shows a state requiring repair.
+3. `PROOF_COMPLETE_PRE_MUTATION`
+   - Identity and initial state were proven, but a later infrastructure failure occurred before
+     `MUTATION_STARTED`.
+   - The controller may report `INFRA_RETRYABLE`, but it invalidates the evidence set, profile, nonce, and
+     authorization. The only permitted rerun starts again at `CONTACT_NOT_ESTABLISHED` with fresh discovery and a new
+     authorization; the previous proof is never reused.
+4. `MUTATION_STARTED`
+   - Automatic retry is prohibited. Any failure is `RECOVERY_REQUIRED`.
+   - Fresh discovery and an explicitly authorized recovery segment are required; the failed segment cannot resume.
+
+Every attempt artifact records `retry_state`, `transport_attempt`, `transport_attempt_limit`,
+`retry_reason_code`, `retry_budget_consumed`, `contact_established`, authoritative-observation count, invalidated
+evidence/profile hashes, and the next permitted action. After every retry, all discovery is fresh. No retry path can
+bypass physical identity proof because `CONTACT_NOT_ESTABLISHED` has no mutation authority,
+`PARTIAL_OR_CONFLICTING_EVIDENCE` is not retryable, and `PROOF_COMPLETE_PRE_MUTATION` destroys its prior proof before
+starting over.
+
+### 10. Decision semantics
 
 | Decision | Mandatory evidence and meaning | Permitted next action |
 | --- | --- | --- |
 | `PASS` | Every required check passed; any authorized mutation completed; expected final physical identity, logical roles, managed clusters, ACM/backup/restore/GitOps state are freshly proven; all artifacts passed complete redaction; provenance and eligibility are valid. | A later segment may begin only with new discovery and profile binding. |
 | `NO_GO` | A definitive certification or safety assertion failed, such as identity mismatch, split brain, unexpected cluster ownership, hostile GitOps, unsupported scenario, failed final state, or failed redaction. | Stop. Human investigation; no retry or recovery mutation from this segment. |
 | `RECOVERY_REQUIRED` | Mutation handoff occurred, or readable evidence shows an ambiguous/partial/unknown lab state requiring controlled repair. | Stop. Fresh rediscovery and a separately issued, explicitly authorized recovery segment are required. |
-| `INFRA_RETRYABLE` | A typed transient transport/tool failure occurred before `MUTATION_STARTED`; identity and initial state remain proven and unexpired; no safety assertion failed. | No Agent retry. The controller may offer one focused operator-authorized rerun, limited to two read attempts and the original five-minute discovery deadline. |
+| `INFRA_RETRYABLE` | A typed transport/infrastructure failure occurred in `CONTACT_NOT_ESTABLISHED`, or after `PROOF_COMPLETE_PRE_MUTATION` but before `MUTATION_STARTED`; no safety assertion failed. Any prior evidence/profile/authorization is invalidated. | No Agent retry. The controller may offer one operator-authorized retry within the controller policy's bounded discovery deadline. The attempt restarts fresh discovery with no reused proof. |
 | `BLOCKED` | Required input, tool, model, compatibility decision, approval, capability, freshness, or provenance is absent/invalid before mutation. | Correct the prerequisite and start a new discovery run; never infer a value. |
 
 `INFRA_RETRYABLE` is never inferred from an exception string. During or after mutation, transient transport failure is
 `RECOVERY_REQUIRED`, because the physical state may have changed.
 
-### 10. Artifact and certification eligibility
+### 11. Artifact and certification eligibility
 
 Every artifact records an evidence class from an allowlist:
 
@@ -360,11 +417,22 @@ Every artifact records an evidence class from an allowlist:
 - `static_fixture`
 - `live_read_only`
 - `live_mutating_segment`
+- `LAB_PREPARATION_ONLY`
 - `diagnostic_live`
 
 Only the explicitly gated future live entrypoint can emit a `live_*` class. Constructors and writers reject attempts
 to relabel fake, dry-run, local-harness, static-fixture, or ordinary pytest unit output. Read-only live evidence proves
 contact/observation only and cannot by itself make a run live-certification eligible.
+
+`LAB_PREPARATION_ONLY` is the only allowed preparation class. Its writer requires
+`purpose=lab_preparation`, `evidence_class=LAB_PREPARATION_ONLY`, `certification_eligible=false`,
+`live_certification_evidence=false`, and `may_have_mutated_lab=true`, plus the preparation plan/reference, source
+revision, controller decision, physical identity bindings, preparation actions, final observed state, redaction
+status, and writer/schema version. It writes to a separate preparation artifact namespace/directory. Writers accept
+only allowlisted evidence classes and reject relabeling or merging preparation output into certification scenario
+results. A certification run may reference preparation provenance, but must freshly discover identity, roles,
+managed clusters, GitOps, RBAC, backup/restore, and compatibility afterward. Redaction failure blocks publication.
+A successful preparation artifact never authorizes mutation or certification.
 
 Minimum segment artifacts:
 
@@ -388,7 +456,7 @@ collector/adapter version, started/completed timestamps, and parent artifact has
 non-publishable and non-certification-eligible. A dirty checkout blocks certification. A future explicit diagnostic
 override may run read-only diagnostics, but the artifact class is `diagnostic_live` and eligibility remains false.
 
-### 11. Controller versus Agent authority
+### 12. Controller versus Agent authority
 
 The Python lab controller owns physical identity, logical roles, lab readiness, profile generation/freshness,
 mutation authorization, mutation-start recording, final-state proof, recovery decisions, and final GO/NO-GO.
@@ -413,19 +481,21 @@ Preparation and certification are separate authorities and artifact classes:
 
 | Activity | Boundary | Mutation treatment | Evidence eligibility |
 | --- | --- | --- | --- |
-| Infrastructure provisioning | External infrastructure system or future audited bootstrap controller | External operator-proven preparation, or its own mutating segment | Preparation only |
-| OpenShift version selection/install | External provisioning plus compatibility decision | Separate preparation segment | Preparation only |
-| ACM installation on each hub | Future Phase 9D declarative bootstrap | Separate mutating segment per known-state unit | Preparation only |
-| Managed-cluster bootstrap/import | Future Phase 9D | Separate mutating segment; exact set re-proven afterward | Preparation only |
-| Backup/OADP prerequisites | Future Phase 9D | Separate mutating segment | Preparation only |
-| GitOps operator installation | Future Phase 9D | Separate mutating segment | Preparation only |
-| Application/ApplicationSet creation | Future Phase 9D with parent ownership proof | Separate mutating segment | Preparation only |
-| Kustomize desired-state application | Future Phase 9D | Separate mutating segment; server-side validation first | Preparation only |
-| Known-state preparation/reset | Python controller, or explicitly external operator-proven handoff | One controlled mutating segment | May establish an entry state, but is not scenario certification |
+| Infrastructure provisioning | External infrastructure system or future audited bootstrap controller | External operator-proven preparation, or its own mutating segment | `LAB_PREPARATION_ONLY` |
+| OpenShift version selection/install | External provisioning plus compatibility decision | Separate preparation segment | `LAB_PREPARATION_ONLY` |
+| ACM installation on each hub | Future Phase 9D declarative bootstrap | Separate mutating segment per known-state unit | `LAB_PREPARATION_ONLY` |
+| Managed-cluster bootstrap/import | Future Phase 9D | Separate mutating segment; exact set re-proven afterward | `LAB_PREPARATION_ONLY` |
+| Backup/OADP prerequisites | Future Phase 9D | Separate mutating segment | `LAB_PREPARATION_ONLY` |
+| GitOps operator installation | Future Phase 9D | Separate mutating segment | `LAB_PREPARATION_ONLY` |
+| Application/ApplicationSet creation | Future Phase 9D with parent ownership proof | Separate mutating segment | `LAB_PREPARATION_ONLY` |
+| Kustomize desired-state application | Future Phase 9D | Separate mutating segment; server-side validation first | `LAB_PREPARATION_ONLY` |
+| Known-state preparation/reset | Python controller, or explicitly external operator-proven handoff | One controlled mutating segment | `LAB_PREPARATION_ONLY`; may establish an entry state, never scenario certification |
 | Live release certification | Python controller plus existing release framework | One selected release mutation per segment | Eligible only after all live gates and redaction pass |
 
-Bootstrap artifacts never automatically qualify as release certification artifacts. After any bootstrap/reset
-mutation, Phase 9B discovery must independently re-establish identity and Phase 9C must prove known state before a
+Preparation writers enforce the `LAB_PREPARATION_ONLY` contract above. Preparation artifacts never qualify as release
+certification artifacts, cannot be relabeled or merged as passing scenario evidence, and can be referenced only as
+provenance. After any bootstrap/reset mutation, Phase 9B discovery must independently re-establish identity and Phase
+9C must freshly prove roles, managed clusters, GitOps, RBAC, backup/restore, compatibility, and known state before a
 certification segment can be authorized.
 
 ## Version and support policy
@@ -494,8 +564,10 @@ validator/PR-comment-resolver workflow, and a separate reviewable PR. No slice m
   inheritance.
 - **Exit gate:** both hub identities independently proven; ambiguity/mismatch tests pass; gated live read evidence
   independently reviewed. Discovery alone cannot claim certification.
-- **Recovery posture:** no recovery. Typed pre-contact/read-only transient failure may be `INFRA_RETRYABLE`; safety
-  mismatch is not retryable.
+- **Recovery posture:** no recovery. `INFRA_RETRYABLE` is available only under `CONTACT_NOT_ESTABLISHED` or
+  `PROOF_COMPLETE_PRE_MUTATION`; the initial attempt plus one operator-authorized retry must restart fresh discovery
+  within the controller policy's bounded deadline. Partial/conflicting evidence and safety mismatches are not
+  retryable.
 - **Protected-file boundary:** no runbook or `.claude/skills/**/*.skill.md` changes.
 - **Parity impact:** none to production Python/Ansible behavior; evidence is stream-neutral.
 - **Independent-validator evidence:** source guard audit, call trace proving only allowlisted reads, redacted real-read
@@ -513,16 +585,18 @@ validator/PR-comment-resolver workflow, and a separate reviewable PR. No slice m
 - **Mutation boundary:** no switchover, recovery, bootstrap, pause, patch, or apply. The output authorization token is
   non-executable in 9C.
 - **Expected files/modules:** normalized live observation models; identity/role/readiness decision integration;
-  role-aware profile vNext with issued/expiry/source/compatibility bindings; decision and artifact contracts.
+  role-aware profile vNext with freshness-policy/nonce/source/compatibility bindings; decision and artifact contracts.
 - **Tests:** all evidence agreement/disagreement states; both/neither active; backup-only/restore-only false signals;
   one-to-three exact clusters; profile tamper/expiry/role flip; unsupported/expired compatibility; unknown GitOps
   capability/owner; SAR allow/deny; decision table coverage.
 - **Artifact contract:** one redacted evidence graph and `PASS`, `NO_GO`, `RECOVERY_REQUIRED`, or `BLOCKED`.
-  `INFRA_RETRYABLE` is limited to bounded pre-mutation reads. No artifact may say mutation occurred.
+  `INFRA_RETRYABLE` is limited to the retry state machine and records attempts, reason, budget, invalidation, and
+  fresh-discovery provenance. No artifact may say mutation occurred.
 - **Entry gate:** fresh Phase 9B evidence and clean revision.
 - **Exit gate:** repeated deterministic preflight on a live known state yields the same decision and profile hash;
-  every negative fixture blocks as designed; independent validator approves the non-executable authorization
-  boundary.
+  freshness policy, clock failure, nonce reuse, all four retry states, evidence invalidation, and fresh-discovery
+  cases pass; every negative fixture blocks as designed; independent validator approves the non-executable
+  authorization boundary.
 - **Recovery posture:** no automatic or live recovery.
 - **Protected-file boundary:** unchanged.
 - **Parity impact:** preflight evidence must remain stream-neutral; no production behavior change.
@@ -543,10 +617,15 @@ validator/PR-comment-resolver workflow, and a separate reviewable PR. No slice m
   profiles outside version control, and preparation artifacts. Exact paths require the Phase 9D design.
 - **Tests:** empty-cluster progression; idempotence; partial bootstrap; exact managed-cluster import; safe and hostile
   GitOps/ApplicationSet modes; reset refusal on unknown state; bootstrap/certification artifact separation.
-- **Artifact contract:** `preparation` purpose, mutation markers, desired/observed state, compatibility hash, applied
-  object inventory, final Phase 9B rediscovery reference; never automatically certification-eligible.
+- **Artifact contract:** `purpose=lab_preparation`, `evidence_class=LAB_PREPARATION_ONLY`,
+  `certification_eligible=false`, `live_certification_evidence=false`, `may_have_mutated_lab=true`, preparation
+  plan/reference, source revision, controller decision, physical identity bindings, preparation actions, final
+  observed state, redaction status, writer/schema version, and final Phase 9B rediscovery reference. The writer uses a
+  separate namespace/directory and rejects relabeling or merge into certification scenario results.
 - **Entry gate:** disposable lab and one bootstrap segment explicitly authorized.
-- **Exit gate:** operator-proven preparation plus independent Phase 9B/9C known-state proof.
+- **Exit gate:** operator-proven preparation plus fresh Phase 9B/9C identity, role, managed-cluster, GitOps, RBAC,
+  backup/restore, compatibility, and known-state proof. Preparation provenance may be referenced but never counted as
+  passing certification evidence.
 - **Recovery posture:** controller decides stop/reset; no Agent recovery. Partial setup is
   `RECOVERY_REQUIRED`.
 - **Protected-file boundary:** runbook and skills remain protected; any required operational change becomes a later
@@ -570,9 +649,14 @@ validator/PR-comment-resolver workflow, and a separate reviewable PR. No slice m
   after handoff becomes `RECOVERY_REQUIRED`; exact one-call invariant; final proof and redaction failure.
 - **Artifact contract:** `live_mutating_segment`, full 9C inputs, operator authorization, one invocation, mutation
   marker, Python normalized evidence, final role/cluster/backup/GitOps proof, recursive redaction audit.
-- **Entry gate:** immediate identity/role re-read no older than 60 seconds and matching one-use profile.
-- **Exit gate:** hub B (or the explicitly expected physical hub) is proven primary, hub A secondary, exact managed
-  clusters healthy, artifacts redacted, segment `PASS`.
+- **Entry gate:** immediate full revalidation under the recognized freshness policy, with unconsumed one-use nonce,
+  matching profile-bound physical identity hashes and expected initial mapping.
+- **Exit gate:** fresh observations match the authorized segment contract: profile/segment/scenario identity,
+  authorized physical identity hashes, `expected_final_mapping`, expected managed-cluster ownership, expected
+  scenario transition, and required post-mutation evidence; artifacts are redacted and the segment is `PASS`.
+  Inventory labels and context names are display aliases only and cannot decide the exit state. A label-to-identity
+  mismatch is blocking, no exit decision may compare only labels or contexts, and stale label mappings cannot be
+  repaired by relabeling artifacts. Phase 9F may start only from this profile-bound proven state.
 - **Recovery posture:** stop on ambiguity or failure. Any failure after handoff is `RECOVERY_REQUIRED`; recovery is a
   future separately authorized segment.
 - **Protected-file boundary:** unchanged.
@@ -586,8 +670,9 @@ validator/PR-comment-resolver workflow, and a separate reviewable PR. No slice m
 
 - **Purpose:** start only from Phase 9E's proven final state, run one Ansible reverse passive-switchover segment, and
   compare scenario-aware normalized evidence.
-- **Prerequisites:** Phase 9E `PASS`; fresh rediscovery; new role mapping/profile/approval; current compatibility
-  evidence.
+- **Prerequisites:** Phase 9E `PASS` from profile-bound physical identity and `expected_final_mapping` proof; fresh
+  rediscovery; new role mapping/profile/approval; current compatibility evidence. Label-only or relabeled state is
+  not a valid handoff.
 - **Mutation boundary:** one `ansible-passive-switchover` adapter handoff. It is a new segment, never part of 9E.
 - **Expected files/modules:** existing Ansible adapter integration; scenario/segment-preserving normalized evidence;
   parity merger; final controller decision.
@@ -596,8 +681,9 @@ validator/PR-comment-resolver workflow, and a separate reviewable PR. No slice m
 - **Artifact contract:** new `live_mutating_segment` bundle plus parent Phase 9E hash; final role proof; merged
   scenario-aware parity and run GO/NO-GO.
 - **Entry gate:** independently proven Phase 9E state and fresh Ansible-bound one-use profile.
-- **Exit gate:** expected reverse role state proven, both segment bundles redacted, scenario-aware evidence passes
-  the approved parity assertions.
+- **Exit gate:** fresh observations match the reverse segment's authorized physical identity hashes,
+  `expected_final_mapping`, managed-cluster ownership, scenario/profile identity, and post-mutation evidence; both
+  segment bundles are redacted and scenario-aware evidence passes the approved parity assertions.
 - **Recovery posture:** identical to 9E; no automatic recovery or third mutation.
 - **Protected-file boundary:** unchanged.
 - **Parity impact:** first narrow parity claim, limited to the two exact passive-switchover scenarios and normalized
@@ -618,9 +704,12 @@ designed slices after 9F. Their presence in the catalog or static fixtures does 
    prompts.
 4. No live mutation occurs before read-only identity and role proof is implemented and validated.
 5. Ambiguous, duplicated, changed, or mismatched physical identity blocks mutation.
-6. Stale, expired, unbound, reused, or tampered generated profiles block mutation.
+6. Missing/unrecognized freshness policy; untrusted/rolled-back clock; excessive skew; or stale, expired, unbound,
+   reused, nonce-consumed, or tampered generated profiles block mutation.
 7. One known-state segment contains at most one lab-mutating scenario.
-8. No later segment mutates until the prior final state is independently proven by fresh discovery.
+8. No later segment mutates until fresh discovery proves the prior final state against the authorized physical
+   identity hashes, `expected_final_mapping`, managed-cluster ownership, scenario transition, and profile/segment
+   identity. Labels and context names are non-authoritative.
 9. Unknown scenario classification fails closed.
 10. Unknown Argo CD ownership, ApplicationSet parent authority, or capability evidence fails closed.
 11. Failed or incomplete redaction blocks publishable and certification-eligible artifacts.
@@ -630,7 +719,8 @@ designed slices after 9F. Their presence in the catalog or static fixtures does 
     mandatory.
 15. No Python/Ansible parity claim is made without scenario-specific normalized evidence.
 16. No full RC-ready declaration is made until every remaining Issue #121 blocker is independently proven.
-17. Bootstrap/reset/preparation mutation never inherits certification eligibility.
+17. Bootstrap/reset/preparation mutation uses `LAB_PREPARATION_ONLY`, never inherits certification eligibility, and
+    cannot be relabeled or merged into passing scenario evidence.
 18. Read-only live evidence proves observation only, not release certification.
 19. The Agent cannot authorize, mutate, recover, retry, relabel, or override.
 
@@ -642,6 +732,12 @@ designed slices after 9F. Their presence in the catalog or static fixtures does 
 - **Agent-selected ad hoc recovery:** it bypasses controller evidence, mutation accounting, and audit.
 - **Retrying a failed mutating scenario without rediscovery:** the lab may have changed despite a transient-looking
   error.
+- **Reusing pre-mutation proof after a transport retry:** every retry invalidates prior evidence, profile, nonce, and
+  authorization and restarts discovery.
+- **Using an unexplained fixed freshness duration:** validity is controlled by a versioned policy with a
+  controller-enforced maximum, trusted-clock rules, nonce consumption, and mandatory immediate revalidation.
+- **Relabeling preparation evidence as certification:** `LAB_PREPARATION_ONLY` remains in a separate namespace and is
+  provenance only.
 - **Treating fake, dry-run, static, or local-harness artifacts as live:** their evidence origin is not a live lab.
 - **Assuming unknown GitOps capability is supported:** CRD/version/schema differences can change patch semantics.
 - **Patching an ApplicationSet child without parent coordination:** the parent can immediately recreate the hostile
@@ -661,7 +757,7 @@ Graphify was used only as a hypothesis generator; inferred or ambiguous edges we
 | Graphify question | Hypothesis | Source verification and conclusion |
 | --- | --- | --- |
 | Current lab-controller-to-release-framework boundaries | The controller is an outer safety model and its current framework execution paths are non-live. | `execution.py`, `invocation.py`, `harness.py`, `run_lab_role_controller.py`, and Phase 6/7 tests prove dry-run/non-executed/fake-local boundaries. `orchestrator.py` separately retains the existing profile-driven live-capable runner. |
-| Live discovery and hub identity evidence flow | Identity and role models exist, but current live evidence does not feed them authoritatively. | `identity.py`/`roles.py` use typed modeled observations; `read_only_live_transport.py` has only an injected protocol; all repository clients are fakes; `baseline/discovery.py` does not provide the required identity tuple. |
+| Live discovery and hub identity evidence flow | Identity and role models exist, but current lab-controller live evidence does not feed them authoritatively. | `identity.py`/`roles.py` use typed modeled observations; `read_only_live_transport.py` has only an injected protocol and current controller integrations are fake/injected. Separately, `orchestrator.py::OcDiscoveryClient` is live-capable for the existing profile runner. Neither it nor `baseline/discovery.py` provides integrated controller-owned proof of the required identity tuple. |
 | Scenario mutation classification and sequencing | Catalog rejection and modeled segment handoff exist, but no live controller-gated mutation exists. | `catalog.py`, `segments.py`, `planner.py`, and their tests prove classification/rejection/fake handoff; CLI live modes fail closed. |
 | Role-aware profile generation and freshness | Hash/drift checks exist but do not bind time or full live provenance. | `profiles.py` binds roles, identity hashes, managed clusters, scenario content, and artifact root; it has no issued/expiry/source-revision/compatibility evidence fields. |
 | Artifact eligibility and redaction | Controller payloads are recursively sanitized, while the release writer has incomplete final coverage. | `lab_controller/artifacts.py` recursively sanitizes modeled payloads; `reporting/artifacts.py::write_json` writes directly and `redaction.json` tracks selected text scans rather than a final recursive inventory. |

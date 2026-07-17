@@ -4,8 +4,11 @@
 
 The gated multi-segment live lab-controller design is documented in
 [`Phase 9A — RC Hardening Re-baseline and Gated Live Lab-Controller Design`](../../docs/plans/2026-07-17-phase-9a-rc-hardening-rebaseline-and-live-controller-design.md).
-Current fake clients, dry runs, static fixtures, local harnesses, and read-only transport tests are not live ACM
-certification evidence. Phase 9B remains blocked until that design is merged and independently validated.
+Current lab-controller fake/injected clients, dry runs, static fixtures, local harnesses, and read-only transport
+tests are not live ACM certification evidence. The existing profile-driven release runner has a live-capable
+`OcDiscoveryClient`, but it is not integrated as controller-owned physical identity proof and no current
+lab-controller entrypoint emits certification-authoritative live discovery. Phase 9B remains blocked until that
+design is merged and independently validated.
 
 ## Framework Tests
 
@@ -68,6 +71,10 @@ evidence. A Phase 9 certification claim additionally requires the gated controll
 freshness evidence, physical-identity and logical-role proof, a bound role-aware profile, one-segment mutation
 authorization, and the applicable independently validated Phase 9B–9F gates. Unit tests may inject fake discovery
 clients or fake adapters, but those runs are marked not certification eligible in the generated summary.
+
+Future lab preparation artifacts use the separate `LAB_PREPARATION_ONLY` evidence class and namespace. They remain
+non-certification-eligible, cannot be relabeled or merged into passing scenario results, and require fresh controller
+discovery and authorization before any certification segment.
 
 The orchestrator writes durable artifacts under the profile artifact root, including `manifest.json`, `scenario-results.json`, `runtime-parity.json`, `summary.json`, and `release-report.md`.
 

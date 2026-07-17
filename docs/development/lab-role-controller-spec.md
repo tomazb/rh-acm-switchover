@@ -9,6 +9,10 @@ The authoritative Phase 9 sequencing, live trust boundary, and current-capabilit
 [`Phase 9A — RC Hardening Re-baseline and Gated Live Lab-Controller Design`](../plans/2026-07-17-phase-9a-rc-hardening-rebaseline-and-live-controller-design.md).
 Its Phase 9A–9F numbering supersedes earlier Phase 9 labels in older readiness documents. This specification remains
 the implementation reference for completed non-live phases and does not itself authorize live execution.
+For future live work, the Phase 9A authority also supersedes the generic retry/freshness language below: retries use
+the four-state `CONTACT_NOT_ESTABLISHED` / `PARTIAL_OR_CONFLICTING_EVIDENCE` /
+`PROOF_COMPLETE_PRE_MUTATION` / `MUTATION_STARTED` contract, freshness uses a versioned bounded policy and one-use
+nonce, preparation uses `LAB_PREPARATION_ONLY`, and final-state proof is profile-bound rather than label-bound.
 
 Phases 1 through 8P/8Q are implemented as non-live controller primitives, profile generation, provisional artifacts,
 dry-run request construction, non-executed invocation materialization, an explicitly gated local harness, a thin CLI
@@ -231,8 +235,8 @@ Allowed segment decisions:
 - **NO-GO**: The run is failed for release certification and must not continue as certification evidence.
 - **RECOVERY_REQUIRED**: The lab may be recoverable, but the controller cannot prove the next safe starting
   state.
-- **INFRA_RETRYABLE**: A pre-mutation infrastructure failure occurred and a bounded retry or focused rerun may
-  be allowed.
+- **INFRA_RETRYABLE**: A typed pre-mutation transport/infrastructure failure satisfied the Phase 9A retry state
+  machine. Any retry invalidates prior observations, profile, nonce, and authorization and restarts fresh discovery.
 
 Each segment may run many non-mutating checks, but it must execute at most one lab-mutating scenario.
 
@@ -294,6 +298,9 @@ ping-pong flow could be:
 
 The controller must never assume that the profile's original `primary` entry still names the active hub after
 Segment B. Every later segment must rediscover and rebind roles.
+The `hub-a`/`hub-b` names in this illustrative flow are display aliases only. Authorization and exit decisions must
+compare fresh observed physical identity hashes and logical roles with the segment profile's authorized identity
+bindings and `expected_final_mapping`; labels or context names alone never prove state.
 
 ## Role-Aware Profile Strategy
 
@@ -330,8 +337,9 @@ The controller must choose from explicit outcomes when observed state does not m
 | RBAC evidence is missing or over-permissive | NO-GO. |
 | Restore evidence is missing for restore-only scenarios | NO-GO. |
 | Artifact redaction fails | NO-GO. |
-| Failure appears infrastructure/transient before mutation | INFRA_RETRYABLE; focused retry may be allowed and recorded. |
-| Failure occurs during or after mutation | No automatic retry unless state is rediscovered and proven. |
+| Typed transport/infrastructure failure with no authoritative observation, or after proof but before mutation | Apply the Phase 9A retry state machine. At most one operator-authorized retry is available within the policy budget; invalidate all prior evidence/profile/authorization and restart fresh discovery. |
+| Incomplete, stale, mismatched, duplicate, ambiguous, or contradictory evidence | `BLOCKED`, `NO_GO`, or `RECOVERY_REQUIRED`; never an ordinary transport retry. |
+| Failure occurs during or after mutation | `RECOVERY_REQUIRED`; automatic retry is prohibited, and fresh discovery plus an explicitly authorized recovery segment is required. |
 
 Recovery automation must be conservative. A recovery action that changes live state is itself a lab-mutating
 segment and must produce its own artifacts and final-state proof.
@@ -691,7 +699,8 @@ Phase 7A contract:
 - Should live decommission ever run outside disposable labs?
 - What exact JSON schemas should segment and merged artifacts use?
 - What exact lab config and generated profile schema changes are needed?
-- Should `AGENTS.md` get a short release-controller instruction after implementation starts?
+- Phase 9 authority is recorded concisely in `AGENTS.md`; later slices must keep it current without duplicating the
+  full design.
 - Should `rbac-bootstrap-live` remain cataloged as lab-mutating if it stays SAR-only and non-persistent?
 - Should an Agent skill be added only after the controller CLI contract is implemented?
 
@@ -699,8 +708,8 @@ Phase 7A contract:
 
 The controller is ready for full live certification only when it can:
 
-- detect `hub-a` primary and `hub-b` secondary
-- detect `hub-b` primary and `hub-a` secondary after switchover
+- prove the expected initial mapping against enrolled physical identity hashes
+- prove the profile-bound `expected_final_mapping` after switchover
 - refuse ambiguous states
 - generate correct role-aware profiles
 - run one mutating scenario and verify the role transition

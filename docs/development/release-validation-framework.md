@@ -12,6 +12,11 @@ Phase 9 trust boundary and implementation gates are defined in
 Until those later slices are implemented and independently validated, fake, dry-run, static-fixture, local-harness,
 and read-only-contact evidence cannot establish live ACM certification through the lab role controller.
 
+The existing profile-driven runner already supplies a live-capable `OcDiscoveryClient` for framework discovery.
+That read-only client capability is distinct from controller authority: current lab-controller integrations use
+fake/injected client paths, do not bind the required physical identity tuple into a live controller decision, and do
+not provide a controller entrypoint that emits certification-authoritative live discovery.
+
 ## Orchestration Flow
 
 The live certification entrypoint calls `tests.release.orchestrator.run_release_certification`, which wires:
@@ -141,6 +146,10 @@ Each run writes a timestamped artifact directory under the profile's artifact ro
 - `release-report.md` renders the operator-readable release validation report.
 
 The final `release-report.md` includes run identity, release metadata consistency, matrix validation, required and optional scenario results, mandatory Argo CD certification, runtime parity, recovery, artifact redaction, final baseline status, and the final GO/NO-GO decision.
+
+Future Phase 9 preparation output uses the separate allowlisted `LAB_PREPARATION_ONLY` evidence class and artifact
+namespace. It is always non-certification-eligible, cannot be relabeled or merged into passing scenario results, and
+may be referenced only as provenance before fresh controller discovery and authorization.
 
 ## Safety Notes
 
