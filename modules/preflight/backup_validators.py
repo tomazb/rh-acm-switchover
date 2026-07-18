@@ -81,8 +81,8 @@ def _collect_bsl_unavailable_details(kube_client: KubeClient) -> str:
             plural="backupstoragelocations",
             namespace=BACKUP_NAMESPACE,
         )
-    except Exception as exc:
-        logger.debug("Failed to list BackupStorageLocations: %s", exc)
+    except Exception:
+        logger.debug("Unable to inspect BackupStorageLocations.")
         return ""
 
     if not bsls:
@@ -113,11 +113,7 @@ class BackupValidator(BaseValidator):
         if not in_progress:
             return []
 
-        logger.info(
-            "Backup(s) in progress: %s. Waiting up to %ds for completion...",
-            ", ".join(in_progress),
-            BACKUP_VERIFY_TIMEOUT,
-        )
+        logger.info("Backup work is still in progress; waiting for completion.")
 
         start_time = time.time()
         remaining = in_progress
@@ -131,8 +127,8 @@ class BackupValidator(BaseValidator):
                     plural="backups",
                     namespace=BACKUP_NAMESPACE,
                 )
-            except Exception as exc:
-                logger.debug("Failed to list backups while waiting: %s", exc)
+            except Exception:
+                logger.debug("Unable to inspect backups while waiting.")
                 return remaining
 
             remaining = [
@@ -186,8 +182,8 @@ class BackupValidator(BaseValidator):
                 freshness = "consider running a fresh backup"
 
             return f"age: {age_display}, {freshness}"
-        except (ValueError, AttributeError) as e:
-            logger.debug("Failed to parse backup timestamp %s: %s", completion_timestamp, e)
+        except (ValueError, AttributeError):
+            logger.debug("Unable to parse a backup timestamp.")
             return ""
 
     def run(self, primary: KubeClient) -> None:  # noqa: C901
@@ -562,12 +558,8 @@ class PassiveSyncValidator(BaseValidator):
                         )
                     else:
                         velero_details = f" Velero restore {velero_restore_name} phase={velero_phase}."
-            except Exception as exc:
-                logger.debug(
-                    "Failed to fetch Velero restore %s details: %s",
-                    velero_restore_name,
-                    exc,
-                )
+            except Exception:
+                logger.debug("Unable to inspect the related Velero restore.")
 
         error_message = f"{restore_name} in unexpected state: {phase} - {message}"
         if velero_details:
@@ -702,9 +694,9 @@ class ManagedClusterBackupValidator(BaseValidator):
                                 cluster_time = datetime.fromisoformat(cluster_creation.replace("Z", "+00:00"))
                                 if cluster_time > backup_time:
                                     clusters_after_backup.append(cluster_name)
-                except (ValueError, TypeError) as e:
+                except (ValueError, TypeError):
                     # If timestamp parsing fails, log warning but continue
-                    logger.warning("Could not compare cluster timestamps: %s", e)
+                    logger.warning("Could not compare managed cluster timestamps.")
 
             # Report failure if clusters were imported after the backup
             if clusters_after_backup:

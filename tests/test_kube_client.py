@@ -112,6 +112,54 @@ class TestKubeClient:
         assert result[1]["metadata"]["name"] == "cluster2"
         mock_k8s_apis["custom_api"].list_namespaced_custom_object.assert_called_once()
 
+    def test_advisory_list_retries_without_logging_exception_detail(self, kube_client, caplog):
+        """Advisory retries must preserve resilience without stringifying external failures."""
+        private_reason = "Authorization: Bearer advisory-retry-token"
+        with patch.object(
+            kube_client,
+            "_list_custom_resources_raw",
+            side_effect=[ApiException(status=500, reason=private_reason), []],
+        ) as raw_list, patch.object(
+            KubeClient.list_custom_resources_advisory.retry,
+            "wait",
+            return_value=0,
+        ):
+            with caplog.at_level("DEBUG", logger="acm_switchover"):
+                result = kube_client.list_custom_resources_advisory(
+                    "argoproj.io",
+                    "v1alpha1",
+                    "applications",
+                )
+
+        assert result == []
+        assert raw_list.call_count == 2
+        assert "advisory-retry-token" not in caplog.text
+
+    def test_advisory_get_retries_without_logging_exception_detail(self, kube_client, caplog):
+        """Advisory CRD reads must use the same silent retry contract."""
+        private_reason = "context=advisory-admin user=system:advisory"
+        with patch.object(
+            kube_client,
+            "_get_custom_resource_raw",
+            side_effect=[ApiException(status=503, reason=private_reason), {"metadata": {"name": "crd"}}],
+        ) as raw_get, patch.object(
+            KubeClient.get_custom_resource_advisory.retry,
+            "wait",
+            return_value=0,
+        ):
+            with caplog.at_level("DEBUG", logger="acm_switchover"):
+                result = kube_client.get_custom_resource_advisory(
+                    "apiextensions.k8s.io",
+                    "v1",
+                    "customresourcedefinitions",
+                    "applications.argoproj.io",
+                )
+
+        assert result == {"metadata": {"name": "crd"}}
+        assert raw_get.call_count == 2
+        assert "advisory-admin" not in caplog.text
+        assert "system:advisory" not in caplog.text
+
     def test_patch_custom_resource_dry_run(self, dry_run_client, mock_k8s_apis):
         """Test dry-run mode doesn't make actual API calls."""
         result = dry_run_client.patch_custom_resource(

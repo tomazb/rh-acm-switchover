@@ -17,6 +17,20 @@ from modules.preflight import (
 )
 from modules.preflight_coordinator import PreflightValidator
 
+SENSITIVE_LOG_VALUES = (
+    "Authorization: Bearer secret-token",
+    "token: secret-token",
+    "client-key-data: c2VjcmV0LWtleQ==",
+    "/home/operator/.kube/production-config",
+    "https://api.internal.example:6443",
+    "ApiException: user=cluster-admin password=secret-password",
+    "context=production-admin",
+    "user=system:admin",
+    "injected-log-entry",
+    "\x1b[31m",
+)
+SENSITIVE_VALIDATION_MESSAGE = "\n".join(SENSITIVE_LOG_VALUES)
+
 
 @pytest.fixture
 def reporter():
@@ -27,6 +41,96 @@ def reporter():
 @pytest.mark.unit
 class TestValidationReporter:
     """Tests for the ValidationReporter helper."""
+
+    @pytest.mark.parametrize(
+        ("passed", "critical", "expected_status"),
+        [
+            (True, True, "passed"),
+            (False, True, "failed"),
+            (False, False, "warning"),
+        ],
+    )
+    def test_result_logs_public_status_without_private_message(
+        self,
+        caplog,
+        reporter,
+        passed,
+        critical,
+        expected_status,
+    ):
+        """Passed, failed, and warning logs must omit private diagnostics."""
+        with caplog.at_level("INFO", logger="acm_switchover"):
+            reporter.add_result(
+                "Backup status",
+                passed,
+                SENSITIVE_VALIDATION_MESSAGE,
+                critical=critical,
+            )
+
+        log_text = "\n".join(record.getMessage() for record in caplog.records)
+        assert "Backup status" in log_text
+        assert expected_status in log_text
+        assert all(value not in log_text for value in SENSITIVE_LOG_VALUES)
+
+        assert reporter.results == [
+            {
+                "check": "Backup status",
+                "passed": passed,
+                "message": SENSITIVE_VALIDATION_MESSAGE,
+                "critical": critical,
+            }
+        ]
+
+    def test_summary_logs_public_category_without_private_message(self, caplog, reporter):
+        """Summary logging must not re-publish stored failure diagnostics."""
+        reporter.add_result(
+            "RBAC Permissions",
+            False,
+            SENSITIVE_VALIDATION_MESSAGE,
+            critical=True,
+        )
+        caplog.clear()
+
+        with caplog.at_level("INFO", logger="acm_switchover"):
+            reporter.print_summary()
+
+        log_text = "\n".join(record.getMessage() for record in caplog.records)
+        assert "RBAC permissions" in log_text
+        assert "failed" in log_text
+        assert all(value not in log_text for value in SENSITIVE_LOG_VALUES)
+
+    @pytest.mark.parametrize(
+        "untrusted_check",
+        [
+            "unknown context=production-admin\ninjected-log-entry\x1b[31m",
+            "x" * 1024,
+            "Backup status\nAuthorization: Bearer secret-token",
+        ],
+    )
+    def test_untrusted_check_labels_use_opaque_fallback(self, caplog, reporter, untrusted_check):
+        """Unapproved, oversized, or control-bearing labels cannot enter logs."""
+        with caplog.at_level("INFO", logger="acm_switchover"):
+            reporter.add_result(untrusted_check, False, "private detail", critical=True)
+
+        log_text = "\n".join(record.getMessage() for record in caplog.records)
+        assert "Preflight validation" in log_text
+        assert untrusted_check not in log_text
+        assert "injected-log-entry" not in log_text
+        assert "secret-token" not in log_text
+        assert "\x1b" not in log_text
+
+    def test_result_order_and_critical_filtering_are_unchanged(self, reporter):
+        """Logging hardening must preserve the decision-engine result contract."""
+        reporter.add_result("Backup status", True, "success", critical=True)
+        reporter.add_result("RBAC Permissions", False, "critical detail", critical=True)
+        reporter.add_result("GitOps advisory", False, "warning detail", critical=False)
+
+        assert [result["check"] for result in reporter.results] == [
+            "Backup status",
+            "RBAC Permissions",
+            "GitOps advisory",
+        ]
+        assert reporter.critical_failures() == [reporter.results[1]]
 
     def test_critical_failures(self, reporter):
         """Test filtering critical failures."""
@@ -123,7 +227,7 @@ class TestObservabilityDetector:
 
 
 @pytest.mark.unit
-def test_preflight_fails_closed_when_argocd_crd_discovery_is_unauthorized():
+def test_preflight_fails_closed_when_argocd_crd_discovery_is_unauthorized(caplog):
     """Unauthorized Argo CD CRD discovery must fail preflight instead of being skipped."""
     primary = Mock()
     secondary = Mock()
@@ -153,18 +257,23 @@ def test_preflight_fails_closed_when_argocd_crd_discovery_is_unauthorized():
     validator.observability_prereq_validator.run = Mock()
     validator.reporter.print_summary = Mock()
 
-    with patch("modules.preflight_coordinator.validate_rbac_permissions") as validate_rbac, patch(
-        "modules.preflight_coordinator.AutoImportStrategyValidator"
-    ) as auto_import_validator, patch(
-        "modules.preflight_coordinator.argocd_lib.detect_argocd_installation",
-        side_effect=ApiException(status=401, reason="Unauthorized"),
-    ):
-        auto_import_validator.return_value.run = Mock()
-        passed, _config = validator.validate_all()
+    private_api_reason = "Authorization: Bearer secret-token\ncontext=production-admin"
+    with caplog.at_level("INFO", logger="acm_switchover"):
+        with patch("modules.preflight_coordinator.validate_rbac_permissions") as validate_rbac, patch(
+            "modules.preflight_coordinator.AutoImportStrategyValidator"
+        ) as auto_import_validator, patch(
+            "modules.preflight_coordinator.argocd_lib.detect_argocd_installation",
+            side_effect=ApiException(status=401, reason=private_api_reason),
+        ):
+            auto_import_validator.return_value.run = Mock()
+            passed, _config = validator.validate_all()
 
     assert passed is False
     validate_rbac.assert_not_called()
     rbac_results = [result for result in validator.reporter.results if result["check"] == "RBAC Permissions"]
     assert len(rbac_results) == 1
     assert rbac_results[0]["passed"] is False
-    assert "401 Unauthorized" in rbac_results[0]["message"]
+    assert private_api_reason in rbac_results[0]["message"]
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    for sentinel in ("secret-token", "production-admin"):
+        assert sentinel not in log_text

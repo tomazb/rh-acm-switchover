@@ -908,6 +908,69 @@ class TestResumeAutosync:
 
 @pytest.mark.unit
 class TestDetectArgocdInstallation:
+    def test_public_advisory_uses_non_logging_raw_crd_reads(self):
+        """Automatic advisory discovery must bypass retry logging that can stringify API errors."""
+        client = MagicMock(spec=argocd_lib.KubeClient)
+        client.get_custom_resource_advisory.side_effect = [
+            {"metadata": {"name": "applications.argoproj.io"}},
+            {"metadata": {"name": "argocds.argoproj.io"}},
+        ]
+        client.list_custom_resources_advisory.return_value = []
+
+        result = argocd_lib.detect_argocd_installation(client, public_advisory=True)
+
+        assert result.has_applications_crd is True
+        assert result.has_argocds_crd is True
+        assert client.get_custom_resource_advisory.call_count == 2
+        client.list_custom_resources_advisory.assert_called_once()
+        client.get_custom_resource.assert_not_called()
+        client.list_custom_resources.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("side_effects", "log_level"),
+        [
+            (
+                [ApiException(status=404, reason="Bearer strict-crd-secret\n\x1b[31m"), None],
+                "DEBUG",
+            ),
+            (
+                ApiException(status=403, reason="Bearer strict-crd-secret\n\x1b[31m"),
+                "WARNING",
+            ),
+            (
+                [
+                    {"metadata": {"name": "applications.argoproj.io"}},
+                    RuntimeError("Bearer strict-crd-secret\n\x1b[31m"),
+                ],
+                "WARNING",
+            ),
+            (
+                [
+                    {"metadata": {"name": "applications.argoproj.io"}},
+                    {"metadata": {"name": "argocds.argoproj.io"}},
+                ],
+                "WARNING",
+            ),
+        ],
+    )
+    def test_strict_discovery_logs_omit_exception_details(self, caplog, side_effects, log_level):
+        """Strict discovery may raise or degrade, but its public logs must remain code-controlled."""
+        import logging
+
+        client = MagicMock()
+        client.get_custom_resource.side_effect = side_effects
+        if isinstance(side_effects, list) and len(side_effects) == 2 and isinstance(side_effects[1], dict):
+            client.list_custom_resources.side_effect = RuntimeError("Bearer strict-crd-secret\n\x1b[31m")
+
+        with caplog.at_level(getattr(logging, log_level), logger="acm_switchover"):
+            try:
+                argocd_lib.detect_argocd_installation(client)
+            except ApiException:
+                pass
+
+        assert "strict-crd-secret" not in caplog.text
+        assert "\x1b" not in caplog.text
+
     """Test detect_argocd_installation."""
 
     def test_none_when_app_crd_missing(self):
@@ -968,7 +1031,8 @@ class TestDetectArgocdInstallation:
         """Indeterminate argocds CRD detection should surface an unknown install type."""
         client = MagicMock()
 
-        def fake_get_crd_presence(_client, crd_name, *, required):
+        def fake_get_crd_presence(_client, crd_name, *, required, public_advisory=False):
+            assert public_advisory is False
             if crd_name == "applications.argoproj.io":
                 return True
             if crd_name == "argocds.argoproj.io":
@@ -988,6 +1052,17 @@ class TestDetectArgocdInstallation:
 
 @pytest.mark.unit
 class TestListArgocdApplications:
+    def test_public_advisory_uses_non_logging_raw_application_list(self):
+        """Automatic advisory listing must bypass retry logging that can stringify API errors."""
+        client = MagicMock(spec=argocd_lib.KubeClient)
+        client.list_custom_resources_advisory.return_value = [{"metadata": {"name": "application"}}]
+
+        result = argocd_lib.list_argocd_applications(client, public_advisory=True)
+
+        assert result == [{"metadata": {"name": "application"}}]
+        client.list_custom_resources_advisory.assert_called_once()
+        client.list_custom_resources.assert_not_called()
+
     def test_cluster_wide_404_returns_empty(self):
         client = MagicMock()
         client.list_custom_resources.side_effect = ApiException(status=404, reason="Not Found")

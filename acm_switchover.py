@@ -46,6 +46,7 @@ from lib.constants import (
     EXIT_SUCCESS,
     EXPECTED_MANAGED_CLUSTER_COUNT_KEY,
     EXPECTED_MANAGED_CLUSTER_NAMES_KEY,
+    HUB_ROLE_PRIMARY,
     HUB_ROLE_SECONDARY,
     MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
     MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED,
@@ -712,56 +713,40 @@ def _report_argocd_acm_impact(
     logger: logging.Logger,
     argocd_manage: bool = False,
 ) -> None:
-    """Run Argo CD detection and log ACM-touching Applications on available hubs."""
+    """Run Argo CD detection and log aggregate ACM Application advisories."""
     all_acm_apps: list = []
     hub_pairs = []
     if primary is not None:
-        hub_pairs.append(("Primary hub", primary))
-    hub_pairs.append(("Secondary hub", secondary))
+        hub_pairs.append((HUB_ROLE_PRIMARY, primary))
+    hub_pairs.append((HUB_ROLE_SECONDARY, secondary))
     for label, client in hub_pairs:
         try:
-            discovery = argocd_lib.detect_argocd_installation(client)
+            discovery = argocd_lib.detect_argocd_installation(client, public_advisory=True)
             if not discovery.has_applications_crd:
                 logger.info(
-                    "[%s] Argo CD Applications CRD not found (skipping Argo CD check)",
+                    "[%s] Argo CD advisory: Applications CRD not found; check skipped",
                     label,
                 )
                 continue
-            if discovery.install_type == "vanilla":
-                instances = "N/A (vanilla)"
-            else:
-                instances = str(len(discovery.argocd_instances or []))
-            logger.info(
-                "[%s] Argo CD: install_type=%s, argocd_instances=%s",
-                label,
-                discovery.install_type,
-                instances,
-            )
-            apps = argocd_lib.list_argocd_applications(client, namespaces=None)
-            acm_apps = argocd_lib.find_acm_touching_apps(apps)
+            apps = argocd_lib.list_argocd_applications(client, namespaces=None, public_advisory=True)
+            acm_apps = argocd_lib.find_acm_touching_apps(apps, public_advisory=True)
             if not acm_apps:
-                logger.info("[%s] No ACM-touching Argo CD Applications detected", label)
+                logger.info(
+                    "[%s] Argo CD advisory: 0 ACM-touching Application(s) detected",
+                    label,
+                )
                 continue
             all_acm_apps.extend(acm_apps)
             logger.warning(
-                "[%s] ACM resources detected in %d Argo CD Application(s); pause/scope before switchover to avoid drift.",
+                "[%s] Argo CD advisory: %d ACM-touching Application(s) detected; "
+                "pause or scope declarative management before switchover.",
                 label,
                 len(acm_apps),
             )
-            for impact in acm_apps[:10]:
-                logger.warning(
-                    "  - %s/%s (%d ACM resources)",
-                    impact.namespace,
-                    impact.name,
-                    impact.resource_count,
-                )
-            if len(acm_apps) > 10:
-                logger.warning("  ... and %d more", len(acm_apps) - 10)
-        except Exception as e:
+        except Exception:
             logger.warning(
-                "[%s] Unable to complete Argo CD check; continuing without blocking switchover: %s",
+                "[%s] Unable to complete Argo CD check; continuing without blocking switchover.",
                 label,
-                e,
             )
 
     if not argocd_manage and all_acm_apps:
@@ -771,17 +756,17 @@ def _report_argocd_acm_impact(
         if autosync_count:
             if primary is None:
                 logger.warning(
-                    "\n⚠ ArgoCD advisory: %d ACM-touching Application(s) with auto-sync detected.\n"
+                    "\n⚠ Argo CD advisory: %d ACM-touching Application(s) with auto-sync detected.\n"
                     "  Use --argocd-manage to pause auto-sync on the secondary hub before restore.\n"
-                    "  Without pausing, ArgoCD may revert restored resources.\n"
+                    "  Without pausing, Argo CD may revert restored resources.\n"
                     "  To suppress: --skip-gitops-check",
                     autosync_count,
                 )
             else:
                 logger.warning(
-                    "\n⚠ ArgoCD advisory: %d ACM-touching Application(s) with auto-sync detected.\n"
+                    "\n⚠ Argo CD advisory: %d ACM-touching Application(s) with auto-sync detected.\n"
                     "  Consider --argocd-manage to pause auto-sync during switchover.\n"
-                    "  Without pausing, ArgoCD may revert switchover changes.\n"
+                    "  Without pausing, Argo CD may revert switchover changes.\n"
                     "  To suppress: --skip-gitops-check",
                     autosync_count,
                 )

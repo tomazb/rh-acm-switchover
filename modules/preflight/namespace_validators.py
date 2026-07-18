@@ -96,7 +96,7 @@ class ObservabilityDetector(BaseValidator):
             InputValidator.validate_kubernetes_namespace(OBSERVABILITY_NAMESPACE)
         except ValidationError:
             # If observability namespace is invalid, it doesn't exist
-            logger.debug("Observability namespace validation failed: %s", OBSERVABILITY_NAMESPACE)
+            logger.debug("Observability namespace validation failed.")
             return False, False
 
         primary_has = primary.namespace_exists(OBSERVABILITY_NAMESPACE) if primary else False
@@ -147,8 +147,8 @@ class ObservabilityPrereqValidator(BaseValidator):
             # Validate namespace and secret name before checking existence
             InputValidator.validate_kubernetes_namespace(OBSERVABILITY_NAMESPACE)
             InputValidator.validate_kubernetes_name(THANOS_OBJECT_STORAGE_SECRET, "secret")
-        except ValidationError as e:
-            logger.debug("Observability validation failed: %s", e)
+        except ValidationError:
+            logger.debug("Observability prerequisite validation failed.")
             return
 
         if not secondary.namespace_exists(OBSERVABILITY_NAMESPACE):

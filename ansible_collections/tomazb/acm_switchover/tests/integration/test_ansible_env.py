@@ -17,3 +17,13 @@ def test_integration_ansible_env_includes_python314_compat_path(tmp_path):
     assert str(compat_path) in pythonpaths
     assert Path(env["ANSIBLE_LOCAL_TEMP"]).is_relative_to(tmp_path)
     assert Path(env["ANSIBLE_REMOTE_TMP"]).is_relative_to(tmp_path)
+
+
+def test_integration_ansible_env_disables_callback_color(monkeypatch, tmp_path):
+    """Sensitive-output tests must not mistake Ansible's own color controls for leaked data."""
+    monkeypatch.setenv("ANSIBLE_FORCE_COLOR", "1")
+
+    env = _ansible_env(_find_repo_root(), tmp_path)
+
+    assert "ANSIBLE_FORCE_COLOR" not in env
+    assert env["ANSIBLE_NOCOLOR"] == "1"

@@ -117,7 +117,7 @@ class TestFailOnUnexpectedError:
         fail_task = None
         for task in rescue:
             sf = task.get("ansible.builtin.set_fact", {})
-            if isinstance(sf, dict) and "acm_switchover_argocd_installed" in sf:
+            if isinstance(sf, dict) and sf.get("acm_switchover_argocd_discovery_status", {}).get("status") == "absent":
                 mark_task = task
             if "ansible.builtin.fail" in task:
                 fail_task = task
@@ -135,14 +135,13 @@ class TestFailOnUnexpectedError:
             "not in" in fail_when and " and " in fail_when
         ), f"fail 'when' should use 'not in' with 'and': {fail_when}"
 
-    def test_fail_task_message_includes_error(self):
-        """The fail message must include the actual error for debugging."""
+    def test_fail_task_message_is_stable_and_omits_raw_error(self):
+        """Strict discovery must fail with stable public text while raw evidence stays protected."""
         rescue = _get_rescue_tasks(_load_discover_tasks())
         task = self._find_fail_task(rescue)
         msg = str(task["ansible.builtin.fail"].get("msg", ""))
-        assert "_argocd_discovery_error" in msg, (
-            "Fail task msg must include {{ _argocd_discovery_error }} " "so operators can diagnose the real failure"
-        )
+        assert msg.strip() == "Argo CD discovery failed; verify controller access and input, then retry."
+        assert "_argocd_discovery_error" not in msg
 
 
 class TestErrorCapture:
@@ -156,6 +155,36 @@ class TestErrorCapture:
         assert isinstance(sf, dict) and "_argocd_discovery_error" in sf, (
             "First rescue task must capture the error into " "_argocd_discovery_error via set_fact"
         )
+        assert first.get("no_log") is True
+
+
+class TestApiFailureBoundary:
+    """API task failures must be normalized before Ansible renders a failed result."""
+
+    def test_application_api_tasks_are_non_failing_and_protected(self):
+        tasks = _get_discovery_block(_load_discover_tasks())["block"]
+        api_tasks = [task for task in tasks if "kubernetes.core.k8s_info" in task]
+        assert len(api_tasks) == 2
+        for task in api_tasks:
+            assert task.get("no_log") is True
+            assert task.get("failed_when") is False
+
+    def test_application_filter_tasks_are_non_failing_and_protected(self):
+        tasks = list(_walk_tasks(_load_discover_tasks()))
+        filter_tasks = [task for task in tasks if "tomazb.acm_switchover.acm_argocd_filter" in task]
+        assert len(filter_tasks) == 2
+        for task in filter_tasks:
+            assert task.get("no_log") is True
+            assert task.get("failed_when") is False
+
+    def test_boundary_failures_use_fixed_public_messages(self):
+        tasks = _get_discovery_block(_load_discover_tasks())["block"]
+        boundary_failures = [task for task in tasks if "discovery failure handling" in task.get("name", "")]
+        assert len(boundary_failures) == 3
+        for task in boundary_failures:
+            message = task["ansible.builtin.fail"]["msg"]
+            assert message == "Argo CD discovery boundary reported a failure."
+            assert "_argocd_discovery_error" not in message
 
 
 class TestUnsafeApplicationBlocking:

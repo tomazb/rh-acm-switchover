@@ -8,6 +8,22 @@ from threading import Thread
 
 import pytest
 
+ARGOCD_FAILURE_SENTINELS = (
+    "nested-bearer-token",
+    "api.nested-secret.example",
+    "nested-production-context",
+    "nested-system-admin",
+    "INJECTED-NESTED-DISCOVERY-LINE",
+    "\x1b",
+    "arbitrary nested discovery detail",
+)
+ARGOCD_FAILURE_MESSAGE = (
+    "Authorization: Bearer nested-bearer-token "
+    "api=https://api.nested-secret.example:6443 "
+    "context=nested-production-context user=nested-system-admin\n"
+    "INJECTED-NESTED-DISCOVERY-LINE\x1b[31m arbitrary nested discovery detail"
+)
+
 
 class _FixtureKubernetesHandler(BaseHTTPRequestHandler):
     def log_message(self, _format, *_args):
@@ -113,9 +129,80 @@ class _FixtureKubernetesHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+class _ArgoFailureKubernetesHandler(_FixtureKubernetesHandler):
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        if path == "/apis":
+            self._write_json(
+                {
+                    "kind": "APIGroupList",
+                    "groups": [
+                        {
+                            "name": "argoproj.io",
+                            "versions": [
+                                {
+                                    "groupVersion": "argoproj.io/v1alpha1",
+                                    "version": "v1alpha1",
+                                }
+                            ],
+                            "preferredVersion": {
+                                "groupVersion": "argoproj.io/v1alpha1",
+                                "version": "v1alpha1",
+                            },
+                        }
+                    ],
+                }
+            )
+            return
+        if path == "/apis/argoproj.io/v1alpha1":
+            self._write_json(
+                {
+                    "kind": "APIResourceList",
+                    "groupVersion": "argoproj.io/v1alpha1",
+                    "resources": [
+                        {
+                            "name": "applications",
+                            "singularName": "application",
+                            "namespaced": True,
+                            "kind": "Application",
+                            "verbs": ["get", "list"],
+                        }
+                    ],
+                }
+            )
+            return
+        if path == "/apis/argoproj.io/v1alpha1/applications":
+            self._write_json(
+                {
+                    "apiVersion": "v1",
+                    "kind": "Status",
+                    "status": "Failure",
+                    "message": ARGOCD_FAILURE_MESSAGE,
+                    "reason": "Forbidden",
+                    "code": 403,
+                },
+                status=403,
+            )
+            return
+        super().do_GET()
+
+
 @pytest.fixture
 def fixture_kubernetes_api_server():
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FixtureKubernetesHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.fixture
+def fixture_argocd_failure_api_server():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _ArgoFailureKubernetesHandler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -220,3 +307,110 @@ def test_preflight_invalid_report_dir_fails_without_writing_report(
     assert completed.returncode != 0
     assert report == {}
     assert "Path traversal attempt" in completed.stdout or "Path traversal attempt" in completed.stderr
+
+
+def test_preflight_nested_argocd_failure_is_callback_safe_and_advisory(
+    run_preflight_fixture,
+    fixture_argocd_failure_api_server,
+):
+    completed, report = run_preflight_fixture(
+        "passive_success.yml",
+        overrides={
+            "acm_switchover_test_overrides": {
+                "fixture_kubeconfig_server": fixture_argocd_failure_api_server,
+            },
+        },
+    )
+
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert report["status"] == "pass"
+    assert "[primary] Unable to complete Argo CD check" in output
+    assert "[secondary] Unable to complete Argo CD check" in output
+    assert not any(
+        sentinel in output for sentinel in ARGOCD_FAILURE_SENTINELS
+    ), "callback output disclosed protected sentinel data"
+
+
+def test_strict_argocd_discovery_failure_is_callback_safe_and_fails(
+    run_argocd_discovery_fixture,
+    fixture_argocd_failure_api_server,
+):
+    completed = run_argocd_discovery_fixture(
+        server=fixture_argocd_failure_api_server,
+        advisory=False,
+    )
+
+    output = completed.stdout + completed.stderr
+    assert completed.returncode != 0
+    assert "Argo CD discovery failed; verify controller access and input, then retry." in output
+    assert not any(
+        sentinel in output for sentinel in ARGOCD_FAILURE_SENTINELS
+    ), "callback output disclosed protected sentinel data"
+
+
+@pytest.mark.parametrize(
+    ("advisory", "expected_returncode", "expected_status"),
+    [
+        (True, 0, "error"),
+        (False, 2, None),
+    ],
+)
+def test_mock_filter_failure_preserves_advisory_and_strict_semantics(
+    run_argocd_discovery_fixture,
+    advisory,
+    expected_returncode,
+    expected_status,
+):
+    completed = run_argocd_discovery_fixture(
+        advisory=advisory,
+        mock_apps=[
+            {
+                "metadata": {"name": "mock-filter-secret"},
+                "status": {"resources": ["Bearer mock-filter-secret\n\x1b[31m"]},
+            }
+        ],
+    )
+
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == expected_returncode, output
+    assert "mock-filter-secret" not in output
+    assert "\x1b" not in output
+    if expected_status is None:
+        assert "Argo CD discovery failed; verify controller access and input, then retry." in output
+    else:
+        assert f"DISCOVERY_STATUS={expected_status} COUNT=0" in output
+        assert "changed=0" in output
+
+
+@pytest.mark.parametrize("check_mode", [False, True])
+def test_argocd_discovery_success_preserves_facts_without_changed_reporting(
+    run_argocd_discovery_fixture,
+    check_mode,
+):
+    completed = run_argocd_discovery_fixture(
+        advisory=True,
+        mock_apps=[
+            {
+                "metadata": {
+                    "namespace": "openshift-gitops",
+                    "name": "acm-policy",
+                },
+                "spec": {"syncPolicy": {"automated": {"prune": True}}},
+                "status": {
+                    "resources": [
+                        {
+                            "kind": "Policy",
+                            "namespace": "open-cluster-management",
+                        }
+                    ]
+                },
+            }
+        ],
+        check_mode=check_mode,
+    )
+
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert "DISCOVERY_STATUS=ok COUNT=1" in output
+    assert "changed=0" in output

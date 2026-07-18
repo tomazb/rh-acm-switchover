@@ -2812,6 +2812,133 @@ class TestPreflightPhase:
         assert logger.warning.call_count == 2
         assert any("Unable to complete Argo CD check" in call.args[0] for call in logger.warning.call_args_list)
 
+    def test_automatic_preflight_logs_only_argocd_aggregate_without_application_identity(self, caplog):
+        """Automatic preflight must retain the advisory count without publishing Application identity."""
+        args = SimpleNamespace(
+            method="passive",
+            old_hub_action="secondary",
+            skip_rbac_validation=False,
+            argocd_manage=False,
+            skip_gitops_check=False,
+            skip_observability_checks=False,
+            validate_only=False,
+        )
+        state = Mock()
+        logger = logging.getLogger("acm_switchover")
+        sensitive_app = {
+            "metadata": {
+                "namespace": "sensitive-app-namespace",
+                "name": "sensitive-app-name\nINJECTED-APPLICATION-LINE\x1b[31m",
+                "annotations": {
+                    "argocd.argoproj.io/tracking-id": "sensitive-tracking-identifier",
+                },
+            },
+            "spec": {"syncPolicy": {"automated": {"prune": True}}},
+            "status": {
+                "resources": [
+                    {
+                        "kind": "Policy",
+                        "namespace": "open-cluster-management",
+                    }
+                ]
+            },
+        }
+
+        def list_resources(*_args, **kwargs):
+            if kwargs["plural"] == "argocds":
+                return []
+            if kwargs["plural"] == "applications":
+                return [sensitive_app]
+            raise AssertionError(f"Unexpected plural: {kwargs['plural']}")
+
+        primary = Mock()
+        secondary = Mock()
+        for client in (primary, secondary):
+            client.get_custom_resource_advisory.return_value = {"metadata": {"name": "crd"}}
+            client.list_custom_resources_advisory.side_effect = list_resources
+
+        config = {
+            "primary_version": "2.14.0",
+            "secondary_version": "2.14.0",
+            "primary_observability_detected": False,
+            "secondary_observability_detected": False,
+            "has_observability": False,
+            "expected_managed_cluster_names": [],
+        }
+
+        with patch("acm_switchover.PreflightValidator") as validator_class:
+            validator = validator_class.return_value
+            validator.validate_all.return_value = (True, config)
+            validator.reporter.results = []
+            validator.reporter.critical_failures.return_value = []
+            with caplog.at_level("INFO", logger="acm_switchover"):
+                result = _run_phase_preflight(args, state, primary, secondary, logger)
+
+        log_text = "\n".join(record.getMessage() for record in caplog.records)
+        assert result is True
+        assert "Argo CD advisory" in log_text
+        assert "1 ACM-touching Application(s)" in log_text
+        assert "sensitive-app-namespace" not in log_text
+        assert "sensitive-app-name" not in log_text
+        assert "sensitive-tracking-identifier" not in log_text
+        assert "INJECTED-APPLICATION-LINE" not in log_text
+        assert "\x1b" not in log_text
+
+    def test_automatic_preflight_omits_credential_bearing_argocd_exception(self, caplog):
+        """Automatic preflight discovery failure must remain advisory without publishing exception detail."""
+        args = SimpleNamespace(
+            method="passive",
+            old_hub_action="secondary",
+            skip_rbac_validation=False,
+            argocd_manage=False,
+            skip_gitops_check=False,
+            skip_observability_checks=False,
+            validate_only=False,
+        )
+        state = Mock()
+        logger = logging.getLogger("acm_switchover")
+        private_reason = (
+            "Authorization: Bearer automatic-preflight-token "
+            "api=https://api.secret.example:6443 "
+            "context=production-admin user=system:admin\n"
+            "INJECTED-EXCEPTION-LINE\x1b[31m arbitrary exception detail"
+        )
+        primary = Mock()
+        secondary = Mock()
+        for client in (primary, secondary):
+            client.get_custom_resource_advisory.side_effect = ApiException(status=401, reason=private_reason)
+
+        config = {
+            "primary_version": "2.14.0",
+            "secondary_version": "2.14.0",
+            "primary_observability_detected": False,
+            "secondary_observability_detected": False,
+            "has_observability": False,
+            "expected_managed_cluster_names": [],
+        }
+
+        with patch("acm_switchover.PreflightValidator") as validator_class:
+            validator = validator_class.return_value
+            validator.validate_all.return_value = (True, config)
+            validator.reporter.results = []
+            validator.reporter.critical_failures.return_value = []
+            with caplog.at_level("INFO", logger="acm_switchover"):
+                result = _run_phase_preflight(args, state, primary, secondary, logger)
+
+        log_text = "\n".join(record.getMessage() for record in caplog.records)
+        assert result is True
+        assert "Unable to complete Argo CD check" in log_text
+        for sentinel in (
+            "automatic-preflight-token",
+            "api.secret.example",
+            "production-admin",
+            "system:admin",
+            "INJECTED-EXCEPTION-LINE",
+            "arbitrary exception detail",
+            "\x1b",
+        ):
+            assert sentinel not in log_text
+
     def test_argocd_detection_runs_automatically_in_preflight(self):
         """When skip_gitops_check=False, _report_argocd_acm_impact is called automatically."""
         args = SimpleNamespace(

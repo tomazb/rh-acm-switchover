@@ -144,6 +144,15 @@ retry_api_call = retry(
     reraise=True,
 )
 
+# Advisory discovery retains retries but deliberately has no before-sleep
+# logger because exception strings may contain server-provided response data.
+retry_api_call_advisory = retry(
+    retry=retry_if_exception(_should_retry),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    stop=stop_after_attempt(5),
+    reraise=True,
+)
+
 
 def api_call(
     not_found_value: Any = None,
@@ -631,6 +640,24 @@ class KubeClient:
                 return None
             raise
 
+    @retry_api_call_advisory
+    def get_custom_resource_advisory(
+        self,
+        group: str,
+        version: str,
+        plural: str,
+        name: str,
+        namespace: Optional[str] = None,
+    ) -> Optional[Dict]:
+        """Read a custom resource with retries and no exception logging."""
+        return self._get_custom_resource_raw(
+            group=group,
+            version=version,
+            plural=plural,
+            name=name,
+            namespace=namespace,
+        )
+
     @retry_api_call
     def list_custom_resources(
         self,
@@ -660,6 +687,25 @@ class KubeClient:
         Raises:
             ValidationError: If namespace is invalid
         """
+        return self._list_custom_resources_raw(
+            group=group,
+            version=version,
+            plural=plural,
+            namespace=namespace,
+            label_selector=label_selector,
+            max_items=max_items,
+        )
+
+    def _list_custom_resources_raw(
+        self,
+        group: str,
+        version: str,
+        plural: str,
+        namespace: Optional[str] = None,
+        label_selector: Optional[str] = None,
+        max_items: Optional[int] = None,
+    ) -> List[Dict]:
+        """List custom resources once without retry logging."""
         self._validate_resource_inputs(namespace=namespace)
 
         items: List[Dict] = []
@@ -720,6 +766,26 @@ class KubeClient:
                 break
 
         return items
+
+    @retry_api_call_advisory
+    def list_custom_resources_advisory(
+        self,
+        group: str,
+        version: str,
+        plural: str,
+        namespace: Optional[str] = None,
+        label_selector: Optional[str] = None,
+        max_items: Optional[int] = None,
+    ) -> List[Dict]:
+        """List custom resources with retries and no exception logging."""
+        return self._list_custom_resources_raw(
+            group=group,
+            version=version,
+            plural=plural,
+            namespace=namespace,
+            label_selector=label_selector,
+            max_items=max_items,
+        )
 
     @retry_api_call
     def patch_custom_resource(

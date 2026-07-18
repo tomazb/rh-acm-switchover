@@ -159,6 +159,99 @@ def run_preflight_fixture(tmp_path):
 
 
 @pytest.fixture
+def run_argocd_discovery_fixture(tmp_path):
+    def _run(
+        *,
+        server: str | None = None,
+        advisory: bool = False,
+        mock_apps: list[dict] | None = None,
+        check_mode: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        repo_root = _find_repo_root()
+        hubs = {
+            "primary": {
+                "context": "primary-hub",
+                "kubeconfig": "",
+            },
+            "secondary": {
+                "context": "secondary-hub",
+                "kubeconfig": "",
+            },
+        }
+        if server:
+            kubeconfig_path = tmp_path / "argocd-discovery.kubeconfig"
+            _write_preflight_fixture_kubeconfig(kubeconfig_path, "primary-hub", server)
+            hubs["primary"]["kubeconfig"] = str(kubeconfig_path)
+
+        vars_payload = {
+            "acm_switchover_hubs": hubs,
+            "acm_switchover_argocd": {"mode": "discover"},
+            "acm_switchover_argocd_mode_override": "discover",
+            "acm_switchover_argocd_advisory": advisory,
+            "_argocd_discover_hub": "primary",
+        }
+        if mock_apps is not None:
+            vars_payload["acm_switchover_argocd_mock_apps"] = mock_apps
+
+        vars_file = tmp_path / "argocd-discovery-vars.yml"
+        vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))
+        playbook_path = tmp_path / "argocd-discovery.yml"
+        playbook_path.write_text(
+            yaml.safe_dump(
+                [
+                    {
+                        "hosts": "localhost",
+                        "connection": "local",
+                        "gather_facts": False,
+                        "tasks": [
+                            {
+                                "name": "Run Argo CD discovery task path",
+                                "ansible.builtin.include_role": {
+                                    "name": "tomazb.acm_switchover.argocd_manage",
+                                    "tasks_from": "discover",
+                                },
+                            },
+                            {
+                                "name": "Publish safe discovery result",
+                                "ansible.builtin.debug": {
+                                    "msg": (
+                                        "DISCOVERY_STATUS="
+                                        "{{ acm_switchover_argocd_discovery_status.status }} "
+                                        "COUNT={{ acm_switchover_argocd_acm_apps | length }}"
+                                    )
+                                },
+                            },
+                        ],
+                    }
+                ],
+                sort_keys=False,
+            )
+        )
+
+        command = [
+            "ansible-playbook",
+            str(playbook_path),
+            "-i",
+            "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
+            "-e",
+            f"@{vars_file}",
+        ]
+        if check_mode:
+            command.append("--check")
+        return subprocess.run(
+            command,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_ansible_env(repo_root, tmp_path),
+            timeout=300,
+        )
+
+    return _run
+
+
+@pytest.fixture
 def run_argocd_fixture(tmp_path):
     def _run(fixture_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = _find_repo_root()

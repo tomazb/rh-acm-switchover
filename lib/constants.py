@@ -269,6 +269,35 @@ VALIDATION_SETUP_ROLE_CHOICES = ("operator", "validator", "both")
 # Token lifetime duration, not token material.
 TOKEN_DURATION_DEFAULT = "24h"  # nosec B105
 
+# Public preflight logging policy. Values not mapped to one of these bounded,
+# code-owned categories must use the opaque fallback.
+PREFLIGHT_PUBLIC_CHECK_FALLBACK = "Preflight validation"
+PREFLIGHT_PUBLIC_CHECK_MAX_INPUT_LENGTH = 160
+PREFLIGHT_PUBLIC_CHECK_CATEGORIES = (
+    ("ACM version matching", "ACM version matching"),
+    ("ACM version", "ACM version"),
+    ("API Connectivity", "API connectivity"),
+    ("Auto-Import Strategy", "Auto-import strategy"),
+    ("Backup status", "Backup status"),
+    ("BackupSchedule configuration", "Backup schedule"),
+    ("BackupStorageLocation", "Backup storage location"),
+    ("Cluster CLI", "Cluster CLI"),
+    ("ClusterDeployment preserveOnDelete", "Cluster deployment safety"),
+    ("Clusters imported after backup", "Backup cluster coverage"),
+    ("DataProtectionApplication", "Data protection application"),
+    ("Kubeconfig User Names", "Kubeconfig identity"),
+    ("ManagedCluster inventory", "Managed cluster inventory"),
+    ("ManagedClusters in backup", "Managed cluster backup"),
+    ("Namespace", "Namespace availability"),
+    ("OADP operator", "OADP operator"),
+    ("Observability object storage secret", "Observability storage"),
+    ("ACM Observability", "ACM observability"),
+    ("Passive sync restore", "Passive sync restore"),
+    ("RBAC Permissions", "RBAC permissions"),
+    ("Token Expiration", "Credential expiration"),
+    ("jq availability", "Optional tooling"),
+)
+
 # Argo CD validation messages
 ARGOCD_RESUME_ON_FAILURE_REQUIRES_MANAGE_MESSAGE = "--argocd-resume-on-failure requires --argocd-manage"
 ARGOCD_RESUME_ON_FAILURE_CONFLICTS_RESUME_ONLY_MESSAGE = (

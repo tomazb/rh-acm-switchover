@@ -189,10 +189,12 @@ def _get_crd_presence(
     crd_name: str,
     *,
     required: bool,
+    public_advisory: bool = False,
 ) -> Optional[bool]:
     """Return CRD presence, or None if an optional lookup failed unexpectedly."""
     try:
-        crd = client.get_custom_resource(
+        get_custom_resource = client.get_custom_resource_advisory if public_advisory else client.get_custom_resource
+        crd = get_custom_resource(
             group="apiextensions.k8s.io",
             version="v1",
             plural="customresourcedefinitions",
@@ -201,24 +203,26 @@ def _get_crd_presence(
         return crd is not None
     except ApiException as e:
         if e.status == 404:
-            logger.debug("CRD %s not found (not installed): %s", crd_name, e)
+            if not public_advisory:
+                logger.debug("Argo CD CRD was not found")
             return False
-        logger.warning(
-            "Unexpected API error checking CRD %s (status=%s): %s",
-            crd_name,
-            e.status,
-            e,
-        )
+        if not public_advisory:
+            logger.warning("Unexpected API error while checking an Argo CD CRD")
         if required:
             raise
-    except Exception as e:
-        logger.warning("Failed to check CRD %s: %s", crd_name, e)
+    except Exception:
+        if not public_advisory:
+            logger.warning("Failed to check an Argo CD CRD")
         if required:
             raise
     return None
 
 
-def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
+def detect_argocd_installation(
+    client: KubeClient,
+    *,
+    public_advisory: bool = False,
+) -> ArgocdDiscoveryResult:
     """
     Detect Argo CD installation (operator and/or vanilla).
 
@@ -231,12 +235,23 @@ def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
     Returns:
         ArgocdDiscoveryResult with CRD presence and instance list.
     """
-    has_app = _get_crd_presence(client, "applications.argoproj.io", required=True)
-    has_argocds_present = _get_crd_presence(client, "argocds.argoproj.io", required=False)
+    has_app = _get_crd_presence(
+        client,
+        "applications.argoproj.io",
+        required=True,
+        public_advisory=public_advisory,
+    )
+    has_argocds_present = _get_crd_presence(
+        client,
+        "argocds.argoproj.io",
+        required=False,
+        public_advisory=public_advisory,
+    )
     has_argocds = bool(has_argocds_present)
     install_type_override = None
     if has_argocds_present is None:
-        logger.warning("Could not determine ArgoCD CRDs presence; install type will be 'unknown'")
+        if not public_advisory:
+            logger.warning("Could not determine ArgoCD CRDs presence; install type will be 'unknown'")
         install_type_override = "unknown"
     instances: List[Dict[str, str]] = []
     if not has_app:
@@ -248,7 +263,10 @@ def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
 
     if has_argocds:
         try:
-            argocds = client.list_custom_resources(
+            list_custom_resources = (
+                client.list_custom_resources_advisory if public_advisory else client.list_custom_resources
+            )
+            argocds = list_custom_resources(
                 group=ARGOCD_APP_GROUP,
                 version=ARGOCD_APP_VERSION,
                 plural=ARGOCD_INSTANCE_CRD_PLURAL,
@@ -263,18 +281,13 @@ def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
                     }
                 )
         except ApiException as e:
-            if e.status != 404:
-                logger.warning(
-                    "Failed to list ArgoCD instances (status=%s); instance list may be incomplete",
-                    e.status,
-                )
-            else:
-                logger.debug("Failed to list ArgoCD instances: %s", e)
-        except Exception as e:
-            logger.warning(
-                "Failed to list ArgoCD instances: %s; instance list may be incomplete",
-                e,
-            )
+            if e.status != 404 and not public_advisory:
+                logger.warning("Failed to list Argo CD instances; instance list may be incomplete")
+            elif not public_advisory:
+                logger.debug("Argo CD instances were not found")
+        except Exception:
+            if not public_advisory:
+                logger.warning("Failed to list Argo CD instances; instance list may be incomplete")
         install_type = "operator"
     else:
         install_type = install_type_override or "vanilla"
@@ -287,10 +300,18 @@ def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
     )
 
 
-def _list_argocd_applications_once(client: KubeClient, namespace: Optional[str]) -> List[Dict[str, Any]]:
+def _list_argocd_applications_once(
+    client: KubeClient,
+    namespace: Optional[str],
+    *,
+    public_advisory: bool = False,
+) -> List[Dict[str, Any]]:
     """List Argo CD Applications for one namespace scope and surface real errors."""
     try:
-        return client.list_custom_resources(
+        list_custom_resources = (
+            client.list_custom_resources_advisory if public_advisory else client.list_custom_resources
+        )
+        return list_custom_resources(
             group=ARGOCD_APP_GROUP,
             version=ARGOCD_APP_VERSION,
             plural=ARGOCD_APP_PLURAL,
@@ -298,21 +319,26 @@ def _list_argocd_applications_once(client: KubeClient, namespace: Optional[str])
         )
     except ApiException as e:
         if e.status == 404:
-            logger.debug("Argo CD Applications not found while listing resources")
+            if not public_advisory:
+                logger.debug("Argo CD Applications not found while listing resources")
             return []
-        logger.warning(
-            "Failed to list Argo CD Applications (status=%s)",
-            e.status,
-        )
+        if not public_advisory:
+            logger.warning(
+                "Failed to list Argo CD Applications (status=%s)",
+                e.status,
+            )
         raise
     except Exception as e:
-        logger.warning("Failed to list Argo CD Applications (error_type=%s)", type(e).__name__)
+        if not public_advisory:
+            logger.warning("Failed to list Argo CD Applications (error_type=%s)", type(e).__name__)
         raise
 
 
 def list_argocd_applications(
     client: KubeClient,
     namespaces: Optional[List[str]] = None,
+    *,
+    public_advisory: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     List Argo CD Application resources.
@@ -332,9 +358,19 @@ def list_argocd_applications(
         for ns in namespaces:
             if not ns:
                 continue
-            result.extend(_list_argocd_applications_once(client, ns))
+            result.extend(
+                _list_argocd_applications_once(
+                    client,
+                    ns,
+                    public_advisory=public_advisory,
+                )
+            )
         return result
-    return _list_argocd_applications_once(client, namespace=None)
+    return _list_argocd_applications_once(
+        client,
+        namespace=None,
+        public_advisory=public_advisory,
+    )
 
 
 def application_namespaces_from_discovery(apps: List[Dict[str, Any]]) -> List[str]:
@@ -489,7 +525,11 @@ def find_argocd_pause_blockers(apps: List[Dict[str, Any]]) -> List[ArgocdPauseBl
     return blockers
 
 
-def find_acm_touching_apps(apps: List[Dict[str, Any]]) -> List[AppImpact]:
+def find_acm_touching_apps(
+    apps: List[Dict[str, Any]],
+    *,
+    public_advisory: bool = False,
+) -> List[AppImpact]:
     """
     Filter Applications to those that touch ACM namespaces/kinds (per status.resources).
 
@@ -504,11 +544,12 @@ def find_acm_touching_apps(apps: List[Dict[str, Any]]) -> List[AppImpact]:
         ns, name = _app_identity(app)
         resources = _status_resources(app)
         if resources is None:
-            logger.debug(
-                "App %s/%s has no status.resources; cannot verify ACM impact — skipped",
-                ns,
-                name,
-            )
+            if not public_advisory:
+                logger.debug(
+                    "App %s/%s has no status.resources; cannot verify ACM impact — skipped",
+                    ns,
+                    name,
+                )
             continue
         acm_count = _count_acm_resources(app)
         if acm_count > 0:

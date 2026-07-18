@@ -29,6 +29,7 @@
     context: "{{ rbac_hub.context }}"
   register: _rbac_argocd_app_crd_hub
   failed_when: false
+  no_log: true
   when: _rbac_requested_argocd_mode != 'none'
 
 - name: Detect Argo CD operator CRD on {{ rbac_hub.hub }} hub
@@ -40,6 +41,7 @@
     context: "{{ rbac_hub.context }}"
   register: _rbac_argocd_instance_crd_hub
   failed_when: false
+  no_log: true
   when:
     - _rbac_requested_argocd_mode != 'none'
     - (_rbac_argocd_app_crd_hub.msg | default('')) | length == 0
@@ -51,7 +53,6 @@
       Authorization denied while inspecting Argo CD CRDs on the {{ rbac_hub.hub }} hub
       (HTTP 401). This usually means the kubeconfig credentials are expired or
       invalid. Fix the credentials and retry.
-      Detail: {{ _rbac_argocd_app_crd_hub.msg | default('no detail') }}
   when:
     - _rbac_requested_argocd_mode != 'none'
     - >-
@@ -61,8 +62,8 @@
 - name: Fail on unexpected Argo CD Applications CRD discovery error for {{ rbac_hub.hub }} hub
   ansible.builtin.fail:
     msg: >-
-      Unable to inspect applications.argoproj.io on the {{ rbac_hub.hub }} hub during RBAC preflight:
-      {{ _rbac_argocd_app_crd_hub.msg | default(_rbac_argocd_app_crd_hub | string) }}
+      Unable to inspect the Argo CD Applications CRD on the {{ rbac_hub.hub }} hub
+      during RBAC preflight. Verify hub API access and retry.
   when:
     - _rbac_requested_argocd_mode != 'none'
     - (_rbac_argocd_app_crd_hub.msg | default('')) | length > 0

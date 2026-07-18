@@ -6,3 +6,7 @@ acm_switchover_features:
 
 acm_switchover_argocd:
   mode: pause
+
+# Read-only preflight callers set this to return a sanitized non-failing
+# discovery status. Other callers retain strict fail-closed behavior.
+acm_switchover_argocd_advisory: false
