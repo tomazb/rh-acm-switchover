@@ -6,16 +6,52 @@ import yaml
 
 ROLE_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles" / "argocd_manage" / "tasks"
 PREFLIGHT_TASKS_DIR = ROLE_DIR.parents[1] / "preflight" / "tasks"
+ROLES_DIR = ROLE_DIR.parents[1]
 
 
 def _load_yaml(name: str) -> list[dict]:
     return yaml.safe_load((ROLE_DIR / name).read_text())
 
 
-def _preflight_public_output() -> str:
-    """Collect every message Ansible can emit directly from preflight tasks."""
-    public_messages = []
-    for path in PREFLIGHT_TASKS_DIR.rglob("*.yml"):
+def _reachable_preflight_task_files() -> set[pathlib.Path]:
+    """Return statically resolvable task files reachable from preflight main."""
+    reachable = set()
+    pending = [PREFLIGHT_TASKS_DIR / "main.yml"]
+    while pending:
+        path = pending.pop()
+        if path in reachable:
+            continue
+        reachable.add(path)
+        tasks = list(yaml.safe_load(path.read_text()) or [])
+        nested = list(tasks)
+        while nested:
+            task = nested.pop()
+            if not isinstance(task, dict):
+                continue
+            for nested_key in ("block", "rescue", "always"):
+                nested.extend(task.get(nested_key, []) or [])
+            for action in (
+                "ansible.builtin.include_tasks",
+                "ansible.builtin.import_tasks",
+                "include_tasks",
+                "import_tasks",
+            ):
+                target = task.get(action)
+                if isinstance(target, str) and "{{" not in target:
+                    pending.append(path.parent / target)
+            include_role = task.get("ansible.builtin.include_role") or task.get("include_role")
+            if isinstance(include_role, dict):
+                role_name = str(include_role.get("name", "")).split(".")[-1]
+                tasks_from = str(include_role.get("tasks_from", "main"))
+                if role_name and "{{" not in role_name and "{{" not in tasks_from:
+                    pending.append(ROLES_DIR / role_name / "tasks" / f"{tasks_from}.yml")
+    return reachable
+
+
+def _static_preflight_public_fields() -> str:
+    """Collect supporting static fields; this does not model callback-rendered module results."""
+    public_fields = []
+    for path in _reachable_preflight_task_files():
         pending = list(yaml.safe_load(path.read_text()) or [])
         while pending:
             task = pending.pop()
@@ -27,16 +63,23 @@ def _preflight_public_output() -> str:
             pending.extend(task.get("block", []))
             pending.extend(task.get("rescue", []))
             pending.extend(task.get("always", []))
-            for action, field in (
-                ("ansible.builtin.debug", "msg"),
-                ("ansible.builtin.fail", "msg"),
-                ("ansible.builtin.assert", "fail_msg"),
+            public_fields.append(str(task.get("name", "")))
+            loop_control = task.get("loop_control")
+            if isinstance(loop_control, dict):
+                public_fields.append(str(loop_control.get("label", "")))
+            for action, fields in (
+                (("ansible.builtin.debug", "debug"), ("msg", "var")),
+                (("ansible.builtin.fail", "fail"), ("msg",)),
+                (("ansible.builtin.assert", "assert"), ("fail_msg", "success_msg")),
             ):
-                action_data = task.get(action)
-                if isinstance(action_data, dict) and field in action_data:
-                    public_messages.append(str(action_data[field]))
+                action_data = next(
+                    (task.get(action_name) for action_name in action if isinstance(task.get(action_name), dict)),
+                    None,
+                )
+                if action_data is not None:
+                    public_fields.extend(str(action_data[field]) for field in fields if field in action_data)
 
-    return "\n".join(public_messages)
+    return "\n".join(public_fields)
 
 
 def test_pause_uses_parameterized_hub():
@@ -229,19 +272,20 @@ def test_preflight_gitops_runs_read_only_argocd_advisory_on_expected_hubs():
     assert "acm_switchover_operation.restore_only" in text
     assert "acm_switchover_features.argocd.manage" in text
     assert "ACM resources detected" in text
-    public_output = _preflight_public_output()
+    public_output = _static_preflight_public_fields()
     assert "ansible_failed_result.msg" not in public_output
     assert "ansible_failed_result | string" not in public_output
     assert "app.namespace" not in public_output
     assert "app.name" not in public_output
 
 
-def test_preflight_public_output_omits_private_failure_and_path_fields():
-    """Collection debug/fail output must use stable public text."""
-    public_output = _preflight_public_output()
+def test_static_preflight_public_fields_omit_raw_failure_and_path_expressions():
+    """Statically reachable public fields must avoid known raw-result expressions."""
+    public_output = _static_preflight_public_fields()
     assert "ansible_failed_result" not in public_output
     assert "_rbac_argocd_app_crd_hub.msg" not in public_output
     assert "acm_switchover_preflight_result.path" not in public_output
+    assert "_argocd_discovery_error" not in public_output
 
 
 def test_finalization_does_not_auto_resume():

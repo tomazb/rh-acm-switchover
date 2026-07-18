@@ -61,7 +61,7 @@
   ansible.builtin.fail:
     msg: >-
       Unable to inspect the Argo CD Applications CRD on the {{ rbac_hub.hub }} hub
-      during RBAC preflight. Review private controller diagnostics and retry.
+      during RBAC preflight. Review structured diagnostic evidence and retry.
   when:
     - _rbac_requested_argocd_mode != 'none'
     - (_rbac_argocd_app_crd_hub.msg | default('')) | length > 0
