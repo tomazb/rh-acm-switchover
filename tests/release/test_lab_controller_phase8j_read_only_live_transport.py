@@ -19,6 +19,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from scripts.release import run_lab_role_controller as lab_controller_cli
 from tests.release.lab_controller.read_only_backend import (
     ReadOnlyBackendDecision,
@@ -174,6 +176,59 @@ def _transport(
         context=context if context is not None else _context(),
         client=client,
     )
+
+
+@pytest.mark.parametrize(
+    ("malformed_options", "expected_category"),
+    [
+        (None, ReadOnlyLiveTransportErrorCategory.NOT_OPTED_IN),
+        (object(), ReadOnlyLiveTransportErrorCategory.NOT_OPTED_IN),
+        (
+            ReadOnlyLiveTransportOptions(
+                allow_live_contact=True,
+                allow_read_only_queries=True,
+                total_deadline_seconds=float("inf"),
+            ),
+            ReadOnlyLiveTransportErrorCategory.INVALID_QUERY,
+        ),
+        (
+            ReadOnlyLiveTransportOptions(
+                allow_live_contact=True,
+                allow_read_only_queries=True,
+                page_size=501,
+            ),
+            ReadOnlyLiveTransportErrorCategory.INVALID_QUERY,
+        ),
+        (
+            ReadOnlyLiveTransportOptions(
+                allow_live_contact=True,
+                allow_read_only_queries=True,
+                timeout_seconds=10**10000,
+            ),
+            ReadOnlyLiveTransportErrorCategory.INVALID_QUERY,
+        ),
+        (
+            ReadOnlyLiveTransportOptions(
+                allow_live_contact=True,
+                allow_read_only_queries=True,
+                total_deadline_seconds=10**10000,
+            ),
+            ReadOnlyLiveTransportErrorCategory.INVALID_QUERY,
+        ),
+    ],
+)
+def test_malformed_or_unbounded_options_block_without_client_contact(
+    malformed_options: Any,
+    expected_category: ReadOnlyLiveTransportErrorCategory,
+) -> None:
+    client = _RecordingFakeClient()
+    context = replace(_context(), options=malformed_options)
+
+    result = _transport(client=client, context=context).execute(_query())
+
+    assert result.status is ReadOnlyLiveTransportStatus.BLOCKED
+    assert result.error_category is expected_category
+    assert client.call_count == 0
 
 
 # --- 1 / 28: non-live source guard ---------------------------------------------------------------

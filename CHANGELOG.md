@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added the disabled-by-default Phase 9B lab-controller live discovery client for bounded typed read-only physical hub
+  identity proof, complete pagination, freshness/provenance binding, stable distinct fingerprints, and fail-closed
+  recursively audited non-certification artifacts. Logical-role and mutation authority remain deferred to Phase 9C.
 - Added live RBAC bootstrap certification scenario (`rbac-bootstrap-live`) for release validation that validates applied cluster permissions end-to-end using SubjectAccessReview against live or disposable clusters.
 - Added opt-in environment variable `ACM_ENABLE_LIVE_RBAC_CERTIFICATION` to gate live RBAC certification; the scenario is skipped when not explicitly enabled, keeping normal release validation safe for production environments.
 - Added `tests/release/checks/rbac_certification.py` module that validates operator and validator role permissions, including MCO delete permission for old-hub finalization and full decommission delete permissions.

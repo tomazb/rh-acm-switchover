@@ -6,9 +6,40 @@ The gated multi-segment live lab-controller design is documented in
 [`Phase 9A — RC Hardening Re-baseline and Gated Live Lab-Controller Design`](../../docs/plans/2026-07-17-phase-9a-rc-hardening-rebaseline-and-live-controller-design.md).
 Current lab-controller fake/injected clients, dry runs, static fixtures, local harnesses, and read-only transport
 tests are not live ACM certification evidence. The existing profile-driven release runner has a live-capable
-`OcDiscoveryClient`, but it is not integrated as controller-owned physical identity proof and no current
-lab-controller entrypoint emits certification-authoritative live discovery. Phase 9B remains blocked until that
-design is merged and independently validated.
+`OcDiscoveryClient`, but it is not the Phase 9 controller authority. Phase 9B now provides
+`tests.release.lab_controller.run_phase9b_live_discovery`, a disabled-by-default controller entrypoint over explicit
+runtime-only typed read APIs. It proves physical identities only and always emits non-certification, non-mutation
+artifacts. Deterministic fake API coverage is not live evidence; the Phase 9B live exit gate remains blocked until an
+operator authorizes a real two-hub read-only run. Phase 9C remains blocked.
+
+## Phase 9B Read-Only Physical Identity
+
+The Phase 9B entrypoint requires two explicit runtime handles, a clean bound source revision, config/profile hashes,
+operator opt-in, and all L0-L9 gates. It inherits no default kubeconfig, context, endpoint, environment credential, or
+client factory. An exact controller-owned binding object passively ties each injected page reader to the corresponding
+runtime access and context object identities before the reader can be called. The binding must explicitly select the
+typed request-timeout contract; its adapter must enforce every `TypedReadRequest.timeout_seconds` value in the
+underlying API call.
+
+The controller performs only fixed bounded list queries for the `kube-system` Namespace, OpenShift
+`Infrastructure/cluster`, and OpenShift `ClusterVersion/version`. It collects each hub twice, requires complete
+pagination and consistent collection resource versions, validates freshness/skew/source/origin, canonicalizes only
+allowlisted identity fields, and requires stable, distinct SHA-256 fingerprints matching immutable controller
+enrollment bound to the clean source revision and config/profile hashes. Missing or tampered enrollment blocks before
+contact. Call traces contain only safe hub IDs, fixed query IDs, list verbs, page ordinals, completeness, and
+`mutation_attempted=false`.
+
+Artifacts force:
+
+- `purpose: live_read_only`
+- `certification_eligible: false`
+- `live_certification_evidence: false`
+- `mutation_attempted: false`
+
+Publication is all-or-nothing after a recursive key/value/type audit. Raw UIDs, infrastructure names, credentials,
+paths, contexts, endpoints, runtime handles, exception text, and arbitrary object representations are never
+published. Phase 9B does not infer logical primary/secondary roles, known state, readiness, mutation/recovery
+authority, or executable profiles.
 
 ## Framework Tests
 

@@ -9,13 +9,19 @@ Release validation is intentionally explicit. `./run_tests.sh` now runs the non-
 The existing profile-driven entrypoint is not the future multi-segment live safety authority. The authoritative
 Phase 9 trust boundary and implementation gates are defined in
 [`Phase 9A — RC Hardening Re-baseline and Gated Live Lab-Controller Design`](../plans/2026-07-17-phase-9a-rc-hardening-rebaseline-and-live-controller-design.md).
-Until those later slices are implemented and independently validated, fake, dry-run, static-fixture, local-harness,
-and read-only-contact evidence cannot establish live ACM certification through the lab role controller.
+Phase 9B now provides a controller-owned, typed read-only discovery entrypoint for physical identity proof. It is
+disabled by default, requires explicit runtime-only handles and L0-L9/source/config/profile gates, performs only fixed
+bounded list queries, and publishes only recursively audited non-certification artifacts. Fake, dry-run,
+static-fixture, local-harness, and Phase 9B read-only-contact evidence still cannot establish live ACM certification
+through the lab role controller.
 
-The existing profile-driven runner already supplies a live-capable `OcDiscoveryClient` for framework discovery.
-That read-only client capability is distinct from controller authority: current lab-controller integrations use
-fake/injected client paths, do not bind the required physical identity tuple into a live controller decision, and do
-not provide a controller entrypoint that emits certification-authoritative live discovery.
+The existing profile-driven runner's `OcDiscoveryClient` remains distinct from controller authority and is not used
+by Phase 9B. The Phase 9B entrypoint accepts caller-injected page readers only through exact controller-owned binding
+objects tied to their runtime access/context object identities. It repeatedly collects `kube-system` Namespace,
+OpenShift Infrastructure, and
+ClusterVersion identity signals; enforces complete pagination, source revision, evidence origin, freshness, and skew;
+and derives stable distinct SHA-256 fingerprints. It deliberately emits no certification-authoritative, logical-role,
+known-state, readiness, mutation, recovery, or executable-profile claims. Phase 9C remains blocked.
 
 ## Orchestration Flow
 
@@ -75,7 +81,8 @@ A focused rerun may select one mutating scenario plus its automatic prerequisite
 ## Known-State Lab Control
 
 This section documents the intended direction for live lab-mutating certification; it is not a complete
-implementation spec and does not describe behavior that already exists.
+implementation spec. Phase 9B physical identity collection now exists, but the logical-role and mutating lifecycle
+described below remains Phase 9C and later work.
 
 Terminology:
 
@@ -98,10 +105,10 @@ lab in an unknown or unsafe intermediate state. Therefore, full multi-mutation c
 blocked or produce a NO-GO decision until reset/recovery sequencing can prove each next starting state.
 
 The lab role controller under `tests/release/lab_controller/` is the intended mechanism for making multi-mutation
-certification safe. Its current Phase 1-6C implementation is deterministic and non-live: it models known-state
-sequencing, generated profile freshness, provisional artifacts, dry-run release-framework request construction,
-non-executed invocation materialization, and an explicitly gated local harness with injected runners. Future live
-execution remains unsupported and fail-closed.
+certification safe. Its Phase 1-8 implementation remains deterministic and non-live for known-state sequencing,
+profile generation, provisional artifacts, request materialization, and the local harness. Phase 9B supports only
+explicitly gated live read-only physical identity discovery. Logical-role mapping and all mutating lifecycle execution
+remain unsupported and fail-closed pending Phase 9C and later slices.
 
 The static release-lab Kustomize fixtures under `tests/release/kustomize/` model the intended two-hub,
 three-managed-SNO topology and Argo CD ACM-object ownership interference modes for non-live validation only. These
@@ -150,6 +157,12 @@ The final `release-report.md` includes run identity, release metadata consistenc
 Future Phase 9 preparation output uses the separate allowlisted `LAB_PREPARATION_ONLY` evidence class and artifact
 namespace. It is always non-certification-eligible, cannot be relabeled or merged into passing scenario results, and
 may be referenced only as provenance before fresh controller discovery and authorization.
+
+Phase 9B live read-only output uses a separate `live_read_only` purpose. Every artifact records the schema, writer,
+and controller revisions; clean source revision; config/profile hashes; immutable identity-enrollment hash; collection
+timestamps; freshness/skew result; evidence-origin fingerprints; per-query pagination completeness; physical identity
+fingerprints; allowlisted call trace; and recursive redaction audit. The controller forces certification eligibility,
+live-certification evidence, and mutation attempted to false. Redaction failure prevents publication.
 
 ## Safety Notes
 

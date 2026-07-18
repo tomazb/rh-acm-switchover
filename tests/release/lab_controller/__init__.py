@@ -39,6 +39,21 @@ from .harness import (
     summarize_execution_evidence,
 )
 from .identity import verify_physical_hub_identities
+from .live_discovery import (
+    IDENTITY_QUERY_IDS,
+    LiveDiscoveryBounds,
+    Phase9BDecision,
+    Phase9BIdentityEnrollment,
+    Phase9BLiveDiscoveryRequest,
+    Phase9BRuntimeHandle,
+    TypedReadApi,
+    TypedReadPage,
+    TypedReadPageReader,
+    TypedReadRequest,
+    build_phase9b_identity_enrollment,
+    fingerprint_identity_inputs,
+    run_phase9b_live_discovery,
+)
 from .models import ArgoCDInterferenceMode, CertificationDecision, CoordinationStrategy
 from .planner import (
     CertificationArtifactBundle,
@@ -78,6 +93,19 @@ __all__ = [
     "classify_scenario",
     "infer_observed_role_state",
     "verify_physical_hub_identities",
+    "IDENTITY_QUERY_IDS",
+    "LiveDiscoveryBounds",
+    "Phase9BDecision",
+    "Phase9BIdentityEnrollment",
+    "Phase9BLiveDiscoveryRequest",
+    "Phase9BRuntimeHandle",
+    "TypedReadApi",
+    "TypedReadPage",
+    "TypedReadPageReader",
+    "TypedReadRequest",
+    "build_phase9b_identity_enrollment",
+    "fingerprint_identity_inputs",
+    "run_phase9b_live_discovery",
     "ArgoCDInterferenceMode",
     "CoordinationStrategy",
     "build_gitops_artifact_summary",

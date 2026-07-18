@@ -20,6 +20,25 @@ wrapper for deterministic planning and redacted artifact emission, and static Gi
 from checked-in release-lab fixtures. These phases do not change the current release profile schema, do not finalize a
 production JSON schema, and do not authorize live lab mutation outside the existing release validation entrypoints.
 
+Phase 9B adds the first controller-owned live-contact path in
+`tests/release/lab_controller/live_discovery.py`. It remains disabled by default and has no ambient credential or
+default-client path. A caller must explicitly opt in, bind a clean source revision and config/profile hashes, satisfy
+L0-L9, and inject two runtime-only typed read APIs whose access and context handles match exactly. The existing pure
+`ReadOnlyLiveTransport` remains the final pre-contact policy gate; the concrete controller client behind it accepts
+only a fixed identity bundle and translates that bundle into bounded, typed Kubernetes/OpenShift list requests.
+Each public hub ID must have its own typed API object and its own matching access/context object identities; sharing
+an API, access handle, or context handle across the two hubs blocks before contact. This object-identity binding is
+separate from equality of safe request metadata and never publishes or stringifies the runtime objects. Pre-contact
+binding validation reads only fields on an exact controller-owned binding dataclass; it does not invoke a callback on
+the caller-supplied page reader. The reader is first invoked behind the existing transport gate.
+
+Phase 9B does not authorize certification or mutation. Its artifact always sets
+`purpose=live_read_only`, `certification_eligible=false`, `live_certification_evidence=false`, and
+`mutation_attempted=false`. Deterministic fake API tests prove the contract but are not live evidence. Until an
+operator-authorized two-hub read-only run satisfies the Phase 9B live exit gate, the implementation status is blocked
+for live exit evidence. Phase 9C logical-role, known-state, readiness, profile binding, mutation authorization, and
+recovery authority remain blocked.
+
 The controller described here is a design target for safely certifying a live two-hub ACM lab when scenarios
 may change which physical cluster is the logical primary.
 
@@ -160,7 +179,11 @@ Text architecture diagram:
 Agent
   -> release-control script
      -> lab role controller
-        -> discovery
+        -> Phase 9B live-discovery entrypoint
+           -> ReadOnlyLiveTransport pre-contact gate
+              -> controller-owned typed client
+                 -> injected runtime-only typed read API
+        -> logical-role discovery (Phase 9C; blocked)
         -> profile generation
         -> pytest release framework
         -> segment verification
@@ -179,11 +202,25 @@ Requirements:
 
 - Stable labels such as `hub-a` and `hub-b` are operator-facing names only.
 - The controller must bind those labels to live cluster identity evidence before every segment.
-- Identity evidence may include the `kube-system` namespace UID, API server URL, cluster version, ACM hub
-  evidence, and kubeconfig context name.
-- Kubeconfig context names alone are insufficient.
+- Phase 9B requires the `kube-system` Namespace UID, the OpenShift `Infrastructure/cluster` object UID plus
+  `status.infrastructureName`, and the OpenShift `ClusterVersion/version` object UID.
+- API endpoints, kubeconfig paths, context names, caller ordering, aliases, and profile role labels are locators or
+  runtime inputs, never physical identity proof.
+- Every admitted typed page-reader binding must explicitly select the controller's request-timeout contract and
+  enforce the supplied timeout in its underlying Kubernetes/OpenShift API call.
+- The three-signal allowlisted document is canonicalized as sorted compact JSON and published only as a SHA-256
+  fingerprint; raw identity fields are not artifact-facing.
+- Expected fingerprints come from immutable controller enrollment bound to the clean source revision and
+  config/profile hashes. The controller recomputes the enrollment hash and blocks missing, duplicate, or tampered
+  enrollment before contact; runtime handles cannot supply or override expected fingerprints.
+- Both hubs are collected twice within one bounded evidence window. Missing, duplicate, conflicting, unreadable,
+  changing, stale, skewed, wrong-source, wrong-origin, or equal fingerprints block.
 - Identity mismatches are hard failures.
-- Identity evidence must be redacted before artifacts are published.
+- Every typed query must reach terminal pagination completeness with one consistent collection resource version.
+  Missing/repeated/looping tokens, invalid transitions, terminal truncation, mixed snapshots, or page/item/deadline
+  exhaustion block.
+- Identity evidence is recursively audited before artifacts are published; audit failure blocks publication rather
+  than emitting a partially sanitized artifact.
 
 This should reuse existing identity ideas where possible. The Python CLI already records hub identities by
 cluster UID in state, as described in `AGENTS.md` and `docs/operations/usage.md`. The release framework
