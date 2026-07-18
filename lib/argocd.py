@@ -204,20 +204,15 @@ def _get_crd_presence(
     except ApiException as e:
         if e.status == 404:
             if not public_advisory:
-                logger.debug("CRD %s not found (not installed): %s", crd_name, e)
+                logger.debug("Argo CD CRD was not found")
             return False
         if not public_advisory:
-            logger.warning(
-                "Unexpected API error checking CRD %s (status=%s): %s",
-                crd_name,
-                e.status,
-                e,
-            )
+            logger.warning("Unexpected API error while checking an Argo CD CRD")
         if required:
             raise
-    except Exception as e:
+    except Exception:
         if not public_advisory:
-            logger.warning("Failed to check CRD %s: %s", crd_name, e)
+            logger.warning("Failed to check an Argo CD CRD")
         if required:
             raise
     return None
@@ -287,18 +282,12 @@ def detect_argocd_installation(
                 )
         except ApiException as e:
             if e.status != 404 and not public_advisory:
-                logger.warning(
-                    "Failed to list ArgoCD instances (status=%s); instance list may be incomplete",
-                    e.status,
-                )
+                logger.warning("Failed to list Argo CD instances; instance list may be incomplete")
             elif not public_advisory:
-                logger.debug("Failed to list ArgoCD instances: %s", e)
-        except Exception as e:
+                logger.debug("Argo CD instances were not found")
+        except Exception:
             if not public_advisory:
-                logger.warning(
-                    "Failed to list ArgoCD instances: %s; instance list may be incomplete",
-                    e,
-                )
+                logger.warning("Failed to list Argo CD instances; instance list may be incomplete")
         install_type = "operator"
     else:
         install_type = install_type_override or "vanilla"

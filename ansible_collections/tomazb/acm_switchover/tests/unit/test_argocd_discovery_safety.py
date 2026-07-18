@@ -140,7 +140,7 @@ class TestFailOnUnexpectedError:
         rescue = _get_rescue_tasks(_load_discover_tasks())
         task = self._find_fail_task(rescue)
         msg = str(task["ansible.builtin.fail"].get("msg", ""))
-        assert msg.strip() == "Argo CD discovery failed; review structured diagnostic evidence and retry."
+        assert msg.strip() == "Argo CD discovery failed; verify controller access and input, then retry."
         assert "_argocd_discovery_error" not in msg
 
 

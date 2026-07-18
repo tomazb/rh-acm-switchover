@@ -198,7 +198,7 @@
 
     - name: Re-raise failure
       ansible.builtin.fail:
-        msg: "Phase preflight failed; review the structured diagnostic evidence."
+        msg: "Phase preflight failed; correct the reported validation failures and retry."
 
 - name: Persist report and summary facts
   ansible.builtin.include_tasks: write_report.yml

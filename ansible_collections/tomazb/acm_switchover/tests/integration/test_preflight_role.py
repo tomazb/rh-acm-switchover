@@ -343,10 +343,44 @@ def test_strict_argocd_discovery_failure_is_callback_safe_and_fails(
 
     output = completed.stdout + completed.stderr
     assert completed.returncode != 0
-    assert "Argo CD discovery failed; review structured diagnostic evidence and retry." in output
+    assert "Argo CD discovery failed; verify controller access and input, then retry." in output
     assert not any(
         sentinel in output for sentinel in ARGOCD_FAILURE_SENTINELS
     ), "callback output disclosed protected sentinel data"
+
+
+@pytest.mark.parametrize(
+    ("advisory", "expected_returncode", "expected_status"),
+    [
+        (True, 0, "error"),
+        (False, 2, None),
+    ],
+)
+def test_mock_filter_failure_preserves_advisory_and_strict_semantics(
+    run_argocd_discovery_fixture,
+    advisory,
+    expected_returncode,
+    expected_status,
+):
+    completed = run_argocd_discovery_fixture(
+        advisory=advisory,
+        mock_apps=[
+            {
+                "metadata": {"name": "mock-filter-secret"},
+                "status": {"resources": ["Bearer mock-filter-secret\n\x1b[31m"]},
+            }
+        ],
+    )
+
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == expected_returncode, output
+    assert "mock-filter-secret" not in output
+    assert "\x1b" not in output
+    if expected_status is None:
+        assert "Argo CD discovery failed; verify controller access and input, then retry." in output
+    else:
+        assert f"DISCOVERY_STATUS={expected_status} COUNT=0" in output
+        assert "changed=0" in output
 
 
 @pytest.mark.parametrize("check_mode", [False, True])

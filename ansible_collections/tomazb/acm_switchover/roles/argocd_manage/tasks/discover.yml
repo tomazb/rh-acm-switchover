@@ -13,12 +13,29 @@
     - name: Capture protected mock Application filtering failure
       ansible.builtin.set_fact:
         _argocd_mock_filter_error: "{{ _argocd_mock_filtered.msg | default('') }}"
+        _argocd_mock_filter_failed: "{{ _argocd_mock_filtered.applications is not defined }}"
       no_log: true
 
     - name: Enter sanitized discovery failure handling for mock Application filtering
       ansible.builtin.fail:
-        msg: "Argo CD discovery failed; review structured diagnostic evidence and retry."
-      when: (_argocd_mock_filter_error | length) > 0
+        msg: "Argo CD discovery failed; verify controller access and input, then retry."
+      when:
+        - _argocd_mock_filter_failed | bool
+        - not (acm_switchover_argocd_advisory | default(false) | bool)
+
+    - name: Record sanitized advisory mock Application filtering failure
+      ansible.builtin.set_fact:
+        acm_switchover_argocd_installed: false
+        acm_switchover_argocd_acm_apps: []
+        acm_switchover_argocd_blocked_apps: []
+        acm_switchover_argocd_all_apps: []
+        acm_switchover_argocd_discovery_status:
+          status: error
+          category: application-filter
+      no_log: true
+      when:
+        - _argocd_mock_filter_failed | bool
+        - acm_switchover_argocd_advisory | default(false) | bool
 
     - name: Record filtered mock apps
       ansible.builtin.set_fact:
@@ -29,6 +46,7 @@
         acm_switchover_argocd_discovery_status:
           status: ok
       no_log: true
+      when: not (_argocd_mock_filter_failed | bool)
 
 - name: Discover Argo CD Applications from cluster
   when: acm_switchover_argocd_mock_apps is not defined
@@ -262,7 +280,7 @@
 
     - name: Fail on unexpected Argo CD discovery error
       ansible.builtin.fail:
-        msg: "Argo CD discovery failed; review structured diagnostic evidence and retry."
+        msg: "Argo CD discovery failed; verify controller access and input, then retry."
       when:
         - not (acm_switchover_argocd_advisory | default(false) | bool)
         - >-

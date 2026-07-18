@@ -274,4 +274,6 @@ def test_preflight_fails_closed_when_argocd_crd_discovery_is_unauthorized(caplog
     assert len(rbac_results) == 1
     assert rbac_results[0]["passed"] is False
     assert private_api_reason in rbac_results[0]["message"]
-    assert private_api_reason not in "\n".join(record.getMessage() for record in caplog.records)
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    for sentinel in ("secret-token", "production-admin"):
+        assert sentinel not in log_text

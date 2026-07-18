@@ -187,6 +187,8 @@ def _ansible_env(repo_root: Path, tmp_path: Path, *, extra_pythonpaths: tuple[Pa
     if existing_pythonpath:
         pythonpaths.append(existing_pythonpath)
     env["PYTHONPATH"] = ":".join(pythonpaths)
+    env.pop("ANSIBLE_FORCE_COLOR", None)
+    env["ANSIBLE_NOCOLOR"] = "1"
     return env
 
 

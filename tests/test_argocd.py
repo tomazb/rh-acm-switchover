@@ -926,6 +926,51 @@ class TestDetectArgocdInstallation:
         client.get_custom_resource.assert_not_called()
         client.list_custom_resources.assert_not_called()
 
+    @pytest.mark.parametrize(
+        ("side_effects", "log_level"),
+        [
+            (
+                [ApiException(status=404, reason="Bearer strict-crd-secret\n\x1b[31m"), None],
+                "DEBUG",
+            ),
+            (
+                ApiException(status=403, reason="Bearer strict-crd-secret\n\x1b[31m"),
+                "WARNING",
+            ),
+            (
+                [
+                    {"metadata": {"name": "applications.argoproj.io"}},
+                    RuntimeError("Bearer strict-crd-secret\n\x1b[31m"),
+                ],
+                "WARNING",
+            ),
+            (
+                [
+                    {"metadata": {"name": "applications.argoproj.io"}},
+                    {"metadata": {"name": "argocds.argoproj.io"}},
+                ],
+                "WARNING",
+            ),
+        ],
+    )
+    def test_strict_discovery_logs_omit_exception_details(self, caplog, side_effects, log_level):
+        """Strict discovery may raise or degrade, but its public logs must remain code-controlled."""
+        import logging
+
+        client = MagicMock()
+        client.get_custom_resource.side_effect = side_effects
+        if isinstance(side_effects, list) and len(side_effects) == 2 and isinstance(side_effects[1], dict):
+            client.list_custom_resources.side_effect = RuntimeError("Bearer strict-crd-secret\n\x1b[31m")
+
+        with caplog.at_level(getattr(logging, log_level), logger="acm_switchover"):
+            try:
+                argocd_lib.detect_argocd_installation(client)
+            except ApiException:
+                pass
+
+        assert "strict-crd-secret" not in caplog.text
+        assert "\x1b" not in caplog.text
+
     """Test detect_argocd_installation."""
 
     def test_none_when_app_crd_missing(self):

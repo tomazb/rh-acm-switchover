@@ -288,6 +288,22 @@ def test_static_preflight_public_fields_omit_raw_failure_and_path_expressions():
     assert "_argocd_discovery_error" not in public_output
 
 
+def test_preflight_rbac_crd_discovery_results_are_callback_protected():
+    """RBAC CRD lookup failures must be hidden before sanitized fail tasks inspect them."""
+    tasks = yaml.safe_load((PREFLIGHT_TASKS_DIR / "validate_rbac_hub.yml").read_text())
+    discovery_tasks = [
+        task
+        for task in tasks
+        if task.get("name", "").startswith("Detect Argo CD")
+        and task.get("register") in {"_rbac_argocd_app_crd_hub", "_rbac_argocd_instance_crd_hub"}
+    ]
+
+    assert len(discovery_tasks) == 2
+    for task in discovery_tasks:
+        assert task.get("failed_when") is False
+        assert task.get("no_log") is True
+
+
 def test_finalization_does_not_auto_resume():
     """finalization/main.yml should NOT auto-resume argocd (removed feature)."""
     text = (ROLES_DIR / "finalization" / "tasks" / "main.yml").read_text()
