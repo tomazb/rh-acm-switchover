@@ -22,17 +22,19 @@ production JSON schema, and do not authorize live lab mutation outside the exist
 
 Phase 9B adds the first controller-owned live-contact path in
 `tests/release/lab_controller/live_discovery.py`. It remains disabled by default and has no ambient credential or
-default-client path. A caller must explicitly opt in, bind a clean source revision and config/profile hashes, satisfy
-L0-L9, and inject two runtime-only typed read APIs whose public hub ID, access/context handles, and exact PEM API
-trust-anchor bundle match. The existing pure
+default-client path. The controller is constructed with a frozen enrollment registry supplied independently of each
+discovery request. Each registry entry binds a stable enrollment ID, private physical inventory label, safe public
+hub ID, expected physical identity fingerprint, expected API trust-anchor fingerprint, expected evidence origin, and
+the clean source/config/profile hashes. A caller must explicitly opt in, satisfy L0-L9, and inject two runtime-only
+typed read APIs that reference those enrollments. A request cannot define or replace registry enrollment. The existing pure
 `ReadOnlyLiveTransport` remains the final pre-contact policy gate; the concrete controller client behind it accepts
 only a fixed identity bundle and translates that bundle into bounded, typed Kubernetes/OpenShift list requests.
 Each public hub ID must have its own typed API object and its own matching access/context object identities; sharing
 an API, access handle, or context handle across the two hubs blocks before contact. This object-identity binding is
-separate from equality of safe request metadata and never publishes or stringifies the runtime objects. Pre-contact
-binding validation reads only fields on an exact controller-owned binding dataclass and uses static callable lookup; it
-does not invoke the caller-supplied page reader. Behind the existing transport gate, the binding passes its exact
-access/context objects and validated trust-anchor bytes into every reader call.
+admitted against the referenced registry entry, separate from equality of safe request metadata, and never publishes
+or stringifies the runtime objects. Pre-contact binding validation reads only fields on exact frozen dataclasses and
+uses static callable lookup; it does not invoke the caller-supplied page reader. Behind the existing transport gate,
+the binding passes its exact access/context objects and validated trust-anchor bytes into every reader call.
 
 Phase 9B does not authorize certification or mutation. Its artifact always sets
 `purpose=live_read_only`, `certification_eligible=false`, `live_certification_evidence=false`, and
@@ -182,6 +184,7 @@ Agent
   -> release-control script
      -> lab role controller
         -> Phase 9B live-discovery entrypoint
+           -> immutable controller enrollment registry
            -> ReadOnlyLiveTransport pre-contact gate
               -> controller-owned typed client
                  -> injected runtime-only typed read API
@@ -202,13 +205,17 @@ The controller must identify physical hubs safely before any mutation.
 
 Requirements:
 
-- Stable labels such as `hub-a` and `hub-b` are operator-facing names only.
+- Stable runtime labels such as `hub-a` and `hub-b` are operator-facing names only.
 - The controller must bind those labels to live cluster identity evidence before every segment.
+- Phase 9B controller enrollment binds a stable enrollment ID and private physical inventory label to the expected
+  physical identity, API trust anchor, evidence origin, clean source revision, config hash, and profile hash. Requests
+  may reference enrollment IDs but cannot define or replace registry entries.
 - Phase 9B requires the `kube-system` Namespace UID, the OpenShift `Infrastructure/cluster` object UID plus
   `status.infrastructureName`, a SHA-256 fingerprint of the exact API trust-anchor bundle used by the connection, and
   the OpenShift `ClusterVersion/version` object UID.
-- API endpoints, kubeconfig paths, context names, caller ordering, aliases, and profile role labels are locators or
-  runtime inputs, never physical identity proof.
+- API endpoints, kubeconfig paths, context names, caller ordering, runtime labels, caller-provided expected
+  fingerprints, aliases, and profile role labels are locators or runtime inputs, never enrollment authority or
+  physical identity proof.
 - Every admitted typed page-reader binding must explicitly select the controller's request-timeout contract and
   enforce the supplied timeout in its underlying Kubernetes/OpenShift API call. The controller also measures each
   request and rejects completion at or beyond the request deadline.
@@ -216,9 +223,10 @@ Requirements:
   Missing, malformed, unverifiable, changed, or mismatched bundles block before contact.
 - The four-signal allowlisted document is canonicalized as sorted compact JSON and published only as a SHA-256
   fingerprint; raw identity fields and certificates are not artifact-facing.
-- Expected fingerprints come from immutable controller enrollment bound to the clean source revision and
-  config/profile hashes. The controller recomputes the enrollment hash and blocks missing, duplicate, or tampered
-  enrollment before contact; runtime handles cannot supply or override expected fingerprints.
+- Expected fingerprints come from the immutable controller registry supplied independently of the per-run request.
+  The controller recomputes the registry hash and blocks missing, duplicate, or tampered enrollment before contact;
+  a non-empty request enrollment field is rejected, and runtime handles cannot supply or override expected identity,
+  trust-anchor, origin, source, config, profile, inventory, or public-label bindings.
 - Both hubs are collected twice within one bounded evidence window. Missing, duplicate, conflicting, unreadable,
   changing, stale, skewed, wrong-source, wrong-origin, or equal fingerprints block.
 - Evidence freshness and the total deadline are recomputed at collection completion before artifact publication.
@@ -228,6 +236,8 @@ Requirements:
   exhaustion block.
 - Identity evidence is recursively audited before artifacts are published; audit failure blocks publication rather
   than emitting a partially sanitized artifact.
+- Raw enrollment IDs, private inventory labels, evidence origins, certificates, credentials, paths, and API locations
+  are never published. Artifacts retain only safe public hub IDs, fingerprints, and the registry digest.
 
 This should reuse existing identity ideas where possible. The Python CLI already records hub identities by
 cluster UID in state, as described in `AGENTS.md` and `docs/operations/usage.md`. The release framework

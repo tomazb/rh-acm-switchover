@@ -20,12 +20,14 @@ from tests.release.lab_controller.live_discovery import (
     ControllerOwnedLiveDiscoveryClient,
     LiveDiscoveryBounds,
     Phase9BDecision,
+    Phase9BEnrollmentRegistry,
+    Phase9BHubEnrollment,
     Phase9BLiveDiscoveryRequest,
     Phase9BRuntimeHandle,
     TypedReadApi,
     TypedReadPage,
     TypedReadRequest,
-    build_phase9b_identity_enrollment,
+    build_phase9b_enrollment_registry,
     fingerprint_api_trust_anchor,
     fingerprint_identity_inputs,
     run_phase9b_live_discovery,
@@ -265,11 +267,13 @@ def _handle(
     access_handle: object | None = None,
     context_handle: object | None = None,
     trust_anchor_pem: bytes | None = None,
+    enrollment_id: str | None = None,
 ) -> Phase9BRuntimeHandle:
     effective_access_handle = access_handle if access_handle is not None else object()
     effective_context_handle = context_handle if context_handle is not None else object()
     reader = api if api is not None else _ScriptedTypedApi(_scripts(seed, origin))
     return Phase9BRuntimeHandle(
+        enrollment_id=enrollment_id or f"enrollment-{public_hub_id}",
         public_hub_id=public_hub_id,
         access_handle=effective_access_handle,
         context_handle=effective_context_handle,
@@ -282,6 +286,46 @@ def _handle(
             timeout_contract="typed_request_timeout_v1",
         ),
         expected_evidence_origin=origin,
+    )
+
+
+def _registry(
+    *,
+    first_identity_seed: str = "alpha",
+    second_identity_seed: str = "bravo",
+    first_trust_seed: str = "alpha",
+    second_trust_seed: str = "bravo",
+    first_origin: str = "origin-alpha",
+    second_origin: str = "origin-bravo",
+) -> Phase9BEnrollmentRegistry:
+    return build_phase9b_enrollment_registry(
+        hubs=(
+            Phase9BHubEnrollment(
+                enrollment_id="enrollment-physical-hub-1",
+                public_hub_id="physical-hub-1",
+                physical_inventory_label="inventory-hub-alpha",
+                expected_identity_fingerprint=_fingerprint(
+                    first_identity_seed,
+                    trust_anchor_pem=_TRUST_ANCHORS[first_trust_seed],
+                ),
+                expected_api_trust_anchor_fingerprint=fingerprint_api_trust_anchor(_TRUST_ANCHORS[first_trust_seed]),
+                expected_evidence_origin=first_origin,
+            ),
+            Phase9BHubEnrollment(
+                enrollment_id="enrollment-physical-hub-2",
+                public_hub_id="physical-hub-2",
+                physical_inventory_label="inventory-hub-bravo",
+                expected_identity_fingerprint=_fingerprint(
+                    second_identity_seed,
+                    trust_anchor_pem=_TRUST_ANCHORS[second_trust_seed],
+                ),
+                expected_api_trust_anchor_fingerprint=fingerprint_api_trust_anchor(_TRUST_ANCHORS[second_trust_seed]),
+                expected_evidence_origin=second_origin,
+            ),
+        ),
+        source_revision=_SOURCE_REVISION,
+        config_sha256=_CONFIG_HASH,
+        profile_sha256=_PROFILE_HASH,
     )
 
 
@@ -311,25 +355,20 @@ def _request(
         ),
         "bounds": bounds or LiveDiscoveryBounds(),
     }
-    base["identity_enrollment"] = build_phase9b_identity_enrollment(
-        hub_fingerprints={
-            "physical-hub-1": _fingerprint("alpha"),
-            "physical-hub-2": _fingerprint("bravo"),
-        },
-        hub_api_trust_anchor_fingerprints={
-            "physical-hub-1": fingerprint_api_trust_anchor(_TRUST_ANCHORS["alpha"]),
-            "physical-hub-2": fingerprint_api_trust_anchor(_TRUST_ANCHORS["bravo"]),
-        },
-        source_revision=_SOURCE_REVISION,
-        config_sha256=_CONFIG_HASH,
-        profile_sha256=_PROFILE_HASH,
-    )
     base.update(kwargs)
     return Phase9BLiveDiscoveryRequest(**base)
 
 
-def _run(request: Phase9BLiveDiscoveryRequest):
-    return run_phase9b_live_discovery(request, clock=_FakeClock())
+def _run(
+    request: Phase9BLiveDiscoveryRequest,
+    *,
+    enrollment_registry: Phase9BEnrollmentRegistry | None = None,
+):
+    return run_phase9b_live_discovery(
+        request,
+        enrollment_registry=enrollment_registry or _registry(),
+        clock=_FakeClock(),
+    )
 
 
 def _all_api_calls(request: Phase9BLiveDiscoveryRequest) -> int:
@@ -340,18 +379,19 @@ def _all_api_calls(request: Phase9BLiveDiscoveryRequest) -> int:
 
 def test_proves_two_stable_distinct_multi_signal_physical_hubs() -> None:
     request = _request()
-    result = _run(request)
+    registry = _registry()
+    result = _run(request, enrollment_registry=registry)
 
     assert result.decision is Phase9BDecision.PASS
     assert result.artifact is not None
-    assert request.identity_enrollment is not None
+    assert request.identity_enrollment is None
     assert len(result.identity_fingerprints) == 2
     assert len(set(result.identity_fingerprints.values())) == 2
     assert result.artifact["purpose"] == "live_read_only"
     assert result.artifact["certification_eligible"] is False
     assert result.artifact["live_certification_evidence"] is False
     assert result.artifact["mutation_attempted"] is False
-    assert result.artifact["identity_enrollment_sha256"] == request.identity_enrollment.enrollment_sha256
+    assert result.artifact["identity_enrollment_sha256"] == registry.registry_sha256
     for proof in result.artifact["physical_identity_proofs"].values():
         assert proof["signal_count"] == 4
         assert "api_trust_anchor_sha256" in proof["signal_names"]
@@ -375,21 +415,12 @@ def test_swapped_runtime_clients_are_rejected_by_enrolled_fingerprint_and_origin
 
 
 def test_enrolled_fingerprint_mismatch_is_rejected_independently_of_origin() -> None:
-    enrollment = build_phase9b_identity_enrollment(
-        hub_fingerprints={
-            "physical-hub-1": _fingerprint("bravo"),
-            "physical-hub-2": _fingerprint("alpha"),
-        },
-        hub_api_trust_anchor_fingerprints={
-            "physical-hub-1": fingerprint_api_trust_anchor(_TRUST_ANCHORS["alpha"]),
-            "physical-hub-2": fingerprint_api_trust_anchor(_TRUST_ANCHORS["bravo"]),
-        },
-        source_revision=_SOURCE_REVISION,
-        config_sha256=_CONFIG_HASH,
-        profile_sha256=_PROFILE_HASH,
+    registry = _registry(
+        first_identity_seed="bravo",
+        second_identity_seed="alpha",
     )
 
-    result = _run(_request(identity_enrollment=enrollment))
+    result = _run(_request(), enrollment_registry=registry)
 
     assert result.decision is Phase9BDecision.BLOCKED
     assert result.artifact is None
@@ -412,21 +443,13 @@ def test_duplicate_physical_hub_fingerprints_are_rejected() -> None:
         _handle("physical-hub-1", "alpha", "origin-alpha"),
         _handle("physical-hub-2", "alpha", "origin-bravo"),
     )
-    enrollment = build_phase9b_identity_enrollment(
-        hub_fingerprints={
-            "physical-hub-1": _fingerprint("alpha"),
-            "physical-hub-2": _fingerprint("alpha"),
-        },
-        hub_api_trust_anchor_fingerprints={
-            "physical-hub-1": fingerprint_api_trust_anchor(_TRUST_ANCHORS["alpha"]),
-            "physical-hub-2": fingerprint_api_trust_anchor(_TRUST_ANCHORS["alpha"]),
-        },
-        source_revision=_SOURCE_REVISION,
-        config_sha256=_CONFIG_HASH,
-        profile_sha256=_PROFILE_HASH,
+    registry = _registry(
+        second_identity_seed="alpha",
+        second_trust_seed="alpha",
     )
 
-    result = _run(_request(handles=handles, identity_enrollment=enrollment))
+    request = _request(handles=handles)
+    result = _run(request, enrollment_registry=registry)
 
     assert result.decision is Phase9BDecision.BLOCKED
     assert "duplicate_identity_fingerprint" in result.reason_codes
@@ -652,10 +675,14 @@ def test_explicit_empty_runtime_handle_set_is_not_replaced_by_test_defaults() ->
     assert "invalid_runtime_handle" in result.reason_codes
 
 
-def test_missing_identity_enrollment_blocks_before_contact() -> None:
-    request = _request(identity_enrollment=None)
+def test_missing_controller_enrollment_registry_blocks_before_contact() -> None:
+    request = _request()
 
-    result = _run(request)
+    result = run_phase9b_live_discovery(
+        request,
+        enrollment_registry=None,  # type: ignore[arg-type]
+        clock=_FakeClock(),
+    )
 
     assert result.decision is Phase9BDecision.BLOCKED
     assert "invalid_identity_enrollment" in result.reason_codes
@@ -686,19 +713,15 @@ def test_missing_typed_request_timeout_contract_blocks_before_contact() -> None:
     assert _all_api_calls(request) == 0
 
 
-def test_tampered_identity_enrollment_blocks_before_contact() -> None:
+def test_tampered_controller_enrollment_registry_blocks_before_contact() -> None:
     request = _request()
-    assert request.identity_enrollment is not None
+    registry = _registry()
     tampered = replace(
-        request.identity_enrollment,
-        hub_fingerprints=(
-            ("physical-hub-1", _fingerprint("bravo")),
-            ("physical-hub-2", _fingerprint("alpha")),
-        ),
+        registry,
+        hubs=(replace(registry.hubs[0], expected_identity_fingerprint=_fingerprint("bravo")), registry.hubs[1]),
     )
-    request = replace(request, identity_enrollment=tampered)
 
-    result = _run(request)
+    result = _run(request, enrollment_registry=tampered)
 
     assert result.decision is Phase9BDecision.BLOCKED
     assert "invalid_identity_enrollment" in result.reason_codes
@@ -1310,14 +1333,12 @@ def test_malformed_request_containers_block_without_contact(field: str, reason: 
     assert _all_api_calls(request) == 0
 
 
-def test_malformed_identity_enrollment_pairs_block_without_contact() -> None:
+def test_malformed_controller_enrollment_registry_blocks_without_contact() -> None:
     request = _request()
-    assert request.identity_enrollment is not None
-    replace_enrollment: Any = replace
-    malformed_enrollment = replace_enrollment(request.identity_enrollment, hub_fingerprints=(("physical-hub-1",),))
-    malformed = replace(request, identity_enrollment=malformed_enrollment)
+    replace_registry: Any = replace
+    malformed_registry = replace_registry(_registry(), hubs=(("physical-hub-1",),))
 
-    result = _run(malformed)
+    result = _run(request, enrollment_registry=malformed_registry)
 
     assert result.decision is Phase9BDecision.BLOCKED
     assert "invalid_identity_enrollment" in result.reason_codes
@@ -1450,7 +1471,11 @@ class _InvalidClock:
 
 @pytest.mark.parametrize("monotonic_value", [float("nan"), float("inf"), float("-inf"), "not-a-number"])
 def test_invalid_clock_reading_fails_closed_without_raw_exception(monotonic_value: Any) -> None:
-    result = run_phase9b_live_discovery(_request(), clock=_InvalidClock(monotonic_value))
+    result = run_phase9b_live_discovery(
+        _request(),
+        enrollment_registry=_registry(),
+        clock=_InvalidClock(monotonic_value),
+    )
 
     assert result.decision is Phase9BDecision.BLOCKED
     assert result.reason_codes == ("controller_clock_failure",)
@@ -1458,7 +1483,11 @@ def test_invalid_clock_reading_fails_closed_without_raw_exception(monotonic_valu
 
 
 def test_clock_exception_fails_closed_without_escaping() -> None:
-    result = run_phase9b_live_discovery(_request(), clock=_InvalidClock(0.0, raises=True))
+    result = run_phase9b_live_discovery(
+        _request(),
+        enrollment_registry=_registry(),
+        clock=_InvalidClock(0.0, raises=True),
+    )
 
     assert result.decision is Phase9BDecision.BLOCKED
     assert result.reason_codes == ("controller_clock_failure",)
@@ -1504,7 +1533,11 @@ def test_operation_completing_at_request_deadline_is_blocked() -> None:
         _handle("physical-hub-2", "bravo", "origin-bravo"),
     )
 
-    result = run_phase9b_live_discovery(_request(handles=handles), clock=clock)
+    result = run_phase9b_live_discovery(
+        _request(handles=handles),
+        enrollment_registry=_registry(),
+        clock=clock,
+    )
 
     assert result.decision is Phase9BDecision.BLOCKED
     assert result.reason_codes == ("request_deadline_exceeded",)
@@ -1512,40 +1545,60 @@ def test_operation_completing_at_request_deadline_is_blocked() -> None:
 
 def test_fully_swapped_binding_with_caller_rebuilt_enrollment_cannot_pass() -> None:
     first, second = _request().runtime_handles
+    first_as_second = TypedReadApi(
+        public_hub_id=second.public_hub_id,
+        access_handle=first.access_handle,
+        context_handle=first.context_handle,
+        api_trust_anchor_pem=first.typed_api.api_trust_anchor_pem,
+        reader=first.typed_api.reader,
+        timeout_contract=first.typed_api.timeout_contract,
+    )
+    second_as_first = TypedReadApi(
+        public_hub_id=first.public_hub_id,
+        access_handle=second.access_handle,
+        context_handle=second.context_handle,
+        api_trust_anchor_pem=second.typed_api.api_trust_anchor_pem,
+        reader=second.typed_api.reader,
+        timeout_contract=second.typed_api.timeout_contract,
+    )
     handles = (
-        replace(
-            first,
+        Phase9BRuntimeHandle(
+            enrollment_id=first.enrollment_id,
+            public_hub_id=first.public_hub_id,
             access_handle=second.access_handle,
             context_handle=second.context_handle,
-            typed_api=second.typed_api,
+            typed_api=second_as_first,
             expected_evidence_origin=second.expected_evidence_origin,
         ),
-        replace(
-            second,
+        Phase9BRuntimeHandle(
+            enrollment_id=second.enrollment_id,
+            public_hub_id=second.public_hub_id,
             access_handle=first.access_handle,
             context_handle=first.context_handle,
-            typed_api=first.typed_api,
+            typed_api=first_as_second,
             expected_evidence_origin=first.expected_evidence_origin,
         ),
     )
-    enrollment = build_phase9b_identity_enrollment(
-        hub_fingerprints={
-            "physical-hub-1": _fingerprint("bravo"),
-            "physical-hub-2": _fingerprint("alpha"),
-        },
-        hub_api_trust_anchor_fingerprints={
-            "physical-hub-1": fingerprint_api_trust_anchor(_TRUST_ANCHORS["bravo"]),
-            "physical-hub-2": fingerprint_api_trust_anchor(_TRUST_ANCHORS["alpha"]),
-        },
-        source_revision=_SOURCE_REVISION,
-        config_sha256=_CONFIG_HASH,
-        profile_sha256=_PROFILE_HASH,
+    replacement_registry = _registry(
+        first_identity_seed="bravo",
+        second_identity_seed="alpha",
+        first_trust_seed="bravo",
+        second_trust_seed="alpha",
+        first_origin="origin-bravo",
+        second_origin="origin-alpha",
     )
 
-    result = _run(_request(handles=handles, identity_enrollment=enrollment))
+    request = _request(handles=handles, identity_enrollment=replacement_registry)
+    result = _run(request)
 
     assert result.decision is Phase9BDecision.BLOCKED
-    assert result.reason_codes == ("runtime_handle_binding_mismatch",)
+    assert result.reason_codes == ("request_enrollment_forbidden",)
+    assert result.artifact is None
+    assert result.identity_fingerprints == {}
+    assert result.certification_eligible is False
+    assert result.live_certification_evidence is False
+    assert result.mutation_attempted is False
+    assert _all_api_calls(request) == 0
 
 
 class _CompletionExpiryClock(_FakeClock):
@@ -1561,7 +1614,11 @@ class _CompletionExpiryClock(_FakeClock):
 
 
 def test_evidence_that_expires_at_collection_completion_is_rejected_before_publication() -> None:
-    result = run_phase9b_live_discovery(_request(), clock=_CompletionExpiryClock())
+    result = run_phase9b_live_discovery(
+        _request(),
+        enrollment_registry=_registry(),
+        clock=_CompletionExpiryClock(),
+    )
 
     assert result.decision is Phase9BDecision.BLOCKED
     assert result.reason_codes == ("stale_evidence",)

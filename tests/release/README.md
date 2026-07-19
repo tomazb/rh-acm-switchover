@@ -14,10 +14,14 @@ operator authorizes a real two-hub read-only run. Phase 9C remains blocked.
 
 ## Phase 9B Read-Only Physical Identity
 
-The Phase 9B entrypoint requires two explicit runtime handles, a clean bound source revision, config/profile hashes,
-operator opt-in, and all L0-L9 gates. It inherits no default kubeconfig, context, endpoint, environment credential, or
-client factory. An exact controller-owned binding object ties each injected page reader to one public hub ID and passes
-the corresponding runtime access object, context object, and exact PEM API trust-anchor bundle into every reader call.
+The Phase 9B controller is constructed with a frozen enrollment registry supplied independently of each discovery
+request. Each entry binds a stable enrollment ID, private physical inventory label, safe public hub ID, expected
+physical identity and API trust-anchor fingerprints, expected evidence origin, and clean source/config/profile
+values. A request provides two explicit runtime handles that reference those enrollment IDs, operator opt-in, and all
+L0-L9 gates; it cannot define or replace enrollment. The path inherits no default kubeconfig, context, endpoint,
+environment credential, or client factory. An exact controller-owned binding object admits each injected page reader
+under one registry entry and passes the corresponding runtime access object, context object, and exact PEM API
+trust-anchor bundle into every reader call.
 Admission uses side-effect-free static lookup and requires a callable reader before contact. The binding must explicitly
 select the typed request-timeout contract; its adapter must enforce every `TypedReadRequest.timeout_seconds` value in
 the underlying API call, while the controller independently measures and enforces the request and collection deadlines.
@@ -27,10 +31,11 @@ The controller performs only fixed bounded list queries for the `kube-system` Na
 pagination and consistent collection resource versions, recomputes freshness at collection completion, and validates
 skew/source/origin. Its four-signal physical identity includes a versioned SHA-256 canonicalization of the validated
 API trust-anchor bundle used by the same connection; raw certificates are never published. Stable, distinct physical
-fingerprints and separate trust-anchor fingerprints must match immutable controller enrollment bound to the clean
-source revision and config/profile hashes. Missing, malformed, changed, mismatched, or tampered trust/enrollment data
-blocks before contact. Call traces contain only safe hub IDs, fixed query IDs, list verbs, page ordinals, completeness,
-and `mutation_attempted=false`.
+fingerprints and separate trust-anchor fingerprints must match the immutable controller registry. Missing, malformed,
+changed, mismatched, or tampered registry/trust data blocks before contact. Runtime labels, request ordering, context
+names, paths, API locations, expected origins, and caller-provided fingerprints are never independent enrollment
+authority. Call traces contain only safe hub IDs, fixed query IDs, list verbs, page ordinals, completeness, and
+`mutation_attempted=false`.
 
 Artifacts force:
 
@@ -39,10 +44,10 @@ Artifacts force:
 - `live_certification_evidence: false`
 - `mutation_attempted: false`
 
-Publication is all-or-nothing after a recursive key/value/type audit. Raw UIDs, infrastructure names, credentials,
-paths, contexts, endpoints, runtime handles, exception text, and arbitrary object representations are never
-published. Phase 9B does not infer logical primary/secondary roles, known state, readiness, mutation/recovery
-authority, or executable profiles.
+Publication is all-or-nothing after a recursive key/value/type audit. Raw UIDs, infrastructure names, enrollment IDs,
+private inventory labels, evidence origins, certificates, credentials, paths, contexts, endpoints, runtime handles,
+exception text, and arbitrary object representations are never published. Phase 9B does not infer logical
+primary/secondary roles, known state, readiness, mutation/recovery authority, or executable profiles.
 
 ## Framework Tests
 

@@ -1,9 +1,10 @@
 """Controller-owned Phase 9B read-only live discovery and physical identity proof.
 
-This module is deliberately not a credential loader or Kubernetes client factory. A caller must
-provide two explicit runtime-only handles containing typed read API objects. The controller owns
-all gates, fixed query selection, collection bounds, pagination completeness, provenance,
-freshness, repeated physical identity proof, and final artifact publication.
+This module is deliberately not a credential loader or Kubernetes client factory. The controller
+is constructed with immutable enrollment authority, and a caller must provide two explicit
+runtime-only handles that reference those enrollments and contain typed read API objects. The
+controller owns all gates, fixed query selection, collection bounds, pagination completeness,
+provenance, freshness, repeated physical identity proof, and final artifact publication.
 
 The only cluster-facing operation is ``TypedReadApi.read_page``. Its request contract has no
 command, argv, shell, release-adapter, endpoint, credential, or mutation fields, and its verb is
@@ -60,7 +61,7 @@ Phase9BDecision = ReadOnlyBackendDecision
 
 PHASE9B_SCHEMA_REVISION = "phase9b.live_read_only.v1"
 PHASE9B_WRITER_REVISION = "phase9b.strict_recursive_writer.v1"
-PHASE9B_CONTROLLER_REVISION = "phase9b.controller_owned_discovery.v1"
+PHASE9B_CONTROLLER_REVISION = "phase9b.controller_owned_discovery.v2"
 IDENTITY_BUNDLE_QUERY_ID = "phase9b.identity_bundle"
 
 _HEX_40 = re.compile(r"^[0-9a-f]{40}$")
@@ -316,6 +317,7 @@ class LiveDiscoveryBounds:
 class Phase9BRuntimeHandle:
     """Explicit runtime-only handle. Object fields are never serialized or stringified."""
 
+    enrollment_id: str
     public_hub_id: str
     access_handle: object
     context_handle: object
@@ -324,20 +326,31 @@ class Phase9BRuntimeHandle:
 
 
 @dataclass(frozen=True)
-class Phase9BIdentityEnrollment:
-    """Immutable physical-ID enrollment bound to controller source/config/profile inputs."""
+class Phase9BHubEnrollment:
+    """Controller-owned expected identity for one enrolled physical hub."""
 
-    hub_fingerprints: tuple[tuple[str, str], ...]
-    hub_api_trust_anchor_fingerprints: tuple[tuple[str, str], ...]
+    enrollment_id: str
+    public_hub_id: str
+    physical_inventory_label: str
+    expected_identity_fingerprint: str
+    expected_api_trust_anchor_fingerprint: str
+    expected_evidence_origin: str
+
+
+@dataclass(frozen=True)
+class Phase9BEnrollmentRegistry:
+    """Immutable enrollment authority supplied independently of a discovery request."""
+
+    hubs: tuple[Phase9BHubEnrollment, ...]
     source_revision: str
     config_sha256: str
     profile_sha256: str
-    enrollment_sha256: str
+    registry_sha256: str
 
 
 @dataclass(frozen=True)
 class Phase9BLiveDiscoveryRequest:
-    """Complete controller request. Live contact remains disabled by default."""
+    """Per-run request. Enrollment replacement is forbidden and live contact is disabled by default."""
 
     allow_live_contact: bool = False
     allow_read_only_queries: bool = False
@@ -347,7 +360,7 @@ class Phase9BLiveDiscoveryRequest:
     source_tree_clean: bool = False
     config_sha256: str = ""
     profile_sha256: str = ""
-    identity_enrollment: Phase9BIdentityEnrollment | None = None
+    identity_enrollment: Phase9BEnrollmentRegistry | None = None
     required_gate_ids: tuple[Any, ...] = ()
     runtime_handles: tuple[Phase9BRuntimeHandle, ...] = ()
     bounds: LiveDiscoveryBounds = field(default_factory=LiveDiscoveryBounds)
@@ -459,34 +472,28 @@ def fingerprint_api_trust_anchor(api_trust_anchor_pem: bytes) -> str:
     return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
 
 
-def build_phase9b_identity_enrollment(
+def build_phase9b_enrollment_registry(
     *,
-    hub_fingerprints: Mapping[str, str],
-    hub_api_trust_anchor_fingerprints: Mapping[str, str],
+    hubs: Sequence[Phase9BHubEnrollment],
     source_revision: str,
     config_sha256: str,
     profile_sha256: str,
-) -> Phase9BIdentityEnrollment:
-    """Build the immutable enrollment record consumed by the controller entrypoint."""
+) -> Phase9BEnrollmentRegistry:
+    """Build a frozen controller-owned enrollment registry."""
 
-    entries = tuple(sorted((str(hub_id), str(fingerprint)) for hub_id, fingerprint in hub_fingerprints.items()))
-    trust_anchor_entries = tuple(
-        sorted((str(hub_id), str(fingerprint)) for hub_id, fingerprint in hub_api_trust_anchor_fingerprints.items())
-    )
-    enrollment_sha256 = _identity_enrollment_digest(
-        hub_fingerprints=entries,
-        hub_api_trust_anchor_fingerprints=trust_anchor_entries,
+    entries = tuple(sorted(hubs, key=lambda hub: hub.enrollment_id))
+    registry_sha256 = _enrollment_registry_digest(
+        hubs=entries,
         source_revision=source_revision,
         config_sha256=config_sha256,
         profile_sha256=profile_sha256,
     )
-    return Phase9BIdentityEnrollment(
-        hub_fingerprints=entries,
-        hub_api_trust_anchor_fingerprints=trust_anchor_entries,
+    return Phase9BEnrollmentRegistry(
+        hubs=entries,
         source_revision=source_revision,
         config_sha256=config_sha256,
         profile_sha256=profile_sha256,
-        enrollment_sha256=enrollment_sha256,
+        registry_sha256=registry_sha256,
     )
 
 
@@ -736,10 +743,42 @@ class ControllerOwnedLiveDiscoveryClient(ReadOnlyLiveClientProtocol):
             requested_token = next_token
 
 
+class Phase9BLiveDiscoveryController:
+    """Controller instance holding immutable enrollment authority across discovery requests."""
+
+    def __init__(
+        self,
+        enrollment_registry: Phase9BEnrollmentRegistry,
+        *,
+        clock: Phase9BClock | None = None,
+    ) -> None:
+        self._enrollment_registry = enrollment_registry
+        self._clock = clock
+
+    def run(self, request: Phase9BLiveDiscoveryRequest) -> Phase9BReadOnlyBackendResult:
+        return _run_phase9b_live_discovery(
+            request,
+            enrollment_registry=self._enrollment_registry,
+            clock=self._clock,
+        )
+
+
 def run_phase9b_live_discovery(
     request: Phase9BLiveDiscoveryRequest,
     *,
+    enrollment_registry: Phase9BEnrollmentRegistry,
     clock: Phase9BClock | None = None,
+) -> Phase9BReadOnlyBackendResult:
+    """Run one request using independently supplied controller enrollment authority."""
+
+    return Phase9BLiveDiscoveryController(enrollment_registry, clock=clock).run(request)
+
+
+def _run_phase9b_live_discovery(
+    request: Phase9BLiveDiscoveryRequest,
+    *,
+    enrollment_registry: Phase9BEnrollmentRegistry,
+    clock: Phase9BClock | None,
 ) -> Phase9BReadOnlyBackendResult:
     """Run the controller-owned Phase 9B entrypoint.
 
@@ -747,7 +786,7 @@ def run_phase9b_live_discovery(
     """
 
     controller_clock = _TrustedControllerClock(clock or _SystemClock())
-    validated_request, gate_failure = _validate_precontact_request(request)
+    validated_request, gate_failure = _validate_precontact_request(request, enrollment_registry)
     if gate_failure is not None:
         return _blocked(gate_failure)
     if validated_request is None:  # pragma: no cover - failure branch above guarantees this
@@ -763,23 +802,25 @@ def run_phase9b_live_discovery(
     clients: dict[str, ControllerOwnedLiveDiscoveryClient] = {}
     first_passes: dict[str, _IdentityPass] = {}
     second_passes: dict[str, _IdentityPass] = {}
+    enrollment_by_id = {hub.enrollment_id: hub for hub in enrollment_registry.hubs}
+    runtime_bindings = tuple((handle, enrollment_by_id[handle.enrollment_id]) for handle in request.runtime_handles)
 
     for pass_number, target in ((1, first_passes), (2, second_passes)):
-        for handle in request.runtime_handles:
-            client = clients.get(handle.public_hub_id)
+        for handle, enrollment in runtime_bindings:
+            client = clients.get(enrollment.public_hub_id)
             if client is None:
                 client = ControllerOwnedLiveDiscoveryClient(
-                    public_hub_id=handle.public_hub_id,
+                    public_hub_id=enrollment.public_hub_id,
                     api=handle.typed_api,
-                    expected_origin=handle.expected_evidence_origin,
+                    expected_origin=enrollment.expected_evidence_origin,
                     source_revision=request.source_revision,
                     bounds=request.bounds,
                     clock=controller_clock,
                     collection_start_utc=start_utc,
                     controller_deadline=controller_deadline,
                 )
-                clients[handle.public_hub_id] = client
-            result = _execute_identity_bundle(request, handle, client)
+                clients[enrollment.public_hub_id] = client
+            result = _execute_identity_bundle(request, handle, enrollment.public_hub_id, client)
             if result.decision is not ReadOnlyTransportDecision.PASS or client.last_identity_pass is None:
                 reason_code = client.failure_code or _transport_failure_code(result.decision.value)
                 decision = (
@@ -788,7 +829,7 @@ def run_phase9b_live_discovery(
                     else Phase9BDecision.BLOCKED
                 )
                 return _blocked(reason_code, decision=decision)
-            target[handle.public_hub_id] = client.last_identity_pass
+            target[enrollment.public_hub_id] = client.last_identity_pass
 
         if pass_number == 1:
             try:
@@ -797,23 +838,23 @@ def run_phase9b_live_discovery(
             except _ControllerClockFailure:
                 return _blocked("controller_clock_failure")
 
-    for handle in request.runtime_handles:
-        first = first_passes[handle.public_hub_id]
-        second = second_passes[handle.public_hub_id]
+    for _, enrollment in runtime_bindings:
+        first = first_passes[enrollment.public_hub_id]
+        second = second_passes[enrollment.public_hub_id]
         if first.fingerprint != second.fingerprint:
             return _blocked("identity_changed_during_collection")
         if first.origin_sha256 != second.origin_sha256:
             return _blocked("mixed_evidence_origin")
 
     identity_fingerprints = {
-        handle.public_hub_id: first_passes[handle.public_hub_id].fingerprint for handle in request.runtime_handles
+        enrollment.public_hub_id: first_passes[enrollment.public_hub_id].fingerprint
+        for _, enrollment in runtime_bindings
     }
     if len(set(identity_fingerprints.values())) != len(identity_fingerprints):
         return _blocked("duplicate_identity_fingerprint")
-    enrollment = request.identity_enrollment
-    if not isinstance(enrollment, Phase9BIdentityEnrollment):  # pragma: no cover - pre-contact gate guarantees this
-        return _blocked("invalid_identity_enrollment")
-    expected_fingerprints = dict(enrollment.hub_fingerprints)
+    expected_fingerprints = {
+        enrollment.public_hub_id: enrollment.expected_identity_fingerprint for enrollment in enrollment_registry.hubs
+    }
     if any(identity_fingerprints[hub_id] != expected_fingerprints[hub_id] for hub_id in identity_fingerprints):
         return _blocked("identity_fingerprint_mismatch")
 
@@ -848,6 +889,7 @@ def run_phase9b_live_discovery(
         first_passes=first_passes,
         second_passes=second_passes,
         clients=clients,
+        enrollment_registry=enrollment_registry,
         spread_seconds=spread.total_seconds(),
     )
     if artifact is None:
@@ -862,12 +904,13 @@ def run_phase9b_live_discovery(
 def _execute_identity_bundle(
     request: Phase9BLiveDiscoveryRequest,
     handle: Phase9BRuntimeHandle,
+    public_hub_id: str,
     client: ControllerOwnedLiveDiscoveryClient,
 ) -> Any:
     client._arm_for_controller_transport()
     context = RuntimeOnlyLiveTransportContext(
         handle=RuntimeOnlyLiveHubHandle(
-            physical_label=handle.public_hub_id,
+            physical_label=public_hub_id,
             kubeconfig_ref="phase9b-runtime-access-handle",
             context_ref="phase9b-runtime-context-handle",
         ),
@@ -886,13 +929,14 @@ def _execute_identity_bundle(
     query = replace(
         build_example_transport_query(),
         query_id=IDENTITY_BUNDLE_QUERY_ID,
-        hub_label=handle.public_hub_id,
+        hub_label=public_hub_id,
     )
     return ReadOnlyLiveTransport(context, client).execute(query)
 
 
 def _validate_precontact_request(
     request: Any,
+    enrollment_registry: Any,
 ) -> tuple[Phase9BLiveDiscoveryRequest | None, str | None]:
     if not isinstance(request, Phase9BLiveDiscoveryRequest):
         return None, "invalid_controller_request"
@@ -901,19 +945,20 @@ def _validate_precontact_request(
     controller_policy_failure = _validate_controller_policy(request)
     if controller_policy_failure is not None:
         return None, controller_policy_failure
+    if request.identity_enrollment is not None:
+        return None, "request_enrollment_forbidden"
     try:
         audited_additional_fields, _ = strict_recursive_artifact_audit(request.additional_artifact_fields)
     except Exception:
         return None, "redaction_failure"
     request_snapshot = replace(request, additional_artifact_fields=audited_additional_fields)
-    for validator in (
-        _validate_query_and_claim_policy,
-        _validate_runtime_handle_set,
-        _validate_identity_enrollment,
-    ):
+    for validator in (_validate_query_and_claim_policy, _validate_runtime_handle_set):
         failure = validator(request_snapshot)
         if failure is not None:
             return None, failure
+    registry_failure = _validate_enrollment_registry(request_snapshot, enrollment_registry)
+    if registry_failure is not None:
+        return None, registry_failure
     return request_snapshot, None
 
 
@@ -975,6 +1020,7 @@ def _validate_runtime_handle_set(request: Phase9BLiveDiscoveryRequest) -> str | 
         return "invalid_runtime_handle"
     if len(request.runtime_handles) != 2:
         return "invalid_runtime_handle"
+    enrollment_ids: set[str] = set()
     public_ids: set[str] = set()
     origins: set[str] = set()
     access_ids: set[int] = set()
@@ -984,7 +1030,9 @@ def _validate_runtime_handle_set(request: Phase9BLiveDiscoveryRequest) -> str | 
         if not isinstance(handle, Phase9BRuntimeHandle):
             return "invalid_runtime_handle"
         if (
-            handle.access_handle is None
+            not isinstance(handle.enrollment_id, str)
+            or not _SAFE_PUBLIC_ID.fullmatch(handle.enrollment_id)
+            or handle.access_handle is None
             or handle.context_handle is None
             or handle.typed_api is None
             or type(handle.typed_api) is not TypedReadApi
@@ -1011,12 +1059,14 @@ def _validate_runtime_handle_set(request: Phase9BLiveDiscoveryRequest) -> str | 
         ):
             return "invalid_runtime_handle"
         if (
-            handle.public_hub_id in public_ids
+            handle.enrollment_id in enrollment_ids
+            or handle.public_hub_id in public_ids
             or id(handle.access_handle) in access_ids
             or id(handle.context_handle) in context_ids
             or id(handle.typed_api.reader) in api_ids
         ):
             return "duplicate_runtime_handle"
+        enrollment_ids.add(handle.enrollment_id)
         public_ids.add(handle.public_hub_id)
         origins.add(handle.expected_evidence_origin)
         access_ids.add(id(handle.access_handle))
@@ -1035,68 +1085,65 @@ def _reader_has_callable_page_method(reader: Any) -> bool:
     return callable(read_page)
 
 
-def _validate_identity_enrollment(request: Phase9BLiveDiscoveryRequest) -> str | None:
-    enrollment = request.identity_enrollment
-    if type(enrollment) is not Phase9BIdentityEnrollment:
+def _validate_enrollment_registry(
+    request: Phase9BLiveDiscoveryRequest,
+    registry: Any,
+) -> str | None:
+    if type(registry) is not Phase9BEnrollmentRegistry or type(registry.hubs) is not tuple:
         return "invalid_identity_enrollment"
-    if type(enrollment.hub_fingerprints) is not tuple or any(
-        type(pair) is not tuple or len(pair) != 2 or not isinstance(pair[0], str) or not isinstance(pair[1], str)
-        for pair in enrollment.hub_fingerprints
-    ):
-        return "invalid_identity_enrollment"
-    if type(enrollment.hub_api_trust_anchor_fingerprints) is not tuple or any(
-        type(pair) is not tuple or len(pair) != 2 or not isinstance(pair[0], str) or not isinstance(pair[1], str)
-        for pair in enrollment.hub_api_trust_anchor_fingerprints
-    ):
+    if len(registry.hubs) != 2 or any(type(hub) is not Phase9BHubEnrollment for hub in registry.hubs):
         return "invalid_identity_enrollment"
     if (
-        not isinstance(enrollment.source_revision, str)
-        or not isinstance(enrollment.config_sha256, str)
-        or not isinstance(enrollment.profile_sha256, str)
-        or not isinstance(enrollment.enrollment_sha256, str)
-        or enrollment.source_revision != request.source_revision
-        or enrollment.config_sha256 != request.config_sha256
-        or enrollment.profile_sha256 != request.profile_sha256
+        not isinstance(registry.source_revision, str)
+        or not isinstance(registry.config_sha256, str)
+        or not isinstance(registry.profile_sha256, str)
+        or not isinstance(registry.registry_sha256, str)
+        or registry.source_revision != request.source_revision
+        or registry.config_sha256 != request.config_sha256
+        or registry.profile_sha256 != request.profile_sha256
     ):
         return "invalid_identity_enrollment"
-    expected_digest = _identity_enrollment_digest(
-        hub_fingerprints=enrollment.hub_fingerprints,
-        hub_api_trust_anchor_fingerprints=enrollment.hub_api_trust_anchor_fingerprints,
-        source_revision=enrollment.source_revision,
-        config_sha256=enrollment.config_sha256,
-        profile_sha256=enrollment.profile_sha256,
+    expected_digest = _enrollment_registry_digest(
+        hubs=registry.hubs,
+        source_revision=registry.source_revision,
+        config_sha256=registry.config_sha256,
+        profile_sha256=registry.profile_sha256,
     )
-    if enrollment.enrollment_sha256 != expected_digest:
-        return "invalid_identity_enrollment"
-    if len(enrollment.hub_fingerprints) != 2:
-        return "invalid_identity_enrollment"
-    fingerprints = dict(enrollment.hub_fingerprints)
-    if len(fingerprints) != 2 or set(fingerprints) != {handle.public_hub_id for handle in request.runtime_handles}:
+    if registry.registry_sha256 != expected_digest:
         return "invalid_identity_enrollment"
     if any(
-        not _SAFE_PUBLIC_ID.fullmatch(hub_id) or not _FINGERPRINT.fullmatch(fingerprint)
-        for hub_id, fingerprint in enrollment.hub_fingerprints
+        not _SAFE_PUBLIC_ID.fullmatch(hub.enrollment_id)
+        or not _SAFE_PUBLIC_ID.fullmatch(hub.public_hub_id)
+        or not _SAFE_IDENTITY_VALUE.fullmatch(hub.physical_inventory_label)
+        or not _FINGERPRINT.fullmatch(hub.expected_identity_fingerprint)
+        or not _FINGERPRINT.fullmatch(hub.expected_api_trust_anchor_fingerprint)
+        or not _SAFE_ORIGIN.fullmatch(hub.expected_evidence_origin)
+        for hub in registry.hubs
     ):
         return "invalid_identity_enrollment"
-    if len(set(fingerprints.values())) != 2:
-        return "duplicate_identity_fingerprint"
-    trust_anchor_fingerprints = dict(enrollment.hub_api_trust_anchor_fingerprints)
     if (
-        len(enrollment.hub_api_trust_anchor_fingerprints) != 2
-        or len(trust_anchor_fingerprints) != 2
-        or set(trust_anchor_fingerprints) != {handle.public_hub_id for handle in request.runtime_handles}
-        or any(
-            not _SAFE_PUBLIC_ID.fullmatch(hub_id) or not _FINGERPRINT.fullmatch(fingerprint)
-            for hub_id, fingerprint in enrollment.hub_api_trust_anchor_fingerprints
-        )
+        len({hub.enrollment_id for hub in registry.hubs}) != 2
+        or len({hub.public_hub_id for hub in registry.hubs}) != 2
+        or len({hub.physical_inventory_label for hub in registry.hubs}) != 2
+        or len({hub.expected_evidence_origin for hub in registry.hubs}) != 2
     ):
         return "invalid_identity_enrollment"
-    observed_trust_anchor_fingerprints = {
-        handle.public_hub_id: fingerprint_api_trust_anchor(handle.typed_api.api_trust_anchor_pem)
-        for handle in request.runtime_handles
-    }
-    if observed_trust_anchor_fingerprints != trust_anchor_fingerprints:
-        return "api_trust_anchor_mismatch"
+    if len({hub.expected_identity_fingerprint for hub in registry.hubs}) != 2:
+        return "duplicate_identity_fingerprint"
+    registry_by_id = {hub.enrollment_id: hub for hub in registry.hubs}
+    if set(registry_by_id) != {handle.enrollment_id for handle in request.runtime_handles}:
+        return "invalid_identity_enrollment"
+    for handle in request.runtime_handles:
+        enrolled_hub = registry_by_id[handle.enrollment_id]
+        if (
+            handle.public_hub_id != enrolled_hub.public_hub_id
+            or handle.expected_evidence_origin != enrolled_hub.expected_evidence_origin
+            or handle.typed_api.public_hub_id != enrolled_hub.public_hub_id
+        ):
+            return "runtime_handle_binding_mismatch"
+        observed_trust_anchor = fingerprint_api_trust_anchor(handle.typed_api.api_trust_anchor_pem)
+        if observed_trust_anchor != enrolled_hub.expected_api_trust_anchor_fingerprint:
+            return "api_trust_anchor_mismatch"
     return None
 
 
@@ -1296,6 +1343,7 @@ def _build_artifact(
     first_passes: Mapping[str, _IdentityPass],
     second_passes: Mapping[str, _IdentityPass],
     clients: Mapping[str, ControllerOwnedLiveDiscoveryClient],
+    enrollment_registry: Phase9BEnrollmentRegistry,
     spread_seconds: float,
 ) -> Mapping[str, Any] | None:
     physical_proofs: dict[str, Any] = {}
@@ -1320,7 +1368,7 @@ def _build_artifact(
             "pagination": [dict(summary) for summary in first.pagination + second.pagination],
             "source_revision": request.source_revision,
         }
-    trace = [entry.to_artifact() for handle in request.runtime_handles for entry in clients[handle.public_hub_id].trace]
+    trace = [entry.to_artifact() for client in clients.values() for entry in client.trace]
     artifact: dict[str, Any] = dict(request.additional_artifact_fields)
     artifact.update(
         {
@@ -1336,11 +1384,7 @@ def _build_artifact(
             "source_revision_clean": True,
             "config_sha256": request.config_sha256,
             "profile_sha256": request.profile_sha256,
-            "identity_enrollment_sha256": (
-                request.identity_enrollment.enrollment_sha256
-                if isinstance(request.identity_enrollment, Phase9BIdentityEnrollment)
-                else ""
-            ),
+            "identity_enrollment_sha256": enrollment_registry.registry_sha256,
             "collection_started_at": start_utc.astimezone(timezone.utc).isoformat(),
             "collection_ended_at": end_utc.astimezone(timezone.utc).isoformat(),
             "freshness": {
@@ -1384,26 +1428,28 @@ def _digest_text(value: str) -> str:
     return f"sha256:{hashlib.sha256(value.encode('utf-8')).hexdigest()}"
 
 
-def _identity_enrollment_digest(
+def _enrollment_registry_digest(
     *,
-    hub_fingerprints: Sequence[tuple[str, str]],
-    hub_api_trust_anchor_fingerprints: Sequence[tuple[str, str]],
+    hubs: Sequence[Phase9BHubEnrollment],
     source_revision: str,
     config_sha256: str,
     profile_sha256: str,
 ) -> str:
     document = {
-        "schema": "phase9b.identity_enrollment.v1",
+        "schema": "phase9b.enrollment_registry.v2",
         "source_revision": source_revision,
         "config_sha256": config_sha256,
         "profile_sha256": profile_sha256,
-        "hub_fingerprints": [
-            {"public_hub_id": hub_id, "identity_fingerprint": fingerprint}
-            for hub_id, fingerprint in sorted(hub_fingerprints)
-        ],
-        "hub_api_trust_anchor_fingerprints": [
-            {"public_hub_id": hub_id, "api_trust_anchor_fingerprint": fingerprint}
-            for hub_id, fingerprint in sorted(hub_api_trust_anchor_fingerprints)
+        "hubs": [
+            {
+                "enrollment_id": hub.enrollment_id,
+                "public_hub_id": hub.public_hub_id,
+                "physical_inventory_label": hub.physical_inventory_label,
+                "expected_identity_fingerprint": hub.expected_identity_fingerprint,
+                "expected_api_trust_anchor_fingerprint": hub.expected_api_trust_anchor_fingerprint,
+                "expected_evidence_origin": hub.expected_evidence_origin,
+            }
+            for hub in sorted(hubs, key=lambda item: item.enrollment_id)
         ],
     }
     canonical = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
@@ -1473,6 +1519,7 @@ def _blocked(
         "missing_api_trust_anchor": "API trust anchor is required for each controller-owned connection",
         "missing_operator_authorization": "operator authorization reference is missing",
         "query_not_allowlisted": "requested query or verb is not allowlisted",
+        "request_enrollment_forbidden": "per-run enrollment replacement is forbidden",
         "request_deadline_exceeded": "typed read exceeded its controller-measured request deadline",
         "read_only_queries_disabled": "read-only queries were not explicitly enabled",
         "redaction_failure": "recursive artifact publication audit failed",
@@ -1498,15 +1545,17 @@ __all__ = [
     "PHASE9B_WRITER_REVISION",
     "Phase9BClock",
     "Phase9BDecision",
-    "Phase9BIdentityEnrollment",
+    "Phase9BEnrollmentRegistry",
+    "Phase9BHubEnrollment",
     "Phase9BLiveDiscoveryRequest",
+    "Phase9BLiveDiscoveryController",
     "Phase9BReadOnlyBackendResult",
     "Phase9BRuntimeHandle",
     "TypedReadApi",
     "TypedReadPageReader",
     "TypedReadPage",
     "TypedReadRequest",
-    "build_phase9b_identity_enrollment",
+    "build_phase9b_enrollment_registry",
     "fingerprint_api_trust_anchor",
     "fingerprint_identity_inputs",
     "run_phase9b_live_discovery",

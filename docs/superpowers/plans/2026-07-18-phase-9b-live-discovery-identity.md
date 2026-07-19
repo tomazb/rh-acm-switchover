@@ -4,7 +4,7 @@
 
 **Goal:** Implement the narrowly scoped Phase 9B controller-owned, explicitly opted-in, read-only live discovery path that proves two stable and distinct physical hub identities without inferring logical roles, known state, readiness, or mutation/recovery authority.
 
-**Architecture:** Add a typed controller client in `tests/release/lab_controller/live_discovery.py`. The controller will reuse the existing pure `ReadOnlyLiveTransport` as the last pre-contact gate and implement `ReadOnlyLiveClientProtocol` through an injected typed Kubernetes/OpenShift read API. The injected API is a runtime-only object and is never serialized; the controller accepts no shell command, argv, endpoint, kubeconfig path, token, release adapter, or ambient client factory. Pagination, repeated identity collection, physical identity canonicalization, freshness/provenance validation, call tracing, and artifact publication all remain controller-owned. Existing backend and artifact modules gain only the Phase 9B contract primitives needed to expose this path while preserving their dependency-free source guards.
+**Architecture:** Add a typed controller client in `tests/release/lab_controller/live_discovery.py`. The controller will reuse the existing pure `ReadOnlyLiveTransport` as the last pre-contact gate and implement `ReadOnlyLiveClientProtocol` through an injected typed Kubernetes/OpenShift read API. The injected API is a runtime-only object and is never serialized; the controller accepts no shell command, argv, endpoint, kubeconfig path, token, release adapter, or ambient client factory. A frozen controller-owned enrollment registry, constructed independently of each discovery request, binds stable enrollment IDs and private inventory labels to expected identity, trust-anchor, origin, source, config, and profile evidence. Per-run requests may reference those enrollment IDs but cannot define or replace enrollment. Pagination, repeated identity collection, physical identity canonicalization, freshness/provenance validation, call tracing, and artifact publication all remain controller-owned. Existing backend and artifact modules gain only the Phase 9B contract primitives needed to expose this path while preserving their dependency-free source guards.
 
 **Tech Stack:** Python 3 dataclasses, enums, protocols, `hashlib`, `json`, UTC/monotonic clocks, pytest, existing release lab-controller transport/backend/artifact contracts.
 
@@ -46,6 +46,8 @@ Stop before editing if implementation would require any of:
 
 The Python lab controller owns:
 
+- the immutable enrollment registry and its source/config/profile binding;
+- the stable-enrollment-to-private-inventory-to-public-label association;
 - operator opt-in and authorization-reference validation;
 - source revision cleanliness and binding;
 - runtime-handle presence and uniqueness;
@@ -62,6 +64,10 @@ The Python lab controller owns:
 
 The existing release framework, production CLI, Ansible Collection, shell tooling, and release adapters do not own or execute this path. The Phase 9B client does not call them.
 
+Per-run request data is not enrollment authority. Runtime labels, ordering, context names, paths, API locations,
+expected origins, and caller-provided fingerprints may only be admitted against the controller-owned registry.
+The compatibility request enrollment field is fail-closed: any non-`None` value blocks before typed-reader contact.
+
 ## Typed Client and Runtime Credential Boundary
 
 Add these core contracts in `live_discovery.py`:
@@ -74,9 +80,12 @@ Add these core contracts in `live_discovery.py`:
   `request.timeout_seconds`, and the controller independently measures the request deadline.
 - `TypedReadApi`: an exact controller-owned dataclass that functionally passes one public hub ID, injected page reader,
   exact access/context object identities, and validated trust-anchor bytes together without pre-contact callbacks.
-- `Phase9BRuntimeHandle`: public hub identifier plus the controller-owned `TypedReadApi` binding. Runtime objects have no string/path/URL coercion contract and are excluded from artifacts.
-- `Phase9BIdentityEnrollment`: immutable public-hub-to-physical-fingerprint and public-hub-to-trust-anchor-fingerprint
-  entries bound to the clean source revision and config/profile hashes, with a controller-recomputed enrollment hash.
+- `Phase9BRuntimeHandle`: stable enrollment reference plus the runtime public label and `TypedReadApi` binding admitted
+  against the registry. Runtime objects have no string/path/URL coercion contract and are excluded from artifacts.
+- `Phase9BHubEnrollment`: immutable stable enrollment ID, safe public hub ID, private physical inventory label,
+  expected identity fingerprint, expected API trust-anchor fingerprint, and expected evidence origin.
+- `Phase9BEnrollmentRegistry`: immutable hub enrollments bound to the clean source revision and config/profile hashes,
+  with a controller-recomputed registry hash. It is supplied independently of the per-run request.
 - `ControllerOwnedLiveDiscoveryClient`: implements `ReadOnlyLiveClientProtocol`; maps the outer transport's fixed read-only identity-bundle `get` to fixed typed API `list` requests; performs complete pagination through those lists; and returns normalized evidence.
 - `Phase9BLiveDiscoveryRequest`, `Phase9BLiveDiscoveryResult`, bounds, and explicit clock protocols.
 
@@ -115,7 +124,7 @@ For each signal:
 - reject missing, duplicate, conflicting, non-string, blank, oversized, control-character, or structurally ambiguous values;
 - compare first and second collections for exact canonical identity equality.
 
-Canonicalization uses UTF-8 JSON with sorted keys and compact separators over the versioned allowlisted identity document. The public fingerprint is `sha256:<lowercase hex>`. Raw UIDs and infrastructure names are never published. Both hub fingerprints must be distinct and each hub's computed fingerprint must match the expected fingerprint in immutable controller enrollment for its public hub ID. The controller recomputes the enrollment hash and requires its source/config/profile bindings to match the request before contact; missing, duplicate, or tampered enrollment blocks. This detects swapped runtime handles without treating caller order or per-run handle fields as proof.
+Canonicalization uses UTF-8 JSON with sorted keys and compact separators over the versioned allowlisted identity document. The public fingerprint is `sha256:<lowercase hex>`. Raw UIDs, infrastructure names, private inventory labels, enrollment IDs, raw origins, certificates, runtime paths, and API locations are never published. Both hub fingerprints must be distinct and each hub's computed fingerprint must match the expected fingerprint in the immutable controller registry for its stable enrollment ID. The controller recomputes the registry hash and requires its source/config/profile bindings to match the request before contact; missing, duplicate, or tampered registry data blocks. This detects swapped runtime handles without treating caller order or per-run handle fields as proof.
 
 ## Pagination Completeness State Machine
 
@@ -267,6 +276,31 @@ Run focused and affected Phase 8 artifact/transport/backend tests.
 Document the Phase 9B controller/transport/API ownership chain, runtime-only credential boundary, selected physical signals, complete pagination, provenance/freshness/redaction behavior, non-authoritative observation status, forced artifact flags, and Phase 9C deferrals. State that deterministic fakes are not live exit evidence.
 
 Do not edit AGENTS.md because Phase 9A already records the durable authority boundary and this slice does not change contributor policy.
+
+### Corrective Task 7: P9B-SV-001 independent enrollment authority
+
+**Files:**
+
+- Modify: `tests/release/lab_controller/live_discovery.py`
+- Modify: `tests/release/lab_controller/__init__.py`
+- Modify: `tests/release/test_lab_controller_phase9b_live_discovery.py`
+- Modify: `docs/development/lab-role-controller-spec.md`
+- Modify: `docs/development/release-validation-framework.md`
+- Modify: `tests/release/README.md`
+- Modify: `CHANGELOG.md`
+
+1. Strengthen `test_fully_swapped_binding_with_caller_rebuilt_enrollment_cannot_pass` so both complete typed runtime
+   bindings and matching request enrollment are rebuilt. At `5498aa083c5e8b3312723b63390610a550d23ca4`,
+   verify RED because the result is `PASS`.
+2. Add frozen `Phase9BHubEnrollment` and `Phase9BEnrollmentRegistry` contracts and a deterministic registry builder.
+   Bind stable enrollment ID, private inventory label, safe public hub ID, expected physical identity fingerprint,
+   expected trust-anchor fingerprint, expected origin, source revision, config hash, and profile hash.
+3. Require the registry independently at the controller entrypoint. Runtime handles reference a stable enrollment ID;
+   request-side enrollment replacement blocks before reader contact.
+4. Resolve public labels and expected evidence from the trusted registry, validate runtime connection/trust material
+   against it, and use only the registry digest and safe public labels in artifacts.
+5. Verify GREEN for P9B-V-005, then run the ordered focused, lab-controller, release, strict repository, diff, formatting,
+   lint, type, and security gates recorded below.
 
 ## Verification and Review
 

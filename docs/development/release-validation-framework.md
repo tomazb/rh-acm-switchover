@@ -10,15 +10,18 @@ The existing profile-driven entrypoint is not the future multi-segment live safe
 Phase 9 trust boundary and implementation gates are defined in
 [`Phase 9A — RC Hardening Re-baseline and Gated Live Lab-Controller Design`](../plans/2026-07-17-phase-9a-rc-hardening-rebaseline-and-live-controller-design.md).
 Phase 9B now provides a controller-owned, typed read-only discovery entrypoint for physical identity proof. It is
-disabled by default, requires explicit runtime-only handles and L0-L9/source/config/profile gates, performs only fixed
-bounded list queries, and publishes only recursively audited non-certification artifacts. Fake, dry-run,
+disabled by default, requires a frozen controller enrollment registry supplied independently of each request plus
+explicit runtime-only enrollment references and L0-L9/source/config/profile gates, performs only fixed bounded list
+queries, and publishes only recursively audited non-certification artifacts. Fake, dry-run,
 static-fixture, local-harness, and Phase 9B read-only-contact evidence still cannot establish live ACM certification
 through the lab role controller.
 
 The existing profile-driven runner's `OcDiscoveryClient` remains distinct from controller authority and is not used
-by Phase 9B. The Phase 9B entrypoint accepts caller-injected page readers only through exact controller-owned binding
-objects tied to one public hub ID and their runtime access/context object identities. The same binding passes its
-validated exact PEM API trust-anchor bundle into each reader call. It repeatedly collects `kube-system` Namespace,
+by Phase 9B. The Phase 9B controller registry binds stable enrollment IDs and private inventory labels to safe public
+hub IDs, expected physical/trust-anchor fingerprints, evidence origins, and clean source/config/profile values.
+Requests may reference but cannot define or replace those entries. Caller-injected page readers are admitted only
+through exact bindings tied to one registry entry and their runtime access/context object identities. The same binding
+passes its validated exact PEM API trust-anchor bundle into each reader call. It repeatedly collects `kube-system` Namespace,
 OpenShift Infrastructure, and ClusterVersion identity signals; combines them with a versioned trust-anchor
 fingerprint; enforces controller-measured request/collection deadlines, complete pagination, source revision, evidence
 origin, completion-time freshness, and skew; and derives stable distinct SHA-256 fingerprints. It deliberately emits
@@ -161,10 +164,11 @@ namespace. It is always non-certification-eligible, cannot be relabeled or merge
 may be referenced only as provenance before fresh controller discovery and authorization.
 
 Phase 9B live read-only output uses a separate `live_read_only` purpose. Every artifact records the schema, writer,
-and controller revisions; clean source revision; config/profile hashes; immutable identity-enrollment hash; collection
+and controller revisions; clean source revision; config/profile hashes; immutable controller-registry hash; collection
 timestamps; freshness/skew result; evidence-origin fingerprints; per-query pagination completeness; physical identity
 fingerprints; allowlisted call trace; and recursive redaction audit. The controller forces certification eligibility,
-live-certification evidence, and mutation attempted to false. Redaction failure prevents publication.
+live-certification evidence, and mutation attempted to false. Raw enrollment IDs, private inventory labels, evidence
+origins, certificates, credentials, paths, and API locations are excluded. Redaction failure prevents publication.
 
 ## Safety Notes
 
