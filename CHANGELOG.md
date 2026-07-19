@@ -39,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Hardened Phase 9B read-only discovery so reader admission is side-effect-free, artifact containers are not traversed
+  before opt-in, injected clocks and request deadlines fail closed, runtime connection objects are functionally bound,
+  completion freshness is recomputed, Phase 9A API trust anchors participate in enrollment/physical identity, and
+  public bound diagnostics state their finite hard limits.
 - Prevented public Python and collection preflight output from publishing raw validation messages, exception text, credential-derived identifiers, API details, or Argo CD Application names. Existing structured result/report contents and artifact permissions remain unchanged; recursive artifact redaction and mode hardening remain tracked as RC-G2.
 - Hardened Python `StateManager` configuration ownership so nested dictionaries and lists are copied at setter and getter boundaries, preventing caller mutations from silently diverging in-memory and durable state.
 - Fixed Python RBAC selector validation to reject validator-role Argo CD manage mode before installation-type filtering, matching the Ansible collection even when Argo CD is not installed.

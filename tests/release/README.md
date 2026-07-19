@@ -16,18 +16,21 @@ operator authorizes a real two-hub read-only run. Phase 9C remains blocked.
 
 The Phase 9B entrypoint requires two explicit runtime handles, a clean bound source revision, config/profile hashes,
 operator opt-in, and all L0-L9 gates. It inherits no default kubeconfig, context, endpoint, environment credential, or
-client factory. An exact controller-owned binding object passively ties each injected page reader to the corresponding
-runtime access and context object identities before the reader can be called. The binding must explicitly select the
-typed request-timeout contract; its adapter must enforce every `TypedReadRequest.timeout_seconds` value in the
-underlying API call.
+client factory. An exact controller-owned binding object ties each injected page reader to one public hub ID and passes
+the corresponding runtime access object, context object, and exact PEM API trust-anchor bundle into every reader call.
+Admission uses side-effect-free static lookup and requires a callable reader before contact. The binding must explicitly
+select the typed request-timeout contract; its adapter must enforce every `TypedReadRequest.timeout_seconds` value in
+the underlying API call, while the controller independently measures and enforces the request and collection deadlines.
 
 The controller performs only fixed bounded list queries for the `kube-system` Namespace, OpenShift
 `Infrastructure/cluster`, and OpenShift `ClusterVersion/version`. It collects each hub twice, requires complete
-pagination and consistent collection resource versions, validates freshness/skew/source/origin, canonicalizes only
-allowlisted identity fields, and requires stable, distinct SHA-256 fingerprints matching immutable controller
-enrollment bound to the clean source revision and config/profile hashes. Missing or tampered enrollment blocks before
-contact. Call traces contain only safe hub IDs, fixed query IDs, list verbs, page ordinals, completeness, and
-`mutation_attempted=false`.
+pagination and consistent collection resource versions, recomputes freshness at collection completion, and validates
+skew/source/origin. Its four-signal physical identity includes a versioned SHA-256 canonicalization of the validated
+API trust-anchor bundle used by the same connection; raw certificates are never published. Stable, distinct physical
+fingerprints and separate trust-anchor fingerprints must match immutable controller enrollment bound to the clean
+source revision and config/profile hashes. Missing, malformed, changed, mismatched, or tampered trust/enrollment data
+blocks before contact. Call traces contain only safe hub IDs, fixed query IDs, list verbs, page ordinals, completeness,
+and `mutation_attempted=false`.
 
 Artifacts force:
 

@@ -231,6 +231,27 @@ def test_malformed_or_unbounded_options_block_without_client_contact(
     assert client.call_count == 0
 
 
+def test_timeout_and_collection_bound_diagnostics_name_finite_positive_hard_limits() -> None:
+    client = _RecordingFakeClient()
+    context = _context(
+        options=ReadOnlyLiveTransportOptions(
+            allow_live_contact=True,
+            allow_read_only_queries=True,
+            timeout_seconds=float("inf"),
+            page_size=501,
+        )
+    )
+
+    result = _transport(client=client, context=context).execute(_query())
+
+    diagnostic = "\n".join(result.reasons)
+    assert "timeout_seconds" in diagnostic
+    assert "finite" in diagnostic
+    assert "maximum" in diagnostic
+    assert "collection_bounds" in diagnostic
+    assert client.call_count == 0
+
+
 # --- 1 / 28: non-live source guard ---------------------------------------------------------------
 
 

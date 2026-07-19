@@ -194,7 +194,7 @@ def strict_recursive_artifact_audit(value: Any) -> tuple[Any, dict[str, Any]]:
             raise ValueError("artifact publication audit exceeded maximum depth")
         if node_count > _STRICT_MAX_NODES:
             raise ValueError("artifact publication audit exceeded maximum node count")
-        if isinstance(child, Mapping):
+        if type(child) is dict:
             container_id = id(child)
             if container_id in active_container_ids:
                 raise ValueError("artifact publication audit rejected a cyclic mapping")
@@ -213,7 +213,7 @@ def strict_recursive_artifact_audit(value: Any) -> tuple[Any, dict[str, Any]]:
                 return audited
             finally:
                 active_container_ids.remove(container_id)
-        if isinstance(child, list):
+        if type(child) is list:
             container_id = id(child)
             if container_id in active_container_ids:
                 raise ValueError("artifact publication audit rejected a cyclic list")

@@ -68,10 +68,15 @@ Add these core contracts in `live_discovery.py`:
 
 - `TypedReadRequest`: fixed query identifier; `list` verb; API group/version; resource plural; exact name selector; continuation token; consistent resource version; page size; request timeout.
 - `TypedReadPage`: normalized item mappings; exact echoed requested continuation token (including the initial `None`); returned continuation token; collection resource version; remaining item count; truncation marker; evidence timestamp; evidence origin; source revision.
-- `TypedReadPageReader` protocol: one method, `read_page(request) -> TypedReadPage`, invoked only after all gates. An admitted runtime binding must explicitly select the `typed_request_timeout_v1` contract and enforce `request.timeout_seconds` in the underlying typed API request.
-- `TypedReadApi`: an exact controller-owned dataclass that passively binds one injected page reader to the exact access/context object identities without invoking caller code.
+- `TypedReadPageReader` protocol: one keyword-only method receiving the public hub ID, exact access/context objects,
+  exact PEM API trust-anchor bytes, and `TypedReadRequest`, invoked only after all gates. Admission uses static callable
+  lookup. The binding must explicitly select `typed_request_timeout_v1`; the adapter enforces
+  `request.timeout_seconds`, and the controller independently measures the request deadline.
+- `TypedReadApi`: an exact controller-owned dataclass that functionally passes one public hub ID, injected page reader,
+  exact access/context object identities, and validated trust-anchor bytes together without pre-contact callbacks.
 - `Phase9BRuntimeHandle`: public hub identifier plus the controller-owned `TypedReadApi` binding. Runtime objects have no string/path/URL coercion contract and are excluded from artifacts.
-- `Phase9BIdentityEnrollment`: immutable public-hub-to-fingerprint entries bound to the clean source revision and config/profile hashes, with a controller-recomputed enrollment hash.
+- `Phase9BIdentityEnrollment`: immutable public-hub-to-physical-fingerprint and public-hub-to-trust-anchor-fingerprint
+  entries bound to the clean source revision and config/profile hashes, with a controller-recomputed enrollment hash.
 - `ControllerOwnedLiveDiscoveryClient`: implements `ReadOnlyLiveClientProtocol`; maps the outer transport's fixed read-only identity-bundle `get` to fixed typed API `list` requests; performs complete pagination through those lists; and returns normalized evidence.
 - `Phase9BLiveDiscoveryRequest`, `Phase9BLiveDiscoveryResult`, bounds, and explicit clock protocols.
 
@@ -96,6 +101,8 @@ Each physical hub is collected twice within the bounded evidence window. The aut
 
 - `kube-system` Namespace `metadata.uid`: cluster-scoped object identity already used by repository hub-binding safety logic.
 - OpenShift `Infrastructure/cluster` `metadata.uid` plus `status.infrastructureName`: independently collected OpenShift cluster identity anchored in the config API.
+- A versioned SHA-256 canonicalization of every validated X.509 certificate in the exact PEM API trust-anchor bundle
+  used by the same typed connection.
 - OpenShift `ClusterVersion/version` `metadata.uid`; its current desired version is recorded only as corroborating metadata, not as an identity secret.
 
 Context names, kubeconfig paths, API endpoints, hub-a/hub-b aliases, input order, runtime handle representations, and profile role labels are excluded.
@@ -131,6 +138,8 @@ Block on missing continuation state, repeated tokens, token loops, invalid token
 - Capture controller UTC and monotonic start/end for the overall collection and every query.
 - Require timezone-aware UTC evidence timestamps.
 - Reject evidence older than `max_evidence_age`, farther in the future than `max_clock_skew`, or collected outside the bounded controller window plus allowed skew.
+- Recompute the total deadline and freshness for every observation at collection completion immediately before
+  artifact construction.
 - Require the maximum timestamp spread across both hubs and both identity passes to be within `max_clock_skew`.
 - Require every page's source revision to equal the controller's clean bound source revision.
 - Require every page for a runtime handle to have the configured expected origin.

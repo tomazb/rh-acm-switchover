@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 from tests.release.lab_controller.live_discovery import (
     IDENTITY_BUNDLE_QUERY_ID,
@@ -22,6 +26,7 @@ from tests.release.lab_controller.live_discovery import (
     TypedReadPage,
     TypedReadRequest,
     build_phase9b_identity_enrollment,
+    fingerprint_api_trust_anchor,
     fingerprint_identity_inputs,
     run_phase9b_live_discovery,
 )
@@ -44,6 +49,30 @@ _PROFILE_HASH = "c" * 64
 _NOW = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
 
 
+def _test_trust_anchor(common_name: str, serial_number: int) -> bytes:
+    key = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(serial_number)
+        .not_valid_before(_NOW - timedelta(days=1))
+        .not_valid_after(_NOW + timedelta(days=365))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    return certificate.public_bytes(serialization.Encoding.PEM)
+
+
+_TRUST_ANCHORS = {
+    "alpha": _test_trust_anchor("phase9b-alpha.invalid", 1),
+    "bravo": _test_trust_anchor("phase9b-bravo.invalid", 2),
+    "changed": _test_trust_anchor("phase9b-changed.invalid", 3),
+}
+
+
 class _FakeClock:
     def __init__(self, now: datetime = _NOW, *, monotonic_step: float = 0.001) -> None:
         self.now = now
@@ -64,6 +93,30 @@ class _UnsafeRepresentation:
         return "credential=" + "unsafe-value"
 
 
+class _NonCallableReader:
+    read_page = object()
+
+
+class _HostileNestedMapping(dict):
+    def __init__(self) -> None:
+        super().__init__({"safe": "value"})
+        self.items_calls = 0
+
+    def items(self):
+        self.items_calls += 1
+        raise RuntimeError("hostile mapping traversal")
+
+
+class _HostileNestedList(list):
+    def __init__(self) -> None:
+        super().__init__(["safe"])
+        self.iter_calls = 0
+
+    def __iter__(self):
+        self.iter_calls += 1
+        raise RuntimeError("hostile list traversal")
+
+
 class _ScriptedTypedApi:
     """Deterministic typed API boundary; never contacts a cluster."""
 
@@ -79,7 +132,15 @@ class _ScriptedTypedApi:
     def call_count(self) -> int:
         return len(self.requests)
 
-    def read_page(self, request: TypedReadRequest) -> TypedReadPage:
+    def read_page(
+        self,
+        *,
+        public_hub_id: str,
+        access_handle: object,
+        context_handle: object,
+        api_trust_anchor_pem: bytes,
+        request: TypedReadRequest,
+    ) -> TypedReadPage:
         self.requests.append(request)
         if request.continuation_token is None:
             if request.query_id not in self._scripts or not self._scripts[request.query_id]:
@@ -183,12 +244,15 @@ def _scripts(
     }
 
 
-def _fingerprint(seed: str) -> str:
+def _fingerprint(seed: str, *, trust_anchor_pem: bytes | None = None) -> str:
     return fingerprint_identity_inputs(
         kube_system_uid=f"{seed}-namespace-uid",
         infrastructure_uid=f"{seed}-infrastructure-uid",
         infrastructure_name=f"{seed}-infrastructure",
         cluster_version_uid=f"{seed}-clusterversion-uid",
+        api_trust_anchor_fingerprint=fingerprint_api_trust_anchor(
+            trust_anchor_pem if trust_anchor_pem is not None else _TRUST_ANCHORS[seed]
+        ),
     )
 
 
@@ -200,6 +264,7 @@ def _handle(
     api: _ScriptedTypedApi | None = None,
     access_handle: object | None = None,
     context_handle: object | None = None,
+    trust_anchor_pem: bytes | None = None,
 ) -> Phase9BRuntimeHandle:
     effective_access_handle = access_handle if access_handle is not None else object()
     effective_context_handle = context_handle if context_handle is not None else object()
@@ -209,8 +274,10 @@ def _handle(
         access_handle=effective_access_handle,
         context_handle=effective_context_handle,
         typed_api=TypedReadApi(
+            public_hub_id=public_hub_id,
             access_handle=effective_access_handle,
             context_handle=effective_context_handle,
+            api_trust_anchor_pem=trust_anchor_pem if trust_anchor_pem is not None else _TRUST_ANCHORS[seed],
             reader=reader,
             timeout_contract="typed_request_timeout_v1",
         ),
@@ -249,6 +316,10 @@ def _request(
             "physical-hub-1": _fingerprint("alpha"),
             "physical-hub-2": _fingerprint("bravo"),
         },
+        hub_api_trust_anchor_fingerprints={
+            "physical-hub-1": fingerprint_api_trust_anchor(_TRUST_ANCHORS["alpha"]),
+            "physical-hub-2": fingerprint_api_trust_anchor(_TRUST_ANCHORS["bravo"]),
+        },
         source_revision=_SOURCE_REVISION,
         config_sha256=_CONFIG_HASH,
         profile_sha256=_PROFILE_HASH,
@@ -282,7 +353,8 @@ def test_proves_two_stable_distinct_multi_signal_physical_hubs() -> None:
     assert result.artifact["mutation_attempted"] is False
     assert result.artifact["identity_enrollment_sha256"] == request.identity_enrollment.enrollment_sha256
     for proof in result.artifact["physical_identity_proofs"].values():
-        assert proof["signal_count"] == 3
+        assert proof["signal_count"] == 4
+        assert "api_trust_anchor_sha256" in proof["signal_names"]
         assert proof["stable"] is True
         assert proof["pagination_complete"] is True
 
@@ -307,6 +379,10 @@ def test_enrolled_fingerprint_mismatch_is_rejected_independently_of_origin() -> 
         hub_fingerprints={
             "physical-hub-1": _fingerprint("bravo"),
             "physical-hub-2": _fingerprint("alpha"),
+        },
+        hub_api_trust_anchor_fingerprints={
+            "physical-hub-1": fingerprint_api_trust_anchor(_TRUST_ANCHORS["alpha"]),
+            "physical-hub-2": fingerprint_api_trust_anchor(_TRUST_ANCHORS["bravo"]),
         },
         source_revision=_SOURCE_REVISION,
         config_sha256=_CONFIG_HASH,
@@ -336,8 +412,21 @@ def test_duplicate_physical_hub_fingerprints_are_rejected() -> None:
         _handle("physical-hub-1", "alpha", "origin-alpha"),
         _handle("physical-hub-2", "alpha", "origin-bravo"),
     )
+    enrollment = build_phase9b_identity_enrollment(
+        hub_fingerprints={
+            "physical-hub-1": _fingerprint("alpha"),
+            "physical-hub-2": _fingerprint("alpha"),
+        },
+        hub_api_trust_anchor_fingerprints={
+            "physical-hub-1": fingerprint_api_trust_anchor(_TRUST_ANCHORS["alpha"]),
+            "physical-hub-2": fingerprint_api_trust_anchor(_TRUST_ANCHORS["alpha"]),
+        },
+        source_revision=_SOURCE_REVISION,
+        config_sha256=_CONFIG_HASH,
+        profile_sha256=_PROFILE_HASH,
+    )
 
-    result = _run(_request(handles=handles))
+    result = _run(_request(handles=handles, identity_enrollment=enrollment))
 
     assert result.decision is Phase9BDecision.BLOCKED
     assert "duplicate_identity_fingerprint" in result.reason_codes
@@ -737,8 +826,10 @@ def test_concrete_client_cannot_contact_api_when_bypassing_controller_entrypoint
     client = ControllerOwnedLiveDiscoveryClient(
         public_hub_id="physical-hub-1",
         api=TypedReadApi(
+            public_hub_id="physical-hub-1",
             access_handle=object(),
             context_handle=object(),
+            api_trust_anchor_pem=_TRUST_ANCHORS["alpha"],
             reader=reader,
             timeout_contract="typed_request_timeout_v1",
         ),
@@ -1307,3 +1398,214 @@ def test_call_trace_is_complete_allowlisted_and_non_mutating() -> None:
     assert {entry["verb"] for entry in trace} == {"list"}
     assert all(entry["pagination_complete"] is True for entry in trace)
     assert all(entry["mutation_attempted"] is False for entry in trace)
+
+
+def test_non_callable_reader_is_rejected_before_contact_instead_of_retryable_api_failure() -> None:
+    first, second = _request().runtime_handles
+    request = _request(
+        handles=(
+            replace(first, typed_api=replace(first.typed_api, reader=_NonCallableReader())),
+            second,
+        )
+    )
+
+    result = _run(request)
+
+    assert result.decision is Phase9BDecision.BLOCKED
+    assert result.reason_codes == ("invalid_runtime_handle",)
+    assert _all_api_calls(request) == 0
+
+
+@pytest.mark.parametrize("hostile_container_type", [_HostileNestedMapping, _HostileNestedList])
+def test_hostile_artifact_container_is_not_invoked_before_opt_in(hostile_container_type: type[Any]) -> None:
+    hostile = hostile_container_type()
+    request = _request(
+        allow_live_contact=False,
+        additional_artifact_fields={"diagnostics": hostile},
+    )
+
+    result = _run(request)
+
+    assert result.reason_codes == ("live_contact_disabled",)
+    assert getattr(hostile, "items_calls", 0) == 0
+    assert getattr(hostile, "iter_calls", 0) == 0
+    assert _all_api_calls(request) == 0
+
+
+class _InvalidClock:
+    def __init__(self, monotonic_value: Any, *, raises: bool = False) -> None:
+        self.monotonic_value = monotonic_value
+        self.raises = raises
+
+    def utcnow(self) -> datetime:
+        if self.raises:
+            raise RuntimeError("private clock failure")
+        return _NOW
+
+    def monotonic(self) -> Any:
+        if self.raises:
+            raise RuntimeError("private clock failure")
+        return self.monotonic_value
+
+
+@pytest.mark.parametrize("monotonic_value", [float("nan"), float("inf"), float("-inf"), "not-a-number"])
+def test_invalid_clock_reading_fails_closed_without_raw_exception(monotonic_value: Any) -> None:
+    result = run_phase9b_live_discovery(_request(), clock=_InvalidClock(monotonic_value))
+
+    assert result.decision is Phase9BDecision.BLOCKED
+    assert result.reason_codes == ("controller_clock_failure",)
+    assert "not-a-number" not in "\n".join(result.reasons)
+
+
+def test_clock_exception_fails_closed_without_escaping() -> None:
+    result = run_phase9b_live_discovery(_request(), clock=_InvalidClock(0.0, raises=True))
+
+    assert result.decision is Phase9BDecision.BLOCKED
+    assert result.reason_codes == ("controller_clock_failure",)
+    assert "private clock failure" not in "\n".join(result.reasons)
+
+
+class _OneCallOverrunApi(_ScriptedTypedApi):
+    def __init__(self, scripts: Mapping[str, Sequence[Sequence[TypedReadPage | Exception]]], clock: _FakeClock) -> None:
+        super().__init__(scripts)
+        self._clock = clock
+        self._advanced = False
+
+    def read_page(
+        self,
+        *,
+        public_hub_id: str,
+        access_handle: object,
+        context_handle: object,
+        api_trust_anchor_pem: bytes,
+        request: TypedReadRequest,
+    ) -> TypedReadPage:
+        if not self._advanced:
+            self._clock.monotonic_value += request.timeout_seconds
+            self._advanced = True
+        return super().read_page(
+            public_hub_id=public_hub_id,
+            access_handle=access_handle,
+            context_handle=context_handle,
+            api_trust_anchor_pem=api_trust_anchor_pem,
+            request=request,
+        )
+
+
+def test_operation_completing_at_request_deadline_is_blocked() -> None:
+    clock = _FakeClock(monotonic_step=0.0)
+    handles = (
+        _handle(
+            "physical-hub-1",
+            "alpha",
+            "origin-alpha",
+            api=_OneCallOverrunApi(_scripts("alpha", "origin-alpha"), clock),
+        ),
+        _handle("physical-hub-2", "bravo", "origin-bravo"),
+    )
+
+    result = run_phase9b_live_discovery(_request(handles=handles), clock=clock)
+
+    assert result.decision is Phase9BDecision.BLOCKED
+    assert result.reason_codes == ("request_deadline_exceeded",)
+
+
+def test_fully_swapped_binding_with_caller_rebuilt_enrollment_cannot_pass() -> None:
+    first, second = _request().runtime_handles
+    handles = (
+        replace(
+            first,
+            access_handle=second.access_handle,
+            context_handle=second.context_handle,
+            typed_api=second.typed_api,
+            expected_evidence_origin=second.expected_evidence_origin,
+        ),
+        replace(
+            second,
+            access_handle=first.access_handle,
+            context_handle=first.context_handle,
+            typed_api=first.typed_api,
+            expected_evidence_origin=first.expected_evidence_origin,
+        ),
+    )
+    enrollment = build_phase9b_identity_enrollment(
+        hub_fingerprints={
+            "physical-hub-1": _fingerprint("bravo"),
+            "physical-hub-2": _fingerprint("alpha"),
+        },
+        hub_api_trust_anchor_fingerprints={
+            "physical-hub-1": fingerprint_api_trust_anchor(_TRUST_ANCHORS["bravo"]),
+            "physical-hub-2": fingerprint_api_trust_anchor(_TRUST_ANCHORS["alpha"]),
+        },
+        source_revision=_SOURCE_REVISION,
+        config_sha256=_CONFIG_HASH,
+        profile_sha256=_PROFILE_HASH,
+    )
+
+    result = _run(_request(handles=handles, identity_enrollment=enrollment))
+
+    assert result.decision is Phase9BDecision.BLOCKED
+    assert result.reason_codes == ("runtime_handle_binding_mismatch",)
+
+
+class _CompletionExpiryClock(_FakeClock):
+    def __init__(self) -> None:
+        super().__init__()
+        self.utcnow_calls = 0
+
+    def utcnow(self) -> datetime:
+        self.utcnow_calls += 1
+        if self.utcnow_calls >= 14:
+            return _NOW + timedelta(minutes=10)
+        return _NOW
+
+
+def test_evidence_that_expires_at_collection_completion_is_rejected_before_publication() -> None:
+    result = run_phase9b_live_discovery(_request(), clock=_CompletionExpiryClock())
+
+    assert result.decision is Phase9BDecision.BLOCKED
+    assert result.reason_codes == ("stale_evidence",)
+    assert result.artifact is None
+
+
+def test_api_trust_anchor_is_required_as_an_authoritative_identity_signal() -> None:
+    first, second = _request().runtime_handles
+    request = _request(handles=(replace(first, typed_api=replace(first.typed_api, api_trust_anchor_pem=b"")), second))
+
+    result = _run(request)
+
+    assert result.decision is Phase9BDecision.BLOCKED
+    assert result.reason_codes == ("missing_api_trust_anchor",)
+    assert result.artifact is None
+    assert _all_api_calls(request) == 0
+
+
+def test_malformed_api_trust_anchor_is_rejected_before_contact() -> None:
+    first, second = _request().runtime_handles
+    request = _request(
+        handles=(replace(first, typed_api=replace(first.typed_api, api_trust_anchor_pem=b"not a certificate")), second)
+    )
+
+    result = _run(request)
+
+    assert result.reason_codes == ("invalid_api_trust_anchor",)
+    assert _all_api_calls(request) == 0
+
+
+def test_changed_api_trust_anchor_is_rejected_against_enrollment_before_contact() -> None:
+    first, second = _request().runtime_handles
+    request = _request(
+        handles=(
+            replace(first, typed_api=replace(first.typed_api, api_trust_anchor_pem=_TRUST_ANCHORS["changed"])),
+            second,
+        )
+    )
+
+    result = _run(request)
+
+    assert result.reason_codes == ("api_trust_anchor_mismatch",)
+    assert _all_api_calls(request) == 0
+
+
+def test_api_trust_anchor_fingerprint_changes_physical_identity_hash() -> None:
+    assert _fingerprint("alpha") != _fingerprint("alpha", trust_anchor_pem=_TRUST_ANCHORS["changed"])

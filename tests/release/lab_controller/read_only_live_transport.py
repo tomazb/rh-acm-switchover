@@ -431,13 +431,13 @@ def evaluate_read_only_live_contact_guard(
         _fail(
             ReadOnlyLiveTransportErrorCategory.INVALID_QUERY,
             "timeout_seconds",
-            "timeout_seconds must be a positive number",
+            "timeout_seconds must be finite, positive, and at or below the controller hard maximum",
         )
     if not _valid_collection_bounds(options):
         _fail(
             ReadOnlyLiveTransportErrorCategory.INVALID_QUERY,
             "collection_bounds",
-            "page, item, and total collection bounds must be explicit positive values",
+            "collection_bounds must use finite positive values at or below the controller hard maximums",
         )
 
     gate_result = validate_read_only_discovery_gates(context.gate_ids)

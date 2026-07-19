@@ -13,6 +13,7 @@ restricted to the fixed ``list`` query definitions below.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import math
 import re
@@ -21,7 +22,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
+
+from cryptography import x509
+from cryptography.hazmat.primitives import serialization
 
 from tests.release.lab_controller.artifacts import strict_recursive_artifact_audit
 from tests.release.lab_controller.read_only_backend import (
@@ -69,6 +73,9 @@ _SAFE_IDENTITY_VALUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,252}$")
 _MAX_EVIDENCE_AGE_SECONDS = 900.0
 _MAX_CLOCK_SKEW_SECONDS = 120.0
 _TYPED_TIMEOUT_CONTRACT = "typed_request_timeout_v1"
+_TRUST_ANCHOR_CANONICALIZATION_REVISION = "phase9b.api_trust_anchor.v1"
+_MAX_TRUST_ANCHOR_BYTES = 1024 * 1024
+_MAX_TRUST_ANCHOR_CERTIFICATES = 64
 _ALLOWED_ADDITIONAL_ARTIFACT_KEYS = frozenset({"diagnostics"})
 _FORBIDDEN_CLAIM_MARKERS = (
     "certification",
@@ -195,7 +202,6 @@ class TypedReadPage:
     source_revision: str
 
 
-@runtime_checkable
 class TypedReadPageReader(Protocol):
     """Caller-supplied page reader invoked only after controller and transport gates pass.
 
@@ -204,7 +210,15 @@ class TypedReadPageReader(Protocol):
     explicitly select that contract before contact.
     """
 
-    def read_page(self, request: TypedReadRequest) -> TypedReadPage:
+    def read_page(
+        self,
+        *,
+        public_hub_id: str,
+        access_handle: object,
+        context_handle: object,
+        api_trust_anchor_pem: bytes,
+        request: TypedReadRequest,
+    ) -> TypedReadPage:
         """Perform one bounded read-only page request."""
         ...
 
@@ -213,13 +227,21 @@ class TypedReadPageReader(Protocol):
 class TypedReadApi:
     """Controller-owned passive binding between runtime handles and an injected page reader."""
 
+    public_hub_id: str
     access_handle: object
     context_handle: object
+    api_trust_anchor_pem: bytes
     reader: TypedReadPageReader
     timeout_contract: str
 
     def read_page(self, request: TypedReadRequest) -> TypedReadPage:
-        return self.reader.read_page(request)
+        return self.reader.read_page(
+            public_hub_id=self.public_hub_id,
+            access_handle=self.access_handle,
+            context_handle=self.context_handle,
+            api_trust_anchor_pem=self.api_trust_anchor_pem,
+            request=request,
+        )
 
 
 class Phase9BClock(Protocol):
@@ -238,6 +260,45 @@ class _SystemClock:
 
     def monotonic(self) -> float:
         return time.monotonic()
+
+
+class _ControllerClockFailure(Exception):
+    pass
+
+
+class _TrustedControllerClock:
+    def __init__(self, clock: Phase9BClock) -> None:
+        self._clock = clock
+        self._last_utc: datetime | None = None
+        self._last_monotonic: float | None = None
+
+    def utcnow(self) -> datetime:
+        try:
+            value = self._clock.utcnow()
+            if not isinstance(value, datetime) or value.utcoffset() is None:
+                raise ValueError
+            normalized = value.astimezone(timezone.utc)
+        except Exception:
+            raise _ControllerClockFailure from None
+        if self._last_utc is not None and normalized < self._last_utc:
+            raise _ControllerClockFailure
+        self._last_utc = normalized
+        return normalized
+
+    def monotonic(self) -> float:
+        try:
+            value = self._clock.monotonic()
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError
+            normalized = float(value)
+            if not math.isfinite(normalized):
+                raise ValueError
+        except Exception:
+            raise _ControllerClockFailure from None
+        if self._last_monotonic is not None and normalized < self._last_monotonic:
+            raise _ControllerClockFailure
+        self._last_monotonic = normalized
+        return normalized
 
 
 @dataclass(frozen=True)
@@ -267,6 +328,7 @@ class Phase9BIdentityEnrollment:
     """Immutable physical-ID enrollment bound to controller source/config/profile inputs."""
 
     hub_fingerprints: tuple[tuple[str, str], ...]
+    hub_api_trust_anchor_fingerprints: tuple[tuple[str, str], ...]
     source_revision: str
     config_sha256: str
     profile_sha256: str
@@ -351,6 +413,7 @@ def fingerprint_identity_inputs(
     infrastructure_uid: str,
     infrastructure_name: str,
     cluster_version_uid: str,
+    api_trust_anchor_fingerprint: str,
 ) -> str:
     """Canonicalize the allowlisted physical identity fields and derive a redacted fingerprint."""
 
@@ -359,7 +422,39 @@ def fingerprint_identity_inputs(
         infrastructure_uid=infrastructure_uid,
         infrastructure_name=infrastructure_name,
         cluster_version_uid=cluster_version_uid,
+        api_trust_anchor_fingerprint=api_trust_anchor_fingerprint,
     )
+    canonical = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
+def fingerprint_api_trust_anchor(api_trust_anchor_pem: bytes) -> str:
+    """Return a versioned fingerprint of a validated PEM trust-anchor bundle."""
+
+    if (
+        type(api_trust_anchor_pem) is not bytes
+        or not api_trust_anchor_pem
+        or len(api_trust_anchor_pem) > _MAX_TRUST_ANCHOR_BYTES
+    ):
+        raise ValueError("API trust anchor is missing or invalid")
+    try:
+        certificates = x509.load_pem_x509_certificates(api_trust_anchor_pem)
+        certificate_digests = sorted(
+            hashlib.sha256(certificate.public_bytes(serialization.Encoding.DER)).hexdigest()
+            for certificate in certificates
+        )
+    except Exception:
+        raise ValueError("API trust anchor is missing or invalid") from None
+    if (
+        not certificate_digests
+        or len(certificate_digests) > _MAX_TRUST_ANCHOR_CERTIFICATES
+        or len(set(certificate_digests)) != len(certificate_digests)
+    ):
+        raise ValueError("API trust anchor is missing or invalid")
+    document = {
+        "schema": _TRUST_ANCHOR_CANONICALIZATION_REVISION,
+        "certificate_sha256": certificate_digests,
+    }
     canonical = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
 
@@ -367,6 +462,7 @@ def fingerprint_identity_inputs(
 def build_phase9b_identity_enrollment(
     *,
     hub_fingerprints: Mapping[str, str],
+    hub_api_trust_anchor_fingerprints: Mapping[str, str],
     source_revision: str,
     config_sha256: str,
     profile_sha256: str,
@@ -374,14 +470,19 @@ def build_phase9b_identity_enrollment(
     """Build the immutable enrollment record consumed by the controller entrypoint."""
 
     entries = tuple(sorted((str(hub_id), str(fingerprint)) for hub_id, fingerprint in hub_fingerprints.items()))
+    trust_anchor_entries = tuple(
+        sorted((str(hub_id), str(fingerprint)) for hub_id, fingerprint in hub_api_trust_anchor_fingerprints.items())
+    )
     enrollment_sha256 = _identity_enrollment_digest(
         hub_fingerprints=entries,
+        hub_api_trust_anchor_fingerprints=trust_anchor_entries,
         source_revision=source_revision,
         config_sha256=config_sha256,
         profile_sha256=profile_sha256,
     )
     return Phase9BIdentityEnrollment(
         hub_fingerprints=entries,
+        hub_api_trust_anchor_fingerprints=trust_anchor_entries,
         source_revision=source_revision,
         config_sha256=config_sha256,
         profile_sha256=profile_sha256,
@@ -436,6 +537,9 @@ class ControllerOwnedLiveDiscoveryClient(ReadOnlyLiveClientProtocol):
         except _CollectionBlocked as exc:
             self.failure_code = exc.reason_code
             raise ReadOnlyLiveSafetyError("Phase 9B collection safety gate blocked") from None
+        except _ControllerClockFailure:
+            self.failure_code = "controller_clock_failure"
+            raise ReadOnlyLiveSafetyError("Phase 9B controller clock failed") from None
         except TimeoutError:
             self.failure_code = "api_timeout"
             raise ReadOnlyLiveTimeoutError("Phase 9B typed read timed out") from None
@@ -500,6 +604,7 @@ class ControllerOwnedLiveDiscoveryClient(ReadOnlyLiveClientProtocol):
             infrastructure_uid=_metadata_scalar(infrastructure, "uid"),
             infrastructure_name=_nested_scalar(infrastructure, ("status", "infrastructureName")),
             cluster_version_uid=_metadata_scalar(cluster_version, "uid"),
+            api_trust_anchor_fingerprint=fingerprint_api_trust_anchor(self._api.api_trust_anchor_pem),
         )
         cluster_version_corroboration_sha256 = _digest_text(
             _nested_scalar(cluster_version, ("status", "desired", "version"))
@@ -516,6 +621,7 @@ class ControllerOwnedLiveDiscoveryClient(ReadOnlyLiveClientProtocol):
             signal_names=(
                 "kube_system_namespace_uid",
                 "openshift_infrastructure_identity",
+                "api_trust_anchor_sha256",
                 "openshift_cluster_version_uid",
             ),
             cluster_version_corroboration_sha256=cluster_version_corroboration_sha256,
@@ -548,7 +654,8 @@ class ControllerOwnedLiveDiscoveryClient(ReadOnlyLiveClientProtocol):
         origin_sha256: str | None = None
 
         while True:
-            remaining_seconds = self._controller_deadline - self._clock.monotonic()
+            request_started = self._clock.monotonic()
+            remaining_seconds = self._controller_deadline - request_started
             if remaining_seconds <= 0:
                 raise _CollectionBlocked("collection_deadline_exceeded")
             typed_request = TypedReadRequest(
@@ -567,9 +674,13 @@ class ControllerOwnedLiveDiscoveryClient(ReadOnlyLiveClientProtocol):
                     remaining_seconds,
                 ),
             )
+            request_deadline = request_started + typed_request.timeout_seconds
             page = self._api.read_page(typed_request)
             page_count += 1
-            if self._clock.monotonic() >= self._controller_deadline:
+            request_completed = self._clock.monotonic()
+            if request_completed >= request_deadline:
+                raise _CollectionBlocked("request_deadline_exceeded")
+            if request_completed >= self._controller_deadline:
                 raise _CollectionBlocked("collection_deadline_exceeded")
             _validate_page_shape(page, typed_request)
             if page.evidence_origin != self._expected_origin:
@@ -635,7 +746,7 @@ def run_phase9b_live_discovery(
     No typed API method is touched until every controller gate passes.
     """
 
-    controller_clock = clock or _SystemClock()
+    controller_clock = _TrustedControllerClock(clock or _SystemClock())
     validated_request, gate_failure = _validate_precontact_request(request)
     if gate_failure is not None:
         return _blocked(gate_failure)
@@ -643,8 +754,11 @@ def run_phase9b_live_discovery(
         return _blocked("invalid_controller_request")
     request = validated_request
 
-    start_utc = controller_clock.utcnow()
-    start_monotonic = controller_clock.monotonic()
+    try:
+        start_utc = controller_clock.utcnow()
+        start_monotonic = controller_clock.monotonic()
+    except _ControllerClockFailure:
+        return _blocked("controller_clock_failure")
     controller_deadline = start_monotonic + request.bounds.total_deadline_seconds
     clients: dict[str, ControllerOwnedLiveDiscoveryClient] = {}
     first_passes: dict[str, _IdentityPass] = {}
@@ -676,8 +790,12 @@ def run_phase9b_live_discovery(
                 return _blocked(reason_code, decision=decision)
             target[handle.public_hub_id] = client.last_identity_pass
 
-        if pass_number == 1 and controller_clock.monotonic() >= controller_deadline:
-            return _blocked("collection_deadline_exceeded")
+        if pass_number == 1:
+            try:
+                if controller_clock.monotonic() >= controller_deadline:
+                    return _blocked("collection_deadline_exceeded")
+            except _ControllerClockFailure:
+                return _blocked("controller_clock_failure")
 
     for handle in request.runtime_handles:
         first = first_passes[handle.public_hub_id]
@@ -710,7 +828,17 @@ def run_phase9b_live_discovery(
     spread = max(all_timestamps) - min(all_timestamps)
     if spread > timedelta(seconds=request.bounds.max_clock_skew_seconds):
         return _blocked("excessive_clock_skew")
-    end_utc = controller_clock.utcnow()
+    try:
+        end_monotonic = controller_clock.monotonic()
+        end_utc = controller_clock.utcnow()
+        if end_monotonic >= controller_deadline:
+            return _blocked("collection_deadline_exceeded")
+        for timestamp in all_timestamps:
+            _validate_freshness(timestamp, end_utc, request.bounds)
+    except _ControllerClockFailure:
+        return _blocked("controller_clock_failure")
+    except _CollectionBlocked as exc:
+        return _blocked(exc.reason_code)
 
     artifact = _build_artifact(
         request=request,
@@ -770,13 +898,15 @@ def _validate_precontact_request(
         return None, "invalid_controller_request"
     if type(request.additional_artifact_fields) is not dict:
         return None, "redaction_failure"
+    controller_policy_failure = _validate_controller_policy(request)
+    if controller_policy_failure is not None:
+        return None, controller_policy_failure
     try:
         audited_additional_fields, _ = strict_recursive_artifact_audit(request.additional_artifact_fields)
     except Exception:
         return None, "redaction_failure"
     request_snapshot = replace(request, additional_artifact_fields=audited_additional_fields)
     for validator in (
-        _validate_controller_policy,
         _validate_query_and_claim_policy,
         _validate_runtime_handle_set,
         _validate_identity_enrollment,
@@ -858,12 +988,19 @@ def _validate_runtime_handle_set(request: Phase9BLiveDiscoveryRequest) -> str | 
             or handle.context_handle is None
             or handle.typed_api is None
             or type(handle.typed_api) is not TypedReadApi
-            or not isinstance(handle.typed_api.reader, TypedReadPageReader)
+            or not _reader_has_callable_page_method(handle.typed_api.reader)
             or handle.typed_api.timeout_contract != _TYPED_TIMEOUT_CONTRACT
         ):
             return "invalid_runtime_handle"
+        if type(handle.typed_api.api_trust_anchor_pem) is not bytes or not handle.typed_api.api_trust_anchor_pem:
+            return "missing_api_trust_anchor"
+        try:
+            fingerprint_api_trust_anchor(handle.typed_api.api_trust_anchor_pem)
+        except ValueError:
+            return "invalid_api_trust_anchor"
         if (
-            handle.typed_api.access_handle is not handle.access_handle
+            handle.typed_api.public_hub_id != handle.public_hub_id
+            or handle.typed_api.access_handle is not handle.access_handle
             or handle.typed_api.context_handle is not handle.context_handle
         ):
             return "runtime_handle_binding_mismatch"
@@ -890,6 +1027,14 @@ def _validate_runtime_handle_set(request: Phase9BLiveDiscoveryRequest) -> str | 
     return None
 
 
+def _reader_has_callable_page_method(reader: Any) -> bool:
+    try:
+        read_page = inspect.getattr_static(reader, "read_page")
+    except (AttributeError, TypeError):
+        return False
+    return callable(read_page)
+
+
 def _validate_identity_enrollment(request: Phase9BLiveDiscoveryRequest) -> str | None:
     enrollment = request.identity_enrollment
     if type(enrollment) is not Phase9BIdentityEnrollment:
@@ -897,6 +1042,11 @@ def _validate_identity_enrollment(request: Phase9BLiveDiscoveryRequest) -> str |
     if type(enrollment.hub_fingerprints) is not tuple or any(
         type(pair) is not tuple or len(pair) != 2 or not isinstance(pair[0], str) or not isinstance(pair[1], str)
         for pair in enrollment.hub_fingerprints
+    ):
+        return "invalid_identity_enrollment"
+    if type(enrollment.hub_api_trust_anchor_fingerprints) is not tuple or any(
+        type(pair) is not tuple or len(pair) != 2 or not isinstance(pair[0], str) or not isinstance(pair[1], str)
+        for pair in enrollment.hub_api_trust_anchor_fingerprints
     ):
         return "invalid_identity_enrollment"
     if (
@@ -911,6 +1061,7 @@ def _validate_identity_enrollment(request: Phase9BLiveDiscoveryRequest) -> str |
         return "invalid_identity_enrollment"
     expected_digest = _identity_enrollment_digest(
         hub_fingerprints=enrollment.hub_fingerprints,
+        hub_api_trust_anchor_fingerprints=enrollment.hub_api_trust_anchor_fingerprints,
         source_revision=enrollment.source_revision,
         config_sha256=enrollment.config_sha256,
         profile_sha256=enrollment.profile_sha256,
@@ -929,6 +1080,23 @@ def _validate_identity_enrollment(request: Phase9BLiveDiscoveryRequest) -> str |
         return "invalid_identity_enrollment"
     if len(set(fingerprints.values())) != 2:
         return "duplicate_identity_fingerprint"
+    trust_anchor_fingerprints = dict(enrollment.hub_api_trust_anchor_fingerprints)
+    if (
+        len(enrollment.hub_api_trust_anchor_fingerprints) != 2
+        or len(trust_anchor_fingerprints) != 2
+        or set(trust_anchor_fingerprints) != {handle.public_hub_id for handle in request.runtime_handles}
+        or any(
+            not _SAFE_PUBLIC_ID.fullmatch(hub_id) or not _FINGERPRINT.fullmatch(fingerprint)
+            for hub_id, fingerprint in enrollment.hub_api_trust_anchor_fingerprints
+        )
+    ):
+        return "invalid_identity_enrollment"
+    observed_trust_anchor_fingerprints = {
+        handle.public_hub_id: fingerprint_api_trust_anchor(handle.typed_api.api_trust_anchor_pem)
+        for handle in request.runtime_handles
+    }
+    if observed_trust_anchor_fingerprints != trust_anchor_fingerprints:
+        return "api_trust_anchor_mismatch"
     return None
 
 
@@ -1101,10 +1269,14 @@ def _canonical_identity_document(
     infrastructure_uid: str,
     infrastructure_name: str,
     cluster_version_uid: str,
+    api_trust_anchor_fingerprint: str,
 ) -> dict[str, Any]:
+    if not _FINGERPRINT.fullmatch(api_trust_anchor_fingerprint):
+        raise ValueError("API trust anchor fingerprint is invalid")
     return {
         "schema": "phase9b.physical_identity.v1",
         "signals": {
+            "api_trust_anchor": {"fingerprint": api_trust_anchor_fingerprint},
             "kube_system_namespace": {"uid": _identity_scalar(kube_system_uid)},
             "openshift_infrastructure": {
                 "uid": _identity_scalar(infrastructure_uid),
@@ -1215,6 +1387,7 @@ def _digest_text(value: str) -> str:
 def _identity_enrollment_digest(
     *,
     hub_fingerprints: Sequence[tuple[str, str]],
+    hub_api_trust_anchor_fingerprints: Sequence[tuple[str, str]],
     source_revision: str,
     config_sha256: str,
     profile_sha256: str,
@@ -1227,6 +1400,10 @@ def _identity_enrollment_digest(
         "hub_fingerprints": [
             {"public_hub_id": hub_id, "identity_fingerprint": fingerprint}
             for hub_id, fingerprint in sorted(hub_fingerprints)
+        ],
+        "hub_api_trust_anchor_fingerprints": [
+            {"public_hub_id": hub_id, "api_trust_anchor_fingerprint": fingerprint}
+            for hub_id, fingerprint in sorted(hub_api_trust_anchor_fingerprints)
         ],
     }
     canonical = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
@@ -1275,6 +1452,7 @@ def _blocked(
 ) -> Phase9BReadOnlyBackendResult:
     safe_reasons = {
         "ambient_credentials_forbidden": "ambient credential inheritance is forbidden",
+        "api_trust_anchor_mismatch": "API trust anchor does not match enrolled evidence",
         "api_failure": "typed read API failed before complete evidence was collected",
         "api_permanent_failure": "typed read API reported a permanent failure",
         "api_timeout": "typed read API timed out before complete evidence was collected",
@@ -1286,13 +1464,16 @@ def _blocked(
         "identity_changed_during_collection": "physical identity changed during the evidence window",
         "identity_fingerprint_mismatch": "physical identity does not match enrolled evidence",
         "invalid_config_hash": "configuration hash is missing or invalid",
+        "invalid_api_trust_anchor": "API trust anchor is malformed or unverifiable",
         "invalid_identity_enrollment": "physical identity enrollment is missing or invalid",
         "invalid_profile_hash": "profile hash is missing or invalid",
         "invalid_runtime_handle": "two complete explicit runtime-only handles are required",
         "live_contact_disabled": "live contact was not explicitly enabled",
         "missing_controller_gates": "required controller gates are incomplete",
+        "missing_api_trust_anchor": "API trust anchor is required for each controller-owned connection",
         "missing_operator_authorization": "operator authorization reference is missing",
         "query_not_allowlisted": "requested query or verb is not allowlisted",
+        "request_deadline_exceeded": "typed read exceeded its controller-measured request deadline",
         "read_only_queries_disabled": "read-only queries were not explicitly enabled",
         "redaction_failure": "recursive artifact publication audit failed",
         "wrong_evidence_origin": "evidence origin does not match its runtime handle",
@@ -1326,6 +1507,7 @@ __all__ = [
     "TypedReadPage",
     "TypedReadRequest",
     "build_phase9b_identity_enrollment",
+    "fingerprint_api_trust_anchor",
     "fingerprint_identity_inputs",
     "run_phase9b_live_discovery",
 ]

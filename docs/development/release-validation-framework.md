@@ -17,11 +17,13 @@ through the lab role controller.
 
 The existing profile-driven runner's `OcDiscoveryClient` remains distinct from controller authority and is not used
 by Phase 9B. The Phase 9B entrypoint accepts caller-injected page readers only through exact controller-owned binding
-objects tied to their runtime access/context object identities. It repeatedly collects `kube-system` Namespace,
-OpenShift Infrastructure, and
-ClusterVersion identity signals; enforces complete pagination, source revision, evidence origin, freshness, and skew;
-and derives stable distinct SHA-256 fingerprints. It deliberately emits no certification-authoritative, logical-role,
-known-state, readiness, mutation, recovery, or executable-profile claims. Phase 9C remains blocked.
+objects tied to one public hub ID and their runtime access/context object identities. The same binding passes its
+validated exact PEM API trust-anchor bundle into each reader call. It repeatedly collects `kube-system` Namespace,
+OpenShift Infrastructure, and ClusterVersion identity signals; combines them with a versioned trust-anchor
+fingerprint; enforces controller-measured request/collection deadlines, complete pagination, source revision, evidence
+origin, completion-time freshness, and skew; and derives stable distinct SHA-256 fingerprints. It deliberately emits
+no certification-authoritative, logical-role, known-state, readiness, mutation, recovery, or executable-profile
+claims. Phase 9C remains blocked.
 
 ## Orchestration Flow
 

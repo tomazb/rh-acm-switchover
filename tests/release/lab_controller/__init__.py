@@ -51,6 +51,7 @@ from .live_discovery import (
     TypedReadPageReader,
     TypedReadRequest,
     build_phase9b_identity_enrollment,
+    fingerprint_api_trust_anchor,
     fingerprint_identity_inputs,
     run_phase9b_live_discovery,
 )
@@ -104,6 +105,7 @@ __all__ = [
     "TypedReadPageReader",
     "TypedReadRequest",
     "build_phase9b_identity_enrollment",
+    "fingerprint_api_trust_anchor",
     "fingerprint_identity_inputs",
     "run_phase9b_live_discovery",
     "ArgoCDInterferenceMode",
