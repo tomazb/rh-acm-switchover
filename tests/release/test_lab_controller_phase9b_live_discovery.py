@@ -1220,6 +1220,46 @@ def test_recursive_redaction_failure_blocks_artifact_publication(unsafe_value: M
     assert "redaction_failure" in result.reason_codes
 
 
+def test_recursive_redaction_rejects_embedded_credential_scheme_without_leakage(
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    sensitive_value = "phase9b-private-value"
+    unsafe_values: tuple[Any, ...] = (
+        f"Bearer {sensitive_value}",
+        f"ordinary prefix Bearer {sensitive_value}",
+        f"ordinary prefix bEaReR {sensitive_value}",
+        {"nested": [{"message": f"ordinary prefix BEARER {sensitive_value}"}]},
+    )
+
+    for unsafe_value in unsafe_values:
+        caplog.clear()
+        result = _run(_request(additional_artifact_fields={"diagnostics": unsafe_value}))
+        captured = capsys.readouterr()
+        public_output = "\n".join((*result.reason_codes, *result.reasons, captured.out, captured.err, caplog.text))
+
+        assert result.decision is Phase9BDecision.BLOCKED
+        assert result.artifact is None
+        assert result.reason_codes == ("redaction_failure",)
+        assert result.reasons == ("recursive artifact publication audit failed",)
+        assert result.identity_fingerprints == {}
+        assert result.certification_eligible is False
+        assert result.live_certification_evidence is False
+        assert result.mutation_attempted is False
+        assert sensitive_value not in public_output
+        assert sensitive_value not in repr(result)
+        assert all(
+            forbidden_claim not in public_output.lower()
+            for forbidden_claim in ("logical-role", "logical_role", "known-state", "known_state", "recovery_authorized")
+        )
+
+    harmless = _run(_request(additional_artifact_fields={"diagnostics": {"status": "forbearer handoff complete"}}))
+
+    assert harmless.decision is Phase9BDecision.PASS
+    assert harmless.artifact is not None
+    assert harmless.artifact["diagnostics"] == {"status": "forbearer handoff complete"}
+
+
 def test_recursive_redaction_rejects_cyclic_artifact_input_without_contact() -> None:
     cyclic: dict[str, Any] = {}
     cyclic["nested"] = cyclic

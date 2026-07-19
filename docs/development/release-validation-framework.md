@@ -87,7 +87,7 @@ A focused rerun may select one mutating scenario plus its automatic prerequisite
 
 This section documents the intended direction for live lab-mutating certification; it is not a complete
 implementation spec. Phase 9B physical identity collection now exists, but the logical-role and mutating lifecycle
-described below remains Phase 9C and later work.
+described below remain Phase 9C and later work.
 
 Terminology:
 

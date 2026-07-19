@@ -39,6 +39,10 @@ _STRICT_SENSITIVE_KEY_MARKERS = (
 _STRICT_MAX_STRING_LENGTH = 2048
 _STRICT_MAX_DEPTH = 32
 _STRICT_MAX_NODES = 10000
+_STRICT_CREDENTIAL_SCHEME_VALUE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])bearer[ \t\r\n]+(?=\S)",
+    re.IGNORECASE,
+)
 
 
 def _shared_redaction_would_change(value: str) -> bool:
@@ -75,6 +79,10 @@ def _is_unredacted_sensitive_key(value: str) -> bool:
         or _KUBECONFIG_PATH_PATTERN.search(value)
         or any(marker in lowered for marker in _CLUSTER_ID_MARKERS)
     )
+
+
+def _contains_credential_scheme_value(value: str) -> bool:
+    return bool(_STRICT_CREDENTIAL_SCHEME_VALUE_PATTERN.search(value))
 
 
 def sanitize_artifact_key(value: object) -> str:
@@ -231,7 +239,7 @@ def strict_recursive_artifact_audit(value: Any) -> tuple[Any, dict[str, Any]]:
         if isinstance(child, str):
             if len(child) > _STRICT_MAX_STRING_LENGTH or _contains_control_characters(child):
                 raise ValueError("artifact publication audit rejected an unsafe string")
-            if child.lower().startswith("bearer ") or _is_unredacted_sensitive_string(child):
+            if _contains_credential_scheme_value(child) or _is_unredacted_sensitive_string(child):
                 raise ValueError("artifact publication audit rejected sensitive string content")
             return child
         raise ValueError("artifact publication audit rejected a non-JSON-safe value")
