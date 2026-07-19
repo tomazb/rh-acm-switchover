@@ -33,7 +33,7 @@ Before implementation begins for any remaining Thermos slice:
 
 This gate applies to the remaining deep-scan queue (`PR 24` onward) and to any new Thermos follow-up slice added later.
 
-**Last Updated:** 2026-07-12
+**Last Updated:** 2026-07-19
 
 ## Post-Merge Revalidation (2026-06-03)
 
@@ -211,7 +211,7 @@ GitHub PR #127, and tracker `PR 35` / GitHub PR #128 respectively. `H3` is the
 only remaining structural item from that earlier set and is tracked separately
 in issue #158.
 
-## Current Completion Summary (2026-07-12)
+## Current Completion Summary (2026-07-19)
 
 ### Completed main queue
 
@@ -224,6 +224,14 @@ in issue #158.
   runtime/bootstrap, GitHub PR #103 recorded the remaining slice map, GitHub PR
   #104 extracted operation and phase-flow runners, GitHub PR #106 extracted Argo
   CD resume safety, and GitHub PR #107 extracted CLI outcome/report orchestration.
+
+### Newly planned security and stability follow-up
+
+- The independently validated Security & Stability Audit contributes 17
+  actionable findings grouped into 10 design-gated `SSA-*` resolution slices.
+- `SSA-01` is the first product-runtime priority. No `SSA-*` slice has a PR
+  number, branch, or worktree until its slice-specific design and plan are
+  approved.
 
 ### Deferred low-severity follow-ups
 
@@ -250,6 +258,268 @@ finalization behavior during decomposition.
 | Finding | Issue | Status | Safety classification |
 | --- | --- | --- | --- |
 | H3 | [#158](https://github.com/tomazb/rh-acm-switchover/issues/158) | open/design track | large safety-sensitive decomposition |
+
+## Security & Stability Audit Follow-Up (2026-07-19)
+
+This queue records the 17 actionable findings from the independently validated
+Security & Stability Audit. It intentionally excludes audit findings `A3`, `A4`,
+and `R3`, which validation determined were documented behavior rather than
+defects. Audit IDs are prefixed with `SSA-` in this tracker to avoid collisions
+with the earlier Thermos finding IDs.
+
+The corrected severity is authoritative for sequencing:
+
+- `SSA-A2` and `SSA-P2` are P1 because both supported implementations can accept
+  primary and secondary contexts that resolve to the same physical cluster.
+- Nine findings are P2 and six are P3 after removing overstated impact and
+  accounting for existing confirmation, lifecycle, and controller gates.
+- The grouped slices below are resolution boundaries, not assigned PR numbers.
+  A slice enters the numbered PR sequence only after its own approved design/spec
+  and implementation plan satisfy the tracker gate.
+
+### Relationship To Existing Thermos Work
+
+- `SSA-A2` / `SSA-P2` complement the identity-binding work in `F5`, `F37`, and
+  `F39`; those fixes protect resume targets but do not prove that the two live
+  hub roles are physically distinct before a new switchover.
+- `SSA-P1` / `SSA-PY4` are new decommission safety work. Open issue
+  [#153](https://github.com/tomazb/rh-acm-switchover/issues/153) (`R2-L6`) is a
+  structural Ansible discovery-order refactor and does not resolve wrong-target
+  protection or the Python embedded-decommission RBAC recheck.
+- `SSA-PY3` is a narrower residual gap after `F31`: report artifacts received
+  canonical containment checks, while relative general state paths still receive
+  syntax-only validation.
+- `SSA-S2` sharpens the residual after `F33`: the OpenShift client is checksum
+  verified today, but release builds may still trust a checksum fetched from the
+  same origin instead of an independently pinned digest.
+- `SSA-S1` / `SSA-S3` overlap the deprecated-script neighborhood of open issue
+  [#157](https://github.com/tomazb/rh-acm-switchover/issues/157) (`R2-L8`), but
+  require a broader remove-versus-harden decision for the deprecated Argo CD
+  script. Resolve them in one script-lifecycle slice rather than duplicating
+  shell cleanup.
+- `SSA-C1`, `SSA-C2`, and `SSA-C3` are not covered by the blocking Bandit and
+  CodeQL controls already present. Their scope is the remaining advisory
+  scanners, mutable workflow/tool references, collection Bandit coverage, and
+  reproducible CI/release dependency inputs.
+
+### Planned Resolution Slices
+
+`SSA-01` is the first product-runtime priority. Release/CI/docs slices `SSA-04`,
+`SSA-06`, `SSA-07`, and `SSA-10` may proceed independently in isolated
+worktrees; sequence the remaining runtime slices after `SSA-01` unless their
+slice-specific design establishes a stronger dependency or urgency.
+
+| Slice | Status | Findings | Proposed resolution boundary | Required review |
+| --- | --- | --- | --- | --- |
+| SSA-01 | planned | SSA-A2, SSA-P2 | Add a shared-behavior, fail-closed physical-hub distinction guard before any mutation. | Python/collection parity; wrong-context and same-UID safety |
+| SSA-02 | planned | SSA-P1, SSA-PY4 | Strengthen standalone and embedded decommission target/RBAC checks without requiring prior switchover state. | destructive-operation, RBAC, parity, and dry-run review |
+| SSA-03 | planned | SSA-PY2, SSA-A6 | Make klusterlet endpoint selection unambiguous and bound collection worker concurrency. | post-activation parity, timeout, and scale review |
+| SSA-04 | planned | SSA-R1, SSA-R2 | Require explicit release-profile authorization for live decommission and reject safety-critical adapter overrides. | lab-controller trust boundary and release evidence review |
+| SSA-05 | planned | SSA-S1, SSA-S3 | Remove the deprecated Argo CD shell path if compatibility permits; otherwise make state identity, permissions, and context parsing fail closed. | operator migration, shell safety, and documentation review |
+| SSA-06 | planned | SSA-C1, SSA-C2 | Establish required dependency/secret gates and pin third-party actions and security tools immutably. | CI availability, false-positive, and update-process review |
+| SSA-07 | planned | SSA-C3, SSA-S2 | Extend blocking Bandit coverage and make CI/release dependency and OpenShift-client inputs reproducible. | supply-chain and multi-architecture build review |
+| SSA-08 | planned | SSA-PY3 | Apply canonical containment and safe-write policy to relative state paths. | resume compatibility and filesystem-adversary review |
+| SSA-09 | planned | SSA-PY5 | Remove raw API-body logging and bound or stream full-list aggregation without silently omitting safety-relevant resources. | secret handling, scale, and fail-closed review |
+| SSA-10 | planned | SSA-A5 | Correct the collection `force` documentation contract; do not introduce an unaudited override. | migration-map and operator-expectation review |
+
+### Resolution Requirements
+
+#### SSA-01: Distinct Physical Hub Guard
+
+**Resolution**
+- Read the live `kube-system` namespace UID for both configured hubs during
+  preflight/initialization and reject equal UIDs before a mutation-capable phase.
+- Implement the same operator-facing decision in Python and the collection while
+  respecting their independent import boundaries.
+- Keep per-role identity binding for resume; distinct-hub validation is an
+  additional invariant, not a replacement.
+
+**Acceptance criteria**
+- Identical context names fail input/preflight validation.
+- Different context names and kubeconfigs that resolve to one cluster fail on
+  equal live UIDs.
+- Unreadable live identity fails closed in execute mode and reports which hub
+  could not be verified without exposing credentials.
+- Distinct live UIDs continue through validate, dry-run, and execute paths.
+- Python, collection, and shared parity tests cover same-context, same-UID,
+  unreadable-UID, and distinct-UID cases.
+
+#### SSA-02: Decommission Target And RBAC Revalidation
+
+**Resolution**
+- Add an optional expected physical-cluster UID to standalone decommission and
+  verify it immediately before destructive work; preserve a clearly confirmed
+  path for operators who have no prior state or expected UID.
+- Re-run decommission RBAC validation immediately before Python finalization
+  invokes embedded teardown so permission drift cannot begin a partial teardown
+  unnoticed.
+- Compare the collection's standalone and embedded paths and close equivalent
+  gaps in the same slice; any intentional difference requires the parity
+  approval process.
+
+**Acceptance criteria**
+- An expected-UID mismatch or unreadable UID stops before deleting a
+  `ManagedCluster`, `MultiClusterHub`, namespace, or observability resource.
+- Standalone decommission remains usable without switchover state, but the
+  no-expected-UID path retains explicit confirmation and reports the verified
+  context/cluster identity before mutation.
+- Embedded decommission fails before teardown if the immediate RBAC recheck
+  denies or errors.
+- Negative tests cover wrong context, UID mismatch, RBAC drift, dry-run, and
+  non-interactive execution in both supported form factors where applicable.
+
+#### SSA-03: Klusterlet Targeting And Concurrency Bounds
+
+**Resolution**
+- Replace hostname-only spoke matching with normalized endpoint identities and
+  fail closed when more than one context remains a valid match.
+- Preserve the documented tolerance for equivalent default-port forms only when
+  the normalized endpoint is unambiguous.
+- Validate the collection worker setting against a documented upper bound before
+  creating worker pools.
+
+**Acceptance criteria**
+- Two contexts that share a hostname but differ by port or endpoint cannot
+  overwrite each other silently.
+- Zero-match and multi-match results are explicit non-mutation failures.
+- Default worker behavior remains unchanged; zero, negative, non-integer, and
+  above-limit values fail validation with actionable messages.
+- Scale tests prove that the configured upper bound constrains concurrent API
+  work and existing per-call timeouts remain effective.
+
+#### SSA-04: Release Profile Mutation Controls
+
+**Resolution**
+- Add a dedicated, default-false release-profile authorization for live Python
+  decommission and reject live decommission outside disposable-lab controller
+  policy.
+- Replace unrestricted safety-critical `extra_args` / environment overrides with
+  an allowlist or explicit denylist validation before adapter command assembly.
+- Keep matrix lifecycle and lab-controller GO/NO-GO checks authoritative; profile
+  validation adds defense in depth and must not bypass controller decisions.
+
+**Acceptance criteria**
+- A focused Python decommission rerun is non-mutating unless the profile,
+  disposable-lab policy, and controller authorization all permit it.
+- Trailing Ansible `-e` values cannot override dry-run, confirmation, target
+  identity, checkpoint, or controller-owned safety variables.
+- Unsafe arguments fail during profile validation, before subprocess execution.
+- Tests cover duplicate-option precedence, environment overrides, focused
+  reruns, and artifact evidence showing whether live mutation was authorized.
+
+#### SSA-05: Deprecated Script Lifecycle
+
+**Resolution**
+- Prefer deleting `scripts/argocd-manage.sh` and its obsolete tests/docs after
+  confirming supported Python and collection replacements cover every documented
+  operator workflow.
+- If removal is not yet compatible, reject legacy resume state that lacks bound
+  context/UID identity, treat explicit context mismatch as fatal, create state
+  files under `umask 077`, and use kubeconfig-aware context resolution that
+  handles quoted names.
+- Coordinate related deprecated-shell cleanup with issue #157 so the same
+  compatibility surface is not changed twice.
+
+**Acceptance criteria**
+- No supported path can patch Argo CD Applications after only warning about a
+  state/context mismatch.
+- Any retained state file is owner-only from creation, not repaired only after
+  writing.
+- Shell tests cover legacy state, mismatched context, quoted context names, and
+  secure file creation.
+- Migration docs and `CHANGELOG.md` direct operators to supported replacements.
+  Protected runbook/SKILL files remain unchanged unless separately approved.
+
+#### SSA-06: Required Security Gates And Immutable CI References
+
+**Resolution**
+- Make dependency auditing and at least one maintained secret-scanning lane
+  blocking, with reviewed suppressions/baselines instead of unconditional
+  `continue-on-error` or `|| true`.
+- Keep intentionally advisory scanners labeled as advisory so workflow status is
+  not misleading.
+- Pin third-party actions to full commit SHAs and install security tools at
+  reviewed versions, with an explicit automated or scheduled update process.
+
+**Acceptance criteria**
+- A known vulnerable dependency fixture and a safe synthetic secret fixture make
+  their required jobs fail.
+- Reports upload with `if: always()` even when a required scanner fails.
+- Workflow/static tests reject branch refs such as `@main` / `@master` and
+  unversioned security-tool installation.
+- Bandit and CodeQL remain blocking; the change does not weaken existing gates.
+
+#### SSA-07: Reproducible Dependencies And Release Artifact Integrity
+
+**Resolution**
+- Extend the blocking Bandit target set to collection plugins while preserving
+  reviewed exclusions only where technically justified.
+- Add constraints or lock artifacts for CI and release certification without
+  replacing the project's intentional minimum-version declarations for
+  consumers.
+- Require independently pinned OpenShift-client digests in release builds for
+  every supported architecture; retain same-origin checksum discovery only for
+  explicitly non-release development builds if still needed.
+
+**Acceptance criteria**
+- A Bandit finding in collection plugin code fails the blocking quality lane.
+- Clean-environment CI/release installs resolve from reviewed reproducible inputs.
+- Release container builds fail when an architecture digest is absent or does
+  not match; amd64 and arm64 paths are tested.
+- Dependency and digest update instructions identify ownership and verification
+  commands.
+
+#### SSA-08: Relative State Path Containment
+
+**Resolution**
+- Route relative state-file paths through the canonical path-safety policy used
+  for protected artifacts, resolving from the documented base directory.
+- Preserve valid ordinary relative state files while rejecting symlink escapes,
+  prefix confusion, unsafe ancestors, and unsafe final-component replacement.
+
+**Acceptance criteria**
+- Existing normal relative and absolute state-path workflows remain compatible.
+- Adversarial tests cover symlinked parents, symlinked final components,
+  non-existent ancestors, traversal, and base-prefix collisions.
+- State creation and replacement use the existing safe-write/no-follow strategy
+  where applicable.
+- Resume reports an actionable path error before reading or writing attacker-
+  redirected state.
+
+#### SSA-09: API Error Redaction And Resource Bounds
+
+**Resolution**
+- Stop logging raw Kubernetes API response bodies from reusable helpers; log
+  stable status/reason text and already-sanitized public details only.
+- Inventory every full-list aggregation call and either stream/process pages or
+  apply a documented maximum appropriate to that operation.
+- Never treat a truncated set as complete for mutation, identity, RBAC, or
+  safety decisions; reaching a required-completeness limit must fail closed.
+
+**Acceptance criteria**
+- Tests with token-, kubeconfig-, and Secret-like API bodies prove logs contain
+  no body fragments.
+- High-cardinality tests prove bounded memory/concurrency behavior.
+- A configured limit reached on a safety-relevant list returns an explicit error,
+  not partial success.
+- Operator diagnostics retain status code, resource kind, namespace, and a
+  sanitized reason sufficient for troubleshooting.
+
+#### SSA-10: Collection `force` Contract
+
+**Resolution**
+- Remove the false CLI migration claim that Python `--force` maps to active
+  collection behavior, and consistently label the collection field as reserved
+  or unsupported.
+- Do not implement a collection force bypass in this slice. Any future override
+  requires a separate safety design covering identity, checkpoint, and
+  destructive-operation boundaries.
+
+**Acceptance criteria**
+- Migration and variable-reference docs agree that no active collection force
+  behavior exists.
+- Documentation guardrails fail if the unsupported one-to-one mapping returns.
+- No runtime defaults, validation, checkpoint, or identity behavior changes.
 
 ## Finding Validation Matrix
 
@@ -312,6 +582,23 @@ finalization behavior during decomposition.
 | R2-M6 | confirmed | PR 47 | `tests/release/adapters/ansible.py`, `bash.py`, `python_cli.py` duplicate ~70% of `execute()` logic despite an existing shared contract in `adapters/common.py`. |
 | R2-M7 | confirmed | PR 45 | `tests/release/orchestrator.py` duplicates primary/secondary RBAC certification handling inline (~75 lines) instead of looping over a shared helper. |
 | R2-M8 | confirmed | PR 46 | `tests/release/checks/rbac_certification.py`'s required-vs-forbidden permission evaluation loops are the same algorithm with polarity flipped, duplicated in full. |
+| SSA-A2 | confirmed, corrected P1 | SSA-01 (planned) | Collection contexts and live UIDs are validated independently but never compared; identical contexts or different contexts targeting one cluster can enter self-switchover. |
+| SSA-P1 | confirmed with lower impact, corrected P2 | SSA-02 (planned) | Python standalone decommission intentionally lacks prior state binding; wrong-context risk remains, so add optional expected-UID verification without making switchover state mandatory. |
+| SSA-P2 | confirmed, corrected P1 | SSA-01 (planned) | Python binds each role identity for resume but does not require primary and secondary live UIDs to differ before a new switchover. |
+| SSA-S1 | confirmed, corrected P2 | SSA-05 (planned) | Deprecated `argocd-manage.sh` accepts legacy state and only warns on explicit context mismatch before patching the CLI-selected hub. |
+| SSA-R1 | confirmed with lifecycle mitigation, corrected P2 | SSA-04 (planned) | Release Python decommission can build a live non-interactive command while the Ansible stream is forced dry-run; lifecycle gates reduce but do not remove focused-rerun risk. |
+| SSA-R2 | confirmed with controller mitigation, corrected P2 | SSA-04 (planned) | Trusted profile arguments are appended verbatim and a trailing Ansible `-e` can override adapter dry-run defaults, although matrix/controller gates still apply. |
+| SSA-C1 | confirmed with narrower scope, corrected P2 | SSA-06 (planned) | Dependency, secret, Semgrep, and Trivy lanes are advisory; Bandit and CodeQL were incorrectly included in the original claim and are already blocking. |
+| SSA-A5 | confirmed documentation defect, corrected P3 | SSA-10 (planned) | The migration map claims `--force` maps to `acm_switchover_execution.force`, but collection runtime never reads it and the variable reference describes reserved compatibility. |
+| SSA-PY2 | confirmed, corrected P2 | SSA-03 (planned) | Python klusterlet context selection collapses server URLs to hostname keys, so distinct endpoints sharing a host can overwrite each other and mis-target remediation. |
+| SSA-PY3 | confirmed with local-filesystem precondition, corrected P3 | SSA-08 (planned) | Relative general state paths receive syntax-only validation and do not inherit the symlink-containment policy already used for report artifacts. |
+| SSA-PY4 | confirmed, corrected P2 | SSA-02 (planned) | Python preflight checks decommission RBAC, but finalization invokes embedded `Decommission` without an immediate permission recheck before teardown. |
+| SSA-S2 | confirmed as residual hardening, corrected P3 | SSA-07 (planned) | OpenShift-client downloads are checksum verified, but empty pinned-digest defaults permit same-origin checksum trust instead of independently pinned release digests. |
+| SSA-C2 | confirmed with narrower scope, corrected P2 | SSA-06 (planned) | Trivy and TruffleHog use branch refs and Semgrep is installed unversioned; other floating major action tags also retain supply-chain movement. |
+| SSA-C3 | confirmed, corrected P2 | SSA-07 (planned) | Blocking Bandit omits collection plugins, and CI/release dependency resolution has minimum floors without reviewed constraints or lock artifacts. |
+| SSA-PY5 | confirmed with workload-dependent impact, corrected P3 | SSA-09 (planned) | Some patch failures log a bounded fragment of raw API response bodies and some callers aggregate every list page without a resource bound. |
+| SSA-A6 | confirmed with narrower scope, corrected P3 | SSA-03 (planned) | Collection worker configuration has no upper cap; defaults and API timeouts mitigate impact, and the original check-mode concern was not substantiated. |
+| SSA-S3 | confirmed with lower composite impact, corrected P3 | SSA-05 (planned) | Deprecated Argo CD state may be created mode `0644`, and shell jsonpath context lookup can break on quoted context names; token stdout is documented and its wrapper already writes mode `0600`. |
 
 ## PR Sequence
 
