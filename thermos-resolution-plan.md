@@ -33,7 +33,7 @@ Before implementation begins for any remaining Thermos slice:
 
 This gate applies to the remaining deep-scan queue (`PR 24` onward) and to any new Thermos follow-up slice added later.
 
-**Last Updated:** 2026-07-19
+**Last Updated:** 2026-07-20
 
 ## Post-Merge Revalidation (2026-06-03)
 
@@ -232,6 +232,8 @@ in issue #158.
 - `SSA-01` is the first product-runtime priority. No `SSA-*` slice has a PR
   number, branch, or worktree until its slice-specific design and plan are
   approved.
+- A 2026-07-20 source revalidation confirmed that all `SSA-01`–`SSA-10`
+  acceptance criteria remain unmet; slice statuses stay `planned` (no flips).
 
 ### Deferred low-severity follow-ups
 
@@ -571,7 +573,7 @@ slice-specific design establishes a stronger dependency or urgency.
 | F44 | resolved | PR 27-PR 31 | `PR 27` extracted runtime/bootstrap; docs-only `PR 28` recorded the remaining slice map; `PR 29`, `PR 30`, and `PR 31` completed operation/phase-flow runners, Argo CD resume safety, and CLI outcome/report orchestration respectively. GitHub PRs #102, #103, #104, #106, and #107 are merged, and the extracted `lib/` modules remain wired through `acm_switchover.py` with dedicated tests. |
 | R2-H1 | confirmed | PR 36 | `delete_configmap`/`delete_pod` in `lib/kube_client.py` and the ACM ≤2.11 `delete_custom_resource` BackupSchedule call in `modules/primary_prep.py` have no request timeout; a hung API call can block PRIMARY_PREP indefinitely. |
 | R2-H2 | confirmed, sharper framing of `H2` | PR 34 | `MANAGED_CLUSTER_API_GROUP` exists but is used in only 1 of ~48 relevant call sites across `modules/`; verified by grep. |
-| R2-H3 | confirmed | PR 39 | Ansible RBAC validation task file duplicates ~140 lines between primary-hub and secondary-hub blocks, mirroring the still-open Python `H1`. |
+| R2-H3 | confirmed | PR 39 | Ansible RBAC validation task file duplicated ~140 lines between primary-hub and secondary-hub blocks (mirroring the Python `H1` pattern later closed by GitHub PR #148); closed by tracker `PR 39` / GitHub PR #149. |
 | R2-M1 | confirmed, resolves subagent disagreement | PR 37 (part 1), PR 38 (part 2) | `acm_preflight_report.py` computes an accurate check-mode `changed` value then explicitly discards it (confirmed by reading `write_json_artifact`/`write_report` and comparing against sibling `acm_report_artifact.py`, which has no such override) — a real, self-contained bug. `acm_backup_schedule.py`/`acm_restore_info.py` force `changed=False` under native Ansible check mode; their owning roles do not surface this to the published role-level `changed` result unless the collection's own `mode: dry_run` variable is set (traced through `pause_backups.yml`/`activate_restore.yml`), which is misleading against the documented "native Ansible check mode is non-mutating even when `mode: execute`" contract in `docs/variable-reference.md` — a real but architecturally distinct issue from the `acm_preflight_report.py` bug. |
 | R2-M2 | confirmed | PR 42 | Crash between restore-staleness verification and activation completion, followed by resume, can skip re-validating restore staleness before completing activation. |
 | R2-M3 | confirmed | PR 40 | `_wait_for_restore_deletion` (`activation.py`) and `_wait_for_primary_restore_deletion` (`finalization.py`) are near-verbatim duplicates; bundle with existing `M2` waiter unification. |
