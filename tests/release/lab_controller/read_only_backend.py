@@ -81,6 +81,38 @@ class ReadOnlyBackendPhase(str, Enum):
     INTERFACE_SKELETON = "interface_skeleton"
     FAKE_TRANSPORT_FUTURE = "fake_transport_future"
     LIVE_TRANSPORT_FUTURE = "live_transport_future"
+    LIVE_READ_ONLY_PHASE_9B = "live_read_only_phase_9b"
+
+
+@dataclass(frozen=True)
+class Phase9BReadOnlyBackendResult:
+    """Dependency-free result boundary for controller-owned Phase 9B discovery."""
+
+    decision: ReadOnlyBackendDecision
+    reason_codes: tuple[str, ...] = ()
+    reasons: tuple[str, ...] = ()
+    identity_fingerprints: Mapping[str, str] = field(default_factory=dict)
+    artifact: Mapping[str, Any] | None = None
+    purpose: str = "live_read_only"
+    certification_eligible: bool = False
+    live_certification_evidence: bool = False
+    mutation_attempted: bool = False
+    backend_phase: ReadOnlyBackendPhase = ReadOnlyBackendPhase.LIVE_READ_ONLY_PHASE_9B
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "purpose", "live_read_only")
+        object.__setattr__(self, "certification_eligible", False)
+        object.__setattr__(self, "live_certification_evidence", False)
+        object.__setattr__(self, "mutation_attempted", False)
+        object.__setattr__(self, "backend_phase", ReadOnlyBackendPhase.LIVE_READ_ONLY_PHASE_9B)
+
+
+class Phase9BReadOnlyBackendProtocol(Protocol):
+    """Narrow Phase 9B backend boundary without importing a concrete live client."""
+
+    def collect_phase9b(self, request: Any) -> Phase9BReadOnlyBackendResult:
+        """Collect controller-owned read-only evidence under the concrete backend's gates."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -1026,6 +1058,8 @@ __all__ = [
     "LogicalRoleEvidence",
     "ManagedClusterSetEvidence",
     "PhysicalIdentityEvidence",
+    "Phase9BReadOnlyBackendProtocol",
+    "Phase9BReadOnlyBackendResult",
     "ReadOnlyBackendArtifactSummary",
     "ReadOnlyBackendDecision",
     "ReadOnlyBackendPhase",

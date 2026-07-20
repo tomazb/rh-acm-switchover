@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added the disabled-by-default Phase 9B lab-controller live discovery client for bounded typed read-only physical hub
+  identity proof, complete pagination, freshness/provenance binding, stable distinct fingerprints, and fail-closed
+  recursively audited non-certification artifacts. Logical-role and mutation authority remain deferred to Phase 9C.
 - Added live RBAC bootstrap certification scenario (`rbac-bootstrap-live`) for release validation that validates applied cluster permissions end-to-end using SubjectAccessReview against live or disposable clusters.
 - Added opt-in environment variable `ACM_ENABLE_LIVE_RBAC_CERTIFICATION` to gate live RBAC certification; the scenario is skipped when not explicitly enabled, keeping normal release validation safe for production environments.
 - Added `tests/release/checks/rbac_certification.py` module that validates operator and validator role permissions, including MCO delete permission for old-hub finalization and full decommission delete permissions.
@@ -36,6 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Hardened Phase 9B read-only discovery so reader admission is side-effect-free, artifact containers are not traversed
+  before opt-in, injected clocks and request deadlines fail closed, runtime connection objects are functionally bound,
+  completion freshness is recomputed, Phase 9A API trust anchors participate in enrollment/physical identity, and
+  public bound diagnostics state their finite hard limits. Expected physical enrollment now comes only from a frozen
+  controller-owned registry supplied independently of each run; requests may reference stable enrollments but cannot
+  define or replace identity, trust-anchor, origin, inventory, source, config, or profile bindings.
 - Prevented public Python and collection preflight output from publishing raw validation messages, exception text, credential-derived identifiers, API details, or Argo CD Application names. Existing structured result/report contents and artifact permissions remain unchanged; recursive artifact redaction and mode hardening remain tracked as RC-G2.
 - Hardened Python `StateManager` configuration ownership so nested dictionaries and lists are copied at setter and getter boundaries, preventing caller mutations from silently diverging in-memory and durable state.
 - Fixed Python RBAC selector validation to reject validator-role Argo CD manage mode before installation-type filtering, matching the Ansible collection even when Argo CD is not installed.

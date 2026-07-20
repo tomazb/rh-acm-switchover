@@ -30,6 +30,7 @@ allowlisted structured fields.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -99,6 +100,11 @@ _FORBIDDEN_ARTIFACT_KEY_SUBSTRINGS: tuple[str, ...] = (
 _MAX_TOP_LEVEL_KEYS = 25
 _MAX_STRING_LENGTH = 512
 _MAX_COLLECTION_LENGTH = 50
+READ_ONLY_LIVE_MAX_REQUEST_TIMEOUT_SECONDS = 60.0
+READ_ONLY_LIVE_MAX_PAGE_SIZE = 500
+READ_ONLY_LIVE_MAX_PAGES_PER_QUERY = 100
+READ_ONLY_LIVE_MAX_ITEMS_PER_QUERY = 10000
+READ_ONLY_LIVE_MAX_TOTAL_DEADLINE_SECONDS = 300.0
 
 # Only these value types can be proven artifact-safe by the str-based redaction layer. Any other
 # type (e.g., ``bytes`` from a real client, or an arbitrary object whose ``repr`` could leak) is
@@ -193,6 +199,10 @@ class ReadOnlyLiveTransportOptions:
     allow_read_only_queries: bool = False
     timeout_seconds: float = 30.0
     approval_reference: str | None = None
+    page_size: int = 100
+    max_pages_per_query: int = 20
+    max_items_per_query: int = 1000
+    total_deadline_seconds: float = 120.0
 
 
 @dataclass(frozen=True)
@@ -264,6 +274,10 @@ class ReadOnlyLiveClientRequest:
     hub_label: str
     resource_family: str
     timeout_seconds: float
+    page_size: int = 100
+    max_pages_per_query: int = 20
+    max_items_per_query: int = 1000
+    total_deadline_seconds: float = 120.0
 
 
 @dataclass(frozen=True)
@@ -417,7 +431,13 @@ def evaluate_read_only_live_contact_guard(
         _fail(
             ReadOnlyLiveTransportErrorCategory.INVALID_QUERY,
             "timeout_seconds",
-            "timeout_seconds must be a positive number",
+            "timeout_seconds must be finite, positive, and at or below the controller hard maximum",
+        )
+    if not _valid_collection_bounds(options):
+        _fail(
+            ReadOnlyLiveTransportErrorCategory.INVALID_QUERY,
+            "collection_bounds",
+            "collection_bounds must use finite positive values at or below the controller hard maximums",
         )
 
     gate_result = validate_read_only_discovery_gates(context.gate_ids)
@@ -777,6 +797,10 @@ def _build_client_request(
         hub_label=query.hub_label,
         resource_family=query.resource_family,
         timeout_seconds=float(options.timeout_seconds),
+        page_size=options.page_size,
+        max_pages_per_query=options.max_pages_per_query,
+        max_items_per_query=options.max_items_per_query,
+        total_deadline_seconds=float(options.total_deadline_seconds),
     )
 
 
@@ -837,7 +861,40 @@ def _positive_timeout(options: Any) -> bool:
     timeout = options.timeout_seconds
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
         return False
-    return timeout > 0
+    if isinstance(timeout, int):
+        return 0 < timeout <= READ_ONLY_LIVE_MAX_REQUEST_TIMEOUT_SECONDS
+    return math.isfinite(timeout) and 0 < timeout <= READ_ONLY_LIVE_MAX_REQUEST_TIMEOUT_SECONDS
+
+
+def _valid_collection_bounds(options: Any) -> bool:
+    if not isinstance(options, ReadOnlyLiveTransportOptions):
+        return False
+    if (
+        not isinstance(options.page_size, int)
+        or isinstance(options.page_size, bool)
+        or options.page_size <= 0
+        or not isinstance(options.max_pages_per_query, int)
+        or isinstance(options.max_pages_per_query, bool)
+        or options.max_pages_per_query <= 0
+        or not isinstance(options.max_items_per_query, int)
+        or isinstance(options.max_items_per_query, bool)
+        or options.max_items_per_query <= 0
+        or not isinstance(options.total_deadline_seconds, (int, float))
+        or isinstance(options.total_deadline_seconds, bool)
+    ):
+        return False
+    deadline = options.total_deadline_seconds
+    deadline_is_valid = (
+        0 < deadline <= READ_ONLY_LIVE_MAX_TOTAL_DEADLINE_SECONDS
+        if isinstance(deadline, int)
+        else math.isfinite(deadline) and 0 < deadline <= READ_ONLY_LIVE_MAX_TOTAL_DEADLINE_SECONDS
+    )
+    return bool(
+        options.page_size <= READ_ONLY_LIVE_MAX_PAGE_SIZE
+        and options.max_pages_per_query <= READ_ONLY_LIVE_MAX_PAGES_PER_QUERY
+        and options.max_items_per_query <= READ_ONLY_LIVE_MAX_ITEMS_PER_QUERY
+        and deadline_is_valid
+    )
 
 
 def _payload_has_unsupported_shape(value: Any) -> bool:
@@ -954,6 +1011,11 @@ def _gate_value(gate: LiveGateId | str) -> str:
 
 __all__ = [
     "RawReadOnlyLiveResponse",
+    "READ_ONLY_LIVE_MAX_ITEMS_PER_QUERY",
+    "READ_ONLY_LIVE_MAX_PAGES_PER_QUERY",
+    "READ_ONLY_LIVE_MAX_PAGE_SIZE",
+    "READ_ONLY_LIVE_MAX_REQUEST_TIMEOUT_SECONDS",
+    "READ_ONLY_LIVE_MAX_TOTAL_DEADLINE_SECONDS",
     "ReadOnlyLiveClientProtocol",
     "ReadOnlyLiveClientRequest",
     "ReadOnlyLiveContactGuardDecision",

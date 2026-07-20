@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -16,6 +17,31 @@ _CLUSTER_ID_MARKERS = ("cluster-id", "cluster_id")
 _URL_PATTERN = re.compile(r"https?://[^\s,;)'\"}]+", re.IGNORECASE)
 _KUBECONFIG_PATH_PATTERN = re.compile(
     r"(?:/home/[^\s,;)'\"}]+|~/\.kube/[^\s,;)'\"}]+|/tmp/[^\s,;)'\"}]+|[^\s,;)'\"}]*[/\\]\.kube[/\\][^\s,;)'\"}]+)"
+)
+_STRICT_SENSITIVE_KEY_MARKERS = (
+    "kubeconfig",
+    "token",
+    "secret",
+    "credential",
+    "password",
+    "endpoint",
+    "api_url",
+    "api_server",
+    "context",
+    "runtime_handle",
+    "error",
+    "exception",
+    "traceback",
+    "command",
+    "argv",
+    "shell",
+)
+_STRICT_MAX_STRING_LENGTH = 2048
+_STRICT_MAX_DEPTH = 32
+_STRICT_MAX_NODES = 10000
+_STRICT_CREDENTIAL_SCHEME_VALUE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])bearer[ \t\r\n]+(?=\S)",
+    re.IGNORECASE,
 )
 
 
@@ -53,6 +79,10 @@ def _is_unredacted_sensitive_key(value: str) -> bool:
         or _KUBECONFIG_PATH_PATTERN.search(value)
         or any(marker in lowered for marker in _CLUSTER_ID_MARKERS)
     )
+
+
+def _contains_credential_scheme_value(value: str) -> bool:
+    return bool(_STRICT_CREDENTIAL_SCHEME_VALUE_PATTERN.search(value))
 
 
 def sanitize_artifact_key(value: object) -> str:
@@ -152,6 +182,80 @@ def sanitize_artifact_payload(value: Any) -> Any:
     if isinstance(value, str):
         return sanitize_artifact_text(value)
     return value
+
+
+def strict_recursive_artifact_audit(value: Any) -> tuple[Any, dict[str, Any]]:
+    """Return a JSON-safe deep copy only when every key and value is publication-safe.
+
+    This is the all-or-nothing Phase 9B publication gate. Unlike the older best-effort sanitizer,
+    it rejects unsupported values instead of stringifying or partially redacting them. The caller
+    must not publish an artifact when this function raises ``ValueError``.
+    """
+
+    node_count = 0
+    active_container_ids: set[int] = set()
+
+    def _audit(child: Any, *, path: tuple[str, ...]) -> Any:
+        nonlocal node_count
+        node_count += 1
+        if len(path) > _STRICT_MAX_DEPTH:
+            raise ValueError("artifact publication audit exceeded maximum depth")
+        if node_count > _STRICT_MAX_NODES:
+            raise ValueError("artifact publication audit exceeded maximum node count")
+        if type(child) is dict:
+            container_id = id(child)
+            if container_id in active_container_ids:
+                raise ValueError("artifact publication audit rejected a cyclic mapping")
+            active_container_ids.add(container_id)
+            try:
+                audited: dict[str, Any] = {}
+                for key, nested in child.items():
+                    if not isinstance(key, str):
+                        raise ValueError("artifact publication audit rejected a non-string mapping key")
+                    lowered = key.lower()
+                    if any(marker in lowered for marker in _STRICT_SENSITIVE_KEY_MARKERS):
+                        raise ValueError("artifact publication audit rejected a sensitive mapping key")
+                    if _is_unredacted_sensitive_key(key) or _contains_control_characters(key):
+                        raise ValueError("artifact publication audit rejected an unsafe mapping key")
+                    audited[key] = _audit(nested, path=(*path, key))
+                return audited
+            finally:
+                active_container_ids.remove(container_id)
+        if type(child) is list:
+            container_id = id(child)
+            if container_id in active_container_ids:
+                raise ValueError("artifact publication audit rejected a cyclic list")
+            active_container_ids.add(container_id)
+            try:
+                return [_audit(item, path=(*path, str(index))) for index, item in enumerate(child)]
+            finally:
+                active_container_ids.remove(container_id)
+        if child is None or isinstance(child, bool) or isinstance(child, int):
+            return child
+        if isinstance(child, float):
+            if not math.isfinite(child):
+                raise ValueError("artifact publication audit rejected a non-finite number")
+            return child
+        if isinstance(child, str):
+            if len(child) > _STRICT_MAX_STRING_LENGTH or _contains_control_characters(child):
+                raise ValueError("artifact publication audit rejected an unsafe string")
+            if _contains_credential_scheme_value(child) or _is_unredacted_sensitive_string(child):
+                raise ValueError("artifact publication audit rejected sensitive string content")
+            return child
+        raise ValueError("artifact publication audit rejected a non-JSON-safe value")
+
+    audited_payload = _audit(value, path=())
+    return audited_payload, {
+        "status": "passed",
+        "recursive": True,
+        "node_count": node_count,
+        "unsupported_value_count": 0,
+        "sensitive_value_count": 0,
+    }
+
+
+def _contains_control_characters(value: str) -> bool:
+    return any(ord(character) < 32 and character not in "\t\n\r" for character in value)
 
 
 def _payload_claims_live_certification_evidence(payload: Mapping[str, Any]) -> bool:
