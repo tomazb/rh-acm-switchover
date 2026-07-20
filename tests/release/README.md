@@ -10,6 +10,11 @@ tests are not live ACM certification evidence. The existing profile-driven relea
 lab-controller entrypoint emits certification-authoritative live discovery. Phase 9B remains blocked until that
 design is merged and independently validated.
 
+Operator lab preparation for Phases 9B–9F is documented in
+[`docs/development/lab-phase9-readiness-checklist.md`](../../docs/development/lab-phase9-readiness-checklist.md).
+That checklist separates Phase 9B physical-identity readiness from later ACM/OADP/GitOps known-state preparation.
+Real runtime bindings and credentials remain outside Git.
+
 ## Framework Tests
 
 Run framework unit and contract tests directly:

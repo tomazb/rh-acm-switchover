@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Phase 9 lab readiness checklist separating Tier A physical-identity readiness from Tier B ACM/OADP/GitOps known-state preparation.
 
 - Added live RBAC bootstrap certification scenario (`rbac-bootstrap-live`) for release validation that validates applied cluster permissions end-to-end using SubjectAccessReview against live or disposable clusters.
 - Added opt-in environment variable `ACM_ENABLE_LIVE_RBAC_CERTIFICATION` to gate live RBAC certification; the scenario is skipped when not explicitly enabled, keeping normal release validation safe for production environments.
