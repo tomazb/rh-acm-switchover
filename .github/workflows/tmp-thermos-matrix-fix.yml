@@ -1,0 +1,40 @@
+name: One-time Thermos matrix fix
+
+on:
+  push:
+    branches:
+      - docs/thermos-post-r2-delta-tracker
+  pull_request:
+    branches:
+      - ansible
+
+permissions:
+  contents: write
+
+jobs:
+  fix-matrix:
+    if: >-
+      github.ref == 'refs/heads/docs/thermos-post-r2-delta-tracker' ||
+      github.head_ref == 'docs/thermos-post-r2-delta-tracker'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tracker branch
+        uses: actions/checkout@v6
+        with:
+          ref: docs/thermos-post-r2-delta-tracker
+          fetch-depth: 0
+
+      - name: Fix matrix and commit tracker-only result
+        shell: bash
+        run: |
+          python .tmp-fix-thermos-matrix.py
+          git diff --check
+          git rm \
+            .github/workflows/tmp-thermos-matrix-fix.yml \
+            .tmp-fix-thermos-matrix.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add thermos-resolution-plan.md
+          git diff --cached --check
+          git commit -m "docs: keep Thermos delta rows in validation matrix"
+          git push origin HEAD:docs/thermos-post-r2-delta-tracker
