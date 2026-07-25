@@ -33,7 +33,7 @@ Before implementation begins for any remaining Thermos slice:
 
 This gate applies to the remaining deep-scan queue (`PR 24` onward) and to any new Thermos follow-up slice added later.
 
-**Last Updated:** 2026-07-20
+**Last Updated:** 2026-07-25
 
 ## Post-Merge Revalidation (2026-06-03)
 
@@ -251,11 +251,26 @@ design/spec and implementation sequence is approved.
 | R2-L7c | [#156](https://github.com/tomazb/rh-acm-switchover/issues/156) | open/split | RBAC bootstrap/parity-sensitive |
 | R2-L8 | [#157](https://github.com/tomazb/rh-acm-switchover/issues/157) | open/deferred | shell/kubeconfig safety |
 
+### Newly planned Thermos Review #3 follow-up
+
+- The 2026-07-25 three-agent full-branch review contributes 40 validated
+  findings grouped into 10 design-gated `R3-*` resolution slices. See
+  **Thermos Review #3 (2026-07-25)**.
+- `R3-01` and `R3-02` are the first product-runtime priorities: both defeat
+  operator-facing safety verification on live switchover paths, and `R3-A1`
+  additionally makes a documented recovery playbook a silent no-op.
+- Two `R3-*` findings are regressions introduced by merged Thermos PRs
+  (`R3-A1` from `F41`/`PR 24`, `R3-P1` from `F2`/`PR 03`). Their resolutions
+  must not reopen the original findings.
+- No `R3-*` slice has a PR number, branch, or worktree until its
+  slice-specific design and plan are approved.
+
 ### Structural H3 design track
 
 `H3` remains open and design-gated. It is not part of the completed low-severity
 follow-up batch and must preserve safety-sensitive post-activation and
-finalization behavior during decomposition.
+finalization behavior during decomposition. `R3-Q1` updates its file-size
+figures rather than opening a parallel structural track.
 
 | Finding | Issue | Status | Safety classification |
 | --- | --- | --- | --- |
@@ -523,6 +538,393 @@ slice-specific design establishes a stronger dependency or urgency.
 - Documentation guardrails fail if the unsupported one-to-one mapping returns.
 - No runtime defaults, validation, checkpoint, or identity behavior changes.
 
+## Thermos Review #3 (2026-07-25)
+
+Full-branch deep review (923 commits, 745 files, +146,459/-11,180, `ansible` vs
+`main` at merge base `aca2d296`) using three area-scoped
+`thermo-nuclear-review-subagent` passes — Python core, Ansible collection, and
+test suite — each also applying the
+`thermo-nuclear-code-quality-review` rubric rather than running a separate
+paired quality agent. The split was by area, not by rubric, because the three
+file sets are near-disjoint at this branch size.
+
+**Naming note:** Review #3 findings use the `R3-` prefix by analogy with `R2-`.
+The bare `R3` identifier that appears in the Security & Stability Audit
+exclusion list (documented behavior, not a defect) is unrelated to any `R3-*`
+finding below.
+
+Baseline established during the review:
+
+- Full suite: **3079 passed, 29 skipped** in ~110s (`python -m pytest tests/ -q`),
+  reproduced twice with no flakes. The 29 skips are e2e-needs-real-cluster plus
+  three gated release/pilot tests.
+- `black --check --line-length 120 tests/` clean across 184 files.
+- 867 collection unit tests pass. All Ansible-semantics claims in `R3-A*` were
+  confirmed empirically with `ansible-playbook` on the reviewing host, not
+  inferred from reading.
+
+### Headline: One Defect Class, Three Surfaces
+
+Every high-severity finding in this review is an instance of **a failure path
+that reports success**, reached by four different mechanisms. None is
+detectable by a linter; all four are semantically valid code.
+
+| Mechanism | Surface | Findings |
+| --- | --- | --- |
+| `register` fires on *skipped* tasks, overwriting a same-named `set_fact` with `{'skipped': True}`; `.resources` disappears and every `\| default([])` converts the loss into an empty-list success | Ansible | `R3-A1`, `R3-A2`, `R3-A3` |
+| `failed_when: false` rewrites `result.failed = False`, making every later `when: result is failed` gate unreachable dead code | Ansible | `R3-A4`, `R3-A5` |
+| One batch deadline consumed as if it were a per-item deadline | Python | `R3-P1` |
+| Mutating dry-run guards exercised only through fully-mocked clients, so guard removal is invisible | Tests | `R3-T1` |
+
+### Relationship To Existing Thermos Work
+
+Two findings are **regressions introduced by previously merged Thermos PRs**,
+which is why neither was caught by the review that motivated the original fix:
+
+- `R3-A1` is a regression from `F41` / `PR 24` (namespace-scoped Argo CD
+  discovery). The scoped-discovery branch added in that PR is the exact branch
+  the register clobber disables, so Argo CD pause and resume both silently
+  no-op on every path that uses it.
+- `R3-P1` is a regression from `F2` / `PR 03` (make Python klusterlet worker
+  timeout fail closed). Converting the timeout from a skip into a
+  `SwitchoverError` is correct; it also converted a batch-wide wall clock into
+  a fleet-size-dependent false failure that now aborts the run *after*
+  activation.
+
+Residuals of closed findings, tracked as new IDs rather than reopened rows:
+
+- `R3-P6` is the residual of `R2-H1` / `PR 36`, which added request timeouts to
+  `delete_configmap` and `delete_pod`. `delete_custom_resource` was not in that
+  slice and is now the only mutating `KubeClient` method without a default
+  request timeout.
+- `R3-A11` is the residual of `F17` / `PR 09` and `R2-M1` / `PR 37`-`PR 38`,
+  which addressed `changed` reporting under **Ansible check mode**. The
+  plan-only `changed=true` reported during an ordinary (non-check-mode) run was
+  outside all three slices.
+- `R3-P2` is the operability cost of the API-response-redaction direction that
+  `SSA-09` also pursues. `SSA-09` remains correct; `R3-P2` records that the
+  preflight reporter applied redaction to the wrong axis and must be resolved
+  without weakening `SSA-09`.
+
+Adjacent but distinct, not duplicates:
+
+- `SSA-03` bounds *collection* klusterlet worker concurrency. `R3-P1` is the
+  *Python* batch timeout budget. Sequence them together if convenient; they do
+  not resolve each other.
+- `SSA-01`'s distinct-physical-hub guard does not address `R3-A6`, which
+  disables identity validation through a persistent configuration key.
+
+### Validated Findings
+
+| Finding | Severity | Surface | Summary |
+| --- | --- | --- | --- |
+| R3-A1 | High | Ansible | `roles/argocd_manage/tasks/discover.yml:154` sets `_argocd_app_list`; `:174` re-registers the same name on a `when:`-skipped task. Under scoped discovery the app list becomes `[]`, so pause and resume both patch nothing and report success. Reached by a `primary_prep` retry after checkpoint rehydration and by the documented standalone `playbooks/argocd_resume.yml`. |
+| R3-A2 | Medium | Ansible | Same clobber at `roles/finalization/tasks/cleanup_restores.yml:3` → `:14`; the dry-run preview always reports `restore_count: 0`, hiding which Restore resources execute mode will delete. |
+| R3-A3 | Medium | Ansible | Same clobber at `roles/finalization/tasks/discover_resources.yml:56` → `:73`; currently benign, but it defeats the fixture-injection guard the same file implements correctly three times above. |
+| R3-A4 | High | Ansible | `roles/primary_prep/tasks/scale_observability.yml:33-70` masks API errors with `failed_when: false`; the `until` loop's `resources \| default([]) \| length == 0` then succeeds on the first attempt and both branches of the follow-up gate are dead. A 403/timeout while verifying Thanos compactor termination reads as "drained". Python fails closed here — a parity divergence on a dual-supported capability. |
+| R3-A5 | High | Ansible | `roles/preflight/tasks/validate_kubeconfigs.yml:32,82` derive the connectivity verdict from `.failed`, which `failed_when: false` pins to `False`. Both hub-connectivity entries are hard-coded `status: pass`; the `else "fail"` branch is unreachable. Expired tokens, wrong `server:` URLs, and DNS failures all render as validated in the go/no-go `preflight-report.json`. |
+| R3-A6 | Medium | Ansible | `plugins/action/checkpoint_phase.py:141,318` treat `reset_from` as an explicit reset, skipping `validate_operation_identity` for **every** `checkpoint_phase` call in the run, not just the pruned phase. `reset_from` is a persistent key shipped in every role's defaults, so a value left in group_vars disables hub-identity binding indefinitely; `_build_reset_from_checkpoint` then rewrites `operation_identity` to whatever is configured now. |
+| R3-A7 | Medium | Ansible | `module_utils/klusterlet.py:331` places `"failed": bool(failed_clusters)` in the probe result and `acm_klusterlet_probe.py:106` returns it via `exit_json`, so Ansible fails the task itself. The role's own diagnostic messages in `verify_klusterlet.yml` never render, contradicting the module's documented contract. |
+| R3-A8 | Medium | Ansible | `module_utils/klusterlet.py:39-40` use `str \| None` in *assignments*, which `from __future__ import annotations` does not defer, so import raises `TypeError` on Python 3.9. The collection declares only `requires_ansible: ">=2.15.0"` and no Python floor; the EE pins `ansible-runner:stable-2.15-latest`. |
+| R3-A9 | Medium | Ansible | `acm_input_validate.py:210` re-adds kubeconfig/checkpoint/report paths into `results`, which flow into the `0644` `preflight-report.json` and defeat the sanitization contract `acm_preflight_report.py:76-95` exists to enforce. Paths, not credentials. |
+| R3-A10 | Medium | Ansible | `roles/post_activation/tasks/verify_observability.yml:85-105` re-annotates observatorium-api on every run. Python guards the equivalent step with per-step state (`modules/post_activation.py:200`); the collection has only phase-level checkpointing, and `checkpoint.enabled` defaults to `false`. Each retry after a post-activation failure extends the metrics outage. |
+| R3-A11 | Medium | Ansible | Residual of `F17`/`R2-M1`: `acm_restore_info.py:386,430` and `acm_backup_schedule.py:181` report `changed=true` for plan-only operations outside check mode, contradicting the `_info` naming convention, their own `RETURN` docs, and `AGENTS.md:547`. |
+| R3-P1 | High | Python | `modules/post_activation.py:782` calls `wait(futures, timeout=KLUSTERLET_WORKER_TIMEOUT)`, one deadline for the whole batch, while the constant and `KLUSTERLET_WORKER_TIMEOUT_MESSAGE` are sized per cluster. With `CLUSTER_VERIFY_MAX_WORKERS = 10` and up to two 30s reads per cluster, a 30-cluster fleet exactly consumes the 180s budget; healthy clusters queued behind slow ones land in `timed_out` and raise at `:1057`, failing the run after activation has already moved production. Scales the wrong way with fleet size. Shared by `_fix_wrong_hub_klusterlets` and `_remediated_klusterlet_state`. |
+| R3-P2 | Medium | Python | `modules/preflight/reporter.py` discards the `message` argument at every log level, with no debug fallback. Diagnostics such as `_describe_bsl_issue()` reach nothing; `--validate-only` prints only `✗ <category>: failed` even under `-v`, and the text survives solely in `state.config["preflight_results"]`, written only when `--report-dir` is passed. Redaction was applied to the bounded code-owned category instead of the unbounded actionable message. |
+| R3-P3 | Medium | Python | `lib/argocd_resume.py:343-349` signals "re-run Argo CD pause on retry" by appending to `errors[]`, but `lib/cli_outcomes.py:96-105` and `lib/workflow.py:172` both read only `errors[-1]`. A post-activation failure yields a report artifact naming `primary_prep` and a resume banner showing the Argo CD housekeeping note instead of the real cause. |
+| R3-P4 | Medium | Python | `lib/argocd.py:491-527`: the ApplicationSet blocker branch is correctly gated on `_count_acm_resources(app) > 0`; the stale-status branch is not. On a hub that also runs Argo CD for fleet workloads, one never-synced Application with `automated` set and empty `status.resources` — any kind, any namespace — hard-fails `PRIMARY_PREP`. The operator message also says pause "failed for N Application(s)" when zero pause attempts were made. |
+| R3-P5 | Medium | Python | `lib/workflow.py:149,193` replaced `sys.exit` with `raise SwitchoverError`, so `lib/cli_outcomes.py:204-208` now records state-refusal messages via `add_error`. The errors array grows unbounded across reruns and `get_last_error_phase()` pins to `FAILED`, permanently masking the real failure in the banner. |
+| R3-P6 | Low | Python | Residual of `R2-H1`: `lib/kube_client.py:1027-1044` still builds `kwargs` conditionally instead of using `_request_timeout_kwargs()`, leaving `delete_custom_resource` the only mutating method able to hang indefinitely. |
+| R3-P7 | Low | Python | `--dry-run --report-dir` writes an empty artifact: `acm_switchover.py:438-443` restores the pre-run snapshot in `run_switchover`'s `finally`, which precedes the report write in `lib/cli_outcomes.py:227-228`, so the report records `current_phase: "init"`, zero steps, and `status: "pass"`. |
+| R3-P8 | Low | Python | `HUB_KUBECONFIG_SECRET_NAME`, `BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME`, `OADP_NAMESPACE`, and `BACKUP_STORAGE_LOCATION_RESOURCE` have no references outside `lib/constants.py` while `modules/post_activation.py` still inlines the same literals at seven call sites, contrary to `AGENTS.md`. |
+| R3-P9 | Low | Python | `lib/report_artifacts.py:131-142` calls `validate_report_artifact_path` twice on the same string (the second is presumably meant to re-check after `mkdir`) and writes mode `0o644` payloads embedding raw exception text from `state_snapshot["errors"]`. |
+| R3-P10 | Low | Python | `modules/activation.py:887` dropped `"FailedWithErrors"` from the fatal Restore-phase set, converting a fast specific failure into a full `RESTORE_WAIT_TIMEOUT` (1800s) generic timeout. Not a documented ACM phase, so impact is small. |
+| R3-P11 | Low | Python | `lib/waiter.py:136` inverted `fast_timeout <= 0` semantics: the signature default `fast_timeout=0` previously meant "use the fast interval forever" and now means "never". No current caller is affected; it is a trap for the next one. |
+| R3-P12 | Low | Scripts | `scripts/generate-merged-kubeconfig.sh:355` relies on `(umask 077 && ...)`, which does not tighten an already-existing world-readable `merged-kubeconfig.yaml`. `scripts/setup-rbac.sh:468` gets this right with an explicit `chmod 600`. |
+| R3-P13 | Low | Scripts | `scripts/generate-sa-kubeconfig.sh:50-51` sources `constants.sh` with no `[[ -f ]]` guard under `set -euo pipefail`, so the documented standalone use aborts. `scripts/argocd-manage.sh:22` guards the same source. |
+| R3-T1 | High | Tests | `scale_statefulset`, `delete_pod`, `delete_configmap`, and `create_or_patch_configmap` have `if self.dry_run:` guards with no dry-run test at any level. Deleting the guard from `scale_statefulset` leaves all 3079 tests passing while `--dry-run` scales the production Thanos compactor to 0. Workflow suites cannot catch it: `tests/test_primary_prep.py:52` returns a bare `Mock()`, so `assert_called_once_with` asserts against the mock and never reaches the guard. The correct pattern already exists at `tests/test_kube_client.py:225`. |
+| R3-T2 | Medium | Tests | `lib/utils.py:98` deliberately uses `if obj is True:` to avoid truthy object references, but every test in `TestDryRunSkipDecorator` passes exact `True`/`False`. Relaxing it to `if obj:` keeps the suite green, and a non-bool truthy `dry_run` (e.g. `1`, a config-parsed `"true"`) silently *runs* the mutation — the coupling `lib/argocd.py:628` warns about is unpinned. |
+| R3-T3 | Medium | Tests | `tests/test_argocd_constants_parity.py:52-87` claims to verify `build_pause_patch` against `pause.yml`'s Jinja but never loads the file; the oracle is hand-written Python. It is already wrong: `pause.yml` gates the whole task on `automated is not none` and issues no patch when absent, while the test asserts a patch body for exactly that case. |
+| R3-T4 | Medium | Tests | `test_acm_namespaces_parity` and `test_ansible_argocd_filters_match_acm_sub_namespaces` assert only positive matches, so widening `ARGOCD_ACM_NS_REGEX` to `.*` passes — the dangerous direction, since that regex selects which Applications get paused. The filter test passes against a stub `return True` and consults neither Python nor Bash. |
+| R3-T5 | Medium | Tests | `tests/test_ci_guardrails.py:31-38` is an exact-version denylist, not a floor (`actions/checkout@v3`, Node16 and EOL, passes), and its positive assertions match the concatenated corpus, so regressing one workflow passes while another still carries `@v6`. `upload-artifact`, `cache`, `download-artifact`, and `github-script` are unguarded. |
+| R3-T6 | Medium | Tests | `tests/properties/conftest.py` registers `ci` and `deep` Hypothesis profiles, but `HYPOTHESIS_PROFILE` is set nowhere in the repo, so CI silently runs `dev` (50 examples) across ~9 property modules. `tests/properties/test_scaffolding.py:17-19` cannot detect this — it reads the same env var with the same default and compares against a duplicated literal table. |
+| R3-T7 | Medium | Tests | `run_tests.sh:97` and `.github/workflows/ci-cd.yml:46` measure and upload coverage with no `--cov-fail-under` and no Codecov threshold, so coverage can regress arbitrarily. This is the mechanism by which `R3-T1` stayed invisible. |
+| R3-T8 | Medium | Tests | `tests/release/conftest.py:52-53` accepts `ACM_RELEASE_PROFILE` as equivalent to the explicit `--release-profile` flag, so a stale shell export turns a plain `pytest tests/` into a real-cluster run with no confirmation. `test_lab_controller_phase8j_live_opt_in.py` models the correct pattern (explicit allowlist plus a separate live-contact flag). |
+| R3-T9 | Medium | Tests | `create_mock_step_context` is byte-identical in four workflow suites and its sibling `mock_state_manager` has already drifted in `test_finalization.py`. There is **no `tests/conftest.py`**, contradicting `AGENTS.md:337`. The helper is also an unpinned hand-rolled double of `lib/utils.py:808 StepContext`, which works against a real `StateManager` on `tmp_path`. |
+| R3-T10 | Medium | Tests | `tests/unit/plugins/action/test_checkpoint_phase_runtime.py:661` seeds stale `operational_data`, `errors`, and `report_refs` but asserts none of them, despite `checkpoint_phase.py:44-45` naming that exact hazard. It also asserts only the in-memory result and never re-reads the checkpoint file. |
+| R3-T11 | Low | Tests | Batch: `time.sleep(0.05)` mtime dependence (`test_post_activation.py:1846`); the 1279-line doc-substring module whose `_assert_no_real_live_config_literals` misses `sha256~` tokens, `client-certificate-data` blobs, and real FQDNs; the tautological `assert "tests" in text` (`test_ci_guardrails.py:48`); a needlessly `@_requires_opt_in`-skipped blocks-without-opt-in assertion; two vacuous `validate_rbac_permissions` tests; import-time `sys.modules` stubbing in a now-dead fallback; and the `OC_VERSION=4.21` pin that will rot. |
+| R3-Q1 | Medium | Quality | Twelve files now exceed 1000 lines, seven crossing in this branch (`test_rbac_validator.py` 589→1312, `test_argocd.py` 448→1192, `lib/rbac_validator.py` 794→1131, plus `test_documentation_guardrails.py`, `test_argocd_coordinator.py`, `test_main_phase_flow.py`, `test_validation.py`). `modules/post_activation.py` reached 1622 and `test_post_activation.py` 2744. |
+| R3-Q2 | Low | Quality | ~40 new `WORKFLOW_*` / `DRY_RUN_*` / `OPERATION_*` entries in `lib/constants.py` are single-use log and banner text, not shared configuration (`WORKFLOW_BLANK_LINE = ""`, `WORKFLOW_BANNER = "=" * 60`). |
+| R3-Q3 | Low | Quality | Twelve functions in `acm_switchover.py:964-1302` are same-signature one-line pass-throughs to `lib.*`. If they exist only as test seams, patching the `lib` functions at their call sites is equally testable and ~100 lines shorter. |
+| R3-Q4 | Low | Quality | `scripts/release/run_lab_role_controller.py:15-42` puts `REPO_ROOT` on `sys.path` and imports seven modules from `tests.release.lab_controller.*`, making the test tree a runtime dependency of a `scripts/` entrypoint. |
+| R3-X1 | Low | Python | Both full suite runs end with `ResourceWarning: unclosed file … state.json.run.lock`; a `StateManager` run-lock handle is leaked. Surfaced by the tests, but the fix belongs in `lib/utils.py`. |
+
+### Categories Verified Clean
+
+Recorded so future reviews do not re-derive them:
+
+- Collection RBAC manifests under `roles/rbac_bootstrap/files/deploy/rbac/**` are
+  byte-identical to `deploy/rbac/**` across all seven files plus the
+  decommission extension; `argoproj.io/applications` remains `patch`-only. No
+  parity drift.
+- The decommission `preserveOnDelete` classifier is a faithful reimplementation
+  of `modules/decommission.py:_cluster_deployment_relationship`, including the
+  three-way classification and both fail-closed raises.
+- Credential handling: `no_log: true` on token minting and copy, `0700` output
+  directories, `0600` files, `argv` list form, and legacy kubeconfig fields
+  stripped from checkpoint identity records.
+- `module_utils/path_safety.py` rejects traversal, shell metacharacters,
+  out-of-root absolutes, and intermediate symlink escapes; `artifacts.py:64-70`
+  uses `O_NOFOLLOW` with post-`mkdir` revalidation.
+- SSAR handling in `run_ssar.yml` and `validate_permission_target.yml` treats
+  failed/statusless results as denied — the one correct, fail-closed use of
+  `failed_when: false` in the collection.
+- Test suite: no order dependence, no module-level mutable fixtures, no writes
+  outside `tmp_path`, and zero `assert True` / swallowed-assertion occurrences.
+- Property-test oracles are genuinely independent (`test_path_safety_properties.py`
+  models containment via `os.path.commonpath` and asserts *both* implementations
+  reject; `test_validation_properties.py` writes standalone predicates). Only
+  the `R3-T6` examples budget detracts.
+- Dry-run state rollback at the orchestrator boundary is strong:
+  `tests/test_main.py:980,1040` use a real `StateManager`, reload from disk, and
+  assert phase, config, `completed_steps`, and `last_updated` are unchanged.
+- The branch's consolidation work is sound and was explicitly not flagged:
+  `lib/argocd_coordinator.py`, `lib/workflow.py` + `lib/operation_runners.py`,
+  `wait_for_restore_deletion`, the `WaitConditionResult` typed contract, and the
+  import-time `_derive_read_only_permissions` assertion.
+- Per the standing parity contract, Python↔Ansible RBAC and constants
+  duplication was excluded from all three passes and is not a finding.
+
+### Planned Resolution Slices
+
+Slices are resolution boundaries, not assigned PR numbers. A slice enters the
+numbered PR sequence only after its own approved design/spec and implementation
+plan satisfy the tracker gate in **Spec And Design Gate**. `R3-01` and `R3-02`
+are the first product-runtime priorities because both defeat operator-facing
+safety verification on live switchover paths.
+
+| Slice | Status | Findings | Proposed resolution boundary | Required review |
+| --- | --- | --- | --- | --- |
+| R3-01 | planned | R3-A1, R3-A2, R3-A3 | Eliminate the skipped-task register clobber wherever a `register` shares a name with a `set_fact`, and add a guardrail that fails on reintroduction. | Argo CD pause/resume safety; retry and standalone-resume paths; dry-run preview fidelity |
+| R3-02 | planned | R3-A4, R3-A5 | Make masked-error verification gates fail closed so an API error can never satisfy a drain or connectivity check. | Thanos/observability parity with Python; preflight go/no-go artifact integrity |
+| R3-03 | planned | R3-P1 | Give klusterlet verification a per-cluster deadline, or scale the batch budget by `ceil(len(targets)/max_workers)`, without reopening the `F2` fail-open direction. | post-activation failure semantics at fleet scale; parity with `SSA-03` |
+| R3-04 | planned | R3-P2, R3-A9 | Restore actionable preflight diagnostics behind an explicit verbosity gate while preserving the `SSA-09` redaction contract, and stop re-adding sanitized paths to the report. | secret-handling review; operator troubleshooting workflow |
+| R3-05 | planned | R3-T1, R3-T2, R3-T3, R3-T4 | Give every mutating dry-run guard a direct test at the `KubeClient` boundary, pin the `is True` contract, and make the parity tests read the artifact they claim to compare. | dry-run safety; mutation-resistance of the parity guardrails |
+| R3-06 | planned | R3-A6 | Scope the `reset_from` identity bypass to the pruned phase and revalidate identity after pruning instead of overwriting it. | checkpoint identity binding; interaction with `SSA-01` |
+| R3-07 | planned | R3-P3, R3-P5 | Separate control signals and refusal messages from the durable `errors[]` log so the last error always names the real failure. | report-artifact accuracy; resume banner correctness |
+| R3-08 | planned | R3-A7, R3-A8, R3-A10, R3-A11 | Correct collection module result contracts and declare/repair the supported Python floor. | module contract and `_info` convention review; EE portability |
+| R3-09 | planned | R3-T5, R3-T6, R3-T7, R3-T8, R3-T9, R3-T10 | Make the test-infrastructure gates real: coverage floor, loaded Hypothesis profile, version-floor CI guardrail, explicit live-cluster opt-in, and a shared `tests/conftest.py` matching `AGENTS.md`. | CI gate strength; accidental live-cluster execution |
+| R3-10 | planned | R3-P4, R3-P6-R3-P13, R3-T11, R3-Q1-R3-Q4, R3-X1 | Batch the residual low-severity items, splitting only if review indicates the diff is too large. Keep `R3-Q1` decomposition inside the `H3` design track rather than opening a parallel structural effort. | scoped per item; `R3-P4` needs Argo CD blast-radius review |
+
+### Resolution Requirements
+
+#### R3-01: Skipped-Task Register Clobber
+
+**Resolution**
+- Register live-query results to names distinct from any `set_fact`, then
+  publish through a guarded `set_fact`, following the pattern already correct in
+  `roles/finalization/tasks/discover_resources.yml:2-17`.
+- Cover the live scoped-discovery branch with a test that does **not** seed
+  `acm_switchover_argocd_mock_apps`; the existing
+  `resume_with_discovery_namespaces.yml` fixture takes the mock branch and
+  cannot observe the defect.
+- Add a repository guardrail that fails when a `register` target collides with a
+  `set_fact` name in the same task file.
+
+**Acceptance criteria**
+- Scoped discovery yields the aggregated Application list, and pause/resume
+  patch the same Applications they would under cluster-wide discovery.
+- A `primary_prep` retry after checkpoint rehydration re-pauses every ACM
+  Application paused in the first attempt.
+- Standalone `playbooks/argocd_resume.yml` restores auto-sync on a real
+  (non-mocked) Application set and reports a non-zero `restored` count.
+- Finalization dry-run reports the Restore resources execute mode would delete.
+- The guardrail fails red against a reintroduced collision.
+
+#### R3-02: Fail-Closed Verification Gates
+
+**Resolution**
+- Key drain and connectivity verdicts on positive evidence
+  (`resources is defined`, expected counts) rather than on `.failed`, or replace
+  `failed_when: false` with `block`/`rescue` so genuine errors stay failures.
+- Follow the shape already correct in
+  `roles/post_activation/tasks/verify_observability.yml:146,222`.
+- Preserve the documented Python behavior as the parity reference; record no
+  intentional divergence.
+
+**Acceptance criteria**
+- A 403, timeout, or connection error during compactor verification fails the
+  phase instead of reporting the compactor drained.
+- The `until` retry loop cannot exit successfully on a result that carries no
+  `resources` key.
+- Preflight hub connectivity reports `fail` for unreachable hubs, expired
+  tokens, and wrong `server:` URLs, and that verdict reaches
+  `preflight-report.json`.
+- Negative tests cover each masked-error case for both hubs.
+
+#### R3-03: Klusterlet Verification Timeout Budget
+
+**Resolution**
+- Apply the timeout per cluster, or scale the batch budget by the number of
+  scheduling rounds, so queued-but-healthy clusters are never classified as
+  timed out.
+- Keep the `F2` / `PR 03` fail-closed direction intact: a genuine per-cluster
+  timeout must still raise.
+- Prefer extracting the klusterlet remediation helpers into their own module so
+  the budget is testable without the surrounding post-activation machinery; the
+  collection already models this boundary as
+  `acm_klusterlet_probe` / `acm_klusterlet_remediate`.
+
+**Acceptance criteria**
+- A fleet larger than `CLUSTER_VERIFY_MAX_WORKERS` with a slow subset reports
+  only the genuinely slow clusters as timed out.
+- The operator-facing message reports a duration that matches the deadline
+  actually applied to that cluster.
+- A real per-cluster timeout still raises `SwitchoverError`.
+- Scale tests cover fleets that require multiple scheduling rounds.
+
+#### R3-04: Preflight Diagnostic Recovery
+
+**Resolution**
+- Emit the validator message at debug level (or another explicit verbosity gate)
+  while keeping the public log line sanitized, rather than reverting the
+  redaction.
+- Ensure a failing preflight always leaves an actionable record, whether or not
+  `--report-dir` was passed.
+- Stop re-adding kubeconfig, checkpoint, and report paths to `results` in
+  `acm_input_validate.py`, so `sanitize_report_hubs` is not defeated downstream.
+- Make an unmapped check category a test failure rather than an anonymous
+  fallback line.
+
+**Acceptance criteria**
+- `--validate-only -v` reports why a check failed, including the composed
+  BackupStorageLocation diagnostic.
+- Default-verbosity output contains no credential-bearing content, verified by
+  tests using token-, kubeconfig-, and Secret-like inputs.
+- `preflight-report.json` contains no filesystem paths for hubs, checkpoint, or
+  report directory.
+- Adding a validator without a category constant fails a guardrail test.
+
+#### R3-05: Dry-Run Guard And Parity Test Integrity
+
+**Resolution**
+- Add a direct dry-run test for every mutating `KubeClient` method, following
+  `tests/test_kube_client.py:225`, so guard removal fails at the client boundary
+  rather than relying on fully-mocked workflow suites.
+- Pin the `dry_run is True` contract with truthy-but-not-`True` cases.
+- Rewrite the Jinja parity test to load and evaluate `pause.yml`, and correct
+  the expectation that a missing `automated` key yields a patch.
+- Add negative assertions to the namespace and filter parity tests so
+  over-matching fails.
+
+**Acceptance criteria**
+- Removing any `if self.dry_run:` guard turns at least one test red.
+- `dry_run = 1` and `dry_run = MagicMock()` have documented, tested behavior.
+- Rewriting `pause.yml`'s Jinja to different semantics fails the parity test.
+- Broadening `ARGOCD_ACM_NS_REGEX` toward `.*` fails; a stub
+  `is_acm_touching_application` returning `True` fails.
+
+#### R3-06: Scoped `reset_from` Identity Validation
+
+**Resolution**
+- Treat `reset_from` as a phase-scoped prune, not a run-wide identity bypass.
+- Revalidate `operation_identity` after pruning instead of overwriting it with
+  the currently configured expectation.
+- Coordinate with `SSA-01` so distinct-hub validation and per-role identity
+  binding remain complementary.
+
+**Acceptance criteria**
+- A `reset_from` value left in group_vars does not disable identity validation
+  for unrelated phases or subsequent runs.
+- A checkpoint whose recorded hub UIDs no longer match live hubs fails after
+  pruning.
+- Existing legitimate phase-reset workflows continue to work.
+- Tests cover run-wide bypass, cross-run persistence, and post-prune identity
+  mismatch.
+
+#### R3-07: Error Channel Hygiene
+
+**Resolution**
+- Carry the "re-run Argo CD pause on retry" signal in configuration or explicit
+  state rather than by appending to `errors[]`.
+- Stop recording state-refusal messages as workflow errors; refusal should not
+  mutate durable state.
+
+**Acceptance criteria**
+- A post-activation failure with `--argocd-resume-on-failure` produces a report
+  artifact naming `post_activation`, and the resume banner shows the real error.
+- Repeated refused reruns do not grow `errors[]` and do not change
+  `get_last_error_phase()`.
+- The retry still re-runs Argo CD pause.
+
+#### R3-08: Collection Module Contracts And Python Floor
+
+**Resolution**
+- Return probe outcomes without `failed: true` so roles can add their own
+  failure messaging, matching the documented contract, and let the role decide
+  via `failed_when`.
+- Replace `str | None` in module-level assignments with `Optional[str]`, and
+  declare and test the supported Python floor for the collection.
+- Guard the observatorium-api restart with step-level state so retries do not
+  re-trigger it.
+- Report `changed=false` from plan-only operations outside check mode.
+
+**Acceptance criteria**
+- Role-level klusterlet diagnostics render for failed, wrong-hub, and skipped
+  clusters before the play aborts.
+- Collection plugins import cleanly on the declared minimum Python version,
+  verified in CI.
+- A resumed post-activation does not re-annotate observatorium-api.
+- `acm_restore_info` never reports `changed=true`; `acm_backup_schedule` reports
+  `changed` only when a resource was modified.
+
+#### R3-09: Test Infrastructure Gates
+
+**Resolution**
+- Add a coverage floor to `run_tests.sh` and CI, set at or just below current
+  measured coverage so it ratchets rather than blocks.
+- Set `HYPOTHESIS_PROFILE=ci` in CI, and make the scaffolding test verify the
+  loaded profile rather than re-reading the same env var.
+- Convert the GitHub Actions guardrail to a per-file minimum-version check and
+  extend it to `upload-artifact`, `cache`, `download-artifact`, and
+  `github-script`.
+- Require the explicit CLI flag (or an additional confirmation) for
+  live-cluster release profiles.
+- Create `tests/conftest.py` with the shared `mock_state_manager` /
+  `mock_kube_client` fixtures, or drop the `StepContext` double for a real
+  `StateManager` on `tmp_path`; either way `AGENTS.md:337` must become true.
+- Assert the seeded stale fields in the checkpoint reset test and re-read the
+  persisted file.
+
+**Acceptance criteria**
+- A coverage regression fails CI.
+- CI runs the `ci` Hypothesis profile, provable from test output.
+- Regressing any single workflow to an EOL action version fails.
+- A stale `ACM_RELEASE_PROFILE` export alone cannot trigger a live-cluster run.
+- `create_mock_step_context` exists in exactly one place, and a `StepContext`
+  semantic change fails the workflow suites.
+- A partial checkpoint reset that leaks `operational_data`, `errors`, or
+  `report_refs` fails.
+
+#### R3-10: Residual Low-Severity Batch
+
+**Resolution**
+- Bundle the remaining low-severity items into one cleanup slice, splitting only
+  if review indicates the diff is too large for a single review.
+- Route `R3-P4` through Argo CD blast-radius review before changing blocker
+  scope; the fail-closed direction is documented and intentional, and only the
+  non-ACM-scoped breadth is in question.
+- Keep `R3-Q1` file decomposition inside the existing `H3` design track
+  ([#158](https://github.com/tomazb/rh-acm-switchover/issues/158)) rather than
+  opening a parallel structural effort; `R3-Q1` records the updated counts, not
+  a separate mandate.
+
+**Acceptance criteria**
+- Each bundled item has a focused red/green test or an explicit rationale for
+  why none applies.
+- No safety-relevant behavior changes ride along in the batch.
+- `R3-Q1` results in updated numbers on the `H3` track, not a new queue.
+
 ## Finding Validation Matrix
 
 | Finding | Validation | Resolution PR | Notes |
@@ -601,6 +1003,46 @@ slice-specific design establishes a stronger dependency or urgency.
 | SSA-PY5 | confirmed with workload-dependent impact, corrected P3 | SSA-09 (planned) | Some patch failures log a bounded fragment of raw API response bodies and some callers aggregate every list page without a resource bound. |
 | SSA-A6 | confirmed with narrower scope, corrected P3 | SSA-03 (planned) | Collection worker configuration has no upper cap; defaults and API timeouts mitigate impact, and the original check-mode concern was not substantiated. |
 | SSA-S3 | confirmed with lower composite impact, corrected P3 | SSA-05 (planned) | Deprecated Argo CD state may be created mode `0644`, and shell jsonpath context lookup can break on quoted context names; token stdout is documented and its wrapper already writes mode `0600`. |
+| R3-A1 | confirmed empirically, High | R3-01 (planned) | Regression from `F41`/`PR 24`: skipped-task `register` clobbers the scoped-discovery `set_fact`, so Argo CD pause and resume both no-op and report success. Verified with `ansible-playbook`; the only covering test seeds mock apps and takes a different branch. |
+| R3-A2 | confirmed empirically, Medium | R3-01 (planned) | Same clobber pattern makes the finalization dry-run preview always report `restore_count: 0`. |
+| R3-A3 | confirmed empirically, Medium | R3-01 (planned) | Same clobber pattern defeats the file's own fixture-injection guard; currently benign. |
+| R3-A4 | confirmed empirically, High | R3-02 (planned) | `failed_when: false` makes Thanos compactor drain verification fail open; the `until` loop exits on the first attempt and the follow-up gate is dead code. Python fails closed — parity divergence. |
+| R3-A5 | confirmed empirically, High | R3-02 (planned) | Preflight hub connectivity is hard-coded `status: pass`; the `fail` branch is unreachable and the fabricated verdict reaches the go/no-go report. |
+| R3-A6 | confirmed, Medium | R3-06 (planned) | `reset_from` disables checkpoint identity validation run-wide, not just for the pruned phase, and rewrites `operation_identity`. Persistent config key shipped in role defaults. |
+| R3-A7 | confirmed, Medium | R3-08 (planned) | Probe returns `failed: true`, failing the task and suppressing the role diagnostics its own documentation promises. |
+| R3-A8 | confirmed, Medium | R3-08 (planned) | `str \| None` in a module-level assignment is not deferred by `from __future__ import annotations`; import raises `TypeError` on Python 3.9 and the collection declares no Python floor. |
+| R3-A9 | confirmed, Medium | R3-04 (planned) | `acm_input_validate` re-adds kubeconfig/checkpoint/report paths that `sanitize_report_hubs` strips, into a `0644` artifact. Paths, not credentials. |
+| R3-A10 | confirmed, Medium | R3-08 (planned) | Observatorium-api restart is not idempotent; Python guards the equivalent step with per-step state and the collection has only phase-level checkpointing, disabled by default. |
+| R3-A11 | confirmed, Medium | R3-08 (planned) | Residual of `F17`/`R2-M1`: plan-only `changed=true` outside check mode, contrary to the `_info` convention, the modules' own `RETURN` docs, and `AGENTS.md:547`. |
+| R3-P1 | confirmed, High | R3-03 (planned) | Regression from `F2`/`PR 03`: `wait()` batch deadline consumed as a per-cluster budget, so healthy queued clusters false-fail the run after activation. Worsens with fleet size. |
+| R3-P2 | confirmed, Medium | R3-04 (planned) | Preflight reporter discards the validator message at every log level with no debug fallback; redaction applied to the bounded category instead of the actionable message. |
+| R3-P3 | confirmed, Medium | R3-07 (planned) | Retry-phase signal appended to `errors[]`, but two consumers read only `errors[-1]`, so the report artifact and resume banner name the wrong phase. |
+| R3-P4 | confirmed with scope nuance, Medium | R3-10 (planned) | Argo CD stale-status blocker is not ACM-scoped, unlike the adjacent ApplicationSet branch; one unrelated Application can hard-fail `PRIMARY_PREP`. Fail-closed direction is intentional; breadth is the finding. |
+| R3-P5 | confirmed, Medium | R3-07 (planned) | State-refusal messages are now recorded via `add_error`, growing `errors[]` across reruns and pinning `get_last_error_phase()` to `FAILED`. |
+| R3-P6 | confirmed, Low | R3-10 (planned) | Residual of `R2-H1`/`PR 36`: `delete_custom_resource` is the only mutating `KubeClient` method without a default request timeout. |
+| R3-P7 | confirmed, Low | R3-10 (planned) | `--dry-run --report-dir` writes an empty artifact because the state snapshot is restored before the report is written. |
+| R3-P8 | confirmed, Low | R3-10 (planned) | Four constants added with no references while the same literals stay inlined at seven call sites, contrary to `AGENTS.md`. |
+| R3-P9 | confirmed, Low | R3-10 (planned) | Report artifacts are `0644` and embed raw exception text; the path validation call is also duplicated without re-checking the created directory. |
+| R3-P10 | confirmed, Low | R3-10 (planned) | `FailedWithErrors` dropped from the fatal Restore-phase set, converting a fast failure into a 1800s generic timeout. Not a documented ACM phase. |
+| R3-P11 | confirmed latent, Low | R3-10 (planned) | `fast_timeout <= 0` semantics inverted relative to `main`; no current caller affected. |
+| R3-P12 | confirmed, Low | R3-10 (planned) | `(umask 077 && ...)` does not tighten an existing world-readable merged kubeconfig; `setup-rbac.sh` uses an explicit `chmod 600`. |
+| R3-P13 | confirmed, Low | R3-10 (planned) | `generate-sa-kubeconfig.sh` sources `constants.sh` unguarded under `set -euo pipefail`, breaking documented standalone use. |
+| R3-T1 | confirmed, High | R3-05 (planned) | Four mutating dry-run guards have no dry-run test; deleting the `scale_statefulset` guard leaves all 3079 tests green while `--dry-run` scales the production Thanos compactor to 0. |
+| R3-T2 | confirmed, Medium | R3-05 (planned) | The deliberate `dry_run is True` identity check is untested against truthy non-`True` values, leaving both the fail-open and fail-shut regressions undetected. |
+| R3-T3 | confirmed and already wrong, Medium | R3-05 (planned) | The Jinja parity test never loads `pause.yml`; its hand-written oracle also contradicts the task's `automated is not none` gate. |
+| R3-T4 | confirmed, Medium | R3-05 (planned) | Namespace and filter parity tests assert only positive matches, so over-matching — the dangerous direction for pause selection — passes. |
+| R3-T5 | confirmed, Medium | R3-09 (planned) | Actions guardrail is an exact-version denylist with corpus-wide positive assertions; EOL `@v3` passes and per-file regressions are invisible. |
+| R3-T6 | confirmed, Medium | R3-09 (planned) | `HYPOTHESIS_PROFILE` is set nowhere, so the `ci` profile never loads and CI explores half the intended state space; the scaffolding test cannot detect this. |
+| R3-T7 | confirmed, Medium | R3-09 (planned) | Coverage is measured and uploaded with no `--cov-fail-under` and no Codecov threshold — the mechanism by which `R3-T1` stayed invisible. |
+| R3-T8 | confirmed, Medium | R3-09 (planned) | `ACM_RELEASE_PROFILE` alone un-gates real-cluster certification; the opt-in pilot tests model the correct explicit pattern. |
+| R3-T9 | confirmed, Medium | R3-09 (planned) | `create_mock_step_context` duplicated byte-identically in four suites with a drifted sibling fixture; `tests/conftest.py` does not exist, contradicting `AGENTS.md:337`. |
+| R3-T10 | confirmed, Medium | R3-09 (planned) | Checkpoint reset test seeds three kinds of stale state and asserts none of them, despite the source naming that exact hazard; also never re-reads the persisted file. |
+| R3-T11 | confirmed, Low | R3-10 (planned) | Batch: sleep-based mtime test, weak doc secret scanner, tautological assertion, needlessly skipped safety test, two vacuous RBAC tests, import-time `sys.modules` stubbing, and a version pin that will rot. |
+| R3-Q1 | confirmed maintainability, Medium | H3 track (#158) | Twelve files exceed 1000 lines, seven crossing in this branch. Recorded as updated counts on the existing `H3` design track, not a parallel effort. |
+| R3-Q2 | confirmed maintainability, Low | R3-10 (planned) | ~40 single-use log/banner strings moved into `lib/constants.py`, which is for shared or tuned values. |
+| R3-Q3 | confirmed maintainability, Low | R3-10 (planned) | Twelve same-signature one-line pass-throughs in `acm_switchover.py`; patching `lib` at the call sites is equally testable. |
+| R3-Q4 | confirmed layering issue, Low | R3-10 (planned) | A `scripts/` entrypoint imports seven modules from `tests.release.lab_controller.*`, making the test tree a runtime dependency. |
+| R3-X1 | confirmed, Low | R3-10 (planned) | `StateManager` run-lock file handle leaked; surfaced by the suite as a `ResourceWarning`, fix belongs in `lib/utils.py`. |
 
 ## PR Sequence
 
