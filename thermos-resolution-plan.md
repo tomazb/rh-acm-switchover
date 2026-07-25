@@ -6,13 +6,17 @@
 
 **Architecture:** Treat the external report as a hypothesis source, not an authority. The original report may exist locally as an untracked `thermos_ansible_review.md`, but it is not required in a fresh checkout; this tracker is the self-contained resolution source. Every finding must stay tied to source evidence, tests, and documentation changes. Each PR uses a dedicated worktree and branch, updates this tracker, and preserves the dual-supported parity contract unless explicit operator approval records an intentional divergence.
 
-**Tech Stack:** Python CLI, Ansible collection roles/playbooks/modules, pytest, GitHub PRs, `.worktrees/` git worktrees.
+**Tech Stack:** Python CLI, Ansible collection roles/playbooks/modules, pytest, GitHub PRs, `.claude/worktrees/` git worktrees.
 
 ---
 
 ## State Tracking Rules
 
 - Status values: `planned`, `in_progress`, `ready_for_review`, `merged`, `blocked`, `deferred`.
+- Findings tracked as GitHub issues rather than PR rows additionally use
+  `open/deferred`, `open/split`, and `open/design track`. These describe an
+  issue's disposition, not a PR slice's progress, and are the correct values in
+  the deferred-follow-up and `H3` tables.
 - A PR branch may mark only its own row `in_progress` or `ready_for_review`.
 - Mark a row `merged` only after the PR has merged into `ansible` and the next branch is created from the updated base.
 - Keep one branch and one worktree per PR slice.
@@ -31,13 +35,13 @@ Before implementation begins for any remaining Thermos slice:
 3. Use `superpowers:writing-plans` to create the implementation plan from that approved design/spec.
 4. Treat the approved design/spec as the verification source of truth: implementation is not complete until the verification evidence shows the delivered behavior matches the accepted design, not merely that tests pass.
 
-This gate applies to the remaining deep-scan queue (`PR 24` onward) and to any new Thermos follow-up slice added later.
+This gate applies to the open `SSA-01`-`SSA-10` and `R3-01`-`R3-10` slices and to any new Thermos follow-up slice added later. It no longer applies to the deep-scan queue: every row in the PR Sequence table is `merged`.
 
-**Last Updated:** 2026-07-25
+**Last Updated:** 2026-07-26
 
 ## Post-Merge Revalidation (2026-06-03)
 
-Current `ansible` HEAD `ac041f6` includes merged Thermos PRs 17-20 (`#89`, `#90`, `#91`, `#92`). A focused source revalidation confirmed:
+`ansible` HEAD at that time, `ac041f6`, included merged Thermos PRs 17-20 (`#89`, `#90`, `#91`, `#92`). A focused source revalidation confirmed:
 
 - `F31` is resolved: path-safety now routes through canonical `path_safety` helpers plus adversarial parity coverage.
 - `F34` is resolved: Python and collection klusterlet remediation now patch/create `bootstrap-hub-kubeconfig`; managed-cluster RBAC/docs were realigned to `patch`.
@@ -50,7 +54,7 @@ Current `ansible` HEAD `ac041f6` includes merged Thermos PRs 17-20 (`#89`, `#90`
 ## Deep-Scan Follow-Up Queue (2026-06-04)
 
 Validated follow-up findings from the Graphify-assisted deep scan and paired Thermos review passes.
-Status after merged follow-up PRs 22-26:
+Status after merged follow-up PRs 22-31:
 
 - `F39` Resolved by `PR 22`: Python Argo CD resume-only now fails closed for legacy state files that recorded paused Applications before `hub_identities` existed.
 - `F40` Resolved by `PR 23`: Python dry-run Argo CD management now performs discovery and blocker reporting instead of skipping directly to no-op behavior.
@@ -82,7 +86,7 @@ runtime/bootstrap seam, docs-only `PR 28` recorded the remaining slice map, and
 
 ## Thermos Review #1 Revalidation (2026-06-13)
 
-Current `ansible` HEAD `f52a19d4` was revalidated against the operator-supplied
+`ansible` HEAD at that time, `f52a19d4`, was revalidated against the operator-supplied
 Thermos review captured in
 `docs/plans/2026-06-13-thermos-ansible-review-findings.md`.
 
@@ -138,11 +142,19 @@ Headline results:
   `L6`, `L7`) were re-confirmed still open and unchanged, with two
   (`M2`, `M5`) reprioritized upward after being shown to be net-new debt added
   within this branch rather than legacy carryover.
-- 12 new findings were validated with independent source verification (not
-  just subagent claims): `R2-H1` (unbounded delete API calls on the
-  PRIMARY_PREP critical path), `R2-H2` (a sharper, quantified framing of the
-  existing `H2`: `MANAGED_CLUSTER_API_GROUP` is used in only 1 of ~48 relevant
-  call sites), `R2-H3` (new ~140-line RBAC validation duplication on the
+  **Revalidation note (2026-07-26):** this list silently dropped `L3` and `L5`,
+  which Review #1 had confirmed real, with no rationale recorded here or in the
+  Review #2 findings document. Both were re-verified and are still open. None of
+  the items in this bullet was ever given a matrix row, so all of them were
+  untracked between 2026-07-02 and 2026-07-26; they now have rows. `M2` in
+  particular was later mis-credited as resolved by `PR 40` — see the `M2` row.
+- 12 new medium/high findings were validated with independent source
+  verification (not just subagent claims): `R2-H1` (unbounded delete API calls
+  on the PRIMARY_PREP critical path), `R2-H2` (a sharper, quantified framing of
+  the existing `H2`: `MANAGED_CLUSTER_API_GROUP` was used in only 1 of the 49
+  call sites the review counted in `modules/`; the delivered `PR 34` scope grew
+  to 56 after 7 more were found in `modules/preflight/`), `R2-H3` (new
+  ~140-line RBAC validation duplication on the
   Ansible side, mirroring `H1`), `R2-M1` (resolves a genuine disagreement
   between the two chunk-5 subagents about check-mode `changed` reporting
   across three collection "plan" modules — confirmed `acm_preflight_report.py`
@@ -159,9 +171,11 @@ Headline results:
 Historical follow-up order after `PR 33` (the `PR 34`-`PR 47` main queue is now
 complete):
 
-1. `PR 34` - `R2-H2`: route the 47 remaining hardcoded API-group/version/plural
+1. `PR 34` - `R2-H2`: route the remaining hardcoded API-group/version/plural
    literals in `modules/` through `MANAGED_CLUSTER_API_GROUP` (and companion
-   constants where they exist).
+   constants where they exist). Delivered scope was 56 literals: the 49
+   top-level sites the review counted plus 7 found in `modules/preflight/`
+   during the red-test run.
 2. `PR 35` - `R2-M4`: deduplicate `lib/utils.py` `REPORT_PHASE_NAMES` and
    `lib/workflow.py` `_CANONICAL_RESUME_START_PHASES` into one shared mapping.
 3. `PR 36` - `R2-H1`: add request timeouts to `delete_configmap`/`delete_pod`
@@ -171,14 +185,16 @@ complete):
    `changed` override to match its `acm_report_artifact.py` sibling.
 5. `PR 38` - `R2-M1` (part 2): resolve or explicitly document the
    native-Ansible-check-mode `changed` gap in `pause_backups.yml` /
-   `activate_restore.yml` against the `docs/variable-reference.md`
+   `activate_restore.yml` against the
+   `ansible_collections/tomazb/acm_switchover/docs/variable-reference.md`
    "native check mode is non-mutating" contract.
 6. `PR 39` - `R2-H3`: deduplicate the Ansible RBAC validation task file's
    primary/secondary blocks; sequence against the still-queued Python `H1`
    unification so both sides land on a consistent approach.
-7. `PR 40` - `R2-M3` + existing `M2`: extract the near-duplicate
+7. `PR 40` - `R2-M3`: extract the near-duplicate
    `_wait_for_restore_deletion`/`_wait_for_primary_restore_deletion` methods
-   into `lib/waiter.py` alongside the `M2` unification work.
+   into `lib/waiter.py`. (This row originally also claimed Review #1 `M2`; that
+   credit was wrong and was corrected on 2026-07-26 — see the `M2` matrix row.)
 8. `PR 41` - `R2-M5`: factor the 4x-duplicated Ansible summary-path resolution
    logic into one shared `set_fact`/filter.
 9. `PR 42` - `R2-M2`: add resume-path re-validation of Velero-restore
@@ -211,7 +227,7 @@ GitHub PR #127, and tracker `PR 35` / GitHub PR #128 respectively. `H3` is the
 only remaining structural item from that earlier set and is tracked separately
 in issue #158.
 
-## Current Completion Summary (2026-07-19)
+## Current Completion Summary (2026-07-25)
 
 ### Completed main queue
 
@@ -264,6 +280,19 @@ design/spec and implementation sequence is approved.
   must not reopen the original findings.
 - No `R3-*` slice has a PR number, branch, or worktree until its
   slice-specific design and plan are approved.
+
+### Revalidation status (2026-07-26)
+
+- A full-file revalidation against `ansible` HEAD `4fed598c` re-verified every
+  source, status, and pointer claim in this tracker except the `R3-*` findings,
+  which were validated one day earlier. See **Revalidation (2026-07-26)**.
+- 19 of 22 re-checked resolved claims hold. `F41` is now recorded as partially
+  regressed and `R2-H2` as partial-as-delivered.
+- Nine Review #1 findings (`M1`, `M2`, `M3`, `M5`, `L2`-`L7`) that were open but
+  untracked since 2026-07-02 now have Finding Validation Matrix rows. All nine
+  are still open. The claim that the main queue is complete refers to the
+  `PR 34`-`PR 47` slice queue only, not to these findings.
+- All ten `SSA-*` slices remain `planned`, re-confirmed by construction.
 
 ### Structural H3 design track
 
@@ -361,6 +390,27 @@ slice-specific design establishes a stronger dependency or urgency.
 - Python, collection, and shared parity tests cover same-context, same-UID,
   unreadable-UID, and distinct-UID cases.
 
+**Revalidation note (2026-07-26)**
+- Still unmet in product code. `lib/validation.py:302-308` and
+  `plugins/module_utils/validation.py:27-44` validate each context
+  independently and never compare them;
+  `roles/preflight/tasks/discover_hub_identities.yml:28-65` publishes both UIDs
+  and asserts each is non-empty without comparing them; `lib/utils.py:712-760`
+  and `acm_switchover.py:1120-1131` compare stored-vs-current **per role** only.
+- The third acceptance bullet (unreadable identity fails closed, naming the hub)
+  is **already satisfied** by pre-existing per-role binding
+  (`lib/kube_client.py:328-334`, `lib/utils.py:731-736`,
+  `discover_hub_identities.yml:50-65`). The slice's remaining work is the
+  *comparison*, not the read. Note also that
+  `discover_hub_identities.yml:10-14,24-26` skips the live read in non-execute
+  mode when `acm_switchover_hub_identities` is already defined.
+- Design donor: the release harness already implements this exact check —
+  `tests/release/lab_controller/identity.py:98-110`
+  (`duplicate physical hub identity fingerprint`),
+  `live_discovery.py:849-854`, `profiles.py:37-43`, `live_config.py:696-702`.
+  These are release-validation-only, never execute in the CLI or the collection,
+  and do **not** close `SSA-A2`/`SSA-P2`.
+
 #### SSA-02: Decommission Target And RBAC Revalidation
 
 **Resolution**
@@ -404,6 +454,20 @@ slice-specific design establishes a stronger dependency or urgency.
 - Scale tests prove that the configured upper bound constrains concurrent API
   work and existing per-call timeouts remain effective.
 
+**Revalidation note (2026-07-26)**
+- The worker-validation criterion is **half-satisfied already**:
+  `plugins/module_utils/klusterlet.py:43-52` rejects non-integer and `< 1` with
+  `"workers must be a positive integer"`. Only the documented **upper bound**
+  and its scale test remain — `plugins/module_utils/constants.py:16` defines
+  just `KLUSTERLET_DEFAULT_WORKERS = 10`, and any configured value flows
+  through to `ThreadPoolExecutor(max_workers=workers)` at `klusterlet.py:197`.
+- Endpoint targeting is unchanged: `modules/post_activation.py:1483-1494`
+  still collapses to `cluster_servers[server_host]` (last write wins), with the
+  same collapse at `plugins/module_utils/klusterlet.py:161-162`. Zero-match
+  returns `""` with a debug log; multi-match is never detected.
+- Sequence with `R3-03` (Python klusterlet batch-timeout budget): the two are
+  adjacent but neither resolves the other.
+
 #### SSA-04: Release Profile Mutation Controls
 
 **Resolution**
@@ -423,6 +487,20 @@ slice-specific design establishes a stronger dependency or urgency.
 - Unsafe arguments fail during profile validation, before subprocess execution.
 - Tests cover duplicate-option precedence, environment overrides, focused
   reruns, and artifact evidence showing whether live mutation was authorized.
+
+**Revalidation note (2026-07-26)**
+- Phase 8J/9B landed **none** of this slice. `tests/release/adapters/python_cli.py:99-112`
+  still builds `--decommission --non-interactive` with no `--dry-run`, while the
+  Ansible stream forces dry-run for the same scenario
+  (`tests/release/adapters/ansible.py:131-138`). No live-authorization field
+  exists on the profile model (`tests/release/contracts/models.py:37-42`), and
+  `contracts/loader.py:112` only coerces `extra_args` to `str` — no allowlist.
+  `adapters/ansible.py:141-149` still appends `extra_args` verbatim *after* the
+  controller-owned `-e` JSON.
+- The overlapping lab-controller work (`lab_controller/live_config.py:926-962`,
+  `decisions.py:26`, `read_only_discovery.py:338`) is a different trust boundary
+  and is already credited in the `SSA-R1`/`SSA-R2` rows. It satisfies no
+  `SSA-04` criterion.
 
 #### SSA-05: Deprecated Script Lifecycle
 
@@ -521,6 +599,26 @@ slice-specific design establishes a stronger dependency or urgency.
   not partial success.
 - Operator diagnostics retain status code, resource kind, namespace, and a
   sanitized reason sufficient for troubleshooting.
+
+**Revalidation note (2026-07-26) — scope widened**
+- The 2026-07-18 "safe logging" commits (`051ef43f`, `cf109d6a`, `37a1605b`)
+  did **not** touch this slice's first bullet. They sanitized preflight detail
+  strings and Argo CD discovery output — work now tracked separately as
+  `R3-P2` / slice `R3-04`. The reusable-helper body log is unchanged:
+  `lib/kube_client.py:863-869` still logs `body=%s` with `e.body[:500]`.
+- **Widen the scope beyond `e.body`.** `logger.error(..., e)` on an
+  `ApiException` leaks the response body through `str(e)`, which embeds
+  `HTTP response body:`. Sites: `lib/kube_client.py:872,1149,1190,1226`,
+  `modules/post_activation.py:490,1306`,
+  `modules/finalization.py:357,360,1529`, `modules/primary_prep.py:295`. This
+  is a wider leak class than the single `e.body[:500]` the finding names, and
+  no test asserts that token-, kubeconfig-, or Secret-like bodies stay out of
+  logs.
+- The truncation bullet is confirmed unmet and safety-relevant:
+  `lib/kube_client.py:714-768` truncates with only a `logger.debug` and returns
+  a partial list to callers making safety decisions on `max_items=2`
+  (`modules/finalization.py:905`, `modules/primary_prep.py:144`). ~25
+  `list_custom_resources(...)` call sites pass no `max_items` at all.
 
 #### SSA-10: Collection `force` Contract
 
@@ -634,6 +732,7 @@ Adjacent but distinct, not duplicates:
 | R3-P3 | Medium | Python | `lib/argocd_resume.py:343-349` signals "re-run Argo CD pause on retry" by appending to `errors[]`, but `lib/cli_outcomes.py:96-105` and `lib/workflow.py:172` both read only `errors[-1]`. A post-activation failure yields a report artifact naming `primary_prep` and a resume banner showing the Argo CD housekeeping note instead of the real cause. |
 | R3-P4 | Medium | Python | `lib/argocd.py:491-527`: the ApplicationSet blocker branch is correctly gated on `_count_acm_resources(app) > 0`; the stale-status branch is not. On a hub that also runs Argo CD for fleet workloads, one never-synced Application with `automated` set and empty `status.resources` — any kind, any namespace — hard-fails `PRIMARY_PREP`. The operator message also says pause "failed for N Application(s)" when zero pause attempts were made. |
 | R3-P5 | Medium | Python | `lib/workflow.py:149,193` replaced `sys.exit` with `raise SwitchoverError`, so `lib/cli_outcomes.py:204-208` now records state-refusal messages via `add_error`. The errors array grows unbounded across reruns and `get_last_error_phase()` pins to `FAILED`, permanently masking the real failure in the banner. |
+| R3-P6b | Low | Python | Amendment recorded 2026-07-26: the `delete_custom_resource` docstring at `lib/kube_client.py:1017-1018` claims "If None, uses client default", but no timeout kwarg is passed at all. The documentation is wrong, not merely the behavior, so a reader cannot discover the gap from the docstring. Resolve with `R3-P6`. |
 | R3-P6 | Low | Python | Residual of `R2-H1`: `lib/kube_client.py:1027-1044` still builds `kwargs` conditionally instead of using `_request_timeout_kwargs()`, leaving `delete_custom_resource` the only mutating method able to hang indefinitely. |
 | R3-P7 | Low | Python | `--dry-run --report-dir` writes an empty artifact: `acm_switchover.py:438-443` restores the pre-run snapshot in `run_switchover`'s `finally`, which precedes the report write in `lib/cli_outcomes.py:227-228`, so the report records `current_phase: "init"`, zero steps, and `status: "pass"`. |
 | R3-P8 | Low | Python | `HUB_KUBECONFIG_SECRET_NAME`, `BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME`, `OADP_NAMESPACE`, and `BACKUP_STORAGE_LOCATION_RESOURCE` have no references outside `lib/constants.py` while `modules/post_activation.py` still inlines the same literals at seven call sites, contrary to `AGENTS.md`. |
@@ -651,7 +750,8 @@ Adjacent but distinct, not duplicates:
 | R3-T7 | Medium | Tests | `run_tests.sh:97` and `.github/workflows/ci-cd.yml:46` measure and upload coverage with no `--cov-fail-under` and no Codecov threshold, so coverage can regress arbitrarily. This is the mechanism by which `R3-T1` stayed invisible. |
 | R3-T8 | Medium | Tests | `tests/release/conftest.py:52-53` accepts `ACM_RELEASE_PROFILE` as equivalent to the explicit `--release-profile` flag, so a stale shell export turns a plain `pytest tests/` into a real-cluster run with no confirmation. `test_lab_controller_phase8j_live_opt_in.py` models the correct pattern (explicit allowlist plus a separate live-contact flag). |
 | R3-T9 | Medium | Tests | `create_mock_step_context` is byte-identical in four workflow suites and its sibling `mock_state_manager` has already drifted in `test_finalization.py`. There is **no `tests/conftest.py`**, contradicting `AGENTS.md:337`. The helper is also an unpinned hand-rolled double of `lib/utils.py:808 StepContext`, which works against a real `StateManager` on `tmp_path`. |
-| R3-T10 | Medium | Tests | `tests/unit/plugins/action/test_checkpoint_phase_runtime.py:661` seeds stale `operational_data`, `errors`, and `report_refs` but asserts none of them, despite `checkpoint_phase.py:44-45` naming that exact hazard. It also asserts only the in-memory result and never re-reads the checkpoint file. |
+| R3-T10 | Medium | Tests | `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/action/test_checkpoint_phase_runtime.py:661` seeds stale `operational_data`, `errors`, and `report_refs` but asserts none of them, despite `checkpoint_phase.py:44-45` naming that exact hazard. It also asserts only the in-memory result and never re-reads the checkpoint file. |
+| R3-T12 | Medium | Tests | Found during the 2026-07-26 revalidation. `tests/test_api_literal_guardrails.py:11,15-18` walks only `MODULES_DIR`, so the `R2-H2` residual — 7 hardcoded `cluster.open-cluster-management.io` literals at `lib/rbac_validator.py:118,149,154,193,194,238,261` — is outside the guardrail's scan root and can grow without failing CI. A guardrail with a blind spot reads as coverage it does not provide. |
 | R3-T11 | Low | Tests | Batch: `time.sleep(0.05)` mtime dependence (`test_post_activation.py:1846`); the 1279-line doc-substring module whose `_assert_no_real_live_config_literals` misses `sha256~` tokens, `client-certificate-data` blobs, and real FQDNs; the tautological `assert "tests" in text` (`test_ci_guardrails.py:48`); a needlessly `@_requires_opt_in`-skipped blocks-without-opt-in assertion; two vacuous `validate_rbac_permissions` tests; import-time `sys.modules` stubbing in a now-dead fallback; and the `OC_VERSION=4.21` pin that will rot. |
 | R3-Q1 | Medium | Quality | Twelve files now exceed 1000 lines, seven crossing in this branch (`test_rbac_validator.py` 589→1312, `test_argocd.py` 448→1192, `lib/rbac_validator.py` 794→1131, plus `test_documentation_guardrails.py`, `test_argocd_coordinator.py`, `test_main_phase_flow.py`, `test_validation.py`). `modules/post_activation.py` reached 1622 and `test_post_activation.py` 2744. |
 | R3-Q2 | Low | Quality | ~40 new `WORKFLOW_*` / `DRY_RUN_*` / `OPERATION_*` entries in `lib/constants.py` are single-use log and banner text, not shared configuration (`WORKFLOW_BLANK_LINE = ""`, `WORKFLOW_BANNER = "=" * 60`). |
@@ -713,8 +813,8 @@ safety verification on live switchover paths.
 | R3-06 | planned | R3-A6 | Scope the `reset_from` identity bypass to the pruned phase and revalidate identity after pruning instead of overwriting it. | checkpoint identity binding; interaction with `SSA-01` |
 | R3-07 | planned | R3-P3, R3-P5 | Separate control signals and refusal messages from the durable `errors[]` log so the last error always names the real failure. | report-artifact accuracy; resume banner correctness |
 | R3-08 | planned | R3-A7, R3-A8, R3-A10, R3-A11 | Correct collection module result contracts and declare/repair the supported Python floor. | module contract and `_info` convention review; EE portability |
-| R3-09 | planned | R3-T5, R3-T6, R3-T7, R3-T8, R3-T9, R3-T10 | Make the test-infrastructure gates real: coverage floor, loaded Hypothesis profile, version-floor CI guardrail, explicit live-cluster opt-in, and a shared `tests/conftest.py` matching `AGENTS.md`. | CI gate strength; accidental live-cluster execution |
-| R3-10 | planned | R3-P4, R3-P6-R3-P13, R3-T11, R3-Q1-R3-Q4, R3-X1 | Batch the residual low-severity items, splitting only if review indicates the diff is too large. Keep `R3-Q1` decomposition inside the `H3` design track rather than opening a parallel structural effort. | scoped per item; `R3-P4` needs Argo CD blast-radius review |
+| R3-09 | planned | R3-T5, R3-T6, R3-T7, R3-T8, R3-T9, R3-T10, R3-T12 | Make the test-infrastructure gates real: coverage floor, loaded Hypothesis profile, version-floor CI guardrail, explicit live-cluster opt-in, and a shared `tests/conftest.py` matching `AGENTS.md`. | CI gate strength; accidental live-cluster execution |
+| R3-10 | planned | R3-P4, R3-P6-R3-P13, R3-T11, R3-Q2-R3-Q4, R3-X1 | Batch the residual low-severity items, splitting only if review indicates the diff is too large. `R3-Q1` is deliberately excluded: its decomposition belongs to the `H3` design track ([#158](https://github.com/tomazb/rh-acm-switchover/issues/158)), not to this batch. | scoped per item; `R3-P4` needs Argo CD blast-radius review |
 
 ### Resolution Requirements
 
@@ -925,6 +1025,165 @@ safety verification on live switchover paths.
 - No safety-relevant behavior changes ride along in the batch.
 - `R3-Q1` results in updated numbers on the `H3` track, not a new queue.
 
+## Revalidation (2026-07-26)
+
+Full-file revalidation of this tracker against `ansible` HEAD `4fed598c`, run as
+three independent read-only passes: (1) re-verification of every finding this
+file claims is resolved or merged, (2) per-criterion re-check of the ten `SSA-*`
+slices, and (3) metadata and internal-consistency audit — real GitHub PR and
+issue states, referenced-path existence, the Verification Command Reference,
+worktree conventions, and cross-section contradictions.
+
+**Why:** this tracker makes three kinds of claim that decay silently — *source*
+claims ("`F31` is resolved"), *status* claims (slice, PR, and issue states), and
+*pointer* claims (spec paths, "Likely Files", command references). A tracker that
+is wrong about its own state is worse than no tracker, because work gets skipped
+on the strength of a stale "resolved".
+
+**Scope limit, stated rather than implied:** the 40 `R3-*` findings were **not**
+re-verified in this pass. They were validated against this same HEAD one day
+earlier, with every `R3-A*` Ansible-semantics claim confirmed empirically by
+running `ansible-playbook`. Re-running that would be waste. Everything else in
+this file was re-checked.
+
+### Verified accurate, no change required
+
+- **All 48 PR URLs** in the PR Sequence table are genuinely `MERGED`, with titles
+  matching each row's description. No row claims `merged` for a PR that is open,
+  draft, or closed-unmerged.
+- **All 7 GitHub issues** (#152-#158) are genuinely `OPEN`, with titles matching
+  the findings attached to them.
+- **The Verification Command Reference** is fully accurate: all five commands
+  resolve and collect (61, 867, 238, and 140 tests respectively);
+  `run_tests.sh` is present and executable.
+- **Review #3 baseline figures are exact**: 923 commits, 745 files,
+  +146,459/-11,180, merge base `aca2d296`, 184 test files, 867 collection tests.
+  The `R3-Q1` line counts are exact.
+- **Counts add up**: `SSA` 17 findings / 10 slices / 2 P1 + 9 P2 + 6 P3; `R3`
+  40 findings across 10 slices.
+- **Every referenced spec and findings document exists.** The one absent path,
+  `docs/plans/2026-04-10-ansible-collection-rewrite-design.md`, is absent *by
+  design* — its absence is finding `F25`.
+- **19 of 22 re-verified resolved claims are CONFIRMED still resolved** with
+  current-source evidence, including `F31`, `F34`, `F35`, `F37`, `F39`, `F40`,
+  `F42`, `R2-H1`, `R2-M1` (both parts), `R2-M2` through `R2-M5`, `H1`, `R2-H3`,
+  and all four release-tooling dedups `R2-H4`/`R2-M6`/`R2-M7`/`R2-M8`. Nothing
+  checked had its fix reverted.
+
+### All ten SSA slices remain `planned`
+
+The 2026-07-20 conclusion that every `SSA-01`-`SSA-10` acceptance criterion
+remains unmet is re-confirmed, and this time **by construction** rather than by
+re-reading: `git show --stat 4fed598c` touches only
+`tests/release/lab_controller/*`, `tests/release/test_lab_controller_*`,
+`tests/release/README.md`, `CHANGELOG.md`, and `docs/`; `78126c05` is docs-only;
+and the three safe-logging commits merged on 2026-07-18, *before* the 07-20
+check. No product-runtime file under `lib/`, `modules/`, `acm_switchover.py`,
+`scripts/`, `ansible_collections/`, `.github/workflows/`, or
+`container-bootstrap/` changed in the interval. No status flips.
+
+Four slices gained **Revalidation note** blocks recording scope corrections that
+do not change status — see `SSA-01` (bullet 3 already satisfied; harness-side
+design donor), `SSA-03` (worker validation half-satisfied), `SSA-04` (Phase
+8J/9B landed none of it), and `SSA-09` (scope widened to the `str(ApiException)`
+leak class, and the safe-logging commits credited to `R3-P2` where they belong).
+
+`SSA-A2` / `SSA-P2`, the two P1 findings, remain **unguarded in product code**:
+nothing in the CLI or the collection rejects a primary and secondary context
+that resolve to the same physical cluster.
+
+### Corrections applied to this file
+
+| Area | Correction |
+| --- | --- |
+| `F41` row | Changed from `resolved` to **partially regressed**. The Python side is confirmed working, but the Ansible side is inert and Argo CD pause/resume silently no-op. Cross-linked to `R3-A1` / `R3-01`. The tracker had recorded the regression as a Review #3 finding while its own `F41` row still read "resolved" — the exact failure mode this pass exists to catch. |
+| `R2-H2` row | Changed to **partial as delivered**. `modules/` is genuinely clean, but 7 literals remain in `lib/rbac_validator.py`, outside the guardrail's scan root. |
+| Worktree convention | `.worktrees/` → `.claude/worktrees/` at the Tech Stack line, Current Branch Notes, the `PR 12` flake8 item, and the `H1` and `43` rows. Confirmed current via `git worktree list` and `.git/info/exclude:5`. |
+| Path pointers | `docs/variable-reference.md` → `ansible_collections/tomazb/acm_switchover/docs/variable-reference.md` (2 sites); `R3-T10`'s checkpoint test path prefixed with `ansible_collections/tomazb/acm_switchover/`. |
+| `PR 34` merge date | 2026-07-02 → 2026-07-03 (`gh` reports `2026-07-03T05:30:44Z`). Every other merge date matches `gh` exactly. |
+| Spec And Design Gate | No longer points at "the remaining deep-scan queue (`PR 24` onward)" — every PR row is merged. Now points at the open `SSA-*` and `R3-*` slices. |
+| `R3-Q1` assignment | Removed from slice `R3-10`, which now covers `R3-Q2`-`R3-Q4`. `R3-Q1` belongs to the `H3` track (#158), as three other places in this file already said. |
+| Review #2 arithmetic | "12 new findings" then enumerating 21 → "12 new medium/high findings ... plus 9 `R2-L*` low-severity items". |
+| `R2-H2` call-site count | Three different figures (48 / 47 / 49+7) reconciled: the review counted 49 top-level sites in `modules/`; delivered `PR 34` scope was 56 after 7 more were found in `modules/preflight/`. |
+| Section dates | "Current Completion Summary (2026-07-19)" → 2026-07-25, since it contains 07-20 and 07-25 content. "Status after merged follow-up PRs 22-26" → 22-31, matching its own bullets. |
+| Historical HEADs | "Current `ansible` HEAD `ac041f6`" / `f52a19d4` → "HEAD at that time". Actual HEAD is `4fed598c`. |
+| Status vocabulary | Extended to cover `open/deferred`, `open/split`, and `open/design track`, which the deferred-follow-up and `H3` tables already used. |
+
+### Nine orphaned Review #1 findings, now tracked
+
+`M1`, `M3`, `M5`, `L2`, `L4`, `L6`, and `L7` were declared "still open and
+unchanged" in the Review #2 headline but appeared in **no** table in this file —
+not the validation matrix, not the deferred-issues table, not any slice or PR
+row — while the Completion Summary declared the queue complete. They had been
+invisible since 2026-07-02. `L3` and `L5` were worse: listed as real by Review #1,
+then silently dropped from Review #2's re-confirmation list **with no stated
+rationale anywhere**, including in the Review #2 findings document itself.
+
+All nine were re-verified against source. **All nine are still open.** None was
+fixed in passing, superseded, or restructured away. Each now has a Finding
+Validation Matrix row with current evidence. Two carry a resolution pointer
+rather than standing alone:
+
+- `L4`'s four duplicated `re.sub(r"https://([^:/]+).*", ...)` sites are exactly
+  the sites `SSA-PY2` describes and `SSA-03` will rewrite. Extract the shared
+  helper inside `SSA-03`; do not open a separate cleanup.
+- `M2` (see below) is superseded by `R3-Q2`.
+
+**A mis-credit was found while verifying this.** The `PR 40` row claimed it
+resolved "`R2-M3` + existing `M2`". Review #1's `M2` is `lib/constants.py`
+UI string-table sprawl — unrelated to the restore-deletion-wait dedup `PR 40`
+actually delivered. `lib/constants.py` is still 381 lines with 43 top-level
+`WORKFLOW_*`/`OPERATION_*`/`DRY_RUN_*`/`*_MESSAGE` constants. `M2` was never
+resolved; it is now recorded as open and superseded by `R3-Q2`, and the `PR 40`
+row and execution-order entry have been corrected to claim `R2-M3` only.
+
+This is the most consequential class of error this pass found: a finding marked
+resolved by a PR that did different work is indistinguishable from real
+progress, and nothing in the file would have surfaced it.
+
+### New findings raised by this pass
+
+Two defects were found while verifying other claims. They are Review #3-era IDs
+because they belong to the same open queue, not to a new review round.
+
+- **`R3-T12`** (Medium, slice `R3-09`) — `tests/test_api_literal_guardrails.py`
+  walks only `MODULES_DIR`, so the `R2-H2` residual in `lib/rbac_validator.py`
+  is unguarded and can grow without failing CI. A guardrail with a scan-root
+  blind spot reads as coverage it does not provide.
+- **`R3-P6b`** (Low, slice `R3-10`) — the `delete_custom_resource` docstring at
+  `lib/kube_client.py:1017-1018` documents a client-default timeout the code
+  never requests, so the gap is undiscoverable from the docstring.
+
+### Fixed outside this file
+
+- `.gitignore` — added `.claude/worktrees/`. Only `.worktrees/` was committed,
+  and the real path was ignored solely through the local, uncommitted
+  `.git/info/exclude`, so a fresh clone would show worktree contents as
+  untracked.
+- `AGENTS.md` — corrected the worktree path in the Thermos Review Resolution
+  rules to `.claude/worktrees/thermos-*` (also dropping the `NN`, since the
+  `H1` row uses a non-numeric name).
+
+### Recorded, not acted on
+
+Three defects are recorded here for a later decision rather than changed in this
+pass:
+
+1. **`AGENTS.md:337` claims a `tests/conftest.py` that does not exist.** This is
+   already tracked as `R3-T9`. Correcting the doc now would make it true by
+   lowering the claim rather than by adding the missing shared fixtures, so the
+   doc stays wrong until `R3-09` resolves it.
+2. **`AGENTS.md:485-509` contains no design/spec gate**, while this tracker's
+   State Tracking Rules and the whole Spec And Design Gate section require
+   `superpowers:brainstorming` → approved design → `superpowers:writing-plans`
+   before implementation. Either mirror the gate in `AGENTS.md` or stop
+   describing it as a repo-wide rule.
+3. **`AGENTS.md:511-537` requires the `code-review` skill before opening and
+   before merging every PR**, but rows `34`-`42` and `44`-`47` record no review
+   evidence while rows `04`-`11` and `19`-`33` do. Either add the gate to the
+   State Tracking Rules and backfill the evidence, or explicitly waive it for
+   those rows.
+
 ## Finding Validation Matrix
 
 | Finding | Validation | Resolution PR | Notes |
@@ -969,14 +1228,14 @@ safety verification on live switchover paths.
 | F38 | resolved | PR 21 | Python klusterlet verification now fails closed for broad API/client inspection failures instead of downgrading them to informational `unreachable`. |
 | F39 | resolved | PR 22 | Python `--argocd-resume-only` now fails closed for legacy state without hub identity binding when `argocd_paused_apps` exist but `hub_identities` are absent. |
 | F40 | resolved | PR 23 | Python dry-run Argo CD management now performs discovery and blocker reporting in parity with the collection dry-run path. |
-| F41 | resolved | PR 24 | Argo CD discovery now uses namespace scoping where available while preserving per-app durable pause persistence. |
+| F41 | partially regressed (2026-07-26) | PR 24 | Python side confirmed still resolved: per-namespace listing at `lib/argocd.py:339-370` with `trusted_application_namespaces` at `:391-401`, wired through `lib/argocd_coordinator.py:161-164`. **The Ansible side is inert.** `roles/argocd_manage/tasks/discover.yml:154-156` sets `_argocd_app_list` for the scoped path, and `:167-177` re-registers the same name on the skipped cluster-wide task, so `:192` reads `[]`. Argo CD pause and resume both no-op and report success on every scoped-discovery path. Tracked for resolution as `R3-A1` / slice `R3-01`. |
 | F42 | resolved | PR 25 | Python RBAC preflight now avoids repeated serial SelfSubjectAccessReview probes without losing reporting fidelity. |
 | F43 | resolved | PR 26 | Release runtime parity now compares real resume, Argo CD, and RBAC/bootstrap outcomes instead of mostly artifact metadata. |
 | F44 | resolved | PR 27-PR 31 | `PR 27` extracted runtime/bootstrap; docs-only `PR 28` recorded the remaining slice map; `PR 29`, `PR 30`, and `PR 31` completed operation/phase-flow runners, Argo CD resume safety, and CLI outcome/report orchestration respectively. GitHub PRs #102, #103, #104, #106, and #107 are merged, and the extracted `lib/` modules remain wired through `acm_switchover.py` with dedicated tests. |
 | R2-H1 | confirmed | PR 36 | `delete_configmap`/`delete_pod` in `lib/kube_client.py` and the ACM ≤2.11 `delete_custom_resource` BackupSchedule call in `modules/primary_prep.py` have no request timeout; a hung API call can block PRIMARY_PREP indefinitely. |
-| R2-H2 | confirmed, sharper framing of `H2` | PR 34 | `MANAGED_CLUSTER_API_GROUP` exists but is used in only 1 of ~48 relevant call sites across `modules/`; verified by grep. |
+| R2-H2 | confirmed, sharper framing of `H2`; partial as delivered (2026-07-26) | PR 34 | Original: `MANAGED_CLUSTER_API_GROUP` existed but was used in only 1 of the 49 call sites the review counted across `modules/`. `modules/` is now clean — 0 hardcoded `cluster.open-cluster-management.io`, 13 sites importing the constant. **Residual:** `lib/rbac_validator.py:118,149,154,193,194,238,261` still hardcode the literal, and the guardrail `tests/test_api_literal_guardrails.py:11,15-18` only walks `MODULES_DIR`, so the residual can grow silently. Guardrail blind spot tracked as `R3-T12` / slice `R3-09`. |
 | R2-H3 | confirmed | PR 39 | Ansible RBAC validation task file duplicated ~140 lines between primary-hub and secondary-hub blocks (mirroring the Python `H1` pattern later closed by GitHub PR #148); closed by tracker `PR 39` / GitHub PR #149. |
-| R2-M1 | confirmed, resolves subagent disagreement | PR 37 (part 1), PR 38 (part 2) | `acm_preflight_report.py` computes an accurate check-mode `changed` value then explicitly discards it (confirmed by reading `write_json_artifact`/`write_report` and comparing against sibling `acm_report_artifact.py`, which has no such override) — a real, self-contained bug. `acm_backup_schedule.py`/`acm_restore_info.py` force `changed=False` under native Ansible check mode; their owning roles do not surface this to the published role-level `changed` result unless the collection's own `mode: dry_run` variable is set (traced through `pause_backups.yml`/`activate_restore.yml`), which is misleading against the documented "native Ansible check mode is non-mutating even when `mode: execute`" contract in `docs/variable-reference.md` — a real but architecturally distinct issue from the `acm_preflight_report.py` bug. |
+| R2-M1 | confirmed, resolves subagent disagreement | PR 37 (part 1), PR 38 (part 2) | `acm_preflight_report.py` computes an accurate check-mode `changed` value then explicitly discards it (confirmed by reading `write_json_artifact`/`write_report` and comparing against sibling `acm_report_artifact.py`, which has no such override) — a real, self-contained bug. `acm_backup_schedule.py`/`acm_restore_info.py` force `changed=False` under native Ansible check mode; their owning roles do not surface this to the published role-level `changed` result unless the collection's own `mode: dry_run` variable is set (traced through `pause_backups.yml`/`activate_restore.yml`), which is misleading against the documented "native Ansible check mode is non-mutating even when `mode: execute`" contract in `ansible_collections/tomazb/acm_switchover/docs/variable-reference.md` — a real but architecturally distinct issue from the `acm_preflight_report.py` bug. |
 | R2-M2 | confirmed | PR 42 | Crash between restore-staleness verification and activation completion, followed by resume, can skip re-validating restore staleness before completing activation. |
 | R2-M3 | confirmed | PR 40 | `_wait_for_restore_deletion` (`activation.py`) and `_wait_for_primary_restore_deletion` (`finalization.py`) are near-verbatim duplicates; bundle with existing `M2` waiter unification. |
 | R2-M4 | confirmed | PR 35 | `lib/utils.py` `REPORT_PHASE_NAMES` and `lib/workflow.py` `_CANONICAL_RESUME_START_PHASES` are byte-identical duplicate dicts. |
@@ -986,6 +1245,16 @@ safety verification on live switchover paths.
 | R2-M6 | confirmed | PR 47 | `tests/release/adapters/ansible.py`, `bash.py`, `python_cli.py` duplicate ~70% of `execute()` logic despite an existing shared contract in `adapters/common.py`. |
 | R2-M7 | confirmed | PR 45 | `tests/release/orchestrator.py` duplicates primary/secondary RBAC certification handling inline (~75 lines) instead of looping over a shared helper. |
 | R2-M8 | confirmed | PR 46 | `tests/release/checks/rbac_certification.py`'s required-vs-forbidden permission evaluation loops are the same algorithm with polarity flipped, duplicated in full. |
+| M1 | confirmed still open (Review #1; re-confirmed Review #2 and 2026-07-26) | none - deprioritized after PR 29-PR 31 | `lib/operation_runners.py:100-197` (`run_switchover_impl`) and `:200-286` (`run_restore_only_impl`) still share the completed-state/failed-state/validate-only/phase-flow/dry-run/completion skeleton, differing only in the `PhaseFlowEntry` tuples (`:139-165` vs `:238-252`) and message constants. Lower value after the orchestration seams were extracted; collapse into one descriptor-driven runner only if a future change must be made twice again. |
+| M2 | confirmed still open; the `M2` credited to `PR 40` was the waiter unification, not this finding | superseded by `R3-Q2` (slice `R3-10`) | Review #1 `M2` is `lib/constants.py` UI string-table sprawl, not restore-wait dedup. Still present: `lib/constants.py` is 381 lines with 43 top-level `WORKFLOW_*`/`OPERATION_*`/`DRY_RUN_*`/`*_MESSAGE` constants, and `lib/workflow.py:9` still opens a long `from lib.constants import (` block. `R3-Q2` is the sharper current framing. |
+| M3 | confirmed still open (Review #1; re-confirmed Review #2 and 2026-07-26) | none - not covered by PR 40 | Two dry-run idioms still coexist: `@dry_run_skip` (`modules/finalization.py:415,724,918,941,1124,1151,1236,1514`) and inline `if self.dry_run:` (`modules/post_activation.py:465,693`; `modules/finalization.py:1046,1065`). `PR 40` moved only the restore-deletion wait into `lib/waiter.py` and touched no dry-run guard. Distinct from `R3-T1`/`R3-T2` (slice `R3-05`), which cover testing the guards rather than unifying the idiom. |
+| M5 | confirmed still open, reprioritized upward by Review #2, re-confirmed 2026-07-26 | none - planned | `lib/argocd_coordinator.py:120-283`: `pause_hubs` is still a 164-line method whose tri-state result-handling block (`:237-282`, `result.patched` / `result.error` / `patch_applied is True/False/None`) was never extracted into `_reconcile_pause_result` (`git log -S` finds that name only in tracker docs). Correctness-critical durable-pause path; `M4`/`PR 35` had no overlap. |
+| L2 | confirmed still open (Review #1; re-confirmed Review #2 and 2026-07-26) | none - opportunistic cleanup | `modules/post_activation.py:1178-1182` derives `bootstrap_namespace` from the import manifest's `bootstrap-hub-kubeconfig` Secret and `:1109` passes it to `_restart_klusterlet` (`:1281`) to patch the `klusterlet` Deployment; the ACM co-residence assumption is still undocumented in the code. |
+| L3 | confirmed still open; silently dropped from Review #2's re-confirmation list without rationale | none - opportunistic cleanup | `deploy/helm/acm-switchover-rbac/templates/namespace.yaml:7-15` inlines its labels and is the only template not using `include "acm-switchover-rbac.labels"` (`templates/_helpers.tpl:35-44`), so the Namespace receives neither `.Values.commonLabels` nor any `managed-by` label. Second residue: `values.yaml:73` sets lowercase `app.kubernetes.io/managed-by: helm`, which will not match a conventional `managed-by=Helm` selector. |
+| L4 | confirmed still open; call sites overlap `SSA-PY2` | resolve inside SSA-03 (planned) | `re.sub(r"https://([^:/]+).*", r"\1", url)` still duplicated 4x at `modules/post_activation.py:1483,1490,1608,1609` with silent passthrough on non-match; no `lib.utils.host_from_url` exists. `SSA-PY2` (hostname-key collapse at `:1490-1491`) targets these exact sites and `SSA-03` replaces hostname-only matching with normalized endpoint identities — extract the shared helper there rather than as a standalone cleanup. |
+| L5 | confirmed still open; silently dropped from Review #2's re-confirmation list without rationale | none - opportunistic cleanup | `lib/operation_runners.py:78-80,101-105,201-204` still type `args`/`state`/`primary`/`secondary`/`logger` as `Any` despite `argparse.Namespace`, `StateManager`, and `KubeClient` being the real types, used precisely in `lib/workflow.py`. |
+| L6 | confirmed still open (Review #1; re-confirmed Review #2 and 2026-07-26) | none - opportunistic cleanup | `modules/post_activation.py:1289` still does `import time as time_module` inside `_restart_klusterlet` while the module imports `time` at `:12`. |
+| L7 | confirmed still open, wider than originally cited | none - opportunistic cleanup | `%`-style formatting inside `raise SwitchoverError(...)` at `modules/finalization.py:1299-1302,1367-1369,1375-1378,1381-1384,1447-1451` — 5 sites, up from the 2 cited on 2026-06-13 — while the rest of the file uses f-strings. `:1423` uses the same idiom in a `WaitConditionResult.pending` call. |
 | SSA-A2 | confirmed, corrected P1 | SSA-01 (planned) | Collection contexts and live UIDs are validated independently but never compared; identical contexts or different contexts targeting one cluster can enter self-switchover. |
 | SSA-P1 | confirmed with lower impact, corrected P2 | SSA-02 (planned) | Python standalone decommission intentionally lacks prior state binding; wrong-context risk remains, so add optional expected-UID verification without making switchover state mandatory. |
 | SSA-P2 | confirmed, corrected P1 | SSA-01 (planned) | Python binds each role identity for resume but does not require primary and secondary live UIDs to differ before a new switchover. |
@@ -1037,6 +1306,8 @@ safety verification on live switchover paths.
 | R3-T8 | confirmed, Medium | R3-09 (planned) | `ACM_RELEASE_PROFILE` alone un-gates real-cluster certification; the opt-in pilot tests model the correct explicit pattern. |
 | R3-T9 | confirmed, Medium | R3-09 (planned) | `create_mock_step_context` duplicated byte-identically in four suites with a drifted sibling fixture; `tests/conftest.py` does not exist, contradicting `AGENTS.md:337`. |
 | R3-T10 | confirmed, Medium | R3-09 (planned) | Checkpoint reset test seeds three kinds of stale state and asserts none of them, despite the source naming that exact hazard; also never re-reads the persisted file. |
+| R3-T12 | confirmed 2026-07-26, Medium | R3-09 (planned) | Guardrail scan-root blind spot: `tests/test_api_literal_guardrails.py` walks only `MODULES_DIR`, leaving the 7-literal `R2-H2` residual in `lib/rbac_validator.py` unguarded and free to grow. |
+| R3-P6b | confirmed 2026-07-26, Low | R3-10 (planned) | `delete_custom_resource` docstring documents a client-default timeout that the code never requests. Resolve alongside `R3-P6`. |
 | R3-T11 | confirmed, Low | R3-10 (planned) | Batch: sleep-based mtime test, weak doc secret scanner, tautological assertion, needlessly skipped safety test, two vacuous RBAC tests, import-time `sys.modules` stubbing, and a version pin that will rot. |
 | R3-Q1 | confirmed maintainability, Medium | H3 track (#158) | Twelve files exceed 1000 lines, seven crossing in this branch. Recorded as updated counts on the existing `H3` design track, not a parallel effort. |
 | R3-Q2 | confirmed maintainability, Low | R3-10 (planned) | ~40 single-use log/banner strings moved into `lib/constants.py`, which is for shared or tuned values. |
@@ -1081,21 +1352,28 @@ safety verification on live switchover paths.
 | 31 | merged | `refactor/thermos-31-cli-report-orchestration` | `.worktrees/thermos-31-cli-reporting` | F44 CLI outcome/report orchestration extraction | https://github.com/tomazb/rh-acm-switchover/pull/107 | Added design spec `docs/superpowers/specs/2026-06-08-pr31-cli-outcome-report-design.md` and implementation plan `docs/superpowers/plans/2026-06-08-pr31-cli-outcome-report-orchestration.md`. `lib/cli_outcomes.py` now owns report target selection, phase summarization, Python report writing, setup-mode outcome handling, and the non-setup completion shell; `acm_switchover.py` keeps thin compatibility wrappers plus entrypoint ordering and delegates setup/runtime outcome handling through the extracted helper module. Verification: `python -m pytest tests/test_cli_outcomes.py tests/test_main.py tests/test_report_artifacts.py tests/test_main_phase_flow.py -q` passed (`167 passed`); `python -m pytest tests/test_documentation_guardrails.py -q` passed (`24 passed`); `graphify update .` passed; `git diff --check` passed; final `./run_tests.sh` passed after formatting the new direct test file with Black during verification. PR #107 merged 2026-06-08 at `fb90d62`. |
 | 32 | merged | `docs/thermos-32-review-validation` | `.worktrees/thermos-32-review-validation` | Thermos Review #1 validation + B1 cleanup | https://github.com/tomazb/rh-acm-switchover/pull/120 | Added the validated 2026-06-13 Thermos review findings document and resolved `B1` by removing the dead `Finalization.disable_observability_on_secondary` instance field while preserving constructor/CLI compatibility and old-hub observability cleanup behavior. `python -m pytest tests/test_finalization.py ansible_collections/tomazb/acm_switchover/tests/unit/test_finalization_old_hub_parity.py tests/test_documentation_guardrails.py -q` passed (`120 passed`); `black --check --line-length 120 modules/finalization.py tests/test_finalization.py` passed; `git diff --check` passed; `coderabbit review --plain -t all --base ansible` reported `No findings` on rerun; final `./run_tests.sh` passed (root lane `1516 passed, 105 deselected`; release lane `212 passed, 1 skipped`; Black/MyPy/Bandit/pip-audit all clean). PR #120 merged 2026-06-15 at `ddbe46e`. |
 | 33 | merged | `codex/thermos-maintainability-followups` | (no dedicated worktree recorded) | Argo CD resume/CLI-entrypoint/logging maintainability cleanup (not H1/H2/M4) | https://github.com/tomazb/rh-acm-switchover/pull/109 | Addressed a maintainability backlog adjacent to, but distinct from, the `H1`/`H2`/`M4` items queued after `PR 32`: decomposed the Argo CD resume client preparation hotspot into focused, independently testable helpers with unit coverage for resume identity checks; removed dead compatibility wrappers and stale complexity suppression from the CLI entrypoint; routed shared report filenames/types and Argo CD pause/hub role strings through constants; hardened the Option-B resume contract test; extracted duplicated operation-completion logging into `lib/workflow.py`; documented the dry-run rollback boundary. Verification: targeted `pytest` across `test_argocd_resume_helpers.py`, `test_operation_runners.py`, `test_cli_outcomes.py`, `test_primary_prep.py`, collection restore-only contracts, release adapters, and targeted `test_main.py` classes passed; `python -m compileall`, `black --check --line-length 120`, `isort --check-only --profile black --line-length 120`, `git diff --check`, and `./run_tests.sh` all passed. PR #109 merged 2026-06-08 at `7010dc2`. This PR only updated the `PR 31` row in the tracker at merge time and had no row of its own until this reconciliation pass. **Correction (2026-07-02, Thermos Review #2):** the original reconciliation-pass label for this row overstated scope by tagging it `H1, H2, M4 partial`; `lib/rbac_validator.py`'s primary/secondary duplication (`H1`), the modules-wide API-group/version/plural literal duplication (`H2`), and the `finalization.py:570` state accessor gap (`M4`) were independently re-verified as still fully unresolved by Review #2 (see `R2-H2`/`H1`/`H2`/`M4` in [`docs/plans/2026-07-02-thermos-ansible-review-2-findings.md`](docs/plans/2026-07-02-thermos-ansible-review-2-findings.md)); this PR's actual changes never touched those files. |
-| 34 | merged | `fix/thermos-34-managed-cluster-constant` | `.claude/worktrees/thermos-34-managed-cluster-constant` | R2-H2 (sharper H2) | https://github.com/tomazb/rh-acm-switchover/pull/127 | Design spec `docs/superpowers/specs/2026-07-02-pr34-managed-cluster-constant-design.md`; implementation plan `docs/superpowers/plans/2026-07-02-pr34-managed-cluster-constant.md`. Routed all 56 hardcoded `cluster.open-cluster-management.io` literals in `modules/**/*.py` (the review's 49 top-level sites plus 7 more found in `modules/preflight/` during the red-test run) and the 2 behavioral `lib/kube_client.py` helpers through `MANAGED_CLUSTER_*` and new `CLUSTER_BACKUP_*` constants; `ACM_BACKUP_SCHEDULE_TYPE_LABEL` now derives from the shared group constant. Added red-first static guardrail `tests/test_api_literal_guardrails.py` (red at 56 violations, now green) and the `MANAGED_CLUSTER_API_GROUP` ↔ `CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO` pair in `tests/test_constants_parity.py`. Verification: targeted `python -m pytest tests/test_api_literal_guardrails.py tests/test_constants_parity.py tests/test_activation.py tests/test_finalization.py tests/test_post_activation.py tests/test_primary_prep.py tests/test_backup_schedule.py tests/test_decommission.py tests/test_kube_client.py -q` passed (`456 passed`); preflight suites passed (`147 passed`); touched-file `black`/`isort` (line-length 120) applied; `git diff --check` passed; full `./run_tests.sh` passed (root lane `1557 passed, 105 deselected`; release lane `1021 passed, 3 skipped`; Black/isort/MyPy/Bandit/pip-audit all clean). PR #127 merged into `ansible` 2026-07-02. |
+| 34 | merged | `fix/thermos-34-managed-cluster-constant` | `.claude/worktrees/thermos-34-managed-cluster-constant` | R2-H2 (sharper H2) | https://github.com/tomazb/rh-acm-switchover/pull/127 | Design spec `docs/superpowers/specs/2026-07-02-pr34-managed-cluster-constant-design.md`; implementation plan `docs/superpowers/plans/2026-07-02-pr34-managed-cluster-constant.md`. Routed all 56 hardcoded `cluster.open-cluster-management.io` literals in `modules/**/*.py` (the review's 49 top-level sites plus 7 more found in `modules/preflight/` during the red-test run) and the 2 behavioral `lib/kube_client.py` helpers through `MANAGED_CLUSTER_*` and new `CLUSTER_BACKUP_*` constants; `ACM_BACKUP_SCHEDULE_TYPE_LABEL` now derives from the shared group constant. Added red-first static guardrail `tests/test_api_literal_guardrails.py` (red at 56 violations, now green) and the `MANAGED_CLUSTER_API_GROUP` ↔ `CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO` pair in `tests/test_constants_parity.py`. Verification: targeted `python -m pytest tests/test_api_literal_guardrails.py tests/test_constants_parity.py tests/test_activation.py tests/test_finalization.py tests/test_post_activation.py tests/test_primary_prep.py tests/test_backup_schedule.py tests/test_decommission.py tests/test_kube_client.py -q` passed (`456 passed`); preflight suites passed (`147 passed`); touched-file `black`/`isort` (line-length 120) applied; `git diff --check` passed; full `./run_tests.sh` passed (root lane `1557 passed, 105 deselected`; release lane `1021 passed, 3 skipped`; Black/isort/MyPy/Bandit/pip-audit all clean). PR #127 merged into `ansible` 2026-07-03. |
 | 35 | merged | `refactor/thermos-35-phase-name-dedup` | `.claude/worktrees/thermos-35-phase-name-dedup` | R2-M4 | https://github.com/tomazb/rh-acm-switchover/pull/128 | Design spec `docs/superpowers/specs/2026-07-02-pr35-phase-name-dedup-design.md`; implementation plan `docs/superpowers/plans/2026-07-02-pr35-phase-name-dedup.md`. Collapsed the byte-identical `lib/utils.py` `REPORT_PHASE_NAMES` and `lib/workflow.py` `_CANONICAL_RESUME_START_PHASES` dicts into one `CANONICAL_PHASE_NAMES` mapping in `lib/utils.py` (next to the `Phase` enum), consumed by `StateManager.mark_step_completed`, `lib/workflow.py` resume-start summaries, and `lib/cli_outcomes.py`; no compatibility alias (zero external references, verified by grep). Red-first guardrails in `tests/test_phase_name_canonical.py` (exact executable-phase key set, SECONDARY_VERIFY fold, `is`-identity across consumers, old names gone). Verification: `python -m pytest tests/test_phase_name_canonical.py tests/test_utils.py tests/test_main_phase_flow.py tests/test_cli_outcomes.py tests/test_report_artifacts.py tests/test_main.py -q` passed (`298 passed`); touched-file `black`/`isort` (line-length 120) applied; `git diff --check` passed; full `./run_tests.sh` passed (root lane `1560 passed, 105 deselected`; release lane `1021 passed, 3 skipped`). PR #128 merged into `ansible` 2026-07-03 (includes read-only MappingProxyType hardening). |
 | 36 | merged | `fix/thermos-36-delete-timeouts` | `.claude/worktrees/thermos-36-delete-timeouts` | R2-H1 | https://github.com/tomazb/rh-acm-switchover/pull/129 | Design spec `docs/superpowers/specs/2026-07-03-pr36-delete-timeouts-design.md`; implementation plan `docs/superpowers/plans/2026-07-03-pr36-delete-timeouts.md`. `delete_configmap`/`delete_pod` now pass the client-default request timeout via `_request_timeout_kwargs()` like every sibling core_v1 call, and `primary_prep.py`'s ACM ≤2.11 BackupSchedule delete passes `timeout_seconds=DELETE_REQUEST_TIMEOUT`, matching the five equivalent delete sites in activation/decommission; timeout expiry flows through the existing tenacity retry/error path. Red-first: tightened `assert_called_once_with` in `tests/test_kube_client.py` (both deletes) and `tests/test_primary_prep.py` (ACM 2.11 delete) to require the timeout kwargs (3 failed before the fix). Verification: `python -m pytest tests/test_kube_client.py tests/test_primary_prep.py -q` passed (`135 passed`); touched-file `black`/`isort` applied; `git diff --check` passed; full `./run_tests.sh` passed (root lane `1556 passed, 105 deselected`; release lane `1021 passed, 3 skipped`). Note: trivial adjacent-line overlap with PR 34 at the `primary_prep.py` call site (PR 34 rewrites the group/version/plural lines) — whichever merges second resolves a one-hunk conflict. |
 | 37 | merged | `fix/thermos-37-preflight-report-checkmode` | `.claude/worktrees/thermos-37-preflight-report-checkmode` | R2-M1 (part 1) | https://github.com/tomazb/rh-acm-switchover/pull/130 | Design spec `docs/superpowers/specs/2026-07-03-pr37-preflight-report-checkmode-design.md`; implementation plan `docs/superpowers/plans/2026-07-03-pr37-preflight-report-checkmode.md`. Deleted `acm_preflight_report.py`'s unconditional `if module.check_mode: changed = False` override so the module reports `write_json_artifact`'s accurate diff-based `changed`, matching sibling `acm_report_artifact.py`; the no-write guarantee stays in `write_json_artifact`'s check-mode gate, and the preflight role's published `acm_switchover_preflight_result.changed` now carries the truthful value. Red-first: flipped the check-mode create test to assert `changed=True` (no write) and added a mode-independence test; also fixed the matching-artifact fixture, which lacked the `cluster_uid` field `sanitize_report_hubs` adds and only passed because the override masked the real diff. Verification: module suite `10 passed`; collection unit suite `807 passed`; full `./run_tests.sh` passed (root lane `1563 passed, 105 deselected`; release lane `1021 passed, 3 skipped`); touched-file `black`/`isort` applied; `git diff --check` passed. PR #130 merged into `ansible` 2026-07-03. |
 | 38 | merged | `fix/thermos-38-checkmode-changed-surfacing` | `.claude/worktrees/thermos-38-checkmode-changed-surfacing` | R2-M1 (part 2) | https://github.com/tomazb/rh-acm-switchover/pull/131 | Design spec `docs/superpowers/specs/2026-07-03-pr38-checkmode-changed-surfacing-design.md` records the required decision: **(a) wiring chosen**, plus a one-sentence doc clarification. `acm_backup_schedule.py`/`acm_restore_info.py` plan modules now report mode-independent `changed` (they mutate nothing; the check-mode zeroing was the same discard-the-right-answer pattern PR 37 removed), and the `pause_backups.yml`/`activate_restore.yml` published-changed fallbacks treat `ansible_check_mode` like `mode: dry_run`, so `--check` with `mode: execute` publishes truthful would-change verdicts. `variable-reference.md` mode row documents the clarified contract. Red-first: flipped the two plugin tests pinning suppressed behavior + 2 new role-contract text asserts (4 red before the fix). Verification: collection unit suite `808 passed`; full `./run_tests.sh` passed (root lane `1563 passed, 105 deselected`; release lane `1021 passed, 3 skipped`); touched-file `black`/`isort` applied; `git diff --check` passed. Implementation plan `docs/superpowers/plans/2026-07-03-pr38-checkmode-changed-surfacing.md`. PR #131 merged into `ansible` 2026-07-03. |
-| H1 | merged | `refactor/thermos-h1-python-rbac-unification` | `.worktrees/thermos-h1-python-rbac-unification` | H1 (Python RBAC validator unification) | https://github.com/tomazb/rh-acm-switchover/pull/148 | Design spec `docs/superpowers/specs/2026-07-05-python-h1-rbac-unification-design.md`; implementation plan `docs/superpowers/plans/2026-07-05-python-h1-rbac-unification.md`. `VALIDATOR_CLUSTER_PERMISSIONS` is now derived from `OPERATOR_CLUSTER_PERMISSIONS` via `_derive_read_only_permissions()` stripping `MUTATING_VERBS`, with the managedclusters `patch` exception recorded as explicit data (`VALIDATOR_CLUSTER_VERB_EXCEPTIONS`) and verified at import time (drift raises `ValueError`). `validate_rbac_permissions()` primary/secondary duplication collapsed into a hub-parameterized `_validate_hub()` helper plus a loop over an explicit per-hub table; asymmetries preserved as data (primary-only decommission/old-hub-finalization pass-through, secondary-only install-type override and error-count failure message, primary-only "not available" skip log). Behavior preserved byte-for-byte (message strings pinned by tests); hub namespace tables intentionally stay literal (not pure verb-strips). Red-first tests: derivation/exception/drift-guard class plus hub-loop asymmetry/message tests (8 failed before implementation across the two facets). Verification: `git diff --check` passed; `python -m pytest tests/test_rbac_validator.py tests/test_check_rbac.py tests/test_rbac_collection_parity.py tests/test_rbac_integration.py tests/release/checks/test_rbac_certification.py -q` passed; full-parity `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ tests/ -q` passed; `./run_tests.sh` passed. This PR establishes the hub-role-loop structural pattern that `PR 39` (R2-H3) must mirror on the Ansible side; no Ansible RBAC validation logic touched. Review-comment resolution pass (2026-07-05): Copilot inline comment (drift-guard `ValueError` printed only dict keys via `sorted(<dict>)`, hiding stripped verbs) fixed by formatting the full key→verbs mapping via `_format_verb_removals()` with red-first message assertions in both drift tests; CodeRabbit nitpick (secondary hub used `not client` vs primary `client is None`) fixed by unifying on `client is None`. Verification after fixes: targeted RBAC/parity suites passed (183), full-parity pytest passed (3515 passed, 29 skipped), `git diff --check` clean, `./run_tests.sh` passed. PR #148 merged into `ansible` 2026-07-05 at merge commit `0afeea52`; the `PR 39` branch was created from that updated base (status reconciled to merged per the tracker rules). |
+| H1 | merged | `refactor/thermos-h1-python-rbac-unification` | `.claude/worktrees/thermos-h1-python-rbac-unification` | H1 (Python RBAC validator unification) | https://github.com/tomazb/rh-acm-switchover/pull/148 | Design spec `docs/superpowers/specs/2026-07-05-python-h1-rbac-unification-design.md`; implementation plan `docs/superpowers/plans/2026-07-05-python-h1-rbac-unification.md`. `VALIDATOR_CLUSTER_PERMISSIONS` is now derived from `OPERATOR_CLUSTER_PERMISSIONS` via `_derive_read_only_permissions()` stripping `MUTATING_VERBS`, with the managedclusters `patch` exception recorded as explicit data (`VALIDATOR_CLUSTER_VERB_EXCEPTIONS`) and verified at import time (drift raises `ValueError`). `validate_rbac_permissions()` primary/secondary duplication collapsed into a hub-parameterized `_validate_hub()` helper plus a loop over an explicit per-hub table; asymmetries preserved as data (primary-only decommission/old-hub-finalization pass-through, secondary-only install-type override and error-count failure message, primary-only "not available" skip log). Behavior preserved byte-for-byte (message strings pinned by tests); hub namespace tables intentionally stay literal (not pure verb-strips). Red-first tests: derivation/exception/drift-guard class plus hub-loop asymmetry/message tests (8 failed before implementation across the two facets). Verification: `git diff --check` passed; `python -m pytest tests/test_rbac_validator.py tests/test_check_rbac.py tests/test_rbac_collection_parity.py tests/test_rbac_integration.py tests/release/checks/test_rbac_certification.py -q` passed; full-parity `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ tests/ -q` passed; `./run_tests.sh` passed. This PR establishes the hub-role-loop structural pattern that `PR 39` (R2-H3) must mirror on the Ansible side; no Ansible RBAC validation logic touched. Review-comment resolution pass (2026-07-05): Copilot inline comment (drift-guard `ValueError` printed only dict keys via `sorted(<dict>)`, hiding stripped verbs) fixed by formatting the full key→verbs mapping via `_format_verb_removals()` with red-first message assertions in both drift tests; CodeRabbit nitpick (secondary hub used `not client` vs primary `client is None`) fixed by unifying on `client is None`. Verification after fixes: targeted RBAC/parity suites passed (183), full-parity pytest passed (3515 passed, 29 skipped), `git diff --check` clean, `./run_tests.sh` passed. PR #148 merged into `ansible` 2026-07-05 at merge commit `0afeea52`; the `PR 39` branch was created from that updated base (status reconciled to merged per the tracker rules). |
 | 39 | merged | `refactor/thermos-39-ansible-rbac-dedup` | `.claude/worktrees/thermos-39-ansible-rbac-dedup` (planned `.worktrees/` path unavailable in the implementing session; same isolation contract) | R2-H3 | https://github.com/tomazb/rh-acm-switchover/pull/149 | Design spec `docs/superpowers/specs/2026-07-05-pr39-ansible-rbac-dedup-design.md`; implementation plan `docs/superpowers/plans/2026-07-05-pr39-ansible-rbac-dedup.md`. Branch created from updated `origin/ansible` merge commit `0afeea52` (Python `H1` merged, PR #148). The ~140-line duplicated primary/secondary blocks in `roles/preflight/tasks/validate_rbac.yml` now run through a `_rbac_hub_validations` data table plus one `include_tasks` loop over the new shared `validate_rbac_hub.yml`, mirroring Python H1's `hub_validations` table + `_validate_hub()` loop; asymmetries are table data (primary-only restore-only skip via `enabled`, decommission expression, old-hub finalization; secondary `false` literals), `_rbac_skip_observability` stays computed once, the managed-cluster section stays separate, and every per-hub fact name (`_rbac_argocd_app_crd_*`, `_rbac_argocd_instance_crd_*`, `_rbac_argocd_install_type_*`, `_rbac_expanded_*`, `_rbac_denied_permissions_*`, `acm_<hub>_rbac_validation`) is re-published via templated `set_fact` keys; 401 fail-closed and non-403 unexpected-error CRD discovery tasks preserved with hub-templated, render-identical messages. Red-first: 8 contract tests (5 new/updated parity, 3 rewritten resilience) failed before the refactor; `test_rbac_bootstrap_contracts.py` old-hub-finalization contract updated to follow the new chain (deviation from plan's test list, recorded here). No Python changes; `lib/rbac_validator.py` untouched. Verification: `git diff --check` clean; targeted `test_preflight_parity.py` + `test_ansible_resilience_contracts.py` passed (54); collection unit suite passed (822); fixture-driven `ansible-playbook` integration `test_preflight_role.py` + `test_restore_only_role.py` passed (8, including `test_preflight_rbac_failure_still_reports_backup_findings` exercising both hub-loop iterations end-to-end); root RBAC/parity suites (`test_rbac_validator.py`, `test_check_rbac.py`, `test_rbac_collection_parity.py`, `test_rbac_integration.py`, `tests/release/checks/test_rbac_certification.py`) passed (183); full `./run_tests.sh` passed (exit 0; compile/unit/release-framework/quality/security lanes all green). PR #149 merged into `ansible` on 2026-07-08 at merge commit `79b1d92f516bfb45a5c18ff54d554044a6e80f15`; PR43 was created from that updated `origin/ansible` base. |
-| 40 | merged | `refactor/thermos-40-restore-wait-dedup` | `.claude/worktrees/thermos-40-restore-wait-dedup` | R2-M3, existing M2 | https://github.com/tomazb/rh-acm-switchover/pull/145 | Design spec `docs/superpowers/specs/2026-07-03-pr40-restore-wait-dedup-design.md`; implementation plan `docs/superpowers/plans/2026-07-03-pr40-restore-wait-dedup.md`. `lib/waiter.py` now owns `wait_for_restore_deletion(client, restore_name, *, dry_run, timeout, where, logger)`; `activation._wait_for_restore_deletion` and `finalization._wait_for_primary_restore_deletion` are one-line delegates preserving their patch seams, historical dry-run flag sources, and the `" on primary"` message suffix byte-for-byte. Red-first: 4 waiter unit tests (absent, poll-until-absent, timeout FatalError with suffix, dry-run skip). Two existing tests that pinned the wait through `modules.<mod>.wait_for_condition` now patch `lib.waiter.wait_for_condition` for the moved poll (recorded in the spec seam note). Verification: `python -m pytest tests/test_waiter.py tests/test_activation.py tests/test_finalization.py -q` passed (15+59+87); full `./run_tests.sh` passed (root lane `1567 passed, 105 deselected`; release lane `1029 passed, 3 skipped`); touched-file `black`/`isort` applied; `git diff --check` passed. |
+| 40 | merged | `refactor/thermos-40-restore-wait-dedup` | `.claude/worktrees/thermos-40-restore-wait-dedup` | R2-M3 (the "existing M2" credit was a mis-attribution corrected 2026-07-26: Review #1 `M2` is `lib/constants.py` string-table sprawl, unrelated to restore-wait dedup, and remains open) | https://github.com/tomazb/rh-acm-switchover/pull/145 | Design spec `docs/superpowers/specs/2026-07-03-pr40-restore-wait-dedup-design.md`; implementation plan `docs/superpowers/plans/2026-07-03-pr40-restore-wait-dedup.md`. `lib/waiter.py` now owns `wait_for_restore_deletion(client, restore_name, *, dry_run, timeout, where, logger)`; `activation._wait_for_restore_deletion` and `finalization._wait_for_primary_restore_deletion` are one-line delegates preserving their patch seams, historical dry-run flag sources, and the `" on primary"` message suffix byte-for-byte. Red-first: 4 waiter unit tests (absent, poll-until-absent, timeout FatalError with suffix, dry-run skip). Two existing tests that pinned the wait through `modules.<mod>.wait_for_condition` now patch `lib.waiter.wait_for_condition` for the moved poll (recorded in the spec seam note). Verification: `python -m pytest tests/test_waiter.py tests/test_activation.py tests/test_finalization.py -q` passed (15+59+87); full `./run_tests.sh` passed (root lane `1567 passed, 105 deselected`; release lane `1029 passed, 3 skipped`); touched-file `black`/`isort` applied; `git diff --check` passed. |
 | 41 | merged | `refactor/thermos-41-summary-path-dedup` | `.claude/worktrees/thermos-41-summary-path-dedup` | R2-M5 | https://github.com/tomazb/rh-acm-switchover/pull/146 | Design spec `docs/superpowers/specs/2026-07-04-pr41-summary-path-dedup-design.md`; implementation plan `docs/superpowers/plans/2026-07-04-pr41-summary-path-dedup.md`. Added the collection's first filter plugin (`plugins/filter/paths.py`, `tomazb.acm_switchover.acm_abs_path(path, base_dir)`) and converted the four `Resolve summary path to absolute` sites (discovery/decommission/rbac_bootstrap roles, `argocd_manage_test.yml`) to it; PWD lookup, task names, and `when:` conditions untouched; resolution byte-identical including the no-normalization concatenation semantics (pinned by unit test). Red-first: 5 filter unit tests + a 4-site contract test banning the inline expression. Verification: collection unit suite `818 passed`; full `./run_tests.sh` passed (root lane `1563 passed, 105 deselected`; release lane `1034 passed, 3 skipped`); touched-file `black`/`isort` applied; `git diff --check` passed. |
 | 42 | merged | `fix/thermos-42-activation-resume-staleness` | `.claude/worktrees/thermos-42-activation-resume-staleness` | R2-M2 | https://github.com/tomazb/rh-acm-switchover/pull/147 | Design spec `docs/superpowers/specs/2026-07-04-pr42-activation-resume-staleness-design.md` (records the approach decision: call-scoped re-validation chosen over step-semantics changes or verification timestamps); implementation plan `docs/superpowers/plans/2026-07-04-pr42-activation-resume-staleness.md`. Extracted `_assert_passive_restore_ready(restore, restore_name)` from `_verify_passive_sync` (log/error strings verbatim) and asserted it on entry of both activation paths: after the already-applied early return on the patch path (patched restores legitimately transition phases) and before snapshot/delete on the Option-B path (never destroy a passive restore that is not activation-ready). Crash-resume after the verify checkpoint now fails closed with `Passive sync restore not ready: ...` instead of activating against a degraded restore; read-only before any mutation; no checkpoint-semantics changes; collection parity gap ruled out in the spec (the activation role re-plans from a fresh `acm_restore_info` run on every invocation). Red-first: 3 new tests (patch path fail-closed, already-applied exemption, Option-B fail-closed with delete/create never called); 4 existing Option-B fixtures gained the ready phase the guard now demands. Verification: `python -m pytest tests/test_activation.py -q` passed (`62 passed`); full `./run_tests.sh` passed (root lane `1572 passed, 105 deselected`; release lane `1034 passed, 3 skipped`); touched-file `black`/`isort` applied; `git diff --check` passed. PR #147 merged into `ansible` 2026-07-05. |
-| 43 | merged | `chore/thermos-43-low-severity-cleanup` | `.worktrees/thermos-43-low-severity-cleanup` | R2-L3, R2-L4, R2-L5, R2-L7 checkpoint-guard subitem, R2-L9; deferred/split: R2-L1 ([#152](https://github.com/tomazb/rh-acm-switchover/issues/152)), R2-L6 ([#153](https://github.com/tomazb/rh-acm-switchover/issues/153)), R2-L7a ([#154](https://github.com/tomazb/rh-acm-switchover/issues/154)), R2-L7b ([#155](https://github.com/tomazb/rh-acm-switchover/issues/155)), R2-L7c ([#156](https://github.com/tomazb/rh-acm-switchover/issues/156)), R2-L8 ([#157](https://github.com/tomazb/rh-acm-switchover/issues/157)); excluded: R2-L2 | https://github.com/tomazb/rh-acm-switchover/pull/151 | Merged 2026-07-10 via GitHub PR [#151](https://github.com/tomazb/rh-acm-switchover/pull/151), final head `917f8d7ca82b143b20e15a5779402b01fbbce432`, merge commit `3985b42cc91dd87d420c550baeade3a3cb774868`; branch was based on PR #149 merge commit `79b1d92f516bfb45a5c18ff54d554044a6e80f15`. Design spec `docs/superpowers/specs/2026-07-08-pr43-low-severity-cleanup-design.md`; implementation plan `docs/superpowers/plans/2026-07-08-pr43-low-severity-cleanup.md`. Included only local behavior-preserving cleanup: bounded waiter/decommission log detail, post-parse CLI required-argument validation, documented/tested klusterlet structured failure contract, Argo CD resume checkpoint guard dedup, and release `StreamResult.to_dict()` cleanup. Validation polish restored bare Jinja truthiness for Argo CD resume `checkpoint.enabled`, added conditionally-required CLI help wording without parser behavior changes, strengthened the Argo CD resume guard test to require the exact checkpoint task-name set, and left V4 as non-actionable cosmetic. No protected files, RBAC permissions/manifests/Helm, live/lab release certification behavior, R2-L2, deferred/split low-severity items, Python H3 decomposition, report schema, or fail-closed/check-mode/idempotence changes. Verification: `python -m pytest tests/test_waiter.py tests/test_decommission.py -q` passed (`57 passed`); `python -m pytest tests/test_main.py tests/test_validation.py -q` passed (`199 passed`); `python -m pytest tests/test_post_activation.py ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_klusterlet_modules.py ansible_collections/tomazb/acm_switchover/tests/unit/test_klusterlet_remediation.py ansible_collections/tomazb/acm_switchover/tests/unit/test_post_activation_regressions.py -q` passed (`192 passed`); `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_hub_parameterization.py ansible_collections/tomazb/acm_switchover/tests/unit/test_ansible_resilience_contracts.py ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_resume_on_failure.py -q` passed (`86 passed`); `python -m pytest tests/release/test_orchestrator.py tests/release/test_release_certification.py -q` passed (`32 passed, 1 skipped`); `python -m pytest tests/test_documentation_guardrails.py -q` passed (`60 passed`); `python -m pytest tests/test_waiter.py tests/test_kube_client.py -q` passed (`114 passed`); `git diff --check` passed; `./run_tests.sh` passed (`1593 passed, 105 deselected`; release lane `1035 passed, 3 skipped`; Black/isort/MyPy/Bandit/pip-audit/compile clean). CodeRabbit `coderabbit review --agent -t uncommitted --base origin/ansible` reported 0 findings. |
+| 43 | merged | `chore/thermos-43-low-severity-cleanup` | `.claude/worktrees/thermos-43-low-severity-cleanup` | R2-L3, R2-L4, R2-L5, R2-L7 checkpoint-guard subitem, R2-L9; deferred/split: R2-L1 ([#152](https://github.com/tomazb/rh-acm-switchover/issues/152)), R2-L6 ([#153](https://github.com/tomazb/rh-acm-switchover/issues/153)), R2-L7a ([#154](https://github.com/tomazb/rh-acm-switchover/issues/154)), R2-L7b ([#155](https://github.com/tomazb/rh-acm-switchover/issues/155)), R2-L7c ([#156](https://github.com/tomazb/rh-acm-switchover/issues/156)), R2-L8 ([#157](https://github.com/tomazb/rh-acm-switchover/issues/157)); excluded: R2-L2 | https://github.com/tomazb/rh-acm-switchover/pull/151 | Merged 2026-07-10 via GitHub PR [#151](https://github.com/tomazb/rh-acm-switchover/pull/151), final head `917f8d7ca82b143b20e15a5779402b01fbbce432`, merge commit `3985b42cc91dd87d420c550baeade3a3cb774868`; branch was based on PR #149 merge commit `79b1d92f516bfb45a5c18ff54d554044a6e80f15`. Design spec `docs/superpowers/specs/2026-07-08-pr43-low-severity-cleanup-design.md`; implementation plan `docs/superpowers/plans/2026-07-08-pr43-low-severity-cleanup.md`. Included only local behavior-preserving cleanup: bounded waiter/decommission log detail, post-parse CLI required-argument validation, documented/tested klusterlet structured failure contract, Argo CD resume checkpoint guard dedup, and release `StreamResult.to_dict()` cleanup. Validation polish restored bare Jinja truthiness for Argo CD resume `checkpoint.enabled`, added conditionally-required CLI help wording without parser behavior changes, strengthened the Argo CD resume guard test to require the exact checkpoint task-name set, and left V4 as non-actionable cosmetic. No protected files, RBAC permissions/manifests/Helm, live/lab release certification behavior, R2-L2, deferred/split low-severity items, Python H3 decomposition, report schema, or fail-closed/check-mode/idempotence changes. Verification: `python -m pytest tests/test_waiter.py tests/test_decommission.py -q` passed (`57 passed`); `python -m pytest tests/test_main.py tests/test_validation.py -q` passed (`199 passed`); `python -m pytest tests/test_post_activation.py ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_klusterlet_modules.py ansible_collections/tomazb/acm_switchover/tests/unit/test_klusterlet_remediation.py ansible_collections/tomazb/acm_switchover/tests/unit/test_post_activation_regressions.py -q` passed (`192 passed`); `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_hub_parameterization.py ansible_collections/tomazb/acm_switchover/tests/unit/test_ansible_resilience_contracts.py ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_resume_on_failure.py -q` passed (`86 passed`); `python -m pytest tests/release/test_orchestrator.py tests/release/test_release_certification.py -q` passed (`32 passed, 1 skipped`); `python -m pytest tests/test_documentation_guardrails.py -q` passed (`60 passed`); `python -m pytest tests/test_waiter.py tests/test_kube_client.py -q` passed (`114 passed`); `git diff --check` passed; `./run_tests.sh` passed (`1593 passed, 105 deselected`; release lane `1035 passed, 3 skipped`; Black/isort/MyPy/Bandit/pip-audit/compile clean). CodeRabbit `coderabbit review --agent -t uncommitted --base origin/ansible` reported 0 findings. |
 | 44 | merged | `refactor/thermos-44-release-orchestrator-shortcircuit` | `.claude/worktrees/thermos-44-release-orchestrator-shortcircuit` | R2-H4 | https://github.com/tomazb/rh-acm-switchover/pull/132 | Design spec `docs/superpowers/specs/2026-07-03-pr44-orchestrator-shortcircuit-design.md`; implementation plan `docs/superpowers/plans/2026-07-03-pr44-orchestrator-shortcircuit.md`. Extracted module-level `_short_circuit_finalize(...)` owning the `not_applicable` runtime-parity/final-baseline artifact pair and the `_finalize_run` delegation; the three abort paths in `_run_release_certification` (matrix-validation blocked, required static-gates failure, stop-before-mutation) collapse to single calls with only their `mandatory_argocd` expression varying. Behavior-preserving; guarded by the existing short-circuit characterization tests plus a new red-first direct helper unit test. Verification: `python -m pytest tests/release/test_orchestrator.py tests/release/test_release_certification.py -q` passed (`30 passed, 1 skipped`); full `./run_tests.sh` passed (root lane `1563 passed, 105 deselected`; release lane `1022 passed, 3 skipped`); touched-file `black`/`isort` applied; `git diff --check` passed. PR #132 merged into `ansible` 2026-07-03. |
 | 45 | merged | `refactor/thermos-45-release-orchestrator-rbac-dedup` | `.claude/worktrees/thermos-45-release-orchestrator-rbac-dedup` | R2-M7 | https://github.com/tomazb/rh-acm-switchover/pull/133 | Design spec `docs/superpowers/specs/2026-07-03-pr45-orchestrator-rbac-dedup-design.md`; implementation plan `docs/superpowers/plans/2026-07-03-pr45-orchestrator-rbac-dedup.md`. Extracted `_certify_hub_rbac(...)` (scope lookup -> `certify_rbac_permissions` -> `hub:name`-prefixed assertion dicts) and replaced the duplicated primary/secondary blocks in `_run_release_certification` with a loop over `("primary", "secondary")` plus equivalent `all`/`any` status aggregation. Behavior-preserving; guarded by existing live-RBAC characterization tests plus a new red-first direct helper unit test. Verification: `python -m pytest tests/release/test_orchestrator.py tests/release/test_release_certification.py -q` passed; full `./run_tests.sh` passed (root lane `1563 passed, 105 deselected`; release lane `1022 passed, 3 skipped`; Flake8/Black/isort/MyPy/Bandit/pip-audit clean); `git diff --check` passed. Rebased onto PR #132's short-circuit helper after resolving the adjacent release orchestrator conflict. |
 | 46 | merged | `refactor/thermos-46-rbac-certification-dedup` | `.claude/worktrees/thermos-46-rbac-certification-dedup` | R2-M8 | https://github.com/tomazb/rh-acm-switchover/pull/134 | Design spec `docs/superpowers/specs/2026-07-03-pr46-rbac-certification-dedup-design.md`; implementation plan `docs/superpowers/plans/2026-07-03-pr46-rbac-certification-dedup.md`. Extracted `_evaluate_permissions(..., expect_allowed: bool)` returning `(assertions, unexpected_count, error_count)`; `certify_rbac_permissions` now calls it once for required permissions and once for forbidden permissions, with expected/actual/message strings derived from the polarity so emitted `CertificationAssertion`s are byte-identical to before. Red-first 6-case polarity-matrix unit test (allowed/denied/error × both polarities); guarded by the existing certification suite. Verification: `python -m pytest tests/release/checks/test_rbac_certification.py tests/release/test_orchestrator.py -q` passed (`62 passed`); full `./run_tests.sh` passed (root lane `1563 passed, 105 deselected`; release lane `1027 passed, 3 skipped`; Flake8/Black/isort/MyPy/Bandit/pip-audit clean); `git diff --check` passed. |
 | 47 | merged | `refactor/thermos-47-release-adapter-dedup` | `.claude/worktrees/thermos-47-release-adapter-dedup` | R2-M6 | https://github.com/tomazb/rh-acm-switchover/pull/135 | Design spec `docs/superpowers/specs/2026-07-03-pr47-release-adapter-dedup-design.md`; implementation plan `docs/superpowers/plans/2026-07-03-pr47-release-adapter-dedup.md`. Added `run_stream_subprocess(...)` to `adapters/common.py` owning the mkdir → `subprocess.run` → timeout/normal branches → `write_capture_artifact` pair → exit-code + redaction assertions → `StreamResult` flow; each adapter's `execute()` now builds its command/env and passes stream name, capability, message strings, and a reports callable. Duplicated `_now`/`_decode` moved to `common.py`; per-adapter variance (bash `bash-` capability prefix, bash inherit-env-when-no-extra-env, exact message strings) preserved byte-for-byte per the spec's variance table. Red-first: 4 direct helper tests (success/failure/timeout/reports) in `test_common.py`; the existing adapter suites (asserting on `StreamResult` fields) guard integrated behavior. Verification: `python -m pytest tests/release/adapters/ tests/release/test_orchestrator.py -q` passed (`90 passed`); full `./run_tests.sh` passed (root lane `1563 passed, 105 deselected`; release lane `1026 passed, 3 skipped`); touched-file `black`/`isort` applied, no new flake8 findings; `git diff --check` passed. |
+| 48 | ready_for_review | `docs/thermos-48-review3-tracker` | `.claude/worktrees/thermos-48-review3-tracker` | Thermos Review #3 record (40 findings, 10 `R3-*` slices) + 2026-07-26 full-file revalidation; new `R3-T12`, `R3-P6b`; nine orphaned Review #1 findings (`M1`-`M3`, `M5`, `L2`-`L7`) given matrix rows; `PR 40` `M2` mis-credit corrected | https://github.com/tomazb/rh-acm-switchover/pull/197 | Docs-only for the tracker; `.gitignore` gains `.claude/worktrees/` and `AGENTS.md` worktree path corrected. `python -m pytest tests/test_documentation_guardrails.py tests/test_ci_guardrails.py -q` → 68 passed. Revalidation evidence: all 48 PR URLs `MERGED` and all 7 issues #152-#158 `OPEN` per `gh`; Verification Command Reference re-run and accurate; SSA slices re-confirmed unmet by construction from `git show --stat 4fed598c`. |
+
+
+**PR 48 note:** this row covers the docs-only slice that recorded Thermos
+Review #3 and performed the 2026-07-26 full-file revalidation. No design/spec
+gate applies: like `PR 01`, `PR 13`, `PR 28`, and `PR 32`, it is tracker
+maintenance, not an implementation slice.
 
 **PR39-001 blocker fix evidence (2026-07-05):** The PR39 restore-only regression was reproduced with only `acm_switchover_hubs.secondary`: the new integration test failed red at `Build hub RBAC validation table` with `'dict object' has no attribute 'primary'`. The fix preserves the PR39 `_rbac_hub_validations` table/include design and makes only the skipped primary row's `kubeconfig`/`context` expressions restore-only-safe; normal switchover mode still dereferences the required primary hub. Added `restore_only_rbac_secondary_only.yml` and `test_restore_only_rbac_with_secondary_only_hub_reports_secondary_validation`, proving `preflight-rbac-primary` is absent while `preflight-rbac-secondary` is still reported. No operator-CRD 401 hardening is included in this PR39-001 fix. Verification after the fix: focused repro passed; targeted preflight/RBAC suite passed (`63 passed`); collection unit suite passed (`822 passed`); root RBAC/parity suite passed (`183 passed`); `git diff --check` passed; full `./run_tests.sh` passed (root lane `1584 passed, 105 deselected`; release lane `1034 passed, 3 skipped`; Black/isort/MyPy/Bandit/pip-audit/compile checks clean).
 
@@ -1318,7 +1596,7 @@ safety verification on live switchover paths.
 - Split `validate_backups.yml` or move complex logic into tested module utilities.
 - Split `tests/test_main.py` fixtures and classes.
 - Add full `deploy/rbac/` to collection-bundled `deploy/rbac/` file-set and content parity tests.
-- Keep `.worktrees/` ignored by flake8 so advisory style checks do not scan nested worktrees.
+- Keep `.claude/worktrees/` ignored by flake8 so advisory style checks do not scan nested worktrees.
 
 **Acceptance Criteria**
 - Refactors are behavior-preserving.
@@ -1603,4 +1881,4 @@ python -m pytest tests/test_rbac_collection_parity.py tests/test_rbac_validator.
 
 - Base branch: `ansible`
 - Root worktree had pre-existing untracked Graphify review artifacts and `thermos_ansible_review.md` when this tracker was created.
-- Keep Thermos implementation changes isolated in `.worktrees/thermos-*` worktrees and their corresponding branches.
+- Keep Thermos implementation changes isolated in `.claude/worktrees/thermos-*` worktrees and their corresponding branches. Earlier rows in the PR Sequence table record a `.worktrees/` path; that convention was replaced by `.claude/worktrees/` and the rows were corrected on 2026-07-26.

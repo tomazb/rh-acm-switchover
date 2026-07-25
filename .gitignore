@@ -33,6 +33,7 @@ bandit-report.json
 .planning/
 .validation/
 .worktrees/
+.claude/worktrees/
 kubeconfigs/
 e2e-soak-24h/
 tests/release/profiles/local/

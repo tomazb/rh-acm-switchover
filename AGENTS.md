@@ -496,7 +496,7 @@ tracker for Thermos follow-up work:
 
 - Update the tracker in every Thermos PR with the branch, status, verification,
   and PR URL state for that slice.
-- Use one isolated `.worktrees/thermos-NN-*` worktree and one branch per PR.
+- Use one isolated `.claude/worktrees/thermos-*` worktree and one branch per PR.
 - Start each PR from the latest merged `ansible` branch, unless the tracker
   explicitly records a stacked-branch dependency.
 - Keep PRs scoped to the tracker row being resolved. Do not fold unrelated
