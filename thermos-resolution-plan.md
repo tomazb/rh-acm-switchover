@@ -35,7 +35,7 @@ Before implementation begins for any remaining Thermos slice:
 3. Use `superpowers:writing-plans` to create the implementation plan from that approved design/spec.
 4. Treat the approved design/spec as the verification source of truth: implementation is not complete until the verification evidence shows the delivered behavior matches the accepted design, not merely that tests pass.
 
-This gate applies to the open `SSA-01`-`SSA-10` and `R3-01`-`R3-10` slices and to any new Thermos follow-up slice added later. It no longer applies to the deep-scan queue: every row in the PR Sequence table is `merged`.
+This gate applies to the open `SSA-01`-`SSA-10` and `R3-01`-`R3-10` slices and to any new Thermos follow-up slice added later. It no longer applies to the deep-scan queue: every implementation row in the PR Sequence table (`PR 01`-`PR 47` and `H1`) is `merged`. `PR 48` is this tracker-maintenance slice and is `ready_for_review`.
 
 **Last Updated:** 2026-07-26
 
@@ -58,7 +58,7 @@ Status after merged follow-up PRs 22-31:
 
 - `F39` Resolved by `PR 22`: Python Argo CD resume-only now fails closed for legacy state files that recorded paused Applications before `hub_identities` existed.
 - `F40` Resolved by `PR 23`: Python dry-run Argo CD management now performs discovery and blocker reporting instead of skipping directly to no-op behavior.
-- `F41` Resolved by `PR 24`: Argo CD pause discovery now scopes `Application` listing to the relevant namespaces without weakening durable pause-state persistence.
+- `F41` **Partially resolved** by `PR 24`: Argo CD pause discovery now scopes `Application` listing to the relevant namespaces without weakening durable pause-state persistence. Corrected 2026-07-26 — the Python side holds, but the Ansible side is inert; see the `F41` matrix row and `R3-A1` / slice `R3-01`.
 - `F42` Resolved by `PR 25`: Python RBAC preflight no longer expands to avoidable serial SelfSubjectAccessReview probes for each repeated tuple.
 - `F43` Resolved by `PR 26`: Release runtime parity now compares real resume, Argo CD, and RBAC/bootstrap outcomes instead of mostly artifact metadata.
 - `F44` Resolved by `PR 27`-`PR 31`: `PR 27` extracted runtime/bootstrap,
@@ -286,9 +286,12 @@ design/spec and implementation sequence is approved.
 - A full-file revalidation against `ansible` HEAD `4fed598c` re-verified every
   source, status, and pointer claim in this tracker except the `R3-*` findings,
   which were validated one day earlier. See **Revalidation (2026-07-26)**.
-- 19 of 22 re-checked resolved claims hold. `F41` is now recorded as partially
+- 19 of 21 re-checked resolved rows hold (20 of 22 counting `R2-M1`'s two parts
+  separately). `F41` is now recorded as partially
   regressed and `R2-H2` as partial-as-delivered.
-- Nine Review #1 findings (`M1`, `M2`, `M3`, `M5`, `L2`-`L7`) that were open but
+- Ten Review #1 matrix rows were added: nine orphaned findings (`M1`, `M3`,
+  `M5`, `L2`-`L7`) plus `M2`, which was a separate mis-credit rather than an
+  orphan. All were open but
   untracked since 2026-07-02 now have Finding Validation Matrix rows. All nine
   are still open. The claim that the main queue is complete refers to the
   `PR 34`-`PR 47` slice queue only, not to these findings.
@@ -663,9 +666,14 @@ Baseline established during the review:
 
 ### Headline: One Defect Class, Three Surfaces
 
-Every high-severity finding in this review is an instance of **a failure path
-that reports success**, reached by four different mechanisms. None is
-detectable by a linter; all four are semantically valid code.
+The high-severity findings cluster around **safety verification that does not
+verify**, reached by four different mechanisms. None is detectable by a linter;
+all four are semantically valid code. Note the shapes differ: `R3-A1`, `R3-A4`,
+and `R3-A5` report success on a failed path; `R3-P1` reports *failure* on a
+healthy one, after activation; `R3-T1` is a coverage gap that lets the first
+shape survive undetected. (Framing corrected 2026-07-26 — the original text
+called all five "a failure path that reports success", which is wrong for
+`R3-P1` and `R3-T1`.)
 
 | Mechanism | Surface | Findings |
 | --- | --- | --- |
@@ -714,48 +722,53 @@ Adjacent but distinct, not duplicates:
 
 ### Validated Findings
 
+Review #3 itself contributed **40** findings. The table below has **42** rows:
+`R3-T12` and `R3-P6b` were added by the 2026-07-26 revalidation and are kept
+here so every `R3-*` ID lives in one table. Current breakdown: 11 `R3-A*`,
+14 `R3-P*`, 12 `R3-T*`, 4 `R3-Q*`, 1 `R3-X*`.
+
 | Finding | Severity | Surface | Summary |
 | --- | --- | --- | --- |
 | R3-A1 | High | Ansible | `roles/argocd_manage/tasks/discover.yml:154` sets `_argocd_app_list`; `:174` re-registers the same name on a `when:`-skipped task. Under scoped discovery the app list becomes `[]`, so pause and resume both patch nothing and report success. Reached by a `primary_prep` retry after checkpoint rehydration and by the documented standalone `playbooks/argocd_resume.yml`. |
 | R3-A2 | Medium | Ansible | Same clobber at `roles/finalization/tasks/cleanup_restores.yml:3` → `:14`; the dry-run preview always reports `restore_count: 0`, hiding which Restore resources execute mode will delete. |
-| R3-A3 | Medium | Ansible | Same clobber at `roles/finalization/tasks/discover_resources.yml:56` → `:73`; currently benign, but it defeats the fixture-injection guard the same file implements correctly three times above. |
+| R3-A3 | Medium | Ansible | Same clobber at `roles/finalization/tasks/discover_resources.yml:55-78`. Benign **only on the execute-mode live-query path**, where the real result is fetched anyway; injected dry-run and fixture data is already defeated, so the `when: … is not defined` guard the same file implements correctly three times above does not hold here. |
 | R3-A4 | High | Ansible | `roles/primary_prep/tasks/scale_observability.yml:33-70` masks API errors with `failed_when: false`; the `until` loop's `resources \| default([]) \| length == 0` then succeeds on the first attempt and both branches of the follow-up gate are dead. A 403/timeout while verifying Thanos compactor termination reads as "drained". Python fails closed here — a parity divergence on a dual-supported capability. |
 | R3-A5 | High | Ansible | `roles/preflight/tasks/validate_kubeconfigs.yml:32,82` derive the connectivity verdict from `.failed`, which `failed_when: false` pins to `False`. Both hub-connectivity entries are hard-coded `status: pass`; the `else "fail"` branch is unreachable. Expired tokens, wrong `server:` URLs, and DNS failures all render as validated in the go/no-go `preflight-report.json`. |
-| R3-A6 | Medium | Ansible | `plugins/action/checkpoint_phase.py:141,318` treat `reset_from` as an explicit reset, skipping `validate_operation_identity` for **every** `checkpoint_phase` call in the run, not just the pruned phase. `reset_from` is a persistent key shipped in every role's defaults, so a value left in group_vars disables hub-identity binding indefinitely; `_build_reset_from_checkpoint` then rewrites `operation_identity` to whatever is configured now. |
+| R3-A6 | Medium | Ansible | `plugins/action/checkpoint_phase.py:141,318` treat `reset_from` as an explicit reset, skipping `validate_operation_identity` for **every** `checkpoint_phase` call in the run, not just the pruned phase. `reset_from` is a persistent key shipped in the defaults of all five checkpointed phase roles (e.g. `roles/activation/defaults/main.yml:15-20`), so a value left in group_vars disables hub-identity binding indefinitely; `_build_reset_from_checkpoint` then rewrites `operation_identity` to whatever is configured now. |
 | R3-A7 | Medium | Ansible | `module_utils/klusterlet.py:331` places `"failed": bool(failed_clusters)` in the probe result and `acm_klusterlet_probe.py:106` returns it via `exit_json`, so Ansible fails the task itself. The role's own diagnostic messages in `verify_klusterlet.yml` never render, contradicting the module's documented contract. |
 | R3-A8 | Medium | Ansible | `module_utils/klusterlet.py:39-40` use `str \| None` in *assignments*, which `from __future__ import annotations` does not defer, so import raises `TypeError` on Python 3.9. The collection declares only `requires_ansible: ">=2.15.0"` and no Python floor; the EE pins `ansible-runner:stable-2.15-latest`. |
-| R3-A9 | Medium | Ansible | `acm_input_validate.py:210` re-adds kubeconfig/checkpoint/report paths into `results`, which flow into the `0644` `preflight-report.json` and defeat the sanitization contract `acm_preflight_report.py:76-95` exists to enforce. Paths, not credentials. |
+| R3-A9 | Medium | Ansible | `acm_input_validate.py:196-210` re-adds kubeconfig/checkpoint/report paths into `results`, which flow into the `0644` `preflight-report.json`. Precisely: `sanitize_report_hubs` (`acm_preflight_report.py:76-113`) only promises to sanitize the `hubs` block, so this is not literally a contract violation — but the same paths the module strips from `hubs` reappear via `results`, defeating the intent. Paths, not credentials. |
 | R3-A10 | Medium | Ansible | `roles/post_activation/tasks/verify_observability.yml:85-105` re-annotates observatorium-api on every run. Python guards the equivalent step with per-step state (`modules/post_activation.py:200`); the collection has only phase-level checkpointing, and `checkpoint.enabled` defaults to `false`. Each retry after a post-activation failure extends the metrics outage. |
-| R3-A11 | Medium | Ansible | Residual of `F17`/`R2-M1`: `acm_restore_info.py:386,430` and `acm_backup_schedule.py:181` report `changed=true` for plan-only operations outside check mode, contradicting the `_info` naming convention, their own `RETURN` docs, and `AGENTS.md:547`. |
+| R3-A11 | Medium | Ansible | Residual of `F17`/`R2-M1`: `acm_restore_info.py:386,430` and `acm_backup_schedule.py:181` report `changed=true` for plan-only operations outside check mode, contradicting the `_info` naming convention and `AGENTS.md:547`. The `RETURN`-doc contradiction applies to `acm_backup_schedule` only; `acm_restore_info` has no `RETURN` block at all. |
 | R3-P1 | High | Python | `modules/post_activation.py:782` calls `wait(futures, timeout=KLUSTERLET_WORKER_TIMEOUT)`, one deadline for the whole batch, while the constant and `KLUSTERLET_WORKER_TIMEOUT_MESSAGE` are sized per cluster. With `CLUSTER_VERIFY_MAX_WORKERS = 10` and up to two 30s reads per cluster, a 30-cluster fleet exactly consumes the 180s budget; healthy clusters queued behind slow ones land in `timed_out` and raise at `:1057`, failing the run after activation has already moved production. Scales the wrong way with fleet size. Shared by `_fix_wrong_hub_klusterlets` and `_remediated_klusterlet_state`. |
-| R3-P2 | Medium | Python | `modules/preflight/reporter.py` discards the `message` argument at every log level, with no debug fallback. Diagnostics such as `_describe_bsl_issue()` reach nothing; `--validate-only` prints only `✗ <category>: failed` even under `-v`, and the text survives solely in `state.config["preflight_results"]`, written only when `--report-dir` is passed. Redaction was applied to the bounded code-owned category instead of the unbounded actionable message. |
+| R3-P2 | Medium | Python | `modules/preflight/reporter.py` discards the `message` argument at every log level, with no debug fallback. Diagnostics such as `_describe_bsl_issue()` reach nothing; `--validate-only` prints only `✗ <category>: failed` even under `-v`, Corrected 2026-07-26: the messages **are** always persisted to `state.config["preflight_results"]` (`acm_switchover.py:639-649`); only the artifact export is `--report-dir`-gated (`lib/cli_outcomes.py:110-129`). So the diagnostic is recoverable by hand-reading the state JSON — but it reaches no log at any verbosity, which is the actual defect. Redaction was applied to the bounded code-owned category instead of the unbounded actionable message. |
 | R3-P3 | Medium | Python | `lib/argocd_resume.py:343-349` signals "re-run Argo CD pause on retry" by appending to `errors[]`, but `lib/cli_outcomes.py:96-105` and `lib/workflow.py:172` both read only `errors[-1]`. A post-activation failure yields a report artifact naming `primary_prep` and a resume banner showing the Argo CD housekeeping note instead of the real cause. |
 | R3-P4 | Medium | Python | `lib/argocd.py:491-527`: the ApplicationSet blocker branch is correctly gated on `_count_acm_resources(app) > 0`; the stale-status branch is not. On a hub that also runs Argo CD for fleet workloads, one never-synced Application with `automated` set and empty `status.resources` — any kind, any namespace — hard-fails `PRIMARY_PREP`. The operator message also says pause "failed for N Application(s)" when zero pause attempts were made. |
-| R3-P5 | Medium | Python | `lib/workflow.py:149,193` replaced `sys.exit` with `raise SwitchoverError`, so `lib/cli_outcomes.py:204-208` now records state-refusal messages via `add_error`. The errors array grows unbounded across reruns and `get_last_error_phase()` pins to `FAILED`, permanently masking the real failure in the banner. |
+| R3-P5 | Medium | Python | `lib/workflow.py:149,193` replaced `sys.exit` with `raise SwitchoverError`, so `lib/cli_outcomes.py:204-208` now records state-refusal messages via `add_error`. On the **unresumable-FAILED** refusal path (`lib/workflow.py:159-194`) the errors array grows on every rerun and `get_last_error_phase()` pins to `FAILED`, masking the real failure in the banner. Scope corrected 2026-07-26: this is the failed-state path specifically, not every refusal path. |
 | R3-P6b | Low | Python | Amendment recorded 2026-07-26: the `delete_custom_resource` docstring at `lib/kube_client.py:1017-1018` claims "If None, uses client default", but no timeout kwarg is passed at all. The documentation is wrong, not merely the behavior, so a reader cannot discover the gap from the docstring. Resolve with `R3-P6`. |
 | R3-P6 | Low | Python | Residual of `R2-H1`: `lib/kube_client.py:1027-1044` still builds `kwargs` conditionally instead of using `_request_timeout_kwargs()`, leaving `delete_custom_resource` the only mutating method able to hang indefinitely. |
-| R3-P7 | Low | Python | `--dry-run --report-dir` writes an empty artifact: `acm_switchover.py:438-443` restores the pre-run snapshot in `run_switchover`'s `finally`, which precedes the report write in `lib/cli_outcomes.py:227-228`, so the report records `current_phase: "init"`, zero steps, and `status: "pass"`. |
-| R3-P8 | Low | Python | `HUB_KUBECONFIG_SECRET_NAME`, `BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME`, `OADP_NAMESPACE`, and `BACKUP_STORAGE_LOCATION_RESOURCE` have no references outside `lib/constants.py` while `modules/post_activation.py` still inlines the same literals at seven call sites, contrary to `AGENTS.md`. |
+| R3-P7 | Low | Python | `--dry-run --report-dir` writes an empty artifact: `acm_switchover.py:438-443` restores the pre-run snapshot in `run_switchover`'s `finally`, which precedes the report write in `lib/cli_outcomes.py:227-228`, so the report records `current_phase: "init"`, zero steps, and `status: "pass"`. Scope corrected 2026-07-26: this describes a fresh successful dry-run; a dry-run over pre-existing state, or a failed dry-run, reports differently. |
+| R3-P8 | Low | Python | Corrected 2026-07-26: **two** of the four constants are unreferenced, not four — `OADP_NAMESPACE` and `BACKUP_STORAGE_LOCATION_RESOURCE` are used by `tests/release/baseline/discovery.py:6,56,60`. `HUB_KUBECONFIG_SECRET_NAME` and `BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME` have no runtime use while `modules/post_activation.py` inlines the same literals at six operational sites (`:1181,1212,1234,1254,1544,1554`), contrary to `AGENTS.md`. |
 | R3-P9 | Low | Python | `lib/report_artifacts.py:131-142` calls `validate_report_artifact_path` twice on the same string (the second is presumably meant to re-check after `mkdir`) and writes mode `0o644` payloads embedding raw exception text from `state_snapshot["errors"]`. |
 | R3-P10 | Low | Python | `modules/activation.py:887` dropped `"FailedWithErrors"` from the fatal Restore-phase set, converting a fast specific failure into a full `RESTORE_WAIT_TIMEOUT` (1800s) generic timeout. Not a documented ACM phase, so impact is small. |
 | R3-P11 | Low | Python | `lib/waiter.py:136` inverted `fast_timeout <= 0` semantics: the signature default `fast_timeout=0` previously meant "use the fast interval forever" and now means "never". No current caller is affected; it is a trap for the next one. |
 | R3-P12 | Low | Scripts | `scripts/generate-merged-kubeconfig.sh:355` relies on `(umask 077 && ...)`, which does not tighten an already-existing world-readable `merged-kubeconfig.yaml`. `scripts/setup-rbac.sh:468` gets this right with an explicit `chmod 600`. |
-| R3-P13 | Low | Scripts | `scripts/generate-sa-kubeconfig.sh:50-51` sources `constants.sh` with no `[[ -f ]]` guard under `set -euo pipefail`, so the documented standalone use aborts. `scripts/argocd-manage.sh:22` guards the same source. |
+| R3-P13 | Low | Scripts | `scripts/generate-sa-kubeconfig.sh:50-51` sources `constants.sh` with no `[[ -f ]]` guard under `set -euo pipefail`. Scope corrected 2026-07-26: the documented in-repo invocation (`scripts/README.md:580-606`) works because `constants.sh` is a sibling; the abort happens when the script is copied or distributed apart from its companion, which its standalone framing invites. `scripts/argocd-manage.sh:22` guards the same source. |
 | R3-T1 | High | Tests | `scale_statefulset`, `delete_pod`, `delete_configmap`, and `create_or_patch_configmap` have `if self.dry_run:` guards with no dry-run test at any level. Deleting the guard from `scale_statefulset` leaves all 3079 tests passing while `--dry-run` scales the production Thanos compactor to 0. Workflow suites cannot catch it: `tests/test_primary_prep.py:52` returns a bare `Mock()`, so `assert_called_once_with` asserts against the mock and never reaches the guard. The correct pattern already exists at `tests/test_kube_client.py:225`. |
 | R3-T2 | Medium | Tests | `lib/utils.py:98` deliberately uses `if obj is True:` to avoid truthy object references, but every test in `TestDryRunSkipDecorator` passes exact `True`/`False`. Relaxing it to `if obj:` keeps the suite green, and a non-bool truthy `dry_run` (e.g. `1`, a config-parsed `"true"`) silently *runs* the mutation — the coupling `lib/argocd.py:628` warns about is unpinned. |
 | R3-T3 | Medium | Tests | `tests/test_argocd_constants_parity.py:52-87` claims to verify `build_pause_patch` against `pause.yml`'s Jinja but never loads the file; the oracle is hand-written Python. It is already wrong: `pause.yml` gates the whole task on `automated is not none` and issues no patch when absent, while the test asserts a patch body for exactly that case. |
 | R3-T4 | Medium | Tests | `test_acm_namespaces_parity` and `test_ansible_argocd_filters_match_acm_sub_namespaces` assert only positive matches, so widening `ARGOCD_ACM_NS_REGEX` to `.*` passes — the dangerous direction, since that regex selects which Applications get paused. The filter test passes against a stub `return True` and consults neither Python nor Bash. |
 | R3-T5 | Medium | Tests | `tests/test_ci_guardrails.py:31-38` is an exact-version denylist, not a floor (`actions/checkout@v3`, Node16 and EOL, passes), and its positive assertions match the concatenated corpus, so regressing one workflow passes while another still carries `@v6`. `upload-artifact`, `cache`, `download-artifact`, and `github-script` are unguarded. |
-| R3-T6 | Medium | Tests | `tests/properties/conftest.py` registers `ci` and `deep` Hypothesis profiles, but `HYPOTHESIS_PROFILE` is set nowhere in the repo, so CI silently runs `dev` (50 examples) across ~9 property modules. `tests/properties/test_scaffolding.py:17-19` cannot detect this — it reads the same env var with the same default and compares against a duplicated literal table. |
+| R3-T6 | Medium | Tests | `tests/properties/conftest.py` registers `ci` and `deep` Hypothesis profiles, but `HYPOTHESIS_PROFILE` is set nowhere in the repo, so CI silently runs `dev` (50 examples) across the eight `test_*.py` property modules (count corrected 2026-07-26; the figure includes `test_scaffolding.py`). `tests/properties/test_scaffolding.py:17-19` cannot detect this — it reads the same env var with the same default and compares against a duplicated literal table. |
 | R3-T7 | Medium | Tests | `run_tests.sh:97` and `.github/workflows/ci-cd.yml:46` measure and upload coverage with no `--cov-fail-under` and no Codecov threshold, so coverage can regress arbitrarily. This is the mechanism by which `R3-T1` stayed invisible. |
 | R3-T8 | Medium | Tests | `tests/release/conftest.py:52-53` accepts `ACM_RELEASE_PROFILE` as equivalent to the explicit `--release-profile` flag, so a stale shell export turns a plain `pytest tests/` into a real-cluster run with no confirmation. `test_lab_controller_phase8j_live_opt_in.py` models the correct pattern (explicit allowlist plus a separate live-contact flag). |
 | R3-T9 | Medium | Tests | `create_mock_step_context` is byte-identical in four workflow suites and its sibling `mock_state_manager` has already drifted in `test_finalization.py`. There is **no `tests/conftest.py`**, contradicting `AGENTS.md:337`. The helper is also an unpinned hand-rolled double of `lib/utils.py:808 StepContext`, which works against a real `StateManager` on `tmp_path`. |
 | R3-T10 | Medium | Tests | `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/action/test_checkpoint_phase_runtime.py:661` seeds stale `operational_data`, `errors`, and `report_refs` but asserts none of them, despite `checkpoint_phase.py:44-45` naming that exact hazard. It also asserts only the in-memory result and never re-reads the checkpoint file. |
 | R3-T12 | Medium | Tests | Found during the 2026-07-26 revalidation. `tests/test_api_literal_guardrails.py:11,15-18` walks only `MODULES_DIR`, so the `R2-H2` residual — 7 hardcoded `cluster.open-cluster-management.io` literals at `lib/rbac_validator.py:118,149,154,193,194,238,261` — is outside the guardrail's scan root and can grow without failing CI. A guardrail with a blind spot reads as coverage it does not provide. |
-| R3-T11 | Low | Tests | Batch: `time.sleep(0.05)` mtime dependence (`test_post_activation.py:1846`); the 1279-line doc-substring module whose `_assert_no_real_live_config_literals` misses `sha256~` tokens, `client-certificate-data` blobs, and real FQDNs; the tautological `assert "tests" in text` (`test_ci_guardrails.py:48`); a needlessly `@_requires_opt_in`-skipped blocks-without-opt-in assertion; two vacuous `validate_rbac_permissions` tests; import-time `sys.modules` stubbing in a now-dead fallback; and the `OC_VERSION=4.21` pin that will rot. |
-| R3-Q1 | Medium | Quality | Twelve files now exceed 1000 lines, seven crossing in this branch (`test_rbac_validator.py` 589→1312, `test_argocd.py` 448→1192, `lib/rbac_validator.py` 794→1131, plus `test_documentation_guardrails.py`, `test_argocd_coordinator.py`, `test_main_phase_flow.py`, `test_validation.py`). `modules/post_activation.py` reached 1622 and `test_post_activation.py` 2744. |
-| R3-Q2 | Low | Quality | ~40 new `WORKFLOW_*` / `DRY_RUN_*` / `OPERATION_*` entries in `lib/constants.py` are single-use log and banner text, not shared configuration (`WORKFLOW_BLANK_LINE = ""`, `WORKFLOW_BANNER = "=" * 60`). |
-| R3-Q3 | Low | Quality | Twelve functions in `acm_switchover.py:964-1302` are same-signature one-line pass-throughs to `lib.*`. If they exist only as test seams, patching the `lib` functions at their call sites is equally testable and ~100 lines shorter. |
+| R3-T11 | Low | Tests | Batch: `time.sleep(0.05)` mtime dependence (`test_post_activation.py:1846`); the 1279-line doc-substring module whose `_assert_no_real_live_config_literals` misses `sha256~` tokens, `client-certificate-data` blobs, and real FQDNs; the tautological `assert "tests" in text` (`test_ci_guardrails.py:48`); a needlessly `@_requires_opt_in`-skipped blocks-without-opt-in assertion; two vacuous `validate_rbac_permissions` tests; and the `OC_VERSION=4.21` pin that will rot. **Withdrawn 2026-07-26:** the import-time `sys.modules` stubbing at `tests/test_rbac_collection_parity.py:18-34` was called a dead fallback; it is not — it supports root-lane CI jobs running without `ansible-core`, which `AGENTS.md` requires. |
+| R3-Q1 | Medium | Quality | Counts re-measured 2026-07-26, superseding the original "twelve files, seven crossing": **36** tracked Python files exceed 1000 lines (excluding vendored `container-bootstrap/get-pip.py`), and **21** crossed the threshold in this branch measured against merge base `aca2d296`. Largest new arrivals: `tests/unit/plugins/action/test_checkpoint_phase_runtime.py` 2111, `tests/properties/strategies.py` 1843, `tests/release/lab_controller/read_only_preflight_pilot.py` 1732. Growth in pre-existing files: `test_rbac_validator.py` 589→1312, `test_argocd.py` 448→1192, `lib/rbac_validator.py` 794→1131, `modules/post_activation.py` →1622, `test_post_activation.py` →2744. |
+| R3-Q2 | Low | Quality | Counts verified 2026-07-26: 44 `WORKFLOW_*` / `DRY_RUN_*` / `OPERATION_*` / `*_MESSAGE` entries in `lib/constants.py`, of which **35 are referenced from exactly one external file** — none is unreferenced. They are log and banner text, not shared configuration (`WORKFLOW_BLANK_LINE = ""`, `WORKFLOW_BANNER = "=" * 60`), so the indirection costs a jump to a 381-line module to read a log line. |
+| R3-Q3 | Low | Quality | Corrected 2026-07-26: the original "twelve" was an overcount. `acm_switchover.py:964-1302` holds 15 functions, of which a subset — including `:964-981`, `:1205-1218`, and `:1221-1302` — are same-signature one-line pass-throughs to `lib.*`; `run_setup`, `_prepare_runtime`, `main`, and hook construction are substantive and must stay. If the delegates exist only as test seams, patching the `lib` functions at their call sites is equally testable and shorter. |
 | R3-Q4 | Low | Quality | `scripts/release/run_lab_role_controller.py:15-42` puts `REPO_ROOT` on `sys.path` and imports seven modules from `tests.release.lab_controller.*`, making the test tree a runtime dependency of a `scripts/` entrypoint. |
 | R3-X1 | Low | Python | Both full suite runs end with `ResourceWarning: unclosed file … state.json.run.lock`; a `StateManager` run-lock handle is leaked. Surfaced by the tests, but the fix belongs in `lib/utils.py`. |
 
@@ -764,9 +777,10 @@ Adjacent but distinct, not duplicates:
 Recorded so future reviews do not re-derive them:
 
 - Collection RBAC manifests under `roles/rbac_bootstrap/files/deploy/rbac/**` are
-  byte-identical to `deploy/rbac/**` across all seven files plus the
-  decommission extension; `argoproj.io/applications` remains `patch`-only. No
-  parity drift.
+  byte-identical to `deploy/rbac/**` across all eight files (seven plus the
+  decommission extension); `argoproj.io/applications` carries `get`, `list`,
+  and `patch` — no `create` and no `delete`, so no verb can create or remove an
+  Application. No parity drift.
 - The decommission `preserveOnDelete` classifier is a faithful reimplementation
   of `modules/decommission.py:_cluster_deployment_relationship`, including the
   three-way classification and both fail-closed raises.
@@ -779,8 +793,16 @@ Recorded so future reviews do not re-derive them:
 - SSAR handling in `run_ssar.yml` and `validate_permission_target.yml` treats
   failed/statusless results as denied — the one correct, fail-closed use of
   `failed_when: false` in the collection.
-- Test suite: no order dependence, no module-level mutable fixtures, no writes
-  outside `tmp_path`, and zero `assert True` / swallowed-assertion occurrences.
+- Test suite: zero `assert True` / swallowed-assertion occurrences (verified).
+  No module-level mutable fixtures and no observed order dependence, though
+  absence of order dependence is not exhaustively provable.
+  **Withdrawn 2026-07-26:** "no writes outside `tmp_path`" was **false**.
+  `tests/release/reporting/test_summary.py:146-161` supplies a `FakeArtifacts`
+  whose `run_dir` returns `Path("/tmp/run")`, and
+  `tests/release/test_release_certification.py:62-68` `finalize_release_artifacts`
+  does a real `mkdir` + `write_text` through it. Reproduced: `rm -rf /tmp/run &&
+  python -m pytest tests/release/reporting/test_summary.py` recreates
+  `/tmp/run/release-report.md` on disk. Tracked for cleanup under `R3-10`.
 - Property-test oracles are genuinely independent (`test_path_safety_properties.py`
   models containment via `os.path.commonpath` and asserts *both* implementations
   reject; `test_validation_properties.py` writes standalone predicates). Only
@@ -1048,9 +1070,10 @@ this file was re-checked.
 
 ### Verified accurate, no change required
 
-- **All 48 PR URLs** in the PR Sequence table are genuinely `MERGED`, with titles
-  matching each row's description. No row claims `merged` for a PR that is open,
-  draft, or closed-unmerged.
+- **All 48 pre-existing PR URLs** in the PR Sequence table (every row except the
+  `48` row this slice added) are genuinely `MERGED`, with titles matching each
+  row's description. No row claims `merged` for a PR that is open, draft, or
+  closed-unmerged.
 - **All 7 GitHub issues** (#152-#158) are genuinely `OPEN`, with titles matching
   the findings attached to them.
 - **The Verification Command Reference** is fully accurate: all five commands
@@ -1064,7 +1087,9 @@ this file was re-checked.
 - **Every referenced spec and findings document exists.** The one absent path,
   `docs/plans/2026-04-10-ansible-collection-rewrite-design.md`, is absent *by
   design* — its absence is finding `F25`.
-- **19 of 22 re-verified resolved claims are CONFIRMED still resolved** with
+- **19 of 21 re-verified resolved rows are CONFIRMED still resolved** — or 20 of
+  22 if `R2-M1`'s two parts are counted separately. `F41` and `R2-H2` are the
+  two partial rows. Evidence is
   current-source evidence, including `F31`, `F34`, `F35`, `F37`, `F39`, `F40`,
   `F42`, `R2-H1`, `R2-M1` (both parts), `R2-M2` through `R2-M5`, `H1`, `R2-H3`,
   and all four release-tooling dedups `R2-H4`/`R2-M6`/`R2-M7`/`R2-M8`. Nothing
@@ -1072,9 +1097,13 @@ this file was re-checked.
 
 ### All ten SSA slices remain `planned`
 
-The 2026-07-20 conclusion that every `SSA-01`-`SSA-10` acceptance criterion
-remains unmet is re-confirmed, and this time **by construction** rather than by
-re-reading: `git show --stat 4fed598c` touches only
+The 2026-07-20 conclusion that no `SSA-01`-`SSA-10` slice is complete is
+re-confirmed, and this time **by construction** rather than by re-reading. Note
+the precise claim: every slice remains incomplete, but **not** every individual
+acceptance criterion is unmet — `SSA-01`'s unreadable-identity bullet and
+`SSA-03`'s integer/lower-bound worker validation are already satisfied by
+pre-existing code, as the per-slice revalidation notes record.
+`git show --stat 4fed598c` touches only
 `tests/release/lab_controller/*`, `tests/release/test_lab_controller_*`,
 `tests/release/README.md`, `CHANGELOG.md`, and `docs/`; `78126c05` is docs-only;
 and the three safe-logging commits merged on 2026-07-18, *before* the 07-20
@@ -1132,7 +1161,7 @@ rather than standing alone:
 **A mis-credit was found while verifying this.** The `PR 40` row claimed it
 resolved "`R2-M3` + existing `M2`". Review #1's `M2` is `lib/constants.py`
 UI string-table sprawl — unrelated to the restore-deletion-wait dedup `PR 40`
-actually delivered. `lib/constants.py` is still 381 lines with 43 top-level
+actually delivered. `lib/constants.py` is still 381 lines with 44 top-level
 `WORKFLOW_*`/`OPERATION_*`/`DRY_RUN_*`/`*_MESSAGE` constants. `M2` was never
 resolved; it is now recorded as open and superseded by `R3-Q2`, and the `PR 40`
 row and execution-order entry have been corrected to claim `R2-M3` only.
@@ -1183,6 +1212,61 @@ pass:
    evidence while rows `04`-`11` and `19`-`33` do. Either add the gate to the
    State Tracking Rules and backfill the evidence, or explicitly waive it for
    those rows.
+
+### Adversarial validation of this pass
+
+The revalidation was itself re-checked by an independent Codex run against the
+same worktree, instructed to treat every added claim as unproven and anchor each
+verdict to a file, line, or SHA it had actually read. It returned a **negative**
+overall verdict on the first draft. Its substantive hits were all
+self-inflicted by the revalidation edits and are now fixed:
+
+- The Spec And Design Gate said "every row in the PR Sequence table is
+  `merged`" *after* this slice added a `ready_for_review` row `48`.
+- The deep-scan queue still read "`F41` Resolved by `PR 24`" while the matrix
+  row had been corrected to partially regressed — the same inconsistency this
+  pass exists to catch, reintroduced one section away.
+- The Current Branch Notes implied all `.worktrees/` rows were corrected; only
+  `H1` and `43` were, by design.
+- "Every `SSA-*` acceptance criterion remains unmet" contradicted the per-slice
+  notes added in the same commit, which record two criteria as already satisfied.
+- The Review #3 findings table was labelled 40 while carrying 42 rows after
+  `R3-T12` and `R3-P6b` were inserted into it.
+- "19 of 22 resolved claims" conflated row counting with atomic-claim counting.
+- Counts corrected against a fresh measurement: `lib/constants.py` has 44
+  matching constants, not 43; the bundled RBAC set is 8 files, not 7, and
+  `argoproj.io/applications` carries `get,list,patch` rather than being
+  "patch-only"; 37 Python files exceed 1000 lines repo-wide, where `R3-Q1` had
+  quoted a branch-scoped figure without saying so.
+
+It also disproved several findings' details. Corrected in place, with the
+verdict recorded on the affected row: `R3-P2` (diagnostics **are** always
+persisted to state; only artifact export is `--report-dir`-gated), `R3-P8` (two
+of four constants are referenced, six inline sites not seven), `R3-Q1` (36
+files over 1000 lines and 21 crossing in-branch, not twelve and seven),
+`R3-Q2` (44 constants, 35 with exactly one consumer), `R3-Q3` (the "twelve
+delegates" figure was an overcount), `R3-T6` (eight property modules), and
+scope narrowing on `R3-A3`, `R3-A6`, `R3-A9`, `R3-A11`, `R3-P5`, `R3-P7`, and
+`R3-P13`. One `R3-T11` sub-item was **withdrawn**: the `sys.modules` stubbing
+is not a dead fallback, it supports root-lane CI without `ansible-core`.
+
+**A clean-category claim was withdrawn.** Codex reported that the suite writes
+outside `tmp_path`. That was initially rejected here on the grounds that
+`FakeArtifacts.write_json` only stores to a dict — which was a misread:
+`finalize_release_artifacts` (`tests/release/test_release_certification.py:62-68`)
+takes `artifacts.run_dir` and performs a real `mkdir` + `write_text`.
+Reproduced by `rm -rf /tmp/run && python -m pytest
+tests/release/reporting/test_summary.py`, which recreates
+`/tmp/run/release-report.md`. Codex was right; the clean category is corrected
+above and the cleanup is tracked under `R3-10`.
+
+**Process claims in this file are not repo-verifiable and should not be read as
+evidence.** The review-agent division of labour, the empirical
+`ansible-playbook` confirmations, the two 3,079-pass suite runs, the
+guard-removal mutation experiments behind `R3-T1`/`R3-T2`, and the GitHub issue
+states all live outside git. They are recorded as provenance, not proof. A
+reader re-deriving any finding should re-run the check rather than trust the
+narration.
 
 ## Finding Validation Matrix
 
@@ -1246,7 +1330,7 @@ pass:
 | R2-M7 | confirmed | PR 45 | `tests/release/orchestrator.py` duplicates primary/secondary RBAC certification handling inline (~75 lines) instead of looping over a shared helper. |
 | R2-M8 | confirmed | PR 46 | `tests/release/checks/rbac_certification.py`'s required-vs-forbidden permission evaluation loops are the same algorithm with polarity flipped, duplicated in full. |
 | M1 | confirmed still open (Review #1; re-confirmed Review #2 and 2026-07-26) | none - deprioritized after PR 29-PR 31 | `lib/operation_runners.py:100-197` (`run_switchover_impl`) and `:200-286` (`run_restore_only_impl`) still share the completed-state/failed-state/validate-only/phase-flow/dry-run/completion skeleton, differing only in the `PhaseFlowEntry` tuples (`:139-165` vs `:238-252`) and message constants. Lower value after the orchestration seams were extracted; collapse into one descriptor-driven runner only if a future change must be made twice again. |
-| M2 | confirmed still open; the `M2` credited to `PR 40` was the waiter unification, not this finding | superseded by `R3-Q2` (slice `R3-10`) | Review #1 `M2` is `lib/constants.py` UI string-table sprawl, not restore-wait dedup. Still present: `lib/constants.py` is 381 lines with 43 top-level `WORKFLOW_*`/`OPERATION_*`/`DRY_RUN_*`/`*_MESSAGE` constants, and `lib/workflow.py:9` still opens a long `from lib.constants import (` block. `R3-Q2` is the sharper current framing. |
+| M2 | confirmed still open; the `M2` credited to `PR 40` was the waiter unification, not this finding | superseded by `R3-Q2` (slice `R3-10`) | Review #1 `M2` is `lib/constants.py` UI string-table sprawl, not restore-wait dedup. Still present: `lib/constants.py` is 381 lines with 44 top-level `WORKFLOW_*`/`OPERATION_*`/`DRY_RUN_*`/`*_MESSAGE` constants (count verified 2026-07-26), and `lib/workflow.py:9` still opens a long `from lib.constants import (` block. `R3-Q2` is the sharper current framing. |
 | M3 | confirmed still open (Review #1; re-confirmed Review #2 and 2026-07-26) | none - not covered by PR 40 | Two dry-run idioms still coexist: `@dry_run_skip` (`modules/finalization.py:415,724,918,941,1124,1151,1236,1514`) and inline `if self.dry_run:` (`modules/post_activation.py:465,693`; `modules/finalization.py:1046,1065`). `PR 40` moved only the restore-deletion wait into `lib/waiter.py` and touched no dry-run guard. Distinct from `R3-T1`/`R3-T2` (slice `R3-05`), which cover testing the guards rather than unifying the idiom. |
 | M5 | confirmed still open, reprioritized upward by Review #2, re-confirmed 2026-07-26 | none - planned | `lib/argocd_coordinator.py:120-283`: `pause_hubs` is still a 164-line method whose tri-state result-handling block (`:237-282`, `result.patched` / `result.error` / `patch_applied is True/False/None`) was never extracted into `_reconcile_pause_result` (`git log -S` finds that name only in tracker docs). Correctness-critical durable-pause path; `M4`/`PR 35` had no overlap. |
 | L2 | confirmed still open (Review #1; re-confirmed Review #2 and 2026-07-26) | none - opportunistic cleanup | `modules/post_activation.py:1178-1182` derives `bootstrap_namespace` from the import manifest's `bootstrap-hub-kubeconfig` Secret and `:1109` passes it to `_restart_klusterlet` (`:1281`) to patch the `klusterlet` Deployment; the ACM co-residence assumption is still undocumented in the code. |
@@ -1367,7 +1451,7 @@ pass:
 | 45 | merged | `refactor/thermos-45-release-orchestrator-rbac-dedup` | `.claude/worktrees/thermos-45-release-orchestrator-rbac-dedup` | R2-M7 | https://github.com/tomazb/rh-acm-switchover/pull/133 | Design spec `docs/superpowers/specs/2026-07-03-pr45-orchestrator-rbac-dedup-design.md`; implementation plan `docs/superpowers/plans/2026-07-03-pr45-orchestrator-rbac-dedup.md`. Extracted `_certify_hub_rbac(...)` (scope lookup -> `certify_rbac_permissions` -> `hub:name`-prefixed assertion dicts) and replaced the duplicated primary/secondary blocks in `_run_release_certification` with a loop over `("primary", "secondary")` plus equivalent `all`/`any` status aggregation. Behavior-preserving; guarded by existing live-RBAC characterization tests plus a new red-first direct helper unit test. Verification: `python -m pytest tests/release/test_orchestrator.py tests/release/test_release_certification.py -q` passed; full `./run_tests.sh` passed (root lane `1563 passed, 105 deselected`; release lane `1022 passed, 3 skipped`; Flake8/Black/isort/MyPy/Bandit/pip-audit clean); `git diff --check` passed. Rebased onto PR #132's short-circuit helper after resolving the adjacent release orchestrator conflict. |
 | 46 | merged | `refactor/thermos-46-rbac-certification-dedup` | `.claude/worktrees/thermos-46-rbac-certification-dedup` | R2-M8 | https://github.com/tomazb/rh-acm-switchover/pull/134 | Design spec `docs/superpowers/specs/2026-07-03-pr46-rbac-certification-dedup-design.md`; implementation plan `docs/superpowers/plans/2026-07-03-pr46-rbac-certification-dedup.md`. Extracted `_evaluate_permissions(..., expect_allowed: bool)` returning `(assertions, unexpected_count, error_count)`; `certify_rbac_permissions` now calls it once for required permissions and once for forbidden permissions, with expected/actual/message strings derived from the polarity so emitted `CertificationAssertion`s are byte-identical to before. Red-first 6-case polarity-matrix unit test (allowed/denied/error × both polarities); guarded by the existing certification suite. Verification: `python -m pytest tests/release/checks/test_rbac_certification.py tests/release/test_orchestrator.py -q` passed (`62 passed`); full `./run_tests.sh` passed (root lane `1563 passed, 105 deselected`; release lane `1027 passed, 3 skipped`; Flake8/Black/isort/MyPy/Bandit/pip-audit clean); `git diff --check` passed. |
 | 47 | merged | `refactor/thermos-47-release-adapter-dedup` | `.claude/worktrees/thermos-47-release-adapter-dedup` | R2-M6 | https://github.com/tomazb/rh-acm-switchover/pull/135 | Design spec `docs/superpowers/specs/2026-07-03-pr47-release-adapter-dedup-design.md`; implementation plan `docs/superpowers/plans/2026-07-03-pr47-release-adapter-dedup.md`. Added `run_stream_subprocess(...)` to `adapters/common.py` owning the mkdir → `subprocess.run` → timeout/normal branches → `write_capture_artifact` pair → exit-code + redaction assertions → `StreamResult` flow; each adapter's `execute()` now builds its command/env and passes stream name, capability, message strings, and a reports callable. Duplicated `_now`/`_decode` moved to `common.py`; per-adapter variance (bash `bash-` capability prefix, bash inherit-env-when-no-extra-env, exact message strings) preserved byte-for-byte per the spec's variance table. Red-first: 4 direct helper tests (success/failure/timeout/reports) in `test_common.py`; the existing adapter suites (asserting on `StreamResult` fields) guard integrated behavior. Verification: `python -m pytest tests/release/adapters/ tests/release/test_orchestrator.py -q` passed (`90 passed`); full `./run_tests.sh` passed (root lane `1563 passed, 105 deselected`; release lane `1026 passed, 3 skipped`); touched-file `black`/`isort` applied, no new flake8 findings; `git diff --check` passed. |
-| 48 | ready_for_review | `docs/thermos-48-review3-tracker` | `.claude/worktrees/thermos-48-review3-tracker` | Thermos Review #3 record (40 findings, 10 `R3-*` slices) + 2026-07-26 full-file revalidation; new `R3-T12`, `R3-P6b`; nine orphaned Review #1 findings (`M1`-`M3`, `M5`, `L2`-`L7`) given matrix rows; `PR 40` `M2` mis-credit corrected | https://github.com/tomazb/rh-acm-switchover/pull/197 | Docs-only for the tracker; `.gitignore` gains `.claude/worktrees/` and `AGENTS.md` worktree path corrected. `python -m pytest tests/test_documentation_guardrails.py tests/test_ci_guardrails.py -q` → 68 passed. Revalidation evidence: all 48 PR URLs `MERGED` and all 7 issues #152-#158 `OPEN` per `gh`; Verification Command Reference re-run and accurate; SSA slices re-confirmed unmet by construction from `git show --stat 4fed598c`. |
+| 48 | ready_for_review | `docs/thermos-48-review3-tracker` | `.claude/worktrees/thermos-48-review3-tracker` | Thermos Review #3 record (40 findings, 10 `R3-*` slices; table now 42 rows after revalidation added `R3-T12`/`R3-P6b`) + 2026-07-26 full-file revalidation; new `R3-T12`, `R3-P6b`; nine orphaned Review #1 findings (`M1`, `M3`, `M5`, `L2`-`L7`) plus the separately mis-credited `M2` given matrix rows; `PR 40` `M2` mis-credit corrected | https://github.com/tomazb/rh-acm-switchover/pull/197 | Docs-only for the tracker; `.gitignore` gains `.claude/worktrees/` and `AGENTS.md` worktree path corrected. `python -m pytest tests/test_documentation_guardrails.py tests/test_ci_guardrails.py -q` → 68 passed. Revalidation evidence: all 48 PR URLs `MERGED` and all 7 issues #152-#158 `OPEN` per `gh`; Verification Command Reference re-run and accurate; SSA slices re-confirmed unmet by construction from `git show --stat 4fed598c`. |
 
 
 **PR 48 note:** this row covers the docs-only slice that recorded Thermos
@@ -1881,4 +1965,4 @@ python -m pytest tests/test_rbac_collection_parity.py tests/test_rbac_validator.
 
 - Base branch: `ansible`
 - Root worktree had pre-existing untracked Graphify review artifacts and `thermos_ansible_review.md` when this tracker was created.
-- Keep Thermos implementation changes isolated in `.claude/worktrees/thermos-*` worktrees and their corresponding branches. Earlier rows in the PR Sequence table record a `.worktrees/` path; that convention was replaced by `.claude/worktrees/` and the rows were corrected on 2026-07-26.
+- Keep Thermos implementation changes isolated in `.claude/worktrees/thermos-*` worktrees and their corresponding branches. Rows `01`-`33` record the historical `.worktrees/` path and are left as accurate history. Only the `H1` and `43` rows were corrected on 2026-07-26, because those two slices ran after the convention changed and had recorded the old path in error.
