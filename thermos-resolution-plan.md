@@ -39,10 +39,10 @@ This gate applies to the open `SSA-01`-`SSA-10`, `R3-*`, and `TR2D-*`
 boundaries and to any new Thermos follow-up slice added later. It no longer
 applies to the deep-scan queue: every implementation row in the PR Sequence
 table (`PR 01`-`PR 47` and `H1`) is `merged`. `PR 48` is this
-tracker-maintenance correction and remains `in_progress` until its builder
-checks pass. When that row later says `ready_for_review`, it means only that the
-builder pass is complete; GitHub PR #197 must remain draft until a different
-agent independently validates the exact head.
+tracker-maintenance correction and is `ready_for_review`, which means only
+that the builder pass is complete. GitHub readiness is separate, and every
+branch-head change requires fresh exact-head independent validation before a
+merge-readiness assessment.
 
 **Last Updated:** 2026-07-26
 
@@ -331,7 +331,7 @@ figures rather than opening a parallel structural track.
 The still-valid post-Review #2 delta from GitHub PR
 [#196](https://github.com/tomazb/rh-acm-switchover/pull/196) is absorbed here
 after revalidation against source and the authoritative Phase 9A design. PR
-#196 and PR #197 edit the same tracker from the same `ansible` base. PR #197 is
+`#196` and PR `#197` edit the same tracker from the same `ansible` base. PR `#197` is
 therefore **intended to supersede PR #196 only after a different agent
 independently validates PR #197's exact corrected head**. Supersession is not
 complete in this builder pass; PR #196 remains open and unchanged.
@@ -820,7 +820,7 @@ hardening + 2 rejected/non-actionable + 1 routed to the existing `H3` track =
 | R3-P6 | Low | Python | Residual of `R2-H1`: `lib/kube_client.py:1027-1044` still builds `kwargs` conditionally instead of using `_request_timeout_kwargs()`, leaving `delete_custom_resource` the only mutating method able to hang indefinitely. Revalidation claim `R3-P6b` is folded here as supporting evidence, not a separate finding: the docstring at `lib/kube_client.py:1017-1018` says a `None` timeout uses the client default even though no timeout keyword is sent, so the documentation also conceals the gap. |
 | R3-P7 | Low | Python | `--dry-run --report-dir` writes an empty artifact: `acm_switchover.py:438-443` restores the pre-run snapshot in `run_switchover`'s `finally`, which precedes the report write in `lib/cli_outcomes.py:227-228`, so the report records `current_phase: "init"`, zero steps, and `status: "pass"`. Scope corrected 2026-07-26: this describes a fresh successful dry-run; a dry-run over pre-existing state, or a failed dry-run, reports differently. |
 | R3-P8 | Low | Python | Corrected 2026-07-26: **two** of the four constants are unreferenced, not four — `OADP_NAMESPACE` and `BACKUP_STORAGE_LOCATION_RESOURCE` are used by `tests/release/baseline/discovery.py:6,56,60`. `HUB_KUBECONFIG_SECRET_NAME` and `BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME` have no runtime use while `modules/post_activation.py` inlines the same literals at six operational sites (`:1181,1212,1234,1254,1544,1554`), contrary to `AGENTS.md`. |
-| R3-P9 | Low | Python | `lib/report_artifacts.py:131-142` calls `validate_report_artifact_path` twice on the same string (the second is presumably meant to re-check after `mkdir`) and writes mode `0o644` payloads embedding raw exception text from `state_snapshot["errors"]`. |
+| R3-P9 | Low | Python | `lib/report_artifacts.py:131-142` writes mode `0o644` payloads embedding raw exception text from `state_snapshot["errors"]`. Its validate → `mkdir` → revalidate sequence is intentional security behavior, mirrored by the collection before `os.open`; it must be preserved and is not part of this finding. |
 | R3-P10 | Rejected | Python | Rejected/non-actionable. The pinned cluster-backup-operator `RestorePhase` definition contains `Started`, `Running`, `Finished`, `FinishedWithErrors`, `Error`, `Unknown`, `EnabledWithErrors`, and `Enabled`; it does not contain `FailedWithErrors`. Release branches 2.12-2.17 were checked at `74b54988`, `7a7b240b`, `8b489db4`, `25b28b76`, `9efe77ea`, and `c8578f94` respectively, and none defines that phase. Authoritative pinned source: [`restore_types.go@c8578f94`](https://github.com/stolostron/cluster-backup-operator/blob/c8578f94df09deab561e1aa5a7e9fc9b57f7d113/api/v1beta1/restore_types.go). Do not add handling for an invented phase. |
 | R3-P11 | Rejected | Python | Rejected/non-actionable as the current executable contract. `lib/waiter.py` uses normal polling when `fast_timeout <= 0`, and `tests/test_waiter.py::test_wait_fast_timeout_zero_disables_fast_interval` explicitly fixes `fast_timeout=0` as disabling fast polling and using the standard interval. Historical behavior on `main` does not override this tested contract. |
 | R3-P12 | Low | Scripts | `scripts/generate-merged-kubeconfig.sh:355` relies on `(umask 077 && ...)`, which does not tighten an already-existing world-readable `merged-kubeconfig.yaml`. `scripts/setup-rbac.sh:468` gets this right with an explicit `chmod 600`. |
@@ -1178,8 +1178,8 @@ until then they are cross-references, not duplicate PRs.
 - `R3-10b` / `R3-P6`: bounded request timeout and corrected documentation,
   including folded `R3-P6b` evidence.
 - `R3-10c` / `R3-P7` + `R3-P9`: truthful dry-run report state, secure report
-  mode/content, sanitized exception data, and meaningful post-creation path
-  verification.
+  mode/content, sanitized exception data, and preservation of the existing
+  validate → `mkdir` → revalidate path-safety sequence.
 - `R3-10d` / `R3-P12` plus optional `R3-P13`: correct existing kubeconfig
   permissions. Treat the companion-script guard only as optional
   packaging/error-message hardening because supported documentation keeps
@@ -1331,10 +1331,10 @@ that resolve to the same physical cluster.
 | --- | --- |
 | `F41` row | Changed from `resolved` to **partially regressed**. The Python side is confirmed working, but the Ansible side is inert and Argo CD pause/resume silently no-op. Cross-linked to `R3-A1` / `R3-01`. The tracker had recorded the regression as a Review #3 finding while its own `F41` row still read "resolved" — the exact failure mode this pass exists to catch. |
 | `R2-H2` row | Changed to **partial as delivered**. `modules/` is genuinely clean, but 7 literals remain in `lib/rbac_validator.py`, outside the guardrail's scan root. |
-| Worktree convention | `.worktrees/` → `.claude/worktrees/` at the Tech Stack line, Current Branch Notes, the `PR 12` flake8 item, and the `H1` and `43` rows. Confirmed current via `git worktree list` and `.git/info/exclude:5`. |
+| Worktree convention | `.worktrees/` → `.claude/worktrees/` at the Tech Stack line, Current Branch Notes, and the `H1` and `43` rows. Confirmed current via `git worktree list` and `.git/info/exclude:5`. The historical `PR 12` flake8 item remains `.worktrees/`, matching `setup.cfg` and that implementation-era scope. |
 | Path pointers | `docs/variable-reference.md` → `ansible_collections/tomazb/acm_switchover/docs/variable-reference.md` (2 sites); `R3-T10`'s checkpoint test path prefixed with `ansible_collections/tomazb/acm_switchover/`. |
 | `PR 34` merge date | 2026-07-02 → 2026-07-03 (`gh` reports `2026-07-03T05:30:44Z`). Every other merge date matches `gh` exactly. |
-| Spec And Design Gate | No longer points at "the remaining deep-scan queue (`PR 24` onward)" — every PR row is merged. Now points at the open `SSA-*` and `R3-*` slices. |
+| Spec And Design Gate | No longer points at "the remaining deep-scan queue (`PR 24` onward)" — every implementation row through `PR 47` and `H1` is merged. Now points at the open `SSA-*`, `R3-*`, and `TR2D-*` boundaries. |
 | `R3-Q1` assignment | Removed from slice `R3-10`, which now covers `R3-Q2`-`R3-Q4`. `R3-Q1` belongs to the `H3` track (#158), as three other places in this file already said. |
 | Review #2 arithmetic | "12 new findings" then enumerating 21 → "12 new medium/high findings ... plus 9 `R2-L*` low-severity items". |
 | `R2-H2` call-site count | Three different figures (48 / 47 / 49+7) reconciled: the review counted 49 top-level sites in `modules/`; delivered `PR 34` scope was 56 after 7 more were found in `modules/preflight/`. |
@@ -1581,7 +1581,7 @@ narration.
 | R3-P6 | confirmed, Low | R3-10b (planned) | Residual of `R2-H1`/`PR 36`: `delete_custom_resource` is the only mutating `KubeClient` method without a default request timeout. Former `R3-P6b` is folded supporting evidence that its docstring also misstates the behavior. |
 | R3-P7 | confirmed, Low | R3-10c (planned) | `--dry-run --report-dir` writes an empty artifact because the state snapshot is restored before the report is written. |
 | R3-P8 | confirmed with corrected count, Low | R3-10f (planned) | Two constants, not four, are unreferenced; six operational sites inline the corresponding Secret names. Route with the constants/quality design boundary. |
-| R3-P9 | confirmed, Low | R3-10c (planned) | Report artifacts are `0644` and embed raw exception text; the path validation call is also duplicated without re-checking the created directory. |
+| R3-P9 | confirmed, Low | R3-10c (planned) | Report artifacts are `0644` and embed raw exception text. The existing validate → `mkdir` → revalidate sequence intentionally checks the created parent before the no-follow open and must remain unchanged. |
 | R3-P10 | rejected/non-actionable | none | Pinned upstream RestorePhase definitions for supported 2.12-2.17 branches do not define `FailedWithErrors`; do not add handling for an invented phase. |
 | R3-P11 | rejected/non-actionable | none | `tests/test_waiter.py::test_wait_fast_timeout_zero_disables_fast_interval` explicitly defines zero as disabling fast polling and using the standard interval. This executable current contract supersedes historical behavior. |
 | R3-P12 | confirmed, Low | R3-10d (planned) | `(umask 077 && ...)` does not tighten an existing world-readable merged kubeconfig; `setup-rbac.sh` uses an explicit `chmod 600`. |
@@ -1664,7 +1664,7 @@ narration.
 | 45 | merged | `refactor/thermos-45-release-orchestrator-rbac-dedup` | `.claude/worktrees/thermos-45-release-orchestrator-rbac-dedup` | R2-M7 | https://github.com/tomazb/rh-acm-switchover/pull/133 | Design spec `docs/superpowers/specs/2026-07-03-pr45-orchestrator-rbac-dedup-design.md`; implementation plan `docs/superpowers/plans/2026-07-03-pr45-orchestrator-rbac-dedup.md`. Extracted `_certify_hub_rbac(...)` (scope lookup -> `certify_rbac_permissions` -> `hub:name`-prefixed assertion dicts) and replaced the duplicated primary/secondary blocks in `_run_release_certification` with a loop over `("primary", "secondary")` plus equivalent `all`/`any` status aggregation. Behavior-preserving; guarded by existing live-RBAC characterization tests plus a new red-first direct helper unit test. Verification: `python -m pytest tests/release/test_orchestrator.py tests/release/test_release_certification.py -q` passed; full `./run_tests.sh` passed (root lane `1563 passed, 105 deselected`; release lane `1022 passed, 3 skipped`; Flake8/Black/isort/MyPy/Bandit/pip-audit clean); `git diff --check` passed. Rebased onto PR #132's short-circuit helper after resolving the adjacent release orchestrator conflict. |
 | 46 | merged | `refactor/thermos-46-rbac-certification-dedup` | `.claude/worktrees/thermos-46-rbac-certification-dedup` | R2-M8 | https://github.com/tomazb/rh-acm-switchover/pull/134 | Design spec `docs/superpowers/specs/2026-07-03-pr46-rbac-certification-dedup-design.md`; implementation plan `docs/superpowers/plans/2026-07-03-pr46-rbac-certification-dedup.md`. Extracted `_evaluate_permissions(..., expect_allowed: bool)` returning `(assertions, unexpected_count, error_count)`; `certify_rbac_permissions` now calls it once for required permissions and once for forbidden permissions, with expected/actual/message strings derived from the polarity so emitted `CertificationAssertion`s are byte-identical to before. Red-first 6-case polarity-matrix unit test (allowed/denied/error × both polarities); guarded by the existing certification suite. Verification: `python -m pytest tests/release/checks/test_rbac_certification.py tests/release/test_orchestrator.py -q` passed (`62 passed`); full `./run_tests.sh` passed (root lane `1563 passed, 105 deselected`; release lane `1027 passed, 3 skipped`; Flake8/Black/isort/MyPy/Bandit/pip-audit clean); `git diff --check` passed. |
 | 47 | merged | `refactor/thermos-47-release-adapter-dedup` | `.claude/worktrees/thermos-47-release-adapter-dedup` | R2-M6 | https://github.com/tomazb/rh-acm-switchover/pull/135 | Design spec `docs/superpowers/specs/2026-07-03-pr47-release-adapter-dedup-design.md`; implementation plan `docs/superpowers/plans/2026-07-03-pr47-release-adapter-dedup.md`. Added `run_stream_subprocess(...)` to `adapters/common.py` owning the mkdir → `subprocess.run` → timeout/normal branches → `write_capture_artifact` pair → exit-code + redaction assertions → `StreamResult` flow; each adapter's `execute()` now builds its command/env and passes stream name, capability, message strings, and a reports callable. Duplicated `_now`/`_decode` moved to `common.py`; per-adapter variance (bash `bash-` capability prefix, bash inherit-env-when-no-extra-env, exact message strings) preserved byte-for-byte per the spec's variance table. Red-first: 4 direct helper tests (success/failure/timeout/reports) in `test_common.py`; the existing adapter suites (asserting on `StreamResult` fields) guard integrated behavior. Verification: `python -m pytest tests/release/adapters/ tests/release/test_orchestrator.py -q` passed (`90 passed`); full `./run_tests.sh` passed (root lane `1563 passed, 105 deselected`; release lane `1026 passed, 3 skipped`); touched-file `black`/`isort` applied, no new flake8 findings; `git diff --check` passed. |
-| 48 | ready_for_review | `docs/thermos-48-review3-tracker` | `.claude/worktrees/thermos-48-review3-tracker` | Non-runtime tracker/repository-maintenance correction: 40 original Review #3 claims + 2 revalidation-added raw claims - 1 folded duplicate = 41 unique IDs (37 actionable, 1 optional, 2 rejected, 1 routed); PR #196/TR2D reconciliation; corrected H2, SSA, priority, and delivery boundaries | https://github.com/tomazb/rh-acm-switchover/pull/197 | Builder-complete only; GitHub PR remains draft pending exact-head independent validation. Targeted documentation/CI/waiter suite: 89 passed. Strict `./run_tests.sh`: root lane 1831 passed, 105 deselected; release lane 1169 passed, 3 skipped; Black/isort/MyPy/Bandit/compile gates completed, with pip-audit advisory findings reported under its CI exit-zero policy. Count parser: 41 canonical rows and 41 matrix rows, 37/1/2/1 disposition. `git diff --check` and worktree-ignore check passed. Changed files remain exactly `.gitignore`, `AGENTS.md`, and `thermos-resolution-plan.md`. |
+| 48 | ready_for_review | `docs/thermos-48-review3-tracker` | `.claude/worktrees/thermos-48-review3-tracker` | Non-runtime tracker/repository-maintenance correction: 40 original Review #3 claims + 2 revalidation-added raw claims - 1 folded duplicate = 41 unique IDs (37 actionable, 1 optional, 2 rejected, 1 routed); PR #196/TR2D reconciliation; corrected H2, SSA, priority, and delivery boundaries | https://github.com/tomazb/rh-acm-switchover/pull/197 | Builder-complete only; GitHub PR is non-draft, while every branch-head change still requires fresh exact-head independent validation. Targeted documentation/CI/waiter suite: 89 passed. Strict `./run_tests.sh`: root lane 1831 passed, 105 deselected; release lane 1169 passed, 3 skipped; Black/isort/MyPy/Bandit/compile gates completed, with pip-audit advisory findings reported under its CI exit-zero policy. Count parser: 41 canonical rows and 41 matrix rows, 37/1/2/1 disposition. `git diff --check` and worktree-ignore check passed. Changed files remain exactly `.gitignore`, `AGENTS.md`, and `thermos-resolution-plan.md`. |
 
 
 **PR 48 note:** this row covers non-runtime tracker/repository-maintenance:
@@ -1672,8 +1672,8 @@ the Review #3 record, repository worktree-ignore/instruction maintenance, the
 2026-07-26 full-file revalidation, and this corrective resolver pass. No
 design/spec gate applies: like `PR 01`, `PR 13`, `PR 28`, and `PR 32`, it is
 tracker maintenance, not an implementation slice. `ready_for_review` in this
-row means builder-complete only; GitHub PR #197 remains draft until exact-head
-independent validation.
+row means builder-complete only; GitHub readiness is separate and each changed
+head requires fresh exact-head independent validation.
 
 **PR39-001 blocker fix evidence (2026-07-05):** The PR39 restore-only regression was reproduced with only `acm_switchover_hubs.secondary`: the new integration test failed red at `Build hub RBAC validation table` with `'dict object' has no attribute 'primary'`. The fix preserves the PR39 `_rbac_hub_validations` table/include design and makes only the skipped primary row's `kubeconfig`/`context` expressions restore-only-safe; normal switchover mode still dereferences the required primary hub. Added `restore_only_rbac_secondary_only.yml` and `test_restore_only_rbac_with_secondary_only_hub_reports_secondary_validation`, proving `preflight-rbac-primary` is absent while `preflight-rbac-secondary` is still reported. No operator-CRD 401 hardening is included in this PR39-001 fix. Verification after the fix: focused repro passed; targeted preflight/RBAC suite passed (`63 passed`); collection unit suite passed (`822 passed`); root RBAC/parity suite passed (`183 passed`); `git diff --check` passed; full `./run_tests.sh` passed (root lane `1584 passed, 105 deselected`; release lane `1034 passed, 3 skipped`; Black/isort/MyPy/Bandit/pip-audit/compile checks clean).
 
@@ -1896,7 +1896,7 @@ independent validation.
 - Split `validate_backups.yml` or move complex logic into tested module utilities.
 - Split `tests/test_main.py` fixtures and classes.
 - Add full `deploy/rbac/` to collection-bundled `deploy/rbac/` file-set and content parity tests.
-- Keep `.claude/worktrees/` ignored by flake8 so advisory style checks do not scan nested worktrees.
+- Keep `.worktrees/` ignored by flake8 so advisory style checks do not scan the nested worktrees used by this slice.
 
 **Acceptance Criteria**
 - Refactors are behavior-preserving.
