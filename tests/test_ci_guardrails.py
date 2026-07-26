@@ -1,11 +1,23 @@
 """Static guardrails for CI and local test runner behavior."""
 
+import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci-cd.yml"
 COLLECTION_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ansible-collection-foundation.yml"
 RUN_TESTS = REPO_ROOT / "run_tests.sh"
+AGENT_INSTRUCTIONS = REPO_ROOT / "AGENTS.md"
+SETUP_CFG = REPO_ROOT / "setup.cfg"
+
+# Matches the AGENTS.md line that documents where agent worktrees are created, e.g.
+# "Use one isolated `.claude/worktrees/thermos-*` worktree and one branch per PR."
+DOCUMENTED_WORKTREE_DIR = re.compile(r"isolated `([^`]+/worktrees)/[^`]*` worktree")
 
 
 def test_root_ci_excludes_e2e_tests_by_marker():
@@ -66,3 +78,41 @@ def test_run_tests_executes_release_framework_explicitly():
 
     assert "--ignore=tests/release" in text
     assert "python -m pytest tests/release -q" in text
+
+
+def test_agent_instructions_document_a_worktree_directory():
+    match = DOCUMENTED_WORKTREE_DIR.search(AGENT_INSTRUCTIONS.read_text())
+
+    assert match, "AGENTS.md no longer documents where agent worktrees are created"
+    assert not Path(match.group(1)).is_absolute()
+
+
+def test_flake8_excludes_the_documented_worktree_directory(tmp_path):
+    """Prove `flake8 .` skips the documented worktree location using the real setup.cfg.
+
+    CI and run_tests.sh both invoke `flake8 .` from the repository root. flake8 resolves
+    any exclude pattern containing a path separator against the current working directory,
+    so this reproduces that layout in a throwaway tree instead of grepping setup.cfg for a
+    string that may not actually match anything.
+    """
+    pytest.importorskip("flake8")
+    documented = DOCUMENTED_WORKTREE_DIR.search(AGENT_INSTRUCTIONS.read_text())
+    assert documented, "AGENTS.md no longer documents where agent worktrees are created"
+
+    shutil.copy(SETUP_CFG, tmp_path / "setup.cfg")
+    worktree_probe = tmp_path / documented.group(1) / "probe-slice" / "probe.py"
+    worktree_probe.parent.mkdir(parents=True)
+    worktree_probe.write_text("undefined_name_inside_worktree\n")
+    (tmp_path / "probe.py").write_text("undefined_name_at_repo_root\n")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "flake8", ".", "--select=F821"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    # Control: flake8 really scanned this tree, so an absent worktree finding means excluded.
+    assert "undefined_name_at_repo_root" in result.stdout, result.stdout + result.stderr
+    assert "undefined_name_inside_worktree" not in result.stdout, result.stdout + result.stderr
