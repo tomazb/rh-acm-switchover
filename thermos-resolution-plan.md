@@ -987,17 +987,19 @@ rollback boundary, and verification plan.
 - The targeted four-file lane produced `41 failed, 52 passed` when only its
   test artifacts were applied to approved base `17c9589d`, then `94 passed` on
   the corrected worktree. Collection unit tests passed `875`; combined
-  collection/root tests passed `3954` with `29` expected skips; release helpers
+  collection/root tests passed `3955` with `29` expected skips; release helpers
   passed `1169` with `3` expected skips; and the strict `./run_tests.sh` root
-  lane passed `1831` selected tests.
+  lane passed `1832` selected tests.
 - Review-driven red evidence separately proved that an explicit empty
   namespace reached cluster-wide discovery and patching before the input guard;
   its regression now fails closed before discovery or mutation.
-- The first draft-PR foundation run exposed a test-interpreter defect:
-  `2 failed, 65 passed` because implicit localhost selected `/usr/bin/python3`
-  without the Kubernetes client. The non-live playbook harness now binds
-  localhost to the pytest interpreter, and the exact collection integration
-  lane passes `67`.
+- The first draft-PR foundation run exposed a test-interpreter defect
+  (`2 failed, 65 passed`) because implicit localhost selected
+  `/usr/bin/python3`. Binding localhost to the pytest interpreter then exposed
+  that the foundation job omitted the collection's declared Python Kubernetes
+  runtime. The workflow now installs `kubernetes>=28.0.0`, an import-safe root
+  guard requires it, and the exact local collection integration lane passes
+  `67`.
 - Draft PR [#200](https://github.com/tomazb/rh-acm-switchover/pull/200) and issue
   [#199](https://github.com/tomazb/rh-acm-switchover/issues/199) own only this
   combined boundary.

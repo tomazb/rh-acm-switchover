@@ -46,6 +46,12 @@ def test_collection_ci_covers_restore_only_syntax_and_runtime_tests():
     assert "tests/scenario/" in text
 
 
+def test_collection_ci_installs_kubernetes_runtime_for_live_module_boundary():
+    text = COLLECTION_WORKFLOW.read_text()
+
+    assert '"kubernetes>=28.0.0"' in text
+
+
 def test_ci_version_check_uses_runtime_version_metadata():
     text = CI_WORKFLOW.read_text()
 
