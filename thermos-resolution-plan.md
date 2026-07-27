@@ -993,6 +993,11 @@ rollback boundary, and verification plan.
 - Review-driven red evidence separately proved that an explicit empty
   namespace reached cluster-wide discovery and patching before the input guard;
   its regression now fails closed before discovery or mutation.
+- The first draft-PR foundation run exposed a test-interpreter defect:
+  `2 failed, 65 passed` because implicit localhost selected `/usr/bin/python3`
+  without the Kubernetes client. The non-live playbook harness now binds
+  localhost to the pytest interpreter, and the exact collection integration
+  lane passes `67`.
 - Draft PR [#200](https://github.com/tomazb/rh-acm-switchover/pull/200) and issue
   [#199](https://github.com/tomazb/rh-acm-switchover/issues/199) own only this
   combined boundary.

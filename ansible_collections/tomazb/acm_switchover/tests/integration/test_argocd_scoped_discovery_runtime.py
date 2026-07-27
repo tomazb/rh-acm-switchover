@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -288,7 +289,11 @@ def _write_hub_inputs(tmp_path: Path, primary: FakeArgoCDHub, secondary: FakeArg
 
 def _run_playbook(tmp_path: Path, playbook: str, variables: dict) -> subprocess.CompletedProcess[str]:
     vars_file = tmp_path / f"{Path(playbook).stem}-vars.yml"
-    vars_file.write_text(yaml.safe_dump(variables, sort_keys=False), encoding="utf-8")
+    playbook_variables = {
+        **variables,
+        "ansible_python_interpreter": sys.executable,
+    }
+    vars_file.write_text(yaml.safe_dump(playbook_variables, sort_keys=False), encoding="utf-8")
     return subprocess.run(
         [
             "ansible-playbook",
