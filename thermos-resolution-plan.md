@@ -985,13 +985,16 @@ rollback boundary, and verification plan.
   boundary, non-mock primary-prep retry, and non-mock standalone two-hub
   resume.
 - The targeted four-file lane produced `41 failed, 52 passed` when only its
-  test artifacts were applied to approved base `17c9589d`, then `93 passed` on
+  test artifacts were applied to approved base `17c9589d`, then `94 passed` on
   the corrected worktree. Collection unit tests passed `875`; combined
-  collection/root tests passed `3953` with `29` expected skips; release helpers
+  collection/root tests passed `3954` with `29` expected skips; release helpers
   passed `1169` with `3` expected skips; and the strict `./run_tests.sh` root
   lane passed `1831` selected tests.
-- The draft PR reference is recorded when it is available. Issue
-  [#199](https://github.com/tomazb/rh-acm-switchover/issues/199) owns only this
+- Review-driven red evidence separately proved that an explicit empty
+  namespace reached cluster-wide discovery and patching before the input guard;
+  its regression now fails closed before discovery or mutation.
+- Draft PR [#200](https://github.com/tomazb/rh-acm-switchover/pull/200) and issue
+  [#199](https://github.com/tomazb/rh-acm-switchover/issues/199) own only this
   combined boundary.
 
 #### R3-01b: Finalization Register Clobbers
