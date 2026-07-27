@@ -64,7 +64,10 @@ when it loads a checkpoint to recover the Argo CD pause `run_id`: it reads live
 including `argocd_manage` if the checkpoint identity is missing, unreadable, or
 does not match the live hubs. If both hubs are supplied, normal and explicitly
 swapped primary/secondary mappings are accepted only when both contexts and UIDs
-match the checkpoint.
+match the checkpoint. After both role invocations, it publishes
+`acm_switchover_argocd_resume_result` with `restored_by_hub.primary`,
+`restored_by_hub.secondary`, their once-derived `restored` total, and a Boolean
+`changed` value.
 
 ## GitOps Integration Boundary
 
@@ -87,6 +90,15 @@ in the collection. It is managed by the `argocd_manage` role:
 - A standalone resume entrypoint is available at `playbooks/argocd_resume.yml`; when
   it loads a checkpoint for the pause `run_id`, live hub identity validation
   completes before any Application resume patch runs
+
+When pause or resume uses an explicit namespace or checkpoint-persisted
+namespace scope, the collection requires exactly one positively successful
+`k8s_info` result for every normalized requested namespace before it aggregates
+Applications. Any failed, skipped, unreachable, malformed,
+cardinality-mismatched, or mixed present/absent result invalidates the complete
+discovery. No partial result reaches filtering or mutation. An all-absent
+result is recognized only when every namespace positively reports the API
+absent with no contradictory resources.
 
 Python and collection resume share the same marker-ownership boundary: the
 `paused-by` annotation must exactly equal the expected run ID before either

@@ -39,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed collection Argo CD scoped discovery so every requested namespace must
+  return one positively validated result before any Application is aggregated
+  or patched. Failed, skipped, unreachable, malformed, cardinality-mismatched,
+  mixed present/absent, and ambiguous results now fail closed with sanitized
+  diagnostics. Primary-prep retries re-pause reconciled Applications, and
+  standalone two-hub resume reports exact changed-patch totals without double
+  counting.
 - Hardened Phase 9B read-only discovery so reader admission is side-effect-free, artifact containers are not traversed
   before opt-in, injected clocks and request deadlines fail closed, runtime connection objects are functionally bound,
   completion freshness is recomputed, Phase 9A API trust anchors participate in enrollment/physical identity, and
