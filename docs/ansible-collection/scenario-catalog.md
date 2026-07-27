@@ -63,6 +63,12 @@ Each scenario records:
 - argocd manage: true
 - resume_on_failure: true
 - expected checkpoint/report: pause `run_id` preserved across retry
+- scoped discovery: every normalized namespace returns exactly one positive
+  result before any Application is aggregated or patched
+- retry expectation: reconciled Applications are re-paused, already-correct
+  Applications are unchanged, and unrelated Applications are never patched
+- standalone expectation: checkpoint identity is validated before either hub
+  role runs; the result reports exact per-hub and total changed-patch counts
 
 ### SCENARIO-009 RBAC bootstrap and validation
 

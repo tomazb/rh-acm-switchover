@@ -16,7 +16,7 @@ jobs:
       - name: Install foundation dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ansible-core==2.15.* pytest PyYAML ansible-builder
+          pip install ansible-core==2.15.* pytest PyYAML ansible-builder "kubernetes>=28.0.0"
       - name: Install collection dependencies
         run: |
           ansible-galaxy collection install -r ansible_collections/tomazb/acm_switchover/requirements.yml

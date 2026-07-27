@@ -238,12 +238,18 @@ class TestTrustedNamespaceDiscovery:
         resolve_tasks = [
             task
             for task in block.get("block", [])
-            if task.get("name") == "Resolve trusted Argo CD discovery namespaces for current hub"
+            if task.get("name") == "Normalize trusted Argo CD discovery namespaces for current hub"
         ]
         assert resolve_tasks, "discover.yml must resolve trusted namespaces before listing Applications"
         fact = resolve_tasks[0]["ansible.builtin.set_fact"]
         assert "_argocd_trusted_discovery_namespaces" in fact
-        assert "acm_switchover_argocd_discovery_namespaces" in str(fact)
+        assert "_argocd_raw_trusted_discovery_namespaces" in str(fact)
+        raw_task = next(
+            task
+            for task in block.get("block", [])
+            if task.get("name") == "Resolve raw trusted Argo CD discovery namespaces for current hub"
+        )
+        assert "acm_switchover_argocd_discovery_namespaces" in str(raw_task["ansible.builtin.set_fact"])
 
     def test_discover_aggregates_namespaced_k8s_info_reads(self):
         tasks = _load_discover_tasks()
@@ -255,13 +261,15 @@ class TestTrustedNamespaceDiscovery:
         ]
         aggregate_tasks = [
             task
-            for task in block.get("block", [])
-            if task.get("name") == "Aggregate Applications from trusted namespaces"
+            for task in yaml.safe_load(
+                (ROLES_DIR / "argocd_manage" / "tasks" / "validate_scoped_discovery.yml").read_text()
+            )
+            if task.get("name") == "Aggregate complete scoped Argo CD discovery resources"
         ]
         assert list_tasks, "discover.yml must list Applications per trusted namespace"
         assert aggregate_tasks, "discover.yml must aggregate namespaced Application reads"
         assert "{{ item }}" in str(list_tasks[0]["kubernetes.core.k8s_info"].get("namespace", ""))
-        assert "_argocd_app_list_by_ns" in str(aggregate_tasks[0]["ansible.builtin.set_fact"])
+        assert "_argocd_scoped_live_query" in str(aggregate_tasks[0]["ansible.builtin.set_fact"])
 
     def test_discover_records_namespace_map_after_cluster_wide_pass(self):
         tasks = _load_discover_tasks()
@@ -296,7 +304,7 @@ class TestTrustedNamespaceDiscovery:
         resolve_tasks = [
             task
             for task in block.get("block", [])
-            if task.get("name") == "Resolve trusted Argo CD discovery namespaces for current hub"
+            if task.get("name") == "Normalize trusted Argo CD discovery namespaces for current hub"
         ]
         assert resolve_tasks
         scoped_expr = str(resolve_tasks[0]["ansible.builtin.set_fact"]["_argocd_use_scoped_discovery"])
@@ -317,3 +325,61 @@ class TestTrustedNamespaceDiscovery:
         assert "in (acm_switchover_argocd_discovery_namespaces | default({}))" in when_text
         assert "type_debug" in when_text
         assert "!= 'list'" in when_text
+
+    def test_scoped_cluster_and_published_results_have_distinct_owners(self):
+        """A skipped cluster-wide register must not replace validated scoped resources."""
+        block_tasks = _get_discovery_block(_load_discover_tasks())["block"]
+        scoped = next(task for task in block_tasks if task.get("name") == "List Applications in trusted namespaces")
+        cluster = next(task for task in block_tasks if task.get("name") == "List Applications cluster-wide")
+        text = (ROLES_DIR / "argocd_manage" / "tasks" / "discover.yml").read_text()
+
+        assert scoped["register"] == "_argocd_scoped_live_query"
+        assert cluster["register"] == "_argocd_cluster_live_query"
+        assert "_argocd_published_discovery" in text
+        assert not any(task.get("register") == "_argocd_published_discovery" for task in block_tasks)
+
+    def test_filter_and_publication_are_gated_on_complete_success(self):
+        block_tasks = _get_discovery_block(_load_discover_tasks())["block"]
+        filter_task = next(task for task in block_tasks if task.get("name") == "Filter to ACM-touching applications")
+        record_task = next(task for task in block_tasks if task.get("name") == "Record discovered ACM apps")
+
+        assert "_argocd_published_discovery.status == 'ok'" in str(filter_task.get("when"))
+        assert "_argocd_published_discovery.status == 'ok'" in str(record_task.get("when"))
+
+    def test_scoped_validation_precedes_aggregation_and_filtering(self):
+        """No scoped resources may reach the filter before complete validation."""
+        block_tasks = _get_discovery_block(_load_discover_tasks())["block"]
+        names = [task.get("name") for task in block_tasks]
+
+        validate_index = names.index("Validate complete scoped Argo CD discovery")
+        publish_index = names.index("Publish validated Argo CD discovery")
+        filter_index = names.index("Filter to ACM-touching applications")
+
+        assert validate_index < publish_index < filter_index
+        validation_task = block_tasks[validate_index]
+        assert validation_task["ansible.builtin.include_tasks"] == "validate_scoped_discovery.yml"
+
+    def test_scoped_validation_contract_is_explicit_and_msg_is_non_authoritative(self):
+        """The approved present/absent predicates must not infer success from msg."""
+        validation_path = ROLES_DIR / "argocd_manage" / "tasks" / "validate_scoped_discovery.yml"
+        validation_text = validation_path.read_text()
+        validation_tasks = yaml.safe_load(validation_text)
+        decision_task_names = {
+            "Validate scoped Argo CD discovery envelope",
+            "Classify each scoped Argo CD discovery result",
+            "Publish scoped Argo CD discovery classification",
+        }
+        decision_text = "\n".join(
+            str(task["ansible.builtin.set_fact"])
+            for task in validation_tasks
+            if task.get("name") in decision_task_names
+        )
+
+        for field in ("failed", "skipped", "unreachable", "api_found", "resources", "item"):
+            assert field in validation_text
+        assert "type_debug" in validation_text
+        assert "_argocd_scoped_validation" in validation_text
+        assert decision_task_names == {
+            task.get("name") for task in validation_tasks if task.get("name") in decision_task_names
+        }
+        assert "msg" not in decision_text

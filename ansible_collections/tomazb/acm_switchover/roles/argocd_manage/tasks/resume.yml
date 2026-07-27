@@ -108,7 +108,14 @@
                 'paused': ((acm_switchover_argocd_summary | default({})).get('paused', 0) | int),
                 'restored': (
                   ((acm_switchover_argocd_summary | default({})).get('restored', 0) | int)
-                  + (acm_argocd_resume_results.results | default([]) | selectattr('changed') | list | length | int)
+                  + (
+                    acm_argocd_resume_results.results | default([])
+                    | selectattr('changed', 'defined')
+                    | selectattr('changed', 'sameas', true)
+                    | list
+                    | length
+                    | int
+                  )
                 )
               })
           }}
@@ -121,7 +128,14 @@
                 hub: {
                   'paused': (existing.get('paused', 0) | int),
                   'restored': (existing.get('restored', 0) | int)
-                    + (acm_argocd_resume_results.results | default([]) | selectattr('changed') | list | length | int)
+                    + (
+                      acm_argocd_resume_results.results | default([])
+                      | selectattr('changed', 'defined')
+                      | selectattr('changed', 'sameas', true)
+                      | list
+                      | length
+                      | int
+                    )
                 }
               })
           }}

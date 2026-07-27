@@ -116,7 +116,10 @@ For the Ansible collection, `playbooks/argocd_resume.yml` can reload the pause
 the checkpoint's stored hub contexts and live cluster UIDs against freshly read
 `kube-system` namespace UIDs before running any resume patch. If both hubs are
 provided, normal and explicitly swapped primary/secondary contexts are accepted
-only when the stored context and UID pairs match.
+only when the stored context and UID pairs match. Its final
+`acm_switchover_argocd_resume_result` reports `restored_by_hub` for primary and
+secondary plus a once-derived `restored` total; only patch results whose
+`changed` value is exactly Boolean `true` are counted.
 
 **State file tracking:**
 The script creates `.state/switchover-<primary>__<secondary>.json` tracking progress:
@@ -618,6 +621,13 @@ python acm_switchover.py \
 ```
 
 Applications that touch ACM namespaces/kinds are paused (auto-sync removed) and left paused by default. State is stored in the switchover state file.
+
+For collection retries and standalone resume, checkpoint-persisted namespace
+scope is fail-closed: every normalized namespace must return exactly one
+positively successful discovery result before any Application is aggregated,
+filtered, or patched. A failed, skipped, unreachable, malformed, incomplete, or
+mixed present/absent namespace result invalidates the entire discovery; partial
+Applications are never mutated.
 
 **Managed pause safety checks:**
 - ApplicationSet-managed child Applications are not patched. The ApplicationSet controller can revert child edits, so pause or update the parent ApplicationSet, generator, or template, then retry.

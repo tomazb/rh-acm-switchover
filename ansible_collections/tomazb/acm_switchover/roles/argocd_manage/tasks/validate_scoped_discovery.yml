@@ -1,0 +1,147 @@
+---
+- name: Initialize scoped Argo CD discovery validation
+  ansible.builtin.set_fact:
+    _argocd_scoped_top_valid: false
+    _argocd_scoped_result_classifications: []
+    _argocd_scoped_validation:
+      status: error
+      resources: []
+  no_log: true
+
+- name: Validate scoped Argo CD discovery envelope
+  ansible.builtin.set_fact:
+    _argocd_scoped_top_valid: >-
+      {{
+        (_argocd_scoped_live_query | default({}) | type_debug) == 'dict'
+        and (_argocd_scoped_live_query.results is defined)
+        and ((_argocd_scoped_live_query.results | type_debug) == 'list')
+        and (
+          'failed' not in _argocd_scoped_live_query
+          or _argocd_scoped_live_query.failed is sameas false
+        )
+        and (
+          'skipped' not in _argocd_scoped_live_query
+          or _argocd_scoped_live_query.skipped is sameas false
+        )
+        and (
+          'unreachable' not in _argocd_scoped_live_query
+          or _argocd_scoped_live_query.unreachable is sameas false
+        )
+        and (
+          (_argocd_scoped_live_query.results | length)
+          == (_argocd_trusted_discovery_namespaces | length)
+        )
+      }}
+  no_log: true
+
+- name: Classify each scoped Argo CD discovery result
+  ansible.builtin.set_fact:
+    _argocd_scoped_result_classifications: >-
+      {{
+        _argocd_scoped_result_classifications
+        + [
+            'present'
+            if (
+              (_argocd_scoped_item_result | type_debug) == 'dict'
+              and (_argocd_scoped_item_result.item is defined)
+              and (_argocd_scoped_item_result.item == _argocd_scoped_expected_namespace)
+              and (
+                'failed' not in _argocd_scoped_item_result
+                or _argocd_scoped_item_result.failed is sameas false
+              )
+              and (
+                'skipped' not in _argocd_scoped_item_result
+                or _argocd_scoped_item_result.skipped is sameas false
+              )
+              and (
+                'unreachable' not in _argocd_scoped_item_result
+                or _argocd_scoped_item_result.unreachable is sameas false
+              )
+              and (_argocd_scoped_item_result.api_found is defined)
+              and (_argocd_scoped_item_result.api_found is sameas true)
+              and (_argocd_scoped_item_result.resources is defined)
+              and ((_argocd_scoped_item_result.resources | type_debug) == 'list')
+            )
+            else (
+              'absent'
+              if (
+                (_argocd_scoped_item_result | type_debug) == 'dict'
+                and (_argocd_scoped_item_result.item is defined)
+                and (_argocd_scoped_item_result.item == _argocd_scoped_expected_namespace)
+                and (
+                  'failed' not in _argocd_scoped_item_result
+                  or _argocd_scoped_item_result.failed is sameas false
+                )
+                and (
+                  'skipped' not in _argocd_scoped_item_result
+                  or _argocd_scoped_item_result.skipped is sameas false
+                )
+                and (
+                  'unreachable' not in _argocd_scoped_item_result
+                  or _argocd_scoped_item_result.unreachable is sameas false
+                )
+                and (_argocd_scoped_item_result.api_found is defined)
+                and (_argocd_scoped_item_result.api_found is sameas false)
+                and (
+                  _argocd_scoped_item_result.resources is not defined
+                  or (
+                    (_argocd_scoped_item_result.resources | type_debug) == 'list'
+                    and (_argocd_scoped_item_result.resources | length) == 0
+                  )
+                )
+              )
+              else 'error'
+            )
+          ]
+      }}
+  vars:
+    _argocd_scoped_item_result: "{{ _argocd_scoped_live_query.results[item] }}"
+    _argocd_scoped_expected_namespace: "{{ _argocd_trusted_discovery_namespaces[item] }}"
+  loop: "{{ range(0, _argocd_trusted_discovery_namespaces | length) | list }}"
+  loop_control:
+    label: "trusted namespace result"
+  when: _argocd_scoped_top_valid | bool
+  no_log: true
+
+- name: Publish scoped Argo CD discovery classification
+  ansible.builtin.set_fact:
+    _argocd_scoped_validation:
+      status: >-
+        {{
+          'ok'
+          if (
+            _argocd_scoped_top_valid | bool
+            and (_argocd_scoped_result_classifications | length)
+              == (_argocd_trusted_discovery_namespaces | length)
+            and (_argocd_scoped_result_classifications | unique | list) == ['present']
+          )
+          else (
+            'absent'
+            if (
+              _argocd_scoped_top_valid | bool
+              and (_argocd_scoped_result_classifications | length)
+                == (_argocd_trusted_discovery_namespaces | length)
+              and (_argocd_scoped_result_classifications | unique | list) == ['absent']
+            )
+            else 'error'
+          )
+        }}
+      resources: []
+  no_log: true
+
+- name: Aggregate complete scoped Argo CD discovery resources
+  ansible.builtin.set_fact:
+    _argocd_scoped_validation: >-
+      {{
+        _argocd_scoped_validation
+        | combine({
+            'resources': (
+              _argocd_scoped_live_query.results
+              | map(attribute='resources')
+              | list
+              | flatten
+            )
+          })
+      }}
+  when: _argocd_scoped_validation.status == 'ok'
+  no_log: true
