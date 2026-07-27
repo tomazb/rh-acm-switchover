@@ -361,10 +361,25 @@ class TestTrustedNamespaceDiscovery:
 
     def test_scoped_validation_contract_is_explicit_and_msg_is_non_authoritative(self):
         """The approved present/absent predicates must not infer success from msg."""
-        validation_text = (ROLES_DIR / "argocd_manage" / "tasks" / "validate_scoped_discovery.yml").read_text()
+        validation_path = ROLES_DIR / "argocd_manage" / "tasks" / "validate_scoped_discovery.yml"
+        validation_text = validation_path.read_text()
+        validation_tasks = yaml.safe_load(validation_text)
+        decision_task_names = {
+            "Validate scoped Argo CD discovery envelope",
+            "Classify each scoped Argo CD discovery result",
+            "Publish scoped Argo CD discovery classification",
+        }
+        decision_text = "\n".join(
+            str(task["ansible.builtin.set_fact"])
+            for task in validation_tasks
+            if task.get("name") in decision_task_names
+        )
 
         for field in ("failed", "skipped", "unreachable", "api_found", "resources", "item"):
             assert field in validation_text
         assert "type_debug" in validation_text
         assert "_argocd_scoped_validation" in validation_text
-        assert "msg" not in validation_text
+        assert decision_task_names == {
+            task.get("name") for task in validation_tasks if task.get("name") in decision_task_names
+        }
+        assert "msg" not in decision_text
