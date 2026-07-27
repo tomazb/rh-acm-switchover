@@ -20,6 +20,16 @@ SETUP_CFG = REPO_ROOT / "setup.cfg"
 DOCUMENTED_WORKTREE_DIR = re.compile(r"isolated `([^`]+/worktrees)/[^`]*` worktree")
 
 
+def _documented_worktree_directory() -> Path:
+    match = DOCUMENTED_WORKTREE_DIR.search(AGENT_INSTRUCTIONS.read_text())
+    assert match, "AGENTS.md no longer documents where agent worktrees are created"
+
+    documented = Path(match.group(1))
+    assert not documented.is_absolute()
+    assert ".." not in documented.parts
+    return documented
+
+
 def test_root_ci_excludes_e2e_tests_by_marker():
     text = CI_WORKFLOW.read_text()
 
@@ -81,10 +91,7 @@ def test_run_tests_executes_release_framework_explicitly():
 
 
 def test_agent_instructions_document_a_worktree_directory():
-    match = DOCUMENTED_WORKTREE_DIR.search(AGENT_INSTRUCTIONS.read_text())
-
-    assert match, "AGENTS.md no longer documents where agent worktrees are created"
-    assert not Path(match.group(1)).is_absolute()
+    _documented_worktree_directory()
 
 
 def test_flake8_excludes_the_documented_worktree_directory(tmp_path):
@@ -96,18 +103,19 @@ def test_flake8_excludes_the_documented_worktree_directory(tmp_path):
     string that may not actually match anything.
     """
     pytest.importorskip("flake8")
-    documented = DOCUMENTED_WORKTREE_DIR.search(AGENT_INSTRUCTIONS.read_text())
-    assert documented, "AGENTS.md no longer documents where agent worktrees are created"
+    documented = _documented_worktree_directory()
 
     shutil.copy(SETUP_CFG, tmp_path / "setup.cfg")
-    worktree_probe = tmp_path / documented.group(1) / "probe-slice" / "probe.py"
+    tmp_root = tmp_path.resolve()
+    worktree_probe = (tmp_root / documented / "probe-slice" / "probe.py").resolve()
+    assert worktree_probe.is_relative_to(tmp_root)
     worktree_probe.parent.mkdir(parents=True)
     worktree_probe.write_text("undefined_name_inside_worktree\n")
-    (tmp_path / "probe.py").write_text("undefined_name_at_repo_root\n")
+    (tmp_root / "probe.py").write_text("undefined_name_at_repo_root\n")
 
     result = subprocess.run(
         [sys.executable, "-m", "flake8", ".", "--select=F821"],
-        cwd=tmp_path,
+        cwd=tmp_root,
         capture_output=True,
         text=True,
         check=False,
