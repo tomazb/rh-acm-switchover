@@ -293,6 +293,42 @@ def run_argocd_fixture(tmp_path):
 
 
 @pytest.fixture
+def run_argocd_scoped_validation(tmp_path):
+    def _run(*, query, namespaces) -> subprocess.CompletedProcess[str]:
+        repo_root = _find_repo_root()
+        vars_file = tmp_path / "argocd-scoped-validation-vars.yml"
+        vars_file.write_text(
+            yaml.safe_dump(
+                {
+                    "_argocd_scoped_live_query": query,
+                    "_argocd_trusted_discovery_namespaces": namespaces,
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        return subprocess.run(
+            [
+                "ansible-playbook",
+                "ansible_collections/tomazb/acm_switchover/tests/integration/playbooks/" "argocd_scoped_validation.yml",
+                "-i",
+                "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
+                "-e",
+                f"@{vars_file}",
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_ansible_env(repo_root, tmp_path),
+            timeout=300,
+        )
+
+    return _run
+
+
+@pytest.fixture
 def run_noncore_fixture(tmp_path):
     def _run(fixture_name: str, playbook_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = _find_repo_root()

@@ -331,6 +331,38 @@ def test_standalone_argocd_resume_covers_both_hubs():
     ), "Primary hub resume should be guarded by acm_switchover_hubs.primary is defined"
 
 
+def test_standalone_argocd_resume_publishes_exact_two_hub_summary_contract():
+    """Standalone totals must be derived once from primary and secondary buckets."""
+    playbook = yaml.safe_load((PLAYBOOKS_DIR / "argocd_resume.yml").read_text())
+    pre_tasks = playbook[0].get("pre_tasks", [])
+    tasks = playbook[0].get("tasks", [])
+
+    initialize = next(
+        task for task in pre_tasks if "acm_switchover_argocd_summary_by_hub" in task.get("ansible.builtin.set_fact", {})
+    )
+    assert initialize["ansible.builtin.set_fact"]["acm_switchover_argocd_summary_by_hub"] == {}
+
+    publish = next(
+        task for task in tasks if "acm_switchover_argocd_resume_result" in task.get("ansible.builtin.set_fact", {})
+    )
+    contract = str(publish["ansible.builtin.set_fact"]["acm_switchover_argocd_resume_result"])
+    assert "restored_by_hub" in contract
+    assert "primary" in contract
+    assert "secondary" in contract
+    assert "changed" in contract
+    assert "restored" in contract
+    assert "acm_switchover_argocd_summary_by_hub" in contract
+    assert "acm_switchover_argocd_summary.restored" not in contract
+
+    output = next(task for task in tasks if task.get("name") == "Report standalone Argo CD resume summary")
+    assert (
+        str(output["ansible.builtin.debug"]["msg"])
+        == "Argo CD standalone resume summary: restored={{ acm_switchover_argocd_resume_result.restored | int }} "
+        "primary={{ acm_switchover_argocd_resume_result.restored_by_hub.primary | int }} "
+        "secondary={{ acm_switchover_argocd_resume_result.restored_by_hub.secondary | int }}"
+    )
+
+
 def test_primary_prep_rehydrates_discovery_namespaces_from_checkpoint():
     """Retrying primary_prep must reuse persisted per-hub Application namespace hints."""
     text = (ROLES_DIR / "primary_prep" / "tasks" / "main.yml").read_text()
