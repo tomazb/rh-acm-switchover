@@ -44,7 +44,7 @@ that the builder and review-comment resolver passes are complete. GitHub
 readiness is separate, and every branch-head change requires fresh exact-head
 independent validation before a merge-readiness assessment.
 
-**Last Updated:** 2026-07-26
+**Last Updated:** 2026-07-27
 
 ## Post-Merge Revalidation (2026-06-03)
 
@@ -340,7 +340,7 @@ complete in this builder pass; PR #196 remains open and unchanged.
 
 | Claim | Validation | Tracker disposition |
 | --- | --- | --- |
-| `TR2D-M1` + `TR2D-L1` | confirmed with nuance | Fold into the same `R3-A1` / `R3-01` / `TR2D-01` Argo CD scoped-discovery correctness boundary. Require positive success for every namespace read before aggregation; do not duplicate implementation work under two IDs. The precise failed-item-without-`msg` runtime shape remains to be captured by an executable mixed-result test. |
+| `TR2D-M1` + `TR2D-L1` | confirmed with nuance | Fold into the same `R3-A1` / `R3-01` / `TR2D-01` Argo CD scoped-discovery correctness boundary. Require positive success for every namespace read before aggregation; do not duplicate implementation work under two IDs. PR #200 captures the failed-item-without-`msg` runtime shape in its executable mixed-result coverage. |
 | `TR2D-M2` | confirmed | Preserve as `TR2D-02`: fresh Application re-read immediately before resume, current same-run marker validation, non-empty current `resourceVersion`, conditional patch, and Python/collection OCC outcome parity. |
 | `TR2D-Q1` | confirmed maintainability/review risk | Preserve as `TR2D-03`, a characterization-first Phase 9B decomposition design input. It is a preferred predecessor or strong design input for later Phase 9 work, not a mandatory Phase 9C prerequisite unless the authoritative design is separately amended. |
 | `TR2D-Q4` | confirmed maintainability | Preserve as deferred `TR2D-04`: remove GitOps advisory duplication only after explicitly recording primary/secondary and restore-only asymmetries. |
@@ -353,7 +353,7 @@ complete in this builder pass; PR #196 remains open and unchanged.
 
 | Boundary | Status | Findings | Resolution boundary |
 | --- | --- | --- | --- |
-| `R3-01` / `TR2D-01` | implemented; awaiting independent validation | `R3-A1`, `TR2D-M1`, `TR2D-L1` | Issue [#199](https://github.com/tomazb/rh-acm-switchover/issues/199) implements distinct scoped/cluster/published ownership, positive all-namespace success proof, fail-closed malformed/failed/skipped/unreachable/mixed handling, exact-Boolean changed counts, primary-prep retry/re-pause, and standalone two-hub resume coverage. This remains one boundary under aliases retained for audit history; merge credit is not claimed. |
+| `R3-01` / `TR2D-01` | ready_for_review | `R3-A1`, `TR2D-M1`, `TR2D-L1` | Draft PR [#200](https://github.com/tomazb/rh-acm-switchover/pull/200) became ready at exact head `e3a313c2813cd1eea0872cca0c322d062ebda898`. A detached-worktree independent validator returned PASS for that exact head; the resolver made no code changes; CodeRabbit and Copilot completed review; zero actionable feedback remains; and exact-head CI is green. Issue [#199](https://github.com/tomazb/rh-acm-switchover/issues/199) retains the single distinct scoped/cluster/published ownership, positive all-namespace success, fail-closed malformed/failed/skipped/unreachable/mixed handling, exact-Boolean changed-count, primary-prep retry/re-pause, and standalone two-hub resume boundary. Merge credit is not claimed. |
 | `TR2D-02` | planned | `TR2D-M2` | Re-read each exact Application immediately before resume, revalidate current same-run ownership, require current resource version, patch conditionally, and align missing/foreign marker, missing-RV, conflict, success, and `changed` outcomes with Python. |
 | `TR2D-03` | planned/design input | `TR2D-Q1` | Characterize and then decompose Phase 9B immutable contracts, enrollment/trust validation, typed read/pagination, identity fingerprinting, freshness/provenance, artifact/redaction, and orchestration without broadening live authority. |
 | `TR2D-04` | deferred/design-gated | `TR2D-Q4` | Replace duplicated dual-hub GitOps advisory blocks only after preserving every intentional hub asymmetry, status fact, and message. |
@@ -916,7 +916,7 @@ This is the delivery sequence. Placing two bounded regressions ahead of
 
 | Slice | Status | Findings | Proposed resolution boundary | Required review |
 | --- | --- | --- | --- | --- |
-| R3-01 / TR2D-01 | implemented; awaiting independent validation | R3-A1, TR2D-M1, TR2D-L1 | Issue [#199](https://github.com/tomazb/rh-acm-switchover/issues/199) removes the skipped-task clobber, requires positive success for every namespace read before aggregation, fails closed on malformed/failed/skipped/unreachable/mixed results, and adds executable non-mock retry and standalone-resume coverage. The aliases preserve provenance; they do not create duplicate implementation work. | Argo CD pause/resume safety; retry and standalone-resume paths; sanitized failure handling |
+| R3-01 / TR2D-01 | ready_for_review | R3-A1, TR2D-M1, TR2D-L1 | Issue [#199](https://github.com/tomazb/rh-acm-switchover/issues/199) removes the skipped-task clobber, requires positive success for every namespace read before aggregation, fails closed on malformed/failed/skipped/unreachable/mixed results, and adds executable non-mock retry and standalone-resume coverage. The aliases preserve provenance; they do not create duplicate implementation work. | Argo CD pause/resume safety; retry and standalone-resume paths; sanitized failure handling |
 | R3-01b | planned | R3-A2, R3-A3 | Correct the two finalization register/set-fact clobbers and guard fixture/live-query semantics without coupling them to the Argo CD regression delivery. | finalization dry-run preview and fixture/live-read behavior |
 | R3-02 | planned | R3-A4, R3-A5 | Make masked-error verification gates fail closed so an API error can never satisfy a drain or connectivity check. | Thanos/observability parity with Python; preflight go/no-go artifact integrity |
 | R3-03 | planned | R3-P1 | Correct the timeout budget in place. The slice design must choose one explicit algorithm; it must not extract helpers or modules. Decomposition remains owned by `H3`. | post-activation failure semantics at fleet scale; parity with `SSA-03` |
@@ -977,9 +977,29 @@ rollback boundary, and verification plan.
 - The implementation and tests cover `R3-A1`, `TR2D-M1`, and `TR2D-L1` once,
   under this shared boundary.
 
-**Builder evidence (awaiting independent validation)**
+**Validation and review evidence**
 - Approved design `R3-01-TR2D-01-DESIGN-A1` and implementation plan
   `R3-01-TR2D-01-PLAN-A2` are recorded under `docs/plans/`.
+- Issue [#199](https://github.com/tomazb/rh-acm-switchover/issues/199) and PR
+  [#200](https://github.com/tomazb/rh-acm-switchover/pull/200) own only this
+  combined boundary. PR #200 advanced from draft to ready.
+- The original approved base is
+  `17c9589d41767ce582fe46444f5e1feb07af0d30`; the rebased integration base is
+  `ed7ec95ff8d20cc14b7ce0d8d733dcab247a44f6`; and the independently validated
+  current exact head is `e3a313c2813cd1eea0872cca0c322d062ebda898`.
+- A fresh independent validator returned PASS from a detached worktree for
+  exact head `e3a313c2813cd1eea0872cca0c322d062ebda898`.
+- Exact-head GitHub Actions completed successfully: CI/CD Pipeline run `#846`
+  and ansible-collection-foundation run `#608`. CodeRabbit status also
+  completed successfully.
+- Copilot reviewed 23 of 23 changed files and generated no comments.
+- CodeRabbit's trivial predicate-deduplication nit was source-checked and
+  rejected: the explicit identical predicates keep the safety boundary
+  directly auditable, the executable negative matrix guards drift, and the
+  proposed indirection would not correct behavior. Its generic 80% docstring
+  warning was rejected because it is not a repository acceptance or CI gate.
+- The PR-comment resolver posted those dispositions, made no code changes, and
+  confirmed zero review threads and zero unresolved actionable feedback.
 - `tests/integration/test_argocd_scoped_discovery_runtime.py` exercises the
   explicit present/absent predicates, negative shape matrix, sanitized failure
   boundary, non-mock primary-prep retry, and non-mock standalone two-hub
@@ -1000,9 +1020,7 @@ rollback boundary, and verification plan.
   runtime. The workflow now installs `kubernetes>=28.0.0`, an import-safe root
   guard requires it, and the exact local collection integration lane passes
   `67`.
-- Draft PR [#200](https://github.com/tomazb/rh-acm-switchover/pull/200) and issue
-  [#199](https://github.com/tomazb/rh-acm-switchover/issues/199) own only this
-  combined boundary.
+- All evidence is non-live. No merge credit is claimed.
 
 #### R3-01b: Finalization Register Clobbers
 
@@ -1545,7 +1563,7 @@ narration.
 | F38 | resolved | PR 21 | Python klusterlet verification now fails closed for broad API/client inspection failures instead of downgrading them to informational `unreachable`. |
 | F39 | resolved | PR 22 | Python `--argocd-resume-only` now fails closed for legacy state without hub identity binding when `argocd_paused_apps` exist but `hub_identities` are absent. |
 | F40 | resolved | PR 23 | Python dry-run Argo CD management now performs discovery and blocker reporting in parity with the collection dry-run path. |
-| F41 | correction implemented; awaiting independent validation (2026-07-26) | PR 24; issue #199 | Python scoped discovery remains correct. The collection correction on issue #199 gives scoped and cluster-wide queries distinct register ownership, validates every scoped item before publication, and adds non-mock retry/resume coverage. Merge credit is not claimed until the draft correction is independently validated and merged. |
+| F41 | correction independently validated; ready_for_review (2026-07-27) | PR 24; issue #199; PR #200 | Python scoped discovery remains correct. The collection correction on PR #200 exact head `e3a313c2813cd1eea0872cca0c322d062ebda898` gives scoped and cluster-wide queries distinct register ownership, validates every scoped item before publication, and adds non-mock retry/resume coverage. The independent validator returned PASS and zero unresolved actionable feedback remains. Merge credit is not yet claimed. |
 | F42 | resolved | PR 25 | Python RBAC preflight now avoids repeated serial SelfSubjectAccessReview probes without losing reporting fidelity. |
 | F43 | resolved | PR 26 | Release runtime parity now compares real resume, Argo CD, and RBAC/bootstrap outcomes instead of mostly artifact metadata. |
 | F44 | resolved | PR 27-PR 31 | `PR 27` extracted runtime/bootstrap; docs-only `PR 28` recorded the remaining slice map; `PR 29`, `PR 30`, and `PR 31` completed operation/phase-flow runners, Argo CD resume safety, and CLI outcome/report orchestration respectively. GitHub PRs #102, #103, #104, #106, and #107 are merged, and the extracted `lib/` modules remain wired through `acm_switchover.py` with dedicated tests. |
@@ -1589,7 +1607,7 @@ narration.
 | SSA-PY5 | confirmed with direct reusable-helper exposure, corrected P2 | SSA-09 (planned) | `KubeClient.patch_custom_resource()` logs status, reason, bounded raw API response body, and the rendered exception; full-list aggregation remains a separate lower-urgency subproblem within the same design gate. |
 | SSA-A6 | confirmed with narrower scope, corrected P3 | SSA-03 (planned) | Collection worker configuration has no upper cap; defaults and API timeouts mitigate impact, and the original check-mode concern was not substantiated. |
 | SSA-S3 | confirmed with lower composite impact, corrected P3 | SSA-05 (planned) | Deprecated Argo CD state may be created mode `0644`, and shell jsonpath context lookup can break on quoted context names; token stdout is documented and its wrapper already writes mode `0600`. |
-| R3-A1 | correction implemented; awaiting independent validation, High | R3-01 / TR2D-01; issue #199 | The correction assigns distinct scoped, cluster-wide, validation, and published variables and guards publication behind complete positive validation. Non-mock primary-prep retry and standalone resume prove the former no-op paths; merge credit is not yet claimed. |
+| R3-A1 | correction independently validated; ready_for_review, High | R3-01 / TR2D-01; issue #199; PR #200 | The correction assigns distinct scoped, cluster-wide, validation, and published variables and guards publication behind complete positive validation. Non-mock primary-prep retry and standalone resume prove the former no-op paths; exact head `e3a313c2813cd1eea0872cca0c322d062ebda898` received independent PASS with zero unresolved actionable feedback. Merge credit is not yet claimed. |
 | R3-A2 | confirmed empirically, Medium | R3-01b (planned) | Same clobber pattern makes the finalization dry-run preview always report `restore_count: 0`. |
 | R3-A3 | confirmed empirically, Medium | R3-01b (planned) | Same clobber pattern defeats the file's own fixture-injection guard; currently benign. |
 | R3-A4 | confirmed empirically, High | R3-02 (planned) | `failed_when: false` makes Thanos compactor drain verification fail open; the `until` loop exits on the first attempt and the follow-up gate is dead code. Python fails closed — parity divergence. |
@@ -1630,7 +1648,7 @@ narration.
 | R3-Q3 | confirmed maintainability with corrected scope, Low | R3-10f (planned) | The original twelve-wrapper count was overstated; only the verified pass-through subset is in scope. |
 | R3-Q4 | confirmed layering issue, Low | R3-10f (planned) | A `scripts/` entrypoint imports seven modules from `tests.release.lab_controller.*`, making the test tree a runtime dependency. |
 | R3-X1 | confirmed, Low | R3-10g (planned) | `StateManager` run-lock file handle leaked; surfaced by the suite as a `ResourceWarning`, fix belongs in `lib/utils.py`. |
-| TR2D-M1 / TR2D-L1 | correction implemented; awaiting independent validation | R3-01 / TR2D-01; issue #199 | Folded with `R3-A1` into one boundary. The implementation requires complete positive all-namespace success, rejects malformed and mixed shapes, and preserves sanitized no-mutation advisory behavior; merge credit is not yet claimed. |
+| TR2D-M1 / TR2D-L1 | correction independently validated; ready_for_review | R3-01 / TR2D-01; issue #199; PR #200 | Folded with `R3-A1` into one boundary. The implementation requires complete positive all-namespace success, rejects malformed and mixed shapes, and preserves sanitized no-mutation advisory behavior; exact head `e3a313c2813cd1eea0872cca0c322d062ebda898` received independent PASS with zero unresolved actionable feedback. Merge credit is not yet claimed. |
 | TR2D-M2 | confirmed | TR2D-02 (planned) | Collection resume uses discovery-time Application data; align fresh re-read, marker ownership, current resource version, OCC refusal/conflict, and changed semantics with Python. |
 | TR2D-Q1 | confirmed maintainability/review risk | TR2D-03 (planned/design input) | Phase 9B decomposition is a strong design input or preferred predecessor, not a mandatory Phase 9C prerequisite absent an authoritative design amendment. Phase 9C remains non-mutating. |
 | TR2D-Q4 | confirmed maintainability | TR2D-04 (deferred/design-gated) | Deduplicate GitOps advisories only after preserving explicit hub and restore-only asymmetries. |
