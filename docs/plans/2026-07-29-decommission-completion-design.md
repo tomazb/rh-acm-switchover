@@ -56,18 +56,23 @@ only and is complementary, not overlapping.
 
 Shared pattern for MCO and MCH (and per-cluster for ManagedClusters):
 
-1. Read the CR; record `metadata.uid`. Absent → clean no-op **only when no teardown for
-   this resource was previously started**: each resource records a teardown phase in state
-   (`delete_started` → `cr_absent` → `drained`). A rerun that finds the CR absent but the
-   phase at `delete_started`/`cr_absent` must still run the pod-drain wait (step 4) before
-   marking `drained` — a prior run's drain timeout cannot be laundered into success by the
-   CR having disappeared in between.
-2. Delete with a server-side identity precondition bound to the observed UID
+1. Read the CR. Absent → clean no-op **only when no teardown for this resource was
+   previously started**. When present, durably record `metadata.uid` as the resource's
+   immutable `expected_uid` together with its teardown phase **before DELETE**
+   (`delete_started` → `cr_absent` → `drained`). The state shape is keyed by API
+   version/kind/namespace/name and contains both `expected_uid` and `phase`;
+   ManagedClusters therefore retain one record per name. A rerun must reuse the recorded
+   UID and must never replace it with a fresh same-name observation. If the live name now
+   has another UID, fail before DELETE and leave the replacement intact. A rerun that
+   finds the CR absent but the recorded phase is `delete_started`/`cr_absent` must still
+   run the pod-drain wait (step 4) before marking `drained` — a prior run's drain timeout
+   cannot be laundered into success by the CR having disappeared in between.
+2. Delete with a server-side identity precondition bound to the recorded `expected_uid`
    (`V1DeleteOptions.preconditions.uid`) — a name-only delete has a TOCTOU gap where a
    replacement created between read and delete gets deleted and the absence poll then
    reads as success. Precondition mismatch (409/412) → fatal, naming the resource.
    Applies to MCO, MCH, and each ManagedCluster in both form factors. Python passes
-   `V1DeleteOptions(preconditions=V1Preconditions(uid=observed_uid))`. The collection uses
+   `V1DeleteOptions(preconditions=V1Preconditions(uid=expected_uid))`. The collection uses
    the collection-owned guarded-delete boundary defined below.
 3. Poll for **CR absence**: GET until 404/absent, bounded by the existing timeout
    constants. A CR that reappears with a *different* UID (replacement) → fatal — someone
@@ -154,9 +159,13 @@ uses `no_log: true` so callback failure rendering cannot expose module arguments
 subsequent fixed-text fail task may publish only the sanitized result.
 
 This module replaces the name-based `kubernetes.core.k8s` deletion tasks for MCO, MCH, and
-ManagedClusters. The role passes the exact primary-hub kubeconfig/context and the UID from
-its live discovery into each invocation. Role-level re-reads, pod-drain waits, and final
-checks remain useful supplementary defenses, but **a name-based
+ManagedClusters. The role passes the exact primary-hub kubeconfig/context and the durably
+recorded `expected_uid` into each invocation; the module's live read validates that
+recorded identity rather than adopting a newly observed UID. Python state and collection
+checkpoint `operational_data` use the same per-resource identity/phase shape. Collection
+execute-mode decommission requires checkpointing so the target UID map is durable before
+the first DELETE; check mode remains non-mutating. Role-level re-reads, pod-drain waits,
+and final checks remain useful supplementary defenses, but **a name-based
 `kubernetes.core.k8s state=absent` call plus reads before and after it does not close the
 read/DELETE race and is not an acceptable substitute for the server-side UID
 precondition**.
@@ -243,6 +252,9 @@ kubeconfig/context is provided; a boolean ack variable mirrors the flag.
 - Finalizer-stuck MCO (CR persists past timeout) → `SwitchoverError`, decommission halts.
 - Rerun after drain timeout with CR now absent → pod-drain wait still runs before
   `drained`; teardown-phase record drives it.
+- Crash/rerun after `delete_started` with a same-name replacement → the recorded UID is
+  reused, mismatch fails before DELETE, and the replacement survives; tests prove neither
+  form factor re-captures the replacement UID.
 - Python: expected UID deletion succeeds; server-side 409/412 precondition conflict is
   fatal; replacement UID mid-poll is fatal and survives.
 - MCH: lingering CR → fatal; lingering *unrelated* pods (wrong labels) → success.
@@ -273,8 +285,9 @@ kubeconfig/context is provided; a boolean ack variable mirrors the flag.
     private keys, response headers/bodies, and Secret material are redacted from module
     results, failure messages, and callback-visible output.
 - Collection role/static-contract tests prove MCO, MCH, and ManagedCluster coverage,
-  selector-scoped pod waits, post-drain re-reads, sanitized failure tasks, and the
-  destination-observability gate.
+  durable per-resource UID/phase checkpointing before DELETE, execute-mode checkpoint
+  enforcement, selector-scoped pod waits, post-drain re-reads, sanitized failure tasks,
+  and the destination-observability gate.
 - Version bump per repo policy (Python + collection, synced).
 
 ## Tracker updates (same PR)
@@ -292,10 +305,11 @@ complementary (target identity/RBAC vs. completion/readiness).
 
 ## Acceptance criteria
 
-1. Every MCO, MCH, and ManagedCluster deletion is server-side UID-preconditioned in both
-   form factors. Decommission cannot report success while any CR of a targeted name still
-   exists — same-UID survivors and different-UID replacements are both fatal through the
-   completion boundary.
+1. Every MCO, MCH, and ManagedCluster deletion durably records its immutable target UID
+   before DELETE and is server-side UID-preconditioned to that recorded value in both
+   form factors. Reruns never rebind to a same-name replacement. Decommission cannot
+   report success while any CR of a targeted name still exists — same-UID survivors and
+   different-UID replacements are both fatal through the completion boundary.
 2. A refused substep yields a non-zero result and an accurate summary.
 3. Missing API discovery aborts before any deletion decision that depends on the list.
 4. Integrated decommission with source observability and a destination without it fails
