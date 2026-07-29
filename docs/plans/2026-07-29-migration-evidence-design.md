@@ -76,7 +76,7 @@ backup is final:
        managed_clusters: {name: "<backup>", completed_at: "<iso8601>"}
        credentials:      {name: "<backup>", completed_at: "<iso8601>"}
        resources:        {name: "<backup>", completed_at: "<iso8601>"}
-     restore:            # written by activation as evidence accrues (§4 reads only this)
+     restore:            # written by activation as evidence accrues (§4 is a pure read of this record's restore/post_activation/waiver fields)
        name: "<restore-cr-name>"
        backup_names_verified_at: null | "<iso8601>"  # set when the completed live Restore's spec matched the journaled backup names (§1a)
        completed_at: null | "<iso8601>"       # set when Restore reached its terminal success phase, last field written, after backup_names_verified_at

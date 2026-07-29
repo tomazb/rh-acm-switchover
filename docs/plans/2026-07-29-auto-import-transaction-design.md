@@ -109,13 +109,17 @@ Restore reads `auto_import_txn` + `auto_import_prior` and inverts exactly:
 
 Before inverting, restore reads the live `autoImportStrategy` value and compares it with
 the temporary value this run wrote (`ImportAndSync`). If it differs — an operator or
-another actor changed it mid-switchover — restore preserves the live value, performs no
-mutation, and journals `restore_conflict` with both values (terminal result; surfaced as a
-warning-level completion note, not silently).
+another actor changed it mid-switchover — restore preserves the live value and performs
+no mutation; when the live value already equals the captured prior, the desired end
+state already holds and the terminal result is `restored_noop` (table row "live value
+already matches prior"), otherwise restore journals `restore_conflict` with both values
+(terminal result; surfaced as a warning-level completion note, not silently). The table
+rows are the authoritative contract; this pre-check narrative introduces them.
 
 | captured prior | restore action (live value == our temporary value) | journal result |
 | --- | --- | --- |
-| `absent` with `created_uid` | if live CM still matches the tool-owned shape (`data` is exactly our one key; no operator-added keys/labels/annotations beyond creation defaults) → delete CM with server-side UID precondition; otherwise patch removing only our key (operator content appeared post-creation — preserve it) | `restored_deleted` / `restored_key_removed` |
+| `absent` with `created_uid`, live UID == `created_uid` | if live CM still matches the tool-owned shape (`data` is exactly our one key; no operator-added keys/labels/annotations beyond creation defaults) → delete CM with server-side UID precondition; otherwise patch removing only our key (operator content appeared post-creation — preserve it) | `restored_deleted` / `restored_key_removed` |
+| `absent` with `created_uid`, live UID ≠ `created_uid` | no patch, no delete — replacement object, ownership not ours, live object preserved unchanged | `restore_conflict` |
 | `absent` without `created_uid`, live CM absent | no-op (nothing exists; nothing of ours can remain) | `restored_noop` |
 | `absent` without `created_uid`, live CM present | no patch, no delete — creation ownership unprovable, live object preserved unchanged | `restore_conflict` |
 | `no_key` | patch removing only the `autoImportStrategy` key | `restored_key_removed` |
@@ -123,10 +127,13 @@ warning-level completion note, not silently).
 | any, live value already matches prior | no-op | `restored_noop` |
 | any, live value ≠ our temporary value and ≠ prior | preserve live value, no mutation | `restore_conflict` |
 
-The `no_key` and `value` patch paths are UID-guarded too: restore compares the live
-ConfigMap UID with the captured `uid`; a mismatch (deleted and recreated since capture)
-or a missing object with prior `value X` → `restore_conflict`, no mutation. A missing
-object with prior `no_key` → `restored_noop` (nothing of ours remains).
+Every patch path is UID-guarded, not only the delete: for `no_key` and `value` priors,
+restore compares the live ConfigMap UID with the captured `uid`; for the `absent` prior
+with `created_uid`, both the delete branch and the key-removal fallback first require
+live UID == `created_uid` — the shape check selects between delete and key removal only
+after UID identity is proven. A mismatch (deleted and recreated since capture) or a
+missing object with prior `value X` → `restore_conflict`, no mutation. A missing object
+with prior `no_key` → `restored_noop` (nothing of ours remains).
 
 Ownership rules for the `absent`-without-`created_uid` conflict row (and every other
 unproven-identity path): absence of `created_uid` means creation ownership is
@@ -202,8 +209,10 @@ present.
   txn id and prior (no re-capture of `ImportAndSync` as prior); legacy-migrated record
   passes the gate via its minted id.
 - UID-guarded patch paths: recreated ConfigMap (new UID) with prior `no_key`/`value` →
-  `restore_conflict`, untouched; tool-created CM with operator-added keys → key removal
-  instead of delete.
+  `restore_conflict`, untouched; `absent` prior with `created_uid` but live UID ≠
+  `created_uid` (replacement, with or without operator-added keys) → `restore_conflict`,
+  no patch, no delete; tool-created CM (live UID == `created_uid`) with operator-added
+  keys → key removal instead of delete, UID identity asserted in the test.
 - Collection parity tests for capture record shape and restore table.
 - Version bump per repo policy (Python + collection, synced).
 
@@ -224,7 +233,8 @@ Plus one planned slice row referencing this design. `F20` cross-referenced as un
    no-ops) correctly; destination hub never left on `ImportAndSync` silently.
 2. A pre-existing ConfigMap with unrelated keys survives a full switchover with only the
    `autoImportStrategy` key transiently changed and exactly restored.
-3. A ConfigMap created by the tool is deleted on restore only when its UID matches.
+3. A ConfigMap created by the tool is deleted — or key-patched via the fallback — on
+   restore only when its live UID matches the recorded `created_uid`.
 4. `data: null` never surfaces as `AttributeError` in any implementation.
 5. Integrated decommission refuses to run with an unrestored transaction, naming the fix
    (run finalization / restore manually).
