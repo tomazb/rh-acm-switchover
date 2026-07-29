@@ -64,10 +64,14 @@ pause patch, post-pause re-read, resume resourceVersion precondition, marker-mis
 
 - `scripts/argocd-manage.sh` pause: build the patch with `jq '.automated = null'` (explicit
   null) instead of `del(.automated)`; keep `--type=merge`.
-- After patching, re-read the Application (`oc get ... -o json`) and evaluate the shared
-  classification rule (§2). If auto-sync is still active: print a failure for that
-  Application, do NOT journal it as paused, and exit non-zero after processing remaining
-  Applications (consistent with the existing per-app error accumulation).
+- After patching, re-read the Application (`oc get ... -o json`) and verify the exact
+  post-patch value: `spec.syncPolicy.automated` must be `null`. Merely "inactive" per the
+  §2 classification is not enough — another actor flipping the object to
+  `{"enabled": false}` between patch and re-read must not be journaled as our successful
+  pause. On any other value: print a failure for that Application, do NOT journal it as
+  paused, and exit non-zero after processing remaining Applications (consistent with the
+  existing per-app error accumulation). The same exact-null post-pause check applies to
+  the Python and collection verifies.
 - The only other Bash changes are the shared classification expression (§2) and the resume
   shape + verification (§3) — all correctness fixes to existing code paths. Everything else
   about the script is `SSA-05` scope.
@@ -127,8 +131,15 @@ and an equivalent pre-task include in the collection:
      controller or operator can re-enable auto-sync between the pause and activation within
      the same run; the gate is cheap (one GET per journaled Application) and closes that
      window too;
-  2. `modules/finalization.py` immediately before `_decommission_old_hub()` when
-     `--argocd-manage` was active for the run.
+  2. FINALIZATION phase entry, before the phase's first mutation, when `--argocd-manage`
+     was active for the run — not merely before `_decommission_old_hub()`; earlier
+     finalization steps already mutate (backup enablement, old-hub handling), and the gate
+     must precede all of them.
+- Gate/resume ordering: the gate consumes only journal entries that are not yet terminal.
+  When `--argocd-resume-after-switchover` resumes an Application, its journal entry is
+  marked terminal (`resumed`) — the marker is legitimately gone, and subsequent gate
+  passes skip terminal entries instead of reading the missing marker as tampering. The
+  finalization gate therefore runs before any resume step in the same phase.
 - Dry-run: gates execute read-only and log what would block (consistent with the `F40`
   resolution that dry-run performs real discovery).
 
@@ -180,7 +191,7 @@ adjacent-not-superseded: `SSA-05` (script lifecycle), `TR2D-02` (collection resu
    `syncPolicy.retry` edit made mid-switchover survives resume.
 4. A run resumed at ACTIVATION after its paused Application was re-enabled (or its marker
    replaced) fails closed before any activation mutation, naming the Application.
-5. Integrated decommission with `--argocd-manage` fails closed under the same conditions
-   before any teardown mutation.
+5. A finalization phase (including integrated decommission) with `--argocd-manage` fails
+   closed under the same conditions before any finalization mutation.
 6. All existing green tests still pass except those that asserted the defective patch
    shapes, which are inverted in the same commit.

@@ -132,9 +132,12 @@ a state write must not report success when its durability step failed.
 ### 6. Collection parity
 
 - `checkpoint_phase`'s existing `validate_operation_identity` gains a contract comparison
-  of the role-critical variables (method, old-hub action, auto-import management, ArgoCD
-  management, waiver) recorded at checkpoint creation, with an override variable mirroring
-  `--accept-changed-options`.
+  of the **same field set as the Python contract** (method, activation-affecting flags,
+  old-hub action, auto-import management, ArgoCD management, ArgoCD resume behavior,
+  observability skip, waiver, tool version) recorded at checkpoint creation, with an
+  override variable mirroring `--accept-changed-options` and the same field-and-phase
+  scoping — parity means no field can change silently in one implementation but not the
+  other.
 - The simulation marker is N/A for the collection (per-task `dry_run` guards mean no
   durable writes in check mode today); noted in role docs.
 
@@ -144,7 +147,8 @@ a state write must not report success when its durability step failed.
   (marker lifecycle included) — equal.
 - Simulated crash: capture marker written, process killed → next load fails closed naming
   the mode; `--reset-state` then recovers.
-- `_write_state` calls dir-fsync (mock `os.fsync` counts); dir-fsync failure non-fatal.
+- `_write_state` calls dir-fsync (mock `os.fsync` counts); `EIO`-class dir-fsync failure
+  propagates (write not reported successful); `ENOTSUP`/`EINVAL` suppressed at debug.
 - Two processes, same hub UIDs, different `--state-file` → second fails fast; different
   UID pairs → no contention; lock order stable under reversed context order.
 - Reset: concurrent lock holder → reset fails fast, live state intact; reset under lock
