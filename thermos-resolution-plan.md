@@ -574,9 +574,12 @@ worktrees when their slice-specific designs establish no dependency conflict.
   confirming supported Python and collection replacements cover every documented
   operator workflow.
 - If removal is not yet compatible, reject legacy resume state that lacks bound
-  context/UID identity, treat explicit context mismatch as fatal, create state
-  files under `umask 077`, and use kubeconfig-aware context resolution that
-  handles quoted names.
+  context/UID identity, treat explicit context mismatch as fatal, and create state
+  files under `umask 077`. (2026-07-29 assessment: the former "kubeconfig-aware
+  context resolution for quoted names" clause described no existing code — the
+  script never parses kubeconfig and already forwards `--context` safely quoted
+  (`argocd-manage.sh:64-121,184-193`); any such resolution would be new work, not
+  a fix, and is dropped from this slice.)
 - Coordinate related deprecated-shell cleanup with issue #157 so the same
   compatibility surface is not changed twice.
 
@@ -585,8 +588,7 @@ worktrees when their slice-specific designs establish no dependency conflict.
   state/context mismatch.
 - Any retained state file is owner-only from creation, not repaired only after
   writing.
-- Shell tests cover legacy state, mismatched context, quoted context names, and
-  secure file creation.
+- Shell tests cover legacy state, mismatched context, and secure file creation.
 - Migration docs and `CHANGELOG.md` direct operators to supported replacements.
   Protected runbook/SKILL files remain unchanged unless separately approved.
 
@@ -829,19 +831,19 @@ hardening + 2 rejected/non-actionable + 1 routed to the existing `H3` track =
 | R3-T2 | Medium | Tests | `lib/utils.py:98` deliberately uses `if obj is True:` to avoid truthy object references, but every test in `TestDryRunSkipDecorator` passes exact `True`/`False`. Relaxing it to `if obj:` keeps the suite green, and a non-bool truthy `dry_run` (e.g. `1`, a config-parsed `"true"`) silently *runs* the mutation — the coupling `lib/argocd.py:628` warns about is unpinned. |
 | R3-T3 | Medium | Tests | `tests/test_argocd_constants_parity.py:52-87` claims to verify `build_pause_patch` against `pause.yml`'s Jinja but never loads the file; the oracle is hand-written Python. It is already wrong: `pause.yml` gates the whole task on `automated is not none` and issues no patch when absent, while the test asserts a patch body for exactly that case. |
 | R3-T4 | Medium | Tests | `test_acm_namespaces_parity` and `test_ansible_argocd_filters_match_acm_sub_namespaces` assert only positive matches, so widening `ARGOCD_ACM_NS_REGEX` to `.*` passes — the dangerous direction, since that regex selects which Applications get paused. The filter test passes against a stub `return True` and consults neither Python nor Bash. |
-| R3-T5 | Medium | Tests | `tests/test_ci_guardrails.py:31-38` is an exact-version denylist, not a floor (`actions/checkout@v3`, Node16 and EOL, passes), and its positive assertions match the concatenated corpus, so regressing one workflow passes while another still carries `@v6`. `upload-artifact`, `cache`, `download-artifact`, and `github-script` are unguarded. |
+| R3-T5 | Medium | Tests | (2026-07-29 assessment: the guardrail now lives at `tests/test_ci_guardrails.py:62-68`, `test_github_actions_use_node24_action_versions`; defect unchanged.) `tests/test_ci_guardrails.py:31-38` is an exact-version denylist, not a floor (`actions/checkout@v3`, Node16 and EOL, passes), and its positive assertions match the concatenated corpus, so regressing one workflow passes while another still carries `@v6`. `upload-artifact`, `cache`, `download-artifact`, and `github-script` are unguarded. |
 | R3-T6 | Medium | Tests | `tests/properties/conftest.py` registers `ci` and `deep` Hypothesis profiles, but `HYPOTHESIS_PROFILE` is set nowhere in the repo, so CI silently runs `dev` (50 examples) across the eight `test_*.py` property modules (count corrected 2026-07-26; the figure includes `test_scaffolding.py`). `tests/properties/test_scaffolding.py:17-19` cannot detect this — it reads the same env var with the same default and compares against a duplicated literal table. |
 | R3-T7 | Medium | Tests | `run_tests.sh:97` and `.github/workflows/ci-cd.yml:46` measure and upload coverage with no `--cov-fail-under` and no Codecov threshold, so coverage can regress arbitrarily. This is the mechanism by which `R3-T1` stayed invisible. |
 | R3-T8 | Medium | Tests | `tests/release/conftest.py:52-53` accepts `ACM_RELEASE_PROFILE` as equivalent to the explicit `--release-profile` flag, so a stale shell export turns a plain `pytest tests/` into a real-cluster run with no confirmation. `test_lab_controller_phase8j_live_opt_in.py` models the correct pattern (explicit allowlist plus a separate live-contact flag). |
 | R3-T9 | Medium | Tests | `create_mock_step_context` is byte-identical in four workflow suites and its sibling `mock_state_manager` has already drifted in `test_finalization.py`. There is **no `tests/conftest.py`**, contradicting `AGENTS.md:337`. The helper is also an unpinned hand-rolled double of `lib/utils.py:808 StepContext`, which works against a real `StateManager` on `tmp_path`. |
-| R3-T10 | Medium | Tests | `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/action/test_checkpoint_phase_runtime.py:661` seeds stale `operational_data`, `errors`, and `report_refs` but asserts none of them, despite `checkpoint_phase.py:44-45` naming that exact hazard. It also asserts only the in-memory result and never re-reads the checkpoint file. |
+| R3-T10 | Medium | Tests | `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/action/test_checkpoint_phase_runtime.py:661-721` seeds stale `operational_data`, `errors`, and `report_refs` but asserts none of them, despite `checkpoint_phase.py:44-45` naming that exact hazard. It also asserts only the in-memory result and never re-reads the checkpoint file. (2026-07-29 assessment: the sibling reset test at `:407-461` does re-read via the saved file — the defect is specific to this test block.) |
 | R3-T12 | Medium | Tests | Found during the 2026-07-26 revalidation. `tests/test_api_literal_guardrails.py:11,15-18` walks only `MODULES_DIR`, so the `R2-H2` residual — 7 hardcoded `cluster.open-cluster-management.io` literals at `lib/rbac_validator.py:118,149,154,193,194,238,261` — is outside the guardrail's scan root and can grow without failing CI. A guardrail with a blind spot reads as coverage it does not provide. |
-| R3-T11 | Low | Tests | Batch: `time.sleep(0.05)` mtime dependence (`test_post_activation.py:1846`); the 1279-line doc-substring module whose `_assert_no_real_live_config_literals` misses `sha256~` tokens, `client-certificate-data` blobs, and real FQDNs; the tautological `assert "tests" in text` (`test_ci_guardrails.py:48`); a needlessly `@_requires_opt_in`-skipped blocks-without-opt-in assertion; two vacuous `validate_rbac_permissions` tests; and the `OC_VERSION=4.21` pin that will rot. **Withdrawn 2026-07-26:** the import-time `sys.modules` stubbing at `tests/test_rbac_collection_parity.py:18-34` was called a dead fallback; it is not — it supports root-lane CI jobs running without `ansible-core`, which `AGENTS.md` requires. |
+| R3-T11 | Low | Tests | Batch: `time.sleep(0.05)` mtime dependence (2026-07-29 assessment: now at `test_post_activation.py:1758` and `:1861`); the 1279-line doc-substring module whose `_assert_no_real_live_config_literals` misses `sha256~` tokens, `client-certificate-data` blobs, and real FQDNs; the tautological `assert "tests" in text` (2026-07-29 assessment: now `test_ci_guardrails.py:78`, redundant to the stronger `:77`); a needlessly `@_requires_opt_in`-skipped blocks-without-opt-in assertion; two vacuous `validate_rbac_permissions` tests; and the `OC_VERSION=4.21` pin that will rot. **Withdrawn 2026-07-26:** the import-time `sys.modules` stubbing at `tests/test_rbac_collection_parity.py:18-34` was called a dead fallback; it is not — it supports root-lane CI jobs running without `ansible-core`, which `AGENTS.md` requires. |
 | R3-Q1 | Medium | Quality | Counts re-measured 2026-07-26, superseding the original "twelve files, seven crossing": **36** tracked Python files exceed 1000 lines (excluding vendored `container-bootstrap/get-pip.py`), and **21** crossed the threshold in this branch measured against merge base `aca2d296`. Largest new arrivals: `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/action/test_checkpoint_phase_runtime.py` 2111, `tests/properties/strategies.py` 1843, `tests/release/lab_controller/read_only_preflight_pilot.py` 1732. Growth in pre-existing files: `test_rbac_validator.py` 589→1312, `test_argocd.py` 448→1192, `lib/rbac_validator.py` 794→1131, `modules/post_activation.py` →1622, `test_post_activation.py` →2744. |
 | R3-Q2 | Low | Quality | Counts verified 2026-07-26: 44 `WORKFLOW_*` / `DRY_RUN_*` / `OPERATION_*` / `*_MESSAGE` entries in `lib/constants.py`, of which **35 are referenced from exactly one external file** — none is unreferenced. They are log and banner text, not shared configuration (`WORKFLOW_BLANK_LINE = ""`, `WORKFLOW_BANNER = "=" * 60`), so the indirection costs a jump to a 381-line module to read a log line. |
 | R3-Q3 | Low | Quality | Corrected 2026-07-26: the original "twelve" was an overcount. `acm_switchover.py:964-1302` holds 15 functions, of which a subset — including `:964-981`, `:1205-1218`, and `:1221-1302` — are same-signature one-line pass-throughs to `lib.*`; `run_setup`, `_prepare_runtime`, `main`, and hook construction are substantive and must stay. If the delegates exist only as test seams, patching the `lib` functions at their call sites is equally testable and shorter. |
 | R3-Q4 | Low | Quality | `scripts/release/run_lab_role_controller.py:15-42` puts `REPO_ROOT` on `sys.path` and imports seven modules from `tests.release.lab_controller.*`, making the test tree a runtime dependency of a `scripts/` entrypoint. |
-| R3-X1 | Low | Python | Both full suite runs end with `ResourceWarning: unclosed file … state.json.run.lock`; a `StateManager` run-lock handle is leaked. Surfaced by the tests, but the fix belongs in `lib/utils.py`. |
+| R3-X1 | Low | Python | Both full suite runs end with `ResourceWarning: unclosed file … state.json.run.lock`. (2026-07-29 assessment: restated — not a leak; the handle is intentionally process-lifetime with an `atexit` release (`lib/utils.py:150-163,230-254`). The gap is the absence of an explicit close on normal completion / for long-lived embedding, which is what the tests surface.) Fix belongs in `lib/utils.py`. |
 
 ### Categories Verified Clean
 
@@ -1592,6 +1594,63 @@ fix), `TR2D-02` (collection resume OCC parity), `R3-10a` (discovery blast radius
 `R4-01` gates are journal-scoped to avoid conflict), `R3-T3` (parity-test oracle),
 `F19`/`F20` (unrelated refactors), `R2-M2`, `R3-P7`, `R3-A6`, `R3-X1`.
 
+## Open-Findings Assessment And Ranking (2026-07-29)
+
+Method: three parallel evidence-based verification passes over every open/planned/
+deferred finding (SSA family; R3 findings, tests, quality; TR2D; R2-L deferred rows; H3)
+plus a regression spot-check of ten high-risk resolved claims, followed by a full
+independent Codex validation pass (all still-apply verdicts and corrections confirmed;
+several priority calls amended on Codex evidence and adopted below). R4 rows were
+excluded from re-validation (validated twice on 2026-07-28/29) but are ranked.
+
+**Results: no open finding is stale — every open row still applies at HEAD `0bf55db9`**
+(SSA-A6 remains the only partial, as already recorded). **All ten spot-checked resolved
+claims hold** (F1, F2, F5, F31, F34, F35, F37, F39, R3-01/TR2D-01, B1) — no regressions.
+
+### Priority ranking
+
+P1 = fix before the next switchover on that form factor; P2 = fix soon; P3 = hardening;
+P4 = hygiene/docs. Conditional P1s bind to the named operation, not the switchover.
+
+| Rank | Findings | Rationale |
+| --- | --- | --- |
+| P1 | SSA-A2 + SSA-P2 (`SSA-01`) | No primary≠secondary cluster-UID comparison anywhere in product code; a same-cluster misconfiguration runs the destructive sequence against one hub. |
+| P1 | R3-A4 (`R3-02`) | Collection compactor drain `failed_when: false` fail-open — backup can run against a live compactor. |
+| P1 | R3-P1 (`R3-10b` scope) | Single 180s batch deadline for all klusterlet workers → false post-activation `SwitchoverError` at fleet scale, after production moved. |
+| P1 | R4-D1 (`R4-04`) | Restores bind to the moving `latest` alias on the normal activation path in both form factors; consumed backup never journaled. |
+| P1 (conditional: before next standalone/non-interactive decommission) | SSA-P1 (`SSA-02`) | No wrong-target identity check; `--skip-rbac-validation` + `--non-interactive` remove every remaining gate. |
+| P1 (conditional: any recovery run using persistent `reset_from`) | R3-A6 (`R3-06`) | Truthy `reset_from` disables checkpoint identity validation for the whole run; empty shipped default is inert. |
+| P1 (conditional: auto-import management enabled) | R4-B1 (`R4-02`) | Restore deletes the entire operator-owned import-controller ConfigMap. |
+| P1 (release/test boundary) | R3-T8 | Ambient `ACM_RELEASE_PROFILE` env var unskips live certification tests that invoke the release orchestrator. |
+| P2 | SSA-PY4, SSA-PY2, SSA-R1, SSA-R2, SSA-S1, SSA-PY5, R3-A2, R3-A5, R3-A8, R3-P2, R3-P4, R3-T1, TR2D-02, R2-L7a, R2-L7c; R4-A1, R4-C1, R4-C2, R4-E1 | Real correctness/safety defects with a mitigating precondition: interactive-only paths, deprecated-but-shipped script, reporting-only impact (R3-A5 — unsuppressed identity reads fail first), fleet-scale or shared-hub topology required, or spec'd R4 High rows on non-switchover paths. |
+| P3 | SSA-A6, SSA-S3, SSA-C1, SSA-C2, SSA-C3, SSA-S2, SSA-PY3, R3-A3, R3-A7, R3-A9, R3-A10, R3-P3, R3-P5, R3-P6, R3-P7, R3-P9, R3-P12, R3-T2, R3-T3, R3-T4, R3-T7, R3-T10, R3-T12, R2-L6, R2-L7b, R2-L8, H3; R4 Medium rows | Hardening: fail-open windows needing an adversary/misconfiguration, guardrail blind spots, duplication with drift risk. |
+| P4 | SSA-A5, R3-A11, R3-P8, R3-P13, R3-X1, R3-T5, R3-T6, R3-T9, R3-T11, R3-Q1..Q4, TR2D-03, TR2D-04, R2-L1, `/tmp/run` residual; R4-E6, R4-F3 | Hygiene, docs, conventions, design-gated refactors. |
+
+### Corrections applied in this pass
+
+Marked "2026-07-29 assessment" at the affected rows: R3-T5 test reference
+(`tests/test_ci_guardrails.py:62-68`); R3-T10 path/range
+(`tests/unit/plugins/action/test_checkpoint_phase_runtime.py:661-721`, sibling `:407-461`
+does re-read); R3-T11 line refs (`:1758`/`:1861`, guardrail `:78` redundant to `:77`);
+R3-X1 restated (process-lifetime handle with `atexit` release, not a leak); SSA-05
+acceptance clause and SSA-S3 matrix row (no kubeconfig/JSONPath context parsing exists in
+the script — `--context` is forwarded safely quoted; the clause described work to add and
+is dropped); F37 scope (gate lives in `playbooks/argocd_resume.yml:107-177`,
+checkpoint-loaded standalone runs only). Verified already-accurate, no edit needed:
+R3-A3 (row already scoped to the `_old_hub_existing_restore_info` pair — the other three
+publish sites are guarded), B1/PR 32 (kwarg-retained/field-removed already recorded).
+Issue-body inaccuracy noted, not a tracker edit: #153 (R2-L6) claims "every other role"
+follows the discover_resources convention — five of ten roles do. Detail amendments from
+Codex adopted: SSA-PY5 has ~8 concrete `str(ApiException)` render sites (not 14);
+SSA-R2's dry-run override vector is specifically the Ansible adapter's trailing `-e`
+append.
+
+**New note (Codex):** the F37/F39 identity protections do not cover the identity-free
+resume surface — explicit `run_id` skips checkpoint lookup
+(`playbooks/argocd_resume.yml:6-14`) and direct `argocd_manage` role resume requires only
+the run-id marker (`roles/argocd_manage/tasks/resume.yml:5-21`). Fold into `TR2D-02` /
+`R4-01` implementation scope.
+
 ## Finding Validation Matrix
 
 | Finding | Validation | Resolution PR | Notes |
@@ -1632,7 +1691,7 @@ fix), `TR2D-02` (collection resume OCC parity), `R3-10a` (discovery blast radius
 | F34 | resolved | PR 17 | Python and collection klusterlet remediation now patch/create `bootstrap-hub-kubeconfig`; managed-cluster RBAC/docs were realigned from `delete` to `patch`. |
 | F35 | resolved | PR 19 | Helm render now rejects mutating `rbac.customValidatorRules` verbs through `validateValidatorCustomRules`, with static tests covering allowed and rejected cases. |
 | F36 | resolved | PR 15 | Service-account token generation defaults were reduced to `24h`; longer lifetimes remain explicit operator opt-in. |
-| F37 | resolved | PR 20 | Standalone collection `argocd_resume.yml` validates checkpoint hub UID identity against the live hubs before resuming Applications. |
+| F37 | resolved | PR 20 | Standalone collection resume validates checkpoint hub UID identity against the live hubs before resuming Applications. (2026-07-29 assessment: the gate lives in `playbooks/argocd_resume.yml:107-177` and applies to checkpoint-loaded standalone runs; explicit `run_id` invocations skip checkpoint lookup and direct `argocd_manage` role resume has no identity check — that identity-free surface is scoped into `TR2D-02`/`R4-01`.) |
 | F38 | resolved | PR 21 | Python klusterlet verification now fails closed for broad API/client inspection failures instead of downgrading them to informational `unreachable`. |
 | F39 | resolved | PR 22 | Python `--argocd-resume-only` now fails closed for legacy state without hub identity binding when `argocd_paused_apps` exist but `hub_identities` are absent. |
 | F40 | resolved | PR 23 | Python dry-run Argo CD management now performs discovery and blocker reporting in parity with the collection dry-run path. |
@@ -1679,7 +1738,7 @@ fix), `TR2D-02` (collection resume OCC parity), `R3-10a` (discovery blast radius
 | SSA-C3 | confirmed, corrected P2 | SSA-07 (planned) | Blocking Bandit omits collection plugins, and CI/release dependency resolution has minimum floors without reviewed constraints or lock artifacts. |
 | SSA-PY5 | confirmed with direct reusable-helper exposure, corrected P2 | SSA-09 (planned) | `KubeClient.patch_custom_resource()` logs status, reason, bounded raw API response body, and the rendered exception; full-list aggregation remains a separate lower-urgency subproblem within the same design gate. |
 | SSA-A6 | confirmed with narrower scope, corrected P3 | SSA-03 (planned) | Collection worker configuration has no upper cap; defaults and API timeouts mitigate impact, and the original check-mode concern was not substantiated. |
-| SSA-S3 | confirmed with lower composite impact, corrected P3 | SSA-05 (planned) | Deprecated Argo CD state may be created mode `0644`, and shell jsonpath context lookup can break on quoted context names; token stdout is documented and its wrapper already writes mode `0600`. |
+| SSA-S3 | confirmed with lower composite impact, corrected P3 | SSA-05 (planned) | Deprecated Argo CD state may be created mode `0644`; token stdout is documented and its wrapper already writes mode `0600`. (2026-07-29 assessment: the "shell jsonpath context lookup breaks on quoted names" claim is withdrawn — the script performs no kubeconfig/JSONPath context parsing; `--context` is forwarded safely quoted.) |
 | R3-A1 | merged, High | R3-01 / TR2D-01; issue #199; PR #200 | The correction assigns distinct scoped, cluster-wide, validation, and published variables and guards publication behind complete positive validation. Non-mock primary-prep retry and standalone resume prove the former no-op paths; exact validated head `0bc1a4b6701508f6c3d4cd898515d82b8a29b6a3` merged as `786f8325493c6086e136cb9694a9997557f12e02`, and issue #199 is closed as completed. |
 | R3-A2 | confirmed empirically, Medium | R3-01b (planned) | Same clobber pattern makes the finalization dry-run preview always report `restore_count: 0`. |
 | R3-A3 | confirmed empirically, Medium | R3-01b (planned) | Same clobber pattern defeats the file's own fixture-injection guard; currently benign. |
