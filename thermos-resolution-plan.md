@@ -44,7 +44,7 @@ that the builder and review-comment resolver passes are complete. GitHub
 readiness is separate, and every branch-head change requires fresh exact-head
 independent validation before a merge-readiness assessment.
 
-**Last Updated:** 2026-07-28
+**Last Updated:** 2026-07-29
 
 ## Post-Merge Revalidation (2026-06-03)
 
@@ -424,7 +424,7 @@ worktrees when their slice-specific designs establish no dependency conflict.
 | --- | --- | --- | --- | --- |
 | SSA-01 | planned | SSA-A2, SSA-P2 | Add a shared-behavior, fail-closed physical-hub distinction guard before any mutation. | Python/collection parity; wrong-context and same-UID safety |
 | SSA-02 | planned | SSA-P1, SSA-PY4 | Strengthen standalone and embedded decommission target/RBAC checks without requiring prior switchover state. | destructive-operation, RBAC, parity, and dry-run review |
-| SSA-03 | planned | SSA-PY2, SSA-A6 | Make klusterlet endpoint selection unambiguous and bound collection worker concurrency. | post-activation parity, timeout, and scale review |
+| SSA-03 | planned | SSA-PY2, SSA-A6 | Make klusterlet endpoint selection unambiguous and bound collection worker concurrency. Extended by `R4-06`: implement against `docs/plans/2026-07-29-kubeconfig-ambiguity-guard-design.md` (fail-closed merge, duplicate-name rule, snapshot-built client, mutation barrier). | post-activation parity, timeout, and scale review |
 | SSA-04 | planned | SSA-R1, SSA-R2 | Require explicit release-profile authorization for live decommission and reject safety-critical adapter overrides. | lab-controller trust boundary and release evidence review |
 | SSA-05 | planned | SSA-S1, SSA-S3 | Remove the deprecated Argo CD shell path if compatibility permits; otherwise make state identity, permissions, and context parsing fail closed. | operator migration, shell safety, and documentation review |
 | SSA-06 | planned | SSA-C1, SSA-C2 | Establish required dependency/secret gates and pin third-party actions and security tools immutably. | CI availability, false-positive, and update-process review |
@@ -1527,6 +1527,65 @@ guard-removal mutation experiments behind `R3-T1`/`R3-T2`, and the GitHub issue
 states all live outside git. They are recorded as provenance, not proof. A
 reader re-deriving any finding should re-run the check rather than trust the
 narration.
+
+## Spec-Sourced Safety Review (2026-07-29)
+
+Origin: seven safety design specs written against `main` were used as a hypothesis
+source and cross-validated against `ansible` HEAD `0bf55db9` by two independent
+read-only passes (Claude exploration agents, then a full Codex revalidation: 20
+confirmed, 7 partially amended, 0 refuted). Only findings confirmed open on
+`ansible` and untracked above are recorded here. Approved slice designs live in
+`docs/plans/2026-07-29-*-design.md`; each slice below follows the standard Spec And
+Design Gate (the designs exist; implementation plans are still required).
+
+### Validated findings
+
+| Finding | Severity | Surface | Summary |
+| --- | --- | --- | --- |
+| R4-A1 | High | Bash | `scripts/argocd-manage.sh:341,345` pause builds `jq 'del(.automated)'` + `--type=merge` — RFC 7396 no-op; auto-sync stays enabled while the script prints `Paused` and journals success. Python/collection are fixed; Bash is divergent. |
+| R4-A2 | Medium | All three | `automated.enabled: false` (Argo CD ≥2.13) classified as active auto-sync in Python (`lib/argocd.py:423-426`), Bash (`:326-330`), and collection (`pause.yml:58-61`). |
+| R4-A3 | Medium | All three | Resume sends the whole stored `syncPolicy` (overwrites pre-existing keys with stale values; merge patch does not delete added siblings) and never verifies post-resume; Bash also lacks the RV precondition. `TR2D-02` covers collection OCC parity only. |
+| R4-A4 | Medium | Python + collection | Pause step is checkpointed (`modules/primary_prep.py:71-81`); a run resumed at ACTIVATION, and integrated decommission, never revalidate journaled pause state. |
+| R4-B1 | High | Python + collection | Auto-import restore deletes the entire `import-controller-config` ConfigMap (`modules/finalization.py:1545-1553`; collection `state: absent`) — operator-owned keys destroyed; unset ownership only warns and leaves `ImportAndSync` behind. |
+| R4-B2 | Medium | Python + collection | ConfigMap mutated before ownership recorded (`modules/activation.py:630-635`); collection ownership is `set_fact`, durable only via optional checkpointing. |
+| R4-B3 | Medium | Python + collection | `data: null` raises `AttributeError` → misleading `SwitchoverError` or silent skip (`modules/activation.py:615-616`; both collection roles share the pattern). |
+| R4-B4 | Medium | Python + collection | Decommission ignores an unrestored auto-import transaction. |
+| R4-C1 | High | Python | MCH completion fails open: lingering non-operator pods only warn, MCH CR absence never re-checked, decommission reports success (`modules/decommission.py:420-455`). |
+| R4-C2 | High | Python | Interactive refusal of MCO/ManagedCluster/MCH prompts logs a skip and still flows to `return True` (`modules/decommission.py:69-98`). |
+| R4-C3 | Medium | Python + collection | No CR-absence proof or UID verification for MCO/MCH/ManagedCluster deletion; pod waits are namespace-wide with no label selector. |
+| R4-C4 | Medium | Python | 404→`[]` (`lib/kube_client.py:724-748`) makes missing discovery indistinguishable from an empty inventory in `_delete_managed_clusters` (`modules/decommission.py:172-176`). |
+| R4-C5 | Medium | Python + collection | No destination-observability check before source MCO deletion when destination observability was never detected (metrics continuity ends silently). |
+| R4-D1 | High | Python + collection | Restores bind to the moving `latest` alias (`modules/activation.py:339-350,453,793-804`); the consumed backup is never journaled; resume re-resolves. |
+| R4-D2 | Medium | Python | Explicit `--min-managed-clusters` replaces name enforcement with count-only; explicit `0` disables enforcement (`acm_switchover.py:869-875`). |
+| R4-D3 | Medium | Python | 404→`[]` yields empty baselines on activation/post-activation inventory reads. |
+| R4-D4 | Medium | Python + collection | Integrated teardown consumes no migration evidence. |
+| R4-E1 | High | Python | A killed dry-run/validate-only leaves durable intermediate state (snapshot restore only in `finally`) that later runs trust; no crash marker. |
+| R4-E2 | Medium | Python | Validate-only checkpoint restores phase/errors/timestamp only; preflight `config` writes leak (`lib/utils.py:482-505`). |
+| R4-E3 | Medium | Python + collection | No run contract: resume silently accepts changed safety-critical options (`old_hub_action`, method, ArgoCD/auto-import management). |
+| R4-E4 | Medium | Python | Locks are state-file-scoped (`lib/utils.py:156`); same physical hubs don't contend across different `--state-file` paths. |
+| R4-E5 | Medium | Python | `--reset-state` removes the state file before the run lock exists (`acm_switchover.py:1073-1083`); `--force` resets progressed state. |
+| R4-E6 | Low | Python | `_write_state` lacks a parent-directory fsync after `os.replace` (`lib/utils.py:367-384`). |
+| R4-F1 | Medium | Python | Klusterlet-repair kubeconfig merge fails open: unreadable/oversized/YAML-invalid files are debug-skips, and the repair call site passes `max_size=0` (`modules/post_activation.py:1311-1317,1377-1404,1438-1444`); mutations proceed on the partial view. |
+| R4-F2 | Medium | Python | The mutation client is built by re-reading kubeconfig files (`new_client_from_config`, `:1118-1134`) after manual matching — TOCTOU and dual-resolver disagreement. |
+| R4-F3 | Low | Python | Duplicate entry names and duplicate YAML mapping keys silently last-write-win in the manual merge. |
+
+### Planned resolution slices
+
+| Slice | Status | Findings | Design | Proposed resolution boundary |
+| --- | --- | --- | --- | --- |
+| R4-01 | planned | R4-A1, R4-A2, R4-A3, R4-A4 | `docs/plans/2026-07-29-argocd-pause-correctness-residuals-design.md` | Minimal Bash pause fix (lifecycle stays `SSA-05`), shared tri-state auto-sync classification, `automated`-only resume with post-resume verification, journal-scoped destructive-phase gates. |
+| R4-02 | planned | R4-B1, R4-B2, R4-B3, R4-B4 | `docs/plans/2026-07-29-auto-import-transaction-design.md` | Prior-state capture with durable intent before mutation, key-level restore, `data: null` normalization, decommission gate. |
+| R4-03 | planned | R4-C1, R4-C2, R4-C3, R4-C4, R4-C5 | `docs/plans/2026-07-29-decommission-completion-design.md` | CR-absence proof with UID verification, refusal-aborts semantics, scoped strict-404 list, destination-observability gate. |
+| R4-04 | planned | R4-D1, R4-D2, R4-D3, R4-D4 | `docs/plans/2026-07-29-migration-evidence-design.md` | Freeze `latest` to journaled concrete backup names at activation entry, additive name+count expectations with explicit waiver, strict inventory reads, evidence gate before teardown. |
+| R4-05 | planned | R4-E1, R4-E2, R4-E3, R4-E4, R4-E5, R4-E6 | `docs/plans/2026-07-29-state-integrity-residuals-design.md` | Full-fidelity simulation snapshot with crash marker, parent-dir fsync, per-hub UID locks, reset-under-lock with narrowed `--force`, run contract. |
+| R4-06 | planned | R4-F1, R4-F2, R4-F3 (+ SSA-PY2, SSA-A6) | `docs/plans/2026-07-29-kubeconfig-ambiguity-guard-design.md` | Extends `SSA-03`: fail-closed merge, duplicate-name rule, full-URL endpoint normalization, snapshot-built client, mutation barrier. `SSA-03` implementation should use this design. |
+
+Cross-references (adjacent, not superseded): `SSA-01` (hub distinctness — excluded,
+already tracked), `SSA-02` (decommission target/RBAC — complementary to `R4-03`),
+`SSA-05` (Bash script lifecycle — owns everything beyond the `R4-A1` correctness
+fix), `TR2D-02` (collection resume OCC parity), `R3-10a` (discovery blast radius —
+`R4-01` gates are journal-scoped to avoid conflict), `R3-T3` (parity-test oracle),
+`F19`/`F20` (unrelated refactors), `R2-M2`, `R3-P7`, `R3-A6`, `R3-X1`.
 
 ## Finding Validation Matrix
 
