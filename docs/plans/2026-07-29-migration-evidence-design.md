@@ -81,8 +81,8 @@ backup is final:
      restore:            # written by activation as evidence accrues (consumed by §1a, §4, §4a)
        namespace: "<restore-namespace>"       # captured with uid from the terminal live Restore (§1a)
        name: "<restore-cr-name>"              # locator only — never an identity (§1a)
-       uid: null | "<metadata.uid>"           # stable object identity, captured per §1a
-       generation: null | <metadata.generation>  # spec-version guard, captured per §1a
+       uid: null | "<metadata.uid>"           # stable object identity, journaled at mutation time (§1 step 3), verified equal at §1a
+       generation: null | <metadata.generation>  # spec-version guard, journaled post-mutation (§1 step 3), verified equal at §1a
        spec_fingerprint: null | "<sha256-hex>"   # canonical fingerprint of the validated spec projection (§1a)
        backup_names_verified_at: null | "<iso8601>"  # set when the completed live Restore's spec matched the journaled backup names (§1a)
        completed_at: null | "<iso8601>"       # terminal success evidence; same durable update as the §1a bundle, or strictly last
@@ -94,12 +94,18 @@ backup is final:
      waiver: null | {flag: "<flag/var name>", journaled_at: "<iso8601>"}
    ```
 
-   Resume (§1.4) and the teardown gate (§4) consume exactly this record in both
+   Resume (§1 step 4) and the teardown gate (§4) consume exactly this record in both
    implementations; field names never diverge between Python and the collection.
 3. Create/patch the Restore with the concrete names — `latest` never reaches a Restore
    spec. Both the full-restore and passive-activation patch paths use the same journal.
+   **Identity is journaled at mutation time**: the create response (create paths) or the
+   pre-patch read (passive path, `_get_restore_or_raise`) carries `metadata.uid` — the
+   run durably records `restore.namespace`, `restore.name`, `restore.uid`, and the
+   post-mutation `metadata.generation` immediately, before treating the mutation as
+   applied. A create/patch response without a readable UID fails closed.
 4. Resume: reuse journaled names verbatim. If a live Restore exists whose spec disagrees
-   with the journal → fail closed (someone changed the restore source mid-run).
+   with the journal, or whose `metadata.uid` differs from the journaled `restore.uid` →
+   fail closed (someone changed or replaced the restore mid-run).
 
 Failure to resolve (no completed backup in a category the method requires) → fatal at
 activation entry, before any mutation.
@@ -117,10 +123,13 @@ the same object later phases see. Identity semantics, first:
 - A missing, malformed, or unreadable UID on any read fails closed.
 - Resume never adopts a newly observed same-name Restore as the original transaction
   target: a live Restore whose UID differs from the journaled `restore.uid` is a
-  fail-closed journal/cluster disagreement, exactly like a spec mismatch (§1.4).
+  fail-closed journal/cluster disagreement, exactly like a spec mismatch (§1 step 4).
 
 Spec-version guard: `metadata.generation` is the Kubernetes spec-version signal — it
-increments on spec changes and is untouched by status-subresource updates.
+increments on spec changes and is untouched by status-subresource updates. This holds
+only for CRDs with the status subresource enabled; the ACM cluster-backup Restore CRD
+enables it, and the implementation asserts that at first use (subresource absent →
+fail closed rather than silently degrading the guard to fingerprint-only).
 `resourceVersion` changes on *every* write, including status updates, so it is never
 used as the long-lived gate; only as an optional short-lived precondition inside a
 single read-modify-write.
@@ -130,29 +139,37 @@ Canonical spec fingerprint — identical algorithm in Python and the collection:
 - **Projection**: exactly `{"activation_method": "<passive|full>", "backup_fields":
   {"<restore-spec-field>": "<concrete-backup-name>", ...}}` where `backup_fields`
   contains precisely the Restore spec backup fields the selected method owns or
-  consumes (the §1 per-field contract). Skipped (`VELERO_BACKUP_SKIP`) categories and
-  categories absent from the journal are excluded from the projection — identically in
-  both implementations. No status fields, no metadata, no timestamps, no transient
+  consumes (the §1 per-field contract). The journal-category → spec-field mapping is
+  pinned identically in both implementations: `managed_clusters` →
+  `veleroManagedClustersBackupName`, `credentials` → `veleroCredentialsBackupName`,
+  `resources` → `veleroResourcesBackupName`. Skipped (`VELERO_BACKUP_SKIP`) categories
+  and categories absent from the journal are excluded from the projection — identically
+  in both implementations. No status fields, no metadata, no timestamps, no transient
   client fields.
-- **Serialization**: JSON, UTF-8, lexicographically sorted keys, no insignificant
-  whitespace (`,`/`:` separators only).
+- **Serialization**: JSON, lexicographically sorted keys, no insignificant whitespace
+  (`,`/`:` separators only), non-ASCII escaped as `\uXXXX` (Python `json.dumps`
+  default `ensure_ascii=True`; the collection matches this escaping exactly).
 - **Digest**: SHA-256, lowercase hex, stored as `restore.spec_fingerprint`.
 
 The evidence bundle is produced in exactly this order:
 
 1. Strictly GET (§3) the live Restore after it reaches its required terminal success
    phase.
-2. Validate `namespace`, `name`, `metadata.uid`, and `metadata.generation` from that
-   read — this is the UID whose Restore verifiably reached terminal success.
+2. Require the read's `namespace`, `name`, and `metadata.uid` to equal the values
+   journaled at mutation time (§1 step 3), and `metadata.generation` to equal the
+   journaled post-mutation generation — the object that reached terminal success is
+   provably the object this run created or patched, with an unchanged spec. A UID
+   mismatch means a same-name replacement: fail closed, never adopt.
 3. Compare every Restore backup field consumed by the selected activation method against
    the concrete journaled value. Per-method scope is preserved exactly: passive
    activation compares only the ManagedCluster backup field it owns; skipped
    credentials/resources fields remain skipped; full restore compares every category it
    consumed; no comparison is invented for a category absent from the journal.
 4. Compute the canonical spec fingerprint from the same read.
-5. Persist `namespace`, `name`, `uid`, `generation`, `spec_fingerprint`, and
-   `backup_names_verified_at` as **one durable state/checkpoint update** where the form
-   factor supports it.
+5. Persist `spec_fingerprint` and `backup_names_verified_at` — together with the
+   already-journaled `namespace`, `name`, `uid`, and `generation`, whose equality step 2
+   just re-asserted — as **one durable state/checkpoint update** where the form factor
+   supports it.
 6. Write `completed_at` in that same durable update, or strictly last after it.
 
 Any mismatch, unreadable Restore, missing UID or expected field, unexpected `latest`
@@ -162,7 +179,7 @@ provenance, or completion field is **non-terminal**: it blocks resume continuati
 finalization, Restore cleanup, and integrated teardown until re-established.
 
 Resume repeats the live comparison — identity (UID), generation, fingerprint, and
-consumed backup fields — before accepting existing completion evidence (§1.4's
+consumed backup fields — before accepting existing completion evidence (§1 step 4's
 fail-closed journal/live disagreement rule).
 
 The teardown gate (§4) requires the complete bundle; the §2 waiver bypasses none of it.
@@ -183,8 +200,9 @@ The teardown gate (§4) requires the complete bundle; the §2 waiver bypasses no
 
 ### 3. Strict inventory reads
 
-The migration path adopts the strict list variant introduced by the decommission
-completion design (`list_custom_resources_strict` in `lib/kube_client.py`):
+The migration path adopts the strict list variant to be introduced by the decommission
+completion design (working name `list_custom_resources_strict` in
+`lib/kube_client.py`; it may land as a `strict=True` flag on the existing helper):
 ManagedCluster inventory reads in activation and post-activation, and the Velero backup
 list in §1. API-group/resource 404 → typed fatal error; genuine empty list → normal
 result (then judged against expectations).
@@ -262,13 +280,27 @@ Rules:
 - Restore cleanup may proceed only after successful revalidation; integrated teardown
   may proceed only after successful revalidation (enforced again by the §4 gate's
   `teardown_revalidated_at` requirement).
+- The cleanup deletion of the run's own Restore is bound to the verified identity: the
+  Python delete uses a server-side UID precondition
+  (`V1DeleteOptions.preconditions.uid` = journaled `restore.uid`), and the collection
+  deletes it through the `acm_uid_guarded_delete` module introduced by the decommission
+  completion design — no name-only delete of the run's Restore remains. A precondition
+  mismatch (409/412: the object was replaced between barrier and delete) fails closed:
+  the replacement is left intact, cleanup and teardown stop. This closes the
+  barrier→cleanup window and matches the same-PR decommission `expected_uid` contract.
+  (Cleanup of *other* switchover-owned Restores found by discovery keeps its existing
+  archive-then-delete behavior — those objects carry no journaled evidence to protect.)
 - A failed later step never fabricates or upgrades the marker; no unrelated later
   observation may replace the journaled identity.
 - Resume re-runs the barrier whenever the prior marker is absent, incomplete, or
-  invalidated by workflow state (e.g. the run re-entered a phase before FINALIZATION).
-  When the marker is already durably present and the Restore was legitimately cleaned up
-  afterwards, the recorded marker stands — the object's absence after a verified,
-  journaled cleanup is expected, not a failure.
+  invalidated by workflow state. Operationally: the marker stands only when the state
+  shows the cleanup step verifiably completed after it (the UID-preconditioned delete
+  succeeded and was journaled); in every other resume — cleanup not yet run, cleanup
+  incomplete, or the run re-entered any phase before FINALIZATION — the barrier runs
+  again. The object's absence after a verified, journaled cleanup is expected, not a
+  failure; a crash between marker write and cleanup re-runs the barrier, and a
+  replacement appearing in that window is caught by the re-run or by the delete's UID
+  precondition.
 - No cross-cluster or cross-store atomicity is claimed: the barrier is one strict read
   plus one durable local state write in the run's own form factor.
 
@@ -311,12 +343,14 @@ Rules:
   unreadable or malformed live Restore → fail closed; resume with journal/live-spec
   disagreement → fatal; teardown blocked when `backup_names_verified_at` is absent even
   with `completed_at` set.
-- Identity (§1a): exact namespace/name/UID match → evidence written; same name with a
-  different UID → fail closed, no adoption; Restore deleted and recreated before
-  evidence capture → fail closed; Restore deleted and recreated before teardown
-  revalidation → barrier fails closed; missing UID → fail closed; unreadable or
-  malformed Restore → fail closed; replacement UID is never automatically adopted, by
-  capture, resume, or barrier.
+- Identity (§1/§1a): UID journaled at mutation time from the create response and from
+  the pre-patch read; create/patch response without a readable UID → fail closed; exact
+  namespace/name/UID match → evidence written; same name with a different UID → fail
+  closed, no adoption; Restore deleted and recreated between mutation and the terminal
+  GET (i.e. before evidence capture) → §1a step-2 UID mismatch, fail closed; Restore
+  deleted and recreated before teardown revalidation → barrier fails closed; missing
+  UID → fail closed; unreadable or malformed Restore → fail closed; replacement UID is
+  never automatically adopted, by capture, resume, barrier, or cleanup.
 - Version/spec (§1a): exact generation and fingerprint match → passes; generation change
   after evidence capture → barrier fails closed; consumed backup field change → fail
   closed; passive single-field projection and full-restore multi-field projection each
@@ -327,8 +361,10 @@ Rules:
   mutation.
 - Ordering (§1a/§4a): `completed_at` cannot exist without the full
   identity/version/provenance bundle; `teardown_revalidated_at` cannot exist without an
-  exact live match; Restore cleanup refuses to run before successful revalidation;
-  integrated teardown refuses to run without `teardown_revalidated_at`; resume
+  exact live match; Restore cleanup refuses to run before successful revalidation; the
+  cleanup delete of the run's own Restore carries the UID precondition and a 409/412
+  mismatch fails closed with the replacement intact; integrated teardown refuses to run
+  without `teardown_revalidated_at`; resume
   revalidates stale or incomplete evidence; failure after name verification but before
   completion stays blocked; the waiver bypasses none of UID, generation, fingerprint,
   provenance, completion, or teardown revalidation.
@@ -370,6 +406,9 @@ cross-referenced as adjacent.
    the waiver substitutes only for expected-name verification.
 6. Completion and provenance evidence is bound to the live Restore's namespace + UID and
    to its exact validated spec (generation + canonical fingerprint); a same-name
-   replacement Restore can never inherit another object's evidence, and a spec change
-   after validation is caught by the §4a barrier before any Restore cleanup or
-   source-hub teardown.
+   replacement Restore can never inherit another object's evidence — at capture, on
+   resume, at the §4a barrier, and at the UID-preconditioned cleanup delete. A spec
+   change after validation is caught up to and including the barrier and the
+   preconditioned delete; Restore objects created *after* the run's own Restore is
+   verifiably cleaned up are outside this contract (explicit non-goal — they carry none
+   of this run's evidence).
