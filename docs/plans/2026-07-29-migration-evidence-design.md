@@ -79,7 +79,7 @@ backup is final:
        credentials:      {name: "<backup>", completed_at: "<iso8601>"}
        resources:        {name: "<backup>", completed_at: "<iso8601>"}
      restore:            # written by activation as evidence accrues (consumed by §1a, §4, §4a)
-       namespace: "<restore-namespace>"       # captured with uid from the terminal live Restore (§1a)
+       namespace: "<restore-namespace>"       # journaled with uid at mutation time (§1 step 3)
        name: "<restore-cr-name>"              # locator only — never an identity (§1a)
        uid: null | "<metadata.uid>"           # stable object identity, journaled at mutation time (§1 step 3), verified equal at §1a
        generation: null | <metadata.generation>  # spec-version guard, journaled post-mutation (§1 step 3), verified equal at §1a
@@ -101,8 +101,9 @@ backup is final:
    **Identity is journaled at mutation time**: the create response (create paths) or the
    pre-patch read (passive path, `_get_restore_or_raise`) carries `metadata.uid` — the
    run durably records `restore.namespace`, `restore.name`, `restore.uid`, and the
-   post-mutation `metadata.generation` immediately, before treating the mutation as
-   applied. A create/patch response without a readable UID fails closed.
+   post-mutation `metadata.generation` (from the create/patch response; if the patch
+   response omits it, from an immediate re-read whose UID must match) before treating
+   the mutation as applied. A create/patch response without a readable UID fails closed.
 4. Resume: reuse journaled names verbatim. If a live Restore exists whose spec disagrees
    with the journal, or whose `metadata.uid` differs from the journaled `restore.uid` →
    fail closed (someone changed or replaced the restore mid-run).
@@ -288,7 +289,12 @@ Rules:
   mismatch (409/412: the object was replaced between barrier and delete) fails closed:
   the replacement is left intact, cleanup and teardown stop. This closes the
   barrier→cleanup window and matches the same-PR decommission `expected_uid` contract.
-  (Cleanup of *other* switchover-owned Restores found by discovery keeps its existing
+  A 404 at delete time (object absent at the journaled locator with no journaled prior
+  delete) is likewise fail-closed — an unexplained disappearance after the barrier, not
+  a success. "The run's own Restore" is defined by the journaled `namespace`/`name`
+  locator: whatever object sits there gets the UID-preconditioned delete, so a same-name
+  replacement 409s instead of being routed around the guard. (Cleanup of *other*
+  switchover-owned Restores found by discovery at different names keeps its existing
   archive-then-delete behavior — those objects carry no journaled evidence to protect.)
 - A failed later step never fabricates or upgrades the marker; no unrelated later
   observation may replace the journaled identity.
