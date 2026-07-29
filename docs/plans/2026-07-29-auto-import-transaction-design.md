@@ -116,7 +116,7 @@ already matches prior"), otherwise restore journals `restore_conflict` with both
 (terminal result; surfaced as a warning-level completion note, not silently). The table
 rows are the authoritative contract; this pre-check narrative introduces them.
 
-| captured prior | restore action (live value == our temporary value) | journal result |
+| captured prior + live state | restore action | journal result |
 | --- | --- | --- |
 | `absent` with `created_uid`, live UID == `created_uid` | if live CM still matches the tool-owned shape (`data` is exactly our one key; no operator-added keys/labels/annotations beyond creation defaults) → delete CM with server-side UID precondition; otherwise patch removing only our key (operator content appeared post-creation — preserve it) | `restored_deleted` / `restored_key_removed` |
 | `absent` with `created_uid`, live UID ≠ `created_uid` | no patch, no delete — replacement object, ownership not ours, live object preserved unchanged | `restore_conflict` |
@@ -124,7 +124,7 @@ rows are the authoritative contract; this pre-check narrative introduces them.
 | `absent` without `created_uid`, live CM present | no patch, no delete — creation ownership unprovable, live object preserved unchanged | `restore_conflict` |
 | `no_key` | patch removing only the `autoImportStrategy` key | `restored_key_removed` |
 | `value X` | patch the key back to `X` | `restored_value` |
-| any, live value already matches prior | no-op | `restored_noop` |
+| any, live value already matches prior | no-op (this row takes precedence over every mutating row, including when the captured prior itself equals the temporary value) | `restored_noop` |
 | any, live value ≠ our temporary value and ≠ prior | preserve live value, no mutation | `restore_conflict` |
 
 Every patch path is UID-guarded, not only the delete: for `no_key` and `value` priors,
