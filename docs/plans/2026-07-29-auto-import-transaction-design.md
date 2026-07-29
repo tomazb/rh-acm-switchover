@@ -1,0 +1,157 @@
+# Auto-Import Strategy Transaction — Design
+
+**Date:** 2026-07-29
+**Branch:** `ansible` (spec branch `docs/thermos-safety-specs`)
+**Status:** approved design, awaiting implementation plan
+**Origin:** cross-validation of main-branch safety specs against `ansible` @ `0bf55db9`,
+independently revalidated (Codex). Entire area is untracked in `thermos-resolution-plan.md`
+(only `F20`, an unrelated version-gating refactor, touches auto-import).
+
+## Problem
+
+The switchover temporarily sets `autoImportStrategy: ImportAndSync` in the
+`multicluster-engine/import-controller-config` ConfigMap on the destination hub and is
+supposed to undo it during finalization. Four defects:
+
+1. **Mutation before ownership.** `modules/activation.py:630-634` calls
+   `create_or_patch_configmap`, then `:635` records
+   `set_config("auto_import_strategy_set", True)`. A crash between the two leaves the
+   destination hub on `ImportAndSync` with finalization believing nothing was changed
+   (`modules/finalization.py:1569-1576` then only warns).
+2. **`data: null` breaks the reader.** `modules/activation.py:615-616` uses
+   `.get("data", {}).get(...)`; a ConfigMap with `data: null` (key present, value null —
+   legal) raises `AttributeError`, caught at `:636-639` and converted to a misleading
+   `SwitchoverError` (management enabled) or a silent skip (disabled). The collection
+   shares the pattern in `roles/activation/tasks/manage_auto_import.yml:55-59` and
+   `roles/finalization/tasks/reset_auto_import.yml:35-40`.
+3. **Restore deletes the whole ConfigMap.** `modules/finalization.py:1545-1553` →
+   `delete_configmap` (`lib/kube_client.py:492-513`). Apply only patched one key; restore
+   destroys every operator-owned key, label, and annotation on a pre-existing ConfigMap.
+   Collection: `reset_auto_import.yml:21-40` `state: absent`, gated on an in-memory
+   `set_fact` (`manage_auto_import.yml:105-108`) that survives only via checkpoint
+   `operational_data` — and checkpointing defaults to disabled
+   (`roles/activation/defaults/main.yml:15-16`).
+4. **Decommission is unaware.** Integrated decommission can tear down the old hub while
+   the destination hub still runs the temporary `ImportAndSync`, with no check anywhere.
+
+## Goals
+
+1. Prior reality is captured durably before the ConfigMap is touched.
+2. Restore inverts exactly what apply changed — never more.
+3. `data: null` is normalized, never an exception, in all implementations.
+4. Integrated decommission refuses to run while the transaction is unrestored.
+
+## Non-goals
+
+- Full transaction phase machinery (`apply_intent/apply_observed/applied` with UID/RV
+  preconditions on every call) as designed in the main-branch spec series — the ansible
+  branch stays with its existing state primitives (KISS).
+- Changing `create_or_patch_configmap` semantics for other callers.
+- MCE-operator reconciliation watching (single re-read on restore is sufficient here; the
+  value is only load-bearing during activation).
+
+## Design
+
+### 1. Prior-state capture and durable intent (before mutation)
+
+Python (`modules/activation.py`):
+
+1. Read the ConfigMap; normalize `data: null` → `{}`.
+2. Record to state — persisted immediately by `set_config` — before any mutation:
+   - `auto_import_prior`: one of
+     `{"state": "absent"}` |
+     `{"state": "no_key", "uid": <cm-uid>}` |
+     `{"state": "value", "value": "<X>", "uid": <cm-uid>}`
+   - `auto_import_txn`: `"intent"`
+3. Apply the create/patch (unchanged call).
+4. Set `auto_import_txn`: `"applied"`.
+
+Legacy migration: a state with the old `auto_import_strategy_set: true` boolean and no
+`auto_import_prior` is treated as `applied` with unknown prior → restore degrades to
+remove-only-our-key plus an explicit warning that the original value could not be known.
+`auto_import_strategy_set` stops being written.
+
+Collection: the same record is written into checkpoint `operational_data` **before** the
+`kubernetes.core.k8s` task when checkpointing is enabled. When disabled, the existing
+`set_fact` ordering is moved before the mutation and the crash window (in-memory fact lost
+on abort) is documented in the role README — parity with Python durability requires
+checkpointing on, and the role docs say so.
+
+### 2. Key-level restore (finalization)
+
+Restore reads `auto_import_txn` + `auto_import_prior` and inverts exactly:
+
+| captured prior | restore action | journal result |
+| --- | --- | --- |
+| `absent` | read CM; if UID matches the create we performed → delete CM; else remove only our key and warn (someone replaced it) | `restored_deleted` / `restored_key_removed` |
+| `no_key` | patch removing only the `autoImportStrategy` key | `restored_key_removed` |
+| `value X` | patch the key back to `X` | `restored_value` |
+| any, live value already matches prior | no-op | `restored_noop` |
+
+- `intent` (crash before/during apply): re-read the live ConfigMap and apply the same
+  inversion against the captured prior — if the live value never changed, journal
+  `restored_noop`.
+- UID check is read-before-delete (GET, compare captured UID, then delete). The remaining
+  TOCTOU window is accepted; `delete_configmap` gains no precondition parameters.
+- Whole-ConfigMap deletion for a pre-existing ConfigMap is removed entirely.
+- Restore failure raises `SwitchoverError` (Python) / `ansible.builtin.fail` (collection)
+  — no warning-only path. The "ownership unset" branch survives only for genuinely
+  never-applied runs (`auto_import_txn` absent and legacy boolean absent).
+- Terminal journal result is recorded in state before the phase completes.
+
+Collection `reset_auto_import.yml` mirrors the same table using the checkpoint record.
+
+### 3. `data: null` normalization
+
+Every reader normalizes `data` to `{}` when null or absent:
+`modules/activation.py:615-616`, `modules/finalization.py` restore read,
+`manage_auto_import.yml:55-59`, `reset_auto_import.yml:35-40`. With management enabled,
+real API failures still raise `SwitchoverError` — now with the true cause instead of a
+wrapped `AttributeError`.
+
+### 4. Decommission gate
+
+Integrated decommission (`modules/finalization.py::_decommission_old_hub` entry) fails
+closed when the run's own state shows `auto_import_txn` in `intent`/`applied` without a
+terminal restore journal entry: the destination hub is still running the temporary
+`ImportAndSync`. Pure state read — no new cluster calls. Standalone decommission
+(`--decommission`, typically a foreign/absent state file) is unaffected. Collection: same
+check in the decommission role against checkpoint data when present.
+
+## Testing
+
+- Table test: 3 prior states × apply → restore, asserting exact patch/delete bodies and
+  journal results; sibling keys asserted untouched.
+- Crash-window: state has `intent` + prior, ConfigMap unmutated → restore is `restored_noop`;
+  ConfigMap mutated → correct inversion.
+- Legacy boolean migration path (remove-only-our-key + warning).
+- `data: null` for every reader (Python + both collection roles' Jinja).
+- UID-mismatch on `absent` prior → key removal, no delete.
+- Decommission gate: blocks on `applied`-without-restore, passes on terminal journal,
+  passes on no-transaction state.
+- Collection parity tests for capture record shape and restore table.
+- Version bump per repo policy (Python + collection, synced).
+
+## Tracker updates (same PR)
+
+| id | severity | summary |
+| --- | --- | --- |
+| new-B1 | High | Restore deletes entire pre-existing import-controller-config ConfigMap (operator data loss) |
+| new-B2 | Medium | ConfigMap mutated before ownership recorded; crash orphans ImportAndSync |
+| new-B3 | Medium | `data: null` raises AttributeError → misleading error / silent skip (Python + collection) |
+| new-B4 | Medium | Decommission ignores unrestored auto-import transaction |
+
+Plus one planned slice row referencing this design. `F20` cross-referenced as unrelated.
+
+## Acceptance criteria
+
+1. Kill -9 between intent record and mutation, then resume: finalization restores (or
+   no-ops) correctly; destination hub never left on `ImportAndSync` silently.
+2. A pre-existing ConfigMap with unrelated keys survives a full switchover with only the
+   `autoImportStrategy` key transiently changed and exactly restored.
+3. A ConfigMap created by the tool is deleted on restore only when its UID matches.
+4. `data: null` never surfaces as `AttributeError` in any implementation.
+5. Integrated decommission refuses to run with an unrestored transaction, naming the fix
+   (run finalization / restore manually).
+6. Legacy state with `auto_import_strategy_set: true` restores via key-removal with an
+   explicit unknown-prior warning.
