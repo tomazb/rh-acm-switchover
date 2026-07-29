@@ -45,8 +45,9 @@ only and is complementary, not overlapping.
 - Wrong-target/UID-expectation and RBAC recheck gates: planned `SSA-02`.
 - Generalizing strict-list semantics across the whole codebase (scoped to decommission
   reads here; a broader migration can follow later).
-- Preconditioned delete parameters in `KubeClient` (read-then-verify-UID pattern is used
-  instead, consistent with the auto-import design).
+- Preconditioned deletes beyond `V1DeleteOptions.preconditions.uid` (no resourceVersion
+  preconditions; UID identity binding is the contract, consistent with the auto-import
+  design's preconditioned ConfigMap delete).
 - Changes to the Hive `ClusterDeployment preserveOnDelete` safety check (kept as is).
 
 ## Design
@@ -61,7 +62,14 @@ Shared pattern for MCO and MCH (and per-cluster for ManagedClusters):
    phase at `delete_started`/`cr_absent` must still run the pod-drain wait (step 4) before
    marking `drained` — a prior run's drain timeout cannot be laundered into success by the
    CR having disappeared in between.
-2. Delete by name (unchanged API call).
+2. Delete with a server-side identity precondition bound to the observed UID
+   (`V1DeleteOptions.preconditions.uid`) — a name-only delete has a TOCTOU gap where a
+   replacement created between read and delete gets deleted and the absence poll then
+   reads as success. Precondition mismatch (409/412) → fatal, naming the resource.
+   Applies to MCO, MCH, and each ManagedCluster. Collection: `kubernetes.core.k8s` does
+   not expose delete preconditions, so the role re-reads immediately before delete and
+   fails on UID change, then re-verifies UID after deletion — documented as the
+   compensating control until upstream supports preconditions.
 3. Poll for **CR absence**: GET until 404/absent, bounded by the existing timeout
    constants. A CR that reappears with a *different* UID (replacement) → fatal — someone
    recreated it mid-teardown.
@@ -69,7 +77,10 @@ Shared pattern for MCO and MCH (and per-cluster for ManagedClusters):
    - MCO: `observability.open-cluster-management.io/name=observability` (already used at
      `modules/post_activation.py` on this branch — promote to a shared constant).
    - MCH: existing ACM operator pod prefix constants; non-matching pods are ignored.
-5. Timeout at any stage, or a still-present same-UID CR → `SwitchoverError`. The MCH
+5. After the pod-drain wait completes, re-read the CR one final time before recording
+   `drained`: a CR recreated during the drain (any UID) → fatal — replacements stay fatal
+   through the completion boundary, matching the collection's post-wait re-list.
+6. Timeout at any stage, or a still-present same-UID CR → `SwitchoverError`. The MCH
    warn-and-return-success path (`:449-455`) is removed.
 
 ManagedClusters: per-cluster read → UID → delete → confirm absent; aggregate failures into

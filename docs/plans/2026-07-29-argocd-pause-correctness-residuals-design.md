@@ -20,8 +20,8 @@ pause patch, post-pause re-read, resume resourceVersion precondition, marker-mis
 2. **`automated.enabled: false` is classified as active** everywhere: Python
    `lib/argocd.py:423-426` (any non-null `automated` object), Bash
    `scripts/argocd-manage.sh:326-330`, collection `pause.yml:58-61`. Argo CD ≥2.13 keeps the
-   `automated` object with `enabled: false` when auto-sync is toggled off, so an already
-   -disabled Application gets patched, journaled, and "restored" for no reason.
+   `automated` object with `enabled: false` when auto-sync is toggled off, so an
+   already-disabled Application gets patched, journaled, and "restored" for no reason.
 3. **Resume overwrites with stale values and never verifies.** All three implementations
    send the entire stored `syncPolicy` snapshot back (`lib/argocd.py:809-897`,
    `resume.yml:55-136`, `argocd-manage.sh:430-449`). A merge patch does not delete
@@ -64,14 +64,16 @@ pause patch, post-pause re-read, resume resourceVersion precondition, marker-mis
 
 - `scripts/argocd-manage.sh` pause: build the patch with `jq '.automated = null'` (explicit
   null) instead of `del(.automated)`; keep `--type=merge`.
-- After patching, re-read the Application (`oc get ... -o json`) and verify the exact
-  post-patch value: `spec.syncPolicy.automated` must be `null`. Merely "inactive" per the
-  §2 classification is not enough — another actor flipping the object to
+- After patching, re-read the Application (`oc get ... -o json`) and verify the
+  **paused shape**: `spec.syncPolicy.automated` absent or JSON `null`. (RFC 7396 deletes
+  the key when patched with `null`, so the persisted resource normally has the key absent
+  — requiring a literal `null` would be unsatisfiable.) Merely "inactive" per the §2
+  classification is not enough — another actor flipping the object to
   `{"enabled": false}` between patch and re-read must not be journaled as our successful
-  pause. On any other value: print a failure for that Application, do NOT journal it as
-  paused, and exit non-zero after processing remaining Applications (consistent with the
-  existing per-app error accumulation). The same exact-null post-pause check applies to
-  the Python and collection verifies.
+  pause: any object value fails. On failure: print it for that Application, do NOT
+  journal it as paused, and exit non-zero after processing remaining Applications
+  (consistent with the existing per-app error accumulation). The same paused-shape check
+  applies to the Python and collection verifies.
 - Patch-succeeded-but-verify-unreadable is not a discard: when the patch call returned
   success but the post-patch read fails, the Application may already be paused. All three
   implementations journal the entry as `verify_pending` (state written immediately, even
@@ -126,18 +128,23 @@ and an equivalent pre-task include in the collection:
   `resumed` is the only terminal state and is skipped by gates. `skipped_disabled` is
   informational, never terminal, and is always re-read (below).
 - `verify_pending` entries (pause patch succeeded but the post-patch read failed, §1)
-  block every gate until settled: the gate re-reads the Application; exact
-  `automated == null` with our marker → promote to `paused` (durably journaled) and apply
-  the normal `paused` checks; any other observed state → fail closed; read error → fail
-  closed, entry stays `verify_pending`.
+  block every gate until settled: the gate re-reads the Application; paused shape
+  (`automated` absent/null) with our marker → promote to `paused` (durably journaled) and
+  apply the normal `paused` checks; any other observed state → fail closed; read error →
+  fail closed, entry stays `verify_pending`.
 - For each journaled *paused* entry: GET the Application. Failure modes, each fail-closed:
   - read error (incl. 404) → `SwitchoverError` naming the app and error;
   - marker annotation missing or not this run's identity → fail (journal/cluster
     disagreement — someone else touched it);
-  - classification says auto-sync active again → fail (re-enabled mid-switchover).
+  - `automated` is any object value — the paused-shape check, not the §2 classification:
+    an operator changing the tool-written absent/null to `{"enabled": false}` while
+    leaving the marker intact must fail too, because resume would overwrite that operator
+    change with the stored active policy and re-enable auto-sync.
 - `skipped_disabled` entries are always re-read and re-classified, on every gate pass and
   regardless of any terminal filtering; if now active → fail with a message that auto-sync
-  was enabled mid-switchover on a previously disabled app.
+  was enabled mid-switchover on a previously disabled app. Read errors (incl. 404) and
+  malformed responses on these re-reads fail closed exactly like `paused` entries — an
+  unreadable previously-disabled app is never treated as still-inactive.
 - Failure message includes per-app `oc get application.argoproj.io -n <ns> <name> -o
   jsonpath=...` inspection commands and the choice: re-pause (re-run primary-prep) or
   investigate/override.
@@ -176,7 +183,8 @@ per-app lines; Python `SwitchoverError` aggregating failed apps; collection
   marker removal); classification table test over the four shapes; resume verification
   success/mismatch; gate tests — marker stolen, auto-sync re-enabled, read error, 404,
   empty journal, `skipped_disabled` re-enabled, clean pass; `verify_pending` promotion to
-  `paused` on confirmed null, blocking on any other state or read error; ACTIVATION
+  `paused` on confirmed paused shape, blocking on any other state or read error;
+  paused-entry gate failure on `{"enabled": false}` with intact marker; ACTIVATION
   call-site tests:
   restored-from-state resume AND same-run re-enable after an in-process pause both blocked.
 - **Collection**: parity tests extended with the same classification table and resume
@@ -206,7 +214,7 @@ adjacent-not-superseded: `SSA-05` (script lifecycle), `TR2D-02` (collection resu
 ## Acceptance criteria
 
 1. A cluster with an auto-sync Application paused via the Bash script has
-   `spec.syncPolicy.automated == null` afterwards, or the script exits non-zero.
+   `spec.syncPolicy.automated` absent (or null) afterwards, or the script exits non-zero.
 2. An Application with `automated.enabled: false` is never patched by pause and never
    patched by resume, in all three implementations.
 3. Resume changes only `spec.syncPolicy.automated` and the marker annotation; a sibling

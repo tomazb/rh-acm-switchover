@@ -56,6 +56,12 @@ supposed to undo it during finalization. Four defects:
 
 Python (`modules/activation.py`):
 
+0. **Resume continuation**: if state already carries `auto_import_txn` in
+   `intent`/`applied` for this run, the existing transaction is continued — its
+   `auto_import_txn_id` and `auto_import_prior` are reused verbatim, never re-minted or
+   re-captured. Re-capturing after the mutation would record our own temporary
+   `ImportAndSync` as the "prior" and finalization would then `restored_noop` past it.
+   Only a run with no open transaction starts a new one.
 1. Read the ConfigMap; normalize `data: null` → `{}`.
 2. Record to state — persisted immediately by `set_config` — before any mutation:
    - `auto_import_txn_id`: a fresh unique id (uuid4); recording it also clears any prior
@@ -76,6 +82,9 @@ Python (`modules/activation.py`):
 Legacy migration: a state with the old `auto_import_strategy_set: true` boolean and no
 `auto_import_prior` is treated as `applied` with unknown prior → restore degrades to
 remove-only-our-key plus an explicit warning that the original value could not be known.
+At migration time a transaction id is minted and persisted for the legacy record, and the
+restore's terminal result carries it — so legacy runs neither stay blocked at the
+decommission gate (no id to match) nor pass it without matching evidence.
 `auto_import_strategy_set` stops being written.
 
 Collection: the same record is written into checkpoint `operational_data` **before** the
@@ -98,12 +107,17 @@ warning-level completion note, not silently).
 
 | captured prior | restore action (live value == our temporary value) | journal result |
 | --- | --- | --- |
-| `absent` with `created_uid` | delete CM with server-side UID precondition | `restored_deleted` |
+| `absent` with `created_uid` | if live CM still matches the tool-owned shape (`data` is exactly our one key; no operator-added keys/labels/annotations beyond creation defaults) → delete CM with server-side UID precondition; otherwise patch removing only our key (operator content appeared post-creation — preserve it) | `restored_deleted` / `restored_key_removed` |
 | `absent` without `created_uid` | patch removing only the `autoImportStrategy` key (creation unprovable — never unconditional delete) | `restored_key_removed` |
 | `no_key` | patch removing only the `autoImportStrategy` key | `restored_key_removed` |
 | `value X` | patch the key back to `X` | `restored_value` |
 | any, live value already matches prior | no-op | `restored_noop` |
 | any, live value ≠ our temporary value and ≠ prior | preserve live value, no mutation | `restore_conflict` |
+
+The `no_key` and `value` patch paths are UID-guarded too: restore compares the live
+ConfigMap UID with the captured `uid`; a mismatch (deleted and recreated since capture)
+or a missing object with prior `value X` → `restore_conflict`, no mutation. A missing
+object with prior `no_key` → `restored_noop` (nothing of ours remains).
 
 - `intent` (crash before/during apply): re-read the live ConfigMap and apply the same
   inversion against the captured prior — if the live value never changed, journal
@@ -133,11 +147,16 @@ wrapped `AttributeError`.
 ### 4. Decommission gate
 
 Integrated decommission (`modules/finalization.py::_decommission_old_hub` entry) fails
-closed when the run's own state shows `auto_import_txn` in `intent`/`applied` without a
-terminal restore journal entry: the destination hub is still running the temporary
-`ImportAndSync`. Pure state read — no new cluster calls. Standalone decommission
-(`--decommission`, typically a foreign/absent state file) is unaffected. Collection: same
-check in the decommission role against checkpoint data when present.
+closed unless the run's own state shows a **successful** terminal restore
+(`restored_deleted` / `restored_key_removed` / `restored_value` / `restored_noop`) whose
+`auto_import_txn_id` matches the current transaction. `intent`/`applied` without a
+terminal entry blocks (destination hub still running the temporary `ImportAndSync`), and
+`restore_conflict` blocks too — a conflict means the captured prior was *not* restored;
+proceeding past it requires an explicit operator acknowledgement flag (naming both
+values), not the conflict record itself. Pure state read — no new cluster calls.
+Standalone decommission (`--decommission`, typically a foreign/absent state file) is
+unaffected. Collection: same check in the decommission role against checkpoint data when
+present.
 
 ## Testing
 
@@ -151,8 +170,15 @@ check in the decommission role against checkpoint data when present.
 - `absent` prior without `created_uid` (crash before UID record) → key removal, never delete.
 - Live value changed by operator mid-run → `restore_conflict`, live value preserved.
 - Stale terminal evidence from an earlier `auto_import_txn_id` → gate still blocks.
-- Decommission gate: blocks on `applied`-without-restore, passes on terminal journal,
+- Decommission gate: blocks on `applied`-without-restore, blocks on `restore_conflict`
+  (passes only with the acknowledgement flag), passes on successful terminal journal,
   passes on no-transaction state.
+- Resume continuation: crash after mutation with `intent` open → rerun reuses the same
+  txn id and prior (no re-capture of `ImportAndSync` as prior); legacy-migrated record
+  passes the gate via its minted id.
+- UID-guarded patch paths: recreated ConfigMap (new UID) with prior `no_key`/`value` →
+  `restore_conflict`, untouched; tool-created CM with operator-added keys → key removal
+  instead of delete.
 - Collection parity tests for capture record shape and restore table.
 - Version bump per repo policy (Python + collection, synced).
 

@@ -121,7 +121,9 @@ a state write must not report success when its durability step failed.
   | field | mutability |
   | --- | --- |
   | `method` (passive/full) | destructive: immutable past PRIMARY_PREP |
+  | `activation_method` (patch/restore) | destructive: immutable past PRIMARY_PREP (the collection already binds it in checkpoint identity; Python must match) |
   | `old_hub_action` | destructive: immutable past PRIMARY_PREP |
+  | `--min-managed-clusters` (expectation floor) | overridable with `--accept-changed-options` at any phase |
   | `manage_auto_import_strategy` | destructive: immutable past PRIMARY_PREP |
   | `--argocd-manage` | immutable once an ArgoCD pause journal exists (changing it would bypass the gates over outstanding entries) |
   | `--argocd-resume-after-switchover` | immutable once an ArgoCD pause journal exists (changing it can silently drop the restoration obligation) |

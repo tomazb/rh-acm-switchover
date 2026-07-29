@@ -54,9 +54,15 @@ Four gaps remain:
 At activation start — after PRIMARY_PREP has paused the BackupSchedule, so the newest
 backup is final:
 
-1. List Velero backups (strict read, §3) and resolve the alias once: newest completed
-   backup per category (managed-clusters, credentials, resources), reusing the existing
-   passive-sync discovery helpers where applicable.
+1. List Velero backups (strict read, §3) and resolve the alias once — **only for the
+   fields the method actually sets**. The per-field Restore contract is preserved
+   exactly: the passive patch path changes only `veleroManagedClustersBackupName`
+   (credentials/resources fields untouched), and restore-create paths keep
+   `VELERO_BACKUP_SKIP` on any field the current code skips — this design substitutes
+   concrete names for `latest`, it never widens restore scope. Where multiple categories
+   are consumed (full restore), all resolved names must come from the same backup
+   generation (same BackupSchedule run, matched by the schedule's name-timestamp); mixed
+   generations → fatal at activation entry.
 2. Journal to state **before** any Restore mutation (intent-first, consistent with the
    auto-import design), using one canonical versioned schema shared verbatim by the Python
    state key and the collection checkpoint `operational_data` entry:
@@ -65,10 +71,16 @@ backup is final:
    migration_backups:
      schema_version: 1
      resolved_at: "<iso8601>"
-     backups:
+     backups:            # only categories the method consumes; skipped fields absent
        managed_clusters: {name: "<backup>", completed_at: "<iso8601>"}
        credentials:      {name: "<backup>", completed_at: "<iso8601>"}
        resources:        {name: "<backup>", completed_at: "<iso8601>"}
+     restore:            # written by activation as evidence accrues (§4 reads only this)
+       name: "<restore-cr-name>"
+       completed_at: null | "<iso8601>"       # set when Restore reached its terminal success phase
+       names_verified_at: null | "<iso8601>"  # set when expected-name check passed in activation
+     post_activation:
+       names_verified_at: null | "<iso8601>"  # set when post-activation name check passed
      waiver: null | {flag: "<flag/var name>", journaled_at: "<iso8601>"}
    ```
 
@@ -108,11 +120,15 @@ result (then judged against expectations).
 
 `_decommission_old_hub` entry requires, from the run's own state:
 
-- **unconditionally** (the waiver cannot bypass these): activation journal shows the
-  restore completed against the journaled backup names, and the post-activation phase
-  completed;
-- expected-name verification passed in both activation and post-activation — this
+- **unconditionally** (the waiver cannot bypass these): `restore.completed_at` is set and
+  the journaled `restore.name` matches — the Restore completed against the exact
+  journaled backup names — and the post-activation phase completed;
+- expected-name verification passed in both activation and post-activation
+  (`restore.names_verified_at` and `post_activation.names_verified_at` set) — this
   predicate, and only this one, is satisfiable by the §2 waiver instead.
+
+These fields are exactly the §1 schema's `restore`/`post_activation` block, written
+durably as each piece of evidence accrues — the gate stays a pure state read.
 
 Anything missing → fail closed listing exactly which clusters or checks lack evidence.
 Pure state read — no new cluster calls. Standalone decommission is unaffected (its

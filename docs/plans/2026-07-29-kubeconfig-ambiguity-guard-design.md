@@ -61,15 +61,23 @@ klusterlet restart) based on that resolution. Beyond the tracked hostname-collap
 ### 2. Duplicate-name rule (official-loader-compatible)
 
 - Merge keeps per-entry provenance: `(name, source_file, index)`.
-- Same name, byte-identical content across files → first occurrence wins (official
-  first-wins semantics), logged at debug.
+- Same name, byte-identical content → first occurrence wins (official first-wins
+  semantics), logged at debug.
 - Same name, differing content → ambiguity failure naming the entry kind/name and both
-  source files. No mutation for any cluster.
+  sources. No mutation for any cluster.
+- Both rules apply **anywhere in the KUBECONFIG chain, including twice within a single
+  file** — `clusters`/`contexts`/`users` are YAML lists of named entries, so a duplicate
+  YAML-key loader does not catch same-file duplicates; the merge-level duplicate check
+  must.
 
 ### 3. Endpoint matching (SSA-03 core, shared rule)
 
-- Full normalized URL equality: scheme, lowercase host, explicit default port (`:443` for
-  https), path preserved. No hostname collapse.
+- Full normalized URL equality. Canonicalization rules (the complete equivalence class):
+  lowercase scheme and host; IPv6 literals kept bracketed, compared in RFC 5952 canonical
+  text form; explicit default port (`:443` for https, `:80` for http); empty path and `/`
+  are equal, otherwise trailing slashes are preserved and significant; percent-encoding
+  normalized to uppercase hex before compare; a server URL carrying a query or fragment
+  is rejected as malformed (never silently stripped). No hostname collapse.
 - Zero-match and multi-match are explicit non-mutation failures per cluster (SSA-03
   acceptance criteria, unchanged).
 - The expected hub endpoint comes from the initialized secondary client's live
@@ -84,10 +92,13 @@ klusterlet restart) based on that resolution. Beyond the tracked hostname-collap
   from the **same merged snapshot** used for matching — the files are never re-read, so
   there is no TOCTOU window and no manual-vs-official-loader disagreement.
 - Before handoff, file-referenced credentials (`certificate-authority`,
-  `client-certificate`, `client-key`, `tokenFile`) are absolutized relative to their
-  source file's directory — matching official loader semantics; embedded `*-data` fields
-  pass through untouched; `exec` credential plugins pass through unchanged (their
-  `command` resolution is the plugin runtime's concern, as with the official loader).
+  `client-certificate`, `client-key`, `tokenFile`) are absolutized **per entry at merge
+  time**, against the source file of the specific `cluster`/`user` entry that won
+  first-wins deduplication — not against the selected context's file. A context, its
+  cluster, and its user may each originate from different files; each entry's relative
+  paths resolve against its own provenance. Embedded `*-data` fields pass through
+  untouched; `exec` credential plugins pass through unchanged (their `command` resolution
+  is the plugin runtime's concern, as with the official loader).
 
 ### 5. Mutation barrier
 
@@ -107,9 +118,15 @@ klusterlet restart) based on that resolution. Beyond the tracked hostname-collap
 - Snapshot client: file modified between merge and client build → client uses snapshot
   values (assert via config dict), no re-read.
 - Relative-path absolutization: CA/cert/key/tokenFile relative to a non-CWD source file
-  resolve correctly; embedded `*-data` untouched; exec passthrough.
-- Endpoint normalization table: default vs explicit port, host case, trailing path,
-  scheme; Python and collection produce identical results (parity test).
+  resolve correctly; context, cluster, and user entries drawn from three different files
+  each resolve against their own source file; embedded `*-data` untouched; exec
+  passthrough.
+- Same-file duplicates: two same-name differing entries within one file → ambiguity
+  failure; byte-identical same-file duplicates → first-wins.
+- Endpoint normalization vectors covering the full equivalence class: default vs explicit
+  port (https/http), host and scheme case, empty vs `/` path, trailing slash on non-root
+  path, IPv6 literal forms, percent-encoding case, query/fragment rejection; Python and
+  collection produce identical results (parity test).
 - Expected-endpoint source: matcher compares against the secondary client's live host.
 - Existing SSA-03 tests (hostname-collapse regression, zero/multi-match) unchanged.
 - Version bump per repo policy (Python + collection, synced).
