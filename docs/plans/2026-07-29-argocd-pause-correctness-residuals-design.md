@@ -72,6 +72,12 @@ pause patch, post-pause re-read, resume resourceVersion precondition, marker-mis
   paused, and exit non-zero after processing remaining Applications (consistent with the
   existing per-app error accumulation). The same exact-null post-pause check applies to
   the Python and collection verifies.
+- Patch-succeeded-but-verify-unreadable is not a discard: when the patch call returned
+  success but the post-patch read fails, the Application may already be paused. All three
+  implementations journal the entry as `verify_pending` (state written immediately, even
+  though the overall run fails) so resume and the destructive-phase gates know a
+  restoration obligation may exist; gates treat `verify_pending` as blocking until an
+  operator or rerun re-reads and settles it.
 - The only other Bash changes are the shared classification expression (§2) and the resume
   shape + verification (§3) — all correctness fixes to existing code paths. Everything else
   about the script is `SSA-05` scope.
@@ -137,8 +143,12 @@ and an equivalent pre-task include in the collection:
      must precede all of them.
 - Gate/resume ordering: the gate consumes only journal entries that are not yet terminal.
   When `--argocd-resume-after-switchover` resumes an Application, its journal entry is
-  marked terminal (`resumed`) — the marker is legitimately gone, and subsequent gate
-  passes skip terminal entries instead of reading the missing marker as tampering. The
+  marked terminal (`resumed`) **only after** the resume patch, the deep-equality
+  restoration check, and the marker-absence check have all passed and the journal update
+  is durably written; a failed or unverified restore keeps the entry non-terminal, so
+  subsequent gates still block on it. With that, the marker is legitimately gone for
+  terminal entries, and gate passes skip them instead of reading the missing marker as
+  tampering. The
   finalization gate therefore runs before any resume step in the same phase.
 - Dry-run: gates execute read-only and log what would block (consistent with the `F40`
   resolution that dry-run performs real discovery).

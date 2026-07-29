@@ -86,7 +86,11 @@ a state write must not report success when its durability step failed.
 - After `ensure_hub_identities` resolves both cluster UIDs, acquire two flock files —
   sorted UID order to avoid AB/BA deadlock — at
   `/tmp/acm-switchover-<euid>/locks/<sha256(uid)>`, opened with `O_NOFOLLOW|O_CREAT`,
-  non-blocking. Holding **both** locks is an explicit barrier: identity discovery
+  non-blocking. The parent chain is created and revalidated securely: each component
+  (`acm-switchover-<euid>`, `locks`) is created `0700`, then verified to be a real
+  directory (not a symlink), owned by the current euid, and mode-restricted before use —
+  a pre-created or symlinked parent under world-writable `/tmp` aborts with a security
+  error rather than following it. Holding **both** locks is an explicit barrier: identity discovery
   (read-only) completes first, then both locks are acquired before any cluster mutation,
   simulation-marker write, legacy contract adoption, or state mutation beyond identity
   recording. If the second lock cannot be acquired, the first is released before failing.
@@ -111,19 +115,29 @@ a state write must not report success when its durability step failed.
 
 ### 5. Run contract
 
-- On first run (state creation), persist `run_contract`: `method`,
-  `activation_method`-affecting flags, `old_hub_action`, `manage_auto_import_strategy`,
-  `--argocd-manage`, `--argocd-resume-after-switchover`, the Area D expectation waiver,
-  `--skip-observability-checks`, and `tool_version`.
+- On first run (state creation), persist `run_contract`. Canonical field table (exhaustive
+  — a field not listed here is not contract-bound):
+
+  | field | mutability |
+  | --- | --- |
+  | `method` (passive/full) | destructive: immutable past PRIMARY_PREP |
+  | `old_hub_action` | destructive: immutable past PRIMARY_PREP |
+  | `manage_auto_import_strategy` | destructive: immutable past PRIMARY_PREP |
+  | `--argocd-manage` | immutable once an ArgoCD pause journal exists (changing it would bypass the gates over outstanding entries) |
+  | `--argocd-resume-after-switchover` | immutable once an ArgoCD pause journal exists (changing it can silently drop the restoration obligation) |
+  | expectation waiver (Area D flag) | overridable with `--accept-changed-options` at any phase |
+  | `--skip-observability-checks` | overridable with `--accept-changed-options` at any phase |
+  | `tool_version` | informational: recorded, mismatch warns, never blocks |
+
+  "Immutable" fields reject even `--accept-changed-options`; changing them requires
+  `--reset-state` (or, for the ArgoCD flags, first settling every outstanding journal
+  entry via an explicit resume/rerun so the journal is terminal, after which the flags
+  fall back to overridable).
 - Every resume compares the live invocation against the contract **before any mutation**;
   any difference → fatal listing each `field: recorded → requested`.
 - New flag `--accept-changed-options`: re-records the contract and journals the old→new
   diff into state (audit trail). `--force` does not substitute. The override is
-  field-and-phase scoped: destructive-behavior fields (`method`, `old_hub_action`,
-  auto-import management) cannot be changed once the run has progressed beyond
-  PRIMARY_PREP even with the flag — those require `--reset-state`. Non-destructive fields
-  (ArgoCD resume behavior, observability skip, waiver) remain overridable at any phase
-  with the flag.
+  field-and-phase scoped per the canonical table above.
 - Legacy state without a contract: progressed legacy state (beyond PREFLIGHT) requires
   `--accept-changed-options` once to adopt the current invocation as the contract —
   adoption is an explicit, journaled act, not a silent recording. Un-progressed legacy
