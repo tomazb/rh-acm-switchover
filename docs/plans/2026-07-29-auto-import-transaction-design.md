@@ -58,13 +58,20 @@ Python (`modules/activation.py`):
 
 1. Read the ConfigMap; normalize `data: null` → `{}`.
 2. Record to state — persisted immediately by `set_config` — before any mutation:
+   - `auto_import_txn_id`: a fresh unique id (uuid4); recording it also clears any prior
+     terminal restore evidence, so stale evidence from an earlier transaction can never
+     satisfy this one's gate.
    - `auto_import_prior`: one of
      `{"state": "absent"}` |
      `{"state": "no_key", "uid": <cm-uid>}` |
      `{"state": "value", "value": "<X>", "uid": <cm-uid>}`
    - `auto_import_txn`: `"intent"`
 3. Apply the create/patch (unchanged call).
-4. Set `auto_import_txn`: `"applied"`.
+4. For the `absent` prior: immediately re-read and persist the created ConfigMap's UID
+   into `auto_import_prior` (`created_uid`). A crash between create and this record leaves
+   an `absent` prior without `created_uid`; restore then falls back to key-removal only —
+   it never deletes a ConfigMap whose creation it cannot prove (no unconditional delete).
+5. Set `auto_import_txn`: `"applied"`.
 
 Legacy migration: a state with the old `auto_import_strategy_set: true` boolean and no
 `auto_import_prior` is treated as `applied` with unknown prior → restore degrades to
@@ -72,32 +79,46 @@ remove-only-our-key plus an explicit warning that the original value could not b
 `auto_import_strategy_set` stops being written.
 
 Collection: the same record is written into checkpoint `operational_data` **before** the
-`kubernetes.core.k8s` task when checkpointing is enabled. When disabled, the existing
-`set_fact` ordering is moved before the mutation and the crash window (in-memory fact lost
-on abort) is documented in the role README — parity with Python durability requires
-checkpointing on, and the role docs say so.
+`kubernetes.core.k8s` task. Auto-import management **requires checkpointing**: the
+activation role asserts at entry that checkpointing is enabled when
+auto-import management is requested and fails otherwise — the in-memory `set_fact`-only
+mode is removed for this feature. This closes the checkpoint-disabled crash window
+instead of documenting it; the decommission gate (§4) additionally fails closed whenever
+required transaction evidence is absent.
 
 ### 2. Key-level restore (finalization)
 
 Restore reads `auto_import_txn` + `auto_import_prior` and inverts exactly:
 
-| captured prior | restore action | journal result |
+Before inverting, restore reads the live `autoImportStrategy` value and compares it with
+the temporary value this run wrote (`ImportAndSync`). If it differs — an operator or
+another actor changed it mid-switchover — restore preserves the live value, performs no
+mutation, and journals `restore_conflict` with both values (terminal result; surfaced as a
+warning-level completion note, not silently).
+
+| captured prior | restore action (live value == our temporary value) | journal result |
 | --- | --- | --- |
-| `absent` | read CM; if UID matches the create we performed → delete CM; else remove only our key and warn (someone replaced it) | `restored_deleted` / `restored_key_removed` |
+| `absent` with `created_uid` | delete CM with server-side UID precondition | `restored_deleted` |
+| `absent` without `created_uid` | patch removing only the `autoImportStrategy` key (creation unprovable — never unconditional delete) | `restored_key_removed` |
 | `no_key` | patch removing only the `autoImportStrategy` key | `restored_key_removed` |
 | `value X` | patch the key back to `X` | `restored_value` |
 | any, live value already matches prior | no-op | `restored_noop` |
+| any, live value ≠ our temporary value and ≠ prior | preserve live value, no mutation | `restore_conflict` |
 
 - `intent` (crash before/during apply): re-read the live ConfigMap and apply the same
   inversion against the captured prior — if the live value never changed, journal
   `restored_noop`.
-- UID check is read-before-delete (GET, compare captured UID, then delete). The remaining
-  TOCTOU window is accepted; `delete_configmap` gains no precondition parameters.
+- The delete uses a server-side UID precondition (`V1DeleteOptions.preconditions.uid` with
+  the captured `created_uid`); `delete_configmap` gains an optional precondition
+  parameter. Precondition mismatch (409/412) → leave the replacement ConfigMap intact,
+  refuse the delete, journal `restore_conflict`. No read-before-delete race remains.
 - Whole-ConfigMap deletion for a pre-existing ConfigMap is removed entirely.
 - Restore failure raises `SwitchoverError` (Python) / `ansible.builtin.fail` (collection)
   — no warning-only path. The "ownership unset" branch survives only for genuinely
   never-applied runs (`auto_import_txn` absent and legacy boolean absent).
-- Terminal journal result is recorded in state before the phase completes.
+- Terminal journal result is recorded in state before the phase completes, and carries
+  `auto_import_txn_id`; the decommission gate (§4) accepts terminal evidence only when its
+  id matches the current transaction's id.
 
 Collection `reset_auto_import.yml` mirrors the same table using the checkpoint record.
 
@@ -126,7 +147,10 @@ check in the decommission role against checkpoint data when present.
   ConfigMap mutated → correct inversion.
 - Legacy boolean migration path (remove-only-our-key + warning).
 - `data: null` for every reader (Python + both collection roles' Jinja).
-- UID-mismatch on `absent` prior → key removal, no delete.
+- Delete precondition mismatch on `absent` prior → replacement intact, `restore_conflict`.
+- `absent` prior without `created_uid` (crash before UID record) → key removal, never delete.
+- Live value changed by operator mid-run → `restore_conflict`, live value preserved.
+- Stale terminal evidence from an earlier `auto_import_txn_id` → gate still blocks.
 - Decommission gate: blocks on `applied`-without-restore, passes on terminal journal,
   passes on no-transaction state.
 - Collection parity tests for capture record shape and restore table.

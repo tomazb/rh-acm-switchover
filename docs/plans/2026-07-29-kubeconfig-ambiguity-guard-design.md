@@ -99,9 +99,11 @@ klusterlet restart) based on that resolution. Beyond the tracked hostname-collap
 
 ## Testing
 
-- Ambiguity matrix, each case asserting **zero mutating calls**: missing file, unreadable
-  file, oversized file, YAML error, duplicate YAML keys, duplicate name identical,
-  duplicate name differing, zero-match, multi-match.
+- Failure matrix, each case asserting **zero mutating calls**: missing file, unreadable
+  file, oversized file, YAML error, duplicate YAML keys, duplicate name differing,
+  zero-match, multi-match.
+- Duplicate name identical (byte-equal) is a *valid* case: asserts first-occurrence
+  selection and normal mutation proceeds.
 - Snapshot client: file modified between merge and client build → client uses snapshot
   values (assert via config dict), no re-read.
 - Relative-path absolutization: CA/cert/key/tokenFile relative to a non-CWD source file

@@ -36,7 +36,8 @@ Four gaps remain:
    and stable across resume.
 2. Name enforcement cannot be silently weakened by count arguments.
 3. Inventory reads on the migration path distinguish empty from missing-API.
-4. Integrated teardown requires migration evidence or an explicit journaled waiver.
+4. Integrated teardown requires migration evidence; an explicit journaled waiver can
+   substitute only for the expected-name predicate, never for restore-completion evidence.
 
 ## Non-goals
 
@@ -57,7 +58,22 @@ backup is final:
    backup per category (managed-clusters, credentials, resources), reusing the existing
    passive-sync discovery helpers where applicable.
 2. Journal to state **before** any Restore mutation (intent-first, consistent with the
-   auto-import design): `migration_backups = {names: {...}, resolved_at, backup_timestamps}`.
+   auto-import design), using one canonical versioned schema shared verbatim by the Python
+   state key and the collection checkpoint `operational_data` entry:
+
+   ```yaml
+   migration_backups:
+     schema_version: 1
+     resolved_at: "<iso8601>"
+     backups:
+       managed_clusters: {name: "<backup>", completed_at: "<iso8601>"}
+       credentials:      {name: "<backup>", completed_at: "<iso8601>"}
+       resources:        {name: "<backup>", completed_at: "<iso8601>"}
+     waiver: null | {flag: "<flag/var name>", journaled_at: "<iso8601>"}
+   ```
+
+   Resume (§1.4) and the teardown gate (§4) consume exactly this record in both
+   implementations; field names never diverge between Python and the collection.
 3. Create/patch the Restore with the concrete names — `latest` never reaches a Restore
    spec. Both the full-restore and passive-activation patch paths use the same journal.
 4. Resume: reuse journaled names verbatim. If a live Restore exists whose spec disagrees
@@ -92,10 +108,11 @@ result (then judged against expectations).
 
 `_decommission_old_hub` entry requires, from the run's own state:
 
-- activation journal: restore completed against journaled backup names, expected names
-  verified; and
-- post-activation journal: expected-name verification passed;
-- OR the §2 waiver present.
+- **unconditionally** (the waiver cannot bypass these): activation journal shows the
+  restore completed against the journaled backup names, and the post-activation phase
+  completed;
+- expected-name verification passed in both activation and post-activation — this
+  predicate, and only this one, is satisfiable by the §2 waiver instead.
 
 Anything missing → fail closed listing exactly which clusters or checks lack evidence.
 Pure state read — no new cluster calls. Standalone decommission is unaffected (its
@@ -123,7 +140,8 @@ wrong-target protection is `SSA-02`).
   validation error.
 - Strict reads: discovery 404 during activation inventory → fatal, not zero-cluster
   success.
-- Teardown gate: blocked without evidence, passes with evidence, passes with waiver,
+- Teardown gate: blocked without evidence; passes with full evidence; waiver satisfies
+  only the name predicate (waiver + missing restore-completion evidence still blocks);
   message names missing pieces.
 - Collection parity for journal shape, additivity, and gate.
 - Version bump per repo policy (Python + collection, synced).
@@ -148,4 +166,5 @@ cross-referenced as adjacent.
    flag, and the waiver is journaled.
 4. A discovery failure can never be read as an empty cluster inventory on the migration
    path.
-5. Integrated teardown without migration evidence or waiver fails closed.
+5. Integrated teardown without restore-completion evidence fails closed regardless of the
+   waiver; the waiver substitutes only for expected-name verification.

@@ -61,11 +61,13 @@ memory-mode state (as designed for `main`) is explicitly rejected here.
 ### 1. Full-fidelity simulation snapshot + crash marker
 
 - `capture_state_snapshot()` / the validate-only checkpoint are unified into one
-  full-fidelity snapshot: deep-copy of `current_phase`, `completed_steps`, `config`,
-  `errors`, `last_updated` (i.e., everything mutable). Restore returns the file to
-  byte-equivalent content for both `--validate-only` and `--dry-run`.
-- At capture, write `simulation_in_progress: {"mode": "dry_run"|"validate_only",
-  "started_at": ...}` to the state file; clear it during restore.
+  full-fidelity snapshot: capture the original state-file **bytes** (or an explicit
+  absent-file sentinel), not a field-level deep copy. Restore atomically writes the
+  captured bytes back — deleting the file when the original was absent — so both
+  `--validate-only` and `--dry-run` end byte-identical by construction.
+- Durably persist `simulation_in_progress: {"mode": "dry_run"|"validate_only",
+  "started_at": ...}` **before the first simulation write** (it is the first write), keep
+  it present on every intermediate write, and clear it as part of the byte restore.
 - On load, a present `simulation_in_progress` marker means a simulation died without
   restoring: fail closed with a message naming the mode, start time, and remedies
   (`--reset-state`, or manual inspection). No auto-repair — the snapshot lived in the
@@ -75,25 +77,31 @@ memory-mode state (as designed for `main`) is explicitly rejected here.
 ### 2. Parent-directory fsync
 
 After `os.replace` in `_write_state`: open the containing directory read-only, fsync, close.
-Failure to dir-fsync is logged at debug and non-fatal on platforms/filesystems that reject
-it (best-effort hardening, matching the temp-file fsync's spirit).
+Only explicitly-unsupported errors (`ENOTSUP`/`EINVAL`-class, e.g. filesystems that reject
+directory fsync) are suppressed and logged at debug; any other I/O failure propagates —
+a state write must not report success when its durability step failed.
 
 ### 3. Per-hub UID locks
 
 - After `ensure_hub_identities` resolves both cluster UIDs, acquire two flock files —
   sorted UID order to avoid AB/BA deadlock — at
   `/tmp/acm-switchover-<euid>/locks/<sha256(uid)>`, opened with `O_NOFOLLOW|O_CREAT`,
-  non-blocking, held until process exit.
+  non-blocking. Holding **both** locks is an explicit barrier: identity discovery
+  (read-only) completes first, then both locks are acquired before any cluster mutation,
+  simulation-marker write, legacy contract adoption, or state mutation beyond identity
+  recording. If the second lock cannot be acquired, the first is released before failing.
+  Both handles are held until process exit.
 - Contention → fatal: "another switchover is running against this hub" with the lock path.
-- The window before identities resolve is read-only (preflight identity discovery), so the
-  late acquisition is safe; document it.
 - Existing state-file run-lock and write-lock stay unchanged. Single-context operations
   (e.g. standalone decommission) lock the one UID they have.
 
 ### 4. Reset under lock; `--force` scope
 
-- `--reset-state` moves into StateManager: construct manager → acquire run lock → then
-  reset (reinitialize state) under the lock. The pre-construction `os.remove` at
+- `--reset-state` moves into StateManager as a construction mode that never parses or
+  validates the existing payload: resolve the state path → acquire the run lock → then
+  reinitialize/remove the file under the lock. A corrupt or schema-invalid state file must
+  not make reset fail on load — reset exists precisely for that case. Normal (non-reset)
+  construction keeps fail-closed payload validation. The pre-construction `os.remove` at
   `acm_switchover.py:1073-1083` is deleted. A concurrent run holding the lock makes reset
   fail fast instead of deleting live state.
 - `--force` no longer triggers `state.reset()` on the stale-COMPLETED or
@@ -110,9 +118,16 @@ it (best-effort hardening, matching the temp-file fsync's spirit).
 - Every resume compares the live invocation against the contract **before any mutation**;
   any difference → fatal listing each `field: recorded → requested`.
 - New flag `--accept-changed-options`: re-records the contract and journals the old→new
-  diff into state (audit trail). `--force` does not substitute.
-- Legacy state without a contract: record one from the current invocation on first
-  post-upgrade resume and continue (no retroactive failure), logged at info.
+  diff into state (audit trail). `--force` does not substitute. The override is
+  field-and-phase scoped: destructive-behavior fields (`method`, `old_hub_action`,
+  auto-import management) cannot be changed once the run has progressed beyond
+  PRIMARY_PREP even with the flag — those require `--reset-state`. Non-destructive fields
+  (ArgoCD resume behavior, observability skip, waiver) remain overridable at any phase
+  with the flag.
+- Legacy state without a contract: progressed legacy state (beyond PREFLIGHT) requires
+  `--accept-changed-options` once to adopt the current invocation as the contract —
+  adoption is an explicit, journaled act, not a silent recording. Un-progressed legacy
+  state records the contract silently (nothing to protect yet), logged at info.
 
 ### 6. Collection parity
 
@@ -136,7 +151,9 @@ it (best-effort hardening, matching the temp-file fsync's spirit).
   reinitializes.
 - `--force` on progressed state no longer resets; message points to `--reset-state`.
 - Contract: matrix over each contract field mismatch → fatal naming the field; override
-  flag re-records + journals; legacy state adopts silently.
+  flag re-records + journals; destructive-field change past PRIMARY_PREP rejected even
+  with the flag; progressed legacy state requires explicit adoption; un-progressed legacy
+  state adopts silently.
 - Collection: contract comparison + override variable parity.
 - Version bump per repo policy (Python + collection, synced).
 

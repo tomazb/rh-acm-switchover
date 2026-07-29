@@ -55,7 +55,12 @@ only and is complementary, not overlapping.
 
 Shared pattern for MCO and MCH (and per-cluster for ManagedClusters):
 
-1. Read the CR; record `metadata.uid`. Absent → step is a clean no-op.
+1. Read the CR; record `metadata.uid`. Absent → clean no-op **only when no teardown for
+   this resource was previously started**: each resource records a teardown phase in state
+   (`delete_started` → `cr_absent` → `drained`). A rerun that finds the CR absent but the
+   phase at `delete_started`/`cr_absent` must still run the pod-drain wait (step 4) before
+   marking `drained` — a prior run's drain timeout cannot be laundered into success by the
+   CR having disappeared in between.
 2. Delete by name (unchanged API call).
 3. Poll for **CR absence**: GET until 404/absent, bounded by the existing timeout
    constants. A CR that reappears with a *different* UID (replacement) → fatal — someone
@@ -98,13 +103,16 @@ returning `[]`. Used by decommission only:
 
 ### 4. Destination observability gate
 
-At integrated-decommission entry (`_decommission_old_hub`), when source observability is
-recorded true:
+Immediately before the source MCO deletion substep (not merely at
+`_decommission_old_hub` entry — no intervening mutations between check and delete), when
+source observability is recorded true:
 
 1. Fresh destination-hub check via the secondary client — MCO CR exists (strict list) and
-   observability namespace present. The preflight boolean is not trusted.
-2. Missing → fail closed: "source observability will be deleted but destination hub has no
-   observability — metrics continuity ends here."
+   observability namespace present. The preflight boolean is not trusted, and the source
+   lookup's clean-skip rule (§3) is **not** reused here: on the destination, missing
+   discovery, missing CRD, missing CR, or missing namespace all block equally.
+2. Missing/unverifiable → fail closed: "source observability will be deleted but
+   destination hub has no observability — metrics continuity ends here."
 3. Proceed only with a new explicit flag `--acknowledge-observability-not-migrated`
    (final name at implementation; validated like other acknowledgement flags). The flag is
    rejected when the gate would pass anyway (no stale acknowledgements).
@@ -126,6 +134,8 @@ kubeconfig/context is provided; a boolean ack variable mirrors the flag.
 ## Testing
 
 - Finalizer-stuck MCO (CR persists past timeout) → `SwitchoverError`, decommission halts.
+- Rerun after drain timeout with CR now absent → pod-drain wait still runs before
+  `drained`; teardown-phase record drives it.
 - Replacement UID mid-poll → fatal.
 - MCH: lingering CR → fatal; lingering *unrelated* pods (wrong labels) → success.
 - Refusal at each of the three prompts → abort, correct partial summary, non-zero result;
@@ -152,7 +162,9 @@ complementary (target identity/RBAC vs. completion/readiness).
 
 ## Acceptance criteria
 
-1. Decommission cannot report success while any targeted CR (same UID) still exists.
+1. Decommission cannot report success while any CR of a targeted name still exists —
+   same-UID survivors and different-UID replacements are both fatal through the completion
+   boundary.
 2. A refused substep yields a non-zero result and an accurate summary.
 3. Missing API discovery aborts before any deletion decision that depends on the list.
 4. Integrated decommission with source observability and a destination without it fails

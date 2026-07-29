@@ -97,9 +97,10 @@ operator audit what was seen.
   never sent. Applies to Python (`lib/argocd.py`), collection (`resume.yml`), and Bash.
 - Keep the existing resourceVersion precondition in Python and the collection (Bash stays
   without one — SSA-05 scope).
-- After a successful patch, re-read the Application and verify: (a) `automated` equals the
-  stored original (or classification is active when original was `{}`), (b) the pause
-  marker annotation is absent. On mismatch: per-app failure in the summary, overall
+- After a successful patch, re-read the Application and verify: (a) `automated` is
+  deep-equal to the stored original — including when the original was `{}`; a different
+  active object (e.g. `{"enabled": true}` or a prune-only object) is a verification
+  failure, with no normalization — (b) the pause marker annotation is absent. On mismatch: per-app failure in the summary, overall
   non-zero result (`SwitchoverError` / `ansible.builtin.fail` / exit ≠ 0). One re-read, no
   polling loop — controller drift after a verified restore is the operator's normal GitOps
   state, not a switchover concern.
@@ -122,8 +123,10 @@ and an equivalent pre-task include in the collection:
   jsonpath=...` inspection commands and the choice: re-pause (re-run primary-prep) or
   investigate/override.
 - Call sites (both un-checkpointed, executed on every pass):
-  1. ACTIVATION entry, only when the `pause_argocd_apps` step was restored from persisted
-     state rather than executed in-process (fresh runs just paused — no value re-checking);
+  1. ACTIVATION entry, on every pass — including fresh runs that paused in-process. A
+     controller or operator can re-enable auto-sync between the pause and activation within
+     the same run; the gate is cheap (one GET per journaled Application) and closes that
+     window too;
   2. `modules/finalization.py` immediately before `_decommission_old_hub()` when
      `--argocd-manage` was active for the run.
 - Dry-run: gates execute read-only and log what would block (consistent with the `F40`
@@ -141,8 +144,8 @@ per-app lines; Python `SwitchoverError` aggregating failed apps; collection
   (`automated` key present and null on pause; resume body contains only `automated` +
   marker removal); classification table test over the four shapes; resume verification
   success/mismatch; gate tests — marker stolen, auto-sync re-enabled, read error, 404,
-  empty journal, `skipped_disabled` re-enabled, clean pass; ACTIVATION call-site test
-  (restored-from-state vs fresh-run).
+  empty journal, `skipped_disabled` re-enabled, clean pass; ACTIVATION call-site tests:
+  restored-from-state resume AND same-run re-enable after an in-process pause both blocked.
 - **Collection**: parity tests extended with the same classification table and resume
   shape; new-assertion oracles must load the real `pause.yml`/`resume.yml` values (do not
   extend the hand-written oracle pattern flagged by `R3-T3`).

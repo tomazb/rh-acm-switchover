@@ -1530,13 +1530,15 @@ narration.
 
 ## Spec-Sourced Safety Review (2026-07-29)
 
-Origin: seven safety design specs written against `main` were used as a hypothesis
-source and cross-validated against `ansible` HEAD `0bf55db9` by two independent
-read-only passes (Claude exploration agents, then a full Codex revalidation: 20
-confirmed, 7 partially amended, 0 refuted). Only findings confirmed open on
-`ansible` and untracked above are recorded here. Approved slice designs live in
-`docs/plans/2026-07-29-*-design.md`; each slice below follows the standard Spec And
-Design Gate (the designs exist; implementation plans are still required).
+Origin: seven safety design specs written against `main` (external hypothesis
+source, not part of this branch) were cross-validated against `ansible` HEAD
+`0bf55db9` by two independent read-only passes (Claude exploration agents, then a
+full Codex revalidation: 20 confirmed, 7 partially amended, 0 refuted). Only
+findings confirmed open on `ansible` and untracked above are recorded here, grouped
+into the **six** new slice designs in `docs/plans/2026-07-29-*-design.md` (six, not
+seven: tracked-elsewhere issues were excluded and the kubeconfig design folds into
+existing `SSA-03`). Each slice follows the standard Spec And Design Gate (the
+designs exist; implementation plans are still required).
 
 ### Validated findings
 
