@@ -37,7 +37,8 @@ Four gaps remain:
 2. Name enforcement cannot be silently weakened by count arguments.
 3. Inventory reads on the migration path distinguish empty from missing-API.
 4. Integrated teardown requires migration evidence; an explicit journaled waiver can
-   substitute only for the expected-name predicate, never for restore-completion evidence.
+   substitute only for the expected-name predicate, never for restore provenance,
+   restore completion, or post-activation completion.
 
 ## Non-goals
 
@@ -77,10 +78,12 @@ backup is final:
        resources:        {name: "<backup>", completed_at: "<iso8601>"}
      restore:            # written by activation as evidence accrues (§4 reads only this)
        name: "<restore-cr-name>"
-       completed_at: null | "<iso8601>"       # set when Restore reached its terminal success phase
+       backup_names_verified_at: null | "<iso8601>"  # set when the completed live Restore's spec matched the journaled backup names (§1a)
+       completed_at: null | "<iso8601>"       # set when Restore reached its terminal success phase, last field written, after backup_names_verified_at
        names_verified_at: null | "<iso8601>"  # set when expected-name check passed in activation
      post_activation:
        names_verified_at: null | "<iso8601>"  # set when post-activation name check passed
+       completed_at: null | "<iso8601>"       # set last, only when every required post-activation operation succeeded
      waiver: null | {flag: "<flag/var name>", journaled_at: "<iso8601>"}
    ```
 
@@ -93,6 +96,31 @@ backup is final:
 
 Failure to resolve (no completed backup in a category the method requires) → fatal at
 activation entry, before any mutation.
+
+#### 1a. Restore backup-provenance evidence
+
+`restore.completed_at` alone does not prove the completed live Restore consumed the
+journaled backup names; `restore.backup_names_verified_at` records that proof, produced
+in exactly this order:
+
+1. Observe the live Restore reaching its required terminal success phase.
+2. Re-read the live Restore.
+3. Compare every Restore backup field consumed by the selected activation method against
+   the concrete journaled value.
+4. Per-method scope is preserved exactly: passive activation compares only the
+   ManagedCluster backup field; skipped credentials/resources fields remain skipped; full
+   restore compares every category it consumed; no comparison is required for a category
+   absent from the journal.
+5. Any mismatch, unreadable Restore, missing expected field, unexpected `latest` alias,
+   or malformed response → fail closed; no evidence is written.
+6. Only after the comparison succeeds, durably record `backup_names_verified_at` and
+   `completed_at` — preferably in one durable state update; otherwise `completed_at` is
+   the last field written, after `backup_names_verified_at`.
+7. Resume repeats the live-spec comparison (§1.4's fail-closed journal/live disagreement
+   rule) before accepting existing completion evidence.
+
+The teardown gate (§4) requires both `restore.backup_names_verified_at` and
+`restore.completed_at`; the §2 waiver bypasses neither.
 
 ### 2. Additive expectations
 
@@ -118,14 +146,23 @@ result (then judged against expectations).
 
 ### 4. Evidence gate before integrated teardown
 
+`post_activation.completed_at` is the final post-activation completion marker: it is
+written last, only after every required post-activation operation — including
+expected-name verification — has succeeded; it is never written when any later
+post-activation operation fails; and it must be durably written before finalization or
+integrated teardown may rely on it. `post_activation.names_verified_at` alone proves
+only the name check, not that later post-activation work completed.
+
 `_decommission_old_hub` entry requires, from the run's own state:
 
-- **unconditionally** (the waiver cannot bypass these): `restore.completed_at` is set and
-  the journaled `restore.name` matches — the Restore completed against the exact
-  journaled backup names — and the post-activation phase completed;
+- **unconditionally** (the waiver cannot bypass these): `restore.backup_names_verified_at`
+  is set (§1a — the completed Restore provably consumed the exact journaled backup
+  names), `restore.completed_at` is set and the journaled `restore.name` matches, and
+  `post_activation.completed_at` is set (all post-activation work completed);
 - expected-name verification passed in both activation and post-activation
   (`restore.names_verified_at` and `post_activation.names_verified_at` set) — this
-  predicate, and only this one, is satisfiable by the §2 waiver instead.
+  predicate, and only this one, is satisfiable by the §2 waiver instead. The waiver never
+  substitutes for restore provenance, restore completion, or post-activation completion.
 
 These fields are exactly the §1 schema's `restore`/`post_activation` block, written
 durably as each piece of evidence accrues — the gate stays a pure state read.
@@ -156,9 +193,22 @@ wrong-target protection is `SSA-02`).
   validation error.
 - Strict reads: discovery 404 during activation inventory → fatal, not zero-cluster
   success.
+- Backup-provenance evidence (§1a): exact live-spec/journal match → both fields written;
+  one consumed field mismatch → fail closed, no evidence; missing expected field → fail
+  closed; `latest` alias present in the live spec → fail closed; skipped
+  credentials/resources fields remain skipped and uncompared; passive activation compares
+  only the ManagedCluster field; full restore compares every consumed category;
+  unreadable or malformed live Restore → fail closed; resume with journal/live-spec
+  disagreement → fatal; teardown blocked when `backup_names_verified_at` is absent even
+  with `completed_at` set.
+- Post-activation completion marker: all post-activation work succeeds → `completed_at`
+  written last; name verification succeeds but a later post-activation operation fails →
+  `completed_at` absent and teardown blocked; `completed_at` written only after all work;
+  waiver present but `completed_at` missing → still blocks; resume preserves or
+  revalidates the marker per the state/resume contract.
 - Teardown gate: blocked without evidence; passes with full evidence; waiver satisfies
-  only the name predicate (waiver + missing restore-completion evidence still blocks);
-  message names missing pieces.
+  only the name predicate (waiver + missing restore-provenance, restore-completion, or
+  post-activation-completion evidence still blocks); message names missing pieces.
 - Collection parity for journal shape, additivity, and gate.
 - Version bump per repo policy (Python + collection, synced).
 
@@ -182,5 +232,7 @@ cross-referenced as adjacent.
    flag, and the waiver is journaled.
 4. A discovery failure can never be read as an empty cluster inventory on the migration
    path.
-5. Integrated teardown without restore-completion evidence fails closed regardless of the
-   waiver; the waiver substitutes only for expected-name verification.
+5. Integrated teardown without restore-provenance (`restore.backup_names_verified_at`),
+   restore-completion (`restore.completed_at`), or post-activation-completion
+   (`post_activation.completed_at`) evidence fails closed regardless of the waiver; the
+   waiver substitutes only for expected-name verification.

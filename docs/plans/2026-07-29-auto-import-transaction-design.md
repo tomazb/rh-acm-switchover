@@ -75,13 +75,21 @@ Python (`modules/activation.py`):
 3. Apply the create/patch (unchanged call).
 4. For the `absent` prior: immediately re-read and persist the created ConfigMap's UID
    into `auto_import_prior` (`created_uid`). A crash between create and this record leaves
-   an `absent` prior without `created_uid`; restore then falls back to key-removal only —
-   it never deletes a ConfigMap whose creation it cannot prove (no unconditional delete).
+   an `absent` prior without `created_uid`; absence of `created_uid` means creation
+   ownership is unprovable, so restore fails closed on any live same-name ConfigMap
+   (§2 table) — it never deletes, and never patches, an object whose creation it cannot
+   prove.
 5. Set `auto_import_txn`: `"applied"`.
 
 Legacy migration: a state with the old `auto_import_strategy_set: true` boolean and no
-`auto_import_prior` is treated as `applied` with unknown prior → restore degrades to
-remove-only-our-key plus an explicit warning that the original value could not be known.
+`auto_import_prior` is treated as `applied` with unknown prior. A legacy record carries
+neither a captured `uid` nor a `created_uid`, so object identity is unprovable — the
+same ownership rule as the `absent`-without-`created_uid` row applies: restore must not
+mutate a live same-name ConfigMap it cannot prove it touched. A live ConfigMap present →
+`restore_conflict` (fail closed, live object preserved, explicit message that the
+original value could not be known and manual recovery — inspect and remove the temporary
+`autoImportStrategy` by hand, or use the acknowledgement path — is required); live
+ConfigMap absent → `restored_noop`. Unconditional remove-only-our-key is not performed.
 At migration time a transaction id is minted and persisted for the legacy record, and the
 restore's terminal result carries it — so legacy runs neither stay blocked at the
 decommission gate (no id to match) nor pass it without matching evidence.
@@ -108,7 +116,8 @@ warning-level completion note, not silently).
 | captured prior | restore action (live value == our temporary value) | journal result |
 | --- | --- | --- |
 | `absent` with `created_uid` | if live CM still matches the tool-owned shape (`data` is exactly our one key; no operator-added keys/labels/annotations beyond creation defaults) → delete CM with server-side UID precondition; otherwise patch removing only our key (operator content appeared post-creation — preserve it) | `restored_deleted` / `restored_key_removed` |
-| `absent` without `created_uid` | patch removing only the `autoImportStrategy` key (creation unprovable — never unconditional delete) | `restored_key_removed` |
+| `absent` without `created_uid`, live CM absent | no-op (nothing exists; nothing of ours can remain) | `restored_noop` |
+| `absent` without `created_uid`, live CM present | no patch, no delete — creation ownership unprovable, live object preserved unchanged | `restore_conflict` |
 | `no_key` | patch removing only the `autoImportStrategy` key | `restored_key_removed` |
 | `value X` | patch the key back to `X` | `restored_value` |
 | any, live value already matches prior | no-op | `restored_noop` |
@@ -118,6 +127,15 @@ The `no_key` and `value` patch paths are UID-guarded too: restore compares the l
 ConfigMap UID with the captured `uid`; a mismatch (deleted and recreated since capture)
 or a missing object with prior `value X` → `restore_conflict`, no mutation. A missing
 object with prior `no_key` → `restored_noop` (nothing of ours remains).
+
+Ownership rules for the `absent`-without-`created_uid` conflict row (and every other
+unproven-identity path): absence of `created_uid` means creation ownership is
+unprovable; key removal is not safe merely because the live key currently equals
+`ImportAndSync` — a replacement ConfigMap created by another actor can legitimately
+carry that value; a same-name object must never be adopted as the transaction target;
+the `restore_conflict` journaled here is a fail-closed ownership conflict that keeps
+integrated decommission blocked (§4) and requires operator investigation, or an
+explicit, separately designed acknowledgement path, before teardown.
 
 - `intent` (crash before/during apply): re-read the live ConfigMap and apply the same
   inversion against the captured prior — if the live value never changed, journal
@@ -164,10 +182,17 @@ present.
   journal results; sibling keys asserted untouched.
 - Crash-window: state has `intent` + prior, ConfigMap unmutated → restore is `restored_noop`;
   ConfigMap mutated → correct inversion.
-- Legacy boolean migration path (remove-only-our-key + warning).
+- Legacy boolean migration path: live ConfigMap present → `restore_conflict`, object
+  untouched, unknown-prior manual-recovery message; live ConfigMap absent →
+  `restored_noop`; minted txn id carried either way.
 - `data: null` for every reader (Python + both collection roles' Jinja).
 - Delete precondition mismatch on `absent` prior → replacement intact, `restore_conflict`.
-- `absent` prior without `created_uid` (crash before UID record) → key removal, never delete.
+- `absent` prior without `created_uid` (crash before UID record): live ConfigMap absent →
+  `restored_noop`; live ConfigMap present with `autoImportStrategy: ImportAndSync` →
+  `restore_conflict`, no patch, no delete; live ConfigMap present with any other value →
+  `restore_conflict`, no patch, no delete; in every present case the live object is
+  byte-identical afterwards and the decommission gate stays blocked without the
+  acknowledgement flag.
 - Live value changed by operator mid-run → `restore_conflict`, live value preserved.
 - Stale terminal evidence from an earlier `auto_import_txn_id` → gate still blocks.
 - Decommission gate: blocks on `applied`-without-restore, blocks on `restore_conflict`
@@ -203,5 +228,6 @@ Plus one planned slice row referencing this design. `F20` cross-referenced as un
 4. `data: null` never surfaces as `AttributeError` in any implementation.
 5. Integrated decommission refuses to run with an unrestored transaction, naming the fix
    (run finalization / restore manually).
-6. Legacy state with `auto_import_strategy_set: true` restores via key-removal with an
-   explicit unknown-prior warning.
+6. Legacy state with `auto_import_strategy_set: true` never mutates a live same-name
+   ConfigMap it cannot prove it touched: present → fail-closed `restore_conflict` with an
+   explicit unknown-prior manual-recovery message; absent → `restored_noop`.

@@ -191,9 +191,19 @@ per-app lines; Python `SwitchoverError` aggregating failed apps; collection
   shape; new-assertion oracles must load the real `pause.yml`/`resume.yml` values (do not
   extend the hand-written oracle pattern flagged by `R3-T3`).
 - **Bash** (`tests/test_argocd_manage_script.py`): mock `oc` upgraded to capture and parse
-  the `-p` payload; assert `"automated":null` present on pause; assert re-read failure path
-  exits non-zero and does not journal. This closes the accept-any-patch blind spot that let
-  defect 1 ship.
+  the `-p` payload; assert `"automated":null` present on pause. This closes the
+  accept-any-patch blind spot that let defect 1 ship. Read-failure coverage is split to
+  match §1: a pre-patch or patch failure exits non-zero and journals nothing; a successful
+  patch followed by a failed post-patch read exits non-zero, does NOT journal the
+  Application as paused, and immediately writes a durable `verify_pending` entry that
+  preserves the original `automated` value and the run/application identity needed for
+  recovery. Further asserts: destructive-phase gates treat `verify_pending` as blocking; a
+  later successful re-read showing the paused shape plus this run's marker promotes the
+  entry to `paused`; a non-paused shape, marker mismatch, 404, malformed response, or
+  repeated read failure stays fail-closed (`verify_pending` retained); resume keeps the
+  restoration obligation until the entry is verifiably settled. The same
+  `verify_pending` test expectations apply to the Python and collection suites wherever
+  the shared §1/§4 behavior is implemented.
 - Version bump per repo policy (PATCH for Python+Bash+collection, synced).
 
 ## Tracker updates (same PR as this spec)
