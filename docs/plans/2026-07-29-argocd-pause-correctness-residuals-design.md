@@ -122,13 +122,22 @@ and an equivalent pre-task include in the collection:
 
 - Input: the persisted pause journal (state key `argocd_paused_apps` / collection
   checkpoint equivalent). If the journal is empty or absent, the gate passes trivially.
+- Journal entry states and gate treatment: `paused` and `verify_pending` are non-terminal;
+  `resumed` is the only terminal state and is skipped by gates. `skipped_disabled` is
+  informational, never terminal, and is always re-read (below).
+- `verify_pending` entries (pause patch succeeded but the post-patch read failed, §1)
+  block every gate until settled: the gate re-reads the Application; exact
+  `automated == null` with our marker → promote to `paused` (durably journaled) and apply
+  the normal `paused` checks; any other observed state → fail closed; read error → fail
+  closed, entry stays `verify_pending`.
 - For each journaled *paused* entry: GET the Application. Failure modes, each fail-closed:
   - read error (incl. 404) → `SwitchoverError` naming the app and error;
   - marker annotation missing or not this run's identity → fail (journal/cluster
     disagreement — someone else touched it);
   - classification says auto-sync active again → fail (re-enabled mid-switchover).
-- `skipped_disabled` entries are re-read and re-classified only; if now active → fail with
-  a message that auto-sync was enabled mid-switchover on a previously disabled app.
+- `skipped_disabled` entries are always re-read and re-classified, on every gate pass and
+  regardless of any terminal filtering; if now active → fail with a message that auto-sync
+  was enabled mid-switchover on a previously disabled app.
 - Failure message includes per-app `oc get application.argoproj.io -n <ns> <name> -o
   jsonpath=...` inspection commands and the choice: re-pause (re-run primary-prep) or
   investigate/override.
@@ -141,8 +150,9 @@ and an equivalent pre-task include in the collection:
      was active for the run — not merely before `_decommission_old_hub()`; earlier
      finalization steps already mutate (backup enablement, old-hub handling), and the gate
      must precede all of them.
-- Gate/resume ordering: the gate consumes only journal entries that are not yet terminal.
-  When `--argocd-resume-after-switchover` resumes an Application, its journal entry is
+- Gate/resume ordering: gates skip only `resumed`-terminal entries (per the state table
+  above — `skipped_disabled` is still re-read). When `--argocd-resume-after-switchover`
+  resumes an Application, its journal entry is
   marked terminal (`resumed`) **only after** the resume patch, the deep-equality
   restoration check, and the marker-absence check have all passed and the journal update
   is durably written; a failed or unverified restore keeps the entry non-terminal, so
@@ -165,7 +175,9 @@ per-app lines; Python `SwitchoverError` aggregating failed apps; collection
   (`automated` key present and null on pause; resume body contains only `automated` +
   marker removal); classification table test over the four shapes; resume verification
   success/mismatch; gate tests — marker stolen, auto-sync re-enabled, read error, 404,
-  empty journal, `skipped_disabled` re-enabled, clean pass; ACTIVATION call-site tests:
+  empty journal, `skipped_disabled` re-enabled, clean pass; `verify_pending` promotion to
+  `paused` on confirmed null, blocking on any other state or read error; ACTIVATION
+  call-site tests:
   restored-from-state resume AND same-run re-enable after an in-process pause both blocked.
 - **Collection**: parity tests extended with the same classification table and resume
   shape; new-assertion oracles must load the real `pause.yml`/`resume.yml` values (do not
