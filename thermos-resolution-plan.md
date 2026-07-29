@@ -1559,7 +1559,7 @@ designs exist; implementation plans are still required).
 | R4-B4 | Medium | Python + collection | Decommission ignores an unrestored auto-import transaction. |
 | R4-C1 | High | Python | MCH completion fails open: lingering non-operator pods only warn, MCH CR absence never re-checked, decommission reports success (`modules/decommission.py:420-455`). |
 | R4-C2 | High | Python | Interactive refusal of MCO/ManagedCluster/MCH prompts logs a skip and still flows to `return True` (`modules/decommission.py:69-98`). |
-| R4-C3 | Medium | Python + collection | No CR-absence proof or UID verification for MCO/MCH/ManagedCluster deletion; pod waits are namespace-wide with no label selector. |
+| R4-C3 | Medium | Python + collection | No server-side UID-preconditioned DELETE or CR-absence proof for MCO/MCH/ManagedCluster deletion; pod waits are namespace-wide with no label selector. |
 | R4-C4 | Medium | Python | 404→`[]` (`lib/kube_client.py:724-748`) makes missing discovery indistinguishable from an empty inventory in `_delete_managed_clusters` (`modules/decommission.py:172-176`). |
 | R4-C5 | Medium | Python + collection | No destination-observability check before source MCO deletion when destination observability was never detected (metrics continuity ends silently). |
 | R4-D1 | High | Python + collection | Restores bind to the moving `latest` alias (`modules/activation.py:339-350,453,793-804`); the consumed backup is never journaled; resume re-resolves. |
@@ -1582,7 +1582,7 @@ designs exist; implementation plans are still required).
 | --- | --- | --- | --- | --- |
 | R4-01 | planned | R4-A1, R4-A2, R4-A3, R4-A4 | `docs/plans/2026-07-29-argocd-pause-correctness-residuals-design.md` | Minimal Bash pause fix (lifecycle stays `SSA-05`), shared tri-state auto-sync classification, `automated`-only resume with post-resume verification, journal-scoped destructive-phase gates. |
 | R4-02 | planned | R4-B1, R4-B2, R4-B3, R4-B4 | `docs/plans/2026-07-29-auto-import-transaction-design.md` | Prior-state capture with durable intent before mutation, key-level restore, `data: null` normalization, decommission gate. |
-| R4-03 | planned | R4-C1, R4-C2, R4-C3, R4-C4, R4-C5 | `docs/plans/2026-07-29-decommission-completion-design.md` | CR-absence proof with UID verification, refusal-aborts semantics, scoped strict-404 list, destination-observability gate. |
+| R4-03 | planned | R4-C1, R4-C2, R4-C3, R4-C4, R4-C5 | `docs/plans/2026-07-29-decommission-completion-design.md` | Server-side UID-preconditioned DELETE with CR-absence proof, refusal-aborts semantics, scoped strict-404 list, destination-observability gate. |
 | R4-04 | planned | R4-D1, R4-D2, R4-D3, R4-D4 | `docs/plans/2026-07-29-migration-evidence-design.md` | Freeze `latest` to journaled concrete backup names at activation entry, additive name+count expectations with explicit waiver, strict inventory reads, evidence gate before teardown. |
 | R4-05 | planned | R4-E1, R4-E2, R4-E3, R4-E4, R4-E5, R4-E6 | `docs/plans/2026-07-29-state-integrity-residuals-design.md` | Full-fidelity simulation snapshot with crash marker, parent-dir fsync, per-hub UID locks, reset-under-lock with narrowed `--force`, run contract. |
 | R4-06 | planned | R4-F1, R4-F2, R4-F3 (+ SSA-PY2, SSA-A6) | `docs/plans/2026-07-29-kubeconfig-ambiguity-guard-design.md` | Extends `SSA-03`: fail-closed merge, duplicate-name rule, full-URL endpoint normalization, snapshot-built client, mutation barrier. `SSA-03` implementation should use this design. |

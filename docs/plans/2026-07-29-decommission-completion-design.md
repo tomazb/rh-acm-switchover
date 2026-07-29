@@ -34,8 +34,8 @@ only and is complementary, not overlapping.
 
 ## Goals
 
-1. Every deleted CR (MCO, MCH, ManagedClusters) is proven gone — same-UID absence — before
-   the step reports success.
+1. Every MCO, MCH, and ManagedCluster deletion is bound to the observed object identity by
+   a server-side UID precondition, then proven complete before the step reports success.
 2. A refused destructive substep can never produce a successful decommission.
 3. Decommission inventory reads distinguish empty from missing-API.
 4. Integrated decommission cannot silently end observability continuity.
@@ -66,10 +66,9 @@ Shared pattern for MCO and MCH (and per-cluster for ManagedClusters):
    (`V1DeleteOptions.preconditions.uid`) — a name-only delete has a TOCTOU gap where a
    replacement created between read and delete gets deleted and the absence poll then
    reads as success. Precondition mismatch (409/412) → fatal, naming the resource.
-   Applies to MCO, MCH, and each ManagedCluster. Collection: `kubernetes.core.k8s` does
-   not expose delete preconditions, so the role re-reads immediately before delete and
-   fails on UID change, then re-verifies UID after deletion — documented as the
-   compensating control until upstream supports preconditions.
+   Applies to MCO, MCH, and each ManagedCluster in both form factors. Python passes
+   `V1DeleteOptions(preconditions=V1Preconditions(uid=observed_uid))`. The collection uses
+   the collection-owned guarded-delete boundary defined below.
 3. Poll for **CR absence**: GET until 404/absent, bounded by the existing timeout
    constants. A CR that reappears with a *different* UID (replacement) → fatal — someone
    recreated it mid-teardown.
@@ -86,6 +85,100 @@ Shared pattern for MCO and MCH (and per-cluster for ManagedClusters):
 ManagedClusters: per-cluster read → UID → delete → confirm absent; aggregate failures into
 one `SwitchoverError` listing the survivors. Hive safety check runs before deletion as
 today.
+
+#### Collection-owned UID-preconditioned deletion boundary
+
+The collection implementation adds a thin custom module, provisionally
+`tomazb.acm_switchover.acm_uid_guarded_delete`, backed by a collection
+`plugins/module_utils/uid_guarded_delete.py` helper. This boundary remains collection-owned:
+it may use the Kubernetes Python client already required by the collection, but it must not
+import Python CLI production code.
+
+The module accepts these explicit inputs:
+
+| Input | Contract |
+| --- | --- |
+| `kubeconfig`, `context` | Required explicit hub routing; never fall back to ambient/default kubeconfig or context. |
+| `api_version`, `kind` | Required discovery identity. |
+| `namespace` | Optional only for cluster-scoped resources; validate it against the discovered resource scope. |
+| `name`, `expected_uid` | Required non-empty object identity. |
+| `request_timeout`, `wait_timeout`, `wait_sleep` | Positive, bounded request and completion budgets. |
+
+The helper follows the collection's existing client-factory pattern:
+`config.new_client_from_config(..., persist_config=False, config_file=kubeconfig,
+context=context)`, per-request timeouts, and dynamic API discovery for the supplied API
+version and kind. The module supports check mode and owns the complete read → conditional
+DELETE → wait → final verification state machine:
+
+1. Perform a live GET through the explicitly selected client. Only an API 404 means
+   already absent. Discovery, authorization, TLS, timeout, transport, decode, and every
+   other read failure mean **unverifiable** and fail closed.
+2. Compare the live `metadata.uid` to `expected_uid`. Missing UID or a different UID is
+   fatal; do not issue DELETE. This re-read narrows stale-input errors but is supplementary
+   defense, not the race-closing primitive.
+3. In check mode, stop after the live read and UID validation. Do not issue a DELETE or
+   poll for a mutation. Return `changed: false` plus an explicit `would_change: true` for a
+   matching present object; an already-absent object returns `changed: false`,
+   `would_change: false`.
+4. In execute mode, issue DELETE for the supplied name with a body equivalent to
+   `V1DeleteOptions(preconditions=V1Preconditions(uid=expected_uid))`. The UID is evaluated
+   by the API server atomically with deletion. HTTP 409 and 412 are fatal precondition
+   conflicts; never retry them as an unconditional or name-only delete.
+5. If the object disappears after the live read but before DELETE and DELETE reports 404,
+   perform a final live verification. Confirmed absence is an idempotent `changed: false`
+   result. A replacement or an unverifiable read is fatal.
+6. After a 200/202 acceptance of the preconditioned DELETE, poll with a monotonic,
+   bounded deadline. The same UID still present means deletion is pending; 404 means
+   absent; the same name with a different UID is immediately fatal and must survive.
+   Discovery/read errors are fatal, not absence. Timeout while the same UID remains is
+   fatal.
+7. Before successful return, perform one final live GET. Only confirmed 404 completes the
+   contract. Any object at that name, including a different-UID replacement created after
+   an earlier 404, is fatal.
+
+Successful execute-mode reporting is exact:
+
+- already absent, or confirmed disappearance before DELETE acceptance:
+  `changed: false`;
+- `changed: true` only after the intended UID's DELETE request was accepted and the
+  bounded completion plus final-absence contract succeeded;
+- mismatch, precondition conflict, timeout, replacement, ambiguous response, or
+  unverifiable read: a failed result, never a successful changed result.
+
+Every error and result is sanitized at the module boundary. Public output is limited to a
+stable operation stage, API status/reason classification, and the non-secret resource
+identity. It must never serialize or interpolate raw exception bodies, response headers,
+client configuration, kubeconfig contents, bearer tokens, client certificates, private
+keys, Secret data, or other credential material. The role task invoking the module also
+uses `no_log: true` so callback failure rendering cannot expose module arguments; a
+subsequent fixed-text fail task may publish only the sanitized result.
+
+This module replaces the name-based `kubernetes.core.k8s` deletion tasks for MCO, MCH, and
+ManagedClusters. The role passes the exact primary-hub kubeconfig/context and the UID from
+its live discovery into each invocation. Role-level re-reads, pod-drain waits, and final
+checks remain useful supplementary defenses, but **a name-based
+`kubernetes.core.k8s state=absent` call plus reads before and after it does not close the
+read/DELETE race and is not an acceptable substitute for the server-side UID
+precondition**.
+
+Primary API basis:
+
+- Kubernetes defines delete [preconditions][kubernetes-preconditions] as conditions that
+  must be fulfilled before an operation and defines `uid` as the target UID.
+- The official Kubernetes Python client
+  [models `V1DeleteOptions.preconditions`][kubernetes-python-delete-options] as
+  `V1Preconditions`, matching the Python-side request body used here.
+- Current `kubernetes.core.k8s` documentation exposes
+  [`delete_options.preconditions.uid`][kubernetes-core-delete] (added in
+  `kubernetes.core` 1.2.0), explicit `kubeconfig`/`context`, check mode, and bounded
+  deletion waiting. This corrects the earlier claim that the module did not expose delete
+  preconditions. It does not make an invocation that omits `delete_options.preconditions`
+  safe, and it does not replace the collection-owned state machine and redaction contract
+  above.
+
+[kubernetes-preconditions]: https://kubernetes.io/docs/reference/kubernetes-api/definitions/preconditions-v1-meta/
+[kubernetes-python-delete-options]: https://github.com/kubernetes-client/python/blob/master/kubernetes/client/models/v1_delete_options.py
+[kubernetes-core-delete]: https://docs.ansible.com/projects/ansible/latest/collections/kubernetes/core/k8s_module.html
 
 ### 2. Refusal aborts
 
@@ -134,11 +227,14 @@ kubeconfig/context is provided; a boolean ack variable mirrors the flag.
 
 ### 5. Collection parity
 
-- `roles/decommission/tasks/delete_observability.yml`: pod wait gains the label selector;
-  after the wait, re-list MCO and fail if present (the `state: absent` + `wait: true`
-  delete already blocks, this adds the replacement-UID/reappearance guard).
-- MCH task: same completion proof (CR absence poll + selector-scoped pod wait, fail on
-  timeout).
+- `roles/decommission/tasks/delete_observability.yml`,
+  `delete_multiclusterhub.yml`, and `delete_managed_clusters.yml` route MCO, MCH, and each
+  ManagedCluster through `acm_uid_guarded_delete`; no name-only `state: absent` task remains
+  for those resources.
+- Every invocation passes explicit primary-hub kubeconfig/context, API version, kind,
+  namespace where applicable, name, observed UID, and bounded wait values.
+- MCO and MCH pod waits gain the scoped selectors, and post-drain live reads preserve the
+  through-completion replacement guard from §1.
 - Roles are non-interactive; refusal semantics don't apply, but failed/partial status
   parity with Python must hold (no `failed_when: false` on these paths).
 
@@ -147,7 +243,8 @@ kubeconfig/context is provided; a boolean ack variable mirrors the flag.
 - Finalizer-stuck MCO (CR persists past timeout) → `SwitchoverError`, decommission halts.
 - Rerun after drain timeout with CR now absent → pod-drain wait still runs before
   `drained`; teardown-phase record drives it.
-- Replacement UID mid-poll → fatal.
+- Python: expected UID deletion succeeds; server-side 409/412 precondition conflict is
+  fatal; replacement UID mid-poll is fatal and survives.
 - MCH: lingering CR → fatal; lingering *unrelated* pods (wrong labels) → success.
 - Refusal at each of the three prompts → abort, correct partial summary, non-zero result;
   rerun completes idempotently.
@@ -155,7 +252,29 @@ kubeconfig/context is provided; a boolean ack variable mirrors the flag.
   → fatal; both absent → skip.
 - Destination gate: destination missing obs → blocked; with ack flag → proceeds; destination
   has obs → passes without flag; flag with passing gate → rejected.
-- Collection: selector-scoped waits, CR re-list failure path, gate parity.
+- Collection module/helper tests:
+  - expected UID is deleted successfully and returns `changed: true` only after bounded
+    completion and final confirmed absence;
+  - a replacement created before DELETE produces a server-side precondition failure and
+    survives;
+  - disappearance before DELETE returns `changed: false` only after confirmed absence;
+  - the same name with a different UID during polling fails immediately and survives;
+  - HTTP 409 and 412 are fatal and never fall back to a name-only delete;
+  - check mode performs the live read/UID validation without DELETE, reports
+    `changed: false`, and reports `would_change` accurately;
+  - already absent reports `changed: false`, while successful accepted-and-completed
+    deletion reports `changed: true`;
+  - GET 404 is distinguished from discovery, authorization, transport, timeout, and decode
+    failures;
+  - explicit kubeconfig and context reach client construction and no ambient routing is
+    used;
+  - request, poll, and total wait budgets are bounded; same-UID timeout fails;
+  - injected API errors containing kubeconfig text, bearer tokens, client certificates,
+    private keys, response headers/bodies, and Secret material are redacted from module
+    results, failure messages, and callback-visible output.
+- Collection role/static-contract tests prove MCO, MCH, and ManagedCluster coverage,
+  selector-scoped pod waits, post-drain re-reads, sanitized failure tasks, and the
+  destination-observability gate.
 - Version bump per repo policy (Python + collection, synced).
 
 ## Tracker updates (same PR)
@@ -164,7 +283,7 @@ kubeconfig/context is provided; a boolean ack variable mirrors the flag.
 | --- | --- | --- |
 | new-C1 | High | MCH completion fails open: warns on lingering pods, never re-checks CR, reports success |
 | new-C2 | High | Interactive refusals of destructive substeps still return overall success |
-| new-C3 | Medium | No CR-absence proof or UID verification for MCO/MCH/ManagedCluster deletion; pod waits unscoped |
+| new-C3 | Medium | No server-side UID-preconditioned DELETE or CR-absence proof for MCO/MCH/ManagedCluster deletion; pod waits unscoped |
 | new-C4 | Medium | 404→[] makes missing discovery indistinguishable from empty inventory in decommission |
 | new-C5 | Medium | No destination-observability check before source MCO deletion (metrics continuity) |
 
@@ -173,9 +292,10 @@ complementary (target identity/RBAC vs. completion/readiness).
 
 ## Acceptance criteria
 
-1. Decommission cannot report success while any CR of a targeted name still exists —
-   same-UID survivors and different-UID replacements are both fatal through the completion
-   boundary.
+1. Every MCO, MCH, and ManagedCluster deletion is server-side UID-preconditioned in both
+   form factors. Decommission cannot report success while any CR of a targeted name still
+   exists — same-UID survivors and different-UID replacements are both fatal through the
+   completion boundary.
 2. A refused substep yields a non-zero result and an accurate summary.
 3. Missing API discovery aborts before any deletion decision that depends on the list.
 4. Integrated decommission with source observability and a destination without it fails
