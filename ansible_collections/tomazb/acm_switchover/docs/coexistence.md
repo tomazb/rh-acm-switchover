@@ -113,3 +113,18 @@ an actionable conflict instead of overwriting newly changed ownership.
 The `app.kubernetes.io/instance` label is treated as `UNRELIABLE` by the marker detector
 and must not be used as a definitive GitOps signal. Use `argocd.argoproj.io/instance`
 or `app.kubernetes.io/managed-by: argocd` instead.
+
+## Pause register invariant
+
+The Python implementation's `argocd_paused_apps` state list is a *pause
+register* (ADR-0001, `docs/adr/0001-pause-register-invariant.md`): its entries
+are exactly the Applications currently paused by this tool. Resume removes an
+entry immediately when its Application is restored (or found already resumed);
+failed entries stay for retry. Dry-run records nothing in the register, and the
+register is never cleared just because the Applications CRD stops being visible
+— only an empty register is cleaned up on CRD-visibility loss.
+
+The collection's checkpoint/cluster-as-truth model is the equivalent register
+on the Ansible side: the cluster-side `paused-by` markers plus the checkpoint
+scope play the same role, and both form factors share the marker-ownership and
+resourceVersion-conditional patch rules documented above.
