@@ -239,7 +239,7 @@ def run_argocd_resume_only(
         logger.error("Resume-only hub identity validation failed: %s", exc)
         return False
 
-    summary = register.resume(resume_primary, resume_secondary, logger)
+    summary = register.resume(resume_primary, resume_secondary)
     if summary.dry_run:
         logger.info(
             "[DRY-RUN] Would restore %d and skip %d already-resumed Application(s); "
@@ -295,7 +295,7 @@ def attempt_argocd_resume_on_failure(
             allow_primary_load_from_state=False,
             kube_client_factory=kube_client_factory,
         )
-        summary = register.resume(resume_primary, resume_secondary, logger)
+        summary = register.resume(resume_primary, resume_secondary)
         logger.info(
             "Argo CD resume-on-failure%s: restored=%d, already_resumed=%d, failed=%d",
             " [DRY-RUN, would have]" if summary.dry_run else "",

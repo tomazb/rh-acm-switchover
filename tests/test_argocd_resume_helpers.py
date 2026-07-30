@@ -200,7 +200,7 @@ def test_run_argocd_resume_only_uses_prepare_clients_and_register_resume():
         allow_primary_load_from_state=True,
         kube_client_factory=KubeClient,
     )
-    register_resume.assert_called_once_with(primary, secondary, logger)
+    register_resume.assert_called_once_with(primary, secondary)
 
 
 def test_attempt_argocd_resume_on_failure_clears_pause_state_only_after_full_success():

@@ -169,7 +169,7 @@ class TestArgocdResumeOnly:
 
             assert _run_argocd_resume_only(args, state, primary, secondary, logger) is True
 
-        resume_recorded.assert_called_once_with(primary, secondary, logger)
+        resume_recorded.assert_called_once_with(primary, secondary)
 
     def test_resume_only_full_success_empties_register_and_clears_run_id(self, tmp_path):
         """Integration: after a fully successful resume-only, the register is empty and run_id cleared (ADR-0001)."""
@@ -225,7 +225,7 @@ class TestArgocdResumeOnly:
             assert _run_argocd_resume_only(args, state, None, secondary, logger) is True
 
         kube_client.assert_called_once_with("hub-a", dry_run=False)
-        resume_recorded.assert_called_once_with(created_primary, secondary, logger)
+        resume_recorded.assert_called_once_with(created_primary, secondary)
 
     def test_resume_only_swaps_clients_when_contexts_are_reversed(self):
         from acm_switchover import _run_argocd_resume_only
@@ -254,7 +254,7 @@ class TestArgocdResumeOnly:
 
             assert _run_argocd_resume_only(args, state, primary, secondary, logger) is True
 
-        resume_recorded.assert_called_once_with(secondary, primary, logger)
+        resume_recorded.assert_called_once_with(secondary, primary)
 
     def test_resume_only_fails_when_state_missing(self):
         from acm_switchover import _run_argocd_resume_only
@@ -426,7 +426,7 @@ class TestArgocdResumeOnly:
 
             assert _run_argocd_resume_only(args, state, primary, secondary, logger) is True
 
-        resume_recorded.assert_called_once_with(primary, secondary, logger)
+        resume_recorded.assert_called_once_with(primary, secondary)
 
     def test_resume_only_leaves_unknown_hub_entries_to_resume_summary(self, caplog):
         from acm_switchover import _run_argocd_resume_only

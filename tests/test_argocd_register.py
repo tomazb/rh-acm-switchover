@@ -1423,12 +1423,6 @@ def _register_entry(hub, name, *, pause_applied=True):
     }
 
 
-def _resume_logger():
-    import logging
-
-    return logging.getLogger("acm_switchover")
-
-
 @pytest.mark.unit
 class TestRegisterResume:
     """resume(): ADR-0001 invariant - successful entries leave the register immediately."""
@@ -1448,7 +1442,7 @@ class TestRegisterResume:
         )
 
         register = ArgocdPauseRegister(state, dry_run=False)
-        summary = register.resume(None, client, _resume_logger())
+        summary = register.resume(None, client)
 
         assert summary.dry_run is False
         assert summary.restored == 2
@@ -1467,7 +1461,7 @@ class TestRegisterResume:
         client = _make_resume_client({("argocd", "app-1"): live})
 
         register = ArgocdPauseRegister(state, dry_run=False)
-        summary = register.resume(None, client, _resume_logger())
+        summary = register.resume(None, client)
 
         assert summary.already_resumed == 1
         assert summary.remaining == 0
@@ -1484,7 +1478,7 @@ class TestRegisterResume:
         )
 
         register = ArgocdPauseRegister(state, dry_run=False)
-        summary = register.resume(None, client, _resume_logger())
+        summary = register.resume(None, client)
 
         assert summary.failed == 1
         assert summary.remaining == 1
@@ -1499,7 +1493,7 @@ class TestRegisterResume:
         client = _make_resume_client({("argocd", "app-1"): _live_paused_app("argocd", "app-1", "run-1")})
 
         register = ArgocdPauseRegister(state, dry_run=False)
-        summary = register.resume(None, client, _resume_logger())
+        summary = register.resume(None, client)
 
         assert summary.restored == 1
         client.patch_custom_resource.assert_called_once()
@@ -1512,7 +1506,7 @@ class TestRegisterResume:
         client = _make_resume_client({("argocd", "app-1"): _live_paused_app("argocd", "app-1", "run-1")})
 
         register = ArgocdPauseRegister(state, dry_run=True)
-        summary = register.resume(None, client, _resume_logger())
+        summary = register.resume(None, client)
 
         assert summary.restored == 1
         assert summary.dry_run is True
@@ -1530,7 +1524,7 @@ class TestRegisterResume:
         )
 
         register = ArgocdPauseRegister(state, dry_run=False)
-        summary = register.resume(None, _make_resume_client({}), _resume_logger())
+        summary = register.resume(None, _make_resume_client({}))
 
         assert summary.failed == 2
         assert summary.remaining == 2
@@ -1541,7 +1535,7 @@ class TestRegisterResume:
         state = _make_real_state(tmp_path)
 
         register = ArgocdPauseRegister(state, dry_run=False)
-        summary = register.resume(None, _make_resume_client({}), _resume_logger())
+        summary = register.resume(None, _make_resume_client({}))
 
         assert (summary.restored, summary.already_resumed, summary.failed, summary.remaining) == (0, 0, 0, 0)
 

@@ -214,8 +214,7 @@ class ArgocdPauseRegister:
         self,
         primary: Optional[KubeClient],
         secondary: Optional[KubeClient],
-        logger: logging.Logger,
-    ) -> "argocd_lib.ResumeSummary":
+    ) -> argocd_lib.ResumeSummary:
         """
         Resume auto-sync for every registered Application.
 
