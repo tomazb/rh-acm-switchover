@@ -128,7 +128,7 @@ class PrimaryPreparation:
             )
         if summary.failed:
             raise SwitchoverError(f"Argo CD auto-sync pause failed for {summary.failed} Application(s)")
-        run_id = self.state.get_config("argocd_run_id")
+        run_id = coordinator.status().run_id
         if run_id is not None:
             logger.info(
                 "Argo CD: %d Application(s) %s (run_id=%s). "

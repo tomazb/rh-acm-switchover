@@ -116,3 +116,30 @@ def test_write_json_report_artifact_rejects_final_file_symlink(tmp_path, monkeyp
         write_json_report_artifact({"schema_version": "1.0"}, "artifacts/report.json")
 
     assert not (outside / "report.json").exists()
+
+
+def test_argocd_report_counts_only_confirmed_paused_entries():
+    """F2: the report artifact must agree with ArgocdPauseRegister.status()."""
+    report = build_operation_report(
+        report_type="switchover",
+        status="pass",
+        source="python-cli",
+        args=SimpleNamespace(primary_context="primary", secondary_context="secondary"),
+        state_snapshot={
+            "current_phase": "completed",
+            "completed_steps": [],
+            "errors": [],
+            "config": {
+                "argocd_run_id": "run-1",
+                "argocd_paused_apps": [
+                    {"hub": "primary", "namespace": "argocd", "name": "app-1", "pause_applied": True},
+                    {"hub": "primary", "namespace": "argocd", "name": "app-2", "pause_applied": False},
+                    {"hub": "primary", "namespace": "argocd", "name": "legacy-dry", "dry_run": True},
+                    "garbage",
+                ],
+            },
+        },
+    )
+
+    assert report["argocd"]["run_id"] == "run-1"
+    assert report["argocd"]["summary"] == {"paused": 1, "restored": 0}

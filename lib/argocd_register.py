@@ -8,7 +8,7 @@ hubs. Used by both PrimaryPreparation (full switchover) and restore-only mode.
 import copy
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from lib import argocd as argocd_lib
 from lib.constants import (
@@ -75,10 +75,28 @@ class ArgocdPauseRegister:
         self.state = state
         self.dry_run = dry_run
 
+    @classmethod
+    def _sanitize_entries(cls, raw: Any) -> List[Dict[str, Any]]:
+        """Register entries from a raw state value (deep copy); non-dict and legacy dry-run entries dropped."""
+        if not isinstance(raw, list):
+            return []
+        return [copy.deepcopy(entry) for entry in raw if isinstance(entry, dict) and not entry.get("dry_run")]
+
     def load_entries(self) -> List[Dict[str, Any]]:
         """Current register entries (deep copy); non-dict and legacy dry-run entries dropped."""
-        raw = self.state.get_config(STATE_KEY_ARGOCD_PAUSED_APPS) or []
-        return [copy.deepcopy(entry) for entry in raw if isinstance(entry, dict) and not entry.get("dry_run")]
+        return self._sanitize_entries(self.state.get_config(STATE_KEY_ARGOCD_PAUSED_APPS))
+
+    @classmethod
+    def status_from_config(cls, config: Mapping[str, Any]) -> RegisterStatus:
+        """Register snapshot read from a raw state config mapping.
+
+        For callers that hold a state snapshot rather than a StateManager
+        (report artifacts). Keeps the register the only reader of its own
+        state keys and its own entry filtering rules.
+        """
+        entries = cls._sanitize_entries(config.get(STATE_KEY_ARGOCD_PAUSED_APPS))
+        applied = [entry for entry in entries if cls._is_pause_applied(entry)]
+        return RegisterStatus(paused_count=len(applied), run_id=config.get(STATE_KEY_ARGOCD_RUN_ID))
 
     def status(self) -> RegisterStatus:
         """Snapshot of the register: confirmed-paused entry count and run id."""

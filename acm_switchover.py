@@ -55,7 +55,6 @@ from lib.constants import (
     MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
     OBSERVABILITY_NAMESPACE,
     STATE_DIR_ENV_VAR,
-    STATE_KEY_ARGOCD_RUN_ID,
     STEP_PAUSE_ARGOCD_APPS,
     TOKEN_DURATION_DEFAULT,
 )
@@ -501,7 +500,7 @@ def _run_restore_only_argocd_pause(
             logger,
         )
 
-    run_id = state.get_config(STATE_KEY_ARGOCD_RUN_ID)
+    run_id = coordinator.status().run_id
     if run_id is not None:
         logger.info(
             "Argo CD: %d Application(s) %s on secondary hub (run_id=%s). "
