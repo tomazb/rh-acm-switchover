@@ -146,10 +146,25 @@ a state write must not report success when its durability step failed.
   diff into state (audit trail) for class B fields whose condition permits it. `--force`
   does not substitute. The override is field-and-condition scoped per the canonical table
   above.
-- Legacy state without a contract: progressed legacy state (beyond PREFLIGHT) requires
-  `--accept-changed-options` once to adopt the current invocation as the contract —
-  adoption is an explicit, journaled act, not a silent recording. Un-progressed legacy
-  state records the contract silently (nothing to protect yet), logged at info.
+- Legacy state without a contract:
+  - **Un-progressed** legacy state (at or before PREFLIGHT) records the contract silently
+    from the current invocation — nothing has been executed yet, so there is nothing to
+    protect — logged at info.
+  - **Progressed** legacy state (beyond PREFLIGHT) is *not* adoptable by
+    `--accept-changed-options`. That flag is the class B override, and a legacy record
+    carries no baseline for the class A fields (`method`, `activation_method`,
+    `old_hub_action`, `manage_auto_import_strategy`), so adopting the current invocation
+    would let those destructive values be set from an unverified command line **after**
+    the work they govern has already run — precisely the silent change class A exists to
+    prevent, and it would be indistinguishable from an operator resuming with different
+    destructive options. Two paths only: `--reset-state`, or an explicit audited legacy
+    migration in which the operator states the class A values the recorded progress was
+    executed under. That migration is accepted only when those values are supplied
+    explicitly (never defaulted from the current invocation), is journaled with actor,
+    timestamp, reason, and the supplied values, and is refused when the state's own
+    evidence contradicts them. Class B and C fields are recorded from the current
+    invocation in the same durable act. After migration the contract is ordinary and all
+    three classes apply normally.
 
 #### Mismatch decision model
 
@@ -276,8 +291,10 @@ safety-critical behavior; it is recorded for diagnostics only.
   - `--force` alone authorizes no contract change in any class;
   - `--min-managed-clusters` and the expectation-waiver flag are explicitly covered,
     including their any-phase override eligibility;
-  - progressed legacy state requires explicit adoption; un-progressed legacy state
-    adopts silently.
+  - progressed legacy state is refused by `--accept-changed-options` alone and requires
+    either `--reset-state` or the audited legacy migration with explicitly supplied
+    class A values, which is journaled and is refused when the state's own evidence
+    contradicts the supplied values; un-progressed legacy state adopts silently.
 - Collection: the same vectors over the same complete field set produce the same
   class, phase decision, override outcome, and audit-record content as Python.
 
