@@ -1448,6 +1448,7 @@ class TestRegisterResume:
         register = ArgocdPauseRegister(state, dry_run=False)
         summary = register.resume(None, client, _resume_logger())
 
+        assert summary.dry_run is False
         assert summary.restored == 2
         assert summary.failed == 0
         assert summary.remaining == 0
@@ -1512,6 +1513,7 @@ class TestRegisterResume:
         summary = register.resume(None, client, _resume_logger())
 
         assert summary.restored == 1
+        assert summary.dry_run is True
         client.get_custom_resource.assert_not_called()
         client.patch_custom_resource.assert_not_called()
         assert state.get_config("argocd_paused_apps") == [_register_entry("secondary", "app-1")]

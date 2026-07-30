@@ -248,12 +248,21 @@ def run_argocd_resume_only(
         return False
 
     summary = register.resume(resume_primary, resume_secondary, logger)
-    logger.info(
-        "Restored %d and already resumed %d Application(s); %d remaining in register.",
-        summary.restored,
-        summary.already_resumed,
-        summary.remaining,
-    )
+    if summary.dry_run:
+        logger.info(
+            "[DRY-RUN] Would restore %d and skip %d already-resumed Application(s); "
+            "%d would remain in the register.",
+            summary.restored,
+            summary.already_resumed,
+            summary.remaining,
+        )
+    else:
+        logger.info(
+            "Restored %d and already resumed %d Application(s); %d remaining in register.",
+            summary.restored,
+            summary.already_resumed,
+            summary.remaining,
+        )
     if summary.failed:
         logger.error("Argo CD auto-sync restore failed for %d Application(s).", summary.failed)
         return False
@@ -297,7 +306,8 @@ def attempt_argocd_resume_on_failure(
         )
         summary = register.resume(resume_primary, resume_secondary, logger)
         logger.info(
-            "Argo CD resume-on-failure: restored=%d, already_resumed=%d, failed=%d",
+            "Argo CD resume-on-failure%s: restored=%d, already_resumed=%d, failed=%d",
+            " [DRY-RUN, would have]" if summary.dry_run else "",
             summary.restored,
             summary.already_resumed,
             summary.failed,

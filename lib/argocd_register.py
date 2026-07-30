@@ -197,7 +197,7 @@ class ArgocdPauseRegister:
         """
         entries = self.load_entries()
         run_id = self.state.get_config(STATE_KEY_ARGOCD_RUN_ID)
-        summary = argocd_lib.ResumeSummary()
+        summary = argocd_lib.ResumeSummary(dry_run=self.dry_run)
         if not run_id or not entries:
             logger.info("No Argo CD paused apps in state; nothing to resume")
             return summary

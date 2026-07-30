@@ -870,3 +870,43 @@ class TestArgocdResumeOnlyContextMismatch:
 
         assert result is True
         assert "--force used" in caplog.text
+
+
+@pytest.mark.unit
+def test_resume_only_dry_run_does_not_report_work_as_done(tmp_path, caplog):
+    """F6: dry-run resume simulates; it must not log restored work."""
+    from lib.argocd_resume import run_argocd_resume_only
+    from lib.utils import StateManager
+
+    state = StateManager(str(tmp_path / "resume-state.json"))
+    state.ensure_contexts("hub-a", "hub-b")
+    state.ensure_hub_identities(
+        {"secondary": {"context": "hub-b", "cluster_uid": "uid-secondary"}},
+    )
+    state.set_config("argocd_run_id", "run-1")
+    state.set_config(
+        "argocd_paused_apps",
+        [
+            {
+                "hub": "secondary",
+                "namespace": "argocd",
+                "name": "app-2",
+                "original_sync_policy": {"automated": {}},
+                "pause_applied": True,
+            }
+        ],
+    )
+    args = SimpleNamespace(primary_context=None, secondary_context="hub-b", dry_run=True, force=False)
+    secondary = Mock(name="secondary-client")
+    secondary.context = "hub-b"
+    secondary.dry_run = True
+    secondary.get_cluster_identity.return_value = {"context": "hub-b", "cluster_uid": "uid-secondary"}
+    logger = logging.getLogger("acm_switchover")
+
+    with caplog.at_level("INFO", logger="acm_switchover"):
+        assert run_argocd_resume_only(args, state, None, secondary, logger) is True
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("Would restore 1" in message for message in messages)
+    assert not any(message.startswith("Restored ") for message in messages)
+    assert state.get_config("argocd_paused_apps") != []

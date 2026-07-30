@@ -138,12 +138,18 @@ PAUSE_BLOCK_REASON_UNKNOWN_ACM_IMPACT = "unknown-acm-impact"
 
 @dataclass
 class ResumeSummary:
-    """Aggregated result of restoring a batch of paused Applications."""
+    """Aggregated result of restoring a batch of paused Applications.
+
+    In dry-run nothing is patched and nothing leaves the register: ``restored``
+    then counts simulated restores, and ``dry_run`` tells callers to phrase the
+    outcome accordingly.
+    """
 
     restored: int = 0
     already_resumed: int = 0
     failed: int = 0
     remaining: int = 0
+    dry_run: bool = False
 
 
 def is_resume_noop(result: ResumeResult) -> bool:
