@@ -331,3 +331,13 @@ Auto-formatting and file protection hooks are configured in `.claude/settings.js
 
 - **Auto-format**: After every `Edit`/`Write` on a `.py` file, `black` and `isort` run automatically
 - **File protection**: Edits to `completions/`, `get-pip.py`, `*.lock`, `ACM_SWITCHOVER_RUNBOOK.md`, and `*.skill.md` files are blocked (see [Protected Critical Files](#protected-critical-files))
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues (`gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context layout: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
