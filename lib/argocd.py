@@ -148,7 +148,7 @@ class ResumeSummary:
     restored: int = 0
     already_resumed: int = 0
     failed: int = 0
-    remaining: int = 0
+    remaining_in_register: int = 0
     dry_run: bool = False
 
 

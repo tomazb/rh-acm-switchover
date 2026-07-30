@@ -1073,12 +1073,11 @@ class TestDiscoveryNamespaceScope:
 
 @pytest.mark.unit
 class TestClearArgocdPauseState:
-    """Shared Argo CD pause-state reset helper."""
+    """Register-owned pause-state reset, with the dry-run guard inside it."""
 
-    def test_clear_argocd_pause_state_clears_all_keys(self):
-        from lib.argocd_register import clear_argocd_pause_state
-
-        state = _make_state_manager(
+    @staticmethod
+    def _populated_state():
+        return _make_state_manager(
             {
                 "argocd_run_id": "run-1",
                 "argocd_paused_apps": [{"hub": "primary", "namespace": "argocd", "name": "app-1"}],
@@ -1086,11 +1085,22 @@ class TestClearArgocdPauseState:
             }
         )
 
-        clear_argocd_pause_state(state)
+    def test_clear_resets_all_keys(self):
+        state = self._populated_state()
+
+        ArgocdPauseRegister(state, dry_run=False)._clear()
 
         assert state._config["argocd_paused_apps"] == []
         assert state._config["argocd_run_id"] is None
         assert state._config["argocd_discovery_namespaces"] == {}
+
+    def test_clear_is_a_noop_in_dry_run(self):
+        state = self._populated_state()
+
+        ArgocdPauseRegister(state, dry_run=True)._clear()
+
+        assert state.set_config.call_count == 0
+        assert state._config["argocd_run_id"] == "run-1"
 
 
 def _make_real_state(tmp_path):
@@ -1106,7 +1116,7 @@ class TestRegisterStatus:
         state = _make_real_state(tmp_path)
         register = ArgocdPauseRegister(state, dry_run=False)
 
-        assert register.status() == RegisterStatus(paused_count=0, run_id=None)
+        assert register.status() == RegisterStatus(confirmed_paused_count=0, run_id=None)
 
     def test_status_counts_applied_entries_only(self, tmp_path):
         state = _make_real_state(tmp_path)
@@ -1150,7 +1160,7 @@ class TestRegisterStatus:
 
         status = register.status()
 
-        assert status.paused_count == 2
+        assert status.confirmed_paused_count == 2
         assert status.run_id == "run-1"
 
     def test_status_drops_garbage_and_legacy_dry_run(self, tmp_path):
@@ -1169,7 +1179,7 @@ class TestRegisterStatus:
         status = register.status()
 
         assert status.entry_count == 1
-        assert status.paused_count == 1
+        assert status.confirmed_paused_count == 1
         assert register.paused_hub_roles() == {"primary"}
 
     def test_register_reads_do_not_expose_mutable_state(self, tmp_path):
@@ -1447,7 +1457,7 @@ class TestRegisterResume:
         assert summary.dry_run is False
         assert summary.restored == 2
         assert summary.failed == 0
-        assert summary.remaining == 0
+        assert summary.remaining_in_register == 0
         assert state.get_config("argocd_paused_apps") == []
         assert state.get_config("argocd_run_id") is None
         assert state.get_config("argocd_discovery_namespaces") == {}
@@ -1464,7 +1474,7 @@ class TestRegisterResume:
         summary = register.resume(None, client)
 
         assert summary.already_resumed == 1
-        assert summary.remaining == 0
+        assert summary.remaining_in_register == 0
         assert state.get_config("argocd_paused_apps") == []
         assert state.get_config("argocd_run_id") is None
 
@@ -1481,7 +1491,7 @@ class TestRegisterResume:
         summary = register.resume(None, client)
 
         assert summary.failed == 1
-        assert summary.remaining == 1
+        assert summary.remaining_in_register == 1
         assert state.get_config("argocd_paused_apps") == [_register_entry("secondary", "app-1")]
         assert state.get_config("argocd_run_id") == "run-1"
 
@@ -1527,7 +1537,7 @@ class TestRegisterResume:
         summary = register.resume(None, _make_resume_client({}))
 
         assert summary.failed == 2
-        assert summary.remaining == 2
+        assert summary.remaining_in_register == 2
         assert len(state.get_config("argocd_paused_apps")) == 2
         assert state.get_config("argocd_run_id") == "run-1"
 
@@ -1537,7 +1547,12 @@ class TestRegisterResume:
         register = ArgocdPauseRegister(state, dry_run=False)
         summary = register.resume(None, _make_resume_client({}))
 
-        assert (summary.restored, summary.already_resumed, summary.failed, summary.remaining) == (0, 0, 0, 0)
+        assert (summary.restored, summary.already_resumed, summary.failed, summary.remaining_in_register) == (
+            0,
+            0,
+            0,
+            0,
+        )
 
 
 @pytest.mark.unit

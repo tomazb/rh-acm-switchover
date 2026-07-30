@@ -665,7 +665,9 @@ class TestAttemptArgoCDResumeOnFailure:
         primary, secondary = self._identity_clients()
 
         with patch.object(ArgocdPauseRegister, "resume") as mock_resume:
-            mock_resume.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0, remaining=1)
+            mock_resume.return_value = argocd_lib.ResumeSummary(
+                restored=1, already_resumed=0, failed=0, remaining_in_register=1
+            )
             _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
 
         reloaded = StateManager(str(state_path))
@@ -724,7 +726,7 @@ class TestAttemptArgoCDResumeOnFailure:
         logger = logging.getLogger("test")
 
         with patch.object(ArgocdPauseRegister, "resume") as mock_resume:
-            mock_resume.return_value = argocd_lib.ResumeSummary(failed=1, remaining=1)
+            mock_resume.return_value = argocd_lib.ResumeSummary(failed=1, remaining_in_register=1)
             with caplog.at_level(logging.WARNING):
                 _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
 

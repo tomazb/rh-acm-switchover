@@ -480,8 +480,8 @@ def _run_restore_only_argocd_pause(
         return True
 
     try:
-        coordinator = ArgocdPauseRegister(state, dry_run=getattr(args, "dry_run", False))
-        summary = coordinator.pause_hubs([(secondary, HUB_ROLE_SECONDARY)])
+        register = ArgocdPauseRegister(state, dry_run=getattr(args, "dry_run", False))
+        summary = register.pause_hubs([(secondary, HUB_ROLE_SECONDARY)])
     except Exception as exc:
         return _fail_phase(state, f"Argo CD pause on secondary hub failed: {exc}", logger)
 
@@ -500,7 +500,7 @@ def _run_restore_only_argocd_pause(
             logger,
         )
 
-    run_id = coordinator.status().run_id
+    run_id = register.status().run_id
     if run_id is not None:
         logger.info(
             "Argo CD: %d Application(s) %s on secondary hub (run_id=%s). "

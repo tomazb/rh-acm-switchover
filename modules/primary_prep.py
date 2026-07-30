@@ -116,9 +116,9 @@ class PrimaryPreparation:
     def _pause_argocd_acm_apps(self) -> None:
         """Pause auto-sync for ACM-touching Argo CD Applications on primary and optionally secondary hub."""
         hubs = [(self.primary, HUB_ROLE_PRIMARY)] + ([(self.secondary, HUB_ROLE_SECONDARY)] if self.secondary else [])
-        coordinator = ArgocdPauseRegister(self.state, self.dry_run)
+        register = ArgocdPauseRegister(self.state, dry_run=self.dry_run)
         try:
-            summary = coordinator.pause_hubs(hubs)
+            summary = register.pause_hubs(hubs)
         except Exception as exc:
             raise SwitchoverError(f"Argo CD pause failed: {exc}") from exc
         if summary.blocked:
@@ -128,7 +128,7 @@ class PrimaryPreparation:
             )
         if summary.failed:
             raise SwitchoverError(f"Argo CD auto-sync pause failed for {summary.failed} Application(s)")
-        run_id = coordinator.status().run_id
+        run_id = register.status().run_id
         if run_id is not None:
             logger.info(
                 "Argo CD: %d Application(s) %s (run_id=%s). "

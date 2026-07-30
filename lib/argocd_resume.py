@@ -246,14 +246,14 @@ def run_argocd_resume_only(
             "%d would remain in the register.",
             summary.restored,
             summary.already_resumed,
-            summary.remaining,
+            summary.remaining_in_register,
         )
     else:
         logger.info(
             "Restored %d and already resumed %d Application(s); %d remaining in register.",
             summary.restored,
             summary.already_resumed,
-            summary.remaining,
+            summary.remaining_in_register,
         )
     if summary.failed:
         logger.error("Argo CD auto-sync restore failed for %d Application(s).", summary.failed)
@@ -303,11 +303,11 @@ def attempt_argocd_resume_on_failure(
             summary.already_resumed,
             summary.failed,
         )
-        if summary.failed or summary.remaining:
+        if summary.failed or summary.remaining_in_register:
             logger.warning(
                 "Argo CD resume-on-failure left %d Application(s) in the pause register. "
                 "Use --argocd-resume-only to retry manually.",
-                summary.remaining,
+                summary.remaining_in_register,
             )
             return
 

@@ -186,7 +186,9 @@ def test_run_argocd_resume_only_uses_prepare_clients_and_register_resume():
         "lib.argocd_resume.prepare_argocd_resume_clients",
         return_value=(primary, secondary),
     ) as prepare_clients, patch.object(ArgocdPauseRegister, "resume") as register_resume:
-        register_resume.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0, remaining=0)
+        register_resume.return_value = argocd_lib.ResumeSummary(
+            restored=1, already_resumed=0, failed=0, remaining_in_register=0
+        )
         result = run_argocd_resume_only(args, state, primary, secondary, logger)
 
     assert result is True
@@ -218,7 +220,9 @@ def test_attempt_argocd_resume_on_failure_clears_pause_state_only_after_full_suc
         "lib.argocd_resume.prepare_argocd_resume_clients",
         return_value=(primary, secondary),
     ) as prepare_clients, patch.object(ArgocdPauseRegister, "resume") as register_resume:
-        register_resume.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0, remaining=1)
+        register_resume.return_value = argocd_lib.ResumeSummary(
+            restored=1, already_resumed=0, failed=0, remaining_in_register=1
+        )
         attempt_argocd_resume_on_failure(args, partial_state, primary, secondary, logger)
 
     prepare_clients.assert_called_once_with(
@@ -238,7 +242,9 @@ def test_attempt_argocd_resume_on_failure_clears_pause_state_only_after_full_suc
         "lib.argocd_resume.prepare_argocd_resume_clients",
         return_value=(primary, secondary),
     ) as prepare_clients, patch.object(ArgocdPauseRegister, "resume") as register_resume:
-        register_resume.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=1, failed=0, remaining=0)
+        register_resume.return_value = argocd_lib.ResumeSummary(
+            restored=1, already_resumed=1, failed=0, remaining_in_register=0
+        )
         attempt_argocd_resume_on_failure(args, success_state, primary, secondary, logger)
 
     prepare_clients.assert_called_once_with(

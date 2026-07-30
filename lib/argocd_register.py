@@ -25,23 +25,16 @@ from lib.utils import StateManager
 logger = logging.getLogger("acm_switchover")
 
 
-def clear_argocd_pause_state(state: StateManager) -> None:
-    """Clear persisted Argo CD pause and discovery namespace state."""
-    state.set_config(STATE_KEY_ARGOCD_PAUSED_APPS, [])
-    state.set_config(STATE_KEY_ARGOCD_RUN_ID, None)
-    state.set_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, {})
-
-
 @dataclass
 class RegisterStatus:
     """Snapshot of the pause register.
 
-    ``paused_count`` counts entries whose pause is confirmed applied;
+    ``confirmed_paused_count`` counts entries whose pause is confirmed applied;
     ``entry_count`` counts every entry resume() would attempt, including
     provisional ones written before an unverified patch.
     """
 
-    paused_count: int
+    confirmed_paused_count: int
     run_id: Optional[str]
     entry_count: int = 0
 
@@ -77,7 +70,7 @@ class ArgocdPauseRegister:
     returning bool).
     """
 
-    def __init__(self, state: StateManager, dry_run: bool = False):
+    def __init__(self, state: StateManager, *, dry_run: bool = False):
         self.state = state
         self.dry_run = dry_run
 
@@ -93,7 +86,9 @@ class ArgocdPauseRegister:
 
         Non-dict values are dropped, as are entries carrying a truthy legacy
         ``dry_run`` flag: dry-run predates ADR-0001 and never recorded real
-        cluster mutations, so such entries are not resumable.
+        cluster mutations, so such entries are not resumable. Because they
+        never survive this filter, an entry without ``pause_applied`` is
+        always a legacy real pause and counts as applied.
         """
         return self._sanitize_entries(self.state.get_config(STATE_KEY_ARGOCD_PAUSED_APPS))
 
@@ -116,7 +111,7 @@ class ArgocdPauseRegister:
         entries = cls._sanitize_entries(config.get(STATE_KEY_ARGOCD_PAUSED_APPS))
         applied = [entry for entry in entries if cls._is_pause_applied(entry)]
         return RegisterStatus(
-            paused_count=len(applied),
+            confirmed_paused_count=len(applied),
             run_id=config.get(STATE_KEY_ARGOCD_RUN_ID),
             entry_count=len(entries),
         )
@@ -126,7 +121,7 @@ class ArgocdPauseRegister:
         entries = self._load_entries()
         applied = [entry for entry in entries if self._is_pause_applied(entry)]
         return RegisterStatus(
-            paused_count=len(applied),
+            confirmed_paused_count=len(applied),
             run_id=self.state.get_config(STATE_KEY_ARGOCD_RUN_ID),
             entry_count=len(entries),
         )
@@ -138,8 +133,8 @@ class ArgocdPauseRegister:
 
     @staticmethod
     def _is_pause_applied(entry: Dict[str, Any]) -> bool:
-        """Treat missing pause_applied as legacy-applied unless the entry is dry-run only."""
-        return entry.get("pause_applied", not entry.get("dry_run", False))
+        """Treat a missing pause_applied flag as legacy-applied (see _load_entries)."""
+        return entry.get("pause_applied", True)
 
     @staticmethod
     def _pause_marker_matches(app: Dict[str, Any], run_id: str) -> bool:
@@ -167,6 +162,17 @@ class ArgocdPauseRegister:
         if self.dry_run:
             return
         self.state.set_config(STATE_KEY_ARGOCD_PAUSED_APPS, copy.deepcopy(paused_apps))
+
+    def _clear(self) -> None:
+        """Clear persisted Argo CD pause and discovery namespace state.
+
+        No-op in dry-run: the guard lives here so no call site can forget it.
+        """
+        if self.dry_run:
+            return
+        self.state.set_config(STATE_KEY_ARGOCD_PAUSED_APPS, [])
+        self.state.set_config(STATE_KEY_ARGOCD_RUN_ID, None)
+        self.state.set_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, {})
 
     def _get_discovery_namespaces_by_hub(self) -> Dict[str, List[str]]:
         stored = self.state.get_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES) or {}
@@ -283,9 +289,9 @@ class ArgocdPauseRegister:
                 summary.failed += 1
                 logger.warning("  Failed %s/%s: %s", ns, name, result.skip_reason or "not restored")
 
-        summary.remaining = len(entries)
+        summary.remaining_in_register = len(entries)
         if not self.dry_run and not entries:
-            clear_argocd_pause_state(self.state)
+            self._clear()
             logger.info("Argo CD pause register empty; cleared pause state.")
         return summary
 
@@ -527,7 +533,7 @@ class ArgocdPauseRegister:
             )
             return PauseSummary(applications_crd_visible=False, run_id=run_id)
         logger.info("Argo CD Applications CRD not found on any hub; skipping Argo CD pause")
+        self._clear()
         if not self.dry_run:
-            clear_argocd_pause_state(self.state)
             run_id = None
         return PauseSummary(applications_crd_visible=False, run_id=run_id)

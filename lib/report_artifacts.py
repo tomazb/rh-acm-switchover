@@ -119,10 +119,10 @@ def build_operation_report(
         report["results"] = results
 
     argocd_status = ArgocdPauseRegister.status_from_config(config)
-    if argocd_status.run_id or argocd_status.paused_count:
+    if argocd_status.run_id or argocd_status.confirmed_paused_count:
         report["argocd"] = {
             "run_id": argocd_status.run_id or "",
-            "summary": {"paused": argocd_status.paused_count, "restored": 0},
+            "summary": {"paused": argocd_status.confirmed_paused_count, "restored": 0},
         }
 
     return report
