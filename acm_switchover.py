@@ -489,7 +489,7 @@ def _run_restore_only_argocd_pause(
         return _fail_phase(
             state,
             f"Argo CD auto-sync pause blocked for {summary.blocked} Application(s); "
-            "pause or update the owning ApplicationSet first",
+            "pause the owning ApplicationSet first",
             logger,
         )
 
@@ -1254,7 +1254,7 @@ def _resolve_state_file(
 def _prepare_argocd_resume_clients(
     args: argparse.Namespace,
     state: StateManager,
-    paused_apps: list[dict[str, Any]],
+    paused_hub_roles: set[str],
     primary: Optional[KubeClient],
     secondary: Optional[KubeClient],
     logger: logging.Logger,
@@ -1265,7 +1265,7 @@ def _prepare_argocd_resume_clients(
     return argocd_resume.prepare_argocd_resume_clients(
         args,
         state,
-        paused_apps,
+        paused_hub_roles,
         primary,
         secondary,
         logger,

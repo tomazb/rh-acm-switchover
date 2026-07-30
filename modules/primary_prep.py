@@ -124,7 +124,7 @@ class PrimaryPreparation:
         if summary.blocked:
             raise SwitchoverError(
                 f"Argo CD auto-sync pause blocked for {summary.blocked} Application(s); "
-                "pause or update the owning ApplicationSet first"
+                "pause the owning ApplicationSet first"
             )
         if summary.failed:
             raise SwitchoverError(f"Argo CD auto-sync pause failed for {summary.failed} Application(s)")

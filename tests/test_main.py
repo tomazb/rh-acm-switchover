@@ -50,6 +50,7 @@ from acm_switchover import (
 )
 from lib import KubeClient
 from lib import argocd as argocd_lib
+from lib.argocd_register import PauseSummary
 from lib.constants import (
     DRY_RUN_RESTORE_ONLY_COMPLETION_MESSAGE,
     DRY_RUN_RESTORE_ONLY_NEXT_STEPS_MESSAGE,
@@ -70,7 +71,6 @@ from lib.constants import (
     SWITCHOVER_COMPLETED_SUCCESS_MESSAGE,
     TOKEN_DURATION_DEFAULT,
 )
-from lib.argocd_register import PauseSummary
 from lib.exceptions import SwitchoverError
 from lib.validation import ValidationError
 from tests.main_test_helpers import make_restore_only_args, make_switchover_args
@@ -1136,7 +1136,7 @@ class TestSwitchoverPhaseFlow:
         coordinator.pause_hubs.assert_called_once_with([(secondary, HUB_ROLE_SECONDARY)])
         fail_phase.assert_called_once_with(
             state,
-            "Argo CD auto-sync pause blocked for 1 Application(s); pause or update the owning ApplicationSet first",
+            "Argo CD auto-sync pause blocked for 1 Application(s); pause the owning ApplicationSet first",
             logger,
         )
         state.mark_step_completed.assert_not_called()
@@ -1619,7 +1619,7 @@ class TestArgocdResumeDelegation:
     def test_prepare_argocd_resume_clients_delegates_to_lib_module(self):
         args = SimpleNamespace(primary_context="hub-a", secondary_context="hub-b", dry_run=False, force=False)
         state = Mock()
-        paused_apps = [{"hub": HUB_ROLE_SECONDARY, "namespace": "argocd", "name": "app-1"}]
+        paused_hub_roles = {HUB_ROLE_SECONDARY}
         primary = Mock()
         secondary = Mock()
         logger = Mock()
@@ -1631,7 +1631,7 @@ class TestArgocdResumeDelegation:
             result = _prepare_argocd_resume_clients(
                 args,
                 state,
-                paused_apps,
+                paused_hub_roles,
                 primary,
                 secondary,
                 logger,
@@ -1642,7 +1642,7 @@ class TestArgocdResumeDelegation:
         prepare_clients.assert_called_once_with(
             args,
             state,
-            paused_apps,
+            paused_hub_roles,
             primary,
             secondary,
             logger,
