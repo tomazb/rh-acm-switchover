@@ -12,8 +12,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from lib import argocd as argocd_lib
 from lib.constants import (
+    HUB_ROLE_PRIMARY,
+    HUB_ROLE_SECONDARY,
     STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES,
     STATE_KEY_ARGOCD_PAUSE_DRY_RUN,
+    STATE_KEY_ARGOCD_PAUSED_APP_HUB,
     STATE_KEY_ARGOCD_PAUSED_APPS,
     STATE_KEY_ARGOCD_RUN_ID,
 )
@@ -138,6 +141,64 @@ class ArgocdPauseRegister:
         name: str,
     ) -> None:
         paused_apps[:] = [entry for entry in paused_apps if not self._pause_entry_matches(entry, hub, namespace, name)]
+
+    def resume(
+        self,
+        primary: Optional[KubeClient],
+        secondary: Optional[KubeClient],
+        logger: logging.Logger,
+    ) -> "argocd_lib.ResumeSummary":
+        """
+        Resume auto-sync for every registered Application.
+
+        ADR-0001 invariant: restored and already-resumed entries are removed
+        from the register immediately (persisted per entry); failures stay for
+        retry.  When the register empties, all Argo CD pause state is cleared.
+        """
+        entries = self.load_entries()
+        run_id = self.state.get_config(STATE_KEY_ARGOCD_RUN_ID)
+        summary = argocd_lib.ResumeSummary()
+        if not run_id or not entries:
+            logger.info("No Argo CD paused apps in state; nothing to resume")
+            return summary
+
+        clients = {HUB_ROLE_PRIMARY: primary, HUB_ROLE_SECONDARY: secondary}
+        for entry in list(entries):
+            hub = entry.get(STATE_KEY_ARGOCD_PAUSED_APP_HUB)
+            ns = entry.get("namespace")
+            name = entry.get("name")
+            original_sync_policy = entry.get("original_sync_policy")
+            client = clients.get(hub)
+            if not all([hub, ns, name, original_sync_policy is not None]) or client is None:
+                summary.failed += 1
+                logger.warning(
+                    "  Skip entry (hub=%s, namespace=%s, name=%s): unusable record or no client", hub, ns, name
+                )
+                continue
+            if self.dry_run:
+                summary.restored += 1
+                logger.info("  [DRY-RUN] Would resume Argo CD Application %s/%s on %s", ns, name, hub)
+                continue
+            result = argocd_lib.resume_autosync(client, ns, name, original_sync_policy, run_id)
+            if result.restored:
+                summary.restored += 1
+                self._remove_pause_entry(entries, hub, ns, name)
+                self._persist_paused_apps(entries)
+                logger.info("  Resumed %s/%s on %s", ns, name, hub)
+            elif argocd_lib.is_resume_noop(result):
+                summary.already_resumed += 1
+                self._remove_pause_entry(entries, hub, ns, name)
+                self._persist_paused_apps(entries)
+                logger.info("  Already resumed %s/%s on %s", ns, name, hub)
+            else:
+                summary.failed += 1
+                logger.warning("  Failed %s/%s: %s", ns, name, result.skip_reason or "not restored")
+
+        summary.remaining = len(entries)
+        if not self.dry_run and not entries:
+            clear_argocd_pause_state(self.state)
+            logger.info("Argo CD pause register empty; cleared pause state.")
+        return summary
 
     def pause_hubs(self, hubs: List[Tuple[KubeClient, str]]) -> Tuple[List[Dict[str, Any]], int]:
         """Pause ArgoCD auto-sync for ACM-touching Applications on the given hubs.

@@ -143,6 +143,7 @@ class ResumeSummary:
     restored: int = 0
     already_resumed: int = 0
     failed: int = 0
+    remaining: int = 0
 
 
 def is_resume_noop(result: ResumeResult) -> bool:
@@ -555,72 +556,6 @@ def find_acm_touching_apps(
         if acm_count > 0:
             result.append(AppImpact(namespace=ns, name=name, resource_count=acm_count, app=app))
     return result
-
-
-def resume_recorded_applications(
-    paused_apps: List[Any],
-    run_id: str,
-    primary: Optional[KubeClient],
-    secondary: Optional[KubeClient],
-    logger: logging.Logger,
-) -> ResumeSummary:
-    """Restore auto-sync for recorded pause state and return an aggregated summary."""
-    summary = ResumeSummary()
-    for entry in paused_apps:
-        if not isinstance(entry, dict):
-            summary.failed += 1
-            logger.warning("  Skip entry with unexpected format in Argo CD pause state")
-            continue
-
-        hub = entry.get("hub")
-        ns = entry.get("namespace")
-        name = entry.get("name")
-        original_sync_policy = entry.get("original_sync_policy")
-
-        if entry.get("dry_run"):
-            summary.failed += 1
-            logger.warning("  Skip %s/%s (pause was dry-run only)", ns, name)
-            continue
-        if not entry.get("pause_applied", True):
-            summary.failed += 1
-            logger.warning("  Skip %s/%s (pause state was recorded but not confirmed)", ns, name)
-            continue
-        if not all([hub, ns, name, original_sync_policy is not None]):
-            summary.failed += 1
-            logger.warning(
-                "  Skip entry missing required fields (hub=%s, namespace=%s, name=%s)",
-                hub,
-                ns,
-                name,
-            )
-            continue
-
-        if hub == "primary":
-            client = primary
-        elif hub == "secondary":
-            client = secondary
-        else:
-            summary.failed += 1
-            logger.warning("  Skip %s/%s (unrecognized hub=%s)", ns, name, hub)
-            continue
-
-        if not client:
-            summary.failed += 1
-            logger.warning("  Skip %s/%s (no client for hub=%s)", ns, name, hub)
-            continue
-
-        result = resume_autosync(client, ns, name, original_sync_policy, run_id)
-        if result.restored:
-            summary.restored += 1
-            logger.info("  Resumed %s/%s on %s", ns, name, hub)
-        elif is_resume_noop(result):
-            summary.already_resumed += 1
-            logger.info("  Already resumed %s/%s on %s", ns, name, hub)
-        else:
-            summary.failed += 1
-            logger.warning("  Failed %s/%s: %s", ns, name, result.skip_reason or "not restored")
-
-    return summary
 
 
 # NOTE: dry_run_skip was designed for instance methods (it reads self.dry_run).

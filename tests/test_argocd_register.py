@@ -1227,3 +1227,160 @@ class TestNoCrdRegisterPreservation:
         assert state.get_config("argocd_paused_apps") == []
         assert state.get_config("argocd_run_id") is None
         assert state.get_config("argocd_discovery_namespaces") == {}
+
+
+def _make_resume_client(apps_by_key, *, patch_error=None):
+    """Fake KubeClient for resume: serves live Applications and records patches."""
+    client = Mock()
+    client.dry_run = False
+
+    def get_custom_resource(group, version, plural, name, namespace=None):
+        return copy.deepcopy(apps_by_key.get((namespace, name)))
+
+    client.get_custom_resource.side_effect = get_custom_resource
+    if patch_error is not None:
+        client.patch_custom_resource.side_effect = patch_error
+    return client
+
+
+def _live_paused_app(namespace, name, run_id):
+    return {
+        "metadata": {
+            "namespace": namespace,
+            "name": name,
+            "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: run_id},
+            "resourceVersion": "10",
+        },
+        "spec": {"syncPolicy": {}},
+    }
+
+
+def _register_entry(hub, name, *, pause_applied=True):
+    return {
+        "hub": hub,
+        "namespace": "argocd",
+        "name": name,
+        "original_sync_policy": {"automated": {"prune": True}},
+        "pause_applied": pause_applied,
+    }
+
+
+def _resume_logger():
+    import logging
+
+    return logging.getLogger("acm_switchover")
+
+
+@pytest.mark.unit
+class TestRegisterResume:
+    """resume(): ADR-0001 invariant - successful entries leave the register immediately."""
+
+    def test_resume_removes_entries_on_success(self, tmp_path):
+        state = _make_real_state(tmp_path)
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config(
+            "argocd_paused_apps", [_register_entry("secondary", "app-1"), _register_entry("secondary", "app-2")]
+        )
+        state.set_config("argocd_discovery_namespaces", {"secondary": ["argocd"]})
+        client = _make_resume_client(
+            {
+                ("argocd", "app-1"): _live_paused_app("argocd", "app-1", "run-1"),
+                ("argocd", "app-2"): _live_paused_app("argocd", "app-2", "run-1"),
+            }
+        )
+
+        register = ArgocdPauseRegister(state, dry_run=False)
+        summary = register.resume(None, client, _resume_logger())
+
+        assert summary.restored == 2
+        assert summary.failed == 0
+        assert summary.remaining == 0
+        assert state.get_config("argocd_paused_apps") == []
+        assert state.get_config("argocd_run_id") is None
+        assert state.get_config("argocd_discovery_namespaces") == {}
+
+    def test_resume_removes_marker_missing_noop_entry(self, tmp_path):
+        state = _make_real_state(tmp_path)
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config("argocd_paused_apps", [_register_entry("secondary", "app-1")])
+        live = _live_paused_app("argocd", "app-1", "run-1")
+        live["metadata"]["annotations"] = {}
+        client = _make_resume_client({("argocd", "app-1"): live})
+
+        register = ArgocdPauseRegister(state, dry_run=False)
+        summary = register.resume(None, client, _resume_logger())
+
+        assert summary.already_resumed == 1
+        assert summary.remaining == 0
+        assert state.get_config("argocd_paused_apps") == []
+        assert state.get_config("argocd_run_id") is None
+
+    def test_resume_failure_keeps_entry(self, tmp_path):
+        state = _make_real_state(tmp_path)
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config("argocd_paused_apps", [_register_entry("secondary", "app-1")])
+        client = _make_resume_client(
+            {("argocd", "app-1"): _live_paused_app("argocd", "app-1", "run-1")},
+            patch_error=RuntimeError("patch failed"),
+        )
+
+        register = ArgocdPauseRegister(state, dry_run=False)
+        summary = register.resume(None, client, _resume_logger())
+
+        assert summary.failed == 1
+        assert summary.remaining == 1
+        assert state.get_config("argocd_paused_apps") == [_register_entry("secondary", "app-1")]
+        assert state.get_config("argocd_run_id") == "run-1"
+
+    def test_resume_attempts_unconfirmed_entry(self, tmp_path):
+        """pause_applied=False entries are attempted; the marker check makes it safe (coexistence.md)."""
+        state = _make_real_state(tmp_path)
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config("argocd_paused_apps", [_register_entry("secondary", "app-1", pause_applied=False)])
+        client = _make_resume_client({("argocd", "app-1"): _live_paused_app("argocd", "app-1", "run-1")})
+
+        register = ArgocdPauseRegister(state, dry_run=False)
+        summary = register.resume(None, client, _resume_logger())
+
+        assert summary.restored == 1
+        client.patch_custom_resource.assert_called_once()
+        assert state.get_config("argocd_paused_apps") == []
+
+    def test_dry_run_resume_mutates_nothing(self, tmp_path):
+        state = _make_real_state(tmp_path)
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config("argocd_paused_apps", [_register_entry("secondary", "app-1")])
+        client = _make_resume_client({("argocd", "app-1"): _live_paused_app("argocd", "app-1", "run-1")})
+
+        register = ArgocdPauseRegister(state, dry_run=True)
+        summary = register.resume(None, client, _resume_logger())
+
+        assert summary.restored == 1
+        client.get_custom_resource.assert_not_called()
+        client.patch_custom_resource.assert_not_called()
+        assert state.get_config("argocd_paused_apps") == [_register_entry("secondary", "app-1")]
+        assert state.get_config("argocd_run_id") == "run-1"
+
+    def test_unknown_hub_or_missing_client_counts_failed_and_stays(self, tmp_path):
+        state = _make_real_state(tmp_path)
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config(
+            "argocd_paused_apps",
+            [_register_entry("tertiary", "app-1"), _register_entry("primary", "app-2")],
+        )
+
+        register = ArgocdPauseRegister(state, dry_run=False)
+        summary = register.resume(None, _make_resume_client({}), _resume_logger())
+
+        assert summary.failed == 2
+        assert summary.remaining == 2
+        assert len(state.get_config("argocd_paused_apps")) == 2
+        assert state.get_config("argocd_run_id") == "run-1"
+
+    def test_resume_with_empty_register_is_noop(self, tmp_path):
+        state = _make_real_state(tmp_path)
+
+        register = ArgocdPauseRegister(state, dry_run=False)
+        summary = register.resume(None, _make_resume_client({}), _resume_logger())
+
+        assert (summary.restored, summary.already_resumed, summary.failed, summary.remaining) == (0, 0, 0, 0)
