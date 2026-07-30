@@ -611,7 +611,10 @@ output. No RBAC file is changed by this design-only PR.
   durable per-resource UID/phase checkpointing before DELETE, execute-mode checkpoint
   enforcement, MCO selector scoping, MCH identity-bound owner-chain classification,
   post-drain re-reads, sanitized failure tasks, and the destination-observability gate.
-- Version bump per repo policy (Python + collection, synced).
+- Changelog entry under `CHANGELOG.md` `## [Unreleased]` per the repository's Version
+  Management policy. The implementation slice is ordinary development work and does not
+  change released version identifiers or create a release tag; the synchronized
+  Python/collection bump belongs to a later explicitly scoped release PR.
 
 ### MCH operator-identity matrix
 

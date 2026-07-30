@@ -251,6 +251,18 @@ and an equivalent pre-task include in the collection:
   terminal entries, and gate passes skip them instead of reading the missing marker as
   tampering. The
   finalization gate therefore runs before any resume step in the same phase.
+- No gate/resume deadlock exists, because "non-terminal" means re-checked, not
+  automatically blocking. A healthy `paused` entry — our marker intact and the live
+  `automated` in the paused shape — passes the gate; only the enumerated disagreements
+  above block. A `verify_pending` entry is settled **by the gate's own re-read**, not by
+  the resume step: a confirmed paused shape with our marker promotes it to `paused`
+  in a durable journal update and it then passes the normal `paused` checks. So a run
+  that paused successfully reaches `--argocd-resume-after-switchover` normally, and
+  resume is never a prerequisite for passing the gate that precedes it. The states that
+  do block — an unreadable or disagreeing entry, and `classification_unknown` — are
+  states resume could not settle either, since resume itself requires a successful read
+  and a valid stored `ACTIVE` value; blocking there is the intended fail-closed
+  outcome and is cleared by operator action or a rerun of the normal pause flow.
 - Dry-run: gates execute read-only and log what would block (consistent with the `F40`
   resolution that dry-run performs real discovery).
 
@@ -321,7 +333,11 @@ destructive gates, and returns fatal/non-zero. No new warning-only paths.
   classification vectors and asserts non-zero/no mutation/no successful state for every
   `UNKNOWN` category. Every form factor also tests that a missing/replaced run marker
   immediately before resume produces no patch and no `resumed` state.
-- Version bump per repo policy (PATCH for Python+Bash+collection, synced).
+- Changelog entry under `CHANGELOG.md` `## [Unreleased]` per the repository's Version
+  Management policy. The implementation slice is ordinary development work, so it does
+  not change released version identifiers or create a release tag; the accumulated
+  change is PATCH-level input to a later explicitly scoped release PR, which is where
+  the synchronized Python/Bash/collection version bump belongs.
 
 ## Tracker updates (same PR as this spec)
 

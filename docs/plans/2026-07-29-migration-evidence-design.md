@@ -312,6 +312,20 @@ identity, version, activation method, explicit backup map, fingerprint, provenan
 completion field is **non-terminal**: it blocks resume continuation, finalization,
 Restore cleanup, and integrated teardown until re-established.
 
+Re-establishment is defined, because the ordered-writes protocol can be interrupted
+between steps 5 and 6 — leaving `spec_fingerprint` and `backup_names_verified_at`
+persisted with `completed_at` absent. That record is non-terminal and never continues
+as-is. On the next attempt the run repeats §1a steps 1-4 in full against the live
+Restore, then reconciles rather than overwrites: every already-persisted field must
+equal what the fresh validation produces — an unequal UID, generation, activation
+method, backup-field map, or fingerprint is a fail-closed journal/live disagreement,
+never repaired by rewriting the journal to match the cluster. Only missing fields are
+written, through the same ordered durable writes, with `completed_at` strictly last.
+The bundle is usable only once every field is present and mutually consistent; an
+interrupted retry simply leaves it non-terminal again. Implementations that choose the
+single-atomic-update protocol cannot reach this state at all, which is why either
+protocol is acceptable.
+
 Resume first validates the exact method-specific key set and canonical digest
 relationship inside the journal, then repeats the live comparison — identity (UID),
 generation, `restore.activation_method`, exact `restore.backup_fields`, fingerprint, and
@@ -728,7 +742,11 @@ described as a cross-form-factor parity fixture.
   empty list remains distinguishable.
 - §1a evidence: exact identity/generation/fingerprint/consumed-field match writes the
   complete bundle; mismatch, missing field, malformed/unreadable response, or unexpected
-  `latest` writes none. The passive map has exactly the one ManagedCluster key; the full
+  `latest` writes none. Crash between the ordered steps 5 and 6 (fingerprint and
+  provenance persisted, `completed_at` absent): the partial bundle blocks resume
+  continuation, finalization, cleanup, and teardown; the retry repeats the full live
+  validation, fails closed on any disagreement with an already-persisted field instead
+  of rewriting it, writes only the missing fields, and writes `completed_at` last. The passive map has exactly the one ManagedCluster key; the full
   map has exactly all three keys; skipped and absent categories stay excluded
   consistently.
 - Explicit-map contract: passive single-field map, full multi-field map, skipped
@@ -826,7 +844,10 @@ described as a cross-form-factor parity fixture.
   fail-closed outcomes are identical.
 - Shared fixtures prove no cross-form-factor journal read, resume, handoff, or dual-write
   assumption; each form factor mutates only its own authoritative store.
-- Version bump per repository policy is synchronized across Python and collection.
+- Changelog entry under `CHANGELOG.md` `## [Unreleased]` per the repository's Version
+  Management policy. The implementation slice is ordinary development work and does not
+  change released version identifiers or create a release tag; the synchronized
+  Python/collection bump belongs to a later explicitly scoped release PR.
 
 ## Tracker updates (same PR)
 

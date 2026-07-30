@@ -186,7 +186,15 @@ auto-import read, mutation, restore, or gate decision:
   `auto_import_conflict` (null or the complete sanitized object). When terminal
   restore evidence exists it must be one §2 table result carrying the matching
   `auto_import_txn_id`; when the §4 acknowledgement exists it must be the complete
-  audited record bound to the same id.
+  audited record (non-empty actor, timestamp, reason, both compared values) bound to
+  the same id. Both fields are optional-but-shaped: absent is valid, present-and-
+  incomplete is malformed, and present-with-a-different-`auto_import_txn_id` is the
+  id-inconsistency case below.
+- Minting a new `auto_import_txn_id` (§1 step 2) clears **both** carried-over terminal
+  restore evidence and any carried-over §4 acknowledgement in the same durable update,
+  so neither can be inherited by a later transaction. Independently of that reset, the
+  §4 gate matches evidence by id, so a stale record surviving any path is an id
+  mismatch that blocks rather than satisfies the gate.
 - A non-null `created_uid` is valid only under the §1 create-response provenance
   rules; a non-legacy record whose `created_uid` state cannot have arisen under those
   rules and the §1 crash-window rules is malformed. The `unknown_legacy` prior never
@@ -399,7 +407,10 @@ and verified; a conflict or failure never reports a successful change.
 - Cross-form-factor parity fixtures assert identical result categories, state transitions,
   no-adoption decisions, and reason codes while Python and the collection use independent
   create-only implementations.
-- Version bump per repo policy (Python + collection, synced).
+- Changelog entry under `CHANGELOG.md` `## [Unreleased]` per the repository's Version
+  Management policy. The implementation slice is ordinary development work and does not
+  change released version identifiers or create a release tag; the synchronized
+  Python/collection bump belongs to a later explicitly scoped release PR.
 
 ## Tracker updates (same PR)
 
