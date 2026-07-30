@@ -232,6 +232,7 @@ missing or has a familiar value.
 | --- | --- | --- |
 | `absent` with response-derived, durably persisted `created_uid`, live UID == `created_uid` | if live CM still matches the tool-owned shape (`data` is exactly our one key; no operator-added keys/labels/annotations beyond creation defaults) → delete CM with server-side UID precondition; otherwise patch removing only our key (operator content appeared post-creation — preserve it) | `restored_deleted` / `restored_key_removed` |
 | `absent` with `created_uid`, live UID ≠ `created_uid` | no patch, no delete — replacement object, ownership not ours, live object preserved unchanged | `restore_conflict` |
+| `absent` with `created_uid`, live CM absent | no-op — the tool-created object no longer exists (deleted by another actor or by an earlier interrupted restore); the captured prior already holds and nothing of ours can remain. No create, patch, delete, or retry | `restored_noop` |
 | `absent` without `created_uid`, live CM absent | no-op (nothing exists; nothing of ours can remain) | `restored_noop` |
 | `absent` without `created_uid`, live CM present | no patch, no delete — creation ownership unprovable, live object preserved unchanged | `restore_conflict` |
 | `no_key` | patch removing only the `autoImportStrategy` key | `restored_key_removed` |
@@ -368,6 +369,10 @@ and verified; a conflict or failure never reports a successful change.
   `restored_noop`; minted txn id carried either way.
 - `data: null` for every reader (Python + both collection roles' Jinja).
 - Delete precondition mismatch on `absent` prior → replacement intact, `restore_conflict`.
+- `absent` prior with a durable `created_uid` and the tool-created ConfigMap externally
+  deleted before finalization → `restored_noop` in both form factors, no create/patch/
+  delete request issued, no retry loop, and the decommission gate passes on that
+  terminal evidence.
 - `absent` prior without `created_uid` (crash before UID record): live ConfigMap absent →
   `restored_noop`; live ConfigMap present with `autoImportStrategy: ImportAndSync` →
   `restore_conflict`, no patch, no delete; live ConfigMap present with any other value →

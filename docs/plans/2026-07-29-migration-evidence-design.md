@@ -58,7 +58,8 @@ Four gaps remain:
   schemas and transitions are parity-identical, but the stores remain independent.
 - Treating a same-name Restore created after this run's verified cleanup as this run's
   object. Such an object is unowned by this transaction, is never deleted or adopted by
-  its evidence, and blocks the remaining finalization gates while it is live.
+  its evidence, and blocks any remaining finalization gate that observes it live (§4
+  states the exact instant-of-read scope of the final locator check).
 
 ## Design
 
@@ -455,8 +456,21 @@ finalization pass, before anything can delete the Restore.
 Anything missing or internally inconsistent → fail closed listing exactly which clusters
 or checks lack evidence. A `recovery_required` cleanup state is always blocking. A
 completed/repaired record followed by a live same-name replacement does not transfer the
-old cleanup evidence: the replacement is preserved and the final locator-absence gate
-blocks finalization and integrated teardown.
+old cleanup evidence: the replacement is preserved and, when it is observable at or
+before the gate's read, the final locator-absence gate blocks finalization and
+integrated teardown.
+
+The scope of that guarantee is stated precisely. The final locator-absence check is one
+live strict GET, so it proves absence **at the instant of that read only**. No
+destination-side reservation, lock, admission control, or serialization of the journaled
+locator against integrated teardown is claimed or designed here: a same-name Restore
+created after the read returns and before teardown proceeds is outside this gate's
+guarantee. What the gate does guarantee is that stale completed/repaired evidence never
+substitutes for a fresh live check, and that any replacement present at the check
+blocks. The UID-bound cleanup transaction (§4a) closes the deletion-path identity and
+version windows; it does not extend to this post-check interval. Narrowing that
+remaining window would require a destination-side reservation mechanism, which is
+outside this design's scope.
 Standalone decommission is unaffected (its wrong-target protection is `SSA-02`).
 
 ### 4a. Live revalidation and durable Restore-cleanup transaction

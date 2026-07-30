@@ -130,6 +130,18 @@ to reinterpret a response already received by the tool.
 An absent/null `syncPolicy` is the valid field-absent case, but a non-mapping `spec` or a
 non-null non-mapping `syncPolicy` is structurally invalid and therefore `UNKNOWN`.
 
+Canonicalization before journaling: because RFC 7396 merge patch deletes a member sent
+as `null`, an `ACTIVE` object journaled verbatim as `{"enabled": null}` could never be
+restored byte-identically — resume would send it and the persisted object would come
+back as `{}`, failing §3's deep-equality check on a correct restore. Implementations
+therefore journal the **canonical** `ACTIVE` object: the classification is performed on
+the observed value, and a null-valued `enabled` member is dropped before the object is
+stored (no other member is added, removed, reordered in meaning, or defaulted). The
+canonical form is what §3 sends and what §3 compares against, so an `enabled: null`
+input and an `enabled`-absent input journal and restore identically. This changes no
+classification: `enabled: null` remains `ACTIVE`, and any non-null non-boolean `enabled`
+remains `UNKNOWN` and is never canonicalized or journaled as active.
+
 These semantics are grounded in the Argo CD
 [automated-sync documentation][argocd-auto-sync] and the current
 [Application CRD schema][argocd-application-crd], together with Kubernetes'
@@ -159,6 +171,9 @@ Application body, status payload, annotation value, or other potentially sensiti
   reconstructed `metadata.annotations` map nor sibling annotation keys are sent. Only the
   sync-policy key pause removed is restored, and sibling `syncPolicy` keys are never sent.
   Applies to Python (`lib/argocd.py`), collection (`resume.yml`), and Bash.
+- The "stored original" throughout this section is the canonical `ACTIVE` object defined
+  in §2 (null-valued `enabled` already dropped at journaling time), so both the patch
+  body and the deep-equality comparison use that one canonical representation.
 - Before resume mutates, it validates that the stored original is an exact schema-valid
   `ACTIVE` object, that the live field has the exact paused shape (absent or `null`), and
   that the live pause marker exactly equals the current journaled run identity immediately
@@ -269,7 +284,10 @@ destructive gates, and returns fatal/non-zero. No new warning-only paths.
   (`automated` key present and null on pause; resume body contains only `automated` +
   this run's marker removal, and preserves a concurrently added sibling annotation);
   classification table tests over every valid shape (absent, top-level
-  null, object with `enabled` absent/null/true/false) and every malformed category
+  null, object with `enabled` absent/null/true/false); canonicalization tests proving an
+  `enabled: null` input and an `enabled`-absent input journal the identical canonical
+  object, that resume of that canonical object passes the deep-equality check against
+  the merge-patch result, and that no `UNKNOWN` value is ever canonicalized and every malformed category
   (array; string, numeric, and boolean scalar; invalid `enabled`; invalid
   `prune`/`selfHeal`/`allowEmpty`; unknown/malformed nested member; non-mapping parent;
   unreadable/structurally invalid response); resume verification
