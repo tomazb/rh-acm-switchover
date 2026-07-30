@@ -194,11 +194,7 @@ class ArgocdPauseRegister:
             entry = {"hub": hub, "namespace": namespace, "name": name}
             paused_apps.append(entry)
 
-        entry["original_sync_policy"] = original_sync_policy
-        entry["pause_applied"] = pause_applied
-        entry.pop("pause_state", None)
-        entry.pop("pause_run_id", None)
-        entry.pop("dry_run", None)
+        self._mark_confirmed(entry, original_sync_policy, applied=pause_applied)
         return entry
 
     def _remove_pause_entry(
@@ -209,6 +205,34 @@ class ArgocdPauseRegister:
         name: str,
     ) -> None:
         paused_apps[:] = [entry for entry in paused_apps if not self._pause_entry_matches(entry, hub, namespace, name)]
+
+    def _forget(self, paused_apps: List[Dict[str, Any]], hub: str, namespace: str, name: str) -> None:
+        """Drop one Application from the register and persist the result."""
+        self._remove_pause_entry(paused_apps, hub, namespace, name)
+        self._persist_paused_apps(paused_apps)
+
+    @staticmethod
+    def _mark_confirmed(
+        entry: Dict[str, Any],
+        original_sync_policy: Optional[Dict[str, Any]] = None,
+        *,
+        applied: bool = True,
+    ) -> None:
+        """Record a known pause outcome: set the applied flag, clear provisional markers."""
+        if original_sync_policy is not None:
+            entry["original_sync_policy"] = original_sync_policy
+        entry["pause_applied"] = applied
+        entry.pop("pause_state", None)
+        entry.pop("pause_run_id", None)
+        entry.pop("dry_run", None)
+
+    @staticmethod
+    def _mark_unknown(entry: Dict[str, Any], original_sync_policy: Optional[Dict[str, Any]], run_id: str) -> None:
+        """Record that the patch outcome is unknown so a retry can verify it against the marker."""
+        entry["original_sync_policy"] = original_sync_policy
+        entry["pause_applied"] = False
+        entry["pause_state"] = "unknown"
+        entry["pause_run_id"] = run_id
 
     def resume(
         self,
@@ -249,13 +273,11 @@ class ArgocdPauseRegister:
             result = argocd_lib.resume_autosync(client, ns, name, original_sync_policy, run_id)
             if result.restored:
                 summary.restored += 1
-                self._remove_pause_entry(entries, hub, ns, name)
-                self._persist_paused_apps(entries)
+                self._forget(entries, hub, ns, name)
                 logger.info("  Resumed %s/%s on %s", ns, name, hub)
             elif argocd_lib.is_resume_noop(result):
                 summary.already_resumed += 1
-                self._remove_pause_entry(entries, hub, ns, name)
-                self._persist_paused_apps(entries)
+                self._forget(entries, hub, ns, name)
                 logger.info("  Already resumed %s/%s on %s", ns, name, hub)
             else:
                 summary.failed += 1
@@ -416,8 +438,7 @@ class ArgocdPauseRegister:
         if not self._is_pause_applied(existing_entry) and not self.dry_run and not has_automated:
             expected_run_id = existing_entry.get("pause_run_id") or run_id
             if not self._pause_marker_matches(impact.app, expected_run_id):
-                self._remove_pause_entry(paused_apps, hub_label, namespace, name)
-                self._persist_paused_apps(paused_apps)
+                self._forget(paused_apps, hub_label, namespace, name)
                 logger.debug(
                     "  Removed unconfirmed Argo CD pause state for %s/%s on %s (marker missing)",
                     namespace,
@@ -425,10 +446,7 @@ class ArgocdPauseRegister:
                     hub_label,
                 )
                 return True
-            existing_entry["pause_applied"] = True
-            existing_entry.pop("dry_run", None)
-            existing_entry.pop("pause_state", None)
-            existing_entry.pop("pause_run_id", None)
+            self._mark_confirmed(existing_entry)
             self._persist_paused_apps(paused_apps)
             summary.recovered += 1
             logger.info(
@@ -465,10 +483,7 @@ class ArgocdPauseRegister:
         """Record one pause attempt: patched, failed with a known patch state, or skipped."""
         if result.patched:
             summary.newly_paused += 1
-            entry["original_sync_policy"] = result.original_sync_policy
-            entry["pause_applied"] = not self.dry_run
-            entry.pop("pause_state", None)
-            entry.pop("pause_run_id", None)
+            self._mark_confirmed(entry, result.original_sync_policy, applied=not self.dry_run)
             if self.dry_run:
                 logger.info(
                     "  [DRY-RUN] Would pause Argo CD Application %s/%s on %s",
@@ -486,25 +501,16 @@ class ArgocdPauseRegister:
             self._persist_paused_apps(paused_apps)
         elif result.error:
             if result.patch_applied is True:
-                entry["original_sync_policy"] = result.original_sync_policy
-                entry["pause_applied"] = True
-                entry.pop("pause_state", None)
-                entry.pop("pause_run_id", None)
-                entry.pop("dry_run", None)
+                self._mark_confirmed(entry, result.original_sync_policy)
                 self._persist_paused_apps(paused_apps)
             elif result.patch_applied is False:
-                self._remove_pause_entry(paused_apps, hub_label, namespace, name)
-                self._persist_paused_apps(paused_apps)
+                self._forget(paused_apps, hub_label, namespace, name)
             else:
-                entry["original_sync_policy"] = result.original_sync_policy
-                entry["pause_applied"] = False
-                entry["pause_state"] = "unknown"
-                entry["pause_run_id"] = run_id
+                self._mark_unknown(entry, result.original_sync_policy, run_id)
                 self._persist_paused_apps(paused_apps)
             summary.failed += 1
         else:
-            self._remove_pause_entry(paused_apps, hub_label, namespace, name)
-            self._persist_paused_apps(paused_apps)
+            self._forget(paused_apps, hub_label, namespace, name)
             logger.debug("  Skip %s/%s (no auto-sync)", result.namespace, result.name)
 
     def _handle_no_applications_crd(self) -> PauseSummary:
