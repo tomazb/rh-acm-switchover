@@ -323,7 +323,7 @@ class TestPrimaryPreparation:
         assert paused_apps[0]["name"] == "app-1"
         assert paused_apps[0]["pause_applied"] is True
 
-    def test_pause_argocd_acm_apps_dry_run_records_apps(self, mock_primary_client, mock_state_manager):
+    def test_pause_argocd_acm_apps_dry_run_writes_no_state(self, mock_primary_client, mock_state_manager):
         """Dry-run should still report and record ACM-touching apps as would-paused."""
         prep = PrimaryPreparation(
             primary_client=mock_primary_client,
@@ -365,20 +365,11 @@ class TestPrimaryPreparation:
 
             prep._pause_argocd_acm_apps()
 
-        paused_call = [
-            call for call in mock_state_manager.set_config.call_args_list if call.args[0] == "argocd_paused_apps"
-        ][-1]
-        paused_apps = paused_call.args[1]
-        assert paused_apps[0]["dry_run"] is True
-        assert paused_apps[0]["pause_applied"] is False
+        # ADR-0001: dry-run records nothing durable - no state writes at all.
+        mock_state_manager.set_config.assert_not_called()
 
-        dry_run_call = next(
-            call for call in mock_state_manager.set_config.call_args_list if call.args[0] == "argocd_pause_dry_run"
-        )
-        assert dry_run_call.args[1] is True
-
-    def test_pause_argocd_acm_apps_clears_state_when_no_crd(self, mock_primary_client, mock_state_manager):
-        """No Applications CRD should clear stale Argo CD pause state before returning."""
+    def test_pause_argocd_acm_apps_clears_empty_state_when_no_crd(self, mock_primary_client, mock_state_manager):
+        """No Applications CRD clears leftover run_id when the register is empty (ADR-0001)."""
         prep = PrimaryPreparation(
             primary_client=mock_primary_client,
             state_manager=mock_state_manager,
@@ -389,7 +380,7 @@ class TestPrimaryPreparation:
         )
         mock_state_manager.get_config.side_effect = lambda key, default=None: {
             "argocd_run_id": "stale-run",
-            "argocd_paused_apps": [{"hub": "primary", "namespace": "argocd", "name": "stale-app"}],
+            "argocd_paused_apps": [],
         }.get(key, default)
 
         discovery = argocd_lib.ArgocdDiscoveryResult(
@@ -404,11 +395,9 @@ class TestPrimaryPreparation:
         ):
             prep._pause_argocd_acm_apps()
 
+        # ADR-0001: only an empty register is cleared on CRD-visibility loss.
         assert any(call.args == ("argocd_paused_apps", []) for call in mock_state_manager.set_config.call_args_list)
         assert any(call.args == ("argocd_run_id", None) for call in mock_state_manager.set_config.call_args_list)
-        assert any(
-            call.args == ("argocd_pause_dry_run", False) for call in mock_state_manager.set_config.call_args_list
-        )
 
     def test_pause_argocd_acm_apps_persists_each_app_incrementally(self, mock_primary_client, mock_state_manager):
         """Each paused app must be saved to state independently so a crash preserves prior pauses.

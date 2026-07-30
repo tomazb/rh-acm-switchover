@@ -1095,7 +1095,7 @@ class TestSwitchoverPhaseFlow:
         assert DRY_RUN_RESTORE_ONLY_NEXT_STEPS_MESSAGE in log_text
         assert RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE not in log_text
 
-    def test_restore_only_argocd_pause_dry_run_uses_coordinator_without_marking_step(self):
+    def test_restore_only_argocd_dry_run_pause_uses_register_without_marking_step(self):
         args = SimpleNamespace(argocd_manage=True, dry_run=True)
         state = Mock()
         state.is_step_completed.return_value = False
@@ -1114,7 +1114,7 @@ class TestSwitchoverPhaseFlow:
         coordinator.pause_hubs.assert_called_once_with([(secondary, HUB_ROLE_SECONDARY)])
         state.mark_step_completed.assert_not_called()
 
-    def test_restore_only_argocd_pause_dry_run_fails_on_blockers(self):
+    def test_restore_only_argocd_dry_run_pause_fails_on_blockers(self):
         args = SimpleNamespace(argocd_manage=True, dry_run=True)
         state = Mock()
         state.is_step_completed.return_value = False

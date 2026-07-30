@@ -454,9 +454,9 @@ class TestIdempotentRepause:
 
 @pytest.mark.unit
 class TestDryRun:
-    """Dry-run behavior records apps but marks pause_applied=False."""
+    """Dry-run reports the would-pause list but records nothing (ADR-0001)."""
 
-    def test_dry_run_records_would_pause(self):
+    def test_dry_run_reports_would_pause_without_recording(self):
         state = _make_state_manager({"argocd_run_id": None, "argocd_paused_apps": []})
         client = Mock()
         app = _make_app("argocd", "app-1")
@@ -488,8 +488,8 @@ class TestDryRun:
         assert failures == 0
         assert len(paused_apps) == 1
         assert paused_apps[0]["pause_applied"] is False
-        assert paused_apps[0]["dry_run"] is True
-        assert state._config["argocd_pause_dry_run"] is True
+        assert "dry_run" not in paused_apps[0]
+        state.set_config.assert_not_called()
 
 
 @pytest.mark.unit
@@ -1073,7 +1073,6 @@ class TestClearArgocdPauseState:
             {
                 "argocd_run_id": "run-1",
                 "argocd_paused_apps": [{"hub": "primary", "namespace": "argocd", "name": "app-1"}],
-                "argocd_pause_dry_run": True,
                 "argocd_discovery_namespaces": {"primary": ["argocd"]},
             }
         )
@@ -1082,7 +1081,6 @@ class TestClearArgocdPauseState:
 
         assert state._config["argocd_paused_apps"] == []
         assert state._config["argocd_run_id"] is None
-        assert state._config["argocd_pause_dry_run"] is False
         assert state._config["argocd_discovery_namespaces"] == {}
 
 
@@ -1384,3 +1382,85 @@ class TestRegisterResume:
         summary = register.resume(None, _make_resume_client({}), _resume_logger())
 
         assert (summary.restored, summary.already_resumed, summary.failed, summary.remaining) == (0, 0, 0, 0)
+
+
+@pytest.mark.unit
+class TestDryRunRecordsNothing:
+    """ADR-0001: dry-run pause writes zero state; discovery/blocker checks still run."""
+
+    def test_dry_run_pause_writes_no_state(self, tmp_path):
+        state = _make_real_state(tmp_path)
+        client = Mock()
+        client.dry_run = True
+        app = _make_app("argocd", "app-1")
+
+        with (
+            patch(
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
+                return_value=_discovery_with_crd(),
+            ),
+            patch(
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
+                return_value=[app],
+            ),
+        ):
+            register = ArgocdPauseRegister(state, dry_run=True)
+            would_pause, failures = register.pause_hubs([(client, "primary")])
+
+        assert failures == 0
+        assert len(would_pause) == 1
+        assert would_pause[0]["name"] == "app-1"
+        assert would_pause[0]["pause_applied"] is False
+        assert "dry_run" not in would_pause[0]
+        client.patch_custom_resource.assert_not_called()
+        for key in ("argocd_paused_apps", "argocd_run_id", "argocd_discovery_namespaces"):
+            assert not state.get_config(key)
+
+    def test_dry_run_pause_preserves_existing_real_state(self, tmp_path):
+        state = _make_real_state(tmp_path)
+        real_entry = {
+            "hub": "secondary",
+            "namespace": "argocd",
+            "name": "app-9",
+            "original_sync_policy": {"automated": {}},
+            "pause_applied": True,
+        }
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config("argocd_paused_apps", [real_entry])
+        state.set_config("argocd_discovery_namespaces", {"secondary": ["argocd"]})
+        client = Mock()
+        client.dry_run = True
+        app = _make_app("argocd", "app-1")
+
+        with (
+            patch(
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
+                return_value=_discovery_with_crd(),
+            ),
+            patch(
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
+                return_value=[app],
+            ),
+        ):
+            register = ArgocdPauseRegister(state, dry_run=True)
+            register.pause_hubs([(client, "primary")])
+
+        assert state.get_config("argocd_paused_apps") == [real_entry]
+        assert state.get_config("argocd_run_id") == "run-1"
+        assert state.get_config("argocd_discovery_namespaces") == {"secondary": ["argocd"]}
+
+    def test_dry_run_no_crd_does_not_clear_state(self, tmp_path):
+        state = _make_real_state(tmp_path)
+        state.set_config("argocd_discovery_namespaces", {"secondary": ["argocd"]})
+        client = Mock()
+        client.dry_run = True
+
+        with patch(
+            "lib.argocd_register.argocd_lib.detect_argocd_installation",
+            return_value=_discovery_without_crd(),
+        ):
+            register = ArgocdPauseRegister(state, dry_run=True)
+            would_pause, failures = register.pause_hubs([(client, "secondary")])
+
+        assert (would_pause, failures) == ([], 0)
+        assert state.get_config("argocd_discovery_namespaces") == {"secondary": ["argocd"]}

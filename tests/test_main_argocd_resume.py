@@ -816,7 +816,6 @@ class TestArgocdResumeOnlyContextMismatch:
     def _make_state(self, primary_ctx, secondary_ctx):
         state = Mock()
         state.get_config.side_effect = lambda key, default=None: {
-            "argocd_pause_dry_run": False,
             "argocd_run_id": "run-123",
             "argocd_paused_apps": [{"hub": "secondary", "namespace": "argocd", "name": "app1"}],
         }.get(key, default)

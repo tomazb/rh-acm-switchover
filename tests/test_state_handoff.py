@@ -95,7 +95,6 @@ class TestStateHandoffContracts:
         consumer_state = StateManager(state_file)
         paused_apps = consumer_state.get_config("argocd_paused_apps")
         assert consumer_state.get_config("argocd_run_id") == "run-123"
-        assert consumer_state.get_config("argocd_pause_dry_run", None) is False
         assert paused_apps == [
             {
                 "hub": "primary",

@@ -15,7 +15,6 @@ from lib.constants import (
     HUB_ROLE_PRIMARY,
     HUB_ROLE_SECONDARY,
     STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES,
-    STATE_KEY_ARGOCD_PAUSE_DRY_RUN,
     STATE_KEY_ARGOCD_PAUSED_APP_HUB,
     STATE_KEY_ARGOCD_PAUSED_APPS,
     STATE_KEY_ARGOCD_RUN_ID,
@@ -30,7 +29,6 @@ def clear_argocd_pause_state(state: StateManager) -> None:
     """Clear persisted Argo CD pause and discovery namespace state."""
     state.set_config(STATE_KEY_ARGOCD_PAUSED_APPS, [])
     state.set_config(STATE_KEY_ARGOCD_RUN_ID, None)
-    state.set_config(STATE_KEY_ARGOCD_PAUSE_DRY_RUN, False)
     state.set_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, {})
 
 
@@ -96,7 +94,12 @@ class ArgocdPauseRegister:
         return None
 
     def _persist_paused_apps(self, paused_apps: List[Dict[str, Any]]) -> None:
-        """Persist a deep copy so StateManager notices nested entry changes."""
+        """Persist a deep copy so StateManager notices nested entry changes.
+
+        No-op in dry-run: the register records nothing it did not do (ADR-0001).
+        """
+        if self.dry_run:
+            return
         self.state.set_config(STATE_KEY_ARGOCD_PAUSED_APPS, copy.deepcopy(paused_apps))
 
     def _get_discovery_namespaces_by_hub(self) -> Dict[str, List[str]]:
@@ -106,6 +109,8 @@ class ArgocdPauseRegister:
         return copy.deepcopy(stored)
 
     def _persist_discovery_namespaces_by_hub(self, namespaces_by_hub: Dict[str, List[str]]) -> None:
+        if self.dry_run:
+            return
         self.state.set_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, copy.deepcopy(namespaces_by_hub))
 
     def _upsert_pause_entry(
@@ -127,10 +132,7 @@ class ArgocdPauseRegister:
         entry["pause_applied"] = pause_applied
         entry.pop("pause_state", None)
         entry.pop("pause_run_id", None)
-        if self.dry_run:
-            entry["dry_run"] = True
-        else:
-            entry.pop("dry_run", None)
+        entry.pop("dry_run", None)
         return entry
 
     def _remove_pause_entry(
@@ -229,13 +231,14 @@ class ArgocdPauseRegister:
                 )
                 return entries, 0
             logger.info("Argo CD Applications CRD not found on any hub; skipping Argo CD pause")
-            clear_argocd_pause_state(self.state)
+            if not self.dry_run:
+                clear_argocd_pause_state(self.state)
             return [], 0
 
         existing_run_id = self.state.get_config(STATE_KEY_ARGOCD_RUN_ID)
         run_id = argocd_lib.run_id_or_new(existing_run_id)
-        self.state.set_config(STATE_KEY_ARGOCD_RUN_ID, run_id)
-        self.state.set_config(STATE_KEY_ARGOCD_PAUSE_DRY_RUN, self.dry_run)
+        if not self.dry_run:
+            self.state.set_config(STATE_KEY_ARGOCD_RUN_ID, run_id)
         paused_apps: List[Dict[str, Any]] = self.load_entries()
         pause_failures = 0
 
@@ -355,8 +358,7 @@ class ArgocdPauseRegister:
                         entry["pause_applied"] = True
                         entry.pop("pause_state", None)
                         entry.pop("pause_run_id", None)
-                        if not self.dry_run:
-                            entry.pop("dry_run", None)
+                        entry.pop("dry_run", None)
                         self._persist_paused_apps(paused_apps)
                     elif result.patch_applied is False:
                         self._remove_pause_entry(paused_apps, hub_label, namespace, name)
