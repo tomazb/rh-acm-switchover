@@ -157,6 +157,16 @@ class ArgocdPauseRegister:
             discoveries.append((client, hub_label, discovery))
 
         if not any(discovery.has_applications_crd for _, _, discovery in discoveries):
+            entries = self.load_entries()
+            applied = [entry for entry in entries if self._is_pause_applied(entry)]
+            if applied:
+                logger.warning(
+                    "Argo CD Applications CRD not visible on any hub but %d app(s) recorded paused; "
+                    "keeping pause register (see ADR-0001). Resume with --argocd-resume-only, or "
+                    "clear the state file manually if Argo CD was permanently removed.",
+                    len(applied),
+                )
+                return entries, 0
             logger.info("Argo CD Applications CRD not found on any hub; skipping Argo CD pause")
             clear_argocd_pause_state(self.state)
             return [], 0
