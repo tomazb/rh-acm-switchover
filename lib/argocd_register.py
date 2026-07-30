@@ -252,11 +252,7 @@ class ArgocdPauseRegister:
         Raises:
             Exception: Propagated from ArgoCD detection or application listing.
         """
-        discoveries = []
-        for client, hub_label in hubs:
-            discovery = argocd_lib.detect_argocd_installation(client)
-            discoveries.append((client, hub_label, discovery))
-
+        discoveries = self._discover(hubs)
         if not any(discovery.has_applications_crd for _, _, discovery in discoveries):
             return self._handle_no_applications_crd()
 
@@ -267,9 +263,41 @@ class ArgocdPauseRegister:
         summary = PauseSummary(run_id=run_id)
         paused_apps: List[Dict[str, Any]] = self.load_entries()
 
-        discovery_namespaces_by_hub = self._get_discovery_namespaces_by_hub() if existing_run_id else {}
+        applications_by_hub, pause_blockers = self._collect_applications(
+            discoveries,
+            reuse_recorded_namespaces=bool(existing_run_id),
+        )
+        if pause_blockers:
+            summary.blocked = len(pause_blockers)
+            return summary
+
+        for client, hub_label, apps in applications_by_hub:
+            for impact in argocd_lib.find_acm_touching_apps(apps):
+                self._pause_application(client, hub_label, impact, paused_apps, run_id, summary)
+
+        return summary
+
+    @staticmethod
+    def _discover(
+        hubs: List[Tuple[KubeClient, str]],
+    ) -> List[Tuple[KubeClient, str, "argocd_lib.ArgocdDiscoveryResult"]]:
+        """Detect the Argo CD installation on every hub, preserving hub order."""
+        return [(client, hub_label, argocd_lib.detect_argocd_installation(client)) for client, hub_label in hubs]
+
+    def _collect_applications(
+        self,
+        discoveries: List[Tuple[KubeClient, str, "argocd_lib.ArgocdDiscoveryResult"]],
+        *,
+        reuse_recorded_namespaces: bool,
+    ) -> Tuple[List[Tuple[KubeClient, str, List[Dict[str, Any]]]], List[Any]]:
+        """List Applications per hub and collect every pause blocker found.
+
+        Records the discovered Application namespaces on the first pass so a
+        retry within the same run can list a trusted, scoped namespace set.
+        """
+        discovery_namespaces_by_hub = self._get_discovery_namespaces_by_hub() if reuse_recorded_namespaces else {}
         applications_by_hub: List[Tuple[KubeClient, str, List[Dict[str, Any]]]] = []
-        pause_blockers = []
+        pause_blockers: List[Any] = []
 
         for client, hub_label, discovery in discoveries:
             if not discovery.has_applications_crd:
@@ -290,121 +318,167 @@ class ArgocdPauseRegister:
             pause_blockers.extend(blockers)
 
         self._persist_discovery_namespaces_by_hub(discovery_namespaces_by_hub)
+        return applications_by_hub, pause_blockers
 
-        if pause_blockers:
-            summary.blocked = len(pause_blockers)
-            return summary
+    def _pause_application(
+        self,
+        client: KubeClient,
+        hub_label: str,
+        impact: "argocd_lib.AppImpact",
+        paused_apps: List[Dict[str, Any]],
+        run_id: str,
+        summary: PauseSummary,
+    ) -> None:
+        """Pause one Application, reconciling whatever the register already says about it."""
+        meta = impact.app.get("metadata", {}) or {}
+        namespace = meta.get("namespace", "")
+        name = meta.get("name", "")
+        sync_policy = dict((impact.app.get("spec", {}) or {}).get("syncPolicy") or {})
+        has_automated = argocd_lib.is_autosync_enabled(impact.app)
+        existing_entry = self._find_pause_entry(paused_apps, hub_label, namespace, name)
 
-        for client, hub_label, apps in applications_by_hub:
-            acm_apps = argocd_lib.find_acm_touching_apps(apps)
+        if existing_entry is not None and self._reconcile_recorded_entry(
+            existing_entry,
+            impact,
+            paused_apps,
+            hub_label,
+            namespace,
+            name,
+            run_id,
+            has_automated=has_automated,
+            summary=summary,
+        ):
+            return
 
-            for impact in acm_apps:
-                meta = impact.app.get("metadata", {}) or {}
-                namespace = meta.get("namespace", "")
-                name = meta.get("name", "")
-                sync_policy = dict((impact.app.get("spec", {}) or {}).get("syncPolicy") or {})
-                has_automated = argocd_lib.is_autosync_enabled(impact.app)
-                existing_entry = self._find_pause_entry(paused_apps, hub_label, namespace, name)
+        if not has_automated:
+            logger.debug("  Skip %s/%s (no auto-sync)", namespace, name)
+            return
 
-                # Entry recovery: recorded in state but not yet confirmed applied
-                if existing_entry:
-                    if not self._is_pause_applied(existing_entry) and not self.dry_run and not has_automated:
-                        expected_run_id = existing_entry.get("pause_run_id") or run_id
-                        if not self._pause_marker_matches(impact.app, expected_run_id):
-                            self._remove_pause_entry(paused_apps, hub_label, namespace, name)
-                            self._persist_paused_apps(paused_apps)
-                            logger.debug(
-                                "  Removed unconfirmed Argo CD pause state for %s/%s on %s (marker missing)",
-                                namespace,
-                                name,
-                                hub_label,
-                            )
-                            continue
-                        existing_entry["pause_applied"] = True
-                        existing_entry.pop("dry_run", None)
-                        existing_entry.pop("pause_state", None)
-                        existing_entry.pop("pause_run_id", None)
-                        self._persist_paused_apps(paused_apps)
-                        summary.recovered += 1
-                        logger.info(
-                            "  Recovered Argo CD pause state for %s/%s on %s",
-                            namespace,
-                            name,
-                            hub_label,
-                        )
-                        continue
-                    # Clobber guard: already paused and recorded
-                    if self._is_pause_applied(existing_entry) and not has_automated:
-                        summary.already_paused += 1
-                        logger.debug(
-                            "  Skip %s/%s (already paused and recorded)",
-                            namespace,
-                            name,
-                        )
-                        continue
+        # Upsert provisional entry (pause_applied=False), persist before API call
+        entry = self._upsert_pause_entry(
+            paused_apps,
+            hub_label,
+            namespace,
+            name,
+            sync_policy,
+            pause_applied=False,
+        )
+        self._persist_paused_apps(paused_apps)
 
-                if not has_automated:
-                    logger.debug("  Skip %s/%s (no auto-sync)", namespace, name)
-                    continue
+        result = argocd_lib.pause_autosync(client, impact.app, run_id)
+        self._apply_pause_result(entry, result, paused_apps, hub_label, namespace, name, run_id, summary)
 
-                # Upsert provisional entry (pause_applied=False), persist before API call
-                entry = self._upsert_pause_entry(
-                    paused_apps,
-                    hub_label,
+    def _reconcile_recorded_entry(
+        self,
+        existing_entry: Dict[str, Any],
+        impact: "argocd_lib.AppImpact",
+        paused_apps: List[Dict[str, Any]],
+        hub_label: str,
+        namespace: str,
+        name: str,
+        run_id: str,
+        *,
+        has_automated: bool,
+        summary: PauseSummary,
+    ) -> bool:
+        """Handle an Application the register already knows about.
+
+        Returns True when the entry was fully handled (recovered, dropped as
+        unconfirmed, or skipped by the clobber guard) and no pause is needed.
+        """
+        if not self._is_pause_applied(existing_entry) and not self.dry_run and not has_automated:
+            expected_run_id = existing_entry.get("pause_run_id") or run_id
+            if not self._pause_marker_matches(impact.app, expected_run_id):
+                self._remove_pause_entry(paused_apps, hub_label, namespace, name)
+                self._persist_paused_apps(paused_apps)
+                logger.debug(
+                    "  Removed unconfirmed Argo CD pause state for %s/%s on %s (marker missing)",
                     namespace,
                     name,
-                    sync_policy,
-                    pause_applied=False,
+                    hub_label,
                 )
+                return True
+            existing_entry["pause_applied"] = True
+            existing_entry.pop("dry_run", None)
+            existing_entry.pop("pause_state", None)
+            existing_entry.pop("pause_run_id", None)
+            self._persist_paused_apps(paused_apps)
+            summary.recovered += 1
+            logger.info(
+                "  Recovered Argo CD pause state for %s/%s on %s",
+                namespace,
+                name,
+                hub_label,
+            )
+            return True
+
+        # Clobber guard: already paused and recorded
+        if self._is_pause_applied(existing_entry) and not has_automated:
+            summary.already_paused += 1
+            logger.debug(
+                "  Skip %s/%s (already paused and recorded)",
+                namespace,
+                name,
+            )
+            return True
+
+        return False
+
+    def _apply_pause_result(
+        self,
+        entry: Dict[str, Any],
+        result: "argocd_lib.PauseResult",
+        paused_apps: List[Dict[str, Any]],
+        hub_label: str,
+        namespace: str,
+        name: str,
+        run_id: str,
+        summary: PauseSummary,
+    ) -> None:
+        """Record one pause attempt: patched, failed with a known patch state, or skipped."""
+        if result.patched:
+            summary.newly_paused += 1
+            entry["original_sync_policy"] = result.original_sync_policy
+            entry["pause_applied"] = not self.dry_run
+            entry.pop("pause_state", None)
+            entry.pop("pause_run_id", None)
+            if self.dry_run:
+                logger.info(
+                    "  [DRY-RUN] Would pause Argo CD Application %s/%s on %s",
+                    result.namespace,
+                    result.name,
+                    hub_label,
+                )
+            else:
+                logger.info(
+                    "  Paused Argo CD Application %s/%s on %s",
+                    result.namespace,
+                    result.name,
+                    hub_label,
+                )
+            self._persist_paused_apps(paused_apps)
+        elif result.error:
+            if result.patch_applied is True:
+                entry["original_sync_policy"] = result.original_sync_policy
+                entry["pause_applied"] = True
+                entry.pop("pause_state", None)
+                entry.pop("pause_run_id", None)
+                entry.pop("dry_run", None)
                 self._persist_paused_apps(paused_apps)
-
-                result = argocd_lib.pause_autosync(client, impact.app, run_id)
-
-                if result.patched:
-                    summary.newly_paused += 1
-                    entry["original_sync_policy"] = result.original_sync_policy
-                    entry["pause_applied"] = not self.dry_run
-                    entry.pop("pause_state", None)
-                    entry.pop("pause_run_id", None)
-                    if self.dry_run:
-                        logger.info(
-                            "  [DRY-RUN] Would pause Argo CD Application %s/%s on %s",
-                            result.namespace,
-                            result.name,
-                            hub_label,
-                        )
-                    else:
-                        logger.info(
-                            "  Paused Argo CD Application %s/%s on %s",
-                            result.namespace,
-                            result.name,
-                            hub_label,
-                        )
-                    self._persist_paused_apps(paused_apps)
-                elif result.error:
-                    if result.patch_applied is True:
-                        entry["original_sync_policy"] = result.original_sync_policy
-                        entry["pause_applied"] = True
-                        entry.pop("pause_state", None)
-                        entry.pop("pause_run_id", None)
-                        entry.pop("dry_run", None)
-                        self._persist_paused_apps(paused_apps)
-                    elif result.patch_applied is False:
-                        self._remove_pause_entry(paused_apps, hub_label, namespace, name)
-                        self._persist_paused_apps(paused_apps)
-                    else:
-                        entry["original_sync_policy"] = result.original_sync_policy
-                        entry["pause_applied"] = False
-                        entry["pause_state"] = "unknown"
-                        entry["pause_run_id"] = run_id
-                        self._persist_paused_apps(paused_apps)
-                    summary.failed += 1
-                else:
-                    self._remove_pause_entry(paused_apps, hub_label, namespace, name)
-                    self._persist_paused_apps(paused_apps)
-                    logger.debug("  Skip %s/%s (no auto-sync)", result.namespace, result.name)
-
-        return summary
+            elif result.patch_applied is False:
+                self._remove_pause_entry(paused_apps, hub_label, namespace, name)
+                self._persist_paused_apps(paused_apps)
+            else:
+                entry["original_sync_policy"] = result.original_sync_policy
+                entry["pause_applied"] = False
+                entry["pause_state"] = "unknown"
+                entry["pause_run_id"] = run_id
+                self._persist_paused_apps(paused_apps)
+            summary.failed += 1
+        else:
+            self._remove_pause_entry(paused_apps, hub_label, namespace, name)
+            self._persist_paused_apps(paused_apps)
+            logger.debug("  Skip %s/%s (no auto-sync)", result.namespace, result.name)
 
     def _handle_no_applications_crd(self) -> PauseSummary:
         """ADR-0001: preserve a non-empty register when the CRD is not visible; clear an empty one."""
