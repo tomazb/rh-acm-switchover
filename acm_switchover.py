@@ -482,23 +482,32 @@ def _run_restore_only_argocd_pause(
 
     try:
         coordinator = ArgocdPauseRegister(state, dry_run=getattr(args, "dry_run", False))
-        paused_apps, failure_count = coordinator.pause_hubs([(secondary, HUB_ROLE_SECONDARY)])
+        summary = coordinator.pause_hubs([(secondary, HUB_ROLE_SECONDARY)])
     except Exception as exc:
         return _fail_phase(state, f"Argo CD pause on secondary hub failed: {exc}", logger)
 
-    if failure_count:
+    if summary.blocked:
         return _fail_phase(
             state,
-            f"Argo CD auto-sync pause failed for {failure_count} Application(s)",
+            f"Argo CD auto-sync pause blocked for {summary.blocked} Application(s); "
+            "pause or update the owning ApplicationSet first",
+            logger,
+        )
+
+    if summary.failed:
+        return _fail_phase(
+            state,
+            f"Argo CD auto-sync pause failed for {summary.failed} Application(s)",
             logger,
         )
 
     run_id = state.get_config(STATE_KEY_ARGOCD_RUN_ID)
     if run_id is not None:
         logger.info(
-            "Argo CD: %d Application(s) paused on secondary hub (run_id=%s). "
+            "Argo CD: %d Application(s) %s on secondary hub (run_id=%s). "
             "Left paused by default; use --argocd-resume-only after retargeting Git.",
-            len(paused_apps),
+            summary.newly_paused,
+            "would be paused" if getattr(args, "dry_run", False) else "paused",
             run_id,
         )
     if not getattr(args, "dry_run", False):

@@ -40,6 +40,26 @@ class RegisterStatus:
     run_id: Optional[str]
 
 
+@dataclass
+class PauseSummary:
+    """Aggregated result of one pause_hubs() run.
+
+    Every counter describes work this run did (or, in dry-run, would do); none
+    of them report pre-existing register contents. ``blocked`` and ``failed``
+    are deliberately distinct: a blocker means the tool refused to pause (an
+    ApplicationSet owns the Application), a failure means the patch itself
+    did not succeed.
+    """
+
+    newly_paused: int = 0
+    already_paused: int = 0
+    recovered: int = 0
+    failed: int = 0
+    blocked: int = 0
+    applications_crd_visible: bool = True
+    run_id: Optional[str] = None
+
+
 class ArgocdPauseRegister:
     """The Argo CD pause register: pause, resume, and status across hubs.
 
@@ -202,14 +222,14 @@ class ArgocdPauseRegister:
             logger.info("Argo CD pause register empty; cleared pause state.")
         return summary
 
-    def pause_hubs(self, hubs: List[Tuple[KubeClient, str]]) -> Tuple[List[Dict[str, Any]], int]:
+    def pause_hubs(self, hubs: List[Tuple[KubeClient, str]]) -> PauseSummary:
         """Pause ArgoCD auto-sync for ACM-touching Applications on the given hubs.
 
         Args:
             hubs: List of (KubeClient, hub_label) tuples to process.
 
         Returns:
-            Tuple of (paused_apps list, failure_count).
+            A PauseSummary describing what this run did.
 
         Raises:
             Exception: Propagated from ArgoCD detection or application listing.
@@ -220,27 +240,14 @@ class ArgocdPauseRegister:
             discoveries.append((client, hub_label, discovery))
 
         if not any(discovery.has_applications_crd for _, _, discovery in discoveries):
-            entries = self.load_entries()
-            applied = [entry for entry in entries if self._is_pause_applied(entry)]
-            if applied:
-                logger.warning(
-                    "Argo CD Applications CRD not visible on any hub but %d app(s) recorded paused; "
-                    "keeping pause register (see ADR-0001). Resume with --argocd-resume-only, or "
-                    "clear the state file manually if Argo CD was permanently removed.",
-                    len(applied),
-                )
-                return entries, 0
-            logger.info("Argo CD Applications CRD not found on any hub; skipping Argo CD pause")
-            if not self.dry_run:
-                clear_argocd_pause_state(self.state)
-            return [], 0
+            return self._handle_no_applications_crd()
 
         existing_run_id = self.state.get_config(STATE_KEY_ARGOCD_RUN_ID)
         run_id = argocd_lib.run_id_or_new(existing_run_id)
         if not self.dry_run:
             self.state.set_config(STATE_KEY_ARGOCD_RUN_ID, run_id)
+        summary = PauseSummary(run_id=run_id)
         paused_apps: List[Dict[str, Any]] = self.load_entries()
-        pause_failures = 0
 
         discovery_namespaces_by_hub = self._get_discovery_namespaces_by_hub() if existing_run_id else {}
         applications_by_hub: List[Tuple[KubeClient, str, List[Dict[str, Any]]]] = []
@@ -267,7 +274,8 @@ class ArgocdPauseRegister:
         self._persist_discovery_namespaces_by_hub(discovery_namespaces_by_hub)
 
         if pause_blockers:
-            return paused_apps, len(pause_blockers)
+            summary.blocked = len(pause_blockers)
+            return summary
 
         for client, hub_label, apps in applications_by_hub:
             acm_apps = argocd_lib.find_acm_touching_apps(apps)
@@ -299,6 +307,7 @@ class ArgocdPauseRegister:
                         existing_entry.pop("pause_state", None)
                         existing_entry.pop("pause_run_id", None)
                         self._persist_paused_apps(paused_apps)
+                        summary.recovered += 1
                         logger.info(
                             "  Recovered Argo CD pause state for %s/%s on %s",
                             namespace,
@@ -308,6 +317,7 @@ class ArgocdPauseRegister:
                         continue
                     # Clobber guard: already paused and recorded
                     if self._is_pause_applied(existing_entry) and not has_automated:
+                        summary.already_paused += 1
                         logger.debug(
                             "  Skip %s/%s (already paused and recorded)",
                             namespace,
@@ -333,6 +343,7 @@ class ArgocdPauseRegister:
                 result = argocd_lib.pause_autosync(client, impact.app, run_id)
 
                 if result.patched:
+                    summary.newly_paused += 1
                     entry["original_sync_policy"] = result.original_sync_policy
                     entry["pause_applied"] = not self.dry_run
                     entry.pop("pause_state", None)
@@ -369,10 +380,29 @@ class ArgocdPauseRegister:
                         entry["pause_state"] = "unknown"
                         entry["pause_run_id"] = run_id
                         self._persist_paused_apps(paused_apps)
-                    pause_failures += 1
+                    summary.failed += 1
                 else:
                     self._remove_pause_entry(paused_apps, hub_label, namespace, name)
                     self._persist_paused_apps(paused_apps)
                     logger.debug("  Skip %s/%s (no auto-sync)", result.namespace, result.name)
 
-        return paused_apps, pause_failures
+        return summary
+
+    def _handle_no_applications_crd(self) -> PauseSummary:
+        """ADR-0001: preserve a non-empty register when the CRD is not visible; clear an empty one."""
+        entries = self.load_entries()
+        applied = [entry for entry in entries if self._is_pause_applied(entry)]
+        run_id = self.state.get_config(STATE_KEY_ARGOCD_RUN_ID)
+        if applied:
+            logger.warning(
+                "Argo CD Applications CRD not visible on any hub but %d app(s) recorded paused; "
+                "keeping pause register (see ADR-0001). Resume with --argocd-resume-only, or "
+                "clear the state file manually if Argo CD was permanently removed.",
+                len(applied),
+            )
+            return PauseSummary(applications_crd_visible=False, run_id=run_id)
+        logger.info("Argo CD Applications CRD not found on any hub; skipping Argo CD pause")
+        if not self.dry_run:
+            clear_argocd_pause_state(self.state)
+            run_id = None
+        return PauseSummary(applications_crd_visible=False, run_id=run_id)

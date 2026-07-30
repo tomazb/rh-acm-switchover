@@ -96,13 +96,15 @@ class TestPauseHubsSingleHub:
                 patched=True,
             )
             coordinator = ArgocdPauseRegister(state, dry_run=False)
-            paused_apps, failures = coordinator.pause_hubs([(client, "secondary")])
+            summary = coordinator.pause_hubs([(client, "secondary")])
 
-        assert failures == 0
-        assert len(paused_apps) == 1
-        assert paused_apps[0]["hub"] == "secondary"
-        assert paused_apps[0]["name"] == "app-1"
-        assert paused_apps[0]["pause_applied"] is True
+        assert summary.failed == 0
+        assert summary.newly_paused == 1
+        entries = state._config["argocd_paused_apps"]
+        assert len(entries) == 1
+        assert entries[0]["hub"] == "secondary"
+        assert entries[0]["name"] == "app-1"
+        assert entries[0]["pause_applied"] is True
 
     def test_no_crd_preserves_legacy_entry_without_pause_applied(self):
         """Legacy entries (no pause_applied flag) count as applied; CRD loss must not clobber them (ADR-0001)."""
@@ -119,10 +121,11 @@ class TestPauseHubsSingleHub:
             return_value=_discovery_without_crd(),
         ):
             coordinator = ArgocdPauseRegister(state, dry_run=False)
-            paused_apps, failures = coordinator.pause_hubs([(client, "secondary")])
+            summary = coordinator.pause_hubs([(client, "secondary")])
 
-        assert paused_apps == [{"hub": "secondary", "name": "old"}]
-        assert failures == 0
+        assert summary.newly_paused == 0
+        assert summary.failed == 0
+        assert summary.applications_crd_visible is False
         assert state._config["argocd_paused_apps"] == [{"hub": "secondary", "name": "old"}]
         assert state._config["argocd_run_id"] == "run-1"
 
@@ -148,11 +151,12 @@ class TestPauseHubsSingleHub:
             patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
         ):
             coordinator = ArgocdPauseRegister(state, dry_run=False)
-            paused_apps, failures = coordinator.pause_hubs([(client, "secondary")])
+            summary = coordinator.pause_hubs([(client, "secondary")])
 
         mock_pause.assert_not_called()
-        assert paused_apps == []
-        assert failures == 0
+        assert summary.newly_paused == 0
+        assert summary.failed == 0
+        assert state._config["argocd_paused_apps"] == []
 
 
 @pytest.mark.unit
@@ -205,17 +209,18 @@ class TestPauseHubsTwoHubs:
             ),
         ):
             coordinator = ArgocdPauseRegister(state, dry_run=False)
-            paused_apps, failures = coordinator.pause_hubs(
+            summary = coordinator.pause_hubs(
                 [
                     (primary_client, "primary"),
                     (secondary_client, "secondary"),
                 ]
             )
 
-        assert failures == 0
-        assert len(paused_apps) == 2
-        hubs = {e["hub"] for e in paused_apps}
-        assert hubs == {"primary", "secondary"}
+        assert summary.failed == 0
+        assert summary.newly_paused == 2
+        entries = state._config["argocd_paused_apps"]
+        assert len(entries) == 2
+        assert {e["hub"] for e in entries} == {"primary", "secondary"}
 
     def test_skips_hub_without_crd(self):
         """When one hub lacks the CRD, only the other hub is processed."""
@@ -251,16 +256,18 @@ class TestPauseHubsTwoHubs:
                 patched=True,
             )
             coordinator = ArgocdPauseRegister(state, dry_run=False)
-            paused_apps, failures = coordinator.pause_hubs(
+            summary = coordinator.pause_hubs(
                 [
                     (primary_client, "primary"),
                     (secondary_client, "secondary"),
                 ]
             )
 
-        assert failures == 0
-        assert len(paused_apps) == 1
-        assert paused_apps[0]["hub"] == "primary"
+        assert summary.failed == 0
+        assert summary.newly_paused == 1
+        entries = state._config["argocd_paused_apps"]
+        assert len(entries) == 1
+        assert entries[0]["hub"] == "primary"
 
 
 @pytest.mark.unit
@@ -303,12 +310,15 @@ class TestIdempotentRepause:
             patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
         ):
             coordinator = ArgocdPauseRegister(state, dry_run=False)
-            paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
+            summary = coordinator.pause_hubs([(client, "primary")])
 
         mock_pause.assert_not_called()
-        assert failures == 0
-        assert len(paused_apps) == 1
-        assert paused_apps[0]["pause_applied"] is True
+        assert summary.failed == 0
+        assert summary.already_paused == 1
+        assert summary.newly_paused == 0
+        entries = state._config["argocd_paused_apps"]
+        assert len(entries) == 1
+        assert entries[0]["pause_applied"] is True
 
     def test_recovers_pending_entry_when_app_already_paused(self):
         """Entry with pause_applied=False should be confirmed when live app has this run's pause marker."""
@@ -350,11 +360,11 @@ class TestIdempotentRepause:
             patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
         ):
             coordinator = ArgocdPauseRegister(state, dry_run=False)
-            paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
+            summary = coordinator.pause_hubs([(client, "primary")])
 
         mock_pause.assert_not_called()
-        assert failures == 0
-        assert paused_apps[0]["pause_applied"] is True
+        assert summary.failed == 0
+        assert summary.recovered == 1
         # Verify state was persisted with confirmed entry
         persisted = state._config["argocd_paused_apps"]
         assert persisted[0]["pause_applied"] is True
@@ -396,11 +406,11 @@ class TestIdempotentRepause:
             patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
         ):
             coordinator = ArgocdPauseRegister(state, dry_run=False)
-            paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
+            summary = coordinator.pause_hubs([(client, "primary")])
 
         mock_pause.assert_not_called()
-        assert failures == 0
-        assert paused_apps == []
+        assert summary.failed == 0
+        assert summary.recovered == 0
         assert state._config["argocd_paused_apps"] == []
 
     def test_recovers_unknown_entry_only_with_matching_marker(self):
@@ -444,12 +454,14 @@ class TestIdempotentRepause:
             patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
         ):
             coordinator = ArgocdPauseRegister(state, dry_run=False)
-            paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
+            summary = coordinator.pause_hubs([(client, "primary")])
 
         mock_pause.assert_not_called()
-        assert failures == 0
-        assert paused_apps[0]["pause_applied"] is True
-        assert "pause_state" not in paused_apps[0]
+        assert summary.failed == 0
+        assert summary.recovered == 1
+        persisted = state._config["argocd_paused_apps"]
+        assert persisted[0]["pause_applied"] is True
+        assert "pause_state" not in persisted[0]
 
 
 @pytest.mark.unit
@@ -483,12 +495,10 @@ class TestDryRun:
                 patched=True,
             )
             coordinator = ArgocdPauseRegister(state, dry_run=True)
-            paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
+            summary = coordinator.pause_hubs([(client, "primary")])
 
-        assert failures == 0
-        assert len(paused_apps) == 1
-        assert paused_apps[0]["pause_applied"] is False
-        assert "dry_run" not in paused_apps[0]
+        assert summary.failed == 0
+        assert summary.newly_paused == 1
         state.set_config.assert_not_called()
 
 
@@ -525,10 +535,11 @@ class TestErrorHandling:
             patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
         ):
             coordinator = ArgocdPauseRegister(state, dry_run=False)
-            paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
+            summary = coordinator.pause_hubs([(client, "primary")])
 
-        assert failures == 1
-        assert paused_apps == []
+        assert summary.blocked == 1
+        assert summary.failed == 0
+        assert summary.newly_paused == 0
         mock_find_acm.assert_not_called()
         mock_pause.assert_not_called()
 
@@ -560,11 +571,12 @@ class TestErrorHandling:
                 error="403 Forbidden",
             )
             coordinator = ArgocdPauseRegister(state, dry_run=False)
-            paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
+            summary = coordinator.pause_hubs([(client, "primary")])
 
-        assert failures == 1
-        # Failed entry should be removed from paused_apps
-        assert paused_apps == []
+        assert summary.failed == 1
+        assert summary.newly_paused == 0
+        # Failed entry should be removed from the register
+        assert state._config["argocd_paused_apps"] == []
 
     def test_verification_failure_preserves_pause_state_for_resume(self):
         state = _make_state_manager({"argocd_run_id": None, "argocd_paused_apps": []})
@@ -595,10 +607,10 @@ class TestErrorHandling:
                 error="pause verification failed: 500 Internal Server Error",
             )
             coordinator = ArgocdPauseRegister(state, dry_run=False)
-            paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
+            summary = coordinator.pause_hubs([(client, "primary")])
 
-        assert failures == 1
-        assert paused_apps == [
+        assert summary.failed == 1
+        assert state._config["argocd_paused_apps"] == [
             {
                 "hub": "primary",
                 "namespace": "argocd",
@@ -607,7 +619,6 @@ class TestErrorHandling:
                 "pause_applied": True,
             }
         ]
-        assert state._config["argocd_paused_apps"] == paused_apps
 
     def test_unknown_patch_state_persists_unconfirmed_entry(self):
         state = _make_state_manager({"argocd_run_id": "run-1", "argocd_paused_apps": []})
@@ -638,10 +649,10 @@ class TestErrorHandling:
                 error="patch state unknown",
             )
             coordinator = ArgocdPauseRegister(state, dry_run=False)
-            paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
+            summary = coordinator.pause_hubs([(client, "primary")])
 
-        assert failures == 1
-        assert paused_apps == [
+        assert summary.failed == 1
+        assert state._config["argocd_paused_apps"] == [
             {
                 "hub": "primary",
                 "namespace": "argocd",
@@ -652,7 +663,6 @@ class TestErrorHandling:
                 "pause_run_id": "run-1",
             }
         ]
-        assert state._config["argocd_paused_apps"] == paused_apps
 
     def test_detection_failure_propagates(self):
         """ArgoCD detection errors should propagate to the caller."""
@@ -729,10 +739,9 @@ class TestErrorHandling:
                 error="patch failed",
             )
             coordinator = ArgocdPauseRegister(state, dry_run=False)
-            paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
+            summary = coordinator.pause_hubs([(client, "primary")])
 
-        assert failures == 1
-        assert paused_apps == []
+        assert summary.failed == 1
         assert state._config["argocd_paused_apps"] == []
 
 
@@ -823,10 +832,10 @@ class TestStatePersistence:
             ),
         ):
             coordinator = ArgocdPauseRegister(state, dry_run=False)
-            paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
+            summary = coordinator.pause_hubs([(client, "primary")])
 
-        assert failures == 0
-        assert len(paused_apps) == 2
+        assert summary.failed == 0
+        assert summary.newly_paused == 2
 
         # Verify set_config was called multiple times (provisional + confirmed for each app)
         paused_calls = [call for call in state.set_config.call_args_list if call.args[0] == "argocd_paused_apps"]
@@ -1198,10 +1207,11 @@ class TestNoCrdRegisterPreservation:
         ):
             register = ArgocdPauseRegister(state, dry_run=False)
             with caplog.at_level("WARNING", logger="acm_switchover"):
-                paused_apps, failures = register.pause_hubs([(client, "secondary")])
+                summary = register.pause_hubs([(client, "secondary")])
 
-        assert failures == 0
-        assert paused_apps == [entry]
+        assert summary.failed == 0
+        assert summary.newly_paused == 0
+        assert summary.applications_crd_visible is False
         assert state.get_config("argocd_paused_apps") == [entry]
         assert state.get_config("argocd_run_id") == "run-1"
         assert any("keeping pause register" in record.message for record in caplog.records)
@@ -1218,13 +1228,161 @@ class TestNoCrdRegisterPreservation:
             return_value=_discovery_without_crd(),
         ):
             register = ArgocdPauseRegister(state, dry_run=False)
-            paused_apps, failures = register.pause_hubs([(client, "secondary")])
+            summary = register.pause_hubs([(client, "secondary")])
 
-        assert paused_apps == []
-        assert failures == 0
+        assert summary.newly_paused == 0
+        assert summary.failed == 0
+        assert summary.applications_crd_visible is False
         assert state.get_config("argocd_paused_apps") == []
         assert state.get_config("argocd_run_id") is None
         assert state.get_config("argocd_discovery_namespaces") == {}
+
+
+@pytest.mark.unit
+class TestPauseSummaryReporting:
+    """F1: pause_hubs returns a PauseSummary whose counters mean one thing each."""
+
+    def test_no_crd_preserve_path_reports_zero_newly_paused(self, tmp_path):
+        """ADR-0001 preserve path paused nothing this run; it must not claim otherwise."""
+        state = _make_real_state(tmp_path)
+        entry = {
+            "hub": "secondary",
+            "namespace": "argocd",
+            "name": "app-1",
+            "original_sync_policy": {"automated": {}},
+            "pause_applied": True,
+        }
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config("argocd_paused_apps", [entry])
+        client = Mock()
+
+        with patch(
+            "lib.argocd_register.argocd_lib.detect_argocd_installation",
+            return_value=_discovery_without_crd(),
+        ):
+            register = ArgocdPauseRegister(state, dry_run=False)
+            summary = register.pause_hubs([(client, "secondary")])
+
+        assert summary.newly_paused == 0
+        assert summary.failed == 0
+        assert summary.blocked == 0
+        assert summary.applications_crd_visible is False
+        assert summary.run_id == "run-1"
+
+    def test_blockers_are_reported_as_blocked_not_failed(self):
+        state = _make_state_manager({"argocd_run_id": None, "argocd_paused_apps": []})
+        client = Mock()
+        blocker = argocd_lib.ArgocdPauseBlocker(
+            namespace="argocd",
+            name="child-app",
+            reason=argocd_lib.PAUSE_BLOCK_REASON_APPLICATIONSET_MANAGED,
+            message="managed by ApplicationSet parent-set",
+        )
+
+        with (
+            patch(
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
+                return_value=_discovery_with_crd(),
+            ),
+            patch("lib.argocd_register.argocd_lib.list_argocd_applications", return_value=[]),
+            patch("lib.argocd_register.argocd_lib.find_argocd_pause_blockers", return_value=[blocker]),
+        ):
+            summary = ArgocdPauseRegister(state, dry_run=False).pause_hubs([(client, "primary")])
+
+        assert summary.blocked == 1
+        assert summary.failed == 0
+        assert summary.newly_paused == 0
+
+    def test_counts_newly_paused_already_paused_and_recovered(self):
+        state = _make_state_manager(
+            {
+                "argocd_run_id": "run-1",
+                "argocd_paused_apps": [
+                    {
+                        "hub": "primary",
+                        "namespace": "argocd",
+                        "name": "already",
+                        "original_sync_policy": {"automated": {}},
+                        "pause_applied": True,
+                    },
+                    {
+                        "hub": "primary",
+                        "namespace": "argocd",
+                        "name": "pending",
+                        "original_sync_policy": {"automated": {}},
+                        "pause_applied": False,
+                    },
+                ],
+            }
+        )
+        client = Mock()
+        fresh = _make_app("argocd", "fresh")
+        already = _make_app("argocd", "already", automated=False)
+        pending = _make_app(
+            "argocd",
+            "pending",
+            automated=False,
+            annotations={argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"},
+        )
+        apps = [fresh, already, pending]
+
+        with (
+            patch(
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
+                return_value=_discovery_with_crd(),
+            ),
+            patch("lib.argocd_register.argocd_lib.list_argocd_applications", return_value=apps),
+            patch(
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
+                return_value=[_make_impact(a) for a in apps],
+            ),
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
+        ):
+            mock_pause.return_value = argocd_lib.PauseResult(
+                namespace="argocd",
+                name="fresh",
+                original_sync_policy={"automated": {}},
+                patched=True,
+            )
+            summary = ArgocdPauseRegister(state, dry_run=False).pause_hubs([(client, "primary")])
+
+        assert summary.newly_paused == 1
+        assert summary.already_paused == 1
+        assert summary.recovered == 1
+        assert summary.failed == 0
+        assert summary.blocked == 0
+        assert summary.applications_crd_visible is True
+        assert summary.run_id == "run-1"
+
+    def test_patch_failure_counts_failed_only(self):
+        state = _make_state_manager({"argocd_run_id": None, "argocd_paused_apps": []})
+        client = Mock()
+        app = _make_app("argocd", "app-1")
+
+        with (
+            patch(
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
+                return_value=_discovery_with_crd(),
+            ),
+            patch("lib.argocd_register.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch(
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
+                return_value=[_make_impact(app)],
+            ),
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
+        ):
+            mock_pause.return_value = argocd_lib.PauseResult(
+                namespace="argocd",
+                name="app-1",
+                original_sync_policy={"automated": {}},
+                patched=False,
+                error="403 Forbidden",
+            )
+            summary = ArgocdPauseRegister(state, dry_run=False).pause_hubs([(client, "primary")])
+
+        assert summary.failed == 1
+        assert summary.blocked == 0
+        assert summary.newly_paused == 0
 
 
 def _make_resume_client(apps_by_key, *, patch_error=None):
@@ -1405,13 +1563,10 @@ class TestDryRunRecordsNothing:
             ),
         ):
             register = ArgocdPauseRegister(state, dry_run=True)
-            would_pause, failures = register.pause_hubs([(client, "primary")])
+            summary = register.pause_hubs([(client, "primary")])
 
-        assert failures == 0
-        assert len(would_pause) == 1
-        assert would_pause[0]["name"] == "app-1"
-        assert would_pause[0]["pause_applied"] is False
-        assert "dry_run" not in would_pause[0]
+        assert summary.failed == 0
+        assert summary.newly_paused == 1
         client.patch_custom_resource.assert_not_called()
         for key in ("argocd_paused_apps", "argocd_run_id", "argocd_discovery_namespaces"):
             assert not state.get_config(key)
@@ -1460,7 +1615,8 @@ class TestDryRunRecordsNothing:
             return_value=_discovery_without_crd(),
         ):
             register = ArgocdPauseRegister(state, dry_run=True)
-            would_pause, failures = register.pause_hubs([(client, "secondary")])
+            summary = register.pause_hubs([(client, "secondary")])
 
-        assert (would_pause, failures) == ([], 0)
+        assert (summary.newly_paused, summary.failed) == (0, 0)
+        assert summary.applications_crd_visible is False
         assert state.get_config("argocd_discovery_namespaces") == {"secondary": ["argocd"]}

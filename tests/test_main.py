@@ -70,6 +70,7 @@ from lib.constants import (
     SWITCHOVER_COMPLETED_SUCCESS_MESSAGE,
     TOKEN_DURATION_DEFAULT,
 )
+from lib.argocd_register import PauseSummary
 from lib.exceptions import SwitchoverError
 from lib.validation import ValidationError
 from tests.main_test_helpers import make_restore_only_args, make_switchover_args
@@ -1104,7 +1105,7 @@ class TestSwitchoverPhaseFlow:
 
         with patch("acm_switchover.ArgocdPauseRegister") as coordinator_class:
             coordinator = coordinator_class.return_value
-            coordinator.pause_hubs.return_value = ([{"hub": HUB_ROLE_SECONDARY, "name": "app-1"}], 0)
+            coordinator.pause_hubs.return_value = PauseSummary(newly_paused=1, run_id="run-1")
             state.get_config.return_value = "run-1"
 
             result = _run_restore_only_argocd_pause(args, state, None, secondary, logger)
@@ -1126,14 +1127,18 @@ class TestSwitchoverPhaseFlow:
             return_value=False,
         ) as fail_phase:
             coordinator = coordinator_class.return_value
-            coordinator.pause_hubs.return_value = ([], 1)
+            coordinator.pause_hubs.return_value = PauseSummary(blocked=1)
 
             result = _run_restore_only_argocd_pause(args, state, None, secondary, logger)
 
         assert result is False
         coordinator_class.assert_called_once_with(state, dry_run=True)
         coordinator.pause_hubs.assert_called_once_with([(secondary, HUB_ROLE_SECONDARY)])
-        fail_phase.assert_called_once_with(state, "Argo CD auto-sync pause failed for 1 Application(s)", logger)
+        fail_phase.assert_called_once_with(
+            state,
+            "Argo CD auto-sync pause blocked for 1 Application(s); pause or update the owning ApplicationSet first",
+            logger,
+        )
         state.mark_step_completed.assert_not_called()
 
     def test_restore_only_argocd_pause_defaults_missing_dry_run_to_false(self):
@@ -1145,7 +1150,7 @@ class TestSwitchoverPhaseFlow:
 
         with patch("acm_switchover.ArgocdPauseRegister") as coordinator_class:
             coordinator = coordinator_class.return_value
-            coordinator.pause_hubs.return_value = ([{"hub": HUB_ROLE_SECONDARY, "name": "app-1"}], 0)
+            coordinator.pause_hubs.return_value = PauseSummary(newly_paused=1, run_id="run-1")
 
             result = _run_restore_only_argocd_pause(args, state, None, secondary, logger)
 

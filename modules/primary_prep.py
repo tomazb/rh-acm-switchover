@@ -118,16 +118,23 @@ class PrimaryPreparation:
         hubs = [(self.primary, HUB_ROLE_PRIMARY)] + ([(self.secondary, HUB_ROLE_SECONDARY)] if self.secondary else [])
         coordinator = ArgocdPauseRegister(self.state, self.dry_run)
         try:
-            paused_apps, failure_count = coordinator.pause_hubs(hubs)
+            summary = coordinator.pause_hubs(hubs)
         except Exception as exc:
             raise SwitchoverError(f"Argo CD pause failed: {exc}") from exc
-        if failure_count:
-            raise SwitchoverError(f"Argo CD auto-sync pause failed for {failure_count} Application(s)")
+        if summary.blocked:
+            raise SwitchoverError(
+                f"Argo CD auto-sync pause blocked for {summary.blocked} Application(s); "
+                "pause or update the owning ApplicationSet first"
+            )
+        if summary.failed:
+            raise SwitchoverError(f"Argo CD auto-sync pause failed for {summary.failed} Application(s)")
         run_id = self.state.get_config("argocd_run_id")
         if run_id is not None:
             logger.info(
-                "Argo CD: %d Application(s) paused (run_id=%s). Resume explicitly with --argocd-resume-only after retargeting Git.",
-                len(paused_apps),
+                "Argo CD: %d Application(s) %s (run_id=%s). "
+                "Resume explicitly with --argocd-resume-only after retargeting Git.",
+                summary.newly_paused,
+                "would be paused" if self.dry_run else "paused",
                 run_id,
             )
 
