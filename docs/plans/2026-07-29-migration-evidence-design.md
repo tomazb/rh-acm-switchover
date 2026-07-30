@@ -37,10 +37,14 @@ Four gaps remain:
 2. Name enforcement cannot be silently weakened by count arguments.
 3. Inventory reads on the migration path distinguish empty from missing-API.
 4. Integrated teardown requires migration evidence bound to a stable Restore identity
-   (namespace + UID) and the exact validated spec (generation + canonical fingerprint),
-   live-revalidated before anything deletes the Restore; an explicit journaled waiver
-   can substitute only for the expected-name predicate, never for restore identity,
-   provenance, completion, post-activation completion, or teardown revalidation.
+   (namespace + UID) and the exact validated spec (generation + canonical fingerprint).
+   Restore cleanup is a durable, recoverable transaction: intent precedes deletion,
+   passive patching is atomically conditional on UID and resourceVersion, the final
+   cleanup DELETE is conditional on the UID and resourceVersion from its immediately
+   preceding validated GET, and unexplained absence never becomes success automatically.
+   An explicit journaled waiver can substitute only for the expected-name predicate,
+   never for restore identity, provenance, completion, post-activation completion,
+   cleanup recovery, or teardown revalidation.
 
 ## Non-goals
 
@@ -49,6 +53,12 @@ Four gaps remain:
   ansible-branch contract).
 - Creating dedicated run-owned Backup resources (existing backup schedule output is used).
 - Standalone decommission target identity: planned `SSA-02`.
+- Cross-form-factor transactions or journal handoff. A Python run writes only Python
+  state and a collection run writes only collection checkpoint `operational_data`; the
+  schemas and transitions are parity-identical, but the stores remain independent.
+- Treating a same-name Restore created after this run's verified cleanup as this run's
+  object. Such an object is unowned by this transaction, is never deleted or adopted by
+  its evidence, and blocks the remaining finalization gates while it is live.
 
 ## Design
 
@@ -72,7 +82,8 @@ backup is final:
 
    ```yaml
    migration_backups:
-     schema_version: 1
+     schema_version: 2
+     run_id: "<uuid>"      # non-empty immutable migration-journal identity
      resolved_at: "<iso8601>"
      backups:            # only categories the method consumes; skipped fields absent
        managed_clusters: {name: "<backup>", completed_at: "<iso8601>"}
@@ -88,16 +99,74 @@ backup is final:
        completed_at: null | "<iso8601>"       # terminal success evidence; same durable update as the §1a bundle, or strictly last
        names_verified_at: null | "<iso8601>"  # set when expected-name check passed in activation
        teardown_revalidated_at: null | "<iso8601>"  # set only by the §4a live revalidation barrier
+     cleanup:
+       operation_id: null | "<uuid>"
+       state: "not_started" | "intent_persisted" | "delete_accepted" | "recovery_required" | "completed" | "repaired"
+       namespace: null | "<restore-namespace>"
+       name: null | "<restore-cr-name>"
+       uid: null | "<metadata.uid>"
+       generation: null | <metadata.generation>
+       spec_fingerprint: null | "<sha256-hex>"
+       backup_fields: {}  # exact concrete Restore spec fields consumed by the method
+       intent_at: null | "<iso8601>"
+       final_get_resource_version: null | "<metadata.resourceVersion>"
+       delete_accepted_at: null | "<iso8601>"
+       absence_verified_at: null | "<iso8601>"
+       completed_at: null | "<iso8601>"
+       recovery: null | {required_at: "<iso8601>", reason_code: "<stable-code>", observed_uid: null | "<uid>", observed_resource_version: null | "<resourceVersion>"}
+       repair: null | {actor: "<non-empty>", acknowledged_at: "<iso8601>", reason: "<non-empty>", run_id: "<uuid>", operation_id: "<uuid>", inspected_evidence: ["<non-empty reference>", "..."]}
      post_activation:
        names_verified_at: null | "<iso8601>"  # set when post-activation name check passed
        completed_at: null | "<iso8601>"       # set last, only when every required post-activation operation succeeded
      waiver: null | {flag: "<flag/var name>", journaled_at: "<iso8601>"}
    ```
 
-   Resume (§1 step 4) and the teardown gate (§4) consume exactly this record in both
-   implementations; field names never diverge between Python and the collection.
+   `run_id`, `cleanup.operation_id`, and all timestamps are strings;
+   `cleanup.generation` is an integer; `cleanup.backup_fields` is a
+   string-to-string mapping; `cleanup.recovery` and `cleanup.repair` are either null or
+   complete objects of the shown shape. Null is valid only where explicitly shown.
+   Empty strings, missing keys in a non-null recovery/repair object, unknown states,
+   timestamps that do not parse as ISO 8601, non-string backup field keys/values, or
+   cleanup identity fields that disagree with `restore` make the record malformed and
+   blocking. `cleanup.backup_fields` is the exact §1a projection's concrete field map;
+   it never contains `latest` or a skipped field.
+
+   `cleanup.recovery.reason_code` is one of `absent_without_completion`,
+   `replacement_uid`, or `replacement_during_poll`. `observed_uid` and
+   `observed_resource_version` are populated only when a complete safe response supplied
+   them; otherwise they remain null. Unknown reason codes are malformed.
+
+   State invariants are exact:
+
+   - `not_started`: operation/target/timestamp fields are null, `backup_fields` is empty,
+     and recovery/repair are null.
+   - `intent_persisted`: operation/target/spec/backup fields and `intent_at` are complete;
+     accepted/absence/completion fields and recovery/repair are null.
+   - `delete_accepted`: all intent fields plus `final_get_resource_version` and
+     `delete_accepted_at` are complete; absence/completion and recovery/repair are null.
+   - `recovery_required`: all intent fields and the complete `recovery` object exist;
+     accepted fields exist if and only if that transition followed an accepted DELETE;
+     `absence_verified_at`, `completed_at`, and repair are null.
+   - `completed`: all intent, accepted-delete, final resourceVersion, absence, and
+     completion fields are complete; recovery/repair are null.
+   - `repaired`: all intent and recovery fields plus the complete matching `repair`
+     object exist; `absence_verified_at` remains null, and it does not synthesize
+     accepted-delete or completion timestamps.
+
+   `cleanup.operation_id` is null only in `not_started`. The transition to
+   `intent_persisted` creates it once and copies `namespace`, `name`, `uid`,
+   `generation`, `spec_fingerprint`, and `backup_fields` from the already complete §1a
+   evidence bundle. Those values and `run_id` are immutable for the lifetime of the
+   journal. No resume path mints a new operation ID or refreshes them from a later
+   object.
+
+   Resume (§4a) and the teardown gate (§4) consume exactly this record in both
+   implementations; field names, types, invariants, and allowed transitions never
+   diverge between Python and the collection.
 3. Create/patch the Restore with the concrete names — `latest` never reaches a Restore
-   spec. Both the full-restore and passive-activation patch paths use the same journal.
+   spec. Both the full-restore and passive-activation patch paths use the same journal;
+   passive activation uses the atomic conditional boundary in §1b, never a name-only
+   patch plus a post-patch UID check.
    **Identity is journaled at mutation time**: the create response (create paths) or the
    pre-patch read (passive path, `_get_restore_or_raise`) carries `metadata.uid` — the
    run durably records `restore.namespace`, `restore.name`, `restore.uid`, and the
@@ -132,8 +201,8 @@ only for CRDs with the status subresource enabled; the ACM cluster-backup Restor
 enables it, and the implementation asserts that at first use (subresource absent →
 fail closed rather than silently degrading the guard to fingerprint-only).
 `resourceVersion` changes on *every* write, including status updates, so it is never
-used as the long-lived gate; only as an optional short-lived precondition inside a
-single read-modify-write.
+used as the long-lived evidence gate. It is mandatory as the short-lived concurrency
+precondition in the §1b patch and the final §4a GET→DELETE attempt.
 
 Canonical spec fingerprint — identical algorithm in Python and the collection:
 
@@ -185,6 +254,76 @@ fail-closed journal/live disagreement rule).
 
 The teardown gate (§4) requires the complete bundle; the §2 waiver bypasses none of it.
 
+#### 1b. Atomic passive-Restore patch boundary
+
+The current passive path performs a name-only merge patch and checks
+`resourceVersion` afterward. That post-check can detect a bad outcome, but it cannot
+prevent the patch from mutating a same-name replacement. R4-04 replaces it in both form
+factors with this server-enforced boundary:
+
+1. Strictly GET the selected passive Restore through the explicitly selected destination
+   kubeconfig and context. Distinguish a true object 404 from API discovery, transport,
+   authentication, authorization, or malformed-response failure; all are fatal before
+   mutation, but are reported with distinct stable public reason codes.
+2. Require non-empty string `metadata.uid` and `metadata.resourceVersion`, validate the
+   passive Restore's readiness and owned pre-patch fields, and durably bind
+   `restore.namespace`, `restore.name`, and `restore.uid` before mutation.
+3. Submit one RFC 6902 JSON Patch with `Content-Type:
+   application/json-patch+json`. Its first two operations are `test` operations against
+   `/metadata/uid` and `/metadata/resourceVersion` using the exact values from step 2;
+   only after both tests does an `add` operation set
+   `/spec/veleroManagedClustersBackupName` to the concrete journaled backup. `add` is
+   intentional because RFC 6902 defines it to replace an existing object member or add a
+   missing one. The patch contains no credentials or resources mutation.
+4. A failed test or conditional conflict is a no-mutation result for the whole atomic
+   PATCH. Treat structured precondition/test failures reported as 409, 412, 422, or the
+   server-equivalent conflict outcome as a conflict, not as success. Other API failures
+   retain their actual classification. Never fall back to merge patch or a surrounding
+   GET plus name-only PATCH.
+5. Conflict handling is bounded by one shared implementation constant. Every retry
+   starts again at step 1. A different UID fails immediately and preserves the
+   replacement. For the same UID, a changed generation or changed owned pre-patch field
+   fails closed; a resourceVersion-only change (for example, status activity) may be
+   retried only after the complete step-2 validation. Exhaustion fails closed. No retry
+   silently loops or reclassifies a conflict as an applied patch.
+6. After an accepted PATCH, strictly re-read the Restore through the same kubeconfig and
+   context. Require the journaled UID; for an actual field change, require an integer
+   generation greater than the validated pre-patch generation and equal to any generation
+   returned by the PATCH response; require the concrete ManagedCluster backup field,
+   unchanged skipped credentials/resources fields, and the canonical fingerprint. Store
+   that verified post-patch generation as `restore.generation`; only then durably write
+   the applied §1a evidence. A missing or malformed response, post-patch UID mismatch,
+   generation/fingerprint mismatch, or unexpected owned-field value fails closed and
+   writes no applied evidence.
+
+Kubernetes documents JSON Patch as a conditional PATCH mechanism, and RFC 6902 makes a
+failed `test` fail the atomic HTTP PATCH. The repository's dependency floor is
+`kubernetes>=28.0.0`; the generated v28.1 `CustomObjectsApi` custom-resource PATCH
+method hard-codes `application/merge-patch+json` and rejects an unknown content-type
+keyword. The Python implementation therefore adds a narrowly owned KubeClient helper
+that uses the same per-instance configured `ApiClient` and exact custom-resource path to
+submit JSON Patch with the required content type and request timeout. It does not change
+the general merge-patch helper. The collection adds a collection-owned guarded-patch
+module and module_utils helper with the same wire contract; `kubernetes.core.k8s` is not
+used as a substitute for this conditional boundary.
+
+Dry-run/check-mode and reporting contract:
+
+- Python dry-run and native Ansible check mode perform the strict read and validation,
+  compute whether the owned field would change, and submit no PATCH. The low-level
+  helper/module reports `changed: false` and `would_change: true|false`; the surrounding
+  preview may aggregate `would_change` into its existing planned-change summary but must
+  not claim a mutation occurred or persist authoritative journal transitions.
+- Execute mode returns `changed: false` when the exact desired value is already present
+  and the complete post-state verification succeeds; `changed: true` only after this
+  invocation's PATCH was accepted and verified. Conflict/failure never reports a
+  successful change.
+- Inputs and results name only sanitized namespace/name, stable reason code, status, and
+  attempt count. Kubeconfig paths, contexts where policy treats them as sensitive,
+  bearer tokens, authorization headers, raw patch bodies, raw API response bodies, and
+  rendered client exceptions are never logged or returned. The collection task invoking
+  the module uses `no_log: true` defensively while publishing only the sanitized result.
+
 ### 2. Additive expectations
 
 - The preflight-derived name set is enforced whenever available (both restore methods and
@@ -224,12 +363,16 @@ only the name check, not that later post-activation work completed.
   `restore.backup_names_verified_at`, and `restore.completed_at`, with the journaled
   `restore.namespace`/`restore.name` matching — plus `post_activation.completed_at`
   (all post-activation work completed) and `restore.teardown_revalidated_at` (the §4a
-  live barrier succeeded for exactly that UID/generation/fingerprint);
+  live barrier succeeded for exactly that UID/generation/fingerprint), plus an internally
+  consistent `cleanup.state` of `completed` or `repaired` for the same
+  `run_id`/`operation_id`/identity/spec/backup-field tuple and a final strict read proving
+  that no object currently occupies the journaled locator;
 - expected-name verification passed in both activation and post-activation
   (`restore.names_verified_at` and `post_activation.names_verified_at` set) — this
   predicate, and only this one, is satisfiable by the §2 waiver instead. The waiver never
   substitutes for restore identity, generation, fingerprint, provenance, completion,
-  post-activation completion, or teardown revalidation.
+  post-activation completion, cleanup completion/recovery, final locator absence, or
+  teardown revalidation.
 
 These fields are exactly the §1 schema's `restore`/`post_activation` block, written
 durably as each piece of evidence accrues. The `_decommission_old_hub` check itself
@@ -238,10 +381,14 @@ the validated identity and spec, which is exactly why `teardown_revalidated_at` 
 it is written only by the §4a live revalidation barrier, which runs earlier in the same
 finalization pass, before anything can delete the Restore.
 
-Anything missing → fail closed listing exactly which clusters or checks lack evidence.
+Anything missing or internally inconsistent → fail closed listing exactly which clusters
+or checks lack evidence. A `recovery_required` cleanup state is always blocking. A
+completed/repaired record followed by a live same-name replacement does not transfer the
+old cleanup evidence: the replacement is preserved and the final locator-absence gate
+blocks finalization and integrated teardown.
 Standalone decommission is unaffected (its wrong-target protection is `SSA-02`).
 
-### 4a. Live revalidation barrier before Restore cleanup and teardown
+### 4a. Live revalidation and durable Restore-cleanup transaction
 
 Current ordering in both form factors deletes the Restore long before integrated
 teardown: Python `finalize()` runs `enable_backup_schedule` →
@@ -249,141 +396,329 @@ teardown: Python `finalize()` runs `enable_backup_schedule` →
 switchover Restore) as its first restore-touching step, while `_handle_old_hub` →
 `_decommission_old_hub` comes much later; the collection mirrors this
 (`roles/finalization/tasks/main.yml`: `cleanup_restores.yml` before
-`handle_old_hub.yml`). A live check at teardown time is therefore impossible — the
-barrier moves **ahead of that cleanup**.
+`handle_old_hub.yml`). The evidence barrier and transaction therefore move **ahead of
+that cleanup**.
 
 Placement: at FINALIZATION, immediately before the first task that may delete or
 irreversibly mutate a switchover Restore — in Python, before
 `_cleanup_restore_resources()` inside the `enable_backup_schedule` step; in the
-collection, before `cleanup_restores.yml`. Precondition: the §1a bundle and
-`post_activation.completed_at` already exist (otherwise the barrier fails closed
-immediately — incomplete evidence is non-terminal, §1a).
+collection, before `cleanup_restores.yml`. Precondition: the complete §1a bundle and
+`post_activation.completed_at` already exist. Missing or partial evidence fails closed
+before cleanup intent.
 
-The barrier:
+#### Evidence barrier
+
+Before creating cleanup intent, the barrier:
 
 1. Uses the destination-hub client with the run's explicit kubeconfig and context (the
    same secondary-hub client identity activation used).
 2. Strictly GETs (§3) the journaled `restore.namespace`/`restore.name`.
-3. Requires live `metadata.uid` == journaled `restore.uid`.
-4. Requires live `metadata.generation` == journaled `restore.generation`.
+3. Requires the live namespace/name locator and `metadata.uid` to equal the journal.
+4. Requires live `metadata.generation` to equal the journaled generation.
 5. Recomputes the §1a canonical fingerprint from the live spec and requires equality
    with `restore.spec_fingerprint`.
-6. Rechecks every journaled concrete backup field against the live spec (§1a scope).
-7. Fails closed on absence, 404, discovery failure, malformed response, missing or
-   malformed UID, replacement UID, generation drift, fingerprint drift, or any
+6. Rechecks every concrete backup field consumed by the activation method, rejects any
+   unexpected `latest` alias, and requires skipped fields to retain their documented
+   `VELERO_BACKUP_SKIP`/untouched semantics.
+7. Fails closed on absence/404, discovery/read failure, incomplete or malformed response,
+   missing identity/version fields, replacement UID, generation/fingerprint drift, or
    backup-field mismatch.
 8. On success, durably records `restore.teardown_revalidated_at`, bound to the same
-   UID/generation/fingerprint it just verified (the write re-asserts equality with the
-   journaled triple; it never updates the triple from the new observation).
+   UID/generation/fingerprint it just verified. It never updates the journaled target
+   from the new observation.
 
-Rules:
+This is an evidence milestone, not the final concurrency boundary. It authorizes the
+creation of cleanup intent but does not claim that a UID-only DELETE protects against a
+same-UID spec change after the barrier.
 
-- Restore cleanup may proceed only after successful revalidation; integrated teardown
-  may proceed only after successful revalidation (enforced again by the §4 gate's
-  `teardown_revalidated_at` requirement).
-- The cleanup deletion of the run's own Restore is bound to the verified identity: the
-  Python delete uses a server-side UID precondition
-  (`V1DeleteOptions.preconditions.uid` = journaled `restore.uid`), and the collection
-  deletes it through the `acm_uid_guarded_delete` module introduced by the decommission
-  completion design — no name-only delete of the run's Restore remains. A precondition
-  mismatch (409/412: the object was replaced between barrier and delete) fails closed:
-  the replacement is left intact, cleanup and teardown stop. This closes the
-  barrier→cleanup window and matches the same-PR decommission `expected_uid` contract.
-  A 404 at delete time (object absent at the journaled locator with no journaled prior
-  delete) is likewise fail-closed — an unexplained disappearance after the barrier, not
-  a success. "The run's own Restore" is defined by the journaled `namespace`/`name`
-  locator: whatever object sits there gets the UID-preconditioned delete, so a same-name
-  replacement 409s instead of being routed around the guard. (Cleanup of *other*
-  switchover-owned Restores found by discovery at different names keeps its existing
-  archive-then-delete behavior — those objects carry no journaled evidence to protect.)
-- A failed later step never fabricates or upgrades the marker; no unrelated later
-  observation may replace the journaled identity.
-- Resume re-runs the barrier whenever the prior marker is absent, incomplete, or
-  invalidated by workflow state. Operationally: the marker stands only when the state
-  shows the cleanup step verifiably completed after it (the UID-preconditioned delete
-  succeeded and was journaled); in every other resume — cleanup not yet run, cleanup
-  incomplete, or the run re-entered any phase before FINALIZATION — the barrier runs
-  again. The object's absence after a verified, journaled cleanup is expected, not a
-  failure; a crash between marker write and cleanup re-runs the barrier, and a
-  replacement appearing in that window is caught by the re-run or by the delete's UID
-  precondition.
-- No cross-cluster or cross-store atomicity is claimed: the barrier is one strict read
-  plus one durable local state write in the run's own form factor.
+#### Cleanup state machine and durability boundaries
 
-### 5. Collection parity
+The authoritative `migration_backups.cleanup` record has these allowed transitions:
 
-- Activation role resolves and journals concrete backup names into checkpoint
-  `operational_data` before creating/patching the Restore; resume tasks reuse them.
-- Expectation additivity mirrored in role defaults/asserts; count variables become an
-  additional floor.
-- Where the Python side enforces the name set, role `k8s_info`-based checks compare the
-  same name set, not just counts.
-- The waiver is a documented role variable with the same journaling semantics.
-- The §1a fingerprint algorithm (projection, serialization, digest) and the §4a barrier
-  are implemented identically; a fingerprint computed by one implementation over the
-  same validated spec projection equals the other's.
-- Persistence stays single-authority per form factor: Python writes one authoritative
-  record to the Python run state; the collection writes one authoritative record to its
-  checkpoint `operational_data`. A run reads only its own form factor's record. The
-  implementations are independent, neither imports from the other, and no
-  cross-form-factor handoff, dual-write, or commit protocol exists or is introduced —
-  "shared schema" means parity-aligned field names and semantics, nothing more.
+| From | To | Durable write and gate meaning |
+| --- | --- | --- |
+| `not_started` | `intent_persisted` | One critical durable update creates immutable `operation_id`, copies the complete target identity/spec/backup fields, and writes `intent_at` **before** DELETE. Until that write succeeds, no DELETE is sent. |
+| `intent_persisted` | `delete_accepted` | Only after this process receives an accepted response to the UID+resourceVersion DELETE; write the request's `final_get_resource_version` and `delete_accepted_at`. This record is audit evidence, not cleanup completion. |
+| `delete_accepted` | `completed` | Only in the uninterrupted attempt that received the accepted response, after bounded absence polling and the final strict absence/replacement check; write `absence_verified_at` and `completed_at` together. |
+| `intent_persisted` or `delete_accepted` | `recovery_required` | A resume sees absence without completion or a different UID, or the uninterrupted delete attempt sees a replacement during polling/final verification. Write the complete `recovery` object when the local journal is writable; never mutate the cluster while recording it. |
+| `recovery_required` | `repaired` | Only an explicit operator acknowledgement satisfying the repair contract below; write the complete `repair` object atomically. |
+
+All other transitions are invalid. `completed` and `repaired` are terminal; no
+automatic transition leaves either state and neither may be rewritten for another
+object. Repeating the same valid durable write is idempotent only when every field is
+byte-for-byte equal. A partial record is not forward-compatible evidence: it blocks
+cleanup, finalization, BackupSchedule enablement, and integrated teardown.
+
+"Durable" means the form factor's critical persistence primitive returned success after
+the atomic replace and required file/directory synchronization. Python writes the
+transition only to its `StateManager` state and forces the critical flush; the collection
+writes it only to checkpoint `operational_data` through an explicit mid-phase journal
+update, not a phase `pass`/`fail` shortcut. Execute mode must fail before mutation when
+that authoritative store is disabled, unwritable, or cannot acknowledge the write.
+Dry-run/check mode writes no authoritative transition. If the parent-directory durability
+work specified by R4-05 has not landed first, R4-04 must include that narrow durability
+primitive for these writes or be sequenced after it; a buffered in-memory fact is not
+cleanup intent.
+
+#### Final pre-delete concurrency boundary
+
+After `intent_persisted`, every deletion attempt performs this sequence:
+
+1. Immediately before DELETE, strictly GET the journaled namespace/name through the
+   explicit destination kubeconfig/context.
+2. From that one complete response, require the exact locator, journaled UID, expected
+   generation, canonical owned-field fingerprint, every journaled concrete backup field,
+   skipped-field semantics, and no unexpected `latest` alias. Missing/malformed fields,
+   404, or read/discovery failure are not delete success.
+3. Capture the non-empty `metadata.resourceVersion` from that same validated response.
+4. Submit DELETE with server-side preconditions for **both** journaled UID and that
+   resourceVersion. Python uses
+   `V1DeleteOptions(preconditions=V1Preconditions(uid=..., resource_version=...))`.
+   The collection's guarded-delete boundary supplies the same two values; for the R4-04
+   Restore call, `expected_resource_version` is mandatory even if the shared module also
+   serves an older UID-only call contract.
+5. Treat a 409/412 or server-equivalent precondition conflict as no deletion. Restart at
+   step 1, bounded by one parity-shared retry limit. A same UID with a status-only
+   resourceVersion change may safely retry only after the entire validation repeats. A
+   generation/fingerprint/backup-field change, replacement UID, malformed response, or
+   retry exhaustion fails closed. Never drop the resourceVersion precondition, downgrade
+   a conflict to success, or loop without a bound.
+6. After an accepted DELETE, retain the response in the current attempt and durably
+   record `delete_accepted`; poll within a fixed timeout for the journaled UID to
+   disappear. A live different UID is a replacement, not absence. When polling first
+   observes absence, perform one additional strict final GET: only a verified 404/absence
+   with no replacement permits the current uninterrupted attempt to write `completed`.
+   A replacement during polling/final verification writes `recovery_required` and never
+   completion. Timeout or malformed/unreadable read fails the current attempt with no
+   completion while leaving the intent state resumable; a later resume must start with
+   the complete strict read rules below.
+
+The Kubernetes API `Preconditions` type explicitly supports both `uid` and
+`resourceVersion`. The repository's dependency floor (`kubernetes>=28.0.0`) exposes a
+`body: V1DeleteOptions` on namespaced custom-object DELETE, and its generated
+`V1Preconditions` contains both fields. The final GET plus UID+resourceVersion
+precondition therefore closes the **final-GET-to-DELETE** identity and same-UID version
+window for this API path. The earlier evidence barrier remains useful, but it is not
+credited with closing that later window.
+
+The journaled locator is reserved for this transaction before generic Restore cleanup
+classification. If another UID occupies it, that replacement is never routed through
+the generic archive/delete path. Other switchover-owned Restores at different names keep
+their existing cleanup contract and carry none of this transaction's evidence.
+
+#### Resume and operator repair
+
+Resume validates the complete journal first, then follows exactly one rule:
+
+1. **No cleanup intent (`not_started`):** cleanup has not started. Re-run the complete
+   evidence barrier, then create intent normally. If the Restore is already absent, the
+   barrier's strict GET fails closed.
+2. **Intent exists and the same UID is live (`intent_persisted` or
+   `delete_accepted`):** re-run the complete locator/UID/generation/fingerprint/backup
+   field/no-`latest` validation and safely retry the guarded deletion using the same
+   `run_id`, `operation_id`, and prior evidence. Never mint or adopt replacements.
+3. **Intent exists and a different UID is live:** preserve the replacement, write
+   `recovery_required` with stable reason `replacement_uid` when possible, and block
+   every later gate. Do not delete, patch, archive, or adopt it.
+4. **Intent exists and strict GET reports 404/absence, but completion is not durable:**
+   do **not** infer success, even if `delete_accepted` was durably recorded. The process
+   that received the accepted DELETE did not durably prove the bounded poll and final
+   absence check. Write `recovery_required` with reason
+   `absent_without_completion` and block cleanup completion, finalization,
+   BackupSchedule enablement, and integrated teardown.
+5. **Recovery read is unreadable or malformed:** make no mutation or state upgrade,
+   preserve the current intent/delete-accepted record, emit a sanitized failure, and
+   block the current attempt. A later resume starts the strict classification again;
+   unreadability is never treated as absence.
+6. **Completion exists:** accept `completed` only when every required field is present,
+   internally consistent, and bound to the same run/operation/Restore/spec/backup tuple.
+   A current same-name replacement remains a new unowned object: preserve it and block
+   the final strict locator-absence gate; it never inherits the completed evidence.
+7. **Recovery/repair exists:** `recovery_required` always blocks. `repaired` is accepted
+   only under the complete audit and live-absence rules below.
+
+There is no automatic ambiguous-to-success conversion. The operator-repair surface
+(final CLI flag/subcommand and collection variable/module interface decided during the
+implementation plan) is an explicit acknowledgement, not a synthetic proof that this
+run performed the delete. It is accepted only when:
+
+- the current state is `recovery_required`;
+- an explicit operator action supplies non-empty `actor`, `reason`, and one or more
+  `inspected_evidence` references;
+- the action names the exact journal `run_id` and immutable cleanup `operation_id`;
+- a fresh strict read through the same destination kubeconfig/context proves the
+  journaled locator is absent; a live replacement rejects the repair and is untouched;
+- one atomic durable update records `actor`, server/controller timestamp, reason,
+  run/operation identities, and inspected-evidence references before changing the state
+  to `repaired`.
+
+Missing/partial audit fields, mismatched identities, unreadable live state, or a present
+object reject the repair. A complete `repaired` record is accepted by cleanup completion,
+BackupSchedule enablement, finalization, and integrated-teardown gates **only** as an
+explicitly audited resolution of the original cleanup ambiguity and only while the final
+strict locator check remains absent. It does not authorize deleting or adopting a
+replacement. The expected-ManagedCluster waiver in §2 cannot create, bypass, or satisfy
+cleanup repair evidence.
+
+No cross-cluster or cross-store atomicity is claimed. Each form factor persists only its
+own journal; parity is schema and behavioral equivalence, not dual writing or
+cross-form-factor resume.
+
+### 5. Form-factor boundaries and parity
+
+#### Python CLI
+
+- `StateManager` owns the sole authoritative Python `migration_backups` record. Backup
+  freeze, Restore identity, cleanup intent, accepted-delete audit, completion,
+  recovery-required, and repair are critical forced-durability writes.
+- KubeClient gains narrowly scoped strict-read, JSON-Patch UID/resourceVersion guarded
+  patch, and UID+resourceVersion guarded-delete helpers with request timeouts, bounded
+  conflicts, per-instance kubeconfig/context routing, and sanitized errors. Existing
+  generic name-only helpers are not used for the journaled Restore.
+- Activation owns the passive guarded patch and post-patch evidence; Finalization owns
+  the §4a transaction and final locator gate. Integrated `Decommission` receives only
+  the already-validated gate outcome and cannot bypass it.
+- Python dry-run performs reads/prediction but neither calls the mutating helpers nor
+  persists authoritative transaction transitions.
+
+#### Ansible collection
+
+- Activation resolves and journals concrete backup names into checkpoint
+  `operational_data` before creating/patching the Restore; resume reuses them.
+- A collection-owned guarded-patch module/module_utils boundary submits the exact JSON
+  Patch contract from §1b with explicit kubeconfig/context, bounded conflicts,
+  check-mode prediction, exact `changed` semantics, post-patch verification, `no_log`
+  task wiring, and sanitized result/error fields.
+- The collection guarded-delete boundary supplies both expected UID and expected
+  resourceVersion for the journaled Restore. Finalization reserves the journaled locator
+  before generic cleanup, performs the transaction, and persists every transition
+  through an explicit checkpoint operational-data update.
+- Execute-mode R4-04 mutations require the checkpoint journal to be enabled and writable.
+  Native check mode performs no mutation or authoritative checkpoint transition and
+  publishes predicted change separately from actual `changed`.
+
+#### Behavioral parity contract
+
+- Expectation additivity, strict inventory semantics, and waiver behavior are identical.
+- The §1a fingerprint projection/serialization/digest, schema-v2 field names and types,
+  cleanup states and transitions, stable recovery reason codes, conflict retry limit,
+  final polling bound, repair audit requirements, and fail-closed outcomes are identical.
+- A fingerprint computed by one implementation over the same validated projection
+  equals the other's, but evidence is never transferred: Python writes only Python
+  state; the collection writes only checkpoint `operational_data`. A run reads only its
+  own form factor's record. Neither imports from the other; no handoff, dual-write,
+  two-store commit, or cross-form-factor resume exists.
+- Parity means the same inputs produce the same mutation/no-mutation decision,
+  `changed`/`would_change` result, recovery state, and teardown gate. It does not mean
+  the two independent stores contain one shared physical record.
 
 ## Testing
 
-- Freeze: journal written before Restore mutation; Restore spec contains concrete names;
-  `latest` absent from every created/patched Restore body.
-- Resume: live `latest` moved → journaled names still used; live Restore spec mismatch →
-  fatal.
-- No completed backup in a required category → fatal before mutation.
-- Additivity: names pass + floor fails → fatal; explicit `0` + missing expected name →
-  fatal; waiver flag → passes with journaled waiver; waiver without expectations →
-  validation error.
-- Strict reads: discovery 404 during activation inventory → fatal, not zero-cluster
-  success.
-- Backup-provenance evidence (§1a): exact live-spec/journal match → evidence bundle
-  written; one consumed field mismatch → fail closed, no evidence; missing expected
-  field → fail closed; `latest` alias present in the live spec → fail closed; skipped
-  credentials/resources fields remain skipped and uncompared; passive activation compares
-  only the ManagedCluster field; full restore compares every consumed category;
-  unreadable or malformed live Restore → fail closed; resume with journal/live-spec
-  disagreement → fatal; teardown blocked when `backup_names_verified_at` is absent even
-  with `completed_at` set.
-- Identity (§1/§1a): UID journaled at mutation time from the create response and from
-  the pre-patch read; create/patch response without a readable UID → fail closed; exact
-  namespace/name/UID match → evidence written; same name with a different UID → fail
-  closed, no adoption; Restore deleted and recreated between mutation and the terminal
-  GET (i.e. before evidence capture) → §1a step-2 UID mismatch, fail closed; Restore
-  deleted and recreated before teardown revalidation → barrier fails closed; missing
-  UID → fail closed; unreadable or malformed Restore → fail closed; replacement UID is
-  never automatically adopted, by capture, resume, barrier, or cleanup.
-- Version/spec (§1a): exact generation and fingerprint match → passes; generation change
-  after evidence capture → barrier fails closed; consumed backup field change → fail
-  closed; passive single-field projection and full-restore multi-field projection each
-  produce the documented fingerprint; skipped fields stay out of the projection;
-  deterministic fingerprint parity — Python and collection produce identical digests for
-  identical projections; a status-only update (generation unchanged) does not invalidate
-  the fingerprint or the barrier; a resourceVersion-only change is not treated as a spec
+Every case below is required for both Python and the collection unless explicitly
+described as a cross-form-factor parity fixture.
+
+### Existing migration evidence
+
+- Freeze: authoritative journal write precedes Restore mutation; live `latest` movement
+  does not change journaled names; every created/patched Restore body contains concrete
+  names and no unexpected `latest`; no completed required backup is fatal before mutation.
+- Additivity: names pass + floor fails; explicit `0` + missing expected name fails; an
+  explicit waiver passes only the name predicate and is journaled; a waiver without
+  expectations is rejected.
+- Strict reads: inventory/discovery 404 is fatal rather than an empty result; a genuine
+  empty list remains distinguishable.
+- §1a evidence: exact identity/generation/fingerprint/consumed-field match writes the
+  complete bundle; mismatch, missing field, malformed/unreadable response, or unexpected
+  `latest` writes none. Passive compares only the ManagedCluster field; full compares
+  every consumed field; skipped fields stay excluded from the fingerprint.
+- Post-activation and teardown gates: the completion marker is written last; later
+  post-activation failure leaves it absent; every missing/partial evidence field blocks;
+  the waiver bypasses none of identity, provenance, post-activation completion, cleanup
+  state, recovery/repair, or final locator absence.
+
+### Cleanup durability and resume
+
+- Crash after durable `intent_persisted` but before DELETE: same UID live causes complete
+  revalidation and guarded retry with the same operation ID.
+- Crash after DELETE is accepted, including after `delete_accepted` is durable but before
+  completion persistence: absent locator becomes `recovery_required`, never completion.
+- Intent plus live same UID: revalidate locator, generation, fingerprint, concrete backup
+  fields, skipped fields, and no-`latest`, then retry safely.
+- Intent plus live replacement UID: replacement remains unmutated and the transaction
+  becomes blocking `recovery_required`.
+- Intent plus strict 404/absence without completion: record
+  `absent_without_completion`; finalization/teardown remain blocked.
+- Malformed or unreadable recovery read: no mutation or state upgrade, intent remains
+  resumable, and the current attempt fails with a sanitized error.
+- Explicit operator repair with complete actor/timestamp/reason/run ID/operation
+  ID/inspected-evidence fields and current strict absence: one durable transition to
+  `repaired`; the named later gates accept it subject to final absence.
+- Missing/partial repair record, wrong run/operation identity, empty evidence, or a live
+  object: reject repair and remain blocked.
+- Completed cleanup followed by a same-name replacement: original evidence remains bound
+  to its UID, replacement remains unmutated, final locator-absence gate blocks.
+- No automatic `recovery_required`/ambiguous-to-`completed` or `repaired` transition;
+  the ManagedCluster-name waiver cannot affect this result.
+- Invalid/unknown state transitions, partial terminal records, rewritten operation ID,
+  disabled/unwritable collection checkpoint, and failed Python critical flush all block
+  before mutation.
+
+### Passive guarded patch
+
+- Replacement UID appears between pre-read and PATCH: JSON Patch UID test fails and the
+  replacement is unchanged.
+- Same UID resourceVersion changes before PATCH: resourceVersion test fails; bounded
+  complete re-read/revalidation is required before any retry.
+- Failed JSON Patch test/precondition produces no field mutation and no applied evidence;
+  merge-patch fallback is forbidden.
+- Accepted PATCH followed by post-read UID mismatch, or generation/fingerprint/owned-field
+  mismatch: fail closed and write no applied evidence.
+- Passive activation changes only `veleroManagedClustersBackupName`; credentials and
+  resources stay untouched/skipped and any `VELERO_BACKUP_SKIP` values remain.
+- Check mode/dry-run reports `changed: false` plus exact `would_change: true|false` and
+  performs no PATCH or journal transition.
+- Execute exact reporting: desired state already verified → `changed: false`; this
+  invocation patched and verified → `changed: true`; conflict/failure never claims an
+  applied change.
+- Explicit destination kubeconfig/context routing is passed through the guarded helper
+  and collection module; a wrong/default client is detected by the test.
+- Object 404 is distinct from discovery/read/auth/transport failure and both precede
   mutation.
-- Ordering (§1a/§4a): `completed_at` cannot exist without the full
-  identity/version/provenance bundle; `teardown_revalidated_at` cannot exist without an
-  exact live match; Restore cleanup refuses to run before successful revalidation; the
-  cleanup delete of the run's own Restore carries the UID precondition and a 409/412
-  mismatch fails closed with the replacement intact; integrated teardown refuses to run
-  without `teardown_revalidated_at`; resume
-  revalidates stale or incomplete evidence; failure after name verification but before
-  completion stays blocked; the waiver bypasses none of UID, generation, fingerprint,
-  provenance, completion, or teardown revalidation.
-- Post-activation completion marker: all post-activation work succeeds → `completed_at`
-  written last; name verification succeeds but a later post-activation operation fails →
-  `completed_at` absent and teardown blocked; `completed_at` written only after all work;
-  waiver present but `completed_at` missing → still blocks; resume preserves or
-  revalidates the marker per the state/resume contract.
-- Teardown gate: blocked without evidence; passes with full evidence; waiver satisfies
-  only the name predicate (waiver + missing restore-provenance, restore-completion, or
-  post-activation-completion evidence still blocks); message names missing pieces.
-- Collection parity for journal shape, additivity, and gate.
-- Version bump per repo policy (Python + collection, synced).
+- Kubeconfig paths, tokens, authorization headers, raw patch/response bodies, credentials,
+  and rendered client exceptions are absent from logs/results in success, conflict,
+  check-mode, and failure cases.
+
+### Final cleanup boundary
+
+- Same UID but owned spec changes after the earlier evidence barrier: the final GET
+  detects generation/fingerprint/backup-field drift and no DELETE is issued.
+- ResourceVersion changes between final GET and DELETE: the server rejects the
+  UID+resourceVersion precondition and no deletion occurs.
+- UID replacement before DELETE: final GET or delete precondition preserves the
+  replacement and blocks.
+- UID+resourceVersion precondition conflict is never treated as success or retried without
+  the complete validation sequence.
+- Status-only resourceVersion change causes a safe bounded retry; retry exhaustion blocks.
+- Final GET missing/malformed UID, generation, resourceVersion, spec, or required field,
+  or unreadable/discovery failure: no DELETE.
+- A consumed backup field changes to `latest`: no DELETE.
+- DELETE accepted, then a replacement appears during polling/final verification:
+  replacement remains and `recovery_required` is written, never completion.
+- Bounded poll timeout writes no completion, leaves the accepted/intended operation
+  resumable, fails the current attempt, and does not silently loop.
+- Completion evidence is written only by the uninterrupted accepted-delete attempt after
+  bounded polling and a final verified absence. Crashing after that final read but before
+  the durable write still resumes as ambiguous.
+
+### Parity
+
+- Identical canonical projection/serialization inputs produce the same SHA-256 digest.
+- Schema-v2 field names/types, cleanup states/transitions, recovery reason codes, repair
+  audit validation, conflict bound, polling bound, `changed`/`would_change`, and
+  fail-closed outcomes are identical.
+- Shared fixtures prove no cross-form-factor journal read, resume, handoff, or dual-write
+  assumption; each form factor mutates only its own authoritative store.
+- Version bump per repository policy is synchronized across Python and collection.
 
 ## Tracker updates (same PR)
 
@@ -408,13 +743,50 @@ cross-referenced as adjacent.
 5. Integrated teardown without restore-provenance (`restore.backup_names_verified_at`),
    restore-completion (`restore.completed_at`), post-activation-completion
    (`post_activation.completed_at`), or teardown-revalidation
-   (`restore.teardown_revalidated_at`) evidence fails closed regardless of the waiver;
-   the waiver substitutes only for expected-name verification.
+   (`restore.teardown_revalidated_at`) evidence, an internally consistent
+   `cleanup.state` of `completed`/`repaired`, and final strict locator absence fails
+   closed regardless of the waiver; the waiver substitutes only for expected-name
+   verification.
 6. Completion and provenance evidence is bound to the live Restore's namespace + UID and
    to its exact validated spec (generation + canonical fingerprint); a same-name
    replacement Restore can never inherit another object's evidence — at capture, on
-   resume, at the §4a barrier, and at the UID-preconditioned cleanup delete. A spec
-   change after validation is caught up to and including the barrier and the
-   preconditioned delete; Restore objects created *after* the run's own Restore is
-   verifiably cleaned up are outside this contract (explicit non-goal — they carry none
-   of this run's evidence).
+   resume, at the §4a barrier, at the conditional patch/delete boundaries, and at the
+   final locator gate.
+7. Passive activation is one atomic JSON Patch whose UID and resourceVersion tests
+   precede its sole ManagedCluster-backup-field mutation. A replacement or concurrent
+   change cannot be mutated by a name-only fallback, and applied evidence follows a
+   complete strict post-read.
+8. Cleanup intent is durably persisted before DELETE. Completion is durably persisted
+   only in the uninterrupted accepted-delete attempt after bounded absence polling and a
+   final strict absence check. Absent-with-intent but without completion is
+   `recovery_required`, never inferred success.
+9. The final deletion attempt validates the complete identity/generation/fingerprint/
+   backup-field projection in one fresh GET and supplies both that UID and
+   resourceVersion as server-side DELETE preconditions. Same-UID spec drift after the
+   earlier barrier or a version change after the final GET prevents deletion or causes a
+   bounded full revalidation retry.
+10. Operator repair is explicit and auditable, requires the complete actor/timestamp/
+    reason/run/operation/evidence record plus current strict absence, never deletes or
+    adopts a replacement, and is accepted only by the named cleanup/finalization/
+    BackupSchedule/teardown gates. The expected-name waiver cannot satisfy it.
+11. Python state and collection checkpoint stores implement identical schema,
+    transitions, retry/timeout behavior, redaction, and outcomes without any dual write,
+    handoff, or cross-form-factor resume.
+
+## Verified protocol and client basis
+
+- [Kubernetes API concepts: updates to existing resources](https://kubernetes.io/docs/reference/using-api/api-concepts/#updates-to-existing-resources)
+  documents `application/json-patch+json`, JSON Patch consistency conditions, and
+  conditional resourceVersion handling.
+- [RFC 6902 §4.6 and §5](https://datatracker.ietf.org/doc/html/rfc6902#section-4.6)
+  define `test` and failed-operation behavior; [RFC 5789 §2.2](https://datatracker.ietf.org/doc/html/rfc5789#section-2.2)
+  requires an HTTP PATCH to apply atomically.
+- [Kubernetes `Preconditions`](https://kubernetes.io/docs/reference/kubernetes-api/definitions/preconditions-v1-meta/)
+  defines both `uid` and `resourceVersion`.
+- The repository's minimum supported generated client,
+  [`kubernetes-client/python` v28.1 custom-object API](https://github.com/kubernetes-client/python/blob/v28.1.0/kubernetes/client/api/custom_objects_api.py),
+  accepts `V1DeleteOptions` for namespaced custom-object DELETE but hard-codes
+  merge-patch content type for its generated PATCH wrapper.
+  [`V1Preconditions` in the same release](https://github.com/kubernetes-client/python/blob/v28.1.0/kubernetes/client/models/v1_preconditions.py)
+  exposes `uid` and `resource_version`. These inspected sources are why this design uses
+  the generated DELETE body and a dedicated low-level JSON-Patch helper.
