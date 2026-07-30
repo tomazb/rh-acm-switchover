@@ -3,16 +3,12 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from lib import argocd as argocd_lib
 from lib import runtime_bootstrap
-from lib.argocd_register import clear_argocd_pause_state
+from lib.argocd_register import ArgocdPauseRegister
 from lib.constants import (
     HUB_ROLE_PRIMARY,
     HUB_ROLE_SECONDARY,
-    STATE_KEY_ARGOCD_PAUSE_DRY_RUN,
     STATE_KEY_ARGOCD_PAUSED_APP_HUB,
-    STATE_KEY_ARGOCD_PAUSED_APPS,
-    STATE_KEY_ARGOCD_RUN_ID,
     STEP_PAUSE_ARGOCD_APPS,
 )
 from lib.exceptions import SwitchoverError
@@ -225,20 +221,15 @@ def run_argocd_resume_only(
     kube_client_factory: type[KubeClient] = KubeClient,
 ) -> bool:
     """Load state and restore Argo CD auto-sync for previously paused Applications, then exit."""
-    if state.get_config(STATE_KEY_ARGOCD_PAUSE_DRY_RUN, False):
-        logger.error(
-            "Argo CD resume requested, but the pause step was run in dry-run mode. "
-            "Re-run pause without --dry-run to generate resumable state."
-        )
-        return False
-    run_id = state.get_config(STATE_KEY_ARGOCD_RUN_ID)
-    paused_apps = state.get_config(STATE_KEY_ARGOCD_PAUSED_APPS) or []
-    if not run_id or not paused_apps:
+    register = ArgocdPauseRegister(state, dry_run=getattr(args, "dry_run", False))
+    status = register.status()
+    paused_apps = register.load_entries()
+    if not status.run_id or not paused_apps:
         logger.error("No Argo CD paused apps in state file (argocd_run_id or argocd_paused_apps missing).")
         return False
     logger.info(
         "Resuming Argo CD auto-sync from state (run_id=%s, %d app(s))",
-        run_id,
+        status.run_id,
         len(paused_apps),
     )
     try:
@@ -256,18 +247,12 @@ def run_argocd_resume_only(
         logger.error("Resume-only hub identity validation failed: %s", exc)
         return False
 
-    summary = argocd_lib.resume_recorded_applications(
-        paused_apps,
-        run_id,
-        resume_primary,
-        resume_secondary,
-        logger,
-    )
+    summary = register.resume(resume_primary, resume_secondary, logger)
     logger.info(
-        "Restored %d and already resumed %d of %d Application(s).",
+        "Restored %d and already resumed %d Application(s); %d remaining in register.",
         summary.restored,
         summary.already_resumed,
-        len(paused_apps),
+        summary.remaining,
     )
     if summary.failed:
         logger.error("Argo CD auto-sync restore failed for %d Application(s).", summary.failed)
@@ -288,15 +273,16 @@ def attempt_argocd_resume_on_failure(
     if not getattr(args, "argocd_resume_on_failure", False):
         return
 
-    paused_apps = state.get_config(STATE_KEY_ARGOCD_PAUSED_APPS) or []
-    run_id = state.get_config(STATE_KEY_ARGOCD_RUN_ID)
-    if not paused_apps or not run_id:
+    register = ArgocdPauseRegister(state, dry_run=getattr(args, "dry_run", False))
+    status = register.status()
+    paused_apps = register.load_entries()
+    if not paused_apps or not status.run_id:
         return
 
     logger.warning(
         "Switchover failed — attempting to resume %d paused Argo CD Application(s) (run_id=%s)...",
         len(paused_apps),
-        run_id,
+        status.run_id,
     )
     try:
         resume_primary, resume_secondary = prepare_argocd_resume_clients(
@@ -309,39 +295,22 @@ def attempt_argocd_resume_on_failure(
             allow_primary_load_from_state=False,
             kube_client_factory=kube_client_factory,
         )
-        summary = argocd_lib.resume_recorded_applications(
-            paused_apps,
-            run_id,
-            resume_primary,
-            resume_secondary,
-            logger,
-        )
+        summary = register.resume(resume_primary, resume_secondary, logger)
         logger.info(
             "Argo CD resume-on-failure: restored=%d, already_resumed=%d, failed=%d",
             summary.restored,
             summary.already_resumed,
             summary.failed,
         )
-        if summary.failed:
+        if summary.failed or summary.remaining:
             logger.warning(
-                "Argo CD resume-on-failure: %d Application(s) could not be resumed. "
+                "Argo CD resume-on-failure left %d Application(s) in the pause register. "
                 "Use --argocd-resume-only to retry manually.",
-                summary.failed,
-            )
-            return
-
-        accounted_for = int(summary.restored or 0) + int(summary.already_resumed or 0)
-        if accounted_for < len(paused_apps):
-            logger.warning(
-                "Argo CD resume-on-failure accounted for %d of %d recorded Application(s). "
-                "Preserving pause state for --argocd-resume-only retry.",
-                accounted_for,
-                len(paused_apps),
+                summary.remaining,
             )
             return
 
         state.clear_step_completed(STEP_PAUSE_ARGOCD_APPS)
-        clear_argocd_pause_state(state)
         retry_phase = Phase.PREFLIGHT if getattr(args, "restore_only", False) else Phase.PRIMARY_PREP
         state.add_error(
             "Argo CD resume-on-failure completed; retry must re-run Argo CD pause before continuing.",

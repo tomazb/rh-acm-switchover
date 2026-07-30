@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from lib import argocd as argocd_lib
+from lib.argocd_register import ArgocdPauseRegister
 from lib.argocd_resume import (
     _ensure_resume_identity_data,
     _required_resume_roles,
@@ -15,7 +16,6 @@ from lib.argocd_resume import (
 from lib.constants import (
     HUB_ROLE_PRIMARY,
     HUB_ROLE_SECONDARY,
-    STATE_KEY_ARGOCD_PAUSE_DRY_RUN,
     STATE_KEY_ARGOCD_PAUSED_APPS,
     STATE_KEY_ARGOCD_RUN_ID,
     STEP_PAUSE_ARGOCD_APPS,
@@ -158,30 +158,29 @@ def test_ensure_resume_identity_data_allows_legacy_state_with_force():
     _ensure_resume_identity_data(args, {}, logger)
 
 
-def test_run_argocd_resume_only_rejects_dry_run_pause_state():
-    paused_apps = [{"hub": HUB_ROLE_SECONDARY, "namespace": "argocd", "name": "app-2"}]
+def test_run_argocd_resume_only_rejects_empty_register():
+    """Dry-run pause records nothing (ADR-0001), so resume-only on such state fails the no-apps precheck."""
     state = Mock()
     state.get_config.side_effect = lambda key, default=None: {
-        STATE_KEY_ARGOCD_PAUSE_DRY_RUN: True,
         STATE_KEY_ARGOCD_RUN_ID: "run-1",
-        STATE_KEY_ARGOCD_PAUSED_APPS: paused_apps,
+        STATE_KEY_ARGOCD_PAUSED_APPS: [],
     }.get(key, default)
-    args = SimpleNamespace()
+    args = SimpleNamespace(dry_run=False)
     primary = Mock()
     secondary = Mock()
-    logger = logging.getLogger("test.run_only.dry_run")
+    logger = logging.getLogger("test.run_only.empty_register")
 
-    with patch("lib.argocd_resume.prepare_argocd_resume_clients") as prepare_clients, patch(
-        "lib.argocd_resume.argocd_lib.resume_recorded_applications"
-    ) as resume_recorded:
+    with patch("lib.argocd_resume.prepare_argocd_resume_clients") as prepare_clients, patch.object(
+        ArgocdPauseRegister, "resume"
+    ) as register_resume:
         result = run_argocd_resume_only(args, state, primary, secondary, logger)
 
     assert result is False
     prepare_clients.assert_not_called()
-    resume_recorded.assert_not_called()
+    register_resume.assert_not_called()
 
 
-def test_run_argocd_resume_only_uses_prepare_clients_and_resume_recorded_applications():
+def test_run_argocd_resume_only_uses_prepare_clients_and_register_resume():
     paused_apps = [{"hub": HUB_ROLE_SECONDARY, "namespace": "argocd", "name": "app-2"}]
     state = _mock_state(paused_apps)
     args = SimpleNamespace(primary_context="hub-a", secondary_context="hub-b", dry_run=False, force=False)
@@ -192,8 +191,8 @@ def test_run_argocd_resume_only_uses_prepare_clients_and_resume_recorded_applica
     with patch(
         "lib.argocd_resume.prepare_argocd_resume_clients",
         return_value=(primary, secondary),
-    ) as prepare_clients, patch("lib.argocd_resume.argocd_lib.resume_recorded_applications") as resume_recorded:
-        resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
+    ) as prepare_clients, patch.object(ArgocdPauseRegister, "resume") as register_resume:
+        register_resume.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0, remaining=0)
         result = run_argocd_resume_only(args, state, primary, secondary, logger)
 
     assert result is True
@@ -207,13 +206,7 @@ def test_run_argocd_resume_only_uses_prepare_clients_and_resume_recorded_applica
         allow_primary_load_from_state=True,
         kube_client_factory=KubeClient,
     )
-    resume_recorded.assert_called_once_with(
-        paused_apps,
-        "run-1",
-        primary,
-        secondary,
-        logger,
-    )
+    register_resume.assert_called_once_with(primary, secondary, logger)
 
 
 def test_attempt_argocd_resume_on_failure_clears_pause_state_only_after_full_success():
@@ -230,10 +223,8 @@ def test_attempt_argocd_resume_on_failure_clears_pause_state_only_after_full_suc
     with patch(
         "lib.argocd_resume.prepare_argocd_resume_clients",
         return_value=(primary, secondary),
-    ) as prepare_clients, patch("lib.argocd_resume.argocd_lib.resume_recorded_applications") as resume_recorded, patch(
-        "lib.argocd_resume.clear_argocd_pause_state"
-    ) as clear_pause_state:
-        resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
+    ) as prepare_clients, patch.object(ArgocdPauseRegister, "resume") as register_resume:
+        register_resume.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0, remaining=1)
         attempt_argocd_resume_on_failure(args, partial_state, primary, secondary, logger)
 
     prepare_clients.assert_called_once_with(
@@ -246,17 +237,14 @@ def test_attempt_argocd_resume_on_failure_clears_pause_state_only_after_full_suc
         allow_primary_load_from_state=False,
         kube_client_factory=KubeClient,
     )
-    clear_pause_state.assert_not_called()
     partial_state.clear_step_completed.assert_not_called()
 
     success_state = _mock_state(paused_apps)
     with patch(
         "lib.argocd_resume.prepare_argocd_resume_clients",
         return_value=(primary, secondary),
-    ) as prepare_clients, patch("lib.argocd_resume.argocd_lib.resume_recorded_applications") as resume_recorded, patch(
-        "lib.argocd_resume.clear_argocd_pause_state"
-    ) as clear_pause_state:
-        resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=1, failed=0)
+    ) as prepare_clients, patch.object(ArgocdPauseRegister, "resume") as register_resume:
+        register_resume.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=1, failed=0, remaining=0)
         attempt_argocd_resume_on_failure(args, success_state, primary, secondary, logger)
 
     prepare_clients.assert_called_once_with(
@@ -269,5 +257,4 @@ def test_attempt_argocd_resume_on_failure_clears_pause_state_only_after_full_suc
         allow_primary_load_from_state=False,
         kube_client_factory=KubeClient,
     )
-    clear_pause_state.assert_called_once_with(success_state)
     success_state.clear_step_completed.assert_called_once_with(STEP_PAUSE_ARGOCD_APPS)
