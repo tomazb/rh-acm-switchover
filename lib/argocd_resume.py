@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 from lib import argocd as argocd_lib
 from lib import runtime_bootstrap
-from lib.argocd_coordinator import clear_argocd_pause_state
+from lib.argocd_register import clear_argocd_pause_state
 from lib.constants import (
     HUB_ROLE_PRIMARY,
     HUB_ROLE_SECONDARY,

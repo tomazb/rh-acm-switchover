@@ -9,7 +9,7 @@ from typing import Optional
 
 from kubernetes.client.rest import ApiException
 
-from lib.argocd_coordinator import ArgoCDPauseCoordinator
+from lib.argocd_register import ArgocdPauseRegister
 from lib.constants import (
     BACKUP_NAMESPACE,
     BACKUP_SCHEDULE_PLURAL,
@@ -116,7 +116,7 @@ class PrimaryPreparation:
     def _pause_argocd_acm_apps(self) -> None:
         """Pause auto-sync for ACM-touching Argo CD Applications on primary and optionally secondary hub."""
         hubs = [(self.primary, HUB_ROLE_PRIMARY)] + ([(self.secondary, HUB_ROLE_SECONDARY)] if self.secondary else [])
-        coordinator = ArgoCDPauseCoordinator(self.state, self.dry_run)
+        coordinator = ArgocdPauseRegister(self.state, self.dry_run)
         try:
             paused_apps, failure_count = coordinator.pause_hubs(hubs)
         except Exception as exc:

@@ -1,7 +1,9 @@
-"""Unit tests for lib/argocd_coordinator.py.
+"""Unit tests for lib/argocd_register.py.
 
-Tests cover ArgoCDPauseCoordinator: hub detection, pause execution,
-entry recovery, clobber guard, dry-run, error handling, and state persistence.
+Tests cover ArgocdPauseRegister: hub detection, pause execution,
+entry recovery, clobber guard, dry-run, error handling, state persistence,
+and the pause-register invariant (ADR-0001): entries == currently paused apps,
+resume removes entries on success, dry-run records nothing.
 """
 
 import copy
@@ -10,7 +12,8 @@ from unittest.mock import Mock, patch
 import pytest
 
 from lib import argocd as argocd_lib
-from lib.argocd_coordinator import ArgoCDPauseCoordinator
+from lib.argocd_register import ArgocdPauseRegister, RegisterStatus
+from lib.utils import StateManager
 
 
 def _make_state_manager(config=None):
@@ -73,18 +76,18 @@ class TestPauseHubsSingleHub:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[app],
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[impact],
             ),
-            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
         ):
             mock_pause.return_value = argocd_lib.PauseResult(
                 namespace="argocd",
@@ -92,7 +95,7 @@ class TestPauseHubsSingleHub:
                 original_sync_policy={"automated": {}},
                 patched=True,
             )
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             paused_apps, failures = coordinator.pause_hubs([(client, "secondary")])
 
         assert failures == 0
@@ -111,10 +114,10 @@ class TestPauseHubsSingleHub:
         client = Mock()
 
         with patch(
-            "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+            "lib.argocd_register.argocd_lib.detect_argocd_installation",
             return_value=_discovery_without_crd(),
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             paused_apps, failures = coordinator.pause_hubs([(client, "secondary")])
 
         assert paused_apps == []
@@ -131,20 +134,20 @@ class TestPauseHubsSingleHub:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[app],
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[impact],
             ),
-            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             paused_apps, failures = coordinator.pause_hubs([(client, "secondary")])
 
         mock_pause.assert_not_called()
@@ -185,23 +188,23 @@ class TestPauseHubsTwoHubs:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 side_effect=detect_side_effect,
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 side_effect=list_side_effect,
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 side_effect=filter_side_effect,
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.pause_autosync",
+                "lib.argocd_register.argocd_lib.pause_autosync",
                 side_effect=pause_side_effect,
             ),
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             paused_apps, failures = coordinator.pause_hubs(
                 [
                     (primary_client, "primary"),
@@ -228,18 +231,18 @@ class TestPauseHubsTwoHubs:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 side_effect=detect_side_effect,
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[app],
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[_make_impact(app)],
             ),
-            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
         ):
             mock_pause.return_value = argocd_lib.PauseResult(
                 namespace="argocd",
@@ -247,7 +250,7 @@ class TestPauseHubsTwoHubs:
                 original_sync_policy={"automated": {}},
                 patched=True,
             )
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             paused_apps, failures = coordinator.pause_hubs(
                 [
                     (primary_client, "primary"),
@@ -286,20 +289,20 @@ class TestIdempotentRepause:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[app],
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[_make_impact(app)],
             ),
-            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
 
         mock_pause.assert_not_called()
@@ -333,20 +336,20 @@ class TestIdempotentRepause:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[app],
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[_make_impact(app)],
             ),
-            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
 
         mock_pause.assert_not_called()
@@ -379,20 +382,20 @@ class TestIdempotentRepause:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[app],
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[_make_impact(app)],
             ),
-            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
 
         mock_pause.assert_not_called()
@@ -427,20 +430,20 @@ class TestIdempotentRepause:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[app],
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[_make_impact(app)],
             ),
-            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
 
         mock_pause.assert_not_called()
@@ -460,18 +463,18 @@ class TestDryRun:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[app],
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[_make_impact(app)],
             ),
-            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
         ):
             mock_pause.return_value = argocd_lib.PauseResult(
                 namespace="argocd",
@@ -479,7 +482,7 @@ class TestDryRun:
                 original_sync_policy={"automated": {}},
                 patched=True,
             )
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=True)
+            coordinator = ArgocdPauseRegister(state, dry_run=True)
             paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
 
         assert failures == 0
@@ -507,21 +510,21 @@ class TestErrorHandling:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[child_app, safe_app],
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_argocd_pause_blockers",
+                "lib.argocd_register.argocd_lib.find_argocd_pause_blockers",
                 return_value=[blocker],
             ),
-            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps") as mock_find_acm,
-            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
+            patch("lib.argocd_register.argocd_lib.find_acm_touching_apps") as mock_find_acm,
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
 
         assert failures == 1
@@ -536,18 +539,18 @@ class TestErrorHandling:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[app],
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[_make_impact(app)],
             ),
-            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
         ):
             mock_pause.return_value = argocd_lib.PauseResult(
                 namespace="argocd",
@@ -556,7 +559,7 @@ class TestErrorHandling:
                 patched=False,
                 error="403 Forbidden",
             )
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
 
         assert failures == 1
@@ -570,18 +573,18 @@ class TestErrorHandling:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[app],
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[_make_impact(app)],
             ),
-            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
         ):
             mock_pause.return_value = argocd_lib.PauseResult(
                 namespace="argocd",
@@ -591,7 +594,7 @@ class TestErrorHandling:
                 patch_applied=True,
                 error="pause verification failed: 500 Internal Server Error",
             )
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
 
         assert failures == 1
@@ -613,18 +616,18 @@ class TestErrorHandling:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[app],
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[_make_impact(app)],
             ),
-            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
         ):
             mock_pause.return_value = argocd_lib.PauseResult(
                 namespace="argocd",
@@ -634,7 +637,7 @@ class TestErrorHandling:
                 patch_applied=None,
                 error="patch state unknown",
             )
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
 
         assert failures == 1
@@ -657,10 +660,10 @@ class TestErrorHandling:
         client = Mock()
 
         with patch(
-            "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+            "lib.argocd_register.argocd_lib.detect_argocd_installation",
             side_effect=RuntimeError("API unreachable"),
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             with pytest.raises(RuntimeError, match="API unreachable"):
                 coordinator.pause_hubs([(client, "secondary")])
 
@@ -671,15 +674,15 @@ class TestErrorHandling:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 side_effect=RuntimeError("list failed"),
             ),
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             with pytest.raises(RuntimeError, match="list failed"):
                 coordinator.pause_hubs([(client, "primary")])
 
@@ -705,18 +708,18 @@ class TestErrorHandling:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[app],
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[_make_impact(app)],
             ),
-            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
         ):
             mock_pause.return_value = argocd_lib.PauseResult(
                 namespace="argocd",
@@ -725,7 +728,7 @@ class TestErrorHandling:
                 patched=False,
                 error="patch failed",
             )
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
 
         assert failures == 1
@@ -743,19 +746,19 @@ class TestStatePersistence:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[],
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[],
             ),
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             coordinator.pause_hubs([(client, "primary")])
 
         run_id = state._config["argocd_run_id"]
@@ -768,19 +771,19 @@ class TestStatePersistence:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[],
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[],
             ),
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             coordinator.pause_hubs([(client, "primary")])
 
         assert state._config["argocd_run_id"] == "existing-run"
@@ -803,23 +806,23 @@ class TestStatePersistence:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[app1, app2],
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[_make_impact(app1), _make_impact(app2)],
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.pause_autosync",
+                "lib.argocd_register.argocd_lib.pause_autosync",
                 side_effect=pause_side_effect,
             ),
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
 
         assert failures == 0
@@ -845,19 +848,19 @@ class TestDiscoveryNamespaceScope:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[],
             ) as mock_list,
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[],
             ),
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             coordinator.pause_hubs([(client, "primary")])
 
         mock_list.assert_called_once_with(client, namespaces=None)
@@ -870,19 +873,19 @@ class TestDiscoveryNamespaceScope:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[app_argocd, app_team],
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[],
             ),
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             coordinator.pause_hubs([(client, "primary")])
 
         assert state._config["argocd_discovery_namespaces"] == {
@@ -902,19 +905,19 @@ class TestDiscoveryNamespaceScope:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[app],
             ) as mock_list,
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[],
             ),
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             coordinator.pause_hubs([(client, "primary")])
 
         mock_list.assert_called_once_with(client, namespaces=["argocd", "team-gitops"])
@@ -931,19 +934,19 @@ class TestDiscoveryNamespaceScope:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[],
             ) as mock_list,
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[],
             ),
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             coordinator.pause_hubs([(client, "primary")])
 
         mock_list.assert_called_once_with(client, namespaces=None)
@@ -960,19 +963,19 @@ class TestDiscoveryNamespaceScope:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[],
             ) as mock_list,
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[],
             ),
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             coordinator.pause_hubs([(client, "primary")])
 
         mock_list.assert_called_once_with(client, namespaces=None)
@@ -988,10 +991,10 @@ class TestDiscoveryNamespaceScope:
         client = Mock()
 
         with patch(
-            "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+            "lib.argocd_register.argocd_lib.detect_argocd_installation",
             return_value=_discovery_without_crd(),
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             coordinator.pause_hubs([(client, "secondary")])
 
         assert state._config["argocd_discovery_namespaces"] == {}
@@ -1010,19 +1013,19 @@ class TestDiscoveryNamespaceScope:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=operator_discovery,
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[watched_app],
             ) as mock_list,
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[],
             ),
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             coordinator.pause_hubs([(client, "primary")])
 
         mock_list.assert_called_once_with(client, namespaces=None)
@@ -1040,19 +1043,19 @@ class TestDiscoveryNamespaceScope:
 
         with (
             patch(
-                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
             ),
             patch(
-                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[],
             ) as mock_list,
             patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                "lib.argocd_register.argocd_lib.find_acm_touching_apps",
                 return_value=[],
             ),
         ):
-            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator = ArgocdPauseRegister(state, dry_run=False)
             coordinator.pause_hubs([(client, "primary")])
 
         mock_list.assert_called_once_with(client, namespaces=None)
@@ -1063,7 +1066,7 @@ class TestClearArgocdPauseState:
     """Shared Argo CD pause-state reset helper."""
 
     def test_clear_argocd_pause_state_clears_all_keys(self):
-        from lib.argocd_coordinator import clear_argocd_pause_state
+        from lib.argocd_register import clear_argocd_pause_state
 
         state = _make_state_manager(
             {
@@ -1080,3 +1083,94 @@ class TestClearArgocdPauseState:
         assert state._config["argocd_run_id"] is None
         assert state._config["argocd_pause_dry_run"] is False
         assert state._config["argocd_discovery_namespaces"] == {}
+
+
+def _make_real_state(tmp_path):
+    """Real StateManager backed by a temp state file."""
+    return StateManager(str(tmp_path / "switchover-state.json"))
+
+
+@pytest.mark.unit
+class TestRegisterStatus:
+    """status() / load_entries(): the register's read interface (ADR-0001)."""
+
+    def test_empty_register_status(self, tmp_path):
+        state = _make_real_state(tmp_path)
+        register = ArgocdPauseRegister(state, dry_run=False)
+
+        assert register.status() == RegisterStatus(paused_count=0, run_id=None)
+
+    def test_status_counts_applied_entries_only(self, tmp_path):
+        state = _make_real_state(tmp_path)
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config(
+            "argocd_paused_apps",
+            [
+                {
+                    "hub": "primary",
+                    "namespace": "argocd",
+                    "name": "app-1",
+                    "original_sync_policy": {"automated": {}},
+                    "pause_applied": True,
+                },
+                {
+                    "hub": "secondary",
+                    "namespace": "argocd",
+                    "name": "app-2",
+                    "original_sync_policy": {"automated": {}},
+                    "pause_applied": True,
+                },
+                {
+                    "hub": "primary",
+                    "namespace": "argocd",
+                    "name": "app-3",
+                    "original_sync_policy": {"automated": {}},
+                    "pause_applied": False,
+                },
+                {
+                    "hub": "primary",
+                    "namespace": "argocd",
+                    "name": "legacy-dry-run",
+                    "original_sync_policy": {"automated": {}},
+                    "pause_applied": False,
+                    "dry_run": True,
+                },
+                "string garbage",
+            ],
+        )
+        register = ArgocdPauseRegister(state, dry_run=False)
+
+        status = register.status()
+
+        assert status.paused_count == 2
+        assert status.run_id == "run-1"
+
+    def test_load_entries_drops_garbage_and_legacy_dry_run(self, tmp_path):
+        state = _make_real_state(tmp_path)
+        state.set_config(
+            "argocd_paused_apps",
+            [
+                {"hub": "primary", "namespace": "argocd", "name": "app-1", "pause_applied": True},
+                {"hub": "primary", "namespace": "argocd", "name": "old-dry", "dry_run": True},
+                "garbage",
+                42,
+            ],
+        )
+        register = ArgocdPauseRegister(state, dry_run=False)
+
+        entries = register.load_entries()
+
+        assert entries == [{"hub": "primary", "namespace": "argocd", "name": "app-1", "pause_applied": True}]
+
+    def test_load_entries_returns_copy(self, tmp_path):
+        state = _make_real_state(tmp_path)
+        state.set_config(
+            "argocd_paused_apps",
+            [{"hub": "primary", "namespace": "argocd", "name": "app-1", "pause_applied": True}],
+        )
+        register = ArgocdPauseRegister(state, dry_run=False)
+
+        entries = register.load_entries()
+        entries[0]["name"] = "mutated"
+
+        assert state.get_config("argocd_paused_apps")[0]["name"] == "app-1"

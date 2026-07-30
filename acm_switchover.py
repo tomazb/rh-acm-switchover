@@ -39,7 +39,7 @@ from lib import (
     setup_logging,
     validate_decommission_permissions,
 )
-from lib.argocd_coordinator import ArgoCDPauseCoordinator
+from lib.argocd_register import ArgocdPauseRegister
 from lib.constants import (
     EXIT_FAILURE,
     EXIT_INTERRUPT,
@@ -481,7 +481,7 @@ def _run_restore_only_argocd_pause(
         return True
 
     try:
-        coordinator = ArgoCDPauseCoordinator(state, dry_run=getattr(args, "dry_run", False))
+        coordinator = ArgocdPauseRegister(state, dry_run=getattr(args, "dry_run", False))
         paused_apps, failure_count = coordinator.pause_hubs([(secondary, HUB_ROLE_SECONDARY)])
     except Exception as exc:
         return _fail_phase(state, f"Argo CD pause on secondary hub failed: {exc}", logger)

@@ -7,6 +7,7 @@ hubs. Used by both PrimaryPreparation (full switchover) and restore-only mode.
 
 import copy
 import logging
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from lib import argocd as argocd_lib
@@ -30,17 +31,38 @@ def clear_argocd_pause_state(state: StateManager) -> None:
     state.set_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, {})
 
 
-class ArgoCDPauseCoordinator:
-    """Coordinates ArgoCD auto-sync pause across one or more hubs.
+@dataclass
+class RegisterStatus:
+    """Snapshot of the pause register."""
 
-    Handles detection, listing, filtering, entry recovery, pause execution,
-    and state persistence. Callers are responsible for error-style adaptation
-    (raising SwitchoverError vs returning bool).
+    paused_count: int
+    run_id: Optional[str]
+
+
+class ArgocdPauseRegister:
+    """The Argo CD pause register: pause, resume, and status across hubs.
+
+    Invariant (ADR-0001): register entries are exactly the Applications
+    currently paused by this tool. Resume removes entries on success;
+    dry-run records nothing. Handles detection, listing, filtering, entry
+    recovery, pause execution, and state persistence. Callers are
+    responsible for error-style adaptation (raising SwitchoverError vs
+    returning bool).
     """
 
     def __init__(self, state: StateManager, dry_run: bool = False):
         self.state = state
         self.dry_run = dry_run
+
+    def load_entries(self) -> List[Dict[str, Any]]:
+        """Current register entries (deep copy); non-dict and legacy dry-run entries dropped."""
+        raw = self.state.get_config(STATE_KEY_ARGOCD_PAUSED_APPS) or []
+        return [copy.deepcopy(entry) for entry in raw if isinstance(entry, dict) and not entry.get("dry_run")]
+
+    def status(self) -> RegisterStatus:
+        """Snapshot of the register: confirmed-paused entry count and run id."""
+        applied = [entry for entry in self.load_entries() if self._is_pause_applied(entry)]
+        return RegisterStatus(paused_count=len(applied), run_id=self.state.get_config(STATE_KEY_ARGOCD_RUN_ID))
 
     @staticmethod
     def _pause_entry_matches(entry: Dict[str, Any], hub: str, namespace: str, name: str) -> bool:
@@ -143,7 +165,7 @@ class ArgoCDPauseCoordinator:
         run_id = argocd_lib.run_id_or_new(existing_run_id)
         self.state.set_config(STATE_KEY_ARGOCD_RUN_ID, run_id)
         self.state.set_config(STATE_KEY_ARGOCD_PAUSE_DRY_RUN, self.dry_run)
-        paused_apps: List[Dict[str, Any]] = copy.deepcopy(self.state.get_config(STATE_KEY_ARGOCD_PAUSED_APPS) or [])
+        paused_apps: List[Dict[str, Any]] = self.load_entries()
         pause_failures = 0
 
         discovery_namespaces_by_hub = self._get_discovery_namespaces_by_hub() if existing_run_id else {}

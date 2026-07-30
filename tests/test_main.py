@@ -1102,7 +1102,7 @@ class TestSwitchoverPhaseFlow:
         secondary = Mock()
         logger = Mock()
 
-        with patch("acm_switchover.ArgoCDPauseCoordinator") as coordinator_class:
+        with patch("acm_switchover.ArgocdPauseRegister") as coordinator_class:
             coordinator = coordinator_class.return_value
             coordinator.pause_hubs.return_value = ([{"hub": HUB_ROLE_SECONDARY, "name": "app-1"}], 0)
             state.get_config.return_value = "run-1"
@@ -1121,7 +1121,7 @@ class TestSwitchoverPhaseFlow:
         secondary = Mock()
         logger = Mock()
 
-        with patch("acm_switchover.ArgoCDPauseCoordinator") as coordinator_class, patch(
+        with patch("acm_switchover.ArgocdPauseRegister") as coordinator_class, patch(
             "acm_switchover._fail_phase",
             return_value=False,
         ) as fail_phase:
@@ -1143,7 +1143,7 @@ class TestSwitchoverPhaseFlow:
         secondary = Mock()
         logger = Mock()
 
-        with patch("acm_switchover.ArgoCDPauseCoordinator") as coordinator_class:
+        with patch("acm_switchover.ArgocdPauseRegister") as coordinator_class:
             coordinator = coordinator_class.return_value
             coordinator.pause_hubs.return_value = ([{"hub": HUB_ROLE_SECONDARY, "name": "app-1"}], 0)
 

@@ -135,7 +135,7 @@ The following files are **safety-critical operational documents** that AI agents
 - `rbac_validator.py` - RBAC permission checks for operator/validator roles
 - `waiter.py` - Generic polling/wait utilities for async conditions
 - `argocd.py` - Argo CD detection and pause/resume of Application auto-sync (supports operator and vanilla installs)
-- `argocd_coordinator.py` - Centralizes ArgoCD pause coordination across hubs; used by PrimaryPrep and restore-only mode
+- `argocd_register.py` - `ArgocdPauseRegister`: the pause register (entries = Applications currently paused; see ADR-0001); pause/resume/status across hubs, used by PrimaryPrep, restore-only mode, and resume paths
 - `gitops_detector.py` - GitOps marker detection for resources (Argo CD, Flux) to warn operators before mutations
 - `report_artifacts.py` - Machine-readable report artifact helpers for the Python CLI
 
