@@ -60,15 +60,60 @@ klusterlet restart) based on that resolution. Beyond the tracked hostname-collap
 
 ### 2. Duplicate-name rule (official-loader-compatible)
 
-- Merge keeps per-entry provenance: `(name, source_file, index)`.
+- Merge keeps per-entry provenance: `(name, source_file, index)`. `index` is the
+  **zero-based position of the entry within its own source file's list** for that entry
+  kind (`clusters`, `contexts`, or `users`) — not a position in the merged result. That
+  definition is used verbatim by every diagnostic below, by both form factors, and by the
+  parity fixtures.
 - Same name, byte-identical content → first occurrence wins (official first-wins
-  semantics), logged at debug.
-- Same name, differing content → ambiguity failure naming the entry kind/name and both
-  sources. No mutation for any cluster.
+  semantics), logged at debug. This holds whether the identical duplicates are in one
+  file or in different files.
+- Same name, differing content → ambiguity failure that identifies **both conflicting
+  entries by complete source location**. No mutation for any cluster.
 - Both rules apply **anywhere in the KUBECONFIG chain, including twice within a single
   file** — `clusters`/`contexts`/`users` are YAML lists of named entries, so a duplicate
   YAML-key loader does not catch same-file duplicates; the merge-level duplicate check
   must.
+
+#### Duplicate-conflict failure-message contract
+
+Naming the files alone is insufficient: when both conflicting entries live in the same
+file, a file-only message repeats one path and locates neither entry. Every
+differing-duplicate diagnostic therefore reports, for **each** of the two conflicting
+entries:
+
+- the entry kind (`cluster` / `context` / `user`);
+- the entry name;
+- the source file path;
+- the zero-based list index defined above.
+
+Consequences of that rule:
+
+- Conflicts spanning two KUBECONFIG files report both file paths together with each
+  entry's own index.
+- Conflicts inside one file report that path (once or twice — either rendering is
+  acceptable) and **both distinct indexes**, so the two entries are unambiguously
+  locatable.
+- The diagnostic carries identity and location only. Entry content, `*-data` fields,
+  tokens, certificate or private-key material, `tokenFile` contents, `exec` credential
+  plugin environment, and any other credential-bearing value are never included — the
+  message says *that* two entries differ and *where* they are, never *how* they differ.
+- Python and the collection emit equivalent structured error data (same kind, name,
+  path, and index fields) so the parity fixtures can compare them directly.
+- The failure aborts the complete merge before any mutation, per §5.
+
+Three or more same-name entries are handled by the same rule, stated for the general
+case: duplicates are evaluated per `(kind, name)` group across the whole KUBECONFIG
+chain. Within a group, byte-identical occurrences collapse under first-wins, and the
+group is an ambiguity failure whenever it contains **more than one distinct content
+variant**. The diagnostic then reports the complete source location of **every
+occurrence in the group** — including occurrences that are byte-identical to an earlier
+one, since an operator resolving the ambiguity must see every place the name is defined,
+and not an arbitrary two. For a group of three entries holding two distinct variants
+(one variant appearing twice), all three locations are reported, each labelled with
+which variant it carries — variants are distinguished by a stable index or digest, never
+by printing their content. The two-entry case above is the common instance of this rule,
+not a separate one.
 
 ### 3. Endpoint matching (SSA-03 core, shared rule)
 
@@ -121,15 +166,46 @@ klusterlet restart) based on that resolution. Beyond the tracked hostname-collap
   resolve correctly; context, cluster, and user entries drawn from three different files
   each resolve against their own source file; embedded `*-data` untouched; exec
   passthrough.
-- Same-file duplicates: two same-name differing entries within one file → ambiguity
-  failure; byte-identical same-file duplicates → first-wins.
+- Duplicate-conflict source locations, per entry kind:
+  - two same-name differing entries in **two different files** → ambiguity failure whose
+    message reports both file paths and each entry's zero-based index;
+  - two same-name differing entries **within one file** → ambiguity failure reporting
+    that one path and both distinct zero-based indexes, unambiguously locating each
+    entry (the regression test for the file-only message, which could not distinguish
+    them);
+  - byte-identical duplicates **within one file** → first-wins, debug log, mutation
+    proceeds;
+  - byte-identical duplicates **across two files** → first-wins, debug log, mutation
+    proceeds;
+  - every ambiguity diagnostic contains entry kind, name, path, and index and contains
+    no entry content, `*-data`, token, certificate, private-key, `tokenFile` content, or
+    `exec` environment value;
+  - three same-name entries in one `(kind, name)` group with two distinct content
+    variants (one of them duplicated byte-identically) → ambiguity failure naming all
+    three occurrence locations, each labelled with the variant it carries, proving the
+    contract is not limited to exactly two entries and that a byte-identical repeat is
+    still located;
+  - Python and the collection produce equivalent structured error data for the same
+    fixtures (shared parity vectors).
 - Endpoint normalization vectors covering the full equivalence class: default vs explicit
   port (https/http), host and scheme case, empty vs `/` path, trailing slash on non-root
   path, IPv6 literal forms, percent-encoding case, query/fragment rejection; Python and
   collection produce identical results (parity test).
 - Expected-endpoint source: matcher compares against the secondary client's live host.
 - Existing SSA-03 tests (hostname-collapse regression, zero/multi-match) unchanged.
-- Version bump per repo policy (Python + collection, synced).
+
+## Release/process follow-up
+
+Version management is not a test case. Per the repository's Version Management policy in
+`AGENTS.md`, the implementation PR for this slice is ordinary development work:
+
+- it records its changelog-worthy change under `CHANGELOG.md` `## [Unreleased]`;
+- it does **not** change released version identifiers and does not create a release tag;
+- the synchronized Python/Bash/container/Helm/README version updates happen only in a
+  separately scoped release/version-bump PR that selects the next version from the
+  accumulated `[Unreleased]` entries.
+
+This design document performs no changelog or version update itself.
 
 ## Tracker updates (same PR)
 
@@ -150,7 +226,14 @@ klusterlet restart) based on that resolution. Beyond the tracked hostname-collap
    whose resolution was not exactly one candidate.
 2. The client used for mutation is provably built from the matched snapshot (no file
    re-read between match and mutate).
-3. Two entries with the same name and different content anywhere in the KUBECONFIG chain
-   abort repair with both files named.
+3. A same-name group carrying more than one distinct content variant anywhere in the
+   KUBECONFIG chain aborts repair before any mutation, and the failure identifies **every
+   occurrence in that group** — including any occurrence byte-identical to an earlier one
+   — by complete source location: entry kind, name, source file path, and zero-based
+   in-file list index, each labelled with which variant it carries. Two files yield both
+   paths with their respective indexes; two entries in one file yield that path with both
+   distinct indexes; groups larger than two are located just as completely. Variants are
+   distinguished by a stable index or digest; no entry content or credential material
+   appears in the diagnostic.
 4. Python and collection normalize endpoints identically (shared test vectors).
 5. The `max_size=0` bypass is gone; oversized inputs fail closed.
