@@ -578,7 +578,7 @@ worktrees when their slice-specific designs establish no dependency conflict.
   files under `umask 077`. (2026-07-29 assessment: the former "kubeconfig-aware
   context resolution for quoted names" clause described no existing code — the
   script never parses kubeconfig and already forwards `--context` safely quoted
-  (`argocd-manage.sh:64-121,184-193`); any such resolution would be new work, not
+  (`scripts/argocd-manage.sh:64-121,184-193`); any such resolution would be new work, not
   a fix, and is dropped from this slice.)
 - Coordinate related deprecated-shell cleanup with issue #157 so the same
   compatibility surface is not changed twice.
@@ -1537,9 +1537,12 @@ source, not part of this branch) were cross-validated against `ansible` HEAD
 `0bf55db9` by two independent read-only passes (Claude exploration agents, then a
 full Codex revalidation of 27 claims: 20 confirmed, 7 partially amended, 0
 refuted). One confirmed claim — the missing primary≠secondary hub-UID distinctness
-check — is already tracked as `SSA-01` and is therefore excluded, leaving the 26
-finding rows below. Only findings confirmed open on `ansible` and untracked above
-are recorded here, grouped
+check — is already tracked as `SSA-01` and is therefore excluded, leaving 26
+**original** R4 finding rows. A later focused PR review independently discovered and
+source-validated one additional finding, `R4-C6` (prefix-only MCH operator-Pod identity).
+It was not one of the 27 external hypotheses. The table below therefore contains 27 R4
+rows in total: 26 original rows plus one review-discovered row. Only findings confirmed
+open on `ansible` and untracked above are recorded here, grouped
 into the **six** new slice designs in `docs/plans/2026-07-29-*-design.md` (six, not
 seven: tracked-elsewhere issues were excluded and the kubeconfig design folds into
 existing `SSA-03`). Each slice follows the standard Spec And Design Gate (the
@@ -1562,6 +1565,7 @@ designs exist; implementation plans are still required).
 | R4-C3 | Medium | Python + collection | No server-side UID-preconditioned DELETE or CR-absence proof for MCO/MCH/ManagedCluster deletion; pod waits are namespace-wide with no label selector. |
 | R4-C4 | Medium | Python | 404→`[]` (`lib/kube_client.py:724-748`) makes missing discovery indistinguishable from an empty inventory in `_delete_managed_clusters` (`modules/decommission.py:172-176`). |
 | R4-C5 | Medium | Python + collection | No destination-observability check before source MCO deletion when destination observability was never detected (metrics continuity ends silently). |
+| R4-C6 | Medium | Python + collection | Review-discovered: MCH drain logic excludes Pods by `multiclusterhub-operator` name prefix in Python (`modules/decommission.py:420-434`) and the collection (`roles/decommission/tasks/delete_multiclusterhub.yml:33-79`). An unrelated prefixed Pod can evade the drain proof because neither form factor validates controller ownership. R4-03 must bind exclusions through a stable Kubernetes identity contract, preferably `Pod → ReplicaSet →` the exact durably recorded operator Deployment UID; no implementation is present in this PR. |
 | R4-D1 | High | Python + collection | Restores bind to the moving `latest` alias (`modules/activation.py:339-350,453,793-804`); the consumed backup is never journaled; resume re-resolves. |
 | R4-D2 | Medium | Python | Explicit `--min-managed-clusters` replaces name enforcement with count-only; explicit `0` disables enforcement (`acm_switchover.py:869-875`). |
 | R4-D3 | Medium | Python | 404→`[]` yields empty baselines on activation/post-activation inventory reads. |
@@ -1580,19 +1584,26 @@ designs exist; implementation plans are still required).
 
 | Slice | Status | Findings | Design | Proposed resolution boundary |
 | --- | --- | --- | --- | --- |
-| R4-01 | planned | R4-A1, R4-A2, R4-A3, R4-A4 | `docs/plans/2026-07-29-argocd-pause-correctness-residuals-design.md` | Minimal Bash pause fix (lifecycle stays `SSA-05`), shared tri-state auto-sync classification, `automated`-only resume with post-resume verification, journal-scoped destructive-phase gates. |
+| R4-01 | planned | R4-A1, R4-A2, R4-A3, R4-A4 | `docs/plans/2026-07-29-argocd-pause-correctness-residuals-design.md` | Minimal Bash pause fix (lifecycle stays `SSA-05`), shared five-outcome fail-closed auto-sync classification, `automated`-only resume with post-resume verification, journal-scoped destructive-phase gates. |
 | R4-02 | planned | R4-B1, R4-B2, R4-B3, R4-B4 | `docs/plans/2026-07-29-auto-import-transaction-design.md` | Prior-state capture with durable intent before mutation, key-level restore, `data: null` normalization, decommission gate. |
-| R4-03 | planned | R4-C1, R4-C2, R4-C3, R4-C4, R4-C5 | `docs/plans/2026-07-29-decommission-completion-design.md` | Server-side UID-preconditioned DELETE with CR-absence proof, refusal-aborts semantics, scoped strict-404 list, destination-observability gate. |
+| R4-03 | planned | R4-C1, R4-C2, R4-C3, R4-C4, R4-C5, R4-C6 | `docs/plans/2026-07-29-decommission-completion-design.md` | Server-side UID-preconditioned DELETE with CR-absence proof, refusal-aborts semantics, scoped strict-404 list, destination-observability gate, and identity-bound MCH Pod classification through the exact recorded operator Deployment UID rather than a name prefix. |
 | R4-04 | planned | R4-D1, R4-D2, R4-D3, R4-D4 | `docs/plans/2026-07-29-migration-evidence-design.md` | Freeze `latest` to journaled concrete backup names at activation entry, additive name+count expectations with explicit waiver, strict inventory reads, evidence bound to Restore identity/spec, atomic UID+resourceVersion passive patch, durable cleanup state machine with fail-closed ambiguous recovery, final validated UID+resourceVersion DELETE, evidence/cleanup gate before teardown. |
 | R4-05 | planned | R4-E1, R4-E2, R4-E3, R4-E4, R4-E5, R4-E6 | `docs/plans/2026-07-29-state-integrity-residuals-design.md` | Full-fidelity simulation snapshot with crash marker, parent-dir fsync, per-hub UID locks, reset-under-lock with narrowed `--force`, run contract. |
 | R4-06 | planned | R4-F1, R4-F2, R4-F3 (+ SSA-PY2, SSA-A6) | `docs/plans/2026-07-29-kubeconfig-ambiguity-guard-design.md` | Extends `SSA-03`: fail-closed merge, duplicate-name rule, full-URL endpoint normalization, snapshot-built client, mutation barrier. `SSA-03` implementation should use this design. |
 
 Cross-references (adjacent, not superseded): `SSA-01` (hub distinctness — excluded,
 already tracked), `SSA-02` (decommission target/RBAC — complementary to `R4-03`),
-`SSA-05` (Bash script lifecycle — owns everything beyond the `R4-A1` correctness
-fix), `TR2D-02` (collection resume OCC parity), `R3-10a` (discovery blast radius —
+`SSA-05` (Bash script lifecycle — owns everything beyond the narrow `R4-01` Bash
+correctness fixes for `R4-A1`/`R4-A2`/`R4-A3`, including the remaining Bash
+concurrency-prevention gap), `TR2D-02` (collection resume OCC parity), `R3-10a` (discovery blast radius —
 `R4-01` gates are journal-scoped to avoid conflict), `R3-T3` (parity-test oracle),
 `F19`/`F20` (unrelated refactors), `R2-M2`, `R3-P7`, `R3-A6`, `R3-X1`.
+
+R4 count reconciliation: the external source contributed 27 validated hypotheses; the
+already-tracked `SSA-01` overlap was excluded, yielding 26 original R4 rows. `R4-C6` is
+one additional PR-review-discovered row, so the tracker now contains **27 R4 rows**. It
+does not change the historical 20-confirmed/7-partially-amended external-hypothesis
+accounting.
 
 ## Open-Findings Assessment And Ranking (2026-07-29)
 
@@ -1623,7 +1634,7 @@ P4 = hygiene/docs. Conditional P1s bind to the named operation, not the switchov
 | P1 (conditional: auto-import management enabled) | R4-B1 (`R4-02`) | Restore deletes the entire operator-owned import-controller ConfigMap. |
 | P1 (release/test boundary) | R3-T8 | Ambient `ACM_RELEASE_PROFILE` env var unskips live certification tests that invoke the release orchestrator. |
 | P2 | SSA-PY4, SSA-PY2, SSA-R1, SSA-R2, SSA-S1, SSA-PY5, R3-A2, R3-A5, R3-A8, R3-P2, R3-P4, R3-T1, TR2D-02, R2-L7a, R2-L7c; R4-A1, R4-C1, R4-C2, R4-E1 | Real correctness/safety defects with a mitigating precondition: interactive-only paths, deprecated-but-shipped script, reporting-only impact (R3-A5 — unsuppressed identity reads fail first), fleet-scale or shared-hub topology required, or spec'd R4 High rows on non-switchover paths. |
-| P3 | SSA-A6, SSA-S3, SSA-C1, SSA-C2, SSA-C3, SSA-S2, SSA-PY3, R3-A3, R3-A7, R3-A9, R3-A10, R3-P3, R3-P5, R3-P6, R3-P7, R3-P9, R3-P12, R3-T2, R3-T3, R3-T4, R3-T7, R3-T10, R3-T12, R2-L6, R2-L7b, R2-L8, H3; R4 Medium rows | Hardening: fail-open windows needing an adversary/misconfiguration, guardrail blind spots, duplication with drift risk. |
+| P3 | SSA-A6, SSA-S3, SSA-C1, SSA-C2, SSA-C3, SSA-S2, SSA-PY3, R3-A3, R3-A7, R3-A9, R3-A10, R3-P3, R3-P5, R3-P6, R3-P7, R3-P9, R3-P12, R3-T2, R3-T3, R3-T4, R3-T7, R3-T10, R3-T12, R2-L6, R2-L7b, R2-L8, H3; R4 Medium rows (including review-discovered R4-C6) | Hardening: fail-open windows needing an adversary/misconfiguration, guardrail blind spots, duplication with drift risk. |
 | P4 | SSA-A5, R3-A11, R3-P8, R3-P13, R3-X1, R3-T5, R3-T6, R3-T9, R3-T11, R3-Q1..Q4, TR2D-03, TR2D-04, R2-L1, `/tmp/run` residual; R4-E6, R4-F3 | Hygiene, docs, conventions, design-gated refactors. |
 
 ### Corrections applied in this pass
@@ -1779,7 +1790,7 @@ the run-id marker (`roles/argocd_manage/tasks/resume.yml:5-21`). Fold into `TR2D
 | R3-Q2 | confirmed maintainability, Low | R3-10f (planned) | 44 matching constants exist; 35 have exactly one external consumer. Evaluate them through the focused constants/quality design. |
 | R3-Q3 | confirmed maintainability with corrected scope, Low | R3-10f (planned) | The original twelve-wrapper count was overstated; only the verified pass-through subset is in scope. |
 | R3-Q4 | confirmed layering issue, Low | R3-10f (planned) | A `scripts/` entrypoint imports seven modules from `tests.release.lab_controller.*`, making the test tree a runtime dependency. |
-| R3-X1 | confirmed, Low | R3-10g (planned) | `StateManager` run-lock file handle leaked; surfaced by the suite as a `ResourceWarning`, fix belongs in `lib/utils.py`. |
+| R3-X1 | confirmed, Low | R3-10g (planned) | `StateManager` intentionally holds the run-lock handle for process lifetime and releases it through `atexit`; that lifetime is not itself a leak. The gap surfaced by the suite's `ResourceWarning` is no explicit close on normal completion or during long-lived embedding/reuse; the fix belongs in `lib/utils.py`. |
 | TR2D-M1 / TR2D-L1 | merged | R3-01 / TR2D-01; issue #199; PR #200 | Folded with `R3-A1` into one boundary. The implementation requires complete positive all-namespace success, rejects malformed and mixed shapes, and preserves sanitized no-mutation advisory behavior; exact validated head `0bc1a4b6701508f6c3d4cd898515d82b8a29b6a3` merged as `786f8325493c6086e136cb9694a9997557f12e02`, and issue #199 is closed as completed. |
 | TR2D-M2 | confirmed | TR2D-02 (planned) | Collection resume uses discovery-time Application data; align fresh re-read, marker ownership, current resource version, OCC refusal/conflict, and changed semantics with Python. |
 | TR2D-Q1 | confirmed maintainability/review risk | TR2D-03 (planned/design input) | Phase 9B decomposition is a strong design input or preferred predecessor, not a mandatory Phase 9C prerequisite absent an authoritative design amendment. Phase 9C remains non-mutating. |

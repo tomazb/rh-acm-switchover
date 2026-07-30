@@ -94,6 +94,9 @@ backup is final:
        name: "<restore-cr-name>"              # locator only — never an identity (§1a)
        uid: null | "<metadata.uid>"           # stable object identity, journaled at mutation time (§1 step 3), verified equal at §1a
        generation: null | <metadata.generation>  # spec-version guard, journaled post-mutation (§1 step 3), verified equal at §1a
+       activation_method: "passive" | "full"  # immutable evidence-scope method, persisted before mutation
+       backup_fields:                         # passive example; full has all three keys defined below
+         veleroManagedClustersBackupName: "<concrete-backup-name>"
        spec_fingerprint: null | "<sha256-hex>"   # canonical fingerprint of the validated spec projection (§1a)
        backup_names_verified_at: null | "<iso8601>"  # set when the completed live Restore's spec matched the journaled backup names (§1a)
        completed_at: null | "<iso8601>"       # terminal success evidence; same durable update as the §1a bundle, or strictly last
@@ -106,8 +109,9 @@ backup is final:
        name: null | "<restore-cr-name>"
        uid: null | "<metadata.uid>"
        generation: null | <metadata.generation>
+       activation_method: null | "passive" | "full"
        spec_fingerprint: null | "<sha256-hex>"
-       backup_fields: {}  # exact concrete Restore spec fields consumed by the method
+       backup_fields: {}  # exact structural copy of restore.backup_fields
        intent_at: null | "<iso8601>"
        final_get_resource_version: null | "<metadata.resourceVersion>"
        delete_accepted_at: null | "<iso8601>"
@@ -122,14 +126,61 @@ backup is final:
    ```
 
    `run_id`, `cleanup.operation_id`, and all timestamps are strings;
-   `cleanup.generation` is an integer; `cleanup.backup_fields` is a
-   string-to-string mapping; `cleanup.recovery` and `cleanup.repair` are either null or
+   `restore.generation`/`cleanup.generation` are integers;
+   `restore.backup_fields`/`cleanup.backup_fields` are string-to-string mappings;
+   `cleanup.recovery` and `cleanup.repair` are either null or
    complete objects of the shown shape. Null is valid only where explicitly shown.
    Empty strings, missing keys in a non-null recovery/repair object, unknown states,
    timestamps that do not parse as ISO 8601, non-string backup field keys/values, or
    cleanup identity fields that disagree with `restore` make the record malformed and
-   blocking. `cleanup.backup_fields` is the exact §1a projection's concrete field map;
-   it never contains `latest` or a skipped field.
+   blocking.
+
+   `backup_fields` is defined exactly once, in `restore.backup_fields`. The allowed
+   journal category keys and their one-to-one Restore spec-field projection are:
+
+   | `backups` category | `restore.backup_fields` key | consumed by |
+   | --- | --- | --- |
+   | `managed_clusters` | `veleroManagedClustersBackupName` | passive and full |
+   | `credentials` | `veleroCredentialsBackupName` | full only |
+   | `resources` | `veleroResourcesBackupName` | full only |
+
+   No other category or spec-field key is allowed. Each value is the exact non-empty
+   Kubernetes/Velero Backup `metadata.name` string captured in the corresponding
+   `backups.<category>.name`; it must be a concrete valid resource name and must not be
+   `latest`, `skip`, or any other alias/sentinel. The map is logically unordered; its
+   canonical byte representation is the sorted-key JSON serialization defined in §1a.
+
+   `restore.activation_method` is the immutable evidence-scope enum `passive` or `full`,
+   derived once from the validated operation `method`. It is distinct from the lower-level
+   CLI/collection `activation_method` option (`patch` or `restore`): both passive mutation
+   mechanisms consume the same single-category backup projection, while their different
+   mutation/identity mechanics remain covered by §1b and the Restore identity fields.
+   The projections are exact:
+
+   - passive: `restore.backup_fields` contains only
+     `veleroManagedClustersBackupName`, copied from
+     `backups.managed_clusters.name`;
+   - full: it contains all three mapped fields, copied from all three journal categories;
+     no full-owned category may use `VELERO_BACKUP_SKIP`; any required category whose
+     frozen value is absent, skipped, or non-concrete is fatal before mutation;
+   - a category absent from `backups` is excluded when the selected method does not
+     consume it, but absence of a category required by the selected method is fatal before
+     mutation;
+   - a live Restore field deliberately set to `VELERO_BACKUP_SKIP` is checked as skipped
+     but is never put in `backups` or either `backup_fields` map. Passive restore-create
+     therefore retains the credentials/resources skip values in the live spec while its
+     evidence map remains the one ManagedCluster field.
+
+   Activation derives this map once from the already frozen categories and durably writes
+   `restore.activation_method` plus `restore.backup_fields` in the same pre-mutation
+   evidence update. All create/patch bodies and later validation consume that stored map;
+   no resume re-derives it from live state. `cleanup.backup_fields` is not independently
+   derived: cleanup-intent creation deep-copies `restore.backup_fields` structurally
+   identically, and copies `restore.activation_method` into
+   `cleanup.activation_method`. The canonical serialized bytes and key/value sets must be
+   identical. Cleanup creation and every resume reject any key, value, method-scope, or
+   canonical-byte/digest disagreement. Neither map ever contains `latest` or a skipped
+   field.
 
    `cleanup.recovery.reason_code` is one of `absent_without_completion`,
    `replacement_uid`, or `replacement_during_poll`. `observed_uid` and
@@ -138,8 +189,8 @@ backup is final:
 
    State invariants are exact:
 
-   - `not_started`: operation/target/timestamp fields are null, `backup_fields` is empty,
-     and recovery/repair are null.
+   - `not_started`: operation/target/timestamp fields and `cleanup.activation_method` are
+     null, `cleanup.backup_fields` is empty, and recovery/repair are null.
    - `intent_persisted`: operation/target/spec/backup fields and `intent_at` are complete;
      accepted/absence/completion fields and recovery/repair are null.
    - `delete_accepted`: all intent fields plus `final_get_resource_version` and
@@ -155,15 +206,19 @@ backup is final:
 
    `cleanup.operation_id` is null only in `not_started`. The transition to
    `intent_persisted` creates it once and copies `namespace`, `name`, `uid`,
-   `generation`, `spec_fingerprint`, and `backup_fields` from the already complete §1a
-   evidence bundle. Those values and `run_id` are immutable for the lifetime of the
-   journal. No resume path mints a new operation ID or refreshes them from a later
-   object.
+   `generation`, `activation_method`, `spec_fingerprint`, and the complete
+   `restore.backup_fields` map from the already complete §1a evidence bundle.
+   `cleanup.backup_fields` must be structurally identical to
+   `restore.backup_fields`; this is model A (explicit evidence plus copy), not a second
+   derivation. Those values and `run_id` are immutable for the lifetime of the journal.
+   No resume path mints a new operation ID, re-derives a field map, or refreshes them from
+   a later object.
 
    Resume (§4a) and the teardown gate (§4) consume exactly this record in both
    implementations; field names, types, invariants, and allowed transitions never
    diverge between Python and the collection.
-3. Create/patch the Restore with the concrete names — `latest` never reaches a Restore
+3. Create/patch the Restore with the exact pre-persisted
+   `restore.backup_fields` concrete names — `latest` never reaches a Restore
    spec. Both the full-restore and passive-activation patch paths use the same journal;
    passive activation uses the atomic conditional boundary in §1b, never a name-only
    patch plus a post-patch UID check.
@@ -206,16 +261,14 @@ precondition in the §1b patch and the final §4a GET→DELETE attempt.
 
 Canonical spec fingerprint — identical algorithm in Python and the collection:
 
-- **Projection**: exactly `{"activation_method": "<passive|full>", "backup_fields":
-  {"<restore-spec-field>": "<concrete-backup-name>", ...}}` where `backup_fields`
-  contains precisely the Restore spec backup fields the selected method owns or
-  consumes (the §1 per-field contract). The journal-category → spec-field mapping is
-  pinned identically in both implementations: `managed_clusters` →
-  `veleroManagedClustersBackupName`, `credentials` → `veleroCredentialsBackupName`,
-  `resources` → `veleroResourcesBackupName`. Skipped (`VELERO_BACKUP_SKIP`) categories
-  and categories absent from the journal are excluded from the projection — identically
-  in both implementations. No status fields, no metadata, no timestamps, no transient
-  client fields.
+- **Projection**: exactly
+  `{"activation_method": "<restore.activation_method>",
+  "backup_fields": <restore.backup_fields>}`. It consumes the explicit immutable map
+  already persisted before mutation; it does not reconstruct one from the live Restore
+  or cleanup state. The allowed categories/fields, passive/full key sets, skipped/absent
+  treatment, and concrete-name rules are exactly the §1 table above. No status fields,
+  metadata, timestamps, transient client fields, skipped sentinel, or absent category
+  enter the projection.
 - **Serialization**: JSON, lexicographically sorted keys, no insignificant whitespace
   (`,`/`:` separators only), non-ASCII escaped as `\uXXXX` (Python `json.dumps`
   default `ensure_ascii=True`; the collection matches this escaping exactly).
@@ -230,27 +283,39 @@ The evidence bundle is produced in exactly this order:
    journaled post-mutation generation — the object that reached terminal success is
    provably the object this run created or patched, with an unchanged spec. A UID
    mismatch means a same-name replacement: fail closed, never adopt.
-3. Compare every Restore backup field consumed by the selected activation method against
-   the concrete journaled value. Per-method scope is preserved exactly: passive
+3. Require the exact `restore.activation_method` and `restore.backup_fields` key set for
+   the journaled categories, then compare every map entry against the same live Restore
+   spec field. Per-method scope is preserved exactly: passive
    activation compares only the ManagedCluster backup field it owns; skipped
    credentials/resources fields remain skipped; full restore compares every category it
    consumed; no comparison is invented for a category absent from the journal.
-4. Compute the canonical spec fingerprint from the same read.
+4. Compute the canonical spec fingerprint from the persisted activation method and map
+   after the exact live comparison.
 5. Persist `spec_fingerprint` and `backup_names_verified_at` — together with the
    already-journaled `namespace`, `name`, `uid`, and `generation`, whose equality step 2
-   just re-asserted — as **one durable state/checkpoint update** where the form factor
-   supports it.
-6. Write `completed_at` in that same durable update, or strictly last after it.
+   just re-asserted — durably, using exactly one of the two allowed protocols:
+   **one atomic durable state/checkpoint update** carrying the complete bundle, or an
+   **explicit ordered sequence of durable writes** whose terminal field
+   (`completed_at`, step 6) is written strictly last. No conditional or best-effort
+   variant exists; these are mandatory durable writes in the authoritative
+   per-form-factor store.
+6. Write `completed_at` inside that same atomic update, or as the strictly last
+   durable write of the ordered sequence. Under either protocol, a bundle missing any
+   field is the non-terminal partial record defined below and blocks.
 
-Any mismatch, unreadable Restore, missing UID or expected field, unexpected `latest`
-alias, generation or fingerprint inconsistency, or malformed response → fail closed; no
-evidence is written. A partial record missing any identity, version, fingerprint,
-provenance, or completion field is **non-terminal**: it blocks resume continuation,
-finalization, Restore cleanup, and integrated teardown until re-established.
+Any map with a missing/extra key, missing/empty/non-string value, wrong method scope,
+skipped or absent category drift, unreadable Restore, missing UID or expected field,
+unexpected `latest`/`skip` value, generation or fingerprint inconsistency, or malformed
+response → fail closed; no completion evidence is written. A partial record missing any
+identity, version, activation method, explicit backup map, fingerprint, provenance, or
+completion field is **non-terminal**: it blocks resume continuation, finalization,
+Restore cleanup, and integrated teardown until re-established.
 
-Resume repeats the live comparison — identity (UID), generation, fingerprint, and
-consumed backup fields — before accepting existing completion evidence (§1 step 4's
-fail-closed journal/live disagreement rule).
+Resume first validates the exact method-specific key set and canonical digest
+relationship inside the journal, then repeats the live comparison — identity (UID),
+generation, `restore.activation_method`, exact `restore.backup_fields`, fingerprint, and
+consumed fields — before accepting existing completion evidence (§1 step 4's fail-closed
+journal/live disagreement rule).
 
 The teardown gate (§4) requires the complete bundle; the §2 waiver bypasses none of it.
 
@@ -351,7 +416,9 @@ result (then judged against expectations).
 
 `post_activation.completed_at` is the final post-activation completion marker: it is
 written last, only after every required post-activation operation — including
-expected-name verification — has succeeded; it is never written when any later
+expected-name verification, or, for that name check only, the journaled §2 waiver (the
+sole waivable operation; a waived check is recorded as waived, never as succeeded) —
+has succeeded; it is never written when any later
 post-activation operation fails; and it must be durably written before finalization or
 integrated teardown may rely on it. `post_activation.names_verified_at` alone proves
 only the name check, not that later post-activation work completed.
@@ -359,7 +426,8 @@ only the name check, not that later post-activation work completed.
 `_decommission_old_hub` entry requires, from the run's own state:
 
 - **unconditionally** (the waiver cannot bypass these): the complete §1a evidence bundle
-  — `restore.uid`, `restore.generation`, `restore.spec_fingerprint`,
+  — `restore.uid`, `restore.generation`, `restore.activation_method`, the exact
+  method-scoped `restore.backup_fields`, `restore.spec_fingerprint`,
   `restore.backup_names_verified_at`, and `restore.completed_at`, with the journaled
   `restore.namespace`/`restore.name` matching — plus `post_activation.completed_at`
   (all post-activation work completed) and `restore.teardown_revalidated_at` (the §4a
@@ -376,7 +444,10 @@ only the name check, not that later post-activation work completed.
 
 These fields are exactly the §1 schema's `restore`/`post_activation` block, written
 durably as each piece of evidence accrues. The `_decommission_old_hub` check itself
-reads only this state — a state read alone cannot prove the live Restore still matched
+reads only this state, with exactly one exception: the final strict locator-absence
+check in the unconditional list above is one live strict GET performed at gate time
+(its result is consumed directly and never back-fills the journal); every other
+predicate is a pure state read. A state read alone cannot prove the live Restore still matched
 the validated identity and spec, which is exactly why `teardown_revalidated_at` exists:
 it is written only by the §4a live revalidation barrier, which runs earlier in the same
 finalization pass, before anything can delete the Restore.
@@ -415,15 +486,24 @@ Before creating cleanup intent, the barrier:
 2. Strictly GETs (§3) the journaled `restore.namespace`/`restore.name`.
 3. Requires the live namespace/name locator and `metadata.uid` to equal the journal.
 4. Requires live `metadata.generation` to equal the journaled generation.
-5. Recomputes the §1a canonical fingerprint from the live spec and requires equality
-   with `restore.spec_fingerprint`.
-6. Rechecks every concrete backup field consumed by the activation method, rejects any
+5. Validates the exact method-specific key set, values, canonical serialization, and
+   digest relationship of the persisted `restore.activation_method` and
+   `restore.backup_fields`, then rechecks every concrete field in that map against the
+   live Restore and rejects any
    unexpected `latest` alias, and requires skipped fields to retain their documented
-   `VELERO_BACKUP_SKIP`/untouched semantics.
-7. Fails closed on absence/404, discovery/read failure, incomplete or malformed response,
+   `VELERO_BACKUP_SKIP`/untouched semantics. Only after those live comparisons succeed
+   does it compute the §1a fingerprint from the persisted method/map pair and require
+   equality with `restore.spec_fingerprint`; it never derives the fingerprint input from
+   live spec data. Because cleanup is still `not_started`, it
+   also requires `cleanup.activation_method` to be null and `cleanup.backup_fields` to be
+   empty. The immediately following intent builder deep-copies the restore method/map,
+   verifies their exact structural and canonical-byte equality in the candidate record,
+   and only then writes `intent_persisted`. Resumes with an existing intent use the
+   restore/cleanup equality checks in the resume and final-boundary rules below.
+6. Fails closed on absence/404, discovery/read failure, incomplete or malformed response,
    missing identity/version fields, replacement UID, generation/fingerprint drift, or
    backup-field mismatch.
-8. On success, durably records `restore.teardown_revalidated_at`, bound to the same
+7. On success, durably records `restore.teardown_revalidated_at`, bound to the same
    UID/generation/fingerprint it just verified. It never updates the journaled target
    from the new observation.
 
@@ -439,7 +519,8 @@ The authoritative `migration_backups.cleanup` record has these allowed transitio
 | --- | --- | --- |
 | `not_started` | `intent_persisted` | One critical durable update creates immutable `operation_id`, copies the complete target identity/spec/backup fields, and writes `intent_at` **before** DELETE. Until that write succeeds, no DELETE is sent. |
 | `intent_persisted` | `delete_accepted` | Only after this process receives an accepted response to the UID+resourceVersion DELETE; write the request's `final_get_resource_version` and `delete_accepted_at`. This record is audit evidence, not cleanup completion. |
-| `delete_accepted` | `completed` | Only in the uninterrupted attempt that received the accepted response, after bounded absence polling and the final strict absence/replacement check; write `absence_verified_at` and `completed_at` together. |
+| `delete_accepted` | `delete_accepted` | Re-entry for a resumed guarded retry (resume rule 2) whose new DELETE attempt receives a new accepted response: durably rewrite `final_get_resource_version` and `delete_accepted_at` under the same immutable `operation_id`, identity, spec, and backup fields. These two fields are the only permitted change; this re-entry is the sole exception to byte-for-byte idempotence. |
+| `delete_accepted` | `completed` | Only in the uninterrupted attempt that received the most recent accepted response, after bounded absence polling and the final strict absence/replacement check; write `absence_verified_at` and `completed_at` together. |
 | `intent_persisted` or `delete_accepted` | `recovery_required` | A resume sees absence without completion or a different UID, or the uninterrupted delete attempt sees a replacement during polling/final verification. Write the complete `recovery` object when the local journal is writable; never mutate the cluster while recording it. |
 | `recovery_required` | `repaired` | Only an explicit operator acknowledgement satisfying the repair contract below; write the complete `repair` object atomically. |
 
@@ -467,9 +548,11 @@ After `intent_persisted`, every deletion attempt performs this sequence:
 1. Immediately before DELETE, strictly GET the journaled namespace/name through the
    explicit destination kubeconfig/context.
 2. From that one complete response, require the exact locator, journaled UID, expected
-   generation, canonical owned-field fingerprint, every journaled concrete backup field,
-   skipped-field semantics, and no unexpected `latest` alias. Missing/malformed fields,
-   404, or read/discovery failure are not delete success.
+   generation, exact activation-method scope, structural equality between restore and
+   cleanup backup maps, canonical owned-field fingerprint, every journaled concrete
+   backup field, skipped-field semantics, and no unexpected `latest` alias.
+   Missing/malformed/partial maps, a key/value difference, method drift, 404, or
+   read/discovery failure are not delete success.
 3. Capture the non-empty `metadata.resourceVersion` from that same validated response.
 4. Submit DELETE with server-side preconditions for **both** journaled UID and that
    resourceVersion. Python uses
@@ -514,8 +597,10 @@ Resume validates the complete journal first, then follows exactly one rule:
    evidence barrier, then create intent normally. If the Restore is already absent, the
    barrier's strict GET fails closed.
 2. **Intent exists and the same UID is live (`intent_persisted` or
-   `delete_accepted`):** re-run the complete locator/UID/generation/fingerprint/backup
-   field/no-`latest` validation and safely retry the guarded deletion using the same
+   `delete_accepted`):** first require exact restore/cleanup activation-method and
+   backup-map equality, then re-run the complete
+   locator/UID/generation/fingerprint/backup-field/no-`latest` validation and safely
+   retry the guarded deletion using the same
    `run_id`, `operation_id`, and prior evidence. Never mint or adopt replacements.
 3. **Intent exists and a different UID is live:** preserve the replacement, write
    `recovery_required` with stable reason `replacement_uid` when possible, and block
@@ -629,8 +714,16 @@ described as a cross-form-factor parity fixture.
   empty list remains distinguishable.
 - §1a evidence: exact identity/generation/fingerprint/consumed-field match writes the
   complete bundle; mismatch, missing field, malformed/unreadable response, or unexpected
-  `latest` writes none. Passive compares only the ManagedCluster field; full compares
-  every consumed field; skipped fields stay excluded from the fingerprint.
+  `latest` writes none. The passive map has exactly the one ManagedCluster key; the full
+  map has exactly all three keys; skipped and absent categories stay excluded
+  consistently.
+- Explicit-map contract: passive single-field map, full multi-field map, skipped
+  categories excluded, absent unconsumed journal category excluded, absent required
+  category fatal, any skipped full-owned category fatal, `latest`/`skip` alias rejected,
+  and partial/malformed maps fail closed.
+- Cleanup copy/resume: intent copies the exact restore map and activation method; a
+  cleanup map differing by key or value, activation-method drift, or canonical
+  serialization/digest disagreement blocks before DELETE.
 - Post-activation and teardown gates: the completion marker is written last; later
   post-activation failure leaves it absent; every missing/partial evidence field blocks;
   the waiver bypasses none of identity, provenance, post-activation completion, cleanup
@@ -712,7 +805,8 @@ described as a cross-form-factor parity fixture.
 
 ### Parity
 
-- Identical canonical projection/serialization inputs produce the same SHA-256 digest.
+- Identical explicit activation-method/map inputs produce deterministic sorted-key JSON
+  and the same SHA-256 digest in Python and the collection.
 - Schema-v2 field names/types, cleanup states/transitions, recovery reason codes, repair
   audit validation, conflict bound, polling bound, `changed`/`would_change`, and
   fail-closed outcomes are identical.
@@ -772,6 +866,14 @@ cross-referenced as adjacent.
 11. Python state and collection checkpoint stores implement identical schema,
     transitions, retry/timeout behavior, redaction, and outcomes without any dual write,
     handoff, or cross-form-factor resume.
+12. `restore.backup_fields` is the sole canonical immutable map; its passive/full key
+    sets, concrete values, skipped/absent treatment, activation-method scope, sorted JSON,
+    and SHA-256 relationship are exact. Cleanup copies that map and method structurally
+    unchanged and rejects every partial, extra-key, missing-key, changed-value,
+    method-drift, alias, or digest mismatch at intent creation, resume, and final
+    pre-delete revalidation. Full activation requires all three owned categories to carry
+    concrete names and rejects `VELERO_BACKUP_SKIP` before mutation; only passive's
+    unowned credentials/resources fields retain their skip/untouched semantics.
 
 ## Verified protocol and client basis
 
