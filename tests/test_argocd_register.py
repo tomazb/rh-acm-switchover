@@ -1100,7 +1100,7 @@ def _make_real_state(tmp_path):
 
 @pytest.mark.unit
 class TestRegisterStatus:
-    """status() / load_entries(): the register's read interface (ADR-0001)."""
+    """status() / paused_hub_roles(): the register's read interface (ADR-0001)."""
 
     def test_empty_register_status(self, tmp_path):
         state = _make_real_state(tmp_path)
@@ -1153,7 +1153,7 @@ class TestRegisterStatus:
         assert status.paused_count == 2
         assert status.run_id == "run-1"
 
-    def test_load_entries_drops_garbage_and_legacy_dry_run(self, tmp_path):
+    def test_status_drops_garbage_and_legacy_dry_run(self, tmp_path):
         state = _make_real_state(tmp_path)
         state.set_config(
             "argocd_paused_apps",
@@ -1166,11 +1166,13 @@ class TestRegisterStatus:
         )
         register = ArgocdPauseRegister(state, dry_run=False)
 
-        entries = register.load_entries()
+        status = register.status()
 
-        assert entries == [{"hub": "primary", "namespace": "argocd", "name": "app-1", "pause_applied": True}]
+        assert status.entry_count == 1
+        assert status.paused_count == 1
+        assert register.paused_hub_roles() == {"primary"}
 
-    def test_load_entries_returns_copy(self, tmp_path):
+    def test_register_reads_do_not_expose_mutable_state(self, tmp_path):
         state = _make_real_state(tmp_path)
         state.set_config(
             "argocd_paused_apps",
@@ -1178,7 +1180,7 @@ class TestRegisterStatus:
         )
         register = ArgocdPauseRegister(state, dry_run=False)
 
-        entries = register.load_entries()
+        entries = register._load_entries()
         entries[0]["name"] = "mutated"
 
         assert state.get_config("argocd_paused_apps")[0]["name"] == "app-1"

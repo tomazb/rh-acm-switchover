@@ -8,7 +8,6 @@ from lib.argocd_register import ArgocdPauseRegister
 from lib.constants import (
     HUB_ROLE_PRIMARY,
     HUB_ROLE_SECONDARY,
-    STATE_KEY_ARGOCD_PAUSED_APP_HUB,
     STEP_PAUSE_ARGOCD_APPS,
 )
 from lib.exceptions import SwitchoverError
@@ -16,14 +15,10 @@ from lib.kube_client import KubeClient
 from lib.utils import Phase
 
 
-def _required_resume_roles(paused_apps: list[Any], stored_identities: Any) -> set[str]:
+def _required_resume_roles(paused_hub_roles: set[str], stored_identities: Any) -> set[str]:
     """Return hub roles that need live identity validation for a resume attempt."""
     known_hub_roles = {HUB_ROLE_PRIMARY, HUB_ROLE_SECONDARY}
-    required_roles = {
-        entry.get(STATE_KEY_ARGOCD_PAUSED_APP_HUB)
-        for entry in paused_apps
-        if isinstance(entry, dict) and entry.get(STATE_KEY_ARGOCD_PAUSED_APP_HUB) in known_hub_roles
-    }
+    required_roles = {role for role in paused_hub_roles if role in known_hub_roles}
     if isinstance(stored_identities, dict):
         required_roles.update(role for role in stored_identities.keys() if role in known_hub_roles)
     return required_roles
@@ -133,7 +128,7 @@ def _load_recorded_primary_client(
 def prepare_argocd_resume_clients(
     args: Any,
     state: Any,
-    paused_apps: list[Any],
+    paused_hub_roles: set[str],
     primary: Optional[KubeClient],
     secondary: Optional[KubeClient],
     logger: logging.Logger,
@@ -151,9 +146,7 @@ def prepare_argocd_resume_clients(
         current_secondary_ctx,
     ) = _resolve_recorded_context_mapping(args, state, primary, secondary, logger)
 
-    primary_apps_recorded = any(
-        isinstance(item, dict) and item.get(STATE_KEY_ARGOCD_PAUSED_APP_HUB) == HUB_ROLE_PRIMARY for item in paused_apps
-    )
+    primary_apps_recorded = HUB_ROLE_PRIMARY in paused_hub_roles
     if primary_apps_recorded and resume_primary is None:
         if not stored_primary_ctx:
             raise SwitchoverError(
@@ -194,7 +187,7 @@ def prepare_argocd_resume_clients(
 
     _ensure_resume_identity_data(args, stored_identities, logger)
     live_identities = runtime_bootstrap.collect_hub_identities(resume_primary, resume_secondary)
-    required_roles = _required_resume_roles(paused_apps, stored_identities)
+    required_roles = _required_resume_roles(paused_hub_roles, stored_identities)
     missing_roles = sorted(role for role in required_roles if role not in live_identities)
     if missing_roles:
         raise SwitchoverError(
@@ -223,20 +216,19 @@ def run_argocd_resume_only(
     """Load state and restore Argo CD auto-sync for previously paused Applications, then exit."""
     register = ArgocdPauseRegister(state, dry_run=getattr(args, "dry_run", False))
     status = register.status()
-    paused_apps = register.load_entries()
-    if not status.run_id or not paused_apps:
+    if not status.run_id or not status.entry_count:
         logger.error("No Argo CD paused apps in state file (argocd_run_id or argocd_paused_apps missing).")
         return False
     logger.info(
         "Resuming Argo CD auto-sync from state (run_id=%s, %d app(s))",
         status.run_id,
-        len(paused_apps),
+        status.entry_count,
     )
     try:
         resume_primary, resume_secondary = prepare_argocd_resume_clients(
             args,
             state,
-            paused_apps,
+            register.paused_hub_roles(),
             primary,
             secondary,
             logger,
@@ -284,20 +276,19 @@ def attempt_argocd_resume_on_failure(
 
     register = ArgocdPauseRegister(state, dry_run=getattr(args, "dry_run", False))
     status = register.status()
-    paused_apps = register.load_entries()
-    if not paused_apps or not status.run_id:
+    if not status.entry_count or not status.run_id:
         return
 
     logger.warning(
         "Switchover failed — attempting to resume %d paused Argo CD Application(s) (run_id=%s)...",
-        len(paused_apps),
+        status.entry_count,
         status.run_id,
     )
     try:
         resume_primary, resume_secondary = prepare_argocd_resume_clients(
             args,
             state,
-            paused_apps,
+            register.paused_hub_roles(),
             primary,
             secondary,
             logger,

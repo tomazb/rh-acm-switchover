@@ -59,7 +59,7 @@ def test_prepare_resume_clients_swaps_reversed_contexts():
     resume_primary, resume_secondary = prepare_argocd_resume_clients(
         args,
         state,
-        paused_apps,
+        {HUB_ROLE_PRIMARY},
         primary,
         secondary,
         logger,
@@ -82,7 +82,7 @@ def test_prepare_resume_clients_requires_force_for_missing_hub_identities():
         prepare_argocd_resume_clients(
             args,
             state,
-            paused_apps,
+            {HUB_ROLE_SECONDARY},
             primary,
             secondary,
             logger,
@@ -102,7 +102,7 @@ def test_prepare_resume_clients_loads_primary_client_only_when_allowed():
     resume_primary, resume_secondary = prepare_argocd_resume_clients(
         args,
         state,
-        paused_apps,
+        {HUB_ROLE_PRIMARY},
         None,
         secondary,
         logger,
@@ -115,24 +115,18 @@ def test_prepare_resume_clients_loads_primary_client_only_when_allowed():
     assert resume_secondary is secondary
 
 
-def test_required_resume_roles_combines_paused_apps_and_stored_identities():
-    paused_apps = [
-        {"hub": HUB_ROLE_PRIMARY, "namespace": "argocd", "name": "app-1"},
-        {"hub": "unknown", "namespace": "argocd", "name": "ignored"},
-        "not-a-mapping",
-    ]
+def test_required_resume_roles_combines_paused_hub_roles_and_stored_identities():
+    paused_hub_roles = {HUB_ROLE_PRIMARY, "unknown"}
     stored_identities = {
         HUB_ROLE_SECONDARY: {"context": "hub-b", "cluster_uid": "uid-secondary"},
         "legacy": {"context": "legacy", "cluster_uid": "uid-legacy"},
     }
 
-    assert _required_resume_roles(paused_apps, stored_identities) == {HUB_ROLE_PRIMARY, HUB_ROLE_SECONDARY}
+    assert _required_resume_roles(paused_hub_roles, stored_identities) == {HUB_ROLE_PRIMARY, HUB_ROLE_SECONDARY}
 
 
 def test_required_resume_roles_ignores_malformed_stored_identities():
-    paused_apps = [{"hub": HUB_ROLE_PRIMARY, "namespace": "argocd", "name": "app-1"}]
-
-    assert _required_resume_roles(paused_apps, "not-a-mapping") == {HUB_ROLE_PRIMARY}
+    assert _required_resume_roles({HUB_ROLE_PRIMARY}, "not-a-mapping") == {HUB_ROLE_PRIMARY}
 
 
 def test_ensure_resume_identity_data_requires_force_for_missing_identities():
@@ -199,7 +193,7 @@ def test_run_argocd_resume_only_uses_prepare_clients_and_register_resume():
     prepare_clients.assert_called_once_with(
         args,
         state,
-        paused_apps,
+        {HUB_ROLE_SECONDARY},
         primary,
         secondary,
         logger,
@@ -230,7 +224,7 @@ def test_attempt_argocd_resume_on_failure_clears_pause_state_only_after_full_suc
     prepare_clients.assert_called_once_with(
         args,
         partial_state,
-        paused_apps,
+        {HUB_ROLE_PRIMARY, HUB_ROLE_SECONDARY},
         primary,
         secondary,
         logger,
@@ -250,7 +244,7 @@ def test_attempt_argocd_resume_on_failure_clears_pause_state_only_after_full_suc
     prepare_clients.assert_called_once_with(
         args,
         success_state,
-        paused_apps,
+        {HUB_ROLE_PRIMARY, HUB_ROLE_SECONDARY},
         primary,
         secondary,
         logger,

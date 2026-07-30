@@ -34,10 +34,16 @@ def clear_argocd_pause_state(state: StateManager) -> None:
 
 @dataclass
 class RegisterStatus:
-    """Snapshot of the pause register."""
+    """Snapshot of the pause register.
+
+    ``paused_count`` counts entries whose pause is confirmed applied;
+    ``entry_count`` counts every entry resume() would attempt, including
+    provisional ones written before an unverified patch.
+    """
 
     paused_count: int
     run_id: Optional[str]
+    entry_count: int = 0
 
 
 @dataclass
@@ -82,9 +88,22 @@ class ArgocdPauseRegister:
             return []
         return [copy.deepcopy(entry) for entry in raw if isinstance(entry, dict) and not entry.get("dry_run")]
 
-    def load_entries(self) -> List[Dict[str, Any]]:
-        """Current register entries (deep copy); non-dict and legacy dry-run entries dropped."""
+    def _load_entries(self) -> List[Dict[str, Any]]:
+        """Current register entries (deep copy).
+
+        Non-dict values are dropped, as are entries carrying a truthy legacy
+        ``dry_run`` flag: dry-run predates ADR-0001 and never recorded real
+        cluster mutations, so such entries are not resumable.
+        """
         return self._sanitize_entries(self.state.get_config(STATE_KEY_ARGOCD_PAUSED_APPS))
+
+    def paused_hub_roles(self) -> set:
+        """Hub roles referenced by the register — the hubs resume() would touch."""
+        return {
+            entry.get(STATE_KEY_ARGOCD_PAUSED_APP_HUB)
+            for entry in self._load_entries()
+            if entry.get(STATE_KEY_ARGOCD_PAUSED_APP_HUB)
+        }
 
     @classmethod
     def status_from_config(cls, config: Mapping[str, Any]) -> RegisterStatus:
@@ -96,12 +115,21 @@ class ArgocdPauseRegister:
         """
         entries = cls._sanitize_entries(config.get(STATE_KEY_ARGOCD_PAUSED_APPS))
         applied = [entry for entry in entries if cls._is_pause_applied(entry)]
-        return RegisterStatus(paused_count=len(applied), run_id=config.get(STATE_KEY_ARGOCD_RUN_ID))
+        return RegisterStatus(
+            paused_count=len(applied),
+            run_id=config.get(STATE_KEY_ARGOCD_RUN_ID),
+            entry_count=len(entries),
+        )
 
     def status(self) -> RegisterStatus:
-        """Snapshot of the register: confirmed-paused entry count and run id."""
-        applied = [entry for entry in self.load_entries() if self._is_pause_applied(entry)]
-        return RegisterStatus(paused_count=len(applied), run_id=self.state.get_config(STATE_KEY_ARGOCD_RUN_ID))
+        """Snapshot of the register: entry counts and run id."""
+        entries = self._load_entries()
+        applied = [entry for entry in entries if self._is_pause_applied(entry)]
+        return RegisterStatus(
+            paused_count=len(applied),
+            run_id=self.state.get_config(STATE_KEY_ARGOCD_RUN_ID),
+            entry_count=len(entries),
+        )
 
     @staticmethod
     def _pause_entry_matches(entry: Dict[str, Any], hub: str, namespace: str, name: str) -> bool:
@@ -195,7 +223,7 @@ class ArgocdPauseRegister:
         from the register immediately (persisted per entry); failures stay for
         retry.  When the register empties, all Argo CD pause state is cleared.
         """
-        entries = self.load_entries()
+        entries = self._load_entries()
         run_id = self.state.get_config(STATE_KEY_ARGOCD_RUN_ID)
         summary = argocd_lib.ResumeSummary(dry_run=self.dry_run)
         if not run_id or not entries:
@@ -261,7 +289,7 @@ class ArgocdPauseRegister:
         if not self.dry_run:
             self.state.set_config(STATE_KEY_ARGOCD_RUN_ID, run_id)
         summary = PauseSummary(run_id=run_id)
-        paused_apps: List[Dict[str, Any]] = self.load_entries()
+        paused_apps: List[Dict[str, Any]] = self._load_entries()
 
         applications_by_hub, pause_blockers = self._collect_applications(
             discoveries,
@@ -482,7 +510,7 @@ class ArgocdPauseRegister:
 
     def _handle_no_applications_crd(self) -> PauseSummary:
         """ADR-0001: preserve a non-empty register when the CRD is not visible; clear an empty one."""
-        entries = self.load_entries()
+        entries = self._load_entries()
         applied = [entry for entry in entries if self._is_pause_applied(entry)]
         run_id = self.state.get_config(STATE_KEY_ARGOCD_RUN_ID)
         if applied:
