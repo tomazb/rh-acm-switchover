@@ -118,11 +118,15 @@ or `app.kubernetes.io/managed-by: argocd` instead.
 
 The Python implementation's `argocd_paused_apps` state list is a *pause
 register* (ADR-0001, `docs/adr/0001-pause-register-invariant.md`): its entries
-are exactly the Applications currently paused by this tool. Resume removes an
-entry immediately when its Application is restored (or found already resumed);
-failed entries stay for retry. Dry-run records nothing in the register, and the
-register is never cleared just because the Applications CRD stops being visible
-— only an empty register is cleaned up on CRD-visibility loss.
+are the *unresolved resume obligations* — Applications this tool may have paused
+and has not yet confirmed resumed. An entry is confirmed (`pause_applied=True`),
+provisional (`pause_applied=False`), or unknown (`pause_state="unknown"`); the
+last two mean the pause may have landed, so they are just as load-bearing as a
+confirmed one. Resume removes an entry only when resume is proven complete (the
+patch landed, or the Application is observably resumed); failed and unproven
+entries stay for retry. Dry-run records nothing in the register, and the register
+is never cleared just because the Applications CRD stops being visible — only a
+truly empty register is cleaned up on CRD-visibility loss.
 
 The collection's checkpoint/cluster-as-truth model is the equivalent register
 on the Ansible side: the cluster-side `paused-by` markers plus the checkpoint

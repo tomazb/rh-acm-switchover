@@ -5,7 +5,7 @@ Automation for switching the active Red Hat ACM hub from a primary cluster to a 
 ## Language
 
 **Pause register**:
-The durable record of Argo CD Applications paused for a switchover run, together with the pause/resume/status operations that maintain it. Invariant: entries are exactly the Applications currently paused by this tool.
+The durable record of unresolved resume obligations for a switchover run, together with the pause/resume/status operations that maintain it. Invariant (ADR-0001): an entry is an Application this tool may have paused and has not yet confirmed resumed — confirmed, provisional, or unknown. Entries leave only when resume is proven complete.
 _Avoid_: paused apps list, pause state, argocd state
 
 **Run marker**:

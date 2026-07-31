@@ -76,12 +76,17 @@ class PauseSummary:
 class ArgocdPauseRegister:
     """The Argo CD pause register: pause, resume, and status across hubs.
 
-    Invariant (ADR-0001): register entries are exactly the Applications
-    currently paused by this tool. Resume removes entries on success;
-    dry-run records nothing. Handles detection, listing, filtering, entry
-    recovery, pause execution, and state persistence. Callers are
-    responsible for error-style adaptation (raising SwitchoverError vs
-    returning bool).
+    Invariant (ADR-0001): register entries are *unresolved resume
+    obligations* — Applications this tool may have paused and has not yet
+    confirmed resumed. An entry is confirmed (``pause_applied=True``),
+    provisional (``pause_applied=False``, written before the patch), or
+    unknown (``pause_state="unknown"``, ambiguous patch error). The latter
+    two still mean the pause may have landed, so they are never discarded
+    as "not really paused"; an entry leaves only when resume is proven
+    complete. Dry-run records nothing. Handles detection, listing,
+    filtering, entry recovery, pause execution, and state persistence.
+    Callers are responsible for error-style adaptation (raising
+    SwitchoverError vs returning bool).
     """
 
     def __init__(self, state: StateManager, *, dry_run: bool = False):
