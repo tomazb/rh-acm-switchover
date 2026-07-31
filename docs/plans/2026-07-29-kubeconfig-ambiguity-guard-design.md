@@ -51,9 +51,29 @@ klusterlet restart) based on that resolution. Beyond the tracked hostname-collap
 
 ### 1. Fail-closed merge
 
+- **Input precedence is deterministic and stated once**, because merge order decides
+  first-wins deduplication (§2) and each entry's credential provenance (§4). When
+  `KUBECONFIG` is set and non-empty, its `:`-separated paths are processed **left to
+  right**, and that order is the merge order. Empty entries produced by leading, trailing,
+  or repeated separators are skipped without error — they are not the default path and do
+  not abort the merge. A path repeated in the list is read once, at its first position.
+  The default path (`~/.kube/config`) is used **only** when `KUBECONFIG` is unset, or is
+  set but yields no non-empty entries; it is never appended to a non-empty `KUBECONFIG`
+  list. Python and the collection apply this identical order, and the parity vectors cover
+  reordered file lists (asserting the first-wins winner changes with order) and the
+  default-path fallback cases.
 - Any path listed in KUBECONFIG (or the default path) that is missing, unreadable,
   oversized, or YAML-invalid aborts the entire repair step with the file name and error —
   before any per-cluster work. A mutating path must not run on a partial view.
+- **Merge-level errors are sanitized before they are returned or logged.** A raw YAML
+  parser message can quote the offending line, and a kubeconfig line can be a token, a
+  private key, or a `*-data` blob. Every merge failure therefore reports only: a stable
+  file-level reason code (`missing`, `unreadable`, `oversized`, `yaml_invalid`,
+  `duplicate_yaml_key`), the source file path, and — where the loader supplies them and
+  they are safe — the line and column. The parser's own message text, the offending
+  source line, and any key material are never included. Test coverage includes malformed
+  YAML whose invalid region contains a token and a private key, asserting neither appears
+  in the returned error, the module result, or any log line.
 - The `max_size=0` bypass is removed; the standard size limit applies to every merged file.
 - YAML parsing uses a loader that **errors on duplicate mapping keys** instead of silently
   keeping the last.
@@ -127,7 +147,13 @@ not a separate one.
   acceptance criteria, unchanged).
 - The expected hub endpoint comes from the initialized secondary client's live
   configuration host (single source), normalized with the same rule — the second
-  derivation at `:1608-1609` is removed.
+  derivation at `:1608-1609` is removed. That host is **not** a merged kubeconfig entry,
+  so it carries **synthetic provenance** for diagnostics: entry kind
+  `expected-endpoint`, name `secondary-hub`, source `secondary client configuration`
+  (a fixed non-path literal, never a filesystem path), and index `0`. Those four fields
+  populate the same structured error data as a merged entry, so the §3 rejection
+  diagnostics have one shape regardless of source, and the expected-source rejection test
+  asserts them together with the stable reason code.
 - Collection: `server_host()` in `module_utils/klusterlet.py` is replaced by the same
   full-URL normalization; comparison at `:285-297` uses it (SSA-03 parity item).
 
@@ -175,6 +201,12 @@ Rules that apply to all of them:
 - The selected context's client is built with `config.new_client_from_config_dict(...)`
   from the **same merged snapshot** used for matching — the files are never re-read, so
   there is no TOCTOU window and no manual-vs-official-loader disagreement.
+- **The matched context is passed explicitly** as the loader's `context` argument. It is
+  never left to default, because `new_client_from_config_dict(...)` falls back to the
+  snapshot's `current-context`, which is an arbitrary entry that has nothing to do with
+  the cluster matching selected — a silent wrong-cluster mutation. A regression test
+  builds a snapshot whose `current-context` names a **different** cluster from the matched
+  context and asserts the constructed client targets the matched cluster's server.
 - Before handoff, file-referenced credentials (`certificate-authority`,
   `client-certificate`, `client-key`, `tokenFile`) are absolutized **per entry at merge
   time**, against the source file of the specific `cluster`/`user` entry that won
@@ -206,6 +238,26 @@ captured at snapshot-construction time:
   has nothing left to re-read.
 - Fields already supplied as embedded `*-data` pass through **unchanged**; they are
   already content, and are never re-encoded or normalized.
+
+**Exact transformation rules**, so Python and the collection produce byte-identical
+snapshots. Each file is read in **binary mode**; no text decoding, universal-newline
+translation, or encoding guess is applied at any point, because a DER-encoded certificate
+or a CRLF-terminated PEM must survive intact:
+
+| field | source file bytes | snapshot field | transformation |
+| --- | --- | --- | --- |
+| `certificate-authority` | raw bytes, unmodified | `certificate-authority-data` | standard base64 of the exact bytes, no line wrapping |
+| `client-certificate` | raw bytes, unmodified | `client-certificate-data` | standard base64 of the exact bytes, no line wrapping |
+| `client-key` | raw bytes, unmodified | `client-key-data` | standard base64 of the exact bytes, no line wrapping |
+| `tokenFile` | raw bytes, decoded as UTF-8 | `token` | decode UTF-8 strictly (a decode failure is fail-closed, not a lossy fallback), then strip **trailing** ASCII whitespace only (`\n`, `\r`, `\t`, space) — matching how the official loader consumes a token file. Leading and interior bytes are preserved verbatim |
+
+Trailing newlines are therefore **preserved** for the three certificate/key fields (they
+are part of the PEM and base64 encodes them faithfully) and **stripped** for `tokenFile`
+alone, where a trailing newline would otherwise become part of the bearer credential. No
+other field-specific normalization exists. Parity tests assert both transformations
+byte-for-byte across the two form factors, including a CRLF-terminated PEM, a certificate
+file with no trailing newline, a token file with and without a trailing newline, and
+byte-fidelity of every field after the source file is modified or deleted post-capture.
 - `exec` credential plugins are the one **documented exception**: they are invoked by the
   client at construction time by design and cannot be snapshotted as bytes. They pass
   through unchanged, exactly as with the official loader, and this design does not claim
@@ -213,6 +265,19 @@ captured at snapshot-construction time:
 - The original absolutized paths are retained **separately**, as provenance for
   diagnostics and tests only. They are never used to reconstruct the client and never
   re-read after capture.
+
+**The frozen snapshot must reach the collection's client factories too.**
+`build_core_v1_client()` and `build_apps_v1_client()`
+(`ansible_collections/tomazb/acm_switchover/plugins/module_utils/klusterlet.py:69,87`)
+currently accept a kubeconfig path and call `config.new_client_from_config(**kwargs)`
+(`:82,:100`), which re-reads the file and every credential path it names — so a snapshot
+built upstream would be discarded at the moment the mutating client is constructed. Both
+factories therefore take the merged snapshot (with credential contents already captured
+and the matched context named explicitly) and construct through
+`new_client_from_config_dict(...)`. A path-only invocation of either factory is not a
+supported entry point for the repair path. Collection tests replace and delete each
+credential file after snapshot creation and assert the mutating client still uses the
+captured contents, mirroring the Python vectors.
 - Captured credential contents are never logged, never returned in a module result, never
   written to state or checkpoint data, and never included in any diagnostic. Parser and
   client-construction errors that could embed the material are redacted to a stable reason

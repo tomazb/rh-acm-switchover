@@ -456,6 +456,28 @@ Both form factors use the shared vectors from the decommission design's contract
 these consumer-mapping assertions, so a future change to the primitive cannot silently
 diverge migration behaviour from decommission behaviour.
 
+**Sequencing: the primitive is built before any consumer is wired to it.** The existing
+`lib/kube_client.py::list_custom_resources` does not satisfy the contract today — it maps
+a list 404 to `[]` rather than distinguishing discovery absence from a genuine empty list,
+accepts a response whose `items` is missing or not a list via `result.get("items", [])`,
+and can stop at its `max_items` cap while a `metadata.continue` token is still
+outstanding, returning a silently truncated inventory that is indistinguishable from a
+complete short one. Wiring migration evidence to that helper as-is would convert an
+authorization failure or a truncated page into "the fleet matches expectations".
+
+The implementation order is therefore fixed, and the migration consumers are the
+**second** step, not the first:
+
+1. Add the strict outcome algebra, mandatory complete pagination (a `continue` token is
+   always followed; any bounded cap is a caller-visible `error`, never a silent
+   truncation), complete-response validation, and the sanitized error contract — with the
+   shared parity vectors from the decommission design green in both form factors.
+2. Only then switch the ManagedCluster inventory reads and the §1 Velero backup list onto
+   it, with the consumer-mapping assertions above.
+
+An implementation plan that reverses this order, or that points the migration consumers at
+the current advisory-shaped helper, does not satisfy this design.
+
 ### 4. Evidence gate before integrated teardown
 
 `post_activation.completed_at` is the final post-activation completion marker: it is

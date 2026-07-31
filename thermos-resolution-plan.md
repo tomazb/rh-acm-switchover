@@ -53,7 +53,7 @@ independent validation before a merge-readiness assessment.
 - `F31` is resolved: path-safety now routes through canonical `path_safety` helpers plus adversarial parity coverage.
 - `F34` is resolved: Python and collection klusterlet remediation now patch/create `bootstrap-hub-kubeconfig`; managed-cluster RBAC/docs were realigned to `patch`.
 - `F35` is resolved: Helm rendering now rejects mutating `rbac.customValidatorRules` verbs before template output.
-- `F37` is resolved: standalone collection `argocd_resume.yml` validates checkpoint hub UID identity against live hubs before resuming Applications on **checkpoint-loaded** runs. (Scope per the authoritative `F37` row below: the gate lives in `ansible_collections/tomazb/acm_switchover/playbooks/argocd_resume.yml:107-177` and reads the checkpoint; a stateless standalone invocation that supplies an explicit `run_id` skips the checkpoint lookup entirely (`:6-13`) and therefore has no checkpoint identity to validate, and direct `argocd_manage` role resume has no identity check — that identity-free surface is scoped into `TR2D-02`/`R4-01`. No identity gate is claimed for the modes that carry no checkpoint identity.)
+- `F37` is resolved: standalone collection `argocd_resume.yml` validates checkpoint hub UID identity against live hubs before resuming Applications on **checkpoint-loaded** runs. (Scope per the authoritative `F37` row below: the gate lives in `ansible_collections/tomazb/acm_switchover/playbooks/argocd_resume.yml:107-177` and reads the checkpoint; a stateless standalone invocation that supplies an explicit `run_id` skips the checkpoint lookup entirely (`:6-14`, the same range as the Codex note below) and therefore has no checkpoint identity to validate, and direct `argocd_manage` role resume has no identity check — that identity-free surface is scoped into `TR2D-02`/`R4-01`. No identity gate is claimed for the modes that carry no checkpoint identity.)
 - Historical note: `F38` was the first residual follow-up after this snapshot and
   was later resolved by `PR 21`. The current source of truth is the resolved
   validation matrix and PR sequence below.
@@ -424,7 +424,7 @@ worktrees when their slice-specific designs establish no dependency conflict.
 | --- | --- | --- | --- | --- |
 | SSA-01 | planned | SSA-A2, SSA-P2 | Add a shared-behavior, fail-closed physical-hub distinction guard before any mutation. | Python/collection parity; wrong-context and same-UID safety |
 | SSA-02 | planned | SSA-P1, SSA-PY4 | Strengthen standalone and embedded decommission target/RBAC checks without requiring prior switchover state. | destructive-operation, RBAC, parity, and dry-run review |
-| SSA-03 | planned | SSA-PY2, SSA-A6 | Make klusterlet endpoint selection unambiguous and bound collection worker concurrency. Extended by `R4-06`: implement against `docs/plans/2026-07-29-kubeconfig-ambiguity-guard-design.md` (fail-closed merge, duplicate-name rule, full normalized-URL endpoint equality, snapshot-built client, mutation barrier). | post-activation parity, timeout, and scale review |
+| SSA-03 | planned | SSA-PY2, SSA-A6 | Make klusterlet endpoint selection unambiguous and bound collection worker concurrency. Extended by `R4-06`: implement against `docs/plans/2026-07-29-kubeconfig-ambiguity-guard-design.md` (§1 fail-closed merge with deterministic KUBECONFIG precedence and sanitized merge errors, §2 duplicate-name rule, §3 full normalized-URL endpoint equality **plus the enumerated fail-closed rejection set for malformed server URLs**, §4 snapshot-built client **whose file-backed credential contents — CA, client certificate, client key, and `tokenFile` — are captured at snapshot time and never re-read during client construction**, and §5 mutation barrier). | post-activation parity, timeout, and scale review |
 | SSA-04 | planned | SSA-R1, SSA-R2 | Require explicit release-profile authorization for live decommission and reject safety-critical adapter overrides. | lab-controller trust boundary and release evidence review |
 | SSA-05 | planned | SSA-S1, SSA-S3 | Remove the deprecated Argo CD shell path if compatibility permits; otherwise make state identity, permissions, and context parsing fail closed. | operator migration, shell safety, and documentation review |
 | SSA-06 | planned | SSA-C1, SSA-C2 | Establish required dependency/secret gates and pin third-party actions and security tools immutably. | CI availability, false-positive, and update-process review |
@@ -588,7 +588,10 @@ worktrees when their slice-specific designs establish no dependency conflict.
   state/context mismatch.
 - Any retained state file is owner-only from creation, not repaired only after
   writing.
-- Shell tests cover legacy state, mismatched context, and secure file creation.
+- Shell tests cover legacy state, mismatched context, missing-UID state, wrong-UID state,
+  and secure file creation. The two UID cases are listed separately because "mismatched
+  context" does not imply them: a state file can carry the right context and no hub UID at
+  all, or a UID belonging to a different cluster.
 - Migration docs and `CHANGELOG.md` direct operators to supported replacements.
   Protected runbook/SKILL files remain unchanged unless separately approved.
 
@@ -1536,7 +1539,24 @@ Origin: seven safety design specs written against `main` (external hypothesis
 source, not part of this branch) were cross-validated against `ansible` HEAD
 `0bf55db9` by two independent read-only passes (Claude exploration agents, then a
 full Codex revalidation of 27 claims: 20 confirmed, 7 partially amended, 0
-refuted). One confirmed claim — the missing primary≠secondary hub-UID distinctness
+refuted).
+
+**Provenance limitation, stated explicitly rather than implied.** Those seven inputs are
+**hypothesis sources only**, and no immutable reference for them is recorded here because
+none is available from this repository: they are not present on `origin/main`, on this
+branch, or anywhere else in the tree, so no path, commit, or archive identifier can be
+cited that a reader could resolve. Anyone re-deriving this review should therefore treat
+the seven specs as unavailable and re-run the checks directly.
+
+That is workable precisely because no finding below rests on them. Each of the 26 rows
+carries its own `ansible`-side `file:line` evidence re-verified against `0bf55db9`, and
+each states its claim in full, so every row is checkable against this branch alone without
+retrieving any source spec. The seven inputs determined *what was looked at*, not *what
+was concluded*. The six derived design documents under `docs/plans/` on this branch are
+distinct from these seven inputs and are not themselves evidence.
+
+Supplying resolvable references for the seven sources — if they are archived outside this
+repository — remains an open documentation gap. One confirmed claim — the missing primary≠secondary hub-UID distinctness
 check — is already tracked as `SSA-01` and is therefore excluded, leaving 26
 **original** R4 finding rows. A later focused PR review independently discovered and
 source-validated one additional finding, `R4-C6` (prefix-only MCH operator-Pod identity).

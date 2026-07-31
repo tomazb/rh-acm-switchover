@@ -122,8 +122,18 @@ retry:
 | `namespace`, `name` | Application identity |
 | `expected_uid` | the Application UID observed at read time; a different live UID is a replacement, never adopted |
 | `expected_resource_version` | the resourceVersion the precondition was built from (Python and the collection; absent for Bash, which has none — §1) |
+| `owned_marker` | the exact pause-marker annotation value **this operation** writes or clears, fixed at mint time |
 | `owned_transition` | the intended `automated` transition: for `pause`, canonical `ACTIVE` payload → paused shape; for `resume`, paused shape → that same canonical payload |
 | `state` | one of the states below |
+
+`owned_marker` binds the operation to its own marker rather than to whatever the journal
+entry happens to hold later. It is derived from the operation's intended marker at mint
+time, is **immutable across retries**, and every reconciliation and settlement step
+requires an **exact** match against it. A marker that differs — a foreign run's marker, or
+a marker rewritten between attempts — is never accepted as ours, so reconciliation can
+never settle an operation against another actor's pause. The journal entry's `run_marker`
+(§2a) must equal the `owned_marker` of the operation that produced it; a disagreement is
+`recovery_required`.
 
 States, in order: `intent_recorded` → `mutation_accepted` → `verify_pending` →
 `verified` → `settled`, with `recovery_required` reachable from any of them.
@@ -147,8 +157,13 @@ Rules:
   longer carries it, which is exactly why intent-first ordering is required). For a
   `resume` intent: `automated` deep-equal to the recorded payload and marker absent →
   advance to `verified`, then `settled` when the journal entry is durably `resumed`.
-- **Replacement identity is never adopted.** A live UID differing from `expected_uid`
-  is `recovery_required` regardless of how well the observed value matches.
+- **Replacement identity is never adopted, and identity is checked on every live read.**
+  `metadata.uid` is compared against `operation.expected_uid` at *every* point the
+  Application is read — before resume mutates, in the post-resume verification read, in
+  every destructive-gate read, and in every reconciliation read. A difference is
+  `recovery_required` with no mutation and no success record, regardless of how well the
+  observed value matches. Shape and marker checks alone are insufficient: a same-name
+  replacement can carry a copied marker and the expected shape, and would otherwise pass.
 - **Ambiguous transport or verification results fail closed** to `verify_pending` (read
   ambiguity) or `recovery_required` (state ambiguity). Neither is terminal and neither
   satisfies a gate.
@@ -294,13 +309,16 @@ accept/reject decisions, and sanitized output are parity fixtures.
 
 ### 2b. Legacy journal migration (schema version 1)
 
-The collection's current pause path stores the **full** `spec.syncPolicy` in the
+Two current pause paths store the **full** `spec.syncPolicy` rather than the canonical
+`automated` object. The collection writes it into the
 `acm-switchover.argoproj.io/original-sync-policy` annotation
-(`ansible_collections/tomazb/acm_switchover/roles/argocd_manage/tasks/pause.yml:46-47`),
-and its patch rebuilds `syncPolicy` from that snapshot
-(`resume.yml:71`). An Application paused by that implementation before this slice ships
-therefore carries a legacy restore value that the §2a schema rejects. Upgrading must not
-strand it, and must not send it back blindly.
+(`ansible_collections/tomazb/acm_switchover/roles/argocd_manage/tasks/pause.yml:46-47`)
+and rebuilds `syncPolicy` from that snapshot on resume (`resume.yml:71`); the Bash script
+writes it into its state file as `original_sync_policy`
+(`scripts/argocd-manage.sh:325-326,336-337,355-356`) and sends the whole stored object
+back on resume (`:432-433`). An Application paused by **either** implementation before
+this slice ships therefore carries a legacy restore value that the §2a schema rejects.
+Upgrading must not strand it, and must not send it back blindly.
 
 Legacy identification is explicit, never inferred from a parse failure: a record is
 schema version `1` when it carries no `argocd_journal_schema_version` **and** its stored
@@ -340,10 +358,33 @@ is a restoration payload inferred from the live paused Application: the live val
 paused shape, so inferring from it would silently "restore" auto-sync to absent and
 permanently disable it.
 
-Bash and Python never wrote the legacy full-`syncPolicy` shape, so for them the migration
-path is a validator that recognizes and rejects a foreign legacy record rather than a
-converter; the collection owns the conversion. All three implement the same
-accept/reject decision table.
+**Two implementations wrote the legacy shape, not one.** Besides the collection, the Bash
+script also stores the full `spec.syncPolicy` — `scripts/argocd-manage.sh:325-326` captures
+`.spec.syncPolicy` into `original_sync_policy`, `:336-337` and `:355-356` journal it into
+the state file, and resume at `:432-433` sends that whole stored object back. Bash
+therefore needs the **same migration or recovery path** as the collection, not a
+foreign-record rejection.
+
+Form-factor ownership of §2b is consequently:
+
+| implementation | legacy records it wrote | §2b role |
+| --- | --- | --- |
+| collection | full `spec.syncPolicy` in the `original-sync-policy` annotation (`pause.yml:46-47`) | owns conversion of its own legacy records |
+| Bash | full `spec.syncPolicy` in the state file's `original_sync_policy` (`argocd-manage.sh:325-326,336-337,355-356`) | owns conversion of its own legacy records, by the identical rules |
+| Python | none — never wrote a full-`syncPolicy` restore value | validator only: recognizes a legacy record and rejects it as foreign |
+
+Bash's conversion follows steps 1-6 above unchanged, reading `original_sync_policy` from
+its state file rather than an annotation, and writing the migrated schema-version-2 record
+back to that state file before any resume patch. A Bash legacy record that is not
+migratable is `recovery_required` exactly as elsewhere. Because Bash has no
+resourceVersion precondition (§1), its migrated `operation` record carries no
+`expected_resource_version`; the `expected_uid` and `owned_marker` bindings still apply.
+
+All three implementations share one accept/reject decision table, and the Bash resume
+suite covers the legacy state explicitly — a stored full `syncPolicy` with sibling
+`syncOptions`/`retry` keys must migrate to the canonical `automated`-only payload and
+produce a resume patch containing no sibling key, and every non-migratable legacy shape
+must fail closed with no patch sent.
 
 ### 3. Resume shape and verification
 
@@ -405,11 +446,25 @@ and an equivalent pre-task include in the collection:
   become valid, the entry remains blocking until the operator or a rerun re-enters the
   normal pause flow and durably replaces the error evidence. No destructive mutation is
   permitted while the entry remains unresolved.
-- `verify_pending` entries (pause patch succeeded but the post-patch read failed, §1)
-  block every gate until settled: the gate re-reads the Application; paused shape
-  (`automated` absent/null) with our marker → promote to `paused` (durably journaled) and
-  apply the normal `paused` checks; any other observed state → fail closed; read error →
-  fail closed, entry stays `verify_pending`.
+- `verify_pending` entries block every gate until settled, and **reconciliation is
+  selected by `operation.kind`, because pause and resume expect opposite live states**.
+  In both cases the live UID must equal `operation.expected_uid` and the observed marker
+  must match `operation.owned_marker` exactly where a marker is expected at all:
+  - `kind: pause` (pause patch succeeded but the post-patch read failed, §1): the gate
+    re-reads the Application; paused shape (`automated` absent/null) **with** our marker →
+    promote to `paused` (durably journaled) and apply the normal `paused` checks; any
+    other observed state → fail closed; read error → fail closed, entry stays
+    `verify_pending`.
+  - `kind: resume` (resume patch accepted but the journal update or verification read
+    failed, §1a): the expected state is the inverse — `automated` deep-equal to the
+    operation's `owned_transition` payload **and the marker absent**. That combination →
+    settle the operation to `verified`/`settled` and the journal entry to `resumed`
+    (durably written); a still-paused shape with our marker → the resume did not take
+    effect and the entry reverts to `paused` for a retry; any other state, a foreign or
+    unexpected marker, a UID mismatch, or a read error → fail closed, entry stays
+    `verify_pending`.
+  A resume-side entry is therefore never misread as marker tampering merely because the
+  marker is gone, which is exactly the state a successful resume produces.
 - For each journaled *paused* entry: GET the Application. Failure modes, each fail-closed:
   - read error (incl. 404) → `SwitchoverError` naming the app and error;
   - marker annotation missing or not this run's identity → fail (journal/cluster
@@ -469,7 +524,7 @@ and an equivalent pre-task include in the collection:
 | Exhaustive §2 classifier, including `enabled: null` and all `UNKNOWN` shapes | typed shared helper | collection-owned parity helper used before Jinja mutation tasks | `jq -e` classifier with explicit type checks |
 | `UNKNOWN` outcome | fatal, sanitized blocking journal entry, no patch | failed task, sanitized blocking checkpoint entry, no patch | non-zero, sanitized blocking state entry, no patch |
 | §2a schema validation before every gate, resume, settlement, and mutation | typed record validator | collection-owned record validator | `jq -e` record validator |
-| §2b legacy (version 1) record handling | recognize and reject as foreign | recognize, convert, durably rewrite before resume | recognize and reject as foreign |
+| §2b legacy (version 1) record handling | recognize and reject as foreign (never wrote the shape) | recognize, convert from the annotation, durably rewrite before resume | recognize, convert from the state file's `original_sync_policy`, durably rewrite before resume |
 | §1a durable operation record and reconciliation | full state machine with RV precondition | full state machine with RV precondition | full state machine, `expected_resource_version` absent (no OCC — §1) |
 | `recovery_required` outcome | fatal, blocks all destructive gates, sanitized | failed task, blocks all destructive gates, sanitized | non-zero, blocks all destructive gates, sanitized |
 | Pause success | exact absent/null verification before `paused` | same | same |
@@ -556,10 +611,13 @@ destructive gates, and returns fatal/non-zero. No new warning-only paths.
   `INACTIVE_NULL`, `INACTIVE_DISABLED`, or `UNKNOWN`; marker missing; marker replaced by a
   foreign run; live Application UID differing from the bound identity. One test asserts
   explicitly that no restore payload is ever derived from the live paused Application.
-  Python and Bash assert they recognize and reject a foreign legacy record rather than
-  converting it; the collection asserts the conversion. A migration that succeeds but
-  whose resume then fails leaves the legacy `original-sync-policy` annotation intact for
-  retry.
+  The collection asserts conversion from its `original-sync-policy` annotation and Bash
+  asserts the identical conversion from its state file's `original_sync_policy` — both
+  including a legacy snapshot carrying sibling `syncOptions`/`retry` keys, whose migrated
+  resume patch must contain no sibling key. Python asserts it recognizes and rejects a
+  foreign legacy record rather than converting one, since it never wrote the shape. A
+  migration that succeeds but whose resume then fails leaves the legacy evidence — the
+  annotation for the collection, the state-file entry for Bash — intact for retry.
 - **Mutation/journal durability boundary (§1a)**: intent-persistence failure sends no
   patch and leaves the cluster unchanged; a patch accepted with the subsequent evidence
   write failing leaves a durable `intent_recorded` operation record, returns non-zero, and

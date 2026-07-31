@@ -88,9 +88,29 @@ memory-mode state (as designed for `main`) is explicitly rejected here.
 ### 2. Parent-directory fsync
 
 After `os.replace` in `_write_state`: open the containing directory read-only, fsync, close.
-Only explicitly-unsupported errors (`ENOTSUP`/`EINVAL`-class, e.g. filesystems that reject
-directory fsync) are suppressed and logged at debug; any other I/O failure propagates —
-a state write must not report success when its durability step failed.
+Any I/O failure propagates — a state write must not report success when its durability
+step failed.
+
+`ENOTSUP`/`EINVAL`-class errors are **not** a blanket exemption. Suppressing them at the
+point of failure is indistinguishable from suppressing a real durability loss: the write
+reports success while the directory entry may not survive a power cut, which is precisely
+the guarantee Goal 2 states. A filesystem that rejects directory fsync is therefore
+handled by an **explicit, up-front capability determination**, not by swallowing the error
+after the fact:
+
+- The capability is established once per state-file directory, before the first durable
+  write, by an explicit probe or a documented allow-list of filesystem types known not to
+  need (or not to support) directory fsync while still ordering the rename durably.
+- When the capability check establishes that the guarantee **is** satisfied without a
+  directory fsync, a subsequent `ENOTSUP`/`EINVAL` is expected and is logged at debug —
+  the durability guarantee still holds by the filesystem's own semantics.
+- When no such determination has been made, an `ENOTSUP`/`EINVAL` is treated like any
+  other failure: it **propagates**, and the state operation is not reported successful.
+- Successful state operations are thereby limited to paths where the directory-fsync
+  safety requirement is either satisfied or provably unnecessary.
+
+The same rule governs every durability point: after `os.replace`, after any rename, and
+after the absent-file unlink below.
 
 **The same requirement applies to the unlink path.** §1 restores an originally-absent
 state file by deleting the generated one, and a rename is not the only directory-entry
@@ -104,12 +124,13 @@ completed. The absent-file restoration sequence is therefore, in order:
 3. `fsync` the directory descriptor;
 4. close the descriptor.
 
-Error handling is identical to the rename path: only the explicitly-unsupported
-`ENOTSUP`/`EINVAL`-class errors are suppressed and logged at debug; **any other fsync
-failure means the restoration did not durably succeed** and propagates, so a simulation
-never reports a successful byte-identical restore on an undurable deletion. An unlink
-that fails with `ENOENT` — the file already absent — is the desired end state and skips
-to the directory fsync rather than failing.
+Error handling is identical to the rename path, including the capability rule above:
+**any fsync failure means the restoration did not durably succeed** and propagates, and an
+`ENOTSUP`/`EINVAL` is tolerated only where the explicit capability determination has
+established that the guarantee holds without it. A simulation therefore never reports a
+successful byte-identical restore on an undurable deletion. An unlink that fails with
+`ENOENT` — the file already absent — is the desired end state and skips to the directory
+fsync rather than failing.
 
 ### 3. Per-hub distributed locks (Kubernetes Lease)
 
@@ -124,9 +145,23 @@ a per-euid local lock.
 namespace every supported execution form factor (CLI on a workstation, container, AAP
 execution node, collection run) already shares by definition, because it is the cluster
 being switched over. Viability is established, not assumed: `lib/kube_client.py` already
-exposes api-version/kind-driven `get_custom_resource`, `create_custom_resource`,
-`patch_custom_resource`, `delete_custom_resource`, and `list_custom_resources`, and
-`coordination.k8s.io/v1` is a built-in API group on every supported OpenShift/ACM version.
+exposes api-version/kind-driven `get_custom_resource` (`:565`), `create_custom_resource`
+(`:882`), `patch_custom_resource` (`:791`), `delete_custom_resource` (`:995`), and
+`list_custom_resources` (`:662`), and `coordination.k8s.io/v1` is a built-in API group on
+every supported OpenShift/ACM version.
+
+**One primitive is missing and the slice must add it.** There is no `update`/PUT
+custom-resource method on `KubeClient` today — only `patch`. Lease renewal and expired-Lease
+takeover are `resourceVersion`-conditional **replacements**, for which PUT is the correct
+and conflict-safe verb: a PUT carrying the observed `resourceVersion` is rejected with 409
+if anything changed, which is exactly the race-free takeover this design depends on. The
+implementation slice therefore adds an `update_custom_resource` (PUT) primitive alongside
+the existing ones, and the Lease RBAC below requests `update` accordingly. The alternative
+— expressing renewal and takeover as a merge patch carrying `metadata.resourceVersion` and
+requesting `patch` RBAC instead — is workable but is **not** what this design specifies;
+whichever is chosen, the primitive must exist and the requested verb must match it before
+the authorization requirements are frozen. Documenting `update` RBAC against a
+`patch`-only client would freeze a permission the code cannot exercise.
 
 - **Lock identity.** One Lease per physical hub, named from the hub's cluster UID
   (`acm-switchover-<sha256(uid)>`, truncated to a valid object name and prefixed so it is
@@ -229,7 +264,11 @@ these surfaces **together**, and this design is not implementable until it does:
   `resources: ["leases"]`, `verbs: ["get", "create", "update", "delete"]`, namespaced to
   the tool's operating namespace. `list` and `watch` are deliberately **not** requested:
   the tool addresses its Lease by name. `patch` is not requested either — takeover and
-  renewal use conditional `update`.
+  renewal use conditional `update`. This verb set is valid **only** once the
+  `update_custom_resource` (PUT) primitive named in §3 exists; the RBAC change and that
+  primitive land together, and neither is meaningful without the other. If the slice
+  instead adopts the merge-patch alternative, the requested verb becomes `patch` and this
+  rule changes with it.
 - `deploy/helm/acm-switchover-rbac` — the same rule in the chart's rendered Role, kept in
   sync with the static manifest by the existing manifest-consistency checks.
 - `deploy/acm-policies/` — the same rule wherever the RBAC is distributed as policy.
@@ -438,7 +477,11 @@ safety-critical behavior; it is recorded for diagnostics only.
   in one implementation but not the other — while remaining independent implementations
   that share no code.
 - The simulation marker is N/A for the collection (per-task `dry_run` guards mean no
-  durable writes in check mode today); noted in role docs.
+  durable **state/checkpoint** writes in check mode today); noted in role docs. The
+  narrower wording is deliberate: per §3 a check-mode run **does** create, renew, and
+  release durable Kubernetes Lease objects, so "no durable writes" would be false. The
+  claim is only that no durable state or checkpoint payload is written, which is what
+  makes the simulation marker unnecessary there.
 
 ## Testing
 
@@ -467,6 +510,12 @@ safety-critical behavior; it is recorded for diagnostics only.
   unlocked; check mode acquires and releases Leases and fails closed identically on
   missing permission. Python and the collection produce identical lock names, ordering,
   expiry decisions, and failure classes.
+- Directory-fsync capability: with the capability undetermined, an `ENOTSUP`/`EINVAL`
+  from the directory fsync **propagates** and the state write or restoration is not
+  reported successful (asserted on the `os.replace` path and the unlink path); with the
+  capability explicitly established, the same error is logged at debug and the operation
+  succeeds. A test asserts no code path reports a successful durable write on an
+  unestablished-capability suppression.
 - Post-acquisition identity barrier: a hub UID that changes between discovery and the
   post-lock re-read releases all locks and fails fatally, with no state or cluster
   mutation performed — asserted for replacement UID, unreadable identity, malformed

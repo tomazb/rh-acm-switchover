@@ -431,9 +431,28 @@ every consumer; §3 of the migration design references it rather than restating 
 - **Outcome algebra.** Every call resolves to exactly one of: `items` (possibly a genuine
   empty list, positively proven complete), `crd_absent` (positive discovery-level absence
   of the API group/resource), `namespace_absent` (positive absence of the named
-  namespace), `object_absent` (GET 404 for a named resource), or `error`.
+  namespace), `object_absent` (a named resource proven absent), or `error`.
   `crd_absent`, `namespace_absent`, and `object_absent` are positive *absence proofs*;
   `error` is not, and no consumer may read an `error` as absence or as an empty list.
+- **A 404 is not self-describing, and the two 404s must not be conflated.** A 404 returned
+  while *resolving* the API group/version/resource means the kind is not served; a 404
+  returned by a successful request *for a named object* of a served kind means that object
+  does not exist. They are distinguished by where they occur, never by the status code
+  alone:
+  - `object_absent` is returned **only** when discovery first succeeded — the
+    group/version/resource resolved and the kind is served — **and** the subsequent object
+    GET, issued through the explicitly selected client, returned 404.
+  - A 404 (or any failure) during discovery itself yields `crd_absent` only when it is a
+    *positive* determination that the resource is not served — the API server answered and
+    the group/resource is genuinely absent from its resource list. A discovery call that
+    times out, is unauthorized, is unreachable, or returns an unparseable resource list is
+    **`error`**, not `crd_absent`: an unserved kind and an unreachable API server are
+    indistinguishable by status code and must not be treated alike.
+  - A 404 from a *list* on a served kind in an existing namespace is not absence of the
+    kind; it is `error` unless the namespace itself is positively proven absent, in which
+    case `namespace_absent` applies.
+  Implementations therefore record which phase produced the 404 and never infer the
+  outcome from the status code in isolation.
 - **Authorization, discovery, timeout, transport, and decode failures are `error`** — the
   403/401 case explicitly included, so a missing RBAC rule can never present as "nothing
   is there".
@@ -501,18 +520,41 @@ joint success permits `completed`.
 ### 4. Destination observability gate
 
 Immediately before the source MCO deletion substep (not merely at
-`_decommission_old_hub` entry — no intervening mutations between check and delete), when
-source observability is recorded true:
+`_decommission_old_hub` entry — no intervening mutations between check and delete):
 
-1. Fresh destination-hub check via the secondary client — MCO CR exists (strict list) and
+1. **Fresh source-hub read first.** Whether source observability exists is re-established
+   by a strict read at this point, never carried from the preflight
+   `primary_has_observability` boolean — preflight ran before every other teardown
+   substep, and observability can have been removed or added since. The source read covers
+   the MCO CR and the observability namespace through the shared §3 primitive.
+   - Source observability positively **absent** (both the CR and the namespace proven
+     absent) → there is nothing to delete and nothing whose continuity could end; the gate
+     is not applicable and the substep is a clean no-op.
+   - Source observability positively **present** → continue to step 2.
+   - Source discovery, CRD, CR, or namespace **missing or unverifiable** — any `error`
+     outcome, or a mixed state such as an absent CRD with a present namespace → **block**.
+     An unverifiable source is never read as "nothing to delete".
+2. Fresh destination-hub check via the secondary client — MCO CR exists (strict list) and
    observability namespace present. The preflight boolean is not trusted, and the source
    lookup's clean-skip rule (§3) is **not** reused here: on the destination, missing
    discovery, missing CRD, missing CR, or missing namespace all block equally.
-2. Missing/unverifiable → fail closed: "source observability will be deleted but
-   destination hub has no observability — metrics continuity ends here."
-3. Proceed only with a new explicit flag `--acknowledge-observability-not-migrated`
-   (final name at implementation; validated like other acknowledgement flags). The flag is
-   rejected when the gate would pass anyway (no stale acknowledgements).
+3. Fail closed, distinguishing the two reasons because they demand different operator
+   responses:
+   - destination observability **positively proven absent** → "source observability will
+     be deleted but destination hub has no observability — metrics continuity ends here";
+   - destination observability **unverifiable** (timeout, authorization failure, wrong-hub
+     read, missing discovery, unparseable response, or any other `error`) → "cannot verify
+     destination observability". This is never reported as, or treated as, the destination
+     having no observability.
+4. Proceed only with a new explicit flag `--acknowledge-observability-not-migrated`
+   (final name at implementation; validated like other acknowledgement flags). The
+   acknowledgement is accepted **only after the destination has been positively verified
+   to have no observability** — that is, only against the first failure reason above. It
+   can never override an unverifiable destination: an operator acknowledging "not
+   migrated" is asserting a known fact about the destination, and when the tool could not
+   read the destination at all there is no such fact to acknowledge, so the run stays
+   blocked regardless of the flag. The flag is also rejected when the gate would pass
+   anyway (no stale acknowledgements).
 
 Standalone decommission (`--decommission`) is unaffected — it has no destination client.
 Collection: the decommission role performs the same gate when a destination

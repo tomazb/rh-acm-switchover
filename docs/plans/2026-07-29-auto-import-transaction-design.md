@@ -264,9 +264,32 @@ at the first tier that applies:
 
 1. **Malformed or partial transaction record** (per the §1 schema rules) — fail closed.
    No live read is used to repair it, and no terminal result is produced.
-2. **`ownership_conflict`, or any state whose ownership is unproven or ambiguous** —
-   blocking. No mutation, and **no successful terminal result of any kind**, including
-   `restored_noop`.
+2. **A recorded `ownership_conflict`, or unproven/ambiguous ownership with a live
+   same-name object present** — blocking. No mutation, and **no successful terminal
+   result of any kind**, including `restored_noop`.
+
+   The qualifier is deliberate and is what keeps this tier consistent with the
+   `unknown_legacy` and crash-before-UID rows. Tier 2 exists to prevent the tool from
+   *acting on*, or *claiming to have restored*, an object it cannot prove it owns. When
+   **no live object exists at all**, there is nothing to own, nothing to mutate, and
+   nothing of ours that can remain — so `restored_noop` there is a statement about the
+   world, not an ownership claim, and it is permitted. When a live same-name object **is**
+   present and ownership is unproven, the same absence of proof becomes load-bearing and
+   tier 2 blocks: `restored_conflict`, never `restored_noop`.
+
+   Concretely, the three unproven-ownership records resolve as:
+
+   | record | live CM absent | live CM present |
+   | --- | --- | --- |
+   | recorded `ownership_conflict` (any reason) | blocking, no terminal result — the conflict is a durable statement about a failed or ambiguous *create*, which live absence cannot retract | blocking, `restore_conflict` |
+   | `absent` prior, crash before UID persistence (`intent`) | `restored_noop` — nothing was left behind | `restore_conflict`, no adoption |
+   | `unknown_legacy` prior | `restored_noop` | `restore_conflict`, manual-recovery message |
+
+   The distinction between row 1 and rows 2-3 on live-absence is the one that matters: a
+   recorded `ownership_conflict` captured a *failed or ambiguous create attempt* whose
+   outcome is unknown, so absence now does not prove absence throughout; rows 2-3 record
+   only that ownership was never established, and with no object present there is nothing
+   the transaction could still be responsible for.
 3. **Proven transaction and proven identity** — a schema-valid `intent` or `applied`
    record whose identity is established for its prior shape (the captured `uid` for a
    `no_key`/`value` prior; a durable response-derived `created_uid`, or the documented
@@ -313,6 +336,24 @@ apply only when the pre-check found the live key value still equal to the tempor
 this run wrote. An operator-edited value on a tool-created ConfigMap is therefore
 preserved and journaled `restore_conflict` even though UID identity is proven.
 
+Every restore mutation is additionally bound to the **exact live state that was
+validated**, not merely to the object's identity. A UID precondition proves the object is
+the same object; it does not prove the object has not changed since the read that decided
+what to do. Between the tier-4 live read and the patch or delete, a same-UID update — an
+operator editing `autoImportStrategy`, or another controller rewriting `data` — can land,
+and a UID-only guard would apply the decision anyway. Therefore:
+
+- Every restore **patch** carries an atomic `resourceVersion` precondition for the exact
+  version observed in the deciding read, alongside the `/metadata/uid` `test` operation.
+  In the RFC 6902 form this is a second `test` against `/metadata/resourceVersion`; both
+  tests precede any mutating operation in the same atomic PATCH.
+- Every restore **delete** carries `V1DeleteOptions.preconditions` with both the captured
+  `uid` and the observed `resourceVersion`.
+- A precondition failure (409/412) is `restore_conflict`: **no mutation occurs**, the live
+  object is left byte-identical, and the conflict is journaled with the stable reason and
+  both compared values. It is never retried automatically against the newer state, because
+  the newer state was never evaluated by the tier-4 rules.
+
 Every patch path is UID-guarded, not only the delete: for `no_key` and `value` priors,
 restore validates the live ConfigMap UID against the captured `uid`; for the `absent`
 prior with `created_uid`, both the delete branch and the key-removal fallback first
@@ -350,10 +391,12 @@ explicit, separately designed acknowledgement path, before teardown.
   separately designed acknowledgement path; acknowledgement may permit teardown but never
   retroactively establishes `created_uid` or authorizes mutation of the live same-name
   object.
-- The delete uses a server-side UID precondition (`V1DeleteOptions.preconditions.uid` with
-  the captured `created_uid`); `delete_configmap` gains an optional precondition
-  parameter. Precondition mismatch (409/412) → leave the replacement ConfigMap intact,
-  refuse the delete, journal `restore_conflict`. No read-before-delete race remains.
+- The delete uses server-side preconditions (`V1DeleteOptions.preconditions` carrying
+  both the captured `created_uid` and the `resourceVersion` observed in the deciding
+  read); `delete_configmap` gains an optional precondition parameter accepting both.
+  Precondition mismatch (409/412) → leave the ConfigMap intact, refuse the delete, journal
+  `restore_conflict`. No read-before-delete race remains, and no same-UID mutation between
+  the deciding read and the delete can slip through.
 - Whole-ConfigMap deletion for a pre-existing ConfigMap is removed entirely.
 - Restore failure raises `SwitchoverError` (Python) / `ansible.builtin.fail` (collection)
   — no warning-only path. When both `auto_import_txn` and the legacy boolean are absent,
@@ -437,7 +480,21 @@ and verified; a conflict or failure never reports a successful change.
   untouched, unknown-prior manual-recovery message; live ConfigMap absent →
   `restored_noop`; minted txn id carried either way.
 - `data: null` for every reader (Python + both collection roles' Jinja).
-- Delete precondition mismatch on `absent` prior → replacement intact, `restore_conflict`.
+- Delete precondition mismatch on `absent` prior → object intact, `restore_conflict`; run
+  separately for a UID mismatch (replacement) and for a UID match with a stale
+  `resourceVersion` (same-UID update between read and delete), asserting no mutation in
+  both.
+- Restore patch `resourceVersion` precondition: a same-UID update landing between the
+  tier-4 deciding read and the patch fails the atomic PATCH's
+  `/metadata/resourceVersion` `test`, leaves the live object byte-identical, journals
+  `restore_conflict`, and is **not** automatically retried against the newer state.
+  Asserted for the `no_key`, `value`, and `absent`-with-`created_uid` key-removal paths.
+- Unproven-ownership precedence rows asserted as a table: recorded `ownership_conflict`
+  with the ConfigMap absent → blocking, no terminal result, gate still blocked; `intent`
+  with an `absent` prior and null `created_uid` with the ConfigMap absent →
+  `restored_noop`; `unknown_legacy` with the ConfigMap absent → `restored_noop`; each of
+  the three with a live object present → `restore_conflict`, no mutation, live object
+  byte-identical.
 - `absent` prior with a durable `created_uid` and the tool-created ConfigMap externally
   deleted before finalization → `restored_noop` in both form factors, no create/patch/
   delete request issued, no retry loop, and the decommission gate passes on that
