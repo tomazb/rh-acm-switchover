@@ -1,0 +1,15 @@
+---
+- name: Validate backup progress has settled
+  ansible.builtin.include_tasks: validate_backups/progress.yml
+
+- name: Validate backup artifact availability and completion
+  ansible.builtin.include_tasks: validate_backups/artifacts.yml
+
+- name: Validate BackupSchedule and BackupStorageLocation readiness
+  ansible.builtin.include_tasks: validate_backups/schedule_storage.yml
+
+- name: Validate backup infrastructure readiness
+  ansible.builtin.include_tasks: validate_backups/infrastructure.yml
+
+- name: Validate managed cluster backup coverage
+  ansible.builtin.include_tasks: validate_backups/managed_cluster_backups.yml

@@ -1,0 +1,40 @@
+---
+acm_switchover_hubs:
+  primary:
+    context: primary-hub
+    kubeconfig: ./kubeconfigs/hub.kubeconfig
+  secondary:
+    context: secondary-hub
+    kubeconfig: ./kubeconfigs/hub.kubeconfig
+
+acm_switchover_operation:
+  method: passive
+  old_hub_action: secondary
+  activation_method: patch
+  min_managed_clusters: 0
+
+acm_switchover_features:
+  manage_auto_import_strategy: false
+  skip_observability_checks: false
+  skip_gitops_check: false
+  skip_rbac_validation: false
+  disable_observability_on_secondary: false
+  argocd:
+    manage: false
+  klusterlet:
+    strict_remediation: false
+
+acm_switchover_execution:
+  mode: execute
+  verbose: false
+  force: false
+  report_dir: ./artifacts
+  concurrency:
+    klusterlet_probe_workers: 10
+    klusterlet_remediation_workers: 10
+  checkpoint:
+    enabled: false
+    backend: file
+    path: .state/switchover.json
+    reset: false
+    reset_from: ""

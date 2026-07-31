@@ -50,6 +50,14 @@ oc get clusterdeployment.hive.openshift.io --all-namespaces --context <primary> 
 - ✅ ALL show `true` → Safe to proceed
 - ❌ ANY show `false` or `<none>` → **STOP AND FIX FIRST**
 
+> **Hive API fail-closed:** if the Hive `ClusterDeployment` API or CRD is
+> not present (or not readable) on the hub, the decommission tool refuses
+> to proceed. It does not assume "no Hive means no risk". On non-Hive
+> clusters, follow the documented non-Hive decommission flow instead. The
+> tool also requires an explicit cluster-ID match between each
+> ManagedCluster and its ClusterDeployment; unverified pairings block
+> deletion.
+
 ```bash
 # Fix any missing preserveOnDelete
 oc patch clusterdeployment.hive.openshift.io <name> -n <namespace> --context <primary> \

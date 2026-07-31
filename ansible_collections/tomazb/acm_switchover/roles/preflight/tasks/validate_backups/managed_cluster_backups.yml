@@ -1,0 +1,236 @@
+---
+- name: Identify non-local ClusterDeployments missing preserveOnDelete=true
+  ansible.builtin.set_fact:
+    _acm_primary_missing_preserve_on_delete: >-
+      {%- set missing = [] -%}
+      {%- for cd in (acm_primary_cluster_deployments_info.resources | default([])) -%}
+      {%- set metadata = cd.get('metadata', {}) -%}
+      {%- if not (cd.get('spec', {}).get('preserveOnDelete', false) | bool) -%}
+      {%- set _ = missing.append(metadata.get('namespace', 'unknown') ~ '/' ~ metadata.get('name', 'unknown')) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ missing }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Record ClusterDeployment preserveOnDelete enforcement
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-clusterdeployments-preserve-on-delete",
+            "severity": "critical",
+            "status": "pass" if (_acm_primary_missing_preserve_on_delete | default([]) | length) == 0 else "fail",
+            "message": "all ClusterDeployments have preserveOnDelete=true"
+              if (_acm_primary_missing_preserve_on_delete | default([]) | length) == 0
+              else "ClusterDeployments missing preserveOnDelete=true: " + (_acm_primary_missing_preserve_on_delete | default([]) | join(', ')),
+            "details": {
+              "clusterdeployment_count": acm_primary_cluster_deployments_info.resources | default([]) | length,
+              "missing": _acm_primary_missing_preserve_on_delete | default([])
+            },
+            "recommended_action": "Set spec.preserveOnDelete=true before switchover to avoid infrastructure deletion"
+              if (_acm_primary_missing_preserve_on_delete | default([]) | length) > 0
+              else None
+          }
+        ]
+      }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Identify joined primary ManagedClusters
+  ansible.builtin.set_fact:
+    _acm_primary_joined_managed_clusters: >-
+      {%- set joined_clusters = [] -%}
+      {%- for cluster in (acm_primary_managed_clusters_info.resources | default([])) -%}
+      {%- set metadata = cluster.get('metadata', {}) -%}
+      {%- set name = metadata.get('name', '') -%}
+      {%- set conditions = cluster.get('status', {}).get('conditions', []) or [] -%}
+      {%- set joined = namespace(value=false) -%}
+      {%- for condition in conditions -%}
+      {%- if condition.get('type') == 'ManagedClusterJoined' and condition.get('status') == 'True' -%}
+      {%- set joined.value = true -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- if name != 'local-cluster' and joined.value -%}
+      {%- set _ = joined_clusters.append(name) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ joined_clusters }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Identify latest managed-clusters backup artifact
+  ansible.builtin.set_fact:
+    _acm_primary_latest_managed_clusters_backup: >-
+      {%- set backups = [] -%}
+      {%- for backup in (acm_primary_backups_info.resources | default([])) -%}
+      {%- set labels = backup.get('metadata', {}).get('labels', {}) or {} -%}
+      {%- if labels.get('cluster.open-cluster-management.io/backup-schedule-type') == 'managedClusters' -%}
+      {%- set _ = backups.append(backup) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- set backups_with_timestamps = backups | selectattr('metadata.creationTimestamp', 'defined') | list -%}
+      {{
+        (backups_with_timestamps | sort(attribute='metadata.creationTimestamp') | last)
+        if (backups_with_timestamps | length) > 0
+        else (backups | last | default({}))
+      }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Record managed-clusters backup completion
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-managed-clusters-backup-completed",
+            "severity": "critical",
+            "status": "pass"
+              if (
+                (_acm_primary_joined_managed_clusters | default([]) | length) == 0
+                or (
+                  (_acm_primary_latest_managed_clusters_backup.get('metadata', {}).get('name', '') | length) > 0
+                  and _acm_primary_latest_managed_clusters_backup.get('status', {}).get('phase', 'unknown') == 'Completed'
+                )
+              )
+              else "fail",
+            "message": "no joined ManagedClusters found (only local-cluster)"
+              if (_acm_primary_joined_managed_clusters | default([]) | length) == 0
+              else (
+                "latest managed-clusters backup "
+                + _acm_primary_latest_managed_clusters_backup.get('metadata', {}).get('name', 'unknown')
+                + " completed successfully"
+                if _acm_primary_latest_managed_clusters_backup.get('status', {}).get('phase', 'unknown') == 'Completed'
+                else (
+                  "latest managed-clusters backup "
+                  + _acm_primary_latest_managed_clusters_backup.get('metadata', {}).get('name', 'unknown')
+                  + " not completed: "
+                  + _acm_primary_latest_managed_clusters_backup.get('status', {}).get('phase', 'missing')
+                  if (_acm_primary_latest_managed_clusters_backup.get('metadata', {}).get('name', '') | length) > 0
+                  else "no managed-clusters backups found"
+                )
+              ),
+            "details": {
+              "joined_cluster_count": _acm_primary_joined_managed_clusters | default([]) | length,
+              "joined_clusters": _acm_primary_joined_managed_clusters | default([]),
+              "backup_name": _acm_primary_latest_managed_clusters_backup.get('metadata', {}).get('name'),
+              "phase": _acm_primary_latest_managed_clusters_backup.get('status', {}).get('phase', 'missing')
+            },
+            "recommended_action": "Run a fresh managed-clusters backup on the primary hub before switchover"
+              if (
+                (_acm_primary_joined_managed_clusters | default([]) | length) > 0
+                and (
+                  (_acm_primary_latest_managed_clusters_backup.get('metadata', {}).get('name', '') | length) == 0
+                  or _acm_primary_latest_managed_clusters_backup.get('status', {}).get('phase', 'unknown') != 'Completed'
+                )
+              )
+              else None
+          }
+        ]
+      }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Identify latest completed managed-clusters backup timestamp
+  ansible.builtin.set_fact:
+    _acm_primary_latest_managed_clusters_backup_ts: >-
+      {%- set ns = namespace(candidates=[]) -%}
+      {%- for backup in (acm_primary_backups_info.resources | default([])) -%}
+      {%- set labels = backup.get('metadata', {}).get('labels', {}) or {} -%}
+      {%- if
+        labels.get('cluster.open-cluster-management.io/backup-schedule-type') == 'managedClusters'
+        and backup.get('status', {}).get('phase') == 'Completed'
+      -%}
+      {%- set ts = backup.get('status', {}).get('completionTimestamp') or backup.get('metadata', {}).get('creationTimestamp', '') -%}
+      {%- if ts | length > 0 -%}
+      {%- set _ = ns.candidates.append(ts) -%}
+      {%- endif -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ (ns.candidates | sort | last) if (ns.candidates | length) > 0 else '' }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Identify joined ManagedClusters created after the latest managed-clusters backup
+  ansible.builtin.set_fact:
+    _acm_primary_clusters_after_latest_backup: >-
+      {%- set after = [] -%}
+      {%- set latest = _acm_primary_latest_managed_clusters_backup_ts | default('') -%}
+      {%- for cluster in (acm_primary_managed_clusters_info.resources | default([])) -%}
+      {%- set metadata = cluster.get('metadata', {}) -%}
+      {%- set name = metadata.get('name', '') -%}
+      {%- set conditions = cluster.get('status', {}).get('conditions', []) or [] -%}
+      {%- set joined = namespace(value=false) -%}
+      {%- for condition in conditions -%}
+      {%- if condition.get('type') == 'ManagedClusterJoined' and condition.get('status') == 'True' -%}
+      {%- set joined.value = true -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- set created = metadata.get('creationTimestamp', '') -%}
+      {%- if latest | length > 0 and created | length > 0 and name != 'local-cluster' and joined.value and created > latest -%}
+      {%- set _ = after.append(name) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ after }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Record imported-after-latest-backup risk
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-managed-clusters-after-latest-backup",
+            "severity": "critical",
+            "status": "pass"
+              if (_acm_primary_clusters_after_latest_backup | default([]) | length) == 0
+              else "fail",
+            "message": "no joined ManagedClusters were imported after the latest managed-clusters backup"
+              if (_acm_primary_clusters_after_latest_backup | default([]) | length) == 0
+              else "clusters imported after latest backup will be lost: " + (_acm_primary_clusters_after_latest_backup | default([]) | join(', ')),
+            "details": {
+              "latest_managed_clusters_backup_timestamp": _acm_primary_latest_managed_clusters_backup_ts | default(''),
+              "clusters_after_latest_backup": _acm_primary_clusters_after_latest_backup | default([])
+            },
+            "recommended_action": "Run a fresh managed-clusters backup on the primary hub before switchover"
+              if (_acm_primary_clusters_after_latest_backup | default([]) | length) > 0
+              else None
+          }
+        ]
+      }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Record primary hub ClusterDeployment and ManagedClusterBackup info
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-clusterdeployments",
+            "severity": "warning",
+            "status": "pass",
+            "message": (acm_primary_cluster_deployments_info.resources | default([]) | length | string)
+              + " Hive ClusterDeployment(s) found on primary hub",
+            "details": {
+              "clusterdeployment_count": acm_primary_cluster_deployments_info.resources | default([]) | length
+            },
+            "recommended_action": "Verify preserveOnDelete=true on each ClusterDeployment before switchover"
+              if (acm_primary_cluster_deployments_info.resources | default([]) | length) > 0
+              else None
+          },
+          {
+            "id": "preflight-managed-cluster-backups",
+            "severity": "warning",
+            "status": "pass",
+            "message": (acm_primary_managed_cluster_backups_info.resources | default([]) | length | string)
+              + " ManagedClusterBackup resource(s) found on primary hub",
+            "details": {
+              "managed_cluster_backup_count": acm_primary_managed_cluster_backups_info.resources | default([]) | length
+            },
+            "recommended_action": "ManagedClusterBackup CRD may not be installed; verify cluster backup coverage manually"
+              if (acm_primary_managed_cluster_backups_info.resources | default([]) | length) == 0
+              else None
+          }
+        ]
+      }}
+  when: not (acm_switchover_operation.restore_only | default(false))

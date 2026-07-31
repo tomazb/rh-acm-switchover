@@ -4,6 +4,13 @@
 
 This document describes the testing strategy, test structure, and how to run tests for the ACM Switchover Automation project.
 
+The repository has four distinct verification surfaces:
+
+- Root tests under `tests/`
+- Collection tests under `ansible_collections/tomazb/acm_switchover/tests/`
+- Release validation framework tests under `tests/release/`
+- On-demand real-cluster E2E tests under `tests/e2e/`
+
 ## Test Structure
 
 ```
@@ -34,7 +41,9 @@ tests/
 ./run_tests.sh
 ```
 
-By default, this excludes long-running E2E tests (marked `@pytest.mark.e2e`).
+By default, this runs the root test lane, then the non-live release-framework helper tests under `tests/release/`, and excludes long-running E2E tests (marked `@pytest.mark.e2e`).
+CI-equivalent quality gates (`black`, `isort`, `mypy`, and `bandit`) fail by default.
+For a local advisory-only quality pass, run `STRICT_QUALITY=0 ./run_tests.sh`.
 To include E2E tests on demand:
 
 ```bash
@@ -55,7 +64,7 @@ This script will:
 2. Install dependencies
 3. Run unit tests with coverage (excluding E2E by default)
 4. Run code quality checks (flake8, pylint, black, isort, mypy)
-5. Run security scans (bandit, safety)
+5. Run security scans (bandit, pip-audit)
 6. Validate Python syntax
 
 ### Manual Test Execution
@@ -66,10 +75,10 @@ This script will:
 pip install -r requirements-dev.txt
 ```
 
-#### Run All Tests
+#### Run Root Tests (matches the default local runner)
 
 ```bash
-python -m pytest tests/ -v -m "not e2e"
+python -m pytest tests/ --ignore=tests/release -v -m "not e2e"
 ```
 
 #### Run Specific Test File
@@ -106,6 +115,34 @@ python -m pytest tests/e2e/ -v -m e2e
 ```
 
 See `tests/e2e/README.md` for details.
+
+### Release Validation Framework
+
+Framework helper tests are part of the default `./run_tests.sh` flow and should
+also be runnable directly when you need a tighter release-framework loop:
+
+```bash
+python -m pytest tests/release -q
+```
+
+Live certification requires an explicit profile:
+
+```bash
+python -m pytest tests/release/test_release_certification.py \
+  --release-profile /path/to/release-profile.yaml \
+  --release-mode certification
+```
+
+Focused reruns are filter-based and use `--release-scenario` / `--release-stream`.
+The current harness does not support resuming or rerunning from a previous
+artifact directory. Dirty checkouts fail certification-mode runs unless
+`--allow-dirty` is supplied; even then, the run remains not certification
+eligible.
+
+When a profile defines `release.metadata_files`, the harness validates those
+files against `release.expected_version` and records the metadata status/hash in
+`manifest.json`. See `docs/development/release-validation-framework.md` for the
+full contract.
 
 ### Full Real E2E (On Demand)
 
@@ -169,6 +206,10 @@ Observed on 2026-01-28:
 - **Target**: 80%+ line coverage
 - **Critical paths**: 100% coverage for data protection logic
 - **Current status**: See coverage report for details
+
+Mutation testing is documented as a deferred concept, not an active local or CI
+gate. See [Mutation Testing Notes](mutation-testing-plan.md) for the future
+Superpowers design/spec handoff.
 
 ## Code Quality Tools
 
@@ -403,11 +444,9 @@ open htmlcov/index.html
 
 ### Planned Improvements
 
-- [ ] Integration tests with real Kubernetes clusters
-- [ ] End-to-end tests with test fixtures
-- [ ] Performance benchmarks
-- [ ] Chaos engineering tests
-- [ ] Additional module coverage (activation, finalization)
+- [ ] Release artifact resume/rerun support with compatibility validation
+- [ ] Broader performance benchmarks for release and E2E paths
+- [ ] Additional failure-injection and chaos-style scenarios
 - [ ] Mutation testing
 
 ### Test Environment Setup

@@ -1,0 +1,9 @@
+---
+- name: Read secondary hub ManagedClusters when not pre-seeded by tests
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1
+    kind: ManagedCluster
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: acm_secondary_managed_clusters_info
+  when: acm_secondary_managed_clusters_info is not defined

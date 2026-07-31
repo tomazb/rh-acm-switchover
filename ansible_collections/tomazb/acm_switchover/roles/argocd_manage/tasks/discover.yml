@@ -1,0 +1,342 @@
+---
+# Use pre-supplied mock apps when provided (for testing without a live cluster).
+- name: Use pre-supplied application list
+  when: acm_switchover_argocd_mock_apps is defined
+  block:
+    - name: Filter mock apps to ACM-touching only
+      tomazb.acm_switchover.acm_argocd_filter:
+        applications: "{{ acm_switchover_argocd_mock_apps }}"
+      register: _argocd_mock_filtered
+      no_log: true
+      failed_when: false
+
+    - name: Capture protected mock Application filtering failure
+      ansible.builtin.set_fact:
+        _argocd_mock_filter_error: "{{ _argocd_mock_filtered.msg | default('') }}"
+        _argocd_mock_filter_failed: "{{ _argocd_mock_filtered.applications is not defined }}"
+      no_log: true
+
+    - name: Enter sanitized discovery failure handling for mock Application filtering
+      ansible.builtin.fail:
+        msg: "Argo CD discovery failed; verify controller access and input, then retry."
+      when:
+        - _argocd_mock_filter_failed | bool
+        - not (acm_switchover_argocd_advisory | default(false) | bool)
+
+    - name: Record sanitized advisory mock Application filtering failure
+      ansible.builtin.set_fact:
+        acm_switchover_argocd_installed: false
+        acm_switchover_argocd_acm_apps: []
+        acm_switchover_argocd_blocked_apps: []
+        acm_switchover_argocd_all_apps: []
+        acm_switchover_argocd_discovery_status:
+          status: error
+          category: application-filter
+      no_log: true
+      when:
+        - _argocd_mock_filter_failed | bool
+        - acm_switchover_argocd_advisory | default(false) | bool
+
+    - name: Record filtered mock apps
+      ansible.builtin.set_fact:
+        acm_switchover_argocd_installed: true
+        acm_switchover_argocd_acm_apps: "{{ _argocd_mock_filtered.applications }}"
+        acm_switchover_argocd_blocked_apps: "{{ _argocd_mock_filtered.blocked | default([]) }}"
+        acm_switchover_argocd_all_apps: "{{ acm_switchover_argocd_mock_apps }}"
+        acm_switchover_argocd_discovery_status:
+          status: ok
+      no_log: true
+      when: not (_argocd_mock_filter_failed | bool)
+
+- name: Discover Argo CD Applications from cluster
+  when: acm_switchover_argocd_mock_apps is not defined
+  block:
+    - name: Initialize protected Argo CD discovery failure detail
+      ansible.builtin.set_fact:
+        _argocd_discovery_error: ""
+      no_log: true
+
+    - name: Generate run_id if not provided
+      ansible.builtin.set_fact:
+        acm_switchover_argocd: >-
+          {{
+            acm_switchover_argocd | default({})
+            | combine({'run_id': lookup('pipe', 'python3 -c "import uuid; print(uuid.uuid4().hex[:12])"')})
+          }}
+      when:
+        - ((acm_switchover_argocd | default({})).get('run_id', '')) == ''
+        - (acm_switchover_argocd_mode_override | default((acm_switchover_argocd | default({})).get('mode', 'pause'))) != 'resume'
+        - (acm_switchover_argocd_mode_override | default((acm_switchover_argocd | default({})).get('mode', 'pause'))) == 'pause'
+
+    - name: Resolve raw trusted Argo CD discovery namespaces for current hub
+      ansible.builtin.set_fact:
+        _argocd_raw_trusted_discovery_namespaces: >-
+          {{
+            [((acm_switchover_argocd | default({})).get('namespace', '') | trim)]
+            if (
+              ((acm_switchover_argocd | default({})).get('namespace', '') is string)
+              and (
+                ((acm_switchover_argocd | default({})).get('namespace', '') | trim | length)
+                > 0
+              )
+            )
+            else (
+              (acm_switchover_argocd_discovery_namespaces | default({}))
+              .get(_argocd_discover_hub | default('primary'), [])
+              if (
+                ((acm_switchover_argocd_discovery_namespaces | default({}))
+                .get(_argocd_discover_hub | default('primary'), [])
+                | type_debug) == 'list'
+              )
+              else []
+            )
+          }}
+      no_log: true
+
+    - name: Fail when explicit Argo CD discovery namespace is malformed
+      ansible.builtin.fail:
+        msg: "Explicit Argo CD discovery namespace must be a non-empty namespace name."
+      when:
+        - "'namespace' in (acm_switchover_argocd | default({}))"
+        - >-
+          (
+            not ((acm_switchover_argocd | default({})).get('namespace') is string)
+          )
+          or (
+            ((acm_switchover_argocd | default({})).get('namespace', '') | trim | length) == 0
+          )
+
+    - name: Fail when persisted Argo CD discovery namespaces are malformed for current hub
+      ansible.builtin.fail:
+        msg: >-
+          Persisted Argo CD discovery namespaces for the selected hub must be
+          a list of namespace names.
+      when:
+        - ((acm_switchover_argocd | default({})).get('namespace', '') | default('') | length) == 0
+        - (_argocd_discover_hub | default('primary')) in (acm_switchover_argocd_discovery_namespaces | default({}))
+        - ((acm_switchover_argocd_discovery_namespaces | default({})).get(_argocd_discover_hub | default('primary')) | type_debug) != 'list'
+
+    - name: Validate trusted Argo CD discovery namespace entries
+      ansible.builtin.assert:
+        that:
+          - item is string
+          - (item | trim | length) > 0
+        fail_msg: "Trusted Argo CD discovery namespaces must contain only non-empty namespace names."
+      loop: "{{ _argocd_raw_trusted_discovery_namespaces | default([]) }}"
+      loop_control:
+        label: "trusted namespace"
+      no_log: true
+
+    - name: Normalize trusted Argo CD discovery namespaces for current hub
+      ansible.builtin.set_fact:
+        _argocd_trusted_discovery_namespaces: >-
+          {{
+            _argocd_raw_trusted_discovery_namespaces
+            | map('trim')
+            | unique
+            | sort
+            | list
+          }}
+        _argocd_use_scoped_discovery: >-
+          {{
+            (acm_switchover_argocd_mode_override | default((acm_switchover_argocd | default({})).get('mode', 'pause'))) != 'discover'
+            and (_argocd_raw_trusted_discovery_namespaces | length) > 0
+          }}
+      no_log: true
+
+    - name: List Applications in trusted namespaces
+      kubernetes.core.k8s_info:
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        namespace: "{{ item }}"
+        kubeconfig: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].kubeconfig | default(omit) }}"
+        context: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].context | default(omit) }}"
+      loop: "{{ _argocd_trusted_discovery_namespaces | default([]) }}"
+      loop_control:
+        label: "trusted namespace"
+      register: _argocd_scoped_live_query
+      no_log: true
+      failed_when: false
+      when: _argocd_use_scoped_discovery | default(false) | bool
+
+    - name: Validate complete scoped Argo CD discovery
+      ansible.builtin.include_tasks: validate_scoped_discovery.yml
+      when: _argocd_use_scoped_discovery | default(false) | bool
+
+    - name: Enter sanitized discovery failure handling for trusted namespaces
+      ansible.builtin.fail:
+        msg: "Argo CD discovery boundary reported a failure."
+      when:
+        - _argocd_use_scoped_discovery | default(false) | bool
+        - (_argocd_scoped_validation | default({})).get('status', 'error') == 'error'
+
+    - name: List Applications cluster-wide
+      kubernetes.core.k8s_info:
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        namespace: "{{ (acm_switchover_argocd | default({})).get('namespace') | default(omit) }}"
+        kubeconfig: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].kubeconfig | default(omit) }}"
+        context: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].context | default(omit) }}"
+      register: _argocd_cluster_live_query
+      no_log: true
+      failed_when: false
+      when: not (_argocd_use_scoped_discovery | default(false) | bool)
+
+    - name: Capture protected cluster-wide discovery failure
+      ansible.builtin.set_fact:
+        _argocd_discovery_error: "{{ _argocd_cluster_live_query.msg | default('') }}"
+      no_log: true
+      when: not (_argocd_use_scoped_discovery | default(false) | bool)
+
+    - name: Enter sanitized discovery failure handling for cluster-wide discovery
+      ansible.builtin.fail:
+        msg: "Argo CD discovery boundary reported a failure."
+      when: (_argocd_discovery_error | default('') | length) > 0
+
+    - name: Publish validated Argo CD discovery
+      ansible.builtin.set_fact:
+        _argocd_published_discovery: >-
+          {{
+            _argocd_scoped_validation
+            if (_argocd_use_scoped_discovery | default(false) | bool)
+            else {
+              'status': 'ok',
+              'resources': (_argocd_cluster_live_query.resources | default([]))
+            }
+          }}
+      no_log: true
+
+    - name: Filter to ACM-touching applications
+      tomazb.acm_switchover.acm_argocd_filter:
+        applications: "{{ _argocd_published_discovery.resources }}"
+      register: _argocd_live_filtered
+      no_log: true
+      failed_when: false
+      when: _argocd_published_discovery.status == 'ok'
+
+    - name: Capture protected Application filtering failure
+      ansible.builtin.set_fact:
+        _argocd_discovery_error: "{{ _argocd_live_filtered.msg | default('') }}"
+      no_log: true
+      when: _argocd_published_discovery.status == 'ok'
+
+    - name: Enter sanitized discovery failure handling for Application filtering
+      ansible.builtin.fail:
+        msg: "Argo CD discovery boundary reported a failure."
+      when:
+        - _argocd_published_discovery.status == 'ok'
+        - (_argocd_discovery_error | default('') | length) > 0
+
+    - name: Record discovered ACM apps
+      ansible.builtin.set_fact:
+        acm_switchover_argocd_installed: true
+        acm_switchover_argocd_acm_apps: "{{ _argocd_live_filtered.applications }}"
+        acm_switchover_argocd_blocked_apps: "{{ _argocd_live_filtered.blocked | default([]) }}"
+        acm_switchover_argocd_all_apps: "{{ _argocd_published_discovery.resources }}"
+        acm_switchover_argocd_discovery_status:
+          status: ok
+      no_log: true
+      when: _argocd_published_discovery.status == 'ok'
+
+    - name: Record absent scoped Argo CD discovery
+      ansible.builtin.set_fact:
+        acm_switchover_argocd_installed: false
+        acm_switchover_argocd_acm_apps: []
+        acm_switchover_argocd_blocked_apps: []
+        acm_switchover_argocd_all_apps: []
+        acm_switchover_argocd_discovery_status:
+          status: absent
+      no_log: true
+      when: _argocd_published_discovery.status == 'absent'
+
+    - name: Record discovered Application namespaces for current hub
+      ansible.builtin.set_fact:
+        acm_switchover_argocd_discovery_namespaces: >-
+          {{
+            acm_switchover_argocd_discovery_namespaces | default({})
+            | combine({
+                (_argocd_discover_hub | default('primary')): (
+                  _argocd_published_discovery.resources
+                  | map(attribute='metadata')
+                  | map(attribute='namespace')
+                  | select('defined')
+                  | select('ne', '')
+                  | list
+                  | unique
+                  | sort
+                )
+              }, recursive=True)
+          }}
+      no_log: true
+      when:
+        - (acm_switchover_argocd_mode_override | default((acm_switchover_argocd | default({})).get('mode', 'pause'))) == 'pause'
+        - not (_argocd_use_scoped_discovery | default(false) | bool)
+        - _argocd_published_discovery.status == 'ok'
+        - (((acm_switchover_argocd | default({})).get('namespace', '')) | length) == 0
+
+  rescue:
+    - name: Check if failure is due to missing Argo CD CRD
+      ansible.builtin.set_fact:
+        _argocd_discovery_error: >-
+          {{
+            _argocd_discovery_error
+            if (_argocd_discovery_error | default('') | length) > 0
+            else (ansible_failed_result.msg | default(ansible_failed_result | string) | default(''))
+          }}
+      no_log: true
+
+    - name: Mark Argo CD as not installed (CRD absent)
+      ansible.builtin.set_fact:
+        acm_switchover_argocd_installed: false
+        acm_switchover_argocd_acm_apps: []
+        acm_switchover_argocd_blocked_apps: []
+        acm_switchover_argocd_all_apps: []
+        acm_switchover_argocd_discovery_status:
+          status: absent
+      when: >-
+        'the server doesn\'t have a resource type' in (_argocd_discovery_error | lower)
+        or 'could not find the requested resource' in (_argocd_discovery_error | lower)
+        or 'no matches for kind "application" in group "argoproj.io"' in (_argocd_discovery_error | lower)
+
+    - name: Record sanitized advisory Argo CD discovery failure
+      ansible.builtin.set_fact:
+        acm_switchover_argocd_installed: false
+        acm_switchover_argocd_acm_apps: []
+        acm_switchover_argocd_blocked_apps: []
+        acm_switchover_argocd_all_apps: []
+        acm_switchover_argocd_discovery_status:
+          status: error
+          category: api-discovery
+      when:
+        - acm_switchover_argocd_advisory | default(false) | bool
+        - >-
+          'the server doesn\'t have a resource type' not in (_argocd_discovery_error | lower)
+          and 'could not find the requested resource' not in (_argocd_discovery_error | lower)
+          and 'no matches for kind "application" in group "argoproj.io"' not in (_argocd_discovery_error | lower)
+
+    - name: Fail on unexpected Argo CD discovery error
+      ansible.builtin.fail:
+        msg: "Argo CD discovery failed; verify controller access and input, then retry."
+      when:
+        - not (acm_switchover_argocd_advisory | default(false) | bool)
+        - >-
+          'the server doesn\'t have a resource type' not in (_argocd_discovery_error | lower)
+          and 'could not find the requested resource' not in (_argocd_discovery_error | lower)
+          and 'no matches for kind "application" in group "argoproj.io"' not in (_argocd_discovery_error | lower)
+
+- name: Report when Argo CD is not installed
+  ansible.builtin.debug:
+    msg: "Argo CD not detected; skipping argocd_manage role actions."
+  when:
+    - not (acm_switchover_argocd_installed | default(false))
+    - (acm_switchover_argocd_discovery_status | default({})).get('status', '') != 'error'
+
+- name: Fail when Argo CD Applications are unsafe for automated pause
+  ansible.builtin.fail:
+    msg: >-
+      Argo CD Applications are unsafe for automated pause:
+      {{ acm_switchover_argocd_blocked_apps | default([]) }}.
+      Remediate the reported ApplicationSet parents or refresh stale Application status before retrying.
+  when:
+    - (acm_switchover_argocd_mode_override | default((acm_switchover_argocd | default({})).get('mode', 'pause'))) == 'pause'
+    - (acm_switchover_argocd_blocked_apps | default([]) | length) > 0

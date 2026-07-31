@@ -23,15 +23,42 @@ htmlcov/
 .pytest_cache/
 coverage.xml
 *.cover
+bandit-report.json
 
 # Local environment files
 .env
 .cursor/
+.kilo/
 .remember
 .planning/
 .validation/
 .worktrees/
+.claude/worktrees/
 kubeconfigs/
 e2e-soak-24h/
+tests/release/profiles/local/
 
 e2e-15-switchover/
+artifacts/
+opus-review.md
+
+# IDE
+.vscode/
+
+# Type-check cache
+.mypy_cache/
+
+# Generated knowledge graph (graphify skill output)
+graphify-out/
+
+# AI tooling local state
+.agents/
+.claude/settings.local.json
+.claude/agent-memory-local/
+
+review/graphify/
+
+# Mutation testing artifacts (on-demand only; not part of normal CI or test path)
+mutants/
+.mutmut-cache/
+mutation-reports/

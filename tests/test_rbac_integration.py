@@ -7,12 +7,21 @@ These tests verify that:
 3. check_rbac.py argument parsing handles all context combinations
 """
 
+import shutil
+import subprocess
 from pathlib import Path
 from typing import List
 
 import pytest
 import yaml
 
+from lib.constants import (
+    ACM_NAMESPACE,
+    BACKUP_NAMESPACE,
+    MANAGED_CLUSTER_AGENT_NAMESPACE,
+    MCE_NAMESPACE,
+    OBSERVABILITY_NAMESPACE,
+)
 from lib.rbac_validator import RBACValidator
 
 
@@ -38,14 +47,56 @@ class TestRBACPermissionCoverage:
     @pytest.mark.parametrize(
         "perm_source, namespace, resource, expected_api_group, expected_verbs",
         [
-            ("namespace", "open-cluster-management-backup", "pods", None, ["get", "list"]),
-            ("namespace", "open-cluster-management-backup", "backupstoragelocations", "velero.io", ["get", "list"]),
-            ("namespace", "open-cluster-management-observability", "secrets", None, ["get"]),
-            ("namespace", "open-cluster-management-observability", "routes", "route.openshift.io", ["get"]),
+            (
+                "namespace",
+                "open-cluster-management-backup",
+                "pods",
+                None,
+                ["get", "list"],
+            ),
+            (
+                "namespace",
+                "open-cluster-management-backup",
+                "backupstoragelocations",
+                "velero.io",
+                ["get", "list"],
+            ),
+            (
+                "namespace",
+                "open-cluster-management-observability",
+                "secrets",
+                None,
+                ["get"],
+            ),
+            (
+                "namespace",
+                "open-cluster-management-observability",
+                "routes",
+                "route.openshift.io",
+                ["get"],
+            ),
             ("namespace", "open-cluster-management", "pods", None, ["get", "list"]),
-            ("namespace", "open-cluster-management-backup", "backupschedules", None, ["delete"]),
-            ("managed_cluster_namespace", "open-cluster-management-agent", "secrets", None, ["create", "delete"]),
-            ("managed_cluster_namespace", "open-cluster-management-agent", "deployments", "apps", ["patch"]),
+            (
+                "namespace",
+                "open-cluster-management-backup",
+                "backupschedules",
+                None,
+                ["delete"],
+            ),
+            (
+                "managed_cluster_namespace",
+                "open-cluster-management-agent",
+                "secrets",
+                None,
+                ["create", "patch"],
+            ),
+            (
+                "managed_cluster_namespace",
+                "open-cluster-management-agent",
+                "deployments",
+                "apps",
+                ["patch"],
+            ),
         ],
         ids=[
             "backup-pods-for-velero-health",
@@ -59,7 +110,13 @@ class TestRBACPermissionCoverage:
         ],
     )
     def test_namespace_permission_exists(
-        self, validator_permissions, perm_source, namespace, resource, expected_api_group, expected_verbs
+        self,
+        validator_permissions,
+        perm_source,
+        namespace,
+        resource,
+        expected_api_group,
+        expected_verbs,
     ):
         """Verify that a required namespaced permission is defined with the correct API group and verbs."""
         perms = validator_permissions[perm_source].get(namespace, [])
@@ -94,12 +151,14 @@ class TestRBACPermissionCoverage:
     @pytest.mark.parametrize(
         "resource, expected_api_group, expected_verbs",
         [
+            ("namespaces", "", ["get", "list"]),
             ("managedclusters", None, ["get", "list", "patch"]),
             ("nodes", "", ["get", "list"]),
             ("clusteroperators", "config.openshift.io", ["get", "list"]),
             ("clusterversions", "config.openshift.io", ["get", "list"]),
         ],
         ids=[
+            "namespaces-for-preflight-discovery",
             "managedclusters-core-functionality",
             "nodes-cluster-health-validation",
             "clusteroperators-openshift-health",
@@ -125,6 +184,16 @@ class TestRBACManifestConsistency:
         return Path(__file__).parent.parent / "deploy" / "rbac" / "role.yaml"
 
     @pytest.fixture
+    def kustomize_rbac_dir(self) -> Path:
+        """Get the baseline Kustomize RBAC directory."""
+        return Path(__file__).parent.parent / "deploy" / "rbac"
+
+    @pytest.fixture
+    def acm_policy_path(self) -> Path:
+        """Get the ACM Policy RBAC manifest path."""
+        return Path(__file__).parent.parent / "deploy" / "acm-policies" / "policy-rbac.yaml"
+
+    @pytest.fixture
     def helm_role_path(self) -> Path:
         """Get the Helm role.yaml path."""
         return Path(__file__).parent.parent / "deploy" / "helm" / "acm-switchover-rbac" / "templates" / "role.yaml"
@@ -137,6 +206,38 @@ class TestRBACManifestConsistency:
         )
         if not path.exists():
             pytest.skip("Helm clusterrole.yaml not found")
+        return path.read_text(encoding="utf-8")
+
+    @pytest.fixture
+    def helm_helpers_content(self) -> str:
+        """Read Helm helpers template as text."""
+        path = Path(__file__).parent.parent / "deploy" / "helm" / "acm-switchover-rbac" / "templates" / "_helpers.tpl"
+        if not path.exists():
+            pytest.skip("Helm _helpers.tpl not found")
+        return path.read_text(encoding="utf-8")
+
+    @pytest.fixture
+    def helm_chart_dir(self) -> Path:
+        """Get the Helm chart directory."""
+        path = Path(__file__).parent.parent / "deploy" / "helm" / "acm-switchover-rbac"
+        if not path.exists():
+            pytest.skip("Helm chart not found")
+        return path
+
+    @pytest.fixture
+    def helm_binary(self) -> str:
+        """Get Helm binary path or skip render tests."""
+        helm = shutil.which("helm")
+        if not helm:
+            pytest.skip("helm binary not available")
+        return helm
+
+    @pytest.fixture
+    def helm_namespace_content(self) -> str:
+        """Read Helm namespace template as text."""
+        path = Path(__file__).parent.parent / "deploy" / "helm" / "acm-switchover-rbac" / "templates" / "namespace.yaml"
+        if not path.exists():
+            pytest.skip("Helm namespace.yaml not found")
         return path.read_text(encoding="utf-8")
 
     @pytest.fixture
@@ -186,6 +287,57 @@ class TestRBACManifestConsistency:
         # Should not raise
         docs = list(yaml.safe_load_all(content))
         assert len(docs) > 0, "Expected at least one YAML document"
+
+    def test_acm_policy_embeds_baseline_rbac_manifests(self, kustomize_rbac_dir, acm_policy_path):
+        """ACM Policy governance manifest must stay aligned with baseline RBAC."""
+        baseline_objects = []
+        for name in (
+            "namespace.yaml",
+            "serviceaccount.yaml",
+            "clusterrole.yaml",
+            "clusterrolebinding.yaml",
+            "role.yaml",
+            "rolebinding.yaml",
+        ):
+            baseline_objects.extend(
+                doc for doc in yaml.safe_load_all((kustomize_rbac_dir / name).read_text(encoding="utf-8")) if doc
+            )
+
+        policy_docs = list(yaml.safe_load_all(acm_policy_path.read_text(encoding="utf-8")))
+        policy = next(doc for doc in policy_docs if doc.get("kind") == "Policy")
+        policy_objects = []
+        for template in policy["spec"]["policy-templates"]:
+            config_policy = template["objectDefinition"]
+            for object_template in config_policy["spec"]["object-templates"]:
+                policy_objects.append(object_template["objectDefinition"])
+
+        def key(obj):
+            metadata = obj["metadata"]
+            return (
+                obj["kind"],
+                metadata.get("namespace", ""),
+                metadata["name"],
+            )
+
+        def assert_unique_keys(label, objects):
+            keys = [key(obj) for obj in objects]
+            duplicates = sorted(item for item in set(keys) if keys.count(item) > 1)
+            assert not duplicates, f"duplicate {label} RBAC key: {duplicates[0]}"
+
+        assert_unique_keys("policy", policy_objects)
+        assert_unique_keys("baseline", baseline_objects)
+        assert {key(obj): obj for obj in policy_objects} == {key(obj): obj for obj in baseline_objects}
+
+    def test_acm_policy_has_cross_namespace_selector(self, acm_policy_path):
+        """ACM Policy must evaluate the namespaces that contain embedded baseline RBAC objects."""
+        policy_docs = list(yaml.safe_load_all(acm_policy_path.read_text(encoding="utf-8")))
+        policy = next(doc for doc in policy_docs if doc.get("kind") == "Policy")
+        config_policy = policy["spec"]["policy-templates"][0]["objectDefinition"]
+
+        assert config_policy["spec"]["namespaceSelector"] == {
+            "exclude": ["kube-*"],
+            "include": ["*"],
+        }
 
     def test_kustomize_roles_cover_expected_namespaces(self, kustomize_roles):
         """Test that Kustomize roles cover all expected namespaces."""
@@ -272,6 +424,43 @@ class TestRBACManifestConsistency:
 
         assert secrets_rule is not None, "Expected secrets rule in observability operator role"
 
+    def test_kustomize_acm_role_has_namespaced_multiclusterhub_discovery_rule(self, kustomize_roles):
+        """Baseline ACM namespace Role must keep MCH access non-destructive."""
+        acm_operator_role = next(
+            (
+                r
+                for r in kustomize_roles
+                if r["metadata"]["namespace"] == "open-cluster-management"
+                and r["metadata"]["name"] == "acm-switchover-operator"
+            ),
+            None,
+        )
+
+        assert acm_operator_role is not None, "Expected ACM namespace operator role"
+        mch_rule = next(
+            (
+                rule
+                for rule in acm_operator_role["rules"]
+                if rule.get("apiGroups") == ["operator.open-cluster-management.io"]
+                and "multiclusterhubs" in rule.get("resources", [])
+            ),
+            None,
+        )
+
+        assert mch_rule is not None, "Expected namespaced MultiClusterHub rule in ACM operator role"
+        assert mch_rule["verbs"] == ["list"]
+
+    def test_helm_acm_role_has_namespaced_multiclusterhub_discovery_rule(self, helm_role_path):
+        """Helm Role template must keep the same non-destructive namespaced MCH rule."""
+        content = helm_role_path.read_text(encoding="utf-8")
+        snippet = (
+            '  - apiGroups: ["operator.open-cluster-management.io"]\n'
+            '    resources: ["multiclusterhubs"]\n'
+            '    verbs: ["list"]'
+        )
+
+        assert snippet in content
+
     ARGOCD_SNIPPETS = [
         '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list", "patch"]',
         '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list"]',
@@ -282,7 +471,6 @@ class TestRBACManifestConsistency:
     DECOMMISSION_FORBIDDEN_SNIPPETS = [
         '  - apiGroups: ["cluster.open-cluster-management.io"]\n    resources: ["managedclusters"]\n    verbs: ["get", "list", "patch", "delete"]',
         '  - apiGroups: ["operator.open-cluster-management.io"]\n    resources: ["multiclusterhubs"]\n    verbs: ["get", "list", "delete"]',
-        '  - apiGroups: ["observability.open-cluster-management.io"]\n    resources: ["multiclusterobservabilities"]\n    verbs: ["get", "list", "delete"]',
     ]
 
     CLUSTERROLE_PATHS = {
@@ -309,6 +497,14 @@ class TestRBACManifestConsistency:
             assert snippet in content, f"Missing Argo CD snippet in {variant} clusterrole: {snippet}"
 
     @pytest.mark.parametrize("variant", ["kustomize", "helm"])
+    def test_clusterrole_namespace_discovery_rule_allows_list(self, variant):
+        """ClusterRole manifests must allow listing namespaces for preflight discovery."""
+        content = self._read_clusterrole(variant)
+        snippet = 'resources: ["namespaces"]\n    verbs: ["get", "list"]'
+
+        assert snippet in content, f"Missing namespace list permission in {variant} clusterrole"
+
+    @pytest.mark.parametrize("variant", ["kustomize", "helm"])
     def test_operator_clusterrole_omits_decommission_delete_verbs(self, variant):
         """Test that baseline operator ClusterRole excludes cluster-wide delete verbs."""
         content = self._read_clusterrole(variant)
@@ -324,9 +520,11 @@ class TestRBACManifestConsistency:
             'resources: ["managedclusters"]\n    verbs: ["delete"]',
             'resources: ["multiclusterhubs"]\n    verbs: ["delete"]',
             'resources: ["multiclusterobservabilities"]\n    verbs: ["delete"]',
+            'resources: ["clusterdeployments"]\n    verbs: ["list"]',
         ]
         for snippet in required_snippets:
             assert snippet in content
+        assert 'resources: ["clusterdeployments"]\n    verbs: ["get", "list"]' not in content
 
     def test_static_decommission_clusterrolebinding_exists(self, decommission_clusterrolebinding_path):
         """Test that static decommission binding exists for opt-in operator escalation."""
@@ -337,14 +535,152 @@ class TestRBACManifestConsistency:
 
     def test_helm_clusterrole_supports_optional_decommission_role(self, helm_clusterrole_content):
         """Test that Helm templates expose an opt-in decommission ClusterRole."""
+        decommission_block = helm_clusterrole_content.split("# ClusterRole for ACM Switchover Decommission", 1)[
+            1
+        ].split("# ClusterRole for ACM Switchover Validator", 1)[0]
         required_snippets = [
-            ".Values.rbac.includeDecommissionClusterRole",
             ".Values.clusterRole.decommission.name",
             'resources: ["managedclusters"]',
             'verbs: ["delete"]',
+            'resources: ["clusterdeployments"]\n    verbs: ["list"]',
         ]
+        assert ".Values.rbac.includeDecommissionClusterRole" in helm_clusterrole_content
         for snippet in required_snippets:
-            assert snippet in helm_clusterrole_content
+            assert snippet in decommission_block
+        assert 'resources: ["clusterdeployments"]\n    verbs: ["get", "list"]' not in decommission_block
+
+    def test_helm_namespace_template_marks_shared_resource_common(self, helm_namespace_content):
+        """Helm namespace output must carry the same common marker used by role filtering."""
+        assert "app.kubernetes.io/part-of: acm-switchover-rbac" in helm_namespace_content
+        assert "app.kubernetes.io/role: common" in helm_namespace_content
+
+    def test_helm_validator_custom_rule_guardrail_is_wired(self, helm_helpers_content, helm_clusterrole_content):
+        """Helm must validate custom validator verbs before rendering the read-only ClusterRole."""
+        assert 'define "acm-switchover-rbac.validateValidatorCustomRules"' in helm_helpers_content
+        assert 'include "acm-switchover-rbac.validateValidatorCustomRules" .' in helm_clusterrole_content
+        assert helm_clusterrole_content.index('include "acm-switchover-rbac.validateValidatorCustomRules" .') < (
+            helm_clusterrole_content.index(".Values.rbac.customValidatorRules")
+        )
+
+    def test_helm_allows_read_only_custom_validator_rules(self, helm_binary, helm_chart_dir, tmp_path):
+        """Read-only validator custom rules should render successfully."""
+        values_file = tmp_path / "values.yaml"
+        values_file.write_text(
+            yaml.safe_dump(
+                {
+                    "rbac": {
+                        "customValidatorRules": [
+                            {
+                                "apiGroups": ["custom.example.com"],
+                                "resources": ["readablewidgets"],
+                                "verbs": ["get", "list", "watch"],
+                            }
+                        ]
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [helm_binary, "template", "acm-switchover-rbac", str(helm_chart_dir), "-f", str(values_file)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "readablewidgets" in result.stdout
+        assert "watch" in result.stdout
+
+    @pytest.mark.parametrize("forbidden_verb", ["delete", "*"])
+    def test_helm_rejects_mutating_custom_validator_rules(self, helm_binary, helm_chart_dir, tmp_path, forbidden_verb):
+        """Validator custom rules must not grant verbs outside the read-only set."""
+        values_file = tmp_path / f"values-{forbidden_verb.replace('*', 'star')}.yaml"
+        values_file.write_text(
+            yaml.safe_dump(
+                {
+                    "rbac": {
+                        "customValidatorRules": [
+                            {
+                                "apiGroups": ["custom.example.com"],
+                                "resources": ["dangerouswidgets"],
+                                "verbs": ["get", forbidden_verb],
+                            }
+                        ]
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [helm_binary, "template", "acm-switchover-rbac", str(helm_chart_dir), "-f", str(values_file)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        assert result.returncode != 0
+        assert "rbac.customValidatorRules may only use read-only verbs" in result.stderr
+        assert forbidden_verb in result.stderr
+
+    @pytest.mark.parametrize(
+        "rule",
+        [
+            {
+                "apiGroups": ["custom.example.com"],
+                "resources": ["invalidwidgets"],
+            },
+            {
+                "apiGroups": ["custom.example.com"],
+                "resources": ["invalidwidgets"],
+                "verbs": "get",
+            },
+        ],
+        ids=["missing-verbs", "scalar-verbs"],
+    )
+    def test_helm_rejects_invalid_custom_validator_rule_verbs_shape(self, helm_binary, helm_chart_dir, tmp_path, rule):
+        """Validator custom rules must define verbs as a YAML list."""
+        values_file = tmp_path / "values-invalid-verbs-shape.yaml"
+        values_file.write_text(
+            yaml.safe_dump({"rbac": {"customValidatorRules": [rule]}}),
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [helm_binary, "template", "acm-switchover-rbac", str(helm_chart_dir), "-f", str(values_file)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        assert result.returncode != 0
+        assert "rbac.customValidatorRules verbs must be a list of strings" in result.stderr
+        assert "rule 0" in result.stderr
+
+    def test_helm_rejects_non_mapping_custom_validator_rule_entry(self, helm_binary, helm_chart_dir, tmp_path):
+        """Validator custom rules must be YAML mappings before rule fields are read."""
+        values_file = tmp_path / "values-invalid-rule-entry.yaml"
+        values_file.write_text(
+            yaml.safe_dump({"rbac": {"customValidatorRules": ["invalid-rule-entry"]}}),
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [helm_binary, "template", "acm-switchover-rbac", str(helm_chart_dir), "-f", str(values_file)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        assert result.returncode != 0
+        assert "rbac.customValidatorRules entries must be mappings" in result.stderr
+        assert "rule 0" in result.stderr
 
 
 class TestRBACValidatorPermissionStructure:
@@ -448,7 +784,7 @@ class TestRBACValidatorRoleAware:
 
     def test_operator_hub_permissions_include_write_verbs(self):
         """Test that operator hub permissions include write verbs where needed."""
-        backup_perms = RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS.get("open-cluster-management-backup", [])
+        backup_perms = RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS.get(BACKUP_NAMESPACE, [])
         configmaps_perm = next((p for p in backup_perms if p[1] == "configmaps"), None)
 
         assert configmaps_perm is not None
@@ -458,13 +794,21 @@ class TestRBACValidatorRoleAware:
 
     def test_managed_cluster_permissions_exist_for_both_roles(self):
         """Test that managed cluster permissions are defined for both roles."""
-        assert "open-cluster-management-agent" in RBACValidator.OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
-        assert "open-cluster-management-agent" in RBACValidator.VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
+        assert MANAGED_CLUSTER_AGENT_NAMESPACE in RBACValidator.OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
+        assert MANAGED_CLUSTER_AGENT_NAMESPACE in RBACValidator.VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
 
     def test_validator_backup_namespace_has_secrets_get(self):
         """Test that validator backup namespace includes secrets get permission."""
-        backup_perms = RBACValidator.VALIDATOR_HUB_NAMESPACE_PERMISSIONS.get("open-cluster-management-backup", [])
+        backup_perms = RBACValidator.VALIDATOR_HUB_NAMESPACE_PERMISSIONS.get(BACKUP_NAMESPACE, [])
         secrets_perm = next((p for p in backup_perms if p[1] == "secrets"), None)
 
         assert secrets_perm is not None, "Validator should have secrets permission in backup namespace"
         assert "get" in secrets_perm[2], "Validator should have 'get' verb for secrets"
+
+    def test_namespace_permission_maps_cover_centralized_namespaces(self):
+        """RBAC namespace permission maps should align with the shared constants module."""
+        assert BACKUP_NAMESPACE in RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS
+        assert ACM_NAMESPACE in RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS
+        assert OBSERVABILITY_NAMESPACE in RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS
+        assert MCE_NAMESPACE in RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS
+        assert MANAGED_CLUSTER_AGENT_NAMESPACE in RBACValidator.OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS

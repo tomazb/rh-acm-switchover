@@ -21,7 +21,7 @@ docker build -t acm-switchover:latest -f container-bootstrap/Containerfile .
 The container image includes:
 
 - **Python 3.12** - Runtime environment
-- **OpenShift CLI (oc)** - Kubernetes API client (stable-4.14+)
+- **OpenShift CLI (oc)** - Kubernetes API client (stable-4.21)
 - **kubectl** - Kubernetes command-line tool (via oc)
 - **jq** - JSON processor for debugging
 - **curl** - HTTP client for downloads
@@ -446,15 +446,23 @@ podman build --platform linux/amd64,linux/arm64 \
   -t acm-switchover:multi-arch .
 ```
 
-### Customize OC Version
+### Customize OC Stream
 
 ```bash
-# Build with specific OpenShift CLI version
+# Build with a specific OpenShift CLI stream
 podman build \
-  --build-arg OC_VERSION=4.15 \
+  --build-arg OC_VERSION=4.21 \
   -f container-bootstrap/Containerfile \
-  -t acm-switchover:oc415 .
+  -t acm-switchover:oc421 .
 ```
+
+`OC_VERSION` selects the `stable-<version>` OpenShift client stream. By default, the build downloads
+the matching checksum from the same OpenShift mirror stream before extracting the archive. To pin a
+specific archive checksum instead, override `OPENSHIFT_CLIENT_LINUX_AMD64_SHA256` and
+`OPENSHIFT_CLIENT_LINUX_ARM64_SHA256`.
+
+The image also verifies `jq` during the build. Override `JQ_VERSION` only together with the matching
+`JQ_LINUX_AMD64_SHA256` and `JQ_LINUX_ARM64_SHA256` values from the upstream jq checksum file.
 
 ## Best Practices
 

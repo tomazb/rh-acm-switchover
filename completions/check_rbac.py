@@ -14,6 +14,13 @@ _check_rbac_complete() {
             _acm_complete_from_list "$(_acm_get_contexts)"
             return
             ;;
+        --role)
+            _acm_complete_from_list "operator validator"
+            return
+            ;;
+        --managed-cluster)
+            return
+            ;;
     esac
 
     if [[ "$cur" == --context=* ]]; then
@@ -34,9 +41,18 @@ _check_rbac_complete() {
         COMPREPLY=( "${COMPREPLY[@]/#/${prefix}}" )
         return
     fi
+    if [[ "$cur" == --role=* ]]; then
+        local value="${cur#*=}" prefix="--role="
+        COMPREPLY=( $(compgen -W "operator validator" -- "$value") )
+        COMPREPLY=( "${COMPREPLY[@]/#/${prefix}}" )
+        return
+    fi
+    if [[ "$cur" == --managed-cluster=* ]]; then
+        return
+    fi
 
     if [[ "$cur" == -* ]]; then
-        local opts="--context --primary-context --secondary-context --include-decommission --skip-observability --verbose -v --help -h"
+        local opts="--context --primary-context --secondary-context --include-decommission --skip-observability --managed-cluster --role --verbose -v --help -h"
         _acm_complete_from_list "$opts"
         return
     fi

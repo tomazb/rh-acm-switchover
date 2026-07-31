@@ -3,16 +3,19 @@ Common utilities for ACM switchover automation.
 """
 
 import atexit
+import copy
 import functools
 import inspect
 import json
 import logging
 import os
+import re
 import shutil
 import signal
 import stat
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Callable, Dict, Literal, Optional, Set, Tuple, TypeVar
 
 from lib.exceptions import StateLoadError, StateLockError
@@ -31,6 +34,11 @@ T = TypeVar("T")
 # plus a reference count so multiple StateManager instances in the same process
 # can reuse the same OS lock without blocking each other.
 _RUN_LOCK_REGISTRY: Dict[str, Dict[str, Any]] = {}
+_ACM_VERSION_RE = re.compile(r"^\s*(\d+)\.(\d+)(?:\.(\d+))?(?:[-+][A-Za-z0-9][A-Za-z0-9.+-]*)?\s*$")
+
+
+class StateIdentityMismatch(RuntimeError):
+    """Raised when persisted state belongs to different live hub identities."""
 
 
 def dry_run_skip(
@@ -79,7 +87,13 @@ def dry_run_skip(
             for attr_name in dry_run_attr.split("."):
                 obj = getattr(obj, attr_name, None)
                 if obj is None:
-                    break
+                    # Attribute path broken — cannot determine dry-run state.
+                    # Fail closed: silently skipping would report a mutation
+                    # step as done without running it.
+                    raise RuntimeError(
+                        f"dry_run_skip cannot resolve attribute path '{dry_run_attr}' "
+                        f"on {type(root).__name__}; refusing to run or skip implicitly"
+                    )
 
             # Explicitly check for True to avoid truthy object references
             if obj is True:
@@ -108,6 +122,21 @@ class Phase(Enum):
     FINALIZATION = "finalization"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+# Canonical phase names keyed by execution phase — the single source for
+# (a) report-artifact phase labels and (b) resume-start phase labels.
+# Legacy secondary-verify folds into activation.
+CANONICAL_PHASE_NAMES = MappingProxyType(
+    {
+        Phase.PREFLIGHT: "preflight",
+        Phase.PRIMARY_PREP: "primary_prep",
+        Phase.SECONDARY_VERIFY: "activation",
+        Phase.ACTIVATION: "activation",
+        Phase.POST_ACTIVATION: "post_activation",
+        Phase.FINALIZATION: "finalization",
+    }
+)
 
 
 def _utc_timestamp() -> str:
@@ -149,7 +178,10 @@ class StateManager:
                 except ValueError:
                     # signal.signal() raises ValueError when called from non-main thread
                     # This is expected in test environments or when StateManager is used in workers
-                    logging.debug("Cannot register signal handler for %s (not in main thread)", sig)
+                    logging.debug(
+                        "Cannot register signal handler for %s (not in main thread)",
+                        sig,
+                    )
             self.state = self._load_state()
         except Exception:
             self._release_run_lock()
@@ -163,7 +195,10 @@ class StateManager:
         Multiple StateManager instances in the same process reuse the same lock.
         """
         if not fcntl:  # pragma: no cover - platform-specific
-            logging.debug("fcntl unavailable; process-level state lock disabled for %s", self.state_file)
+            logging.debug(
+                "fcntl unavailable; process-level state lock disabled for %s",
+                self.state_file,
+            )
             return
 
         registry_entry = _RUN_LOCK_REGISTRY.get(self._run_lock_path)
@@ -309,6 +344,7 @@ class StateManager:
             "errors": [],
             "last_updated": _utc_timestamp(),
             "contexts": {"primary": None, "secondary": None},
+            "hub_identities": {},
         }
 
     def _ensure_state_dir(self) -> None:
@@ -378,6 +414,10 @@ class StateManager:
     def _do_flush(self, force: bool = False, suppress_errors: bool = False) -> bool:
         """Core flush logic shared by all flush methods.
 
+        Loops until clean because _write_state callers can trigger nested state
+        mutations. A single _do_flush call may perform multiple writes when
+        state becomes dirty again during an active write.
+
         Args:
             force: If True, write even if not dirty. If False, only write when dirty.
             suppress_errors: If True, catch exceptions and print to stderr instead of raising.
@@ -391,20 +431,29 @@ class StateManager:
             return False
 
         self._flushing = True
-        self.state["last_updated"] = _utc_timestamp()
+        performed = False
         try:
-            if suppress_errors:
-                try:
-                    self._write_state(self.state)
-                except Exception as e:
-                    import sys
+            while force or self._dirty:
+                force = False
+                self._dirty = False
+                self.state["last_updated"] = _utc_timestamp()
+                if suppress_errors:
+                    try:
+                        self._write_state(self.state)
+                    except Exception as e:
+                        self._dirty = True
+                        import sys
 
-                    print(f"Error flushing state: {e}", file=sys.stderr)
-                    return False
-            else:
-                self._write_state(self.state)
-            self._dirty = False
-            return True
+                        print(f"Error flushing state: {e}", file=sys.stderr)
+                        return False
+                else:
+                    try:
+                        self._write_state(self.state)
+                    except Exception:
+                        self._dirty = True
+                        raise
+                performed = True
+            return performed
         finally:
             self._flushing = False
 
@@ -421,16 +470,27 @@ class StateManager:
         self.state["current_phase"] = phase.value
         self.flush_state()  # Phase transitions are critical checkpoints
 
-    def capture_runtime_checkpoint(self) -> Dict[str, Optional[str]]:
+    def record_retry_error_baseline(self, phase: Any, count: int) -> None:
+        """Record the error baseline for a resumed retry attempt."""
+        phase_value = phase.value if isinstance(phase, Phase) else str(phase)
+        self._retry_error_baseline = {"phase": phase_value, "count": count}
+
+    def get_retry_error_baseline(self) -> Optional[Dict[str, Any]]:
+        """Return the current retry error baseline, if any."""
+        return dict(self._retry_error_baseline) if self._retry_error_baseline is not None else None
+
+    def capture_runtime_checkpoint(self) -> Dict[str, Any]:
         """Capture the durable state fields that validate-only must preserve."""
         return {
             "current_phase": self.state.get("current_phase", Phase.INIT.value),
+            "errors": copy.deepcopy(self.state.get("errors", [])),
             "last_updated": self.state.get("last_updated"),
         }
 
-    def restore_runtime_checkpoint(self, checkpoint: Dict[str, Optional[str]]) -> None:
+    def restore_runtime_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         """Restore a previously captured runtime checkpoint without touching other state."""
         self.state["current_phase"] = checkpoint.get("current_phase", Phase.INIT.value)
+        self.state["errors"] = copy.deepcopy(checkpoint.get("errors", []))
 
         last_updated = checkpoint.get("last_updated")
         if last_updated is None:
@@ -443,10 +503,37 @@ class StateManager:
         self._dirty = False
         self._write_state(self.state)
 
+    def capture_state_snapshot(self) -> Dict[str, Any]:
+        """Capture the complete durable state for dry-run rollback."""
+        return copy.deepcopy(self.state)
+
+    def restore_state_snapshot(self, snapshot: Dict[str, Any]) -> None:
+        """Restore a complete durable state snapshot without refreshing timestamps."""
+        self.state = copy.deepcopy(snapshot)
+        self._dirty = False
+        self._write_state(self.state)
+
     def mark_step_completed(self, step_name: str) -> None:
-        """Mark a step as completed."""
+        """Mark a step as completed, recording the report phase active at the time.
+
+        The recorded "phase" is a report-artifact name (e.g. "primary_prep"),
+        not a raw Phase value like the "phase" field on error entries.
+        """
         if not self.is_step_completed(step_name):
-            self.state["completed_steps"].append({"name": step_name, "timestamp": _utc_timestamp()})
+            entry = {"name": step_name, "timestamp": _utc_timestamp()}
+            report_phase = CANONICAL_PHASE_NAMES.get(self.get_current_phase())
+            if report_phase:
+                entry["phase"] = report_phase
+            self.state["completed_steps"].append(entry)
+            self._dirty = True
+            self.save_state()
+
+    def clear_step_completed(self, step_name: str) -> None:
+        """Clear a completed step marker so the step can run again."""
+        completed_steps = self.state.get("completed_steps", [])
+        filtered_steps = [step for step in completed_steps if step.get("name") != step_name]
+        if len(filtered_steps) != len(completed_steps):
+            self.state["completed_steps"] = filtered_steps
             self._dirty = True
             self.save_state()
 
@@ -461,7 +548,7 @@ class StateManager:
         completed, executing it if not, and marking it completed afterward.
 
         Usage:
-            with self.state.step("my_step", logger) as should_run:
+            with self.state.step("pause_backup_schedule", logger) as should_run:
                 if should_run:
                     self._do_actual_work()
 
@@ -481,16 +568,20 @@ class StateManager:
         return StepContext(self, step_name, logger)
 
     def set_config(self, key: str, value: Any) -> None:
-        """Store configuration value."""
-        if self.state["config"].get(key) == value:
+        """Store an owned copy of a JSON-native configuration value."""
+        config = self.state["config"]
+        if key in config and config[key] == value:
             return
-        self.state["config"][key] = value
+        config[key] = copy.deepcopy(value)
         self._dirty = True
         self.save_state()
 
     def get_config(self, key: str, default: Any = None) -> Any:
-        """Retrieve configuration value."""
-        return self.state["config"].get(key, default)
+        """Return an isolated copy of a stored value, or the caller-owned default."""
+        config = self.state["config"]
+        if key not in config:
+            return default
+        return copy.deepcopy(config[key])
 
     def add_error(self, error: str, phase: Optional[str] = None) -> None:
         """Record an error."""
@@ -523,7 +614,10 @@ class StateManager:
         try:
             return Phase(phase_str)
         except ValueError:
-            logging.warning("Unknown phase '%s' in last error, cannot determine resume point", phase_str)
+            logging.warning(
+                "Unknown phase '%s' in last error, cannot determine resume point",
+                phase_str,
+            )
             return None
 
     def reset(self) -> None:
@@ -607,6 +701,67 @@ class StateManager:
 
         if state_changed:
             self.flush_state()  # Context changes are critical checkpoints
+
+    def _has_progress(self) -> bool:
+        """Return True when this state has progressed beyond a fresh run."""
+        return (
+            bool(self.state.get("completed_steps"))
+            or bool(self.state.get("errors"))
+            or (self.state.get("current_phase") not in (None, Phase.INIT.value))
+        )
+
+    def ensure_hub_identities(
+        self,
+        identities: Dict[str, Dict[str, Optional[str]]],
+        *,
+        allow_legacy_backfill: bool = False,
+        persist: bool = True,
+    ) -> None:
+        """Ensure stored hub identities match the live cluster identities."""
+        normalized = {
+            role: {
+                "context": (identity or {}).get("context"),
+                "cluster_uid": str((identity or {}).get("cluster_uid") or "").strip(),
+            }
+            for role, identity in (identities or {}).items()
+            if identity is not None
+        }
+        if not normalized:
+            return
+
+        for role, desired in normalized.items():
+            if not desired.get("cluster_uid"):
+                raise StateIdentityMismatch(
+                    f"{role} hub identity is missing a live cluster UID. "
+                    "Refusing to bind or resume state because the target cluster cannot be verified."
+                )
+
+        stored = self.state.get("hub_identities") or {}
+
+        if stored:
+            for role, desired in normalized.items():
+                previous = stored.get(role) or {}
+                previous_uid = previous.get("cluster_uid")
+                desired_uid = desired.get("cluster_uid")
+                if previous_uid and desired_uid and previous_uid != desired_uid:
+                    raise StateIdentityMismatch(
+                        f"{role} hub identity changed for context {desired.get('context')}: "
+                        f"recorded cluster UID {previous_uid}, current cluster UID {desired_uid}. "
+                        "Refusing to resume against a different live cluster. "
+                        "Use --reset-state to start over after manual verification."
+                    )
+
+        if not stored and self._has_progress() and not allow_legacy_backfill:
+            raise StateIdentityMismatch(
+                "State file is missing hub identity data for an in-progress switchover. "
+                "Refusing to resume because context names alone cannot prove the same live clusters. "
+                "Use --reset-state to start over, or --force to bind this legacy state to the current hubs "
+                "after manual verification."
+            )
+
+        if persist and stored != normalized:
+            self.state["hub_identities"] = normalized
+            self.flush_state()
 
     def _flush_on_signal(self, signum: int, frame: Any) -> None:
         """Flush pending state changes on termination signal (signal handler).
@@ -747,18 +902,20 @@ def parse_acm_version(version_string: str) -> Optional[Tuple[int, int, int]]:
     Parse ACM version string to tuple for comparison.
 
     Args:
-        version_string: Version like "2.12.0" or "2.11.3"
+        version_string: Version like "2.12.0", "2.11.3", or "2.14.3-rc1"
 
     Returns:
         Tuple of (major, minor, patch)
     """
-    try:
-        parts = [int(p) for p in version_string.strip().split(".")]
-        while len(parts) < 3:
-            parts.append(0)
-        return (parts[0], parts[1], parts[2])
-    except (ValueError, AttributeError):
+    if not isinstance(version_string, str):
         return None
+
+    match = _ACM_VERSION_RE.match(version_string)
+    if not match:
+        return None
+
+    major, minor, patch = match.groups()
+    return int(major), int(minor), int(patch or 0)
 
 
 def is_acm_version_ge(version: str, compare_to: str) -> bool:

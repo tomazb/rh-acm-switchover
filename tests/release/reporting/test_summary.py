@@ -1,0 +1,179 @@
+from pathlib import Path
+
+from tests.release.reporting.summary import build_summary
+from tests.release.test_release_certification import finalize_release_artifacts
+
+
+def test_summary_passes_only_when_required_gates_pass() -> None:
+    summary = build_summary(
+        release_mode="certification",
+        certification_eligible=True,
+        required_scenarios=[{"scenario_id": "preflight", "status": "passed"}],
+        optional_scenarios=[],
+        runtime_parity={"status": "passed"},
+        artifact_redaction={"status": "passed"},
+        final_baseline={"status": "passed"},
+        recovery={"status": "passed"},
+        mandatory_argocd={"status": "passed"},
+        release_metadata={"status": "passed"},
+    )
+
+    assert summary["status"] == "passed"
+    assert summary["certification_eligible"] is True
+
+
+def test_summary_fails_dirty_or_non_certification_run() -> None:
+    summary = build_summary(
+        release_mode="debug",
+        certification_eligible=False,
+        required_scenarios=[{"scenario_id": "preflight", "status": "passed"}],
+        optional_scenarios=[],
+        runtime_parity={"status": "passed"},
+        artifact_redaction={"status": "passed"},
+        final_baseline={"status": "passed"},
+        recovery={"status": "passed"},
+        mandatory_argocd={"status": "passed"},
+        release_metadata={"status": "passed"},
+    )
+
+    assert summary["status"] == "failed"
+    assert "release mode is not certification" in summary["failure_reasons"]
+
+
+def test_certification_summary_requires_runtime_parity_evidence() -> None:
+    summary = build_summary(
+        release_mode="certification",
+        certification_eligible=True,
+        required_scenarios=[{"scenario_id": "preflight", "status": "passed"}],
+        optional_scenarios=[],
+        runtime_parity={"status": "not_applicable"},
+        artifact_redaction={"status": "passed"},
+        final_baseline={"status": "passed"},
+        recovery={"status": "passed"},
+        mandatory_argocd={"status": "passed"},
+        release_metadata={"status": "passed"},
+    )
+
+    assert summary["status"] == "failed"
+    assert "runtime parity failed" in summary["failure_reasons"]
+
+
+def test_summary_includes_matrix_validation_failures() -> None:
+    summary = build_summary(
+        release_mode="certification",
+        certification_eligible=True,
+        required_scenarios=[{"scenario_id": "preflight", "status": "passed"}],
+        optional_scenarios=[],
+        runtime_parity={"status": "passed"},
+        artifact_redaction={"status": "passed"},
+        final_baseline={"status": "passed"},
+        recovery={"status": "passed"},
+        mandatory_argocd={"status": "passed"},
+        release_metadata={"status": "passed"},
+        matrix_validation={
+            "status": "failed",
+            "reasons": ["mutating scenario sequence requires reset/recovery between scenarios"],
+        },
+    )
+
+    assert summary["status"] == "failed"
+    assert summary["matrix_validation"]["status"] == "failed"
+    assert (
+        "matrix validation failed: mutating scenario sequence requires reset/recovery between scenarios"
+        in summary["failure_reasons"]
+    )
+
+
+def test_summary_defaults_missing_matrix_validation_to_passed() -> None:
+    summary = build_summary(
+        release_mode="certification",
+        certification_eligible=True,
+        required_scenarios=[{"scenario_id": "preflight", "status": "passed"}],
+        optional_scenarios=[],
+        runtime_parity={"status": "passed"},
+        artifact_redaction={"status": "passed"},
+        final_baseline={"status": "passed"},
+        recovery={"status": "passed"},
+        mandatory_argocd={"status": "passed"},
+        release_metadata={"status": "passed"},
+        matrix_validation=None,
+    )
+
+    assert summary["status"] == "passed"
+    assert summary["matrix_validation"] == {"status": "passed", "reasons": []}
+
+
+def test_summary_fails_closed_for_malformed_matrix_validation_payload() -> None:
+    summary = build_summary(
+        release_mode="certification",
+        certification_eligible=True,
+        required_scenarios=[{"scenario_id": "preflight", "status": "passed"}],
+        optional_scenarios=[],
+        runtime_parity={"status": "passed"},
+        artifact_redaction={"status": "passed"},
+        final_baseline={"status": "passed"},
+        recovery={"status": "passed"},
+        mandatory_argocd={"status": "passed"},
+        release_metadata={"status": "passed"},
+        matrix_validation=["bad"],
+    )
+
+    assert summary["status"] == "failed"
+    assert summary["matrix_validation"] == {
+        "status": "failed",
+        "reasons": ["matrix validation payload is malformed"],
+    }
+    assert "matrix validation failed: matrix validation payload is malformed" in summary["failure_reasons"]
+
+
+def test_debug_summary_allows_missing_runtime_parity() -> None:
+    summary = build_summary(
+        release_mode="debug",
+        certification_eligible=False,
+        required_scenarios=[{"scenario_id": "preflight", "status": "passed"}],
+        optional_scenarios=[],
+        runtime_parity={"status": "not_applicable"},
+        artifact_redaction={"status": "passed"},
+        final_baseline={"status": "passed"},
+        recovery={"status": "passed"},
+        mandatory_argocd={"status": "passed"},
+        release_metadata={"status": "passed"},
+    )
+
+    assert "runtime parity failed" not in summary["failure_reasons"]
+
+
+class FakeArtifacts:
+    def __init__(self) -> None:
+        self.writes = {}
+
+    def write_json(self, relative_path, payload):
+        self.writes[relative_path] = payload
+
+    @property
+    def run_dir(self):
+        return Path("/tmp/run")
+
+
+def test_finalize_release_artifacts_writes_summary_and_report() -> None:
+    artifacts = FakeArtifacts()
+
+    finalize_release_artifacts(
+        artifacts=artifacts,
+        manifest={"run_id": "run-1", "profile": {"name": "lab"}},
+        summary_inputs={
+            "release_mode": "certification",
+            "certification_eligible": True,
+            "required_scenarios": [{"scenario_id": "preflight", "status": "passed"}],
+            "optional_scenarios": [],
+            "runtime_parity": {"status": "passed"},
+            "artifact_redaction": {"status": "passed"},
+            "final_baseline": {"status": "passed"},
+            "recovery": {"status": "passed"},
+            "mandatory_argocd": {"status": "passed"},
+            "release_metadata": {"status": "passed"},
+            "matrix_validation": {"status": "passed", "reasons": []},
+        },
+    )
+
+    assert artifacts.writes["summary.json"]["status"] == "passed"

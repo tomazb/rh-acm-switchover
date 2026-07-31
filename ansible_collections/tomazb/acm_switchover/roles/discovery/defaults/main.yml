@@ -1,0 +1,9 @@
+---
+# Bridge script for context enumeration until collection discovery is fully native.
+# scripts/discover-hub.sh remains the supported bridge for kubeconfig context resolution.
+acm_switchover_discovery:
+  bridge_script: scripts/discover-hub.sh
+
+# Input facts for hub classification - callers override these from real discovery.
+acm_switchover_discovery_restore_state: none
+acm_switchover_discovery_managed_clusters: 0

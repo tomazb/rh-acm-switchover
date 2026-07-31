@@ -1,0 +1,181 @@
+---
+- name: Record generic GitOps drift warning
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-gitops-warning",
+            "severity": "warning",
+            "status": "pass",
+            "message": "GitOps marker detection is informational only in the collection",
+            "details": {"skip_gitops_check": acm_switchover_features.skip_gitops_check | default(false)},
+            "recommended_action": "Coordinate with GitOps before mutation if ACM resources are managed declaratively"
+          }
+        ]
+      }}
+  when: not (acm_switchover_features.skip_gitops_check | default(false))
+
+- name: Initialize Argo CD advisory results
+  ansible.builtin.set_fact:
+    _gitops_primary_argocd_acm_apps: []
+    _gitops_secondary_argocd_acm_apps: []
+    _gitops_primary_argocd_discovery_status:
+      status: skipped
+    _gitops_secondary_argocd_discovery_status:
+      status: skipped
+  when: not (acm_switchover_features.skip_gitops_check | default(false))
+
+- name: Discover primary hub ACM-touching Argo CD Applications for advisory output
+  when:
+    - not (acm_switchover_features.skip_gitops_check | default(false))
+    - not (acm_switchover_operation.restore_only | default(false))
+  block:
+    - name: Run primary hub read-only Argo CD discovery
+      ansible.builtin.include_role:
+        name: tomazb.acm_switchover.argocd_manage
+        tasks_from: discover
+      vars:
+        acm_switchover_argocd_mode_override: discover
+        acm_switchover_argocd_advisory: true
+        _argocd_discover_hub: primary
+
+    - name: Capture primary hub Argo CD advisory result
+      ansible.builtin.set_fact:
+        _gitops_primary_argocd_acm_apps: "{{ acm_switchover_argocd_acm_apps | default([]) }}"
+        _gitops_primary_argocd_discovery_status: >-
+          {{ acm_switchover_argocd_discovery_status | default({'status': 'ok'}) }}
+      no_log: true
+
+    - name: Continue after primary hub Argo CD advisory discovery failure
+      ansible.builtin.debug:
+        msg: "[primary] Unable to complete Argo CD check; continuing without raw failure details"
+      when: (_gitops_primary_argocd_discovery_status | default({})).get('status', '') == 'error'
+  rescue:
+    - name: Continue after primary hub Argo CD advisory discovery failure
+      ansible.builtin.debug:
+        msg: "[primary] Unable to complete Argo CD check; continuing without raw failure details"
+
+    - name: Clear primary hub Argo CD advisory apps after discovery failure
+      ansible.builtin.set_fact:
+        _gitops_primary_argocd_acm_apps: []
+        _gitops_primary_argocd_discovery_status:
+          status: error
+          category: included-role
+
+- name: Discover secondary hub ACM-touching Argo CD Applications for advisory output
+  when: not (acm_switchover_features.skip_gitops_check | default(false))
+  block:
+    - name: Run secondary hub read-only Argo CD discovery
+      ansible.builtin.include_role:
+        name: tomazb.acm_switchover.argocd_manage
+        tasks_from: discover
+      vars:
+        acm_switchover_argocd_mode_override: discover
+        acm_switchover_argocd_advisory: true
+        _argocd_discover_hub: secondary
+
+    - name: Capture secondary hub Argo CD advisory result
+      ansible.builtin.set_fact:
+        _gitops_secondary_argocd_acm_apps: "{{ acm_switchover_argocd_acm_apps | default([]) }}"
+        _gitops_secondary_argocd_discovery_status: >-
+          {{ acm_switchover_argocd_discovery_status | default({'status': 'ok'}) }}
+      no_log: true
+
+    - name: Continue after secondary hub Argo CD advisory discovery failure
+      ansible.builtin.debug:
+        msg: "[secondary] Unable to complete Argo CD check; continuing without raw failure details"
+      when: (_gitops_secondary_argocd_discovery_status | default({})).get('status', '') == 'error'
+  rescue:
+    - name: Continue after secondary hub Argo CD advisory discovery failure
+      ansible.builtin.debug:
+        msg: "[secondary] Unable to complete Argo CD check; continuing without raw failure details"
+
+    - name: Clear secondary hub Argo CD advisory apps after discovery failure
+      ansible.builtin.set_fact:
+        _gitops_secondary_argocd_acm_apps: []
+        _gitops_secondary_argocd_discovery_status:
+          status: error
+          category: included-role
+
+- name: Report primary hub with no ACM-touching Argo CD Applications
+  ansible.builtin.debug:
+    msg: "[primary] No ACM-touching Argo CD Applications detected"
+  when:
+    - not (acm_switchover_features.skip_gitops_check | default(false))
+    - not (acm_switchover_operation.restore_only | default(false))
+    - (_gitops_primary_argocd_discovery_status | default({})).get('status', '') != 'error'
+    - (_gitops_primary_argocd_acm_apps | default([]) | length) == 0
+
+- name: Report secondary hub with no ACM-touching Argo CD Applications
+  ansible.builtin.debug:
+    msg: "[secondary] No ACM-touching Argo CD Applications detected"
+  when:
+    - not (acm_switchover_features.skip_gitops_check | default(false))
+    - (_gitops_secondary_argocd_discovery_status | default({})).get('status', '') != 'error'
+    - (_gitops_secondary_argocd_acm_apps | default([]) | length) == 0
+
+- name: Report primary hub ACM-touching Argo CD Application count
+  ansible.builtin.debug:
+    msg: >-
+      [primary] ACM resources detected in
+      {{ _gitops_primary_argocd_acm_apps | default([]) | length }}
+      Argo CD Application(s); pause/scope before switchover to avoid drift.
+  when:
+    - not (acm_switchover_features.skip_gitops_check | default(false))
+    - (_gitops_primary_argocd_discovery_status | default({})).get('status', '') != 'error'
+    - (_gitops_primary_argocd_acm_apps | default([]) | length) > 0
+
+- name: Report secondary hub ACM-touching Argo CD Application count
+  ansible.builtin.debug:
+    msg: >-
+      [secondary] ACM resources detected in
+      {{ _gitops_secondary_argocd_acm_apps | default([]) | length }}
+      Argo CD Application(s); pause/scope before switchover to avoid drift.
+  when:
+    - not (acm_switchover_features.skip_gitops_check | default(false))
+    - (_gitops_secondary_argocd_discovery_status | default({})).get('status', '') != 'error'
+    - (_gitops_secondary_argocd_acm_apps | default([]) | length) > 0
+
+- name: Report restore-only Argo CD advisory recommendation
+  ansible.builtin.debug:
+    msg: >-
+      Argo CD advisory:
+      {{
+        (_gitops_primary_argocd_acm_apps | default([]) | length)
+        + (_gitops_secondary_argocd_acm_apps | default([]) | length)
+      }}
+      ACM-touching Application(s) with auto-sync detected. Use argocd.manage=true
+      to pause auto-sync on the secondary hub before restore. Without pausing,
+      Argo CD may revert restored resources.
+  when:
+    - not (acm_switchover_features.skip_gitops_check | default(false))
+    - not (acm_switchover_features.argocd.manage | default(false))
+    - acm_switchover_operation.restore_only | default(false)
+    - >-
+      (
+        (_gitops_primary_argocd_acm_apps | default([]) | length)
+        + (_gitops_secondary_argocd_acm_apps | default([]) | length)
+      ) > 0
+
+- name: Report switchover Argo CD advisory recommendation
+  ansible.builtin.debug:
+    msg: >-
+      Argo CD advisory:
+      {{
+        (_gitops_primary_argocd_acm_apps | default([]) | length)
+        + (_gitops_secondary_argocd_acm_apps | default([]) | length)
+      }}
+      ACM-touching Application(s) with auto-sync detected. Consider
+      argocd.manage=true to pause auto-sync during switchover. Without pausing,
+      Argo CD may revert switchover changes.
+  when:
+    - not (acm_switchover_features.skip_gitops_check | default(false))
+    - not (acm_switchover_features.argocd.manage | default(false))
+    - not (acm_switchover_operation.restore_only | default(false))
+    - >-
+      (
+        (_gitops_primary_argocd_acm_apps | default([]) | length)
+        + (_gitops_secondary_argocd_acm_apps | default([]) | length)
+      ) > 0

@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitops-pause-required-before-switchover-scenario
+  namespace: open-cluster-management-backup
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/gitops-mode: hostile-pause-required
+data:
+  mode: hostile-pause-required
+  acm_ownership: present
+  required_operator_action: pause-gitops-before-switchover

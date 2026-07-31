@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import modules.backup_schedule as backup_module
 from lib.constants import BACKUP_NAMESPACE
+from lib.exceptions import SwitchoverError
 
 BackupScheduleManager = backup_module.BackupScheduleManager
 
@@ -68,6 +69,16 @@ class TestBackupScheduleManager:
         # Should not patch if paused field doesn't exist (default enabled)
         mock_kube_client.patch_custom_resource.assert_not_called()
 
+    def test_explicit_null_paused_field_is_treated_as_enabled(self, schedule_manager, mock_kube_client):
+        """Treat spec.paused=null the same as the collection: enabled unless literally true."""
+        mock_kube_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": None}}
+        ]
+
+        schedule_manager.ensure_enabled("2.12.0")
+
+        mock_kube_client.patch_custom_resource.assert_not_called()
+
     def test_unpause_schedule_acm_212_and_above(self, schedule_manager, mock_kube_client):
         """Test unpausing schedule for ACM 2.12.0+."""
         mock_kube_client.list_custom_resources.return_value = [
@@ -85,6 +96,19 @@ class TestBackupScheduleManager:
             patch={"spec": {"paused": False}},
             namespace=BACKUP_NAMESPACE,
         )
+
+    def test_multiple_schedules_fail_fast(self, schedule_manager, mock_kube_client):
+        """Finalization must not choose an arbitrary BackupSchedule when multiple exist."""
+        mock_kube_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-a"}, "spec": {"paused": False}},
+            {"metadata": {"name": "schedule-b"}, "spec": {"paused": True}},
+        ]
+
+        with pytest.raises(SwitchoverError, match="Multiple BackupSchedules"):
+            schedule_manager.ensure_enabled("2.12.0")
+
+        mock_kube_client.patch_custom_resource.assert_not_called()
+        mock_kube_client.create_custom_resource.assert_not_called()
 
     def test_unpause_schedule_acm_211(self, schedule_manager, mock_kube_client):
         """Test handling paused schedule for ACM < 2.12.0."""
@@ -128,6 +152,8 @@ class TestBackupScheduleManager:
             ("2.12.0", True),
             ("2.12.5", True),
             ("2.13.0", True),
+            ("2.14.3-rc1", True),
+            ("2.14.3+build", True),
             ("2.11.5", False),
             ("2.10.0", False),
         ],
@@ -145,18 +171,31 @@ class TestBackupScheduleManager:
         else:
             mock_kube_client.patch_custom_resource.assert_not_called()
 
-    def test_multiple_schedules_uses_first(self, schedule_manager, mock_kube_client):
-        """Test that when multiple schedules exist, first one is used."""
+    @pytest.mark.parametrize("acm_version", ["not-a-version", "2"])
+    def test_version_based_pause_handling_fails_closed_for_unparseable_version(
+        self, schedule_manager, mock_kube_client, acm_version
+    ):
+        """Unparseable ACM versions must fail before planning BackupSchedule changes."""
+        mock_kube_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}
+        ]
+
+        with pytest.raises(SwitchoverError, match="Invalid ACM version"):
+            schedule_manager.ensure_enabled(acm_version)
+
+        mock_kube_client.patch_custom_resource.assert_not_called()
+
+    def test_multiple_schedules_fail_without_patching(self, schedule_manager, mock_kube_client):
+        """Multiple schedules are ambiguous and must fail without patching either one."""
         mock_kube_client.list_custom_resources.return_value = [
             {"metadata": {"name": "schedule-1"}, "spec": {"paused": True}},
             {"metadata": {"name": "schedule-2"}, "spec": {"paused": False}},
         ]
 
-        schedule_manager.ensure_enabled("2.12.0")
+        with pytest.raises(SwitchoverError, match="Multiple BackupSchedules"):
+            schedule_manager.ensure_enabled("2.12.0")
 
-        # Should patch the first schedule
-        call_args = mock_kube_client.patch_custom_resource.call_args
-        assert call_args[1]["name"] == "schedule-1"
+        mock_kube_client.patch_custom_resource.assert_not_called()
 
 
 @pytest.mark.integration

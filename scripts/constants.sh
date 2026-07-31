@@ -12,8 +12,8 @@
 # - MAJOR: Breaking changes to script behavior or output format
 # - MINOR: New features, new checks, significant improvements
 # - PATCH: Bug fixes, minor improvements
-export SCRIPT_VERSION="1.6.3"
-export SCRIPT_VERSION_DATE="2026-04-07"
+export SCRIPT_VERSION="1.7.10"
+export SCRIPT_VERSION_DATE="2026-05-12"
 
 # Namespaces
 export ACM_NAMESPACE="open-cluster-management"
@@ -79,6 +79,7 @@ export AUTO_IMPORT_STRATEGY_DOC_URL="https://docs.redhat.com/en/documentation/re
 export SWITCHOVER_NAMESPACE="acm-switchover"
 export OPERATOR_SA="acm-switchover-operator"
 export VALIDATOR_SA="acm-switchover-validator"
+export DEFAULT_TOKEN_DURATION="24h"
 
 # Managed Cluster Constants
 # Used when generating kubeconfigs for managed clusters (--managed-cluster flag)

@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "phase": "post_activation",
+  "completed_phases": [
+    "preflight",
+    "primary_prep",
+    "activation"
+  ],
+  "operational_data": {},
+  "errors": [
+    {
+      "phase": "post_activation",
+      "error": "Task failed: Action failed: Unknown error."
+    }
+  ],
+  "report_refs": [
+    {
+      "phase": "preflight",
+      "path": "artifacts/preflight-report.json",
+      "kind": "json-report"
+    }
+  ],
+  "created_at": "2026-04-13T17:56:05.618941+00:00",
+  "updated_at": "2026-04-13T18:07:12.784375+00:00",
+  "phase_status": "fail"
+}

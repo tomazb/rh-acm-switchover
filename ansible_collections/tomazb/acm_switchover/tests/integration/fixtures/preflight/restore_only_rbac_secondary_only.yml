@@ -1,0 +1,47 @@
+---
+acm_switchover_hubs:
+  secondary:
+    context: secondary-hub
+    kubeconfig: ./kubeconfigs/secondary
+
+acm_switchover_operation:
+  restore_only: true
+  method: full
+  activation_method: patch
+  old_hub_action: none
+
+acm_switchover_features:
+  skip_gitops_check: true
+  skip_observability_checks: true
+  argocd:
+    manage: false
+
+acm_switchover_execution:
+  mode: validate
+  report_dir: ./artifacts
+  checkpoint:
+    path: .state/preflight.json
+
+acm_secondary_mch_info:
+  resources:
+    - status:
+        currentVersion: 2.14.2
+
+acm_secondary_namespace_info:
+  resources:
+    - metadata:
+        name: open-cluster-management
+    - metadata:
+        name: open-cluster-management-backup
+    - metadata:
+        name: open-cluster-management-observability
+
+acm_secondary_bsl_info:
+  resources:
+    - metadata:
+        name: acm-bsl
+      status:
+        phase: Available
+
+acm_secondary_restore_info:
+  resources: []

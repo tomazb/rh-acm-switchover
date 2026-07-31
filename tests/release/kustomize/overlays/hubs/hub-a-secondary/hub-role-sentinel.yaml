@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hub-a-secondary-role-sentinel
+  namespace: acm-lab-hub
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/physical-hub: hub-a
+    acm-switchover.redhat-lab/logical-role: secondary
+data:
+  physical_hub: hub-a
+  logical_role: secondary
+  identity_boundary: label-only

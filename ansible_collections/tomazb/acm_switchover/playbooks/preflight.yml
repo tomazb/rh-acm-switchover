@@ -1,0 +1,11 @@
+---
+- name: ACM Hub Switchover - Preflight
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  roles:
+    - role: tomazb.acm_switchover.preflight
+      tags:
+        - preflight
+        - validate

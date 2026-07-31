@@ -32,36 +32,62 @@ Choose the deployment method that best fits your environment:
 
 ## Quick Start
 
-### Automated Setup (Recommended)
+### Ansible Collection Bootstrap (Recommended)
 
-The easiest way to deploy RBAC and generate kubeconfigs is using the bootstrap script:
+The recommended operator path is the collection RBAC bootstrap playbook. It
+applies the same least-privilege manifest set as `deploy/rbac/`, can generate a
+service-account kubeconfig, and can validate the applied permissions through the
+collection RBAC validator.
 
 ```bash
 # Clone repository
 git clone https://github.com/tomazb/rh-acm-switchover.git
 cd rh-acm-switchover
 
-# Setup RBAC on a hub with your admin kubeconfig
+# Bootstrap operator RBAC on a hub with an admin kubeconfig
+ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/rbac_bootstrap.yml \
+  -i ansible_collections/tomazb/acm_switchover/examples/inventory.yml \
+  -e '{"acm_switchover_hubs":{"primary":{"kubeconfig":"/home/admin/.kube/admin.yaml","context":"primary-hub"}}}' \
+  -e '{"acm_switchover_execution":{"mode":"execute"}}' \
+  -e '{"acm_switchover_rbac_bootstrap":{"role":"operator","generate_kubeconfigs":true,"validate_permissions":true,"output_dir":"./kubeconfigs"}}'
+
+# The playbook will:
+# 1. Deploy selected RBAC resources (namespace, SA, roles, bindings)
+# 2. Generate role-specific kubeconfig files with unique user names
+# 3. Validate selected role permissions with the collection RBAC validator
+```
+
+The collection kubeconfig generator sanitizes context names containing `/` or
+`:` for safe output filenames while using the original value for all cluster API
+operations. For example, context `admin/api-prod.example.com:6443` generates a
+file such as `kubeconfigs/admin_api-prod.example.com_6443-operator.yaml`.
+Use an absolute kubeconfig path in JSON extra-vars; shell shortcuts such as `~`
+are not expanded inside quoted JSON values.
+
+Set `acm_switchover_rbac_bootstrap.role` to `operator`, `validator`, or `both`.
+The `both` profile applies both role-specific manifest sets and generates both
+`<context>-operator.yaml` and `<context>-validator.yaml` when kubeconfig
+generation is enabled. The baseline operator role includes the
+`MultiClusterObservability` delete permission used by normal old-hub
+finalization when observability is present; it does not include `ManagedCluster`
+or `MultiClusterHub` delete permissions for decommission. Set
+`acm_switchover_rbac_bootstrap.include_decommission=true` only for service
+accounts that must run old-hub teardown; it is valid with `role: operator` or
+`role: both`.
+
+### Deprecated Bash Bootstrap
+
+The legacy `scripts/setup-rbac.sh` wrapper remains for Python CLI compatibility,
+but active operator guidance should prefer `playbooks/rbac_bootstrap.yml`.
+
+```bash
 ./scripts/setup-rbac.sh \
   --admin-kubeconfig ~/.kube/admin.yaml \
   --context primary-hub \
   --role operator
-
-# The script will:
-# 1. Deploy all RBAC resources (namespace, SA, roles, bindings)
-# 2. Generate a kubeconfig with unique user name
-# 3. Validate permissions with check_rbac.py
-
-# OpenShift oc-login context names containing '/' or ':' are fully supported.
-# The script sanitizes them for safe output filenames while using the original
-# value for all cluster API operations.
-# Example: --context "admin/api-prod.example.com:6443"
-#   generates: kubeconfigs/admin_api-prod.example.com_6443-operator.yaml
 ```
 
-This bootstrap path deploys the baseline operator role only.
-
-For multi-hub setup:
+For legacy multi-hub script setup:
 
 ```bash
 # Setup both hubs
@@ -175,12 +201,19 @@ kubectl apply -f deploy/rbac/role.yaml
 kubectl apply -f deploy/rbac/rolebinding.yaml
 ```
 
-If the operator service account also needs old-hub teardown permissions, apply the optional decommission extension too:
+If the operator service account also needs old-hub teardown permissions for `ManagedCluster` and `MultiClusterHub` removal, apply the optional decommission extension too:
 
 ```bash
 kubectl apply -f deploy/rbac/extensions/decommission/clusterrole.yaml
 kubectl apply -f deploy/rbac/extensions/decommission/clusterrolebinding.yaml
 ```
+
+The baseline namespace Roles include only the `open-cluster-management`
+namespaced `multiclusterhubs` list rule. The baseline ClusterRole includes
+`delete` on `multiclusterobservabilities` for normal finalization cleanup, and
+the optional extension also carries the Hive `clusterdeployments` read used by
+the decommission `preserveOnDelete` safety gate as `list` plus the cluster-scoped delete
+permissions needed to complete decommission.
 
 #### Step 4: Verify
 
@@ -317,6 +350,8 @@ kubectl get policy policy-acm-switchover-rbac \
 
 For detailed ACM Policy usage, see [deploy/acm-policies/README.md](../../deploy/acm-policies/README.md).
 
+The ACM Policy manifest embeds the same baseline least-privilege resources as `deploy/rbac/`. It does not grant the optional cluster-scoped decommission extension; apply the extension separately when the same operator service account must run old-hub teardown.
+
 ## Validation
 
 ### Check RBAC Permissions
@@ -339,9 +374,11 @@ python check_rbac.py \
   --secondary-context secondary-hub \
   --role operator
 
-# Include decommission permissions (requires the optional decommission RBAC extension)
-# Note: --include-decommission is only valid with --role operator.
-# Combining it with --role validator is rejected with an explicit error.
+# Include decommission permissions for ManagedCluster and MultiClusterHub teardown
+# (requires the optional decommission RBAC extension)
+# Note: check_rbac.py validates concrete roles, so --include-decommission is only
+# valid with --role operator here. During setup/bootstrap, role=both applies and
+# validates the operator decommission extension plus the validator profile.
 python check_rbac.py --include-decommission --role operator
 ```
 
@@ -380,15 +417,15 @@ kubectl auth can-i --list \
 ### Generate Service Account Token
 
 ```bash
-# Create long-lived token (48 hours - recommended default)
+# Create short-lived token (24 hours - recommended default)
 kubectl create token acm-switchover-operator \
   -n acm-switchover \
-  --duration=48h
+  --duration=24h
 
 # Store in variable
 SA_TOKEN=$(kubectl create token acm-switchover-operator \
   -n acm-switchover \
-  --duration=48h)
+  --duration=24h)
 ```
 
 ### Generate kubeconfig for Service Account
@@ -427,7 +464,7 @@ kubectl --kubeconfig=/tmp/operator-kubeconfig.yaml get managedclusters
 | `--kubeconfig <path>` | Kubeconfig to read cluster metadata and token from | Current kubeconfig |
 | `--context <ctx>` | Kubernetes context to use | Current context |
 | `--user <name>` | Custom user name in kubeconfig | `<context>-<sa-name>` |
-| `--token-duration <dur>` | Token validity duration | `48h` |
+| `--token-duration <dur>` | Token validity duration | `24h` |
 
 > **Tip**: Always use `--user` with unique names when generating kubeconfigs for
 > multiple clusters to prevent credential collisions when merging.
@@ -449,7 +486,7 @@ Use the `generate-merged-kubeconfig.sh` script for easy multi-hub kubeconfig cre
   --token-duration 72h \
   hub1:operator,hub2:operator
 
-# Include managed clusters for klusterlet validation
+# Include managed clusters for managed-cluster RBAC and klusterlet validation
 ./scripts/generate-merged-kubeconfig.sh \
   --output ~/full-kubeconfig.yaml \
   hub1:operator,hub2:operator,managed1:operator
@@ -461,7 +498,7 @@ Use the `generate-merged-kubeconfig.sh` script for easy multi-hub kubeconfig cre
 |--------|-------------|---------|
 | `--admin-kubeconfig <path>` | Admin kubeconfig for token generation | Current kubeconfig |
 | `--output <file>` | Output merged kubeconfig file | `./merged-kubeconfig.yaml` |
-| `--token-duration <dur>` | Token validity duration | `48h` |
+| `--token-duration <dur>` | Token validity duration | `24h` |
 | `--namespace <ns>` | Namespace where SAs exist | `acm-switchover` |
 
 #### Manual Merging (Alternative)
@@ -504,7 +541,9 @@ python acm_switchover.py \
 
 ### setup-rbac.sh
 
-Automated RBAC deployment and kubeconfig generation.
+Deprecated Bash wrapper for RBAC deployment and kubeconfig generation. Prefer
+the collection `playbooks/rbac_bootstrap.yml` entrypoint for new operator
+automation.
 
 ```bash
 ./scripts/setup-rbac.sh --admin-kubeconfig <path> --context <context> [OPTIONS]
@@ -516,13 +555,13 @@ Automated RBAC deployment and kubeconfig generation.
 | `--context <context>` | **Required.** Kubernetes context to deploy RBAC to | - |
 | `--role <role>` | Role to deploy: `operator`, `validator`, `both` | `both` |
 | `--include-decommission` | Also deploy and validate the opt-in decommission RBAC extension (operator or both only) | - |
-| `--token-duration <dur>` | Token validity duration | `48h` |
+| `--token-duration <dur>` | Token validity duration | `24h` |
 | `--output-dir <dir>` | Output directory for kubeconfigs | `./kubeconfigs` |
 | `--skip-kubeconfig` | Skip kubeconfig generation | - |
 | `--skip-validation` | Skip RBAC validation after deployment | - |
 | `--dry-run` | Show what would be deployed without changes | - |
 
-**Example - Full setup for production:**
+**Legacy example - Bash wrapper with decommission extension:**
 
 ```bash
 ./scripts/setup-rbac.sh \
@@ -548,7 +587,7 @@ Generate and merge kubeconfigs for multiple clusters.
 |--------|-------------|---------|
 | `--admin-kubeconfig <path>` | Admin kubeconfig for token generation | Current kubeconfig |
 | `--output <file>` | Output merged kubeconfig file | `./merged-kubeconfig.yaml` |
-| `--token-duration <dur>` | Token validity duration | `48h` |
+| `--token-duration <dur>` | Token validity duration | `24h` |
 | `--namespace <ns>` | Namespace where SAs exist | `acm-switchover` |
 | `--managed-cluster` | Flag for managed cluster contexts | - |
 
@@ -557,7 +596,7 @@ Generate and merge kubeconfigs for multiple clusters.
 ```bash
 ./scripts/generate-merged-kubeconfig.sh \
   --output ~/switchover.yaml \
-  --token-duration 48h \
+  --token-duration 24h \
   hub1:operator,hub2:operator,hub3:validator
 ```
 

@@ -1,0 +1,18 @@
+---
+- name: Exercise the complete scoped Argo CD role path
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Run scoped Argo CD management
+      ansible.builtin.include_role:
+        name: tomazb.acm_switchover.argocd_manage
+      vars:
+        _argocd_discover_hub: primary
+
+    - name: Publish sanitized scoped discovery outcome
+      ansible.builtin.debug:
+        msg: >-
+          DISCOVERY_STATUS={{
+            acm_switchover_argocd_discovery_status.status | default('missing')
+          }}

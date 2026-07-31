@@ -1,0 +1,139 @@
+---
+- name: Derive requested Argo CD RBAC mode
+  ansible.builtin.set_fact:
+    _rbac_requested_argocd_mode: >-
+      {{
+        'none'
+        if acm_switchover_features.skip_gitops_check | default(false)
+        else (
+          'manage'
+          if acm_switchover_features.argocd.manage | default(false)
+          else 'check'
+        )
+      }}
+
+- name: Determine primary old-hub finalization RBAC requirement
+  ansible.builtin.set_fact:
+    _rbac_include_old_hub_finalization_primary: >-
+      {{
+        (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
+        and not (acm_switchover_features.skip_observability_checks | default(false) | bool)
+        and 'open-cluster-management-observability' in (
+          acm_primary_namespace_names
+          | default((acm_primary_namespace_info.resources | default([])) | map(attribute='metadata.name') | list)
+        )
+      }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Determine Observability RBAC skip state
+  ansible.builtin.set_fact:
+    _rbac_skip_observability: >-
+      {{
+        (acm_switchover_features.skip_observability_checks | default(false) | bool)
+        or (
+          not (acm_switchover_primary_has_observability | default(false) | bool)
+          and not (acm_switchover_secondary_has_observability | default(false) | bool)
+        )
+      }}
+
+- name: Build hub RBAC validation table
+  ansible.builtin.set_fact:
+    _rbac_hub_validations:
+      # Asymmetries are explicit data, mirroring Python H1's hub_validations
+      # table in lib/rbac_validator.py:
+      # - the primary hub is skipped entirely in restore-only mode;
+      # - decommission/old-hub-finalization checks apply to the primary hub only.
+      - hub: primary
+        enabled: "{{ not (acm_switchover_operation.restore_only | default(false)) }}"
+        kubeconfig: >-
+          {{
+            ''
+            if (acm_switchover_operation.restore_only | default(false))
+            else acm_switchover_hubs.primary.kubeconfig
+          }}
+        context: >-
+          {{
+            ''
+            if (acm_switchover_operation.restore_only | default(false))
+            else acm_switchover_hubs.primary.context
+          }}
+        include_decommission: "{{ acm_switchover_operation.old_hub_action | default('secondary') == 'decommission' }}"
+        include_old_hub_finalization: "{{ _rbac_include_old_hub_finalization_primary | default(false) }}"
+      - hub: secondary
+        enabled: true
+        kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+        context: "{{ acm_switchover_hubs.secondary.context }}"
+        include_decommission: false  # secondary hub never runs decommission
+        include_old_hub_finalization: false
+
+- name: Validate RBAC permissions per hub
+  ansible.builtin.include_tasks: validate_rbac_hub.yml
+  loop: "{{ _rbac_hub_validations }}"
+  loop_control:
+    loop_var: rbac_hub
+    label: "{{ rbac_hub.hub }}"
+  when: rbac_hub.enabled | bool
+
+- name: Initialize denied permissions for managed clusters
+  ansible.builtin.set_fact:
+    _rbac_denied_permissions_managed_clusters: []
+
+- name: Select managed clusters with kubeconfigs for RBAC validation
+  ansible.builtin.set_fact:
+    _rbac_managed_cluster_targets: >-
+      {%- set targets = [] -%}
+      {%- for target in (acm_switchover_managed_clusters | default({}, true) | dict2items) -%}
+        {%- if (target.value.kubeconfig | default('', true) | length) > 0 -%}
+          {%- set _ = targets.append(target) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ targets }}
+
+- name: Validate configured managed cluster RBAC permissions
+  ansible.builtin.include_tasks: validate_managed_cluster_rbac.yml
+  loop: "{{ _rbac_managed_cluster_targets | default([]) }}"
+  loop_control:
+    loop_var: managed_cluster_target
+    label: "{{ managed_cluster_target.key }}"
+
+- name: Summarize RBAC validation results for managed clusters
+  tomazb.acm_switchover.acm_rbac_validate:
+    hub: managed-clusters
+    scope: managed_cluster
+    denied_permissions: "{{ _rbac_denied_permissions_managed_clusters | default([]) }}"
+    result_id: preflight-rbac-managed-clusters
+    failure_message: missing required RBAC permissions on configured managed clusters
+    success_message: all required RBAC permissions validated on configured managed clusters
+    recommended_action: Grant the documented managed-cluster RBAC role before running preflight again
+  register: acm_managed_cluster_rbac_validation
+  when: (_rbac_managed_cluster_targets | default([]) | length) > 0
+
+- name: Merge RBAC results into preflight accumulator
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        (acm_switchover_validation_results | default([]))
+        + (acm_primary_rbac_validation.results | default([]))
+        + acm_secondary_rbac_validation.results
+        + (acm_managed_cluster_rbac_validation.results | default([]))
+      }}
+    acm_switchover_preflight_summary:
+      passed: >-
+        {{
+          (acm_switchover_preflight_summary.passed | default(true))
+          and (acm_primary_rbac_validation.passed | default(true))
+          and acm_secondary_rbac_validation.passed
+          and (acm_managed_cluster_rbac_validation.passed | default(true))
+        }}
+      critical_failures: >-
+        {{
+          (acm_switchover_preflight_summary.critical_failures | default(0) | int)
+          + (acm_primary_rbac_validation.critical_failures | default(0) | int)
+          + (acm_secondary_rbac_validation.critical_failures | default(0) | int)
+          + (acm_managed_cluster_rbac_validation.critical_failures | default(0) | int)
+        }}
+      warning_failures: "{{ acm_switchover_preflight_summary.warning_failures | default(0) | int }}"
+
+- name: Mark RBAC validation collection complete
+  ansible.builtin.set_fact:
+    _acm_preflight_rbac_validation_completed: true

@@ -1,4 +1,5 @@
 {{- if and .Values.rbac.enabled .Values.clusterRole.create -}}
+{{- include "acm-switchover-rbac.validateValidatorCustomRules" . -}}
 ---
 # ClusterRole for ACM Switchover Operator
 apiVersion: rbac.authorization.k8s.io/v1
@@ -13,7 +14,7 @@ rules:
   # Core API - Namespace validation
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["get"]
+    verbs: ["get", "list"]
   
   # Core API - Nodes (for cluster health validation per runbook)
   - apiGroups: [""]
@@ -45,10 +46,10 @@ rules:
     resources: ["multiclusterhubs"]
     verbs: ["get", "list"]
   
-  # Observability - Auto-detection
+  # Observability - Auto-detection and old-hub finalization cleanup
   - apiGroups: ["observability.open-cluster-management.io"]
     resources: ["multiclusterobservabilities"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "delete"]
 
   # Argo CD - Detection and pause/resume (auto-detected, --argocd-manage)
   - apiGroups: ["argoproj.io"]
@@ -77,6 +78,9 @@ metadata:
     app.kubernetes.io/component: decommission
     app.kubernetes.io/role: operator
 rules:
+  - apiGroups: ["hive.openshift.io"]
+    resources: ["clusterdeployments"]
+    verbs: ["list"]
   - apiGroups: ["cluster.open-cluster-management.io"]
     resources: ["managedclusters"]
     verbs: ["delete"]
@@ -102,7 +106,7 @@ rules:
   # Core API - Namespace validation
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["get"]
+    verbs: ["get", "list"]
   
   # Core API - Nodes (for cluster health validation per runbook)
   - apiGroups: [""]

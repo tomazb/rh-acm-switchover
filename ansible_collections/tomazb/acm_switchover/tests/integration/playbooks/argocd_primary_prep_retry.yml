@@ -1,0 +1,17 @@
+---
+- name: Exercise primary-prep Argo CD checkpoint retry
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Run primary-prep role
+      ansible.builtin.include_role:
+        name: tomazb.acm_switchover.primary_prep
+
+    - name: Report sanitized primary-prep Argo CD summary
+      ansible.builtin.debug:
+        msg: >-
+          PRIMARY_PREP_PAUSED={{ (acm_switchover_argocd_summary | default({})).get('paused', 0) | int }}
+          PRIMARY_NAMESPACES={{
+            (acm_switchover_argocd_discovery_namespaces | default({})).get('primary', []) | length
+          }}

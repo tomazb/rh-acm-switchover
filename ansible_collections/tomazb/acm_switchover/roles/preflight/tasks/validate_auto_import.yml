@@ -1,0 +1,153 @@
+---
+- name: Determine auto-import support from discovered ACM versions
+  ansible.builtin.set_fact:
+    acm_primary_auto_import_supported: "{{ (acm_primary_version | default('0.0.0', true)) is version('2.14.0', '>=') }}"
+    acm_secondary_auto_import_supported: "{{ (acm_secondary_version | default('0.0.0', true)) is version('2.14.0', '>=') }}"
+
+- name: Read primary auto-import strategy ConfigMap
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    namespace: multicluster-engine
+    name: import-controller-config
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: acm_primary_import_controller_config
+  failed_when: false
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - acm_primary_auto_import_supported | bool
+
+- name: Read secondary auto-import strategy ConfigMap
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    namespace: multicluster-engine
+    name: import-controller-config
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: acm_secondary_import_controller_config
+  failed_when: false
+  when: acm_secondary_auto_import_supported | bool
+
+- name: Read secondary ManagedClusters for auto-import advisory
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1
+    kind: ManagedCluster
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: acm_secondary_auto_import_managed_clusters
+  failed_when: false
+  when: acm_secondary_auto_import_supported | bool
+
+- name: Normalize auto-import preflight facts
+  ansible.builtin.set_fact:
+    acm_primary_auto_import_strategy: >-
+      {{
+        (
+          ((acm_primary_import_controller_config | default({})).get('resources', []) | first | default({}))
+          .get('data', {})
+          .get('autoImportStrategy', '')
+        ) or 'default'
+      }}
+    acm_secondary_auto_import_strategy: >-
+      {{
+        (
+          ((acm_secondary_import_controller_config | default({})).get('resources', []) | first | default({}))
+          .get('data', {})
+          .get('autoImportStrategy', '')
+        ) or 'default'
+      }}
+    acm_secondary_non_local_cluster_names: >-
+      {{
+        ((acm_secondary_auto_import_managed_clusters | default({})).get('resources', []))
+        | map(attribute='metadata.name')
+        | reject('equalto', 'local-cluster')
+        | list
+      }}
+
+- name: Record primary auto-import strategy advisory
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-auto-import-primary",
+            "severity": "warning",
+            "status": "pass"
+              if (
+                not (acm_primary_auto_import_supported | bool)
+                or acm_primary_auto_import_strategy in ["default", "ImportOnly"]
+              )
+              else "fail",
+            "message": ("ACM " ~ acm_primary_version ~ " (< 2.14) - autoImportStrategy not applicable")
+              if not (acm_primary_auto_import_supported | bool)
+              else (
+                "default (ImportOnly) autoImportStrategy is in effect on the primary hub"
+                if acm_primary_auto_import_strategy in ["default", "ImportOnly"]
+                else "non-default autoImportStrategy is in use on the primary hub: " ~ acm_primary_auto_import_strategy
+              ),
+            "details": {
+              "hub": "primary",
+              "version": acm_primary_version,
+              "strategy": acm_primary_auto_import_strategy
+            },
+            "recommended_action": "Reset the primary hub autoImportStrategy to ImportOnly before switchover"
+              if (
+                acm_primary_auto_import_supported | bool
+                and acm_primary_auto_import_strategy not in ["default", "ImportOnly"]
+              )
+              else None
+          }
+        ]
+      }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Record secondary auto-import strategy advisory
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-auto-import-secondary",
+            "severity": "warning",
+            "status": "pass"
+              if (
+                not (acm_secondary_auto_import_supported | bool)
+                or acm_secondary_auto_import_strategy == "ImportAndSync"
+                or (acm_secondary_non_local_cluster_names | length == 0)
+                or acm_secondary_auto_import_strategy not in ["default", "ImportOnly"]
+              )
+              else "fail",
+            "message": ("ACM " ~ acm_secondary_version ~ " (< 2.14) - autoImportStrategy not applicable")
+              if not (acm_secondary_auto_import_supported | bool)
+              else (
+                "ImportAndSync autoImportStrategy is set on the secondary hub; reset to ImportOnly after activation"
+                if acm_secondary_auto_import_strategy == "ImportAndSync"
+                else (
+                  "secondary hub has existing managed clusters and autoImportStrategy is default (ImportOnly)"
+                  if (
+                    acm_secondary_non_local_cluster_names | length > 0
+                    and acm_secondary_auto_import_strategy in ["default", "ImportOnly"]
+                  )
+                  else "default (ImportOnly) autoImportStrategy is in effect on the secondary hub"
+                )
+              ),
+            "details": {
+              "hub": "secondary",
+              "version": acm_secondary_version,
+              "strategy": acm_secondary_auto_import_strategy,
+              "non_local_clusters": acm_secondary_non_local_cluster_names
+            },
+            "recommended_action": "Consider temporarily setting ImportAndSync on the secondary hub before restore, then reset to ImportOnly afterward"
+              if (
+                acm_secondary_auto_import_supported | bool
+                and acm_secondary_non_local_cluster_names | length > 0
+                and acm_secondary_auto_import_strategy in ["default", "ImportOnly"]
+              )
+              else None
+          }
+        ]
+      }}

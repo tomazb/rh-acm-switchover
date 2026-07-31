@@ -157,26 +157,44 @@ The ACM switchover automation tool implements comprehensive input validation to:
 
 **Valid Values**: `["text", "json"]`
 
+#### Report Directory Validation
+
+`--report-dir` is optional. When set, it must pass filesystem path validation and point to a writable
+directory location for schema-versioned report artifacts. Relative paths are accepted and resolved
+from the current working directory. Absolute paths are accepted only under the safe path roots listed
+in [Filesystem Path Validation](#6-filesystem-path-validation).
+
+Report artifacts use schema version `1.0` and preserve the shared status/report contract with
+collection JSON artifacts. Report types are not field-for-field identical across the Python CLI
+and collection because each runtime includes context fields for its own execution model. The CLI
+validates the path before writing `preflight-report.json`, `switchover-report.json`,
+`restore-only-report.json`, or `decommission-report.json`.
+
 #### Cross-Argument Rules
 
 - `--activation-method=restore` is only valid with `--method passive`
 - `--secondary-context` is required for switchover operations (unless `--decommission` or `--setup`)
 - `--non-interactive` is only valid with `--decommission`
-- `--disable-observability-on-secondary` requires `--old-hub-action secondary` and is not valid with `--decommission`
+- `--disable-observability-on-secondary` is deprecated/redundant, but if supplied it still requires `--old-hub-action secondary` and is not valid with `--decommission`
 - `--argocd-resume-only` requires `--secondary-context` (used to resolve the state file for restoring Argo CD auto-sync)
 - `--argocd-resume-only` cannot be used with `--validate-only` (resume performs changes)
 - `--argocd-resume-only` cannot be used with `--decommission`
 - `--argocd-resume-only` cannot be used with `--setup`
 - `--argocd-manage` has no effect with `--validate-only`; a warning is emitted and validation continues
 - `--argocd-manage` cannot be used with `--argocd-resume-only`
-- `--argocd-resume-after-switchover` cannot be used with `--validate-only`
-- `--argocd-resume-after-switchover` cannot be used with `--argocd-resume-only`
-- `--argocd-resume-after-switchover` requires `--argocd-manage`
-- `--argocd-resume-after-switchover` cannot be used with `--old-hub-action decommission`
+- `--argocd-resume-on-failure` requires `--argocd-manage`
+- `--argocd-resume-on-failure` cannot be used with `--argocd-resume-only`
+- `--argocd-resume-on-failure` cannot be used with `--validate-only`
 - `--include-decommission` is only valid with `--setup` when `--role` is `operator` or `both`
+- `--restore-only` requires `--secondary-context` (the restore target hub)
+- `--restore-only` cannot be used with `--primary-context` (no primary hub needed)
+- `--restore-only` requires `--method full` (passive sync needs a live primary); method defaults to `full` if unset
+- `--restore-only` cannot be used with `--old-hub-action` (no old hub to manage)
+- `--restore-only` cannot be used with `--decommission`
 - In `check_rbac.py`, `--include-decommission` is only valid with `--role operator`; combining it with `--role validator` is rejected with an explicit error (decommission permissions are operator-only)
 - With `--validate-only`, `--argocd-manage` has no effect (management is not performed during validation); a warning is emitted if both are set
 - ArgoCD detection runs automatically when CRD is detected; `--skip-gitops-check` disables all GitOps detection including ArgoCD deep dive
+- `--report-dir`, when set, must be a safe filesystem path for schema-versioned JSON report artifacts
 
 ### 6. Filesystem Path Validation
 
@@ -195,6 +213,7 @@ The ACM switchover automation tool implements comprehensive input validation to:
 - `.state/switchover-state.json`
 - `relative/path/to/file`
 - `/tmp/valid-file`
+- `/tmp/acm-switchover/report.json`
 - `/var/log/app.log`
 - `/home/user/workspace/config.json` (under home)
 - `/path/to/workspace/data.json` (under cwd)
@@ -208,6 +227,9 @@ The ACM switchover automation tool implements comprehensive input validation to:
 - `/etc/passwd` (absolute path outside allowed directories)
 
 **Note**: Relative paths are always permitted and are resolved relative to the current working directory.
+For absolute paths that do not exist yet, validation resolves the nearest existing ancestor and
+allows new child paths only when that resolved ancestor is under an allowed safe root. Tilde
+expansion is intentionally not performed; pass a shell-expanded absolute path instead.
 
 ### 7. String Validation
 
@@ -322,8 +344,8 @@ except ValidationError as e:
 
 - Secondary context requirement: `--secondary-context` is required for switchover operations unless `--decommission` or `--setup` is set.
 - Non-interactive constraint: `--non-interactive` can only be used together with `--decommission`.
-- Managed cluster threshold: `--min-managed-clusters` must be a non-negative integer. `0` keeps the post-restore cluster count check informational-only.
-- Argo CD flags: `--argocd-resume-only` requires `--secondary-context` and cannot be combined with `--validate-only`, `--decommission`, or `--setup`. `--argocd-manage` is allowed with `--validate-only` but has no effect and emits a warning. `--argocd-resume-after-switchover` cannot be combined with `--validate-only`, `--argocd-resume-only`, or `--old-hub-action decommission`, and it requires `--argocd-manage`.
+- Managed cluster threshold: `--min-managed-clusters` must be a non-negative integer. Omitted values derive the expected count from preflight; restore-only defaults to at least one restored non-local ManagedCluster because no primary inventory exists. Explicit `0` is the empty-target opt-out.
+- Argo CD flags: `--argocd-resume-only` requires `--secondary-context` and cannot be combined with `--validate-only`, `--decommission`, or `--setup`. `--argocd-manage` is allowed with `--validate-only` but has no effect and emits a warning.
 - Setup RBAC extension: `--include-decommission` is only valid during `--setup`, and only with `--role operator` or `--role both`.
 
 ### Utilities

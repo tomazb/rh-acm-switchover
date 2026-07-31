@@ -1,0 +1,2 @@
+python3 [platform:rpm]
+python3-pip [platform:rpm]

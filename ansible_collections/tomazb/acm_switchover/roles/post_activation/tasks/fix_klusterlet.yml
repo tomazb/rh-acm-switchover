@@ -1,0 +1,51 @@
+---
+# Mirrors Python _force_klusterlet_reconnect() in modules/post_activation.py with
+# bounded concurrency inside the custom module.
+
+- name: Identify clusters eligible for remediation
+  ansible.builtin.set_fact:
+    _klusterlet_remediation_requested: >-
+      {{
+        (
+          _klusterlet_remediation_candidates
+          | default(
+              acm_switchover_cluster_verify_result.pending | default(acm_cluster_verify_result.pending | default([]))
+            )
+        )
+        | unique
+        | list
+      }}
+
+- name: Filter clusters eligible for remediation to those with kubeconfigs
+  ansible.builtin.set_fact:
+    _klusterlet_fix_candidates: []
+
+- name: Add clusters with managed-cluster kubeconfigs to remediation candidates
+  ansible.builtin.set_fact:
+    _klusterlet_fix_candidates: "{{ _klusterlet_fix_candidates + [item] }}"
+  loop: "{{ _klusterlet_remediation_requested }}"
+  when:
+    - item in (acm_switchover_managed_clusters | default({}))
+    - (acm_switchover_managed_clusters[item].kubeconfig | default('') | length) > 0
+
+- name: Skip klusterlet fix when no remediation candidates have kubeconfigs
+  ansible.builtin.debug:
+    msg: >-
+      No klusterlet remediation possible — pending clusters
+      {{ _klusterlet_remediation_requested | default([]) | join(', ') }}
+      do not have entries in acm_switchover_managed_clusters
+  when: _klusterlet_fix_candidates | length == 0
+
+- name: Fix klusterlet for eligible clusters
+  tomazb.acm_switchover.acm_klusterlet_remediate:
+    secondary_hub:
+      kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+      context: "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
+    managed_clusters: "{{ acm_switchover_managed_clusters | default({}) }}"
+    pending_clusters: "{{ _klusterlet_fix_candidates }}"
+    workers: "{{ acm_switchover_execution.concurrency.klusterlet_remediation_workers | default(10) | int }}"
+    request_timeout: "{{ acm_switchover_execution.timeouts.klusterlet_request_seconds | default(30) | int }}"
+    future_timeout: "{{ acm_switchover_execution.timeouts.klusterlet_worker_seconds | default(180) | int }}"
+    strict: "{{ acm_switchover_features.klusterlet.strict_remediation | default(false) | bool }}"
+  register: _klusterlet_remediation_result
+  when: _klusterlet_fix_candidates | length > 0

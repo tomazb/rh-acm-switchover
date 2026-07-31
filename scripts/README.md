@@ -9,17 +9,17 @@ These scripts automate the validation process before and after switchover, ensur
 > ⚠️ **Safety note:** Some utilities mutate cluster state. Review usage and required credentials/state files before running in production.
 > **Shell requirement:** These scripts require Bash 4 or newer because shared helpers use associative arrays.
 
-| Script | Purpose | When to Use |
-|--------|---------|-------------|
-| [`discover-hub.sh`](discover-hub.sh) | Auto-discover ACM hubs and propose checks | When unsure which hub is primary/secondary |
-| [`preflight-check.sh`](preflight-check.sh) | Validate prerequisites before switchover | Before starting switchover procedure |
-| [`postflight-check.sh`](postflight-check.sh) | Verify switchover completed successfully | After switchover activation completes |
-| [`argocd-manage.sh`](argocd-manage.sh) | ⚠️ **Mutating / requires state file**: Pause or resume Argo CD auto-sync for ACM-touching Applications ([usage](#argo-cd-management-script)) | When GitOps (Argo CD) manages ACM resources; use with a state file for reversible pause/resume |
-| [`setup-rbac.sh`](setup-rbac.sh) | ⚠️ **Mutating (initial setup)**: Deploy RBAC and generate kubeconfigs ([usage](#rbac-bootstrap-script)) | Initial setup of switchover access |
-| [`generate-sa-kubeconfig.sh`](generate-sa-kubeconfig.sh) | Generate kubeconfig from service account | For service account authentication |
-| [`generate-merged-kubeconfig.sh`](generate-merged-kubeconfig.sh) | Merge kubeconfigs for multi-hub ops | Setting up multi-hub access |
-| [`lib-common.sh`](lib-common.sh) | Shared helper functions and utilities | Sourced by other scripts |
-| [`constants.sh`](constants.sh) | Shared configuration constants | Sourced by other scripts |
+| Script | Purpose | When to Use | Collection Status |
+|--------|---------|-------------|-------------------|
+| [`discover-hub.sh`](discover-hub.sh) | Auto-discover ACM hubs and propose checks | When unsure which hub is primary/secondary | **Supported bridge** — use until `playbooks/discovery.yml` covers all context-enumeration needs |
+| [`preflight-check.sh`](preflight-check.sh) | Validate prerequisites before switchover | Before starting switchover procedure | dual-supported |
+| [`postflight-check.sh`](postflight-check.sh) | Verify switchover completed successfully | After switchover activation completes | dual-supported |
+| [`argocd-manage.sh`](argocd-manage.sh) | ⚠️ **Mutating / requires state file**: Pause or resume Argo CD auto-sync for ACM-touching Applications ([usage](#argo-cd-management-script)) | When GitOps (Argo CD) manages ACM resources; use with a state file for reversible pause/resume | **Deprecated** — prefer `playbooks/argocd_resume.yml` (Phase 5) |
+| [`setup-rbac.sh`](setup-rbac.sh) | ⚠️ **Mutating (initial setup)**: Deploy RBAC and generate kubeconfigs ([usage](#rbac-bootstrap-script)) | Initial setup of switchover access | **Deprecated** — prefer `playbooks/rbac_bootstrap.yml` (Phase 6) |
+| [`generate-sa-kubeconfig.sh`](generate-sa-kubeconfig.sh) | Generate kubeconfig from service account | For service account authentication | bridge (called by `rbac_bootstrap` role during transition) |
+| [`generate-merged-kubeconfig.sh`](generate-merged-kubeconfig.sh) | Merge kubeconfigs for multi-hub ops | Setting up multi-hub access | bridge |
+| [`lib-common.sh`](lib-common.sh) | Shared helper functions and utilities | Sourced by other scripts | internal |
+| [`constants.sh`](constants.sh) | Shared configuration constants | Sourced by other scripts | internal |
 
 ## Version Tracking
 
@@ -29,7 +29,7 @@ All scripts display their version number in the output header for troubleshootin
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Switchover Pre-flight Validation                    ║
 ╚════════════════════════════════════════════════════════════╝
-preflight-check.sh v1.5.3 (2026-01-29)
+preflight-check.sh v1.7.10 (2026-05-12)
 ```
 
 The version is defined in `constants.sh` and follows [Semantic Versioning](https://semver.org/):
@@ -124,7 +124,7 @@ This resolves ambiguity during the transition period when the old hub hasn't yet
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Hub Discovery                                        ║
 ╚════════════════════════════════════════════════════════════╝
-discover-hub.sh v1.5.3 (2026-01-29)
+discover-hub.sh v1.7.10 (2026-05-12)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Analyzing Contexts
@@ -206,6 +206,15 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 
 > **Note:** Argo CD detection runs automatically when the Applications CRD is found on either hub. Use `--skip-gitops-check` to disable.
 
+> **Restore-only mode:** `preflight-check.sh` requires both a primary and secondary hub context.
+> For single-hub restore scenarios (no primary hub available), use the Python tool's built-in
+> validation instead:
+> ```bash
+> python acm_switchover.py --restore-only --secondary-context <target-hub> --validate-only
+> ```
+> This runs secondary-only preflight checks (ACM version, namespaces, BSL, OADP) without
+> requiring a primary hub connection. See [Restore-Only Mode](../docs/operations/usage.md#restore-only-mode-single-hub-restore) for details.
+
 ### What It Checks
 
 1. **CLI Tools** - Verifies `oc`/`kubectl` and `jq` are installed (jq is required)
@@ -227,7 +236,7 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 11. **Passive Sync** (Method 1 only) - Validates passive restore is running and up-to-date (dynamically finds latest restore)
 12. **Observability** - If observability is installed on the primary:
   - Confirms required CRs/secrets exist
-  - **Fails if the secondary hub has an active MCO** unless **Thanos compactor** and **observatorium-api** are scaled to `0`
+  - **Fails if the secondary hub has an active MCO** unless **Thanos compactor** and **observatorium-api** are scaled to `0` for a temporary/manual switchover window
   - **Warns** if the secondary has observability pods but no MCO CR (likely incomplete decommission)
 13. **Secondary Hub Managed Clusters** - Checks for pre-existing clusters on secondary:
     - Shows available/total count (e.g., "0/8 available")
@@ -245,7 +254,7 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Switchover Pre-flight Validation                     ║
 ╚════════════════════════════════════════════════════════════╝
-preflight-check.sh v1.5.3 (2026-01-29)
+preflight-check.sh v1.7.10 (2026-05-12)
 
 Primary Hub:    primary-hub
 Secondary Hub:  secondary-hub
@@ -315,29 +324,31 @@ graph TD
     C --> D[Check Kubernetes Contexts]
     D --> E[Verify Namespaces]
     E --> F[Check ACM Versions]
-    F --> G{Versions Match?}
-    G -->|No| H[FAIL: Version Mismatch]
-    G -->|Yes| I[Check OADP Operator]
-    I --> J[Verify DataProtectionApplication]
-    J --> J2[Check BackupStorageLocation]
-    J2 --> J3{BSL Available?}
-    J3 -->|No| J4[FAIL: Storage Inaccessible]
-    J3 -->|Yes| J5[Check Cluster Health]
-    J5 --> J6{Nodes Ready &<br/>ClusterOps Healthy?}
-    J6 -->|No| J7[FAIL: Cluster Unhealthy]
-    J6 -->|Yes| J8{Upgrade in<br/>Progress?}
-    J8 -->|Yes| J9[FAIL: Upgrade in Progress]
-    J8 -->|No| K[Check Backup Status]
-    K --> L{Backups OK?}
-    L -->|No| M[FAIL: Backup Issues]
-    L -->|Yes| N[CRITICAL: Check useManagedServiceAccount]
+    F --> G[Detect GitOps markers<br/>on hub resources]
+    G --> H{Versions Match?}
+    H -->|No| I[FAIL: Version Mismatch]
+    H -->|Yes| J[Build Hub Summary<br/>cluster counts + BackupSchedule state]
+    J --> K[Check OADP Operator]
+    K --> L[Verify DataProtectionApplication]
+    L --> L2[Check BackupStorageLocation]
+    L2 --> L3{BSL Available?}
+    L3 -->|No| L4[FAIL: Storage Inaccessible]
+    L3 -->|Yes| L5[Check Cluster Health]
+    L5 --> L6{Nodes Ready,<br/>ClusterOps Healthy,<br/>No Upgrade?}
+    L6 -->|No| L7[FAIL: Cluster Unhealthy<br/>or Upgrade in Progress]
+    L6 -->|Yes| M[Check Backup Status]
+    M --> M2[Wait for in-progress backups<br/>within timeout]
+    M2 --> M3[Check latest backup phase,<br/>age/cadence, and cluster coverage]
+    M3 --> M4{Backups OK?}
+    M4 -->|No| M5[FAIL: Backup Issues]
+    M4 -->|Yes| N[CRITICAL: Check useManagedServiceAccount]
     N --> O{BackupSchedule has<br/>useManagedServiceAccount=true?}
     O -->|No| P[FAIL: Missing useManagedServiceAccount<br/>Auto-reconnect at risk]
     O -->|Yes| Q[CRITICAL: Check preserveOnDelete]
     Q --> R{All CDs have<br/>preserveOnDelete=true?}
     R -->|No| S[FAIL: Missing preserveOnDelete<br/>DANGER: Infrastructure at risk!]
     R -->|Yes| T{Method?}
-    T -->|Passive| U[Find & Check Latest Restore]
+    T -->|Passive| U[Find passive sync Restore<br/>by spec or well-known name]
     T -->|Full| V[Skip Passive Check]
     U --> W{Passive Sync<br/>Enabled?}
     W -->|No| X[FAIL: Passive Sync Not Ready]
@@ -349,21 +360,21 @@ graph TD
     Y3 --> Y4
     Y4 --> Y5{Non-default<br/>Strategy?}
     Y5 -->|Yes| Y6[WARN: Non-default Strategy]
-    Y5 -->|No| Z[Generate Summary Report]
+    Y5 -->|No| Z[Check Argo CD / GitOps<br/>management unless skipped]
     Y6 --> Z
-    Z --> ZA{Any Failures?}
-    ZA -->|Yes| ZB[Exit Code 1<br/>Display Failed Checks]
-    ZA -->|No| ZC[Exit Code 0<br/>Ready to Proceed]
+    Z --> ZA[Generate Summary Report]
+    ZA --> ZB{Any Failures?}
+    ZB -->|Yes| ZC[Exit Code 1<br/>Display Failed Checks]
+    ZB -->|No| ZD[Exit Code 0<br/>Ready to Proceed]
     
     style P fill:#ff6b6b
     style S fill:#ff6b6b
-    style H fill:#ff6b6b
-    style M fill:#ff6b6b
+    style I fill:#ff6b6b
+    style M5 fill:#ff6b6b
     style X fill:#ff6b6b
-    style J4 fill:#ff6b6b
-    style J7 fill:#ff6b6b
-    style J9 fill:#ff6b6b
-    style ZC fill:#51cf66
+    style L4 fill:#ff6b6b
+    style L7 fill:#ff6b6b
+    style ZD fill:#51cf66
 ```
 
 ---
@@ -405,7 +416,7 @@ Verifies that the ACM switchover completed successfully by validating all critic
 5b. **BackupStorageLocation** - Verifies BSL is in "Available" phase (storage accessible for backups)
 6. **ACM Hub Components** - Verifies MultiClusterHub and ACM pods are healthy
 7. **Old Hub Comparison** (if `--old-hub-context` provided) - Checks old hub clusters are disconnected and that the old hub is not still acting as an active observability hub:
-  - Passes if **MCO is absent**, or if **Thanos compactor** and **observatorium-api** are scaled to `0`
+  - Passes if **MCO is absent**, or if **Thanos compactor** and **observatorium-api** are scaled to `0` as a transitional/manual state
 8. **Auto-Import Status** - Verifies no lingering disable-auto-import annotations
 9. **Auto-Import Strategy** (ACM 2.14+) - Ensures `autoImportStrategy` is reset to default post-switchover:
     - Warns if non-default strategy remains configured
@@ -477,7 +488,8 @@ Recommended next steps:
 ```mermaid
 graph TD
     A[Start Post-flight Check] --> B[Parse Arguments]
-    B --> C[Find & Check Latest Restore]
+    B --> B2[Verify CLI Tools]
+    B2 --> C[Find passive sync or latest Restore]
     C --> D{Restore<br/>Found?}
     D -->|Yes| D2{Phase<br/>Finished?}
     D2 -->|No| E[FAIL: Restore Not Complete]
@@ -490,22 +502,25 @@ graph TD
     G -->|No| H[FAIL: Clusters Not Connected]
     G -->|Yes| I{All Clusters<br/>Joined?}
     I -->|No| J[WARN: Some Clusters Still Joining]
-    I -->|Yes| K[Check Observability Pods]
-    J --> K
+    I -->|Yes| I2[Check Pending Import status]
+    J --> I2
+    I2 --> K[Check Observability Components]
     K --> L{Observability<br/>Installed?}
     L -->|No| M[SKIP: Observability Not Installed]
-    L -->|Yes| N{All Pods<br/>Running?}
-    N -->|No| O[FAIL: Observability Pods Failed]
-    N -->|Yes| P[Check observatorium-api Restart]
+    L -->|Yes| N[Check MCO Ready,<br/>critical pods, and pod errors]
+    N --> N2{Components<br/>Healthy?}
+    N2 -->|No| O[FAIL: Observability Components Failed]
+    N2 -->|Yes| P[Check observatorium-api Restart]
     M --> Q
     P --> Q[Check Grafana Route]
     Q --> R[Verify BackupSchedule Enabled]
     R --> S{BackupSchedule<br/>Enabled?}
     S -->|No| T[FAIL: Backups Not Enabled]
-    S -->|Yes| S2[Check BackupStorageLocation]
-    S2 --> S3{BSL Available?}
-    S3 -->|No| S4[FAIL: Storage Inaccessible]
-    S3 -->|Yes| U[Check ACM Hub Components]
+    S -->|Yes| S2[Check BackupSchedule status,<br/>collision, recent backups,<br/>backup age, and Velero logs]
+    S2 --> S3[Check BackupStorageLocation]
+    S3 --> S4{BSL Available?}
+    S4 -->|No| S5[FAIL: Storage Inaccessible]
+    S4 -->|Yes| U[Check ACM Hub Components]
     U --> V{MultiClusterHub<br/>Running?}
     V -->|No| W[FAIL: MCH Not Running]
     V -->|Yes| X{Old Hub<br/>Provided?}
@@ -520,28 +535,31 @@ graph TD
     AC3 -->|No| AC4[WARN: Failback Not Ready]
     AC3 -->|Yes| AC5[Check Old Hub ACM<br/>Still Installed or Decommissioned]
     AC4 --> AC5
-    AC5 --> Y2[Check Auto-Import Strategy<br/>ACM 2.14+]
+    AC5 --> Y1[Check disable-auto-import<br/>annotations on new hub]
+    Y1 --> Y2[Check Auto-Import Strategy<br/>ACM 2.14+]
     Y2 --> Y3{Non-default<br/>Strategy?}
     Y3 -->|Yes| Y4[WARN: Reset Strategy to Default]
     Y3 -->|No| AD
     Y4 --> AD
-    Z --> Z2[Check Auto-Import Strategy<br/>ACM 2.14+]
+    Z --> Z1[Check disable-auto-import<br/>annotations on new hub]
+    Z1 --> Z2[Check Auto-Import Strategy<br/>ACM 2.14+]
     Z2 --> Z3{Non-default<br/>Strategy?}
     Z3 -->|Yes| Z4[WARN: Reset Strategy to Default]
     Z3 -->|No| AD
     Z4 --> AD
-    AD[Generate Summary Report]
-    AD --> AE{Any Failures?}
-    AE -->|Yes| AF[Exit Code 1<br/>Display Issues & Recommendations]
-    AE -->|No| AG[Exit Code 0<br/>Switchover Successful]
+    AD[Check Argo CD / GitOps<br/>management unless skipped]
+    AD --> AE[Generate Summary Report]
+    AE --> AF{Any Failures?}
+    AF -->|Yes| AG[Exit Code 1<br/>Display Issues & Recommendations]
+    AF -->|No| AH[Exit Code 0<br/>Switchover Successful]
     
     style E fill:#ff6b6b
     style H fill:#ff6b6b
     style O fill:#ff6b6b
     style T fill:#ff6b6b
-    style S4 fill:#ff6b6b
+    style S5 fill:#ff6b6b
     style W fill:#ff6b6b
-    style AG fill:#51cf66
+    style AH fill:#51cf66
     style D4 fill:#51cf66
     style J fill:#ffd43b
     style AB fill:#ffd43b
@@ -555,7 +573,7 @@ graph TD
 
 ### Purpose
 
-Generates a kubeconfig file that can be used to authenticate as a specific Kubernetes service account. The generated kubeconfig uses a short-lived token (48 hours by default) created via `kubectl create token`, providing secure temporary access without storing permanent credentials.
+Generates a kubeconfig file that can be used to authenticate as a specific Kubernetes service account. The generated kubeconfig uses a short-lived token (24 hours by default) created via `kubectl create token`, providing secure temporary access without storing permanent credentials.
 
 ### Usage
 
@@ -564,7 +582,7 @@ Generates a kubeconfig file that can be used to authenticate as a specific Kuber
 ./scripts/generate-sa-kubeconfig.sh [OPTIONS] <namespace> <service-account-name>
 
 # Examples:
-# Default 48-hour token from current context
+# Default 24-hour token from current context
 umask 077 && ./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
 
 # Read cluster metadata and token from an explicit admin kubeconfig
@@ -599,7 +617,7 @@ oc get managedclusters
 | `--kubeconfig <path>` | Kubeconfig to read cluster metadata and token from | Current kubeconfig |
 | `--context <context>` | Kubernetes context to use | Current context |
 | `--user <name>` | Custom user name in kubeconfig | `<context>-<sa-name>` |
-| `--token-duration <dur>` | Token lifetime (e.g., `8h`, `48h`, `72h`) | `48h` |
+| `--token-duration <dur>` | Token lifetime (e.g., `8h`, `24h`, `72h`) | `24h` |
 
 **Arguments:**
 
@@ -693,7 +711,7 @@ Automates the complete RBAC setup for the ACM switchover tool. This script deplo
 | `--context <context>` | **Required.** Kubernetes context to deploy RBAC to | - |
 | `--role <role>` | Role to deploy: `operator`, `validator`, `both` | `both` |
 | `--include-decommission` | Also deploy and validate the opt-in decommission RBAC extension (operator or both only) | - |
-| `--token-duration <dur>` | Token validity duration | `48h` |
+| `--token-duration <dur>` | Token validity duration | `24h` |
 | `--output-dir <dir>` | Output directory for kubeconfigs | `./kubeconfigs` |
 | `--skip-kubeconfig` | Skip kubeconfig generation | - |
 | `--skip-validation` | Skip RBAC validation after deployment | - |
@@ -760,7 +778,7 @@ Generates and merges kubeconfigs for multiple clusters/contexts into a single fi
 |--------|-------------|---------|
 | `--admin-kubeconfig <path>` | Admin kubeconfig for token generation | Current kubeconfig |
 | `--output <file>` | Output merged kubeconfig file | `./merged-kubeconfig.yaml` |
-| `--token-duration <dur>` | Token validity duration | `48h` |
+| `--token-duration <dur>` | Token validity duration | `24h` |
 | `--namespace <ns>` | Namespace where SAs exist | `acm-switchover` |
 | `--managed-cluster` | Flag for managed cluster contexts | - |
 
@@ -872,17 +890,18 @@ graph TD
     Q -->|Yes| R[Skip RBAC validation]
     Q -->|No| S[Run check_rbac.py]
     S --> T{Validation<br/>passed?}
-    T -->|No| U[Warning: Validation failed]
+    T -->|No| U[FAIL: Validation failed]
     T -->|Yes| V[Success]
     R --> V
-    U --> V
+    U --> X[Exit 1]
     V --> W[Exit 0]
     
     style C fill:#ff6b6b
     style F fill:#ff6b6b
     style I fill:#ff6b6b
     style L fill:#ff6b6b
-    style U fill:#ffd43b
+    style U fill:#ff6b6b
+    style X fill:#ff6b6b
     style W fill:#51cf66
 ```
 
@@ -895,6 +914,8 @@ graph TD
 ### Purpose
 
 Pause or resume auto-sync on Argo CD Applications that touch ACM namespaces/kinds, so GitOps does not revert switchover steps. Uses a JSON state file to record original sync policies and restore them safely.
+
+> **Deprecated boundary:** This legacy Bash script is not updated for the supported ApplicationSet child-Application blocker, stale or empty `status.resources` blocker, or post-patch auto-sync verification. Use the Python CLI `--argocd-manage` or the Ansible collection `argocd_manage` role for production Argo CD management.
 
 ### Usage
 
@@ -920,7 +941,7 @@ Note: GitOps marker detection is heuristic. The generic label `app.kubernetes.io
 3. Run switchover (Python tool or manual runbook steps)
 4. After updating Git/desired state for the new hub, resume: `./scripts/argocd-manage.sh --context <new-hub> --mode resume --state-file .state/argocd-pause-state.json`
 
-The Python tool can perform pause/resume during switchover when using `--argocd-manage` and optionally `--argocd-resume-after-switchover` or `--argocd-resume-only`; see [usage.md](../docs/operations/usage.md).
+The Python tool can perform pause/resume during switchover when using `--argocd-manage`; resume explicitly after updating Git for the new hub with `--argocd-resume-only`. See [usage.md](../docs/operations/usage.md).
 
 ---
 
@@ -934,39 +955,70 @@ graph TD
     B --> C{Pre-flight<br/>Passed?}
     C -->|No| D[Fix Issues]
     D --> B
-  C -->|Yes| E{Argo CD<br/>Managing ACM?}
-  E -->|Yes| F0[Optional: Pause ACM-touching<br/>Argo CD Applications]
-  E -->|No| F[Begin Switchover Procedure]
-  F0 --> F
-  F --> G[Step 1-3: Prepare Primary Hub]
-  G --> H[Step 4-5: Activate Secondary Hub]
-  H --> I[Wait for Restore Complete]
-  I --> J[Run Post-flight Check]
-  J --> K{Post-flight<br/>Passed?}
-  K -->|No| L{Critical<br/>Failures?}
-  L -->|Yes| M[Consider Reverse Switchover]
-  L -->|No| N[Troubleshoot & Retry]
-  N --> I
-  K -->|Yes| O[Steps 6-10: Post-Activation Common Steps]
-  O --> P[Steps 11-12: Finalization]
-  P --> Q{Argo CD<br/>Paused Earlier?}
-  Q -->|Yes| R[Optional: Resume ACM-touching<br/>Argo CD Applications]
-  Q -->|No| S[Step 13: Inform Stakeholders]
-  R --> S
-  S --> T[Verify Metrics in Grafana<br/>and Monitor for 24 Hours]
-  T --> U[Step 14: Decommission Old Hub Optional]
-  U --> V[Switchover Complete]
+    C -->|Yes| E{Argo CD<br/>Managing ACM?}
+    E -->|Yes| F0[Pause ACM-touching<br/>Argo CD Applications]
+    E -->|No| F[Begin Switchover Procedure]
+    F0 --> F
+    F --> G[Step 1-3: Prepare Primary Hub]
+    G --> H[Step 4-5: Activate Secondary Hub]
+    H --> I[Wait for Restore Complete]
+    I --> O[Steps 6-10: Post-Activation Common Steps]
+    O --> P[Steps 11-12: Finalization]
+    P --> J[Run Post-flight Check]
+    J --> K{Post-flight<br/>Passed?}
+    K -->|No| L{Critical<br/>Failures?}
+    L -->|Yes| M[Consider rollback or<br/>reverse switchover]
+    L -->|No| N[Troubleshoot & Retry]
+    N --> J
+    K -->|Yes| Q{Argo CD<br/>Paused Earlier?}
+    Q -->|Yes| R[Optional: Resume ACM-touching<br/>Argo CD Applications<br/>after Git retargeting]
+    Q -->|No| S[Step 13: Inform Stakeholders]
+    R --> S
+    S --> T[Verify Metrics in Grafana<br/>and Monitor for 24 Hours]
+    T --> U[Step 14: Decommission Old Hub Optional]
+    U --> V[Switchover Complete]
     
     style C fill:#ffd43b
-  style E fill:#ffd43b
-  style K fill:#ffd43b
-  style M fill:#ff6b6b
-  style V fill:#51cf66
+    style E fill:#ffd43b
+    style K fill:#ffd43b
+    style M fill:#ff6b6b
+    style V fill:#51cf66
 ```
 
 > **Note**: RBAC setup (`setup-rbac.sh`) and kubeconfig generation are **one-time prerequisites** 
 > done during initial deployment, not part of the operational switchover workflow. 
 > See [RBAC Deployment Guide](../docs/deployment/rbac-deployment.md) for setup instructions.
+
+### Restore-Only (Single-Hub) Workflow
+
+When the original hub is unavailable and you need to restore managed clusters from S3 backups
+onto a new hub, the Python tool handles validation and orchestration directly — the bash
+`preflight-check.sh` is not used in this flow:
+
+```mermaid
+graph TD
+    A[Start: Plan Restore] --> B["Run Restore-Only Preflight<br/>(python acm_switchover.py --restore-only --validate-only)"]
+    B --> C{Preflight<br/>Passed?}
+    C -->|No| D[Fix Issues<br/>BSL, OADP, namespaces]
+    D --> B
+    C -->|Yes| E{Argo CD<br/>Managing ACM?}
+    E -->|Yes| E2[Use --argocd-manage<br/>to pause ACM-touching Applications]
+    E -->|No| E3["Execute Restore<br/>(python acm_switchover.py --restore-only --secondary-context target-hub)"]
+    E2 --> E3
+    E3 --> F[ACTIVATION: Create Restore from S3]
+    F --> G[POST_ACTIVATION: Wait for Clusters]
+    G --> H[FINALIZATION: Enable BackupSchedule]
+    H --> I[Run Post-flight Check<br/>./scripts/postflight-check.sh --new-hub-context target-hub]
+    I --> J{Post-flight<br/>Passed?}
+    J -->|No| K[Troubleshoot & Retry]
+    K --> I
+    J -->|Yes| L[Restore Complete]
+
+    style C fill:#ffd43b
+    style E fill:#ffd43b
+    style J fill:#ffd43b
+    style L fill:#51cf66
+```
 
 ---
 
@@ -986,6 +1038,13 @@ graph TD
 3. **Check Grafana metrics** manually after 10-15 minutes
 4. **Keep old hub accessible** for at least 24 hours in case reverse switchover is needed
 5. **Save post-flight output** for documentation and compliance
+
+### Restore-Only (Single-Hub)
+
+1. **Verify S3 backup access** before starting — the target hub must have a working BSL (BackupStorageLocation)
+2. **Use `--validate-only` first** to run preflight checks without making changes
+3. **Use `--dry-run`** to preview what would be created before committing
+4. **Run `postflight-check.sh`** after restore completes to verify cluster connectivity
 
 ### Troubleshooting
 
@@ -1043,7 +1102,7 @@ Provides shared helper functions and utilities used by both `preflight-check.sh`
 | **Color Variables** | `RED`, `GREEN`, `YELLOW`, `BLUE`, `NC` for formatted output |
 | **Counter Variables** | `TOTAL_CHECKS`, `PASSED_CHECKS`, `FAILED_CHECKS`, `WARNING_CHECKS` |
 | **Message Arrays** | `FAILED_MESSAGES`, `WARNING_MESSAGES` for summary reporting |
-| **`print_script_version`** | Print version line (e.g., `preflight-check.sh v1.5.0 (2026-01-28)`) |
+| **`print_script_version`** | Print version line (e.g., `preflight-check.sh v1.7.10 (2026-05-12)`) |
 | **`check_pass`** | Record a passing check with green checkmark |
 | **`check_fail`** | Record a failing check with red X, adds to failed messages |
 | **`check_warn`** | Record a warning with yellow triangle, adds to warning messages |

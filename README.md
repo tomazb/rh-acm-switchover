@@ -1,8 +1,11 @@
 # ACM Hub Switchover Automation
 
-**Version 1.6.3** (2026-04-07)
+**Version 1.7.10** (2026-05-12)
 
-Automated, idempotent script for switching over Red Hat Advanced Cluster Management (ACM) from a primary hub to a secondary hub cluster.
+Automated, idempotent tool for switching over Red Hat Advanced Cluster Management (ACM) from a primary hub to a secondary hub cluster. Available in two form factors:
+
+- **Python CLI** (`acm_switchover.py`) — standalone script with full phase orchestration, state persistence, and rich CLI surface.
+- **Ansible Collection** (`tomazb.acm_switchover`) — production-ready collection for `ansible-core` CLI and Ansible Automation Platform (AAP), with roles and playbooks covering the full switchover workflow (see [`ansible_collections/tomazb/acm_switchover/`](ansible_collections/tomazb/acm_switchover/)).
 
 ## Features
 
@@ -16,7 +19,16 @@ Automated, idempotent script for switching over Red Hat Advanced Cluster Managem
 - ✅ **Validate-only mode** - Run all validations without execution
 - ✅ **State tracking** - JSON state file for resume capability
 - ✅ **Two methods supported** - Continuous passive restore (Method 1) or one-time full restore (Method 2)
+- ✅ **Restore-only mode** - Restore managed clusters from S3 backups onto a new hub when the old hub is gone
 - ✅ **Multi-deployment support** - RBAC via Kustomize, Helm, or ACM Policies
+
+## Production Resilience Hardening In 1.7.10
+
+- Kubernetes API calls, polling waits, and Python/collection klusterlet worker batches are bounded so stalled APIs fail with actionable results instead of hanging indefinitely.
+- Observability checks are blocking by default unless explicitly skipped with `--skip-observability-checks` or `acm_switchover_features.skip_observability_checks`.
+- Argo CD managed pause fails closed for ApplicationSet-managed child Applications, unknown/stale Application impact, and failed post-patch pause verification.
+- Post-activation enforces preflight-derived ManagedCluster expectations when `--min-managed-clusters` is omitted and fails if klusterlet probing/remediation does not converge. After remediation, the post-remediation klusterlet probe waits up to 300 seconds (polling every 10 seconds) for the klusterlet-updated hub kubeconfig secret to converge before failing persistent wrong-hub results.
+- Release parity guardrails cover switchover, restore-only, decommission, RBAC/bootstrap, checkpoint, and report artifacts across the Python CLI and Ansible collection where practical.
 
 ---
 
@@ -26,8 +38,8 @@ ArgoCD integration is fully available and stable in the switchover workflow.
 
 - Automatic read-only ArgoCD discovery runs when the Applications CRD is present
 - Optional managed pause/resume is available through `--argocd-manage`
-- Optional automatic resume at the end of switchover is available through `--argocd-resume-after-switchover`
-- Resume-only mode is available through `--argocd-resume-only`
+- Resume-only mode is available through `--argocd-resume-only` (after updating Git for the new hub)
+- Managed pause blocks unsafe cases instead of patching child Applications that a parent ApplicationSet can revert, or Applications whose ACM impact cannot be determined from current Argo CD status
 
 For full ArgoCD behavior, constraints, and examples, see [Detailed Usage Guide](docs/operations/usage.md) and [Scripts README](scripts/README.md).
 
@@ -102,6 +114,7 @@ Standalone validation scripts ensure safe and successful switchovers:
 - **[ACM Switchover Runbook](docs/ACM_SWITCHOVER_RUNBOOK.md)** - Detailed operational procedures
 - **[Installation Guide](docs/getting-started/install.md)** - Detailed installation instructions
 - **[Architecture](docs/development/architecture.md)** - Design and implementation details
+- **[Code Walkthrough](docs/development/code-walkthrough.md)** - Deep explanation of Python, Ansible, and Bash implementation flows
 - **[Testing Guide](docs/development/testing.md)** - How to run tests and CI/CD
 - **[Contributing](CONTRIBUTING.md)** - Development guidelines
 
@@ -175,11 +188,17 @@ python acm_switchover.py \
   --secondary-context secondary-hub \
   --old-hub-action secondary \
   --method passive \
-  --argocd-manage \
-  --argocd-resume-after-switchover
+  --argocd-manage
 ```
 
-For post-cutover-only resumption, use `--argocd-resume-only` with `--secondary-context`.
+Applications are left paused by default. After updating Git/desired state for the new hub, resume explicitly with `--argocd-resume-only`.
+
+Managed pause fails closed in these cases:
+- An auto-sync Application is owned by an ApplicationSet and touches ACM resources.
+- `status.resources` is empty or stale for an auto-sync Application.
+- A live re-read shows auto-sync still enabled after patching.
+
+For ApplicationSet-managed apps, pause or update the parent ApplicationSet, generator, or template rather than the generated child Application.
 
 ### Resume from Previous Run
 
@@ -217,6 +236,26 @@ python acm_switchover.py --decommission \
   --primary-context primary-hub
 ```
 
+### Restore-Only (Single Hub — No Primary Needed)
+
+When the old hub is gone and you need to restore managed clusters from existing S3 backups:
+
+```bash
+# Validate new hub readiness
+python acm_switchover.py --restore-only --validate-only \
+  --secondary-context new-hub
+
+# Dry-run to preview planned actions
+python acm_switchover.py --restore-only --dry-run \
+  --secondary-context new-hub
+
+# Execute the restore
+python acm_switchover.py --restore-only \
+  --secondary-context new-hub
+```
+
+> **Note:** Requires ACM installed on the new hub with a BackupStorageLocation pointing to the same S3 bucket as the old hub's backups.
+
 ## Command Line Options
 
 | Option | Description |
@@ -225,19 +264,19 @@ python acm_switchover.py --decommission \
 | `--secondary-context` | Kubernetes context for secondary hub (required for switchover) |
 | `--method` | Switchover method: `passive` or `full` (required) |
 | `--activation-method` | Activation option for passive method: `patch` (default) or `restore` |
-| `--min-managed-clusters` | Minimum restored non-local `ManagedCluster` count to enforce after activation; must be non-negative (`0` = informational only) |
+| `--min-managed-clusters` | Minimum restored non-local `ManagedCluster` count to enforce after activation; omitted derives the expected names/count from primary preflight, restore-only omitted defaults to `1`, and explicit `0` allows an empty hub |
 | `--old-hub-action` | Action for old hub: `secondary` (**recommended** - enables reverse switchover), `decommission`, or `none` (required) |
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing |
 | `--state-file` | Path to state file (default: `.state/switchover-<primary>__<secondary>.json`) |
 | `--decommission` | Decommission old hub (interactive) |
+| `--restore-only` | Restore managed clusters from S3 backups onto a single hub (no primary needed; implies `--method full`) |
 | `--manage-auto-import-strategy` | Temporarily set ImportAndSync on destination hub (ACM 2.14+) |
-| `--skip-observability-checks` | Skip Observability-related steps even if detected |
-| `--disable-observability-on-secondary` | Delete MCO on old hub when keeping it as secondary |
+| `--skip-observability-checks` | Explicitly bypass Observability-related steps even if detected |
+| `--disable-observability-on-secondary` | Deprecated compatibility flag; `--old-hub-action secondary` now deletes MCO automatically |
 | `--skip-rbac-validation` | Skip RBAC permission validation during pre-flight checks |
-| `--argocd-manage` | Pause/resume ACM-touching ArgoCD Applications as part of switchover |
-| `--argocd-resume-after-switchover` | Resume ArgoCD Applications after successful switchover completion |
-| `--argocd-resume-only` | Only resume previously paused ArgoCD Applications (no switchover execution) |
+| `--argocd-manage` | Pause ACM-touching ArgoCD Applications during switchover (left paused by default) |
+| `--argocd-resume-only` | Resume previously paused ArgoCD Applications (standalone; after updating Git for the new hub) |
 | `--verbose` | Enable verbose logging |
 
 ## How It Works
@@ -255,7 +294,7 @@ python acm_switchover.py --decommission \
 2. **Primary Hub Preparation**
    - Pause BackupSchedule (version-aware: ACM 2.11 vs 2.12+)
    - Add disable-auto-import annotations to ManagedClusters
-   - Scale down Thanos compactor (if Observability detected)
+   - Scale down Thanos compactor (if Observability detected; failures block unless `--skip-observability-checks` is set)
 
 3. **Secondary Hub Activation**
    - Verify latest passive restore (Method 1) or create full restore (Method 2)
@@ -265,8 +304,8 @@ python acm_switchover.py --decommission \
 
 4. **Post-Activation Verification**
    - Monitor ManagedCluster connection status (5-10 minutes)
-   - Restart observatorium-api deployment (if Observability detected)
-   - Verify Observability pod health
+   - Restart observatorium-api deployment (if Observability detected; failures block unless `--skip-observability-checks` is set)
+   - Verify Observability pod health (blocking by default)
    - Check metrics collection
 
 5. **Finalization**
@@ -278,8 +317,31 @@ python acm_switchover.py --decommission \
      - `secondary`: Set up passive sync restore (**recommended** - enables reverse switchover)
      - `decommission`: Remove ACM components automatically
      - `none`: Leave unchanged for manual handling
-   - Optional: delete MultiClusterObservability on old hub when keeping it as secondary
+   - When `--old-hub-action secondary` is used, delete MultiClusterObservability on the old hub automatically; termination failures block unless `--skip-observability-checks` is set
    - Generate completion report
+
+### Restore-Only Flow
+
+When using `--restore-only` (no primary hub available), the workflow is simplified:
+
+```mermaid
+flowchart LR
+    A[PREFLIGHT] --> P{--argocd-manage?}
+    P -->|yes| Q[Pause ACM-touching<br/>Argo CD Applications]
+    P -->|no| B[ACTIVATION]
+    Q --> B
+    B --> C[POST_ACTIVATION]
+    C --> D[FINALIZATION]
+    D --> E[COMPLETED]
+    style A fill:#e1f5fe
+    style E fill:#c8e6c9
+```
+
+1. **Preflight** — validates target hub only (ACM version, BSL credentials, namespaces)
+2. **Optional Argo CD pause** — with `--argocd-manage`, pauses ACM-touching Applications on the target hub before activation
+3. **Activation** — creates a one-time full Restore from the latest S3 backup
+4. **Post-Activation** — waits for ManagedClusters to connect, verifies klusterlet agents, and requires at least one restored non-local ManagedCluster unless `--min-managed-clusters 0` is explicitly set
+5. **Finalization** — enables BackupSchedule on the new hub
 
 ### State Management
 
@@ -337,11 +399,19 @@ Edit state file manually or use `--reset-state` to start fresh (use with caution
 ### Run Tests
 
 ```bash
-# Run all tests with coverage
+# Run the default local suite (root tests + release-framework helper tests)
 ./run_tests.sh
 
-# Or manually
-python -m pytest tests/ -v --cov=. --cov-report=html
+# Run release validation framework tests directly
+python -m pytest tests/release -q
+
+# Run live release certification with an operator-provided lab profile
+python -m pytest tests/release/test_release_certification.py \
+  --release-profile /path/to/release-profile.yaml \
+  --release-mode certification
+
+# Or run the root test lane only
+python -m pytest tests/ --ignore=tests/release -v --cov=. --cov-report=html
 ```
 
 ### E2E Testing

@@ -1,0 +1,32 @@
+{
+    "apiVersion": "v1",
+    "items": [
+        {
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "BackupSchedule",
+            "metadata": {
+                "creationTimestamp": "2026-04-07T13:57:24Z",
+                "generation": 4,
+                "name": "acm-hub-backup",
+                "namespace": "open-cluster-management-backup",
+                "resourceVersion": "59439783",
+                "uid": "9a09686e-d4b8-4b67-8d75-77458e0c9312"
+            },
+            "spec": {
+                "managedServiceAccountTTL": "720h",
+                "paused": true,
+                "useManagedServiceAccount": true,
+                "veleroSchedule": "0 */4 * * *",
+                "veleroTtl": "720h"
+            },
+            "status": {
+                "lastMessage": "BackupSchedule is paused.",
+                "phase": "Paused"
+            }
+        }
+    ],
+    "kind": "List",
+    "metadata": {
+        "resourceVersion": ""
+    }
+}

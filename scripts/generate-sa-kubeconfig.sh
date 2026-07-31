@@ -4,7 +4,7 @@
 #
 # This script generates a kubeconfig file that can be used to authenticate
 # as a specific service account. The generated kubeconfig uses a short-lived
-# token (48 hours by default) created via `kubectl create token`.
+# token created via `kubectl create token`.
 #
 # Usage:
 #   ./generate-sa-kubeconfig.sh [OPTIONS] <namespace> <service-account-name>
@@ -13,7 +13,7 @@
 #   --kubeconfig <path>    - Kubeconfig to read cluster metadata and tokens from
 #   --context <context>       - Kubernetes context to use (default: current context)
 #   --user <name>             - Custom user name in kubeconfig (default: <context>-<sa-name>)
-#   --token-duration <dur>    - Token validity duration (default: 48h)
+#   --token-duration <dur>    - Token validity duration (default: ${DEFAULT_TOKEN_DURATION})
 #   -h, --help                - Show this help message
 #
 # Arguments:
@@ -47,11 +47,14 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/constants.sh"
+
 # Parse optional flags first
 KUBECONFIG_PATH=""
 CONTEXT=""
 USER_NAME=""
-DURATION="48h"
+DURATION="${DEFAULT_TOKEN_DURATION}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -96,7 +99,7 @@ while [[ $# -gt 0 ]]; do
                 DURATION="${2}"
                 shift 2
             else
-                echo "Error: --token-duration requires a value (e.g., 24h, 48h)" >&2
+                echo "Error: --token-duration requires a value (e.g., ${DEFAULT_TOKEN_DURATION}, 48h)" >&2
                 echo "" >&2
                 echo "Usage: $0 [OPTIONS] <namespace> <service-account-name>" >&2
                 exit 1
@@ -109,7 +112,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --kubeconfig <path>    - Kubeconfig to read cluster metadata and tokens from"
             echo "  --context <context>       - Kubernetes context to use (default: current context)"
             echo "  --user <name>             - Custom user name in kubeconfig (default: <context>-<sa-name>)"
-            echo "  --token-duration <dur>    - Token validity duration (default: 48h)"
+            echo "  --token-duration <dur>    - Token validity duration (default: ${DEFAULT_TOKEN_DURATION})"
             echo "  -h, --help                - Show this help message"
             echo ""
             echo "Arguments:"
@@ -162,7 +165,7 @@ if [[ -z "$NAMESPACE" || -z "$SA_NAME" ]]; then
     echo "  --kubeconfig <path>    - Kubeconfig to read cluster metadata and tokens from" >&2
     echo "  --context <context>       - Kubernetes context to use (default: current context)" >&2
     echo "  --user <name>             - Custom user name in kubeconfig (default: <context>-<sa-name>)" >&2
-    echo "  --token-duration <dur>    - Token validity duration (default: 48h)" >&2
+    echo "  --token-duration <dur>    - Token validity duration (default: ${DEFAULT_TOKEN_DURATION})" >&2
     echo "" >&2
     echo "Arguments:" >&2
     echo "  namespace                 - Namespace where the service account exists" >&2
@@ -198,6 +201,11 @@ fi
 # Validate cluster info
 if [[ -z "$SERVER" ]]; then
     echo "Error: Could not determine cluster server URL from context" >&2
+    exit 1
+fi
+
+if [[ -z "$CA_DATA" ]]; then
+    echo "Error: Could not determine cluster certificate-authority-data from context or kubeconfig" >&2
     exit 1
 fi
 

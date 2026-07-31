@@ -40,7 +40,7 @@ _preflight_check_complete() {
     fi
 
     if [[ "$cur" == -* ]]; then
-        local opts="--primary-context --secondary-context --method --help -h"
+        local opts="--primary-context --secondary-context --method --skip-gitops-check --help -h"
         _acm_complete_from_list "$opts"
         return
     fi

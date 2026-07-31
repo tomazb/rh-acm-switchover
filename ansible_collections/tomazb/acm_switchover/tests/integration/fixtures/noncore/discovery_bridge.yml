@@ -1,0 +1,11 @@
+---
+acm_switchover_hubs:
+  primary:
+    context: primary-hub
+    kubeconfig: ./kubeconfigs/primary
+
+acm_switchover_execution:
+  mode: dry_run
+
+acm_switchover_discovery_restore_state: none
+acm_switchover_discovery_managed_clusters: 3

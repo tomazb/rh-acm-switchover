@@ -25,6 +25,7 @@ from tenacity import (
 from urllib3.exceptions import HTTPError, MaxRetryError, NewConnectionError
 from urllib3.exceptions import TimeoutError as Urllib3TimeoutError
 
+from lib.constants import MANAGED_CLUSTER_API_GROUP, MANAGED_CLUSTER_API_VERSION, MANAGED_CLUSTER_PLURAL
 from lib.validation import InputValidator, ValidationError
 
 logger = logging.getLogger("acm_switchover")
@@ -143,6 +144,15 @@ retry_api_call = retry(
     reraise=True,
 )
 
+# Advisory discovery retains retries but deliberately has no before-sleep
+# logger because exception strings may contain server-provided response data.
+retry_api_call_advisory = retry(
+    retry=retry_if_exception(_should_retry),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    stop=stop_after_attempt(5),
+    reraise=True,
+)
+
 
 def api_call(
     not_found_value: Any = None,
@@ -211,23 +221,29 @@ class KubeClient:
         """
         self.context = context
         self.dry_run = dry_run
+        self.request_timeout = request_timeout
         self.disable_hostname_verification = disable_hostname_verification
 
-        # Load config for specific context with clearer error handling
+        # Build an ApiClient for this context without mutating global Kubernetes configuration.
         try:
-            config.load_kube_config(context=context)
+            api_client = config.new_client_from_config(context=context, persist_config=False)
         except ConfigException as exc:
-            logger.error("Failed to load kubeconfig for context %s: %s", context or "default", exc)
+            logger.error(
+                "Failed to load kubeconfig for context %s: %s",
+                context or "default",
+                exc,
+            )
             raise
 
-        # Create per-instance configuration to avoid affecting other clients
-        configuration = client.Configuration.get_default_copy()
+        # Configure only this per-context ApiClient instance.
+        configuration = api_client.configuration
         # Tenacity handles retries for API calls; disable urllib3 retries to avoid double retry layers.
         # NOTE: With this setting, the underlying HTTP client will not retry failed requests on its own.
         #       Any operation that is not wrapped by the Tenacity-based retry decorator (e.g., @retry_api_call),
         #       or if Tenacity is disabled/misconfigured, will perform no automatic retries and may fail on
         #       transient network or server errors.
         configuration.retries = 0
+        configuration.timeout = request_timeout
 
         if disable_hostname_verification and hasattr(configuration, "assert_hostname"):
             configuration.assert_hostname = False
@@ -237,7 +253,6 @@ class KubeClient:
             )
 
         # Create API clients with this specific configuration
-        api_client = client.ApiClient(configuration)
         self.core_v1 = client.CoreV1Api(api_client)
         self.apps_v1 = client.AppsV1Api(api_client)
         self.custom_api = client.CustomObjectsApi(api_client)
@@ -252,6 +267,10 @@ class KubeClient:
             context or "default",
             request_timeout,
         )
+
+    def _request_timeout_kwargs(self, request_timeout: Optional[int] = None) -> Dict[str, int]:
+        """Return Kubernetes client kwargs with an explicit per-request timeout."""
+        return {"_request_timeout": (request_timeout if request_timeout is not None else self.request_timeout)}
 
     def _validate_resource_inputs(
         self,
@@ -289,7 +308,7 @@ class KubeClient:
         """
         self._validate_resource_inputs(namespace=name)
 
-        ns = self.core_v1.read_namespace(name)
+        ns = self.core_v1.read_namespace(name, **self._request_timeout_kwargs())
         return ns.to_dict()
 
     def namespace_exists(self, name: str) -> bool:
@@ -306,6 +325,14 @@ class KubeClient:
         """
         return self.get_namespace(name) is not None
 
+    def get_cluster_identity(self) -> Dict[str, Optional[str]]:
+        """Return a stable live identity for the connected cluster."""
+        namespace = self.get_namespace("kube-system")
+        cluster_uid = ((namespace or {}).get("metadata") or {}).get("uid")
+        if not cluster_uid:
+            raise RuntimeError("Unable to determine cluster identity: kube-system namespace UID is unavailable")
+        return {"context": self.context, "cluster_uid": cluster_uid}
+
     @api_call(not_found_value=[], resource_desc="list namespaces")
     def list_namespaces(self) -> List[Dict]:
         """List all namespaces.
@@ -316,7 +343,7 @@ class KubeClient:
         Raises:
             None (uses api_call decorator for error handling)
         """
-        result = self.core_v1.list_namespace()
+        result = self.core_v1.list_namespace(**self._request_timeout_kwargs())
         return [ns.to_dict() for ns in (result.items or [])]
 
     @api_call(not_found_value=None, log_on_error=False)
@@ -335,7 +362,11 @@ class KubeClient:
         """
         self._validate_resource_inputs(namespace, name, "secret")
 
-        secret = self.core_v1.read_namespaced_secret(name=name, namespace=namespace)
+        secret = self.core_v1.read_namespaced_secret(
+            name=name,
+            namespace=namespace,
+            **self._request_timeout_kwargs(),
+        )
         return secret.to_dict()
 
     def secret_exists(self, namespace: str, name: str) -> bool:
@@ -372,7 +403,11 @@ class KubeClient:
         """
         self._validate_resource_inputs(namespace, name, "ConfigMap")
 
-        cm = self.core_v1.read_namespaced_config_map(name=name, namespace=namespace)
+        cm = self.core_v1.read_namespaced_config_map(
+            name=name,
+            namespace=namespace,
+            **self._request_timeout_kwargs(),
+        )
         return cm.to_dict()
 
     def exists_configmap(self, namespace: str, name: str) -> bool:
@@ -427,14 +462,27 @@ class KubeClient:
             "data": data,
         }
         try:
-            result = self.core_v1.create_namespaced_config_map(namespace=namespace, body=create_body)
+            result = self.core_v1.create_namespaced_config_map(
+                namespace=namespace,
+                body=create_body,
+                **self._request_timeout_kwargs(),
+            )
             return result.to_dict()
         except ApiException as e:
             if e.status == 409:
                 # ConfigMap already exists (concurrent create or timeout-after-create);
                 # patch to converge to the desired state.
-                logger.debug("ConfigMap %s/%s already exists (409), patching instead", namespace, name)
-                result = self.core_v1.patch_namespaced_config_map(name=name, namespace=namespace, body={"data": data})
+                logger.debug(
+                    "ConfigMap %s/%s already exists (409), patching instead",
+                    namespace,
+                    name,
+                )
+                result = self.core_v1.patch_namespaced_config_map(
+                    name=name,
+                    namespace=namespace,
+                    body={"data": data},
+                    **self._request_timeout_kwargs(),
+                )
                 return result.to_dict()
             if is_retryable_error(e):
                 raise
@@ -461,7 +509,7 @@ class KubeClient:
             logger.info("[DRY-RUN] Would delete ConfigMap %s/%s", namespace, name)
             return True
 
-        self.core_v1.delete_namespaced_config_map(name=name, namespace=namespace)
+        self.core_v1.delete_namespaced_config_map(name=name, namespace=namespace, **self._request_timeout_kwargs())
         return True
 
     @api_call(not_found_value=True, resource_desc="delete pod")
@@ -484,7 +532,7 @@ class KubeClient:
             logger.info("[DRY-RUN] Would delete Pod %s/%s", namespace, name)
             return True
 
-        self.core_v1.delete_namespaced_pod(name=name, namespace=namespace)
+        self.core_v1.delete_namespaced_pod(name=name, namespace=namespace, **self._request_timeout_kwargs())
         return True
 
     @api_call(not_found_value=None, resource_desc="read Route")
@@ -509,6 +557,7 @@ class KubeClient:
             namespace=namespace,
             plural="routes",
             name=name,
+            **self._request_timeout_kwargs(),
         )
         return route.get("spec", {}).get("host")
 
@@ -546,9 +595,16 @@ class KubeClient:
                 namespace=namespace,
                 plural=plural,
                 name=name,
+                **self._request_timeout_kwargs(),
             )
         else:
-            resource = self.custom_api.get_cluster_custom_object(group=group, version=version, plural=plural, name=name)
+            resource = self.custom_api.get_cluster_custom_object(
+                group=group,
+                version=version,
+                plural=plural,
+                name=name,
+                **self._request_timeout_kwargs(),
+            )
         return resource
 
     def _get_custom_resource_raw(
@@ -570,17 +626,37 @@ class KubeClient:
                     namespace=namespace,
                     plural=plural,
                     name=name,
+                    **self._request_timeout_kwargs(),
                 )
             return self.custom_api.get_cluster_custom_object(
                 group=group,
                 version=version,
                 plural=plural,
                 name=name,
+                **self._request_timeout_kwargs(),
             )
         except ApiException as e:
             if e.status == 404:
                 return None
             raise
+
+    @retry_api_call_advisory
+    def get_custom_resource_advisory(
+        self,
+        group: str,
+        version: str,
+        plural: str,
+        name: str,
+        namespace: Optional[str] = None,
+    ) -> Optional[Dict]:
+        """Read a custom resource with retries and no exception logging."""
+        return self._get_custom_resource_raw(
+            group=group,
+            version=version,
+            plural=plural,
+            name=name,
+            namespace=namespace,
+        )
 
     @retry_api_call
     def list_custom_resources(
@@ -611,6 +687,25 @@ class KubeClient:
         Raises:
             ValidationError: If namespace is invalid
         """
+        return self._list_custom_resources_raw(
+            group=group,
+            version=version,
+            plural=plural,
+            namespace=namespace,
+            label_selector=label_selector,
+            max_items=max_items,
+        )
+
+    def _list_custom_resources_raw(
+        self,
+        group: str,
+        version: str,
+        plural: str,
+        namespace: Optional[str] = None,
+        label_selector: Optional[str] = None,
+        max_items: Optional[int] = None,
+    ) -> List[Dict]:
+        """List custom resources once without retry logging."""
         self._validate_resource_inputs(namespace=namespace)
 
         items: List[Dict] = []
@@ -636,6 +731,7 @@ class KubeClient:
                         label_selector=label_selector,
                         _continue=continue_token,
                         limit=remaining,
+                        **self._request_timeout_kwargs(),
                     )
                 else:
                     result = self.custom_api.list_cluster_custom_object(
@@ -645,6 +741,7 @@ class KubeClient:
                         label_selector=label_selector,
                         _continue=continue_token,
                         limit=remaining,
+                        **self._request_timeout_kwargs(),
                     )
             except ApiException as e:
                 if e.status == 404:
@@ -669,6 +766,26 @@ class KubeClient:
                 break
 
         return items
+
+    @retry_api_call_advisory
+    def list_custom_resources_advisory(
+        self,
+        group: str,
+        version: str,
+        plural: str,
+        namespace: Optional[str] = None,
+        label_selector: Optional[str] = None,
+        max_items: Optional[int] = None,
+    ) -> List[Dict]:
+        """List custom resources with retries and no exception logging."""
+        return self._list_custom_resources_raw(
+            group=group,
+            version=version,
+            plural=plural,
+            namespace=namespace,
+            label_selector=label_selector,
+            max_items=max_items,
+        )
 
     @retry_api_call
     def patch_custom_resource(
@@ -723,12 +840,18 @@ class KubeClient:
                     plural=plural,
                     name=name,
                     body=patch,
+                    **self._request_timeout_kwargs(),
                 )
                 logger.debug("KUBE_CLIENT: patch_namespaced_custom_object returned successfully")
             else:
                 logger.debug("KUBE_CLIENT: Calling patch_cluster_custom_object...")
                 result = self.custom_api.patch_cluster_custom_object(
-                    group=group, version=version, plural=plural, name=name, body=patch
+                    group=group,
+                    version=version,
+                    plural=plural,
+                    name=name,
+                    body=patch,
+                    **self._request_timeout_kwargs(),
                 )
                 logger.debug("KUBE_CLIENT: patch_cluster_custom_object returned successfully")
 
@@ -756,7 +879,6 @@ class KubeClient:
             )
             raise
 
-    @retry_api_call
     def create_custom_resource(
         self,
         group: str,
@@ -791,6 +913,22 @@ class KubeClient:
             )
             return body
 
+        if resource_name:
+            create_once = retry_api_call(self._create_custom_resource_once)
+            return create_once(group, version, plural, body, namespace, resource_name)
+
+        return self._create_custom_resource_once(group, version, plural, body, namespace, resource_name)
+
+    def _create_custom_resource_once(
+        self,
+        group: str,
+        version: str,
+        plural: str,
+        body: Dict[str, Any],
+        namespace: Optional[str],
+        resource_name: Optional[str],
+    ) -> Dict:
+        """Create a custom resource once, reconciling named 409 conflicts."""
         try:
             if namespace:
                 result = self.custom_api.create_namespaced_custom_object(
@@ -799,10 +937,15 @@ class KubeClient:
                     namespace=namespace,
                     plural=plural,
                     body=body,
+                    **self._request_timeout_kwargs(),
                 )
             else:
                 result = self.custom_api.create_cluster_custom_object(
-                    group=group, version=version, plural=plural, body=body
+                    group=group,
+                    version=version,
+                    plural=plural,
+                    body=body,
+                    **self._request_timeout_kwargs(),
                 )
             return result
         except ApiException as e:
@@ -904,17 +1047,17 @@ class KubeClient:
     def list_managed_clusters(self) -> List[Dict]:
         """List all ManagedCluster resources."""
         return self.list_custom_resources(
-            group="cluster.open-cluster-management.io",
-            version="v1",
-            plural="managedclusters",
+            group=MANAGED_CLUSTER_API_GROUP,
+            version=MANAGED_CLUSTER_API_VERSION,
+            plural=MANAGED_CLUSTER_PLURAL,
         )
 
     def patch_managed_cluster(self, name: str, patch: Dict[str, Any]) -> Dict:
         """Patch a ManagedCluster resource."""
         return self.patch_custom_resource(
-            group="cluster.open-cluster-management.io",
-            version="v1",
-            plural="managedclusters",
+            group=MANAGED_CLUSTER_API_GROUP,
+            version=MANAGED_CLUSTER_API_VERSION,
+            plural=MANAGED_CLUSTER_PLURAL,
             name=name,
             patch=patch,
         )
@@ -935,7 +1078,11 @@ class KubeClient:
         """
         self._validate_resource_inputs(namespace, name, "deployment")
 
-        deployment = self.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
+        deployment = self.apps_v1.read_namespaced_deployment(
+            name=name,
+            namespace=namespace,
+            **self._request_timeout_kwargs(),
+        )
         return deployment.to_dict()
 
     @api_call(not_found_value=None, resource_desc="get statefulset")
@@ -954,7 +1101,11 @@ class KubeClient:
         """
         self._validate_resource_inputs(namespace, name, "statefulset")
 
-        statefulset = self.apps_v1.read_namespaced_stateful_set(name=name, namespace=namespace)
+        statefulset = self.apps_v1.read_namespaced_stateful_set(
+            name=name,
+            namespace=namespace,
+            **self._request_timeout_kwargs(),
+        )
         return statefulset.to_dict()
 
     @retry_api_call
@@ -985,7 +1136,12 @@ class KubeClient:
 
         try:
             body = {"spec": {"replicas": replicas}}
-            result = self.apps_v1.patch_namespaced_deployment_scale(name=name, namespace=namespace, body=body)
+            result = self.apps_v1.patch_namespaced_deployment_scale(
+                name=name,
+                namespace=namespace,
+                body=body,
+                **self._request_timeout_kwargs(),
+            )
             return result.to_dict()
         except ApiException as e:
             if is_retryable_error(e):
@@ -1021,7 +1177,12 @@ class KubeClient:
 
         try:
             body = {"spec": {"replicas": replicas}}
-            result = self.apps_v1.patch_namespaced_stateful_set_scale(name=name, namespace=namespace, body=body)
+            result = self.apps_v1.patch_namespaced_stateful_set_scale(
+                name=name,
+                namespace=namespace,
+                body=body,
+                **self._request_timeout_kwargs(),
+            )
             return result.to_dict()
         except ApiException as e:
             if is_retryable_error(e):
@@ -1052,7 +1213,12 @@ class KubeClient:
         try:
             now = time.strftime("%Y%m%d%H%M%S")
             body = {"spec": {"template": {"metadata": {"annotations": {"kubectl.kubernetes.io/restartedAt": now}}}}}
-            result = self.apps_v1.patch_namespaced_deployment(name=name, namespace=namespace, body=body)
+            result = self.apps_v1.patch_namespaced_deployment(
+                name=name,
+                namespace=namespace,
+                body=body,
+                **self._request_timeout_kwargs(),
+            )
             return result.to_dict()
         except ApiException as e:
             if is_retryable_error(e):
@@ -1080,9 +1246,11 @@ class KubeClient:
             if not label_selector.strip():
                 raise ValidationError("Label selector cannot be empty or whitespace-only")
 
-        kwargs: Dict[str, Any] = {"namespace": namespace, "label_selector": label_selector}
-        if request_timeout is not None:
-            kwargs["_request_timeout"] = request_timeout
+        kwargs: Dict[str, Any] = {
+            "namespace": namespace,
+            "label_selector": label_selector,
+            **self._request_timeout_kwargs(request_timeout),
+        }
 
         result = self.core_v1.list_namespaced_pod(**kwargs)
         return [pod.to_dict() for pod in (result.items or [])]
@@ -1155,6 +1323,7 @@ class KubeClient:
                 raise ValidationError("tail_lines must be a non-negative integer")
             kwargs["tail_lines"] = tail_lines_int
 
+        kwargs.update(self._request_timeout_kwargs())
         return self.core_v1.read_namespaced_pod_log(name=name, namespace=namespace, **kwargs) or ""
 
     def wait_for_pods_ready(
@@ -1179,6 +1348,11 @@ class KubeClient:
         start_time = time.time()
         poll_interval = 5
 
+        def sleep_remaining_budget() -> None:
+            sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
         while time.time() - start_time < timeout:
             elapsed = time.time() - start_time
             remaining_budget = timeout - elapsed
@@ -1196,26 +1370,28 @@ class KubeClient:
                     pods = []
                 elif is_retryable_error(exc):
                     logger.debug("Transient error while listing pods in %s: %s", namespace, exc)
-                    sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
-                    if sleep_time > 0:
-                        time.sleep(sleep_time)
+                    sleep_remaining_budget()
                     continue
                 else:
                     raise
             except Exception as exc:
                 if is_retryable_error(exc):
                     logger.debug("Transient error while listing pods in %s: %s", namespace, exc)
-                    sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
-                    if sleep_time > 0:
-                        time.sleep(sleep_time)
+                    sleep_remaining_budget()
                     continue
                 raise
 
             if expected_count is not None and len(pods) < expected_count:
                 logger.debug("Waiting for %s pods, found %s", expected_count, len(pods))
-                sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
+                sleep_remaining_budget()
+                continue
+
+            if expected_count == 0:
+                if len(pods) == 0:
+                    logger.info("No pods expected in %s and none found", namespace)
+                    return True
+                logger.debug("Waiting for zero pods in %s, found %s", namespace, len(pods))
+                sleep_remaining_budget()
                 continue
 
             ready_count = 0
@@ -1227,7 +1403,7 @@ class KubeClient:
                         break
 
             if expected_count is None:
-                if ready_count == len(pods) and len(pods) > 0:
+                if pods and ready_count == len(pods):
                     logger.info("All %s pods ready in %s", ready_count, namespace)
                     return True
             else:
@@ -1242,9 +1418,7 @@ class KubeClient:
                     return True
 
             logger.debug("%s/%s pods ready in %s", ready_count, len(pods), namespace)
-            sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+            sleep_remaining_budget()
 
         logger.error("Timeout waiting for pods in %s", namespace)
         return False

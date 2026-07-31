@@ -1,0 +1,117 @@
+---
+- name: Use discovered secondary Restore resources in dry-run mode
+  ansible.builtin.set_fact:
+    _acm_secondary_restores_to_cleanup: "{{ acm_finalization_restores_info | default({'resources': []}) }}"
+  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+
+- name: Read Restore resources on the secondary hub
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: Restore
+    namespace: open-cluster-management-backup
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _acm_secondary_restores_to_cleanup
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Initialize Restore cleanup classification
+  ansible.builtin.set_fact:
+    _acm_secondary_cleanup_candidate_restores: []
+    _acm_secondary_cleanup_candidate_restore_names: []
+    _acm_secondary_unexpected_restore_names: []
+
+- name: Classify secondary Restore resources for cleanup
+  ansible.builtin.set_fact:
+    _acm_secondary_cleanup_candidate_restores: >-
+      {{
+        _acm_secondary_cleanup_candidate_restores + [item]
+        if _acm_restore_cleanup_candidate
+        else _acm_secondary_cleanup_candidate_restores
+      }}
+    _acm_secondary_cleanup_candidate_restore_names: >-
+      {{
+        _acm_secondary_cleanup_candidate_restore_names + [_acm_restore_name]
+        if _acm_restore_cleanup_candidate
+        else _acm_secondary_cleanup_candidate_restore_names
+      }}
+    _acm_secondary_unexpected_restore_names: >-
+      {{
+        _acm_secondary_unexpected_restore_names + [_acm_restore_name]
+        if not _acm_restore_cleanup_candidate
+        else _acm_secondary_unexpected_restore_names
+      }}
+  vars:
+    _acm_restore_name: "{{ (((item.metadata | default({})) or {}).get('name', 'unknown')) }}"
+    _acm_restore_cleanup_candidate: >-
+      {{
+        _acm_restore_name in ['restore-acm-passive-sync', 'restore-acm-full', 'restore-acm-activate']
+        or (((item.spec | default({})) or {}).get('syncRestoreWithNewBackups') is sameas true)
+      }}
+  loop: "{{ _acm_secondary_restores_to_cleanup.resources | default([]) }}"
+  loop_control:
+    label: "{{ (((item.metadata | default({})) or {}).get('name', 'unknown')) }}"
+
+- name: Refuse to delete unexpected Restore resources
+  ansible.builtin.fail:
+    msg: >-
+      Found unexpected Restore resource(s) blocking BackupSchedule enablement:
+      {{ _acm_secondary_unexpected_restore_names | join(', ') }}.
+      Refusing to delete non-switchover Restore resources automatically.
+  when:
+    - (_acm_secondary_unexpected_restore_names | default([]) | length) > 0
+
+- name: Delete Restore resources before enabling backups
+  kubernetes.core.k8s:
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: Restore
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ item.metadata.namespace | default('open-cluster-management-backup') }}"
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+    state: absent
+  loop: "{{ _acm_secondary_cleanup_candidate_restores | default([]) }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  register: _acm_secondary_restore_cleanup_results
+  when:
+    - (_acm_secondary_cleanup_candidate_restores | default([]) | length) > 0
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Wait for secondary Restore cleanup to finish
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: Restore
+    namespace: open-cluster-management-backup
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _acm_secondary_restore_cleanup_wait
+  retries: 40
+  delay: 3
+  until: >-
+    (
+      (_acm_secondary_restore_cleanup_wait.resources | default([])
+      | map(attribute='metadata')
+      | map('default', {})
+      | map('default', {}, true)
+      | map(attribute='name')
+      | select('in', _acm_secondary_cleanup_candidate_restore_names | default([]))
+      | list
+      | length)
+    ) == 0
+  when:
+    - (_acm_secondary_cleanup_candidate_restores | default([]) | length) > 0
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Publish restore cleanup result
+  ansible.builtin.set_fact:
+    acm_switchover_cleanup_restores_result:
+      changed: >-
+        {{
+          (_acm_secondary_restore_cleanup_results.changed | default(false))
+          or (
+            acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+            and (_acm_secondary_cleanup_candidate_restores | default([]) | length) > 0
+          )
+        }}
+      restore_count: "{{ _acm_secondary_cleanup_candidate_restores | default([]) | length }}"
+      restore_names: "{{ _acm_secondary_cleanup_candidate_restore_names | default([]) }}"

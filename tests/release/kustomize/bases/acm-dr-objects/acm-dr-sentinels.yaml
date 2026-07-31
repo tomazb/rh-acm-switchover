@@ -1,0 +1,132 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: open-cluster-management-backup
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/fixture-scope: acm-dr-objects
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: acm-dr-backupschedule-desired-state
+  namespace: open-cluster-management-backup
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/fixture-scope: acm-dr-objects
+    acm-switchover.redhat-lab/acm-object: backupschedule
+  annotations:
+    argocd.argoproj.io/tracking-id: acm-dr-objects:/ConfigMap:open-cluster-management-backup/acm-dr-backupschedule-desired-state
+data:
+  desired-state.yaml: |-
+    apiVersion: cluster.open-cluster-management.io/v1beta1
+    kind: BackupSchedule
+    metadata:
+      name: acm-managed-clusters-schedule
+      namespace: open-cluster-management-backup
+    spec:
+      veleroSchedule: 0 */6 * * *
+      useManagedServiceAccount: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: acm-dr-restore-desired-state
+  namespace: open-cluster-management-backup
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/fixture-scope: acm-dr-objects
+    acm-switchover.redhat-lab/acm-object: restore
+  annotations:
+    argocd.argoproj.io/tracking-id: acm-dr-objects:/ConfigMap:open-cluster-management-backup/acm-dr-restore-desired-state
+data:
+  desired-state.yaml: |-
+    apiVersion: cluster.open-cluster-management.io/v1beta1
+    kind: Restore
+    metadata:
+      name: restore-acm-passive-sync
+      namespace: open-cluster-management-backup
+    spec:
+      syncRestoreWithNewBackups: true
+      restoreSyncInterval: 10m
+      cleanupBeforeRestore: CleanupRestored
+      restoreStatus:
+        includedResources:
+          - managedclusters
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: acm-policy-desired-state
+  namespace: open-cluster-management-backup
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/fixture-scope: acm-dr-objects
+    acm-switchover.redhat-lab/acm-object: policy
+  annotations:
+    argocd.argoproj.io/tracking-id: acm-dr-objects:/ConfigMap:open-cluster-management-backup/acm-policy-desired-state
+data:
+  desired-state.yaml: |-
+    apiVersion: policy.open-cluster-management.io/v1
+    kind: Policy
+    metadata:
+      name: acm-switchover-lab-inform
+      namespace: open-cluster-management-backup
+    spec:
+      remediationAction: inform
+      disabled: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: acm-placement-desired-state
+  namespace: open-cluster-management-backup
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/fixture-scope: acm-dr-objects
+    acm-switchover.redhat-lab/acm-object: placement
+data:
+  placement.yaml: |-
+    apiVersion: cluster.open-cluster-management.io/v1beta1
+    kind: Placement
+    metadata:
+      name: acm-switchover-lab-placement
+      namespace: open-cluster-management-backup
+    spec:
+      predicates:
+        - requiredClusterSelector:
+            labelSelector:
+              matchExpressions:
+                - key: name
+                  operator: In
+                  values:
+                    - mc-1
+                    - mc-2
+                    - mc-3
+  placementbinding.yaml: |-
+    apiVersion: policy.open-cluster-management.io/v1
+    kind: PlacementBinding
+    metadata:
+      name: acm-switchover-lab-binding
+      namespace: open-cluster-management-backup
+    placementRef:
+      apiGroup: cluster.open-cluster-management.io
+      kind: Placement
+      name: acm-switchover-lab-placement
+    subjects:
+      - apiGroup: policy.open-cluster-management.io
+        kind: Policy
+        name: acm-switchover-lab-inform
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: managedcluster-ownership-markers
+  namespace: open-cluster-management-backup
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/fixture-scope: acm-dr-objects
+    acm-switchover.redhat-lab/acm-object: managedcluster-markers
+data:
+  managed-clusters: mc-1,mc-2,mc-3
+  ownership-model: metadata-only-static-fixture

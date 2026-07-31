@@ -1,0 +1,47 @@
+{
+    "apiVersion": "v1",
+    "items": [
+        {
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "Restore",
+            "metadata": {
+                "creationTimestamp": "2026-04-07T13:57:24Z",
+                "finalizers": [
+                    "restores.cluster.open-cluster-management.io/finalizer"
+                ],
+                "generation": 3,
+                "name": "restore-acm-passive-sync",
+                "namespace": "open-cluster-management-backup",
+                "resourceVersion": "49205252",
+                "uid": "93e80d44-c17f-46ea-b94e-c2994e918bbf"
+            },
+            "spec": {
+                "cleanupBeforeRestore": "CleanupRestored",
+                "hooks": {},
+                "restoreSyncInterval": "10m0s",
+                "syncRestoreWithNewBackups": true,
+                "veleroCredentialsBackupName": "latest",
+                "veleroManagedClustersBackupName": "latest",
+                "veleroResourcesBackupName": "latest"
+            },
+            "status": {
+                "completionTimestamp": "2026-04-13T13:31:58Z",
+                "lastMessage": "All Velero restores have run successfully",
+                "messages": [
+                    "managed cluster prod2 already available",
+                    "managed cluster prod1 already available",
+                    "managed cluster prod3 already available"
+                ],
+                "phase": "Finished",
+                "veleroCredentialsRestoreName": "restore-acm-passive-sync-acm-credentials-schedule-20260413124016",
+                "veleroGenericResourcesRestoreName": "restore-acm-passive-sync-acm-resources-generic-schedule-20260413124016-active",
+                "veleroManagedClustersRestoreName": "restore-acm-passive-sync-acm-managed-clusters-schedule-20260413124016",
+                "veleroResourcesRestoreName": "restore-acm-passive-sync-acm-resources-schedule-20260413124016"
+            }
+        }
+    ],
+    "kind": "List",
+    "metadata": {
+        "resourceVersion": ""
+    }
+}

@@ -9,10 +9,12 @@ Thank you for considering contributing to the ACM Switchover Automation project!
 3. Create a feature branch: `git checkout -b feature/your-feature-name`
 4. Set up development environment:
    ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements-dev.txt
    ```
+
+The repository defaults to `.venv`, and `./run_tests.sh` will reuse an active virtualenv when possible.
 
 ## Development Guidelines
 
@@ -206,28 +208,38 @@ logger.info("Scaled deployment")
 
 Before submitting a PR:
 
-1. **Validate syntax:**
+1. **Run the default verification path:**
+   ```bash
+   ./run_tests.sh
+   ```
+
+2. **Validate syntax when narrowing failures:**
    ```bash
    python -m py_compile acm_switchover.py lib/*.py modules/*.py
    ```
 
-2. **Test dry-run mode:**
+3. **Test dry-run mode:**
    ```bash
    python acm_switchover.py --dry-run \
      --primary-context test-primary \
      --secondary-context test-secondary
    ```
 
-3. **Test validate-only:**
+4. **Test validate-only:**
    ```bash
    python acm_switchover.py --validate-only \
      --primary-context test-primary \
      --secondary-context test-secondary
    ```
 
-4. **Test in non-production environment** (if possible)
+5. **Run collection tests when touching the collection:**
+   ```bash
+   python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q
+   ```
 
-5. **Verify idempotency:**
+6. **Test in non-production environment** (if possible)
+
+7. **Verify idempotency:**
    - Run twice
    - Second run should skip all completed steps
    - Verify state file updated correctly
@@ -240,8 +252,10 @@ When adding features:
 2. **Update docs/operations/usage.md** - Add usage examples
 3. **Update docs/operations/quickref.md** - Add commands if new flags
 4. **Update docs/development/architecture.md** - Explain design decisions
-5. **Add inline comments** - Explain complex logic
-6. **Update docstrings** - Document function behavior
+5. **Update collection docs** - Refresh `docs/ansible-collection/` or `ansible_collections/.../docs/` when collection behavior changes
+6. **Update CHANGELOG.md** - Add entries under `[Unreleased]`
+7. **Add inline comments** - Explain complex logic
+8. **Update docstrings** - Document function behavior
 
 ### Commit Messages
 
@@ -278,7 +292,7 @@ refactor: extract common validation logic to helper
 
 1. **Update documentation** as described above
 2. **Test thoroughly** in non-production environment
-3. **Update CHANGELOG** (if we add one)
+3. **Update CHANGELOG.md**
 4. **Create PR** with clear description:
    - What does this PR do?
    - Why is this change needed?

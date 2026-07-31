@@ -1,0 +1,23 @@
+---
+# Resume with trusted namespace hints rehydrated from checkpoint/runtime data.
+acm_switchover_argocd:
+  run_id: test-run-002
+
+acm_switchover_argocd_discovery_namespaces:
+  primary:
+    - argocd
+    - team-gitops
+
+acm_switchover_argocd_mock_apps:
+  - metadata:
+      name: acm-app
+      namespace: argocd
+      annotations:
+        acm-switchover.argoproj.io/paused-by: test-run-002
+        acm-switchover.argoproj.io/original-sync-policy: '{"automated": {"prune": true}}'
+    spec:
+      syncPolicy: {}
+    status:
+      resources:
+        - kind: BackupSchedule
+          namespace: open-cluster-management-backup

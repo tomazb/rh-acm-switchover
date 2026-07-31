@@ -17,8 +17,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import modules.primary_prep as primary_prep_module
 from lib import argocd as argocd_lib
-from lib.constants import DISABLE_AUTO_IMPORT_ANNOTATION, OBSERVABILITY_NAMESPACE, THANOS_SCALE_DOWN_WAIT
+from lib.constants import (
+    BACKUP_NAMESPACE,
+    DELETE_REQUEST_TIMEOUT,
+    DISABLE_AUTO_IMPORT_ANNOTATION,
+    OBSERVABILITY_NAMESPACE,
+    OBSERVABILITY_TERMINATE_INTERVAL,
+    OBSERVABILITY_TERMINATE_TIMEOUT,
+    THANOS_COMPACTOR_LABEL_SELECTOR,
+)
 from lib.exceptions import SwitchoverError
+from lib.waiter import WaitConditionResult
 
 PrimaryPreparation = primary_prep_module.PrimaryPreparation
 
@@ -133,6 +142,19 @@ class TestPrimaryPreparation:
         # Should not scale Thanos since no observability
         mock_primary_client.scale_statefulset.assert_not_called()
 
+    def test_pause_backup_schedule_fails_when_multiple_schedules_exist(self, primary_prep_no_obs, mock_primary_client):
+        """Multiple BackupSchedules are ambiguous and must not be silently first-selected."""
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-a"}, "spec": {"paused": False}},
+            {"metadata": {"name": "schedule-b"}, "spec": {"paused": False}},
+        ]
+
+        with pytest.raises(SwitchoverError, match="Multiple BackupSchedules"):
+            primary_prep_no_obs._pause_backup_schedule()
+
+        mock_primary_client.patch_custom_resource.assert_not_called()
+        mock_primary_client.delete_custom_resource.assert_not_called()
+
     def test_prepare_steps_already_completed(self, primary_prep_with_obs, mock_state_manager):
         """Test skipping already completed steps."""
         mock_state_manager.is_step_completed.return_value = True
@@ -157,9 +179,93 @@ class TestPrimaryPreparation:
         mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1", "labels": {}}}]
         mock_primary_client.patch_custom_resource.return_value = True
 
-        result = prep.prepare()
+        with patch.object(prep, "_pause_argocd_acm_apps"):
+            result = prep.prepare()
 
         assert result is True
+        assert not any(
+            call.args == ("pause_argocd_apps",) for call in mock_state_manager.mark_step_completed.call_args_list
+        )
+
+    def test_prepare_dry_run_still_calls_argocd_pause_logic(self, mock_primary_client, mock_state_manager):
+        """Dry-run must still discover Argo CD apps instead of skipping the coordinator path."""
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            has_observability=False,
+            dry_run=True,
+            argocd_manage=True,
+        )
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
+        ]
+        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1", "labels": {}}}]
+        mock_primary_client.patch_custom_resource.return_value = True
+
+        with patch.object(prep, "_pause_argocd_acm_apps") as pause_argocd:
+            result = prep.prepare()
+
+        assert result is True
+        pause_argocd.assert_called_once_with()
+        assert not any(
+            call.args == ("pause_argocd_apps",) for call in mock_state_manager.mark_step_completed.call_args_list
+        )
+
+    def test_prepare_dry_run_surfaces_argocd_blockers(self, mock_primary_client, mock_state_manager):
+        """Dry-run should still fail when Argo CD discovery finds pause blockers."""
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            has_observability=False,
+            dry_run=True,
+            argocd_manage=True,
+        )
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
+        ]
+        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1", "labels": {}}}]
+        mock_primary_client.patch_custom_resource.return_value = True
+
+        with patch.object(
+            prep,
+            "_pause_argocd_acm_apps",
+            side_effect=SwitchoverError("Argo CD auto-sync pause failed for 1 Application(s)"),
+        ) as pause_argocd:
+            result = prep.prepare()
+
+        assert result is False
+        pause_argocd.assert_called_once_with()
+        mock_state_manager.add_error.assert_called_once_with(
+            "Argo CD auto-sync pause failed for 1 Application(s)",
+            primary_prep_module.Phase.PRIMARY_PREP.value,
+        )
+
+    def test_prepare_dry_run_skips_argocd_pause_when_step_already_completed(
+        self, mock_primary_client, mock_state_manager
+    ):
+        """Dry-run should mirror resumed step gating when Argo CD pause already completed."""
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            has_observability=False,
+            dry_run=True,
+            argocd_manage=True,
+        )
+        mock_state_manager.is_step_completed.side_effect = lambda step_name: step_name == "pause_argocd_apps"
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
+        ]
+        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1", "labels": {}}}]
+        mock_primary_client.patch_custom_resource.return_value = True
+
+        with patch.object(prep, "_pause_argocd_acm_apps") as pause_argocd:
+            result = prep.prepare()
+
+        assert result is True
+        pause_argocd.assert_not_called()
         assert not any(
             call.args == ("pause_argocd_apps",) for call in mock_state_manager.mark_step_completed.call_args_list
         )
@@ -192,10 +298,10 @@ class TestPrimaryPreparation:
         impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-1", resource_count=1, app=app)]
 
         with (
-            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
-            patch("modules.primary_prep.argocd_lib.pause_autosync") as pause_autosync,
+            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as pause_autosync,
         ):
             pause_autosync.return_value = argocd_lib.PauseResult(
                 namespace="argocd",
@@ -245,10 +351,10 @@ class TestPrimaryPreparation:
         impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-2", resource_count=1, app=app)]
 
         with (
-            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
-            patch("modules.primary_prep.argocd_lib.pause_autosync") as pause_autosync,
+            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as pause_autosync,
         ):
             pause_autosync.return_value = argocd_lib.PauseResult(
                 namespace="argocd",
@@ -293,7 +399,7 @@ class TestPrimaryPreparation:
         )
 
         with patch(
-            "modules.primary_prep.argocd_lib.detect_argocd_installation",
+            "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
             return_value=discovery,
         ):
             prep._pause_argocd_acm_apps()
@@ -353,10 +459,10 @@ class TestPrimaryPreparation:
             )
 
         with (
-            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app1, app2]),
-            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
-            patch("modules.primary_prep.argocd_lib.pause_autosync", side_effect=pause_side_effect),
+            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app1, app2]),
+            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_coordinator.argocd_lib.pause_autosync", side_effect=pause_side_effect),
         ):
             prep._pause_argocd_acm_apps()
 
@@ -407,11 +513,11 @@ class TestPrimaryPreparation:
         impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-1", resource_count=1, app=app)]
 
         with (
-            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
             patch(
-                "modules.primary_prep.argocd_lib.pause_autosync",
+                "lib.argocd_coordinator.argocd_lib.pause_autosync",
                 return_value=argocd_lib.PauseResult(
                     namespace="argocd",
                     name="app-1",
@@ -471,11 +577,11 @@ class TestPrimaryPreparation:
         impacts = [argocd_lib.AppImpact(namespace="openshift-gitops", name="acm-app", resource_count=1, app=app)]
 
         with (
-            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
             patch(
-                "modules.primary_prep.argocd_lib.pause_autosync",
+                "lib.argocd_coordinator.argocd_lib.pause_autosync",
                 return_value=argocd_lib.PauseResult(
                     namespace="openshift-gitops",
                     name="acm-app",
@@ -521,17 +627,21 @@ class TestPrimaryPreparation:
             install_type="vanilla",
         )
         app = {
-            "metadata": {"namespace": "argocd", "name": "app-1"},
+            "metadata": {
+                "namespace": "argocd",
+                "name": "app-1",
+                "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"},
+            },
             "spec": {"syncPolicy": {"syncOptions": ["CreateNamespace=true"]}},
             "status": {"resources": [{"kind": "Restore", "namespace": "open-cluster-management-backup"}]},
         }
         impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-1", resource_count=1, app=app)]
 
         with (
-            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
-            patch("modules.primary_prep.argocd_lib.pause_autosync") as pause_autosync,
+            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as pause_autosync,
         ):
             prep._pause_argocd_acm_apps()
 
@@ -586,10 +696,10 @@ class TestPrimaryPreparation:
         impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-1", resource_count=1, app=app)]
 
         with (
-            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
-            patch("modules.primary_prep.argocd_lib.pause_autosync") as pause_autosync,
+            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as pause_autosync,
         ):
             prep._pause_argocd_acm_apps()
 
@@ -597,28 +707,107 @@ class TestPrimaryPreparation:
         assert not any(call.args[0] == "argocd_paused_apps" for call in mock_state_manager.set_config.call_args_list)
         assert state_config["argocd_paused_apps"] == [recorded_entry]
 
-    def test_pause_backup_schedule_acm_212(self, primary_prep_with_obs, mock_primary_client):
+    def test_pause_backup_schedule_acm_212(self, primary_prep_with_obs, mock_primary_client, mock_state_manager):
         """Test pausing backup schedule for ACM 2.12+."""
-        mock_primary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
-        ]
+        backup_schedule = {
+            "metadata": {"name": "schedule-rhacm", "resourceVersion": "12345"},
+            "spec": {"paused": False},
+        }
+        mock_primary_client.list_custom_resources.return_value = [backup_schedule]
+
+        def patch_side_effect(**_kwargs):
+            mock_state_manager.set_config.assert_called_once_with("saved_backup_schedule", backup_schedule)
+            return True
+
+        mock_primary_client.patch_custom_resource.side_effect = patch_side_effect
 
         primary_prep_with_obs._pause_backup_schedule()
 
-        mock_primary_client.patch_custom_resource.assert_called_once()
-        call_kwargs = mock_primary_client.patch_custom_resource.call_args[1]
-        assert call_kwargs["patch"] == {"spec": {"paused": True}}
+        mock_primary_client.list_custom_resources.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="backupschedules",
+            namespace=BACKUP_NAMESPACE,
+            max_items=2,
+        )
+        mock_primary_client.patch_custom_resource.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="backupschedules",
+            name="schedule-rhacm",
+            patch={"spec": {"paused": True}},
+            namespace=BACKUP_NAMESPACE,
+        )
+        mock_primary_client.delete_custom_resource.assert_not_called()
 
-    def test_pause_backup_schedule_already_paused(self, primary_prep_with_obs, mock_primary_client):
-        """Test when backup schedule is already paused."""
+    def test_pause_backup_schedule_acm_211_delete_targets_backup_schedule(
+        self, mock_primary_client, mock_state_manager
+    ):
+        """ACM 2.11 pause must snapshot then delete the BackupSchedule by exact resource target."""
+        backup_schedule = {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.11.6",
+            has_observability=False,
+        )
+        mock_primary_client.list_custom_resources.return_value = [backup_schedule]
+
+        def delete_side_effect(**_kwargs):
+            mock_state_manager.set_config.assert_called_once_with("saved_backup_schedule", backup_schedule)
+            return True
+
+        mock_primary_client.delete_custom_resource.side_effect = delete_side_effect
+
+        prep._pause_backup_schedule()
+
+        mock_primary_client.list_custom_resources.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="backupschedules",
+            namespace=BACKUP_NAMESPACE,
+            max_items=2,
+        )
+        mock_primary_client.delete_custom_resource.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="backupschedules",
+            name="schedule-rhacm",
+            namespace=BACKUP_NAMESPACE,
+            timeout_seconds=DELETE_REQUEST_TIMEOUT,
+        )
+        mock_primary_client.patch_custom_resource.assert_not_called()
+
+    def test_pause_backup_schedule_already_paused_persists_when_no_saved_schedule_exists(
+        self, primary_prep_with_obs, mock_primary_client, mock_state_manager
+    ):
+        """Already-paused reruns must persist the BackupSchedule when no saved schedule exists."""
+        backup_schedule = {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}
+        mock_primary_client.list_custom_resources.return_value = [backup_schedule]
+        mock_state_manager.get_config.return_value = None
+
+        primary_prep_with_obs._pause_backup_schedule()
+
+        mock_state_manager.get_config.assert_called_once_with("saved_backup_schedule")
+        mock_state_manager.set_config.assert_called_once_with("saved_backup_schedule", backup_schedule)
+        mock_primary_client.patch_custom_resource.assert_not_called()
+        mock_primary_client.delete_custom_resource.assert_not_called()
+
+    def test_pause_backup_schedule_already_paused_keeps_existing_saved_schedule(
+        self, primary_prep_with_obs, mock_primary_client, mock_state_manager
+    ):
+        """Already-paused reruns must not overwrite a previously saved BackupSchedule."""
         mock_primary_client.list_custom_resources.return_value = [
             {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}
         ]
+        mock_state_manager.get_config.return_value = {"metadata": {"name": "previous-schedule"}}
 
         primary_prep_with_obs._pause_backup_schedule()
 
-        # Should not patch if already paused
+        mock_state_manager.get_config.assert_called_once_with("saved_backup_schedule")
+        mock_state_manager.set_config.assert_not_called()
         mock_primary_client.patch_custom_resource.assert_not_called()
+        mock_primary_client.delete_custom_resource.assert_not_called()
 
     def test_pause_backup_schedule_not_found(self, primary_prep_with_obs, mock_primary_client):
         """Test when no backup schedule exists."""
@@ -641,6 +830,8 @@ class TestPrimaryPreparation:
         [
             ("2.12.0", True),
             ("2.13.0", True),
+            ("2.14.3-rc1", True),
+            ("2.14.3+build", True),
             ("2.11.5", False),
             ("2.10.0", False),
         ],
@@ -665,6 +856,27 @@ class TestPrimaryPreparation:
         else:
             # For ACM < 2.12, use delete instead
             mock_primary_client.delete_custom_resource.assert_called_once()
+
+    @pytest.mark.parametrize("acm_version", ["not-a-version", "2"])
+    def test_pause_backup_schedule_fails_closed_for_unparseable_version(
+        self, mock_primary_client, mock_state_manager, acm_version
+    ):
+        """Unparseable ACM versions must not fall through to the delete path."""
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version=acm_version,
+            has_observability=False,
+        )
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
+        ]
+
+        with pytest.raises(SwitchoverError, match="Invalid ACM version"):
+            prep._pause_backup_schedule()
+
+        mock_primary_client.patch_custom_resource.assert_not_called()
+        mock_primary_client.delete_custom_resource.assert_not_called()
 
     def test_disable_auto_import_with_clusters(self, primary_prep_with_obs, mock_primary_client):
         """Test disabling auto-import on managed clusters."""
@@ -709,11 +921,17 @@ class TestPrimaryPreparation:
 
         mock_primary_client.patch_managed_cluster.assert_not_called()
 
-    @patch("time.sleep")
-    def test_scale_down_thanos(self, mock_sleep, primary_prep_with_obs, mock_primary_client):
+    @patch("modules.primary_prep.wait_for_condition")
+    def test_scale_down_thanos(self, mock_wait, primary_prep_with_obs, mock_primary_client):
         """Test scaling down Thanos compactor."""
         mock_primary_client.scale_statefulset.return_value = {"status": "scaled"}
         mock_primary_client.get_pods.return_value = []  # No pods after scaling down
+
+        def wait_side_effect(_description, condition_fn, **_kwargs):
+            assert condition_fn() == WaitConditionResult.complete("all Thanos compactor pods terminated")
+            return True
+
+        mock_wait.side_effect = wait_side_effect
 
         primary_prep_with_obs._scale_down_thanos_compactor()
 
@@ -722,12 +940,19 @@ class TestPrimaryPreparation:
             name="observability-thanos-compact",
             replicas=0,
         )
-        mock_sleep.assert_called_once_with(THANOS_SCALE_DOWN_WAIT)
+        mock_wait.assert_called_once()
+        _, condition_fn = mock_wait.call_args.args[:2]
+        assert mock_wait.call_args.kwargs["timeout"] == OBSERVABILITY_TERMINATE_TIMEOUT
+        assert mock_wait.call_args.kwargs["interval"] == OBSERVABILITY_TERMINATE_INTERVAL
+        mock_primary_client.get_pods.assert_called_once_with(
+            namespace=OBSERVABILITY_NAMESPACE,
+            label_selector=THANOS_COMPACTOR_LABEL_SELECTOR,
+        )
 
-    def test_prepare_with_thanos_404_warns_and_continues(
+    def test_prepare_with_thanos_404_blocks(
         self, primary_prep_with_obs, mock_primary_client, mock_state_manager, caplog
     ):
-        """Missing Thanos compactor should stay optional for the full prep flow."""
+        """Missing Thanos compactor should block when Observability checks are enabled."""
         mock_primary_client.list_custom_resources.return_value = [
             {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
         ]
@@ -737,16 +962,49 @@ class TestPrimaryPreparation:
             reason="Not Found",
         )
 
-        with caplog.at_level(logging.WARNING, logger="acm_switchover"):
+        with caplog.at_level(logging.ERROR, logger="acm_switchover"):
             result = primary_prep_with_obs.prepare()
 
-        assert result is True
-        mock_state_manager.add_error.assert_not_called()
-        assert any(
+        assert result is False
+        mock_state_manager.add_error.assert_called_once()
+        assert not any(
             call.args == ("scale_down_thanos",) for call in mock_state_manager.mark_step_completed.call_args_list
         )
-        assert "Thanos compactor StatefulSet not found" in caplog.text
+        assert "Failed to scale down Thanos compactor" in caplog.text
         mock_primary_client.get_pods.assert_not_called()
+
+    def test_scale_down_thanos_404_maps_to_switchover_error(self, primary_prep_with_obs, mock_primary_client, caplog):
+        """A missing Thanos StatefulSet must fail closed with the domain error expected by prepare()."""
+        mock_primary_client.scale_statefulset.side_effect = primary_prep_module.ApiException(
+            status=404,
+            reason="Not Found",
+        )
+
+        with (
+            caplog.at_level(logging.ERROR, logger="acm_switchover"),
+            pytest.raises(SwitchoverError, match="Thanos compactor StatefulSet not found"),
+        ):
+            primary_prep_with_obs._scale_down_thanos_compactor()
+
+        assert "Failed to scale down Thanos compactor: StatefulSet not found" in caplog.text
+        mock_primary_client.get_pods.assert_not_called()
+
+    @patch("modules.primary_prep.wait_for_condition")
+    def test_scale_down_thanos_pods_remaining_blocks(self, mock_wait, primary_prep_with_obs, mock_primary_client):
+        """Thanos pods still running after scale-down should block primary prep."""
+        mock_primary_client.scale_statefulset.return_value = {"status": "scaled"}
+        mock_primary_client.get_pods.return_value = [{"metadata": {"name": "thanos-compact-0"}}]
+        mock_wait.return_value = False
+
+        with pytest.raises(SwitchoverError) as exc_info:
+            primary_prep_with_obs._scale_down_thanos_compactor()
+
+        assert "Thanos compactor still has 1 pod(s) running after scale-down timeout" in str(exc_info.value)
+        mock_wait.assert_called_once()
+        mock_primary_client.get_pods.assert_called_once_with(
+            namespace=OBSERVABILITY_NAMESPACE,
+            label_selector=THANOS_COMPACTOR_LABEL_SELECTOR,
+        )
 
     def test_prepare_with_thanos_api_exception_fails_as_real_error(
         self, primary_prep_with_obs, mock_primary_client, mock_state_manager, caplog

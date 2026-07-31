@@ -15,6 +15,57 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# CI-equivalent quality gates fail by default. Set STRICT_QUALITY=0 for a local
+# advisory-only quality pass while preserving test execution.
+STRICT_QUALITY="${STRICT_QUALITY:-1}"
+FLAKE8_JOBS="${FLAKE8_JOBS:-1}"
+BLACK_WORKERS="${BLACK_WORKERS:-1}"
+PYLINT_PATHS=(acm_switchover.py lib/ modules/)
+QUALITY_PATHS=(
+    acm_switchover.py
+    lib
+    modules
+    ansible_collections/tomazb/acm_switchover/plugins
+    ansible_collections/tomazb/acm_switchover/tests
+    tests
+)
+MYPY_PATHS=(
+    acm_switchover.py
+    lib/
+    modules/
+    ansible_collections/tomazb/acm_switchover/plugins
+    ansible_collections/tomazb/acm_switchover/tests
+)
+
+run_ci_quality_gate() {
+    local label="$1"
+    shift
+
+    if "$@"; then
+        return 0
+    fi
+
+    if [ "$STRICT_QUALITY" = "0" ]; then
+        echo -e "${YELLOW}${label} reported issues (advisory because STRICT_QUALITY=0).${NC}"
+        return 0
+    fi
+
+    echo -e "${RED}${label} failed. Set STRICT_QUALITY=0 only for an advisory local run.${NC}"
+    return 1
+}
+
+run_advisory_check() {
+    local label="$1"
+    shift
+
+    if "$@"; then
+        return 0
+    fi
+
+    echo -e "${YELLOW}${label} reported issues (advisory, matching CI exit-zero behavior).${NC}"
+    return 0
+}
+
 # Use existing virtual environment if active, else prefer .venv then venv
 if [ -n "$VIRTUAL_ENV" ]; then
     echo -e "${GREEN}Using active virtualenv: $VIRTUAL_ENV${NC}"
@@ -41,10 +92,16 @@ echo "======================================"
 echo "Running Unit Tests"
 echo "======================================"
 
-# E2E tests are on-demand. Set RUN_E2E=1 to include them.
-# Main test run always excludes E2E; E2E runs separately when requested
-pytest_args=(tests/ -v --cov=. --cov-report=term-missing --cov-report=html --cov-report=xml -m "not e2e")
+# E2E tests are on-demand. Release-framework helper tests run as their own
+# explicit lane so local verification matches CI structure.
+pytest_args=(tests/ --ignore=tests/release -v --cov=. --cov-report=term-missing --cov-report=html --cov-report=xml -m "not e2e")
 python -m pytest "${pytest_args[@]}"
+
+echo ""
+echo "======================================"
+echo "Running Release Framework Tests"
+echo "======================================"
+python -m pytest tests/release -q
 
 if [ "${RUN_E2E:-0}" = "1" ]; then
     echo ""
@@ -61,23 +118,24 @@ echo "======================================"
 
 echo ""
 echo "--- Flake8 (Style Check) ---"
-flake8 acm_switchover.py lib/ modules/ || true
+flake8 . --jobs "$FLAKE8_JOBS" --count --select=E9,F63,F7,F82 --show-source --statistics
+run_advisory_check "Flake8 full style check" flake8 . --jobs "$FLAKE8_JOBS" --count --exit-zero --max-complexity=15 --max-line-length=120 --statistics
 
 echo ""
 echo "--- Pylint (Code Analysis) ---"
-pylint acm_switchover.py lib/ modules/ --exit-zero || true
+run_advisory_check "Pylint" pylint "${PYLINT_PATHS[@]}" --exit-zero --max-line-length=120 --disable=C0103,C0114,C0115,C0116
 
 echo ""
 echo "--- Black (Format Check) ---"
-black --check --line-length 120 acm_switchover.py lib/ modules/ || echo -e "${YELLOW}Format issues found. Run: black --line-length 120 .${NC}"
+run_ci_quality_gate "Black format check" black --check --workers "$BLACK_WORKERS" --line-length 120 "${QUALITY_PATHS[@]}"
 
 echo ""
 echo "--- isort (Import Sort Check) ---"
-isort --check-only --profile black --line-length 120 acm_switchover.py lib/ modules/ || echo -e "${YELLOW}Import sorting issues found. Run: isort --profile black --line-length 120 .${NC}"
+run_ci_quality_gate "isort import check" isort --check-only --profile black --line-length 120 "${QUALITY_PATHS[@]}"
 
 echo ""
 echo "--- MyPy (Type Check) ---"
-mypy acm_switchover.py lib/ modules/ --ignore-missing-imports --no-strict-optional || true
+run_ci_quality_gate "MyPy" mypy --explicit-package-bases "${MYPY_PATHS[@]}" --ignore-missing-imports --no-strict-optional
 
 echo ""
 echo "======================================"
@@ -86,11 +144,12 @@ echo "======================================"
 
 echo ""
 echo "--- Bandit (Security Linter) ---"
-bandit --ini .bandit -ll || true
+bandit --ini .bandit -f json -o bandit-report.json || true
+run_ci_quality_gate "Bandit security check" bandit --ini .bandit -f txt
 
 echo ""
 echo "--- pip-audit (Dependency Vulnerabilities) ---"
-pip-audit || true
+run_advisory_check "pip-audit dependency check" pip-audit
 
 echo ""
 echo "======================================"
@@ -106,6 +165,7 @@ echo "======================================"
 echo "Test Summary"
 echo "======================================"
 echo -e "${GREEN}✓ Unit tests completed${NC}"
+echo -e "${GREEN}✓ Release framework tests completed${NC}"
 echo -e "${GREEN}✓ Coverage report generated: htmlcov/index.html${NC}"
 echo -e "${GREEN}✓ Code quality checks completed${NC}"
 echo -e "${GREEN}✓ Security checks completed${NC}"

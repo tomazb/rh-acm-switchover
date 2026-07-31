@@ -1,91 +1,53 @@
 # Bash Script Test Suite
 
-This suite validates the two operational Bash scripts:
-
-* `scripts/preflight-check.sh`
-* `scripts/postflight-check.sh`
+This slice covers the repo's shell-centric and CLI-adjacent tooling, not just the original pre/post-flight scripts.
 
 ## Test Organization
 
-### Unit Tests (`test_scripts.py`) - 12 tests
+### Script and Tool Coverage
 
-Fast-running tests without external dependencies:
+- `test_scripts.py` covers fast argument-parsing and output-shape checks for:
+  - `scripts/preflight-check.sh`
+  - `scripts/postflight-check.sh`
+  - shared shell helpers from `scripts/lib-common.sh`
+- `test_scripts_integration.py` covers mocked end-to-end shell scenarios and RBAC packaging guidance.
+- `test_check_rbac.py` covers `check_rbac.py`.
+- `test_generate_merged_kubeconfig_script.py` covers `scripts/generate-merged-kubeconfig.sh`.
+- `test_argocd_manage_script.py` covers failure handling and safety edges in `scripts/argocd-manage.sh`.
 
-* **Argument parsing**: Help output, missing/invalid arguments
-* **Error handling**: Unknown options, exit codes
-* **Output formatting**: Section headers, summary display
+## What These Tests Emphasize
 
-### Integration Tests (`test_scripts_integration.py`) - 8 tests
-
-Mocked end-to-end scenarios:
-
-* **Success paths**: All validation checks pass (passive & full methods)
-* **Failure scenarios**: 
-  - ACM version mismatch between hubs
-  - Backups in progress
-  - Missing namespaces/contexts
-  - Missing restore resources
-
-## Implementation Details
-
-* **ANSI stripping**: Color codes removed for stable assertions
-* **Mocked binaries**: Temporary `PATH` injection with bash script mocks
-* **Exit code semantics**: 
-  - `0` = success
-  - `1` = validation failure
-  - `2` = argument error
-  - `127` = command not found
-* **Bug fixes applied**: 
-  - `|| true` on counter increments for `set -e` compatibility
-  - `|| echo "0"` on `grep -c` calls to prevent exits on zero matches
-* **Parameterized tests**: Multiple scenarios tested with single test function
-* **Test markers**: `@pytest.mark.integration` for categorization
+- Help output and argument validation
+- Exit-code discipline for shell entry points
+- Mocked `oc`/`kubectl`/`jq` scenarios for script behavior
+- Packaging and safety regressions around generated kubeconfigs and RBAC assets
+- Guardrails for deprecated or risky tool flows
 
 ## Running Tests
 
-### All script tests
+### Focused Shell/Tool Slice
+
+```bash
+pytest tests/test_scripts.py tests/test_scripts_integration.py \
+  tests/test_check_rbac.py tests/test_generate_merged_kubeconfig_script.py \
+  tests/test_argocd_manage_script.py -v
+```
+
+### Original Pre/Post-Flight Slice
+
 ```bash
 pytest tests/test_scripts.py tests/test_scripts_integration.py -v
 ```
 
-### Quick unit tests only (no mocks)
+### Narrow Tool Checks
+
 ```bash
-pytest tests/test_scripts.py -v
+pytest tests/test_check_rbac.py -v
+pytest tests/test_generate_merged_kubeconfig_script.py -v
+pytest tests/test_argocd_manage_script.py -v
 ```
 
-### Integration tests only
-```bash
-pytest -m integration -v
-```
+## Notes
 
-### Run with coverage report
-```bash
-pytest tests/test_scripts*.py --cov-report=term-missing:skip-covered
-```
-
-### Filter by test name pattern
-```bash
-pytest -k "preflight" -v      # Only preflight tests
-pytest -k "success" -v         # Only success scenario tests
-pytest -k "version" -v         # Version mismatch tests
-```
-
-## Test Statistics
-
-* **Total tests**: 20
-* **Unit tests**: 12 (argument parsing, help, errors)
-* **Integration tests**: 8 (mocked cluster scenarios)
-* **Parameterized variations**: 7 (different args, methods, scripts)
-* **Average runtime**: ~1.2 seconds
-
-## Future Enhancements
-
-* Add `--no-color` flag to scripts for cleaner output parsing
-* JSON summary output option for CI/CD integration
-* Additional failure scenarios:
-  - ClusterDeployment without `preserveOnDelete`
-  - Observability pod failures
-  - DPA reconciliation failures
-* Performance benchmarking for large cluster counts
-* Script timeout tests to ensure proper error handling
-* Mock jq filters for more realistic JSON processing tests
+- The exact number of tool-focused tests changes as new scripts and regression checks are added.
+- Keep this README aligned with actual coverage whenever a new shell entry point or standalone CLI gains dedicated tests.

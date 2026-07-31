@@ -1,0 +1,17 @@
+---
+- name: Exercise scoped Argo CD discovery validation
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Validate injected scoped discovery result
+      ansible.builtin.include_role:
+        name: tomazb.acm_switchover.argocd_manage
+        tasks_from: validate_scoped_discovery
+
+    - name: Report sanitized scoped validation result
+      ansible.builtin.debug:
+        msg: >-
+          VALIDATION_STATUS={{ _argocd_scoped_validation.status }}
+          RESOURCE_COUNT={{ _argocd_scoped_validation.resources | length }}
+          DOWNSTREAM_ALLOWED={{ _argocd_scoped_validation.status == 'ok' }}

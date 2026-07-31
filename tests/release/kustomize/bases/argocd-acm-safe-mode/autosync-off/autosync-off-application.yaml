@@ -1,0 +1,30 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: acm-owner-autosync-off
+  namespace: openshift-gitops
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/fixture-scope: argocd-acm-safe-mode
+    acm-switchover.redhat-lab/gitops-mode: autosync-off
+spec:
+  project: default
+  source:
+    repoURL: https://git.example.invalid/acm-switchover-lab.git
+    targetRevision: HEAD
+    path: tests/release/kustomize/bases/acm-dr-objects
+  destination:
+    name: in-cluster
+    namespace: open-cluster-management-backup
+  # Compatibility-safe autosync-off fixture:
+  # omit spec.syncPolicy.automated so this remains valid for older
+  # OpenShift GitOps / Argo CD versions that do not support
+  # spec.syncPolicy.automated.enabled.
+  syncPolicy: {}
+status:
+  resources:
+    - group: ""
+      kind: ConfigMap
+      namespace: open-cluster-management-backup
+      name: acm-dr-restore-desired-state
+      status: Synced

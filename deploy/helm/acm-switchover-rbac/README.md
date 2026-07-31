@@ -1,5 +1,10 @@
 # ACM Switchover RBAC Helm Chart
 
+> **Collection users:** This Helm chart is an implementation asset consumed internally by the
+> `tomazb.acm_switchover.rbac_bootstrap` role via `playbooks/rbac_bootstrap.yml`. Use the
+> collection playbook as your primary interface rather than running Helm directly. Direct Helm
+> usage remains supported for operators who prefer Helm as their manifest delivery mechanism.
+
 This Helm chart deploys RBAC resources for the ACM Switchover automation tool.
 
 ## TL;DR
@@ -39,6 +44,7 @@ If your ACM installation uses custom namespaces:
 
 ```bash
 helm install acm-switchover-rbac ./deploy/helm/acm-switchover-rbac \
+  --set role.namespaces.acm=my-acm-namespace \
   --set role.namespaces.backup=my-backup-namespace \
   --set role.namespaces.observability=my-observability-namespace \
   --set role.namespaces.mce=my-mce-namespace
@@ -71,6 +77,7 @@ The following table lists the configurable parameters and their default values.
 | `clusterRole.validator.name` | Validator cluster role name | `acm-switchover-validator` |
 | `clusterRoleBinding.create` | Create cluster role bindings | `true` |
 | `role.create` | Create namespace-scoped roles | `true` |
+| `role.namespaces.acm` | ACM namespace | `open-cluster-management` |
 | `role.namespaces.backup` | ACM backup namespace | `open-cluster-management-backup` |
 | `role.namespaces.observability` | ACM observability namespace | `open-cluster-management-observability` |
 | `role.namespaces.mce` | Multicluster engine namespace | `multicluster-engine` |
@@ -80,8 +87,7 @@ The following table lists the configurable parameters and their default values.
 | `environment` | Environment designation | `production` |
 | `rbac.enabled` | Enable RBAC resource creation | `true` |
 | `rbac.customOperatorRules` | Additional operator ClusterRole rules | `[]` |
-| `rbac.customValidatorRules` | Additional validator ClusterRole rules | `[]` |
-| `rbac.customNamespaces` | Additional namespaces for Roles | `[]` |
+| `rbac.customValidatorRules` | Additional read-only validator ClusterRole rules; verbs are limited to `get`, `list`, and `watch` | `[]` |
 
 ## Examples
 
@@ -112,6 +118,19 @@ rbac:
     - apiGroups: ["custom.example.com"]
       resources: ["customresources"]
       verbs: ["get", "list", "create"]
+```
+
+Operator custom rules may include the mutating verbs required by your environment.
+Validator custom rules are always read-only: `rbac.customValidatorRules` accepts only
+`get`, `list`, and `watch`. Helm rendering fails if validator custom rules include
+mutating verbs such as `create`, `update`, `patch`, `delete`, or `*`.
+
+```yaml
+rbac:
+  customValidatorRules:
+    - apiGroups: ["custom.example.com"]
+      resources: ["customresources"]
+      verbs: ["get", "list", "watch"]
 ```
 
 Install with custom values:

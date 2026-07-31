@@ -4,26 +4,35 @@ Primary hub preparation module for ACM switchover.
 
 # Runbook: Steps 1-3 (Method 1) / F1-F3 (Method 2)
 
-import copy
 import logging
-import time
-from typing import Any, Dict, Optional
+from typing import Optional
 
 from kubernetes.client.rest import ApiException
 
-from lib import argocd as argocd_lib
+from lib.argocd_coordinator import ArgoCDPauseCoordinator
 from lib.constants import (
     BACKUP_NAMESPACE,
+    BACKUP_SCHEDULE_PLURAL,
+    CLUSTER_BACKUP_API_GROUP,
+    CLUSTER_BACKUP_API_VERSION,
+    DELETE_REQUEST_TIMEOUT,
     DISABLE_AUTO_IMPORT_ANNOTATION,
+    HUB_ROLE_PRIMARY,
+    HUB_ROLE_SECONDARY,
     LOCAL_CLUSTER_NAME,
     OBSERVABILITY_NAMESPACE,
+    OBSERVABILITY_TERMINATE_INTERVAL,
+    OBSERVABILITY_TERMINATE_TIMEOUT,
+    STEP_PAUSE_ARGOCD_APPS,
     THANOS_COMPACTOR_LABEL_SELECTOR,
     THANOS_COMPACTOR_STATEFULSET,
-    THANOS_SCALE_DOWN_WAIT,
 )
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
-from lib.utils import StateManager, is_acm_version_ge
+from lib.utils import Phase, StateManager
+from lib.waiter import WaitConditionResult, wait_for_condition
+
+from .backup_schedule import acm_supports_backup_schedule_pause, fail_on_multiple_backup_schedules
 
 logger = logging.getLogger("acm_switchover")
 
@@ -49,64 +58,6 @@ class PrimaryPreparation:
         self.argocd_manage = argocd_manage
         self.secondary = secondary_client
 
-    @staticmethod
-    def _pause_entry_matches(entry: Dict[str, Any], hub: str, namespace: str, name: str) -> bool:
-        """Return True when an Argo CD pause-state entry matches one Application."""
-        return entry.get("hub") == hub and entry.get("namespace") == namespace and entry.get("name") == name
-
-    @staticmethod
-    def _is_pause_applied(entry: Dict[str, Any]) -> bool:
-        """Treat missing pause_applied as legacy-applied unless the entry is dry-run only."""
-        return entry.get("pause_applied", not entry.get("dry_run", False))
-
-    def _find_pause_entry(
-        self,
-        paused_apps: list[Dict[str, Any]],
-        hub: str,
-        namespace: str,
-        name: str,
-    ) -> Optional[Dict[str, Any]]:
-        for entry in paused_apps:
-            if self._pause_entry_matches(entry, hub, namespace, name):
-                return entry
-        return None
-
-    def _persist_paused_apps(self, paused_apps: list[Dict[str, Any]]) -> None:
-        """Persist a deep copy so StateManager notices nested entry changes."""
-        self.state.set_config("argocd_paused_apps", copy.deepcopy(paused_apps))
-
-    def _upsert_pause_entry(
-        self,
-        paused_apps: list[Dict[str, Any]],
-        hub: str,
-        namespace: str,
-        name: str,
-        original_sync_policy: Dict[str, Any],
-        *,
-        pause_applied: bool,
-    ) -> Dict[str, Any]:
-        entry = self._find_pause_entry(paused_apps, hub, namespace, name)
-        if entry is None:
-            entry = {"hub": hub, "namespace": namespace, "name": name}
-            paused_apps.append(entry)
-
-        entry["original_sync_policy"] = original_sync_policy
-        entry["pause_applied"] = pause_applied
-        if self.dry_run:
-            entry["dry_run"] = True
-        else:
-            entry.pop("dry_run", None)
-        return entry
-
-    def _remove_pause_entry(
-        self,
-        paused_apps: list[Dict[str, Any]],
-        hub: str,
-        namespace: str,
-        name: str,
-    ) -> None:
-        paused_apps[:] = [entry for entry in paused_apps if not self._pause_entry_matches(entry, hub, namespace, name)]
-
     def prepare(self) -> bool:
         """
         Execute all primary hub preparation steps.
@@ -120,11 +71,12 @@ class PrimaryPreparation:
             # Optional: Pause Argo CD auto-sync for ACM-touching Applications (both hubs)
             if self.argocd_manage:
                 if self.dry_run:
-                    logger.info(
-                        "[DRY-RUN] Would pause Argo CD auto-sync for ACM-touching Applications on configured hubs"
-                    )
+                    if self.state.is_step_completed(STEP_PAUSE_ARGOCD_APPS):
+                        logger.info("Argo CD pause already completed, skipping")
+                    else:
+                        self._pause_argocd_acm_apps()
                 else:
-                    with self.state.step("pause_argocd_apps", logger) as should_run:
+                    with self.state.step(STEP_PAUSE_ARGOCD_APPS, logger) as should_run:
                         if should_run:
                             self._pause_argocd_acm_apps()
 
@@ -154,115 +106,30 @@ class PrimaryPreparation:
 
         except SwitchoverError as e:
             logger.error("Primary hub preparation failed: %s", e)
-            self.state.add_error(str(e), "primary_preparation")
+            self.state.add_error(str(e), Phase.PRIMARY_PREP.value)
             return False
         except Exception as e:
             logger.error("Unexpected error during primary preparation: %s", e)
-            self.state.add_error(f"Unexpected: {str(e)}", "primary_preparation")
+            self.state.add_error(f"Unexpected: {str(e)}", Phase.PRIMARY_PREP.value)
             return False
 
     def _pause_argocd_acm_apps(self) -> None:
         """Pause auto-sync for ACM-touching Argo CD Applications on primary and optionally secondary hub."""
-        hubs = [(self.primary, "primary")] + ([(self.secondary, "secondary")] if self.secondary else [])
-        discoveries = []
-        for client, hub_label in hubs:
-            try:
-                discovery = argocd_lib.detect_argocd_installation(client)
-            except Exception as exc:
-                raise SwitchoverError(f"Failed to detect Argo CD installation on {hub_label} hub: {exc}") from exc
-            discoveries.append((client, hub_label, discovery))
-        if not any(discovery.has_applications_crd for _, _, discovery in discoveries):
-            logger.info("Argo CD Applications CRD not found on any hub; skipping Argo CD pause")
-            self.state.set_config("argocd_paused_apps", [])
-            self.state.set_config("argocd_run_id", None)
-            self.state.set_config("argocd_pause_dry_run", False)
-            return
-        run_id = argocd_lib.run_id_or_new(self.state.get_config("argocd_run_id"))
-        self.state.set_config("argocd_run_id", run_id)
-        self.state.set_config("argocd_pause_dry_run", self.dry_run)
-        paused_apps = copy.deepcopy(self.state.get_config("argocd_paused_apps") or [])
-        pause_failures = 0
-
-        for client, hub_label, discovery in discoveries:
-            if not discovery.has_applications_crd:
-                logger.info("Argo CD Applications CRD not found on %s; skipping Argo CD pause", hub_label)
-                continue
-            try:
-                apps = argocd_lib.list_argocd_applications(client, namespaces=None)
-            except Exception as exc:
-                raise SwitchoverError(f"Failed to list Argo CD Applications on {hub_label} hub: {exc}") from exc
-            acm_apps = argocd_lib.find_acm_touching_apps(apps)
-            for impact in acm_apps:
-                meta = impact.app.get("metadata", {}) or {}
-                namespace = meta.get("namespace", "")
-                name = meta.get("name", "")
-                sync_policy = dict((impact.app.get("spec", {}) or {}).get("syncPolicy") or {})
-                has_automated = "automated" in sync_policy
-                existing_entry = self._find_pause_entry(paused_apps, hub_label, namespace, name)
-
-                if existing_entry:
-                    if not self._is_pause_applied(existing_entry) and not self.dry_run and not has_automated:
-                        existing_entry["pause_applied"] = True
-                        existing_entry.pop("dry_run", None)
-                        self._persist_paused_apps(paused_apps)
-                        logger.info(
-                            "  Recovered Argo CD pause state for %s/%s on %s",
-                            namespace,
-                            name,
-                            hub_label,
-                        )
-                        continue
-                    if self._is_pause_applied(existing_entry) and not has_automated:
-                        logger.debug("  Skip %s/%s (already paused and recorded)", namespace, name)
-                        continue
-
-                if not has_automated:
-                    logger.debug("  Skip %s/%s (no auto-sync)", namespace, name)
-                    continue
-
-                entry = self._upsert_pause_entry(
-                    paused_apps,
-                    hub_label,
-                    namespace,
-                    name,
-                    sync_policy,
-                    pause_applied=False,
-                )
-                self._persist_paused_apps(paused_apps)
-                result = argocd_lib.pause_autosync(client, impact.app, run_id)
-                if result.patched:
-                    entry["original_sync_policy"] = result.original_sync_policy
-                    entry["pause_applied"] = not self.dry_run
-                    if self.dry_run:
-                        logger.info(
-                            "  [DRY-RUN] Would pause Argo CD Application %s/%s on %s",
-                            result.namespace,
-                            result.name,
-                            hub_label,
-                        )
-                    else:
-                        logger.info(
-                            "  Paused Argo CD Application %s/%s on %s",
-                            result.namespace,
-                            result.name,
-                            hub_label,
-                        )
-                    self._persist_paused_apps(paused_apps)
-                elif result.error:
-                    self._remove_pause_entry(paused_apps, hub_label, namespace, name)
-                    self._persist_paused_apps(paused_apps)
-                    pause_failures += 1
-                else:
-                    self._remove_pause_entry(paused_apps, hub_label, namespace, name)
-                    self._persist_paused_apps(paused_apps)
-                    logger.debug("  Skip %s/%s (no auto-sync)", result.namespace, result.name)
-        if pause_failures:
-            raise SwitchoverError(f"Argo CD auto-sync pause failed for {pause_failures} Application(s)")
-        logger.info(
-            "Argo CD: %d Application(s) paused (run_id=%s). Left paused by default; use --argocd-resume-after-switchover or --argocd-resume-only after retargeting Git.",
-            len(paused_apps),
-            run_id,
-        )
+        hubs = [(self.primary, HUB_ROLE_PRIMARY)] + ([(self.secondary, HUB_ROLE_SECONDARY)] if self.secondary else [])
+        coordinator = ArgoCDPauseCoordinator(self.state, self.dry_run)
+        try:
+            paused_apps, failure_count = coordinator.pause_hubs(hubs)
+        except Exception as exc:
+            raise SwitchoverError(f"Argo CD pause failed: {exc}") from exc
+        if failure_count:
+            raise SwitchoverError(f"Argo CD auto-sync pause failed for {failure_count} Application(s)")
+        run_id = self.state.get_config("argocd_run_id")
+        if run_id is not None:
+            logger.info(
+                "Argo CD: %d Application(s) paused (run_id=%s). Resume explicitly with --argocd-resume-only after retargeting Git.",
+                len(paused_apps),
+                run_id,
+            )
 
     def _pause_backup_schedule(self):
         """Pause BackupSchedule (version-aware)."""
@@ -270,18 +137,18 @@ class PrimaryPreparation:
 
         # Get BackupSchedule
         backup_schedules = self.primary.list_custom_resources(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="backupschedules",
+            group=CLUSTER_BACKUP_API_GROUP,
+            version=CLUSTER_BACKUP_API_VERSION,
+            plural=BACKUP_SCHEDULE_PLURAL,
             namespace=BACKUP_NAMESPACE,
-            max_items=1,
+            max_items=2,
         )
+        fail_on_multiple_backup_schedules(backup_schedules, "primary hub")
 
         if not backup_schedules:
             logger.warning("No BackupSchedule found to pause")
             return
 
-        # Assume first BackupSchedule (typically only one exists)
         bs = backup_schedules[0]
         bs_name = bs.get("metadata", {}).get("name")
 
@@ -305,14 +172,14 @@ class PrimaryPreparation:
         self.state.set_config("saved_backup_schedule", bs)
 
         # ACM 2.12+ supports pausing via spec.paused
-        if is_acm_version_ge(self.acm_version, "2.12.0"):
+        if acm_supports_backup_schedule_pause(self.acm_version):
             logger.info("Using spec.paused for ACM %s", self.acm_version)
 
             patch = {"spec": {"paused": True}}
             self.primary.patch_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="backupschedules",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=BACKUP_SCHEDULE_PLURAL,
                 name=bs_name,
                 patch=patch,
                 namespace=BACKUP_NAMESPACE,
@@ -324,11 +191,12 @@ class PrimaryPreparation:
             logger.info("ACM %s requires deleting BackupSchedule", self.acm_version)
 
             self.primary.delete_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="backupschedules",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=BACKUP_SCHEDULE_PLURAL,
                 name=bs_name,
                 namespace=BACKUP_NAMESPACE,
+                timeout_seconds=DELETE_REQUEST_TIMEOUT,
             )
 
             logger.info("BackupSchedule %s deleted (saved to state)", bs_name)
@@ -387,26 +255,42 @@ class PrimaryPreparation:
                 logger.info("[DRY-RUN] Skipping Thanos compactor pod verification")
                 return
 
-            # Wait a moment and verify no pods running
-            time.sleep(THANOS_SCALE_DOWN_WAIT)
+            def _thanos_compactor_terminated():
+                pods = self.primary.get_pods(
+                    namespace=OBSERVABILITY_NAMESPACE,
+                    label_selector=THANOS_COMPACTOR_LABEL_SELECTOR,
+                )
+                if not pods:
+                    return WaitConditionResult.complete("all Thanos compactor pods terminated")
+                return WaitConditionResult.pending(f"{len(pods)} pod(s) remaining")
 
-            pods = self.primary.get_pods(
-                namespace=OBSERVABILITY_NAMESPACE,
-                label_selector=THANOS_COMPACTOR_LABEL_SELECTOR,
+            success = wait_for_condition(
+                "Thanos compactor pod termination",
+                _thanos_compactor_terminated,
+                timeout=OBSERVABILITY_TERMINATE_TIMEOUT,
+                interval=OBSERVABILITY_TERMINATE_INTERVAL,
+                logger=logger,
             )
 
-            if pods:
-                logger.warning("Thanos compactor still has %s pod(s) running", len(pods))
-            else:
-                logger.info("Thanos compactor scaled down successfully")
+            if not success:
+                pods = self.primary.get_pods(
+                    namespace=OBSERVABILITY_NAMESPACE,
+                    label_selector=THANOS_COMPACTOR_LABEL_SELECTOR,
+                )
+                if pods:
+                    raise SwitchoverError(
+                        f"Thanos compactor still has {len(pods)} pod(s) running after scale-down timeout"
+                    )
+
+            logger.info("Thanos compactor scaled down successfully")
 
         except (RuntimeError, ValueError) as e:
             logger.error("Failed to scale down Thanos compactor: %s", e)
             raise
         except ApiException as e:
-            # Don't fail the whole preparation if this is optional
             if e.status == 404:
-                logger.warning("Thanos compactor StatefulSet not found (may not exist)")
+                logger.error("Failed to scale down Thanos compactor: StatefulSet not found")
+                raise SwitchoverError("Thanos compactor StatefulSet not found") from e
             else:
                 logger.error("Failed to scale down Thanos compactor: %s", e)
                 raise

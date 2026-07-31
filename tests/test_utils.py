@@ -4,6 +4,7 @@ Modernized pytest tests with fixtures, markers, and better organization.
 Tests cover StateManager, Phase enum, version comparison, and logging setup.
 """
 
+import json
 import os
 from unittest.mock import MagicMock, patch
 
@@ -17,9 +18,11 @@ except ImportError:  # pragma: no cover - platform-specific
 from lib.exceptions import StateLoadError, StateLockError
 from lib.utils import (
     Phase,
+    StateIdentityMismatch,
     StateManager,
     dry_run_skip,
     is_acm_version_ge,
+    parse_acm_version,
     setup_logging,
 )
 
@@ -86,6 +89,21 @@ class TestStateManager:
         assert completed[0]["name"] == "step1"
         assert "timestamp" in completed[0]
 
+    def test_mark_step_completed_records_report_phase(self, state_manager):
+        """Steps record the report phase active at completion time."""
+        state_manager.set_phase(Phase.PRIMARY_PREP)
+        state_manager.mark_step_completed("step1")
+
+        completed = state_manager.state["completed_steps"]
+        assert completed[0]["phase"] == "primary_prep"
+
+    def test_mark_step_completed_omits_phase_when_unmapped(self, state_manager):
+        """Phases with no report mapping (e.g. init) don't record a phase key."""
+        state_manager.mark_step_completed("step1")
+
+        completed = state_manager.state["completed_steps"]
+        assert "phase" not in completed[0]
+
     def test_mark_step_completed_persists_immediately(self, tmp_path):
         """Completed steps should be persisted without explicit save_state."""
         state_path = tmp_path / "state-step.json"
@@ -95,6 +113,41 @@ class TestStateManager:
 
         reloaded = StateManager(str(state_path))
         assert reloaded.is_step_completed("step1") is True
+
+    def test_clear_step_completed_persists_immediately(self, tmp_path):
+        """Cleared completed steps should be persisted for retryable cleanup."""
+        state_path = tmp_path / "state-clear-step.json"
+        sm = StateManager(str(state_path))
+        sm.mark_step_completed("pause_argocd_apps")
+
+        sm.clear_step_completed("pause_argocd_apps")
+
+        assert sm.is_step_completed("pause_argocd_apps") is False
+        reloaded = StateManager(str(state_path))
+        assert reloaded.is_step_completed("pause_argocd_apps") is False
+
+    def test_restore_runtime_checkpoint_restores_errors_deep_copy(self, tmp_path):
+        """Validate-only checkpoint restore must discard transient errors."""
+        state_path = tmp_path / "state-runtime-checkpoint.json"
+        sm = StateManager(str(state_path))
+        sm.set_phase(Phase.POST_ACTIVATION)
+        sm.add_error("original failure", Phase.POST_ACTIVATION.value)
+        checkpoint = sm.capture_runtime_checkpoint()
+        assert "errors" in checkpoint
+        assert checkpoint["errors"] is not sm.state["errors"]
+
+        # Mutate runtime state after capture to prove the checkpoint kept an
+        # independent copy of the durable error list.
+        sm.set_phase(Phase.PREFLIGHT)
+        sm.add_error("validate-only preflight failure", Phase.PREFLIGHT.value)
+
+        sm.restore_runtime_checkpoint(checkpoint)
+
+        assert sm.get_current_phase() == Phase.POST_ACTIVATION
+        errors = sm.get_errors()
+        assert len(errors) == 1
+        assert errors[0]["phase"] == Phase.POST_ACTIVATION.value
+        assert errors[0]["error"] == "original failure"
 
     def test_set_get_config(self, state_manager):
         """Test configuration storage."""
@@ -114,6 +167,215 @@ class TestStateManager:
 
         reloaded = StateManager(str(state_path))
         assert reloaded.get_config("key") == "value"
+
+    def test_set_config_persists_explicit_none(self, tmp_path):
+        """An explicit None config value must remain distinct from an absent key."""
+        state_path = tmp_path / "state-config-null.json"
+        sm = StateManager(str(state_path))
+        assert "method" not in sm.state["config"]
+
+        sm.set_config("method", None)
+
+        assert "method" in sm.state["config"]
+        assert sm.state["config"]["method"] is None
+
+        reloaded = StateManager(str(state_path))
+        assert "method" in reloaded.state["config"]
+        assert reloaded.state["config"]["method"] is None
+        sentinel = object()
+        assert reloaded.get_config("method", sentinel) is None
+
+    def test_set_config_repeated_none_is_idempotent(self, tmp_path):
+        """Equal present values must not trigger another durable write."""
+        state_path = tmp_path / "state-config-idempotent.json"
+        sm = StateManager(str(state_path))
+        sm.set_config("method", None)
+        assert "method" in sm.state["config"]
+
+        with patch.object(sm, "_write_state", wraps=sm._write_state) as mock_write:
+            sm.set_config("method", None)
+            mock_write.assert_not_called()
+            assert "method" in sm.state["config"]
+            assert sm.state["config"]["method"] is None
+
+            sm.set_config("method", "passive")
+            mock_write.assert_called_once()
+            assert StateManager(str(state_path)).get_config("method") == "passive"
+
+            mock_write.reset_mock()
+            sm.set_config("method", "passive")
+            mock_write.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "value,mutate",
+        [
+            pytest.param(
+                {"method": "passive"},
+                lambda item: item.__setitem__("method", "full"),
+                id="dictionary",
+            ),
+            pytest.param(
+                ["passive"],
+                lambda item: item.__setitem__(0, "full"),
+                id="list",
+            ),
+            pytest.param(
+                {"modes": [{"method": "passive"}]},
+                lambda item: item["modes"][0].__setitem__("method", "full"),
+                id="nested-dictionary-list",
+            ),
+        ],
+    )
+    def test_set_config_isolates_caller_owned_mutable_values(self, tmp_path, value, mutate):
+        """Mutating caller-owned input must not change memory or durable config."""
+        state_path = tmp_path / "state-config-set-alias.json"
+        sm = StateManager(str(state_path))
+        expected = json.loads(json.dumps(value))
+
+        sm.set_config("operation", value)
+        mutate(value)
+
+        assert sm.state["config"]["operation"] == expected
+        assert json.loads(state_path.read_text())["config"]["operation"] == expected
+
+    @pytest.mark.parametrize(
+        "stored,mutate",
+        [
+            pytest.param(
+                {"method": "passive"},
+                lambda item: item.__setitem__("method", "full"),
+                id="dictionary",
+            ),
+            pytest.param(
+                ["passive"],
+                lambda item: item.__setitem__(0, "full"),
+                id="list",
+            ),
+            pytest.param(
+                {"modes": [{"method": "passive"}]},
+                lambda item: item["modes"][0].__setitem__("method", "full"),
+                id="nested-dictionary-list",
+            ),
+        ],
+    )
+    def test_get_config_returns_isolated_mutable_values(self, tmp_path, stored, mutate):
+        """Mutating a retrieved value must not change memory or durable config."""
+        state_path = tmp_path / "state-config-get-alias.json"
+        sm = StateManager(str(state_path))
+        sm.set_config("operation", stored)
+        expected = json.loads(json.dumps(stored))
+
+        returned = sm.get_config("operation")
+        mutate(returned)
+
+        assert sm.state["config"]["operation"] == expected
+        assert json.loads(state_path.read_text())["config"]["operation"] == expected
+
+    def test_set_config_explicit_mutable_update_persists(self, tmp_path):
+        """A modified retrieved copy must persist when passed back explicitly."""
+        state_path = tmp_path / "state-config-explicit-update.json"
+        sm = StateManager(str(state_path))
+        sm.set_config("operation", {"modes": [{"method": "passive"}]})
+        updated = sm.get_config("operation")
+        updated["modes"][0]["method"] = "full"
+
+        sm.set_config("operation", updated)
+
+        expected = {"modes": [{"method": "full"}]}
+        assert sm.state["config"]["operation"] == expected
+        assert json.loads(state_path.read_text())["config"]["operation"] == expected
+
+    def test_set_config_repeated_equal_mutable_update_is_idempotent(self, tmp_path):
+        """An equal mutable value must remain write-free after ownership isolation."""
+        state_path = tmp_path / "state-config-mutable-idempotent.json"
+        sm = StateManager(str(state_path))
+        sm.set_config("operation", {"modes": ["passive"]})
+
+        with patch.object(sm, "_write_state", wraps=sm._write_state) as mock_write:
+            sm.set_config("operation", {"modes": ["passive"]})
+
+        mock_write.assert_not_called()
+
+    @pytest.mark.parametrize("value", [None, "passive", True, False, 0, 42, 1.5])
+    def test_set_get_config_preserves_json_scalar_behavior(self, state_manager, value):
+        """Immutable JSON scalars and explicit None retain their value semantics."""
+        state_manager.set_config("scalar", value)
+
+        assert "scalar" in state_manager.state["config"]
+        assert state_manager.get_config("scalar") == value
+
+    def test_get_config_returns_absent_mutable_default_without_retaining_it(self, state_manager):
+        """An absent-key default remains caller-owned and is never stored."""
+        default = {"modes": ["passive"]}
+
+        returned = state_manager.get_config("missing", default)
+        returned["modes"].append("full")
+
+        assert returned is default
+        assert "missing" not in state_manager.state["config"]
+
+    def test_capture_state_snapshot_isolates_nested_config(self, tmp_path):
+        """Mutating a captured snapshot must not change memory or durable state."""
+        state_path = tmp_path / "state-config-snapshot.json"
+        sm = StateManager(str(state_path))
+        sm.set_config("operation", {"modes": [{"method": "passive"}]})
+
+        snapshot = sm.capture_state_snapshot()
+        snapshot["config"]["operation"]["modes"][0]["method"] = "full"
+
+        expected = {"modes": [{"method": "passive"}]}
+        assert sm.state["config"]["operation"] == expected
+        assert json.loads(state_path.read_text())["config"]["operation"] == expected
+
+    def test_restore_state_snapshot_isolates_snapshot_input(self, tmp_path):
+        """Mutating a restored snapshot input must not change memory or disk."""
+        state_path = tmp_path / "state-config-restore-snapshot.json"
+        sm = StateManager(str(state_path))
+        sm.set_config("operation", {"modes": [{"method": "passive"}]})
+        snapshot = sm.capture_state_snapshot()
+
+        sm.set_config("operation", {"modes": [{"method": "temporary"}]})
+        sm.restore_state_snapshot(snapshot)
+        snapshot["config"]["operation"]["modes"][0]["method"] = "full"
+
+        expected = {"modes": [{"method": "passive"}]}
+        assert sm.state["config"]["operation"] == expected
+        assert json.loads(state_path.read_text())["config"]["operation"] == expected
+
+    def test_reloaded_config_values_follow_getter_ownership_contract(self, tmp_path):
+        """Values loaded from JSON must remain isolated when returned to callers."""
+        state_path = tmp_path / "state-config-reload.json"
+        StateManager(str(state_path)).set_config("operation", {"modes": [{"method": "passive"}]})
+        reloaded = StateManager(str(state_path))
+
+        returned = reloaded.get_config("operation")
+        returned["modes"][0]["method"] = "full"
+
+        expected = {"modes": [{"method": "passive"}]}
+        assert reloaded.state["config"]["operation"] == expected
+        assert json.loads(state_path.read_text())["config"]["operation"] == expected
+
+    def test_reentrant_flush_preserves_dirty_state(self, tmp_path):
+        """State changed during a flush must be persisted by a follow-up flush."""
+        state_path = tmp_path / "state-reentrant.json"
+        sm = StateManager(str(state_path))
+        original_write = sm._write_state
+        write_count = 0
+
+        def reentrant_write(state):
+            nonlocal write_count
+            write_count += 1
+            original_write(state)
+            if write_count == 1:
+                sm.set_config("nested", "value")
+
+        with patch.object(sm, "_write_state", side_effect=reentrant_write):
+            sm.set_config("outer", "value")
+
+        assert write_count == 2
+        reloaded = StateManager(str(state_path))
+        assert reloaded.get_config("outer") == "value"
+        assert reloaded.get_config("nested") == "value"
 
     def test_add_error(self, state_manager):
         """Test error recording."""
@@ -280,6 +542,37 @@ class TestStateManager:
         assert reloaded.get_config("primary_version") == "2.14.0"
         assert reloaded.state["last_updated"] == original_timestamp
 
+    def test_restore_state_snapshot_rolls_back_full_durable_state(self, tmp_path):
+        """Dry-run snapshots should restore phase, errors, completed steps, and config."""
+        state_path = tmp_path / "dry-run-snapshot.json"
+        sm = StateManager(str(state_path))
+        sm.set_phase(Phase.POST_ACTIVATION)
+        sm.mark_step_completed("original_step")
+        sm.set_config("original_key", {"nested": ["value"]})
+        sm.add_error("original failure", Phase.POST_ACTIVATION.value)
+        original_timestamp = sm.state["last_updated"]
+
+        snapshot = sm.capture_state_snapshot()
+
+        sm.set_phase(Phase.FINALIZATION)
+        sm.mark_step_completed("dry_run_step")
+        sm.set_config("original_key", {"nested": ["changed"]})
+        sm.set_config("dry_run_key", "discard")
+        sm.add_error("dry-run failure", Phase.FINALIZATION.value)
+
+        sm.restore_state_snapshot(snapshot)
+
+        reloaded = StateManager(str(state_path))
+        assert reloaded.get_current_phase() == Phase.POST_ACTIVATION
+        assert [step["name"] for step in reloaded.state["completed_steps"]] == ["original_step"]
+        assert reloaded.get_config("original_key") == {"nested": ["value"]}
+        assert reloaded.get_config("dry_run_key") is None
+        assert reloaded.state["last_updated"] == original_timestamp
+        errors = reloaded.get_errors()
+        assert len(errors) == 1
+        assert errors[0]["error"] == "original failure"
+        assert errors[0]["phase"] == Phase.POST_ACTIVATION.value
+
     def test_ensure_contexts_stores_values(self, tmp_path):
         """Contexts should be persisted and reloaded."""
         state_path = tmp_path / "ctx.json"
@@ -316,6 +609,335 @@ class TestStateManager:
 
         assert reloaded.get_current_phase() == Phase.INIT
         assert reloaded.state["completed_steps"] == []
+
+    def test_ensure_contexts_resets_when_contexts_key_is_missing_during_resume(self, tmp_path):
+        """An in-progress state missing stored contexts must discard prior progress before rebinding hubs."""
+        state_path = tmp_path / "ctx-missing-key.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_contexts("primary-a", "secondary-b")
+        sm.set_phase(Phase.PRIMARY_PREP)
+        sm.mark_step_completed("step1")
+        sm.state.pop("contexts")
+        sm.flush_state()
+
+        reloaded = StateManager(str(state_path))
+        reloaded.ensure_contexts("primary-a", "secondary-b")
+
+        assert reloaded.get_current_phase() == Phase.INIT
+        assert reloaded.state["completed_steps"] == []
+        assert reloaded.state["contexts"] == {"primary": "primary-a", "secondary": "secondary-b"}
+
+    def test_ensure_contexts_resets_when_only_primary_context_changes(self, tmp_path):
+        """Changing just one hub context must still reset state because partial drift can mix runs."""
+        state_path = tmp_path / "ctx-primary-drift.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_contexts("primary-a", "secondary-b")
+        sm.set_phase(Phase.PRIMARY_PREP)
+        sm.mark_step_completed("step1")
+        sm.set_config("preserved", "no")
+
+        reloaded = StateManager(str(state_path))
+        reloaded.ensure_contexts("primary-other", "secondary-b")
+
+        assert reloaded.get_current_phase() == Phase.INIT
+        assert reloaded.state["completed_steps"] == []
+        assert reloaded.get_config("preserved") is None
+        assert reloaded.state["contexts"] == {
+            "primary": "primary-other",
+            "secondary": "secondary-b",
+        }
+
+    def test_ensure_hub_identities_stores_values(self, tmp_path):
+        """Fresh state records live hub identities for later resume checks."""
+        state_path = tmp_path / "identity.json"
+        sm = StateManager(str(state_path))
+
+        sm.ensure_hub_identities(
+            {
+                "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+                "secondary": {"context": "secondary-b", "cluster_uid": "uid-secondary"},
+            }
+        )
+
+        reloaded = StateManager(str(state_path))
+        assert reloaded.state["hub_identities"] == {
+            "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+            "secondary": {"context": "secondary-b", "cluster_uid": "uid-secondary"},
+        }
+
+    def test_ensure_hub_identities_rejects_same_context_retargeted_to_different_cluster(self, tmp_path):
+        """Resume must fail when context names are unchanged but live cluster UIDs differ."""
+        state_path = tmp_path / "identity-mismatch.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_contexts("primary-a", "secondary-b")
+        sm.ensure_hub_identities(
+            {
+                "primary": {"context": "primary-a", "cluster_uid": "uid-primary-old"},
+                "secondary": {"context": "secondary-b", "cluster_uid": "uid-secondary"},
+            }
+        )
+        sm.set_phase(Phase.PRIMARY_PREP)
+
+        reloaded = StateManager(str(state_path))
+        with pytest.raises(StateIdentityMismatch, match="primary hub identity changed"):
+            reloaded.ensure_hub_identities(
+                {
+                    "primary": {
+                        "context": "primary-a",
+                        "cluster_uid": "uid-primary-new",
+                    },
+                    "secondary": {
+                        "context": "secondary-b",
+                        "cluster_uid": "uid-secondary",
+                    },
+                }
+            )
+
+        assert reloaded.get_current_phase() == Phase.PRIMARY_PREP
+
+    def test_ensure_hub_identities_requires_reset_for_legacy_in_progress_state(self, tmp_path):
+        """In-progress legacy state without identity must not silently resume."""
+        state_path = tmp_path / "identity-legacy.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_contexts("primary-a", "secondary-b")
+        sm.set_phase(Phase.PRIMARY_PREP)
+
+        reloaded = StateManager(str(state_path))
+        with pytest.raises(StateIdentityMismatch, match="missing hub identity"):
+            reloaded.ensure_hub_identities(
+                {
+                    "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+                    "secondary": {
+                        "context": "secondary-b",
+                        "cluster_uid": "uid-secondary",
+                    },
+                }
+            )
+
+    def test_ensure_hub_identities_rejects_missing_live_cluster_uid(self, tmp_path):
+        """Missing live UIDs must not replace a previously verified hub identity."""
+        state_path = tmp_path / "identity-missing-uid.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_hub_identities(
+            {
+                "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+                "secondary": {"context": "secondary-b", "cluster_uid": "uid-secondary"},
+            }
+        )
+
+        reloaded = StateManager(str(state_path))
+        with pytest.raises(StateIdentityMismatch, match="missing a live cluster UID"):
+            reloaded.ensure_hub_identities(
+                {
+                    "primary": {"context": "primary-a", "cluster_uid": ""},
+                    "secondary": {
+                        "context": "secondary-b",
+                        "cluster_uid": "uid-secondary",
+                    },
+                }
+            )
+
+        assert reloaded.state["hub_identities"]["primary"]["cluster_uid"] == "uid-primary"
+
+    def test_ensure_hub_identities_force_backfills_legacy_in_progress_state(self, tmp_path):
+        """--force can explicitly bind a legacy in-progress state to current live identities."""
+        state_path = tmp_path / "identity-force.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_contexts("primary-a", "secondary-b")
+        sm.set_phase(Phase.PRIMARY_PREP)
+
+        reloaded = StateManager(str(state_path))
+        reloaded.ensure_hub_identities(
+            {
+                "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+                "secondary": {"context": "secondary-b", "cluster_uid": "uid-secondary"},
+            },
+            allow_legacy_backfill=True,
+        )
+
+        assert reloaded.state["hub_identities"]["primary"]["cluster_uid"] == "uid-primary"
+
+    def test_ensure_hub_identities_can_validate_without_persisting(self, tmp_path):
+        """Read-only validation should check live identity without writing a backfill."""
+        state_path = tmp_path / "identity-read-only.json"
+        sm = StateManager(str(state_path))
+
+        sm.ensure_hub_identities(
+            {
+                "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+                "secondary": {"context": "secondary-b", "cluster_uid": "uid-secondary"},
+            },
+            persist=False,
+        )
+
+        reloaded = StateManager(str(state_path))
+        assert reloaded.state["hub_identities"] == {}
+
+    def test_ensure_hub_identities_rejects_legacy_in_progress_state_when_backfill_disabled(self, tmp_path):
+        """Explicitly disabling legacy backfill must fail closed for in-progress state missing identities."""
+        state_path = tmp_path / "identity-legacy-explicit.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_contexts("primary-a", "secondary-b")
+        sm.set_phase(Phase.PRIMARY_PREP)
+        sm.state.pop("hub_identities")
+        sm.flush_state()
+
+        reloaded = StateManager(str(state_path))
+        with pytest.raises(StateIdentityMismatch, match="missing hub identity"):
+            reloaded.ensure_hub_identities(
+                {
+                    "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+                    "secondary": {
+                        "context": "secondary-b",
+                        "cluster_uid": "uid-secondary",
+                    },
+                },
+                allow_legacy_backfill=False,
+            )
+
+    def test_ensure_hub_identities_mismatch_leaves_disk_state_unchanged(self, tmp_path):
+        """A UID mismatch must fail closed without rewriting the already persisted hub identity data."""
+        state_path = tmp_path / "identity-read-only-mismatch.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_hub_identities(
+            {
+                "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+                "secondary": {
+                    "context": "secondary-b",
+                    "cluster_uid": "uid-secondary-old",
+                },
+            }
+        )
+
+        reloaded = StateManager(str(state_path))
+        with pytest.raises(StateIdentityMismatch, match="secondary hub identity changed"):
+            reloaded.ensure_hub_identities(
+                {
+                    "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+                    "secondary": {
+                        "context": "secondary-b",
+                        "cluster_uid": "uid-secondary-new",
+                    },
+                }
+            )
+
+        persisted = StateManager(str(state_path))
+        assert persisted.state["hub_identities"]["secondary"]["cluster_uid"] == "uid-secondary-old"
+
+    def test_ensure_hub_identities_persist_false_does_not_write_on_mismatch(self, tmp_path):
+        """Validation-only identity checks must still raise on drift without touching persisted state."""
+        state_path = tmp_path / "identity-read-only-primary-mismatch.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_hub_identities(
+            {
+                "primary": {"context": "primary-a", "cluster_uid": "stored-uid-123"},
+                "secondary": {
+                    "context": "secondary-b",
+                    "cluster_uid": "uid-secondary",
+                },
+            }
+        )
+
+        reloaded = StateManager(str(state_path))
+        with patch.object(reloaded, "save_state") as mock_save, patch.object(reloaded, "flush_state") as mock_flush:
+            with pytest.raises(StateIdentityMismatch, match="primary hub identity changed"):
+                reloaded.ensure_hub_identities(
+                    {
+                        "primary": {
+                            "context": "primary-a",
+                            "cluster_uid": "live-uid-456",
+                        },
+                        "secondary": {
+                            "context": "secondary-b",
+                            "cluster_uid": "uid-secondary",
+                        },
+                    },
+                    persist=False,
+                )
+
+        mock_save.assert_not_called()
+        mock_flush.assert_not_called()
+        persisted = StateManager(str(state_path))
+        assert persisted.state["hub_identities"]["primary"]["cluster_uid"] == "stored-uid-123"
+
+    def test_ensure_hub_identities_persist_false_suppresses_partial_identity_update(self, tmp_path):
+        """Validation-only checks must not flush a partial identity backfill when no mismatch is present."""
+        state_path = tmp_path / "identity-read-only-backfill.json"
+        sm = StateManager(str(state_path))
+        sm.state["hub_identities"] = {"primary": {"context": "primary-a", "cluster_uid": "uid-primary"}}
+        sm.flush_state()
+
+        reloaded = StateManager(str(state_path))
+        with patch.object(reloaded, "flush_state") as mock_flush:
+            reloaded.ensure_hub_identities(
+                {
+                    "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+                    "secondary": {
+                        "context": "secondary-b",
+                        "cluster_uid": "uid-secondary",
+                    },
+                },
+                persist=False,
+            )
+
+        mock_flush.assert_not_called()
+        persisted = StateManager(str(state_path))
+        assert persisted.state["hub_identities"] == {"primary": {"context": "primary-a", "cluster_uid": "uid-primary"}}
+
+    def test_ensure_hub_identities_rejects_partial_secondary_drift(self, tmp_path):
+        """One matching hub is not enough: a changed secondary UID must still block resume."""
+        state_path = tmp_path / "identity-secondary-drift.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_contexts("primary-a", "secondary-b")
+        sm.ensure_hub_identities(
+            {
+                "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+                "secondary": {
+                    "context": "secondary-b",
+                    "cluster_uid": "uid-secondary-old",
+                },
+            }
+        )
+        sm.set_phase(Phase.PRIMARY_PREP)
+
+        reloaded = StateManager(str(state_path))
+        with pytest.raises(StateIdentityMismatch, match="secondary hub identity changed"):
+            reloaded.ensure_hub_identities(
+                {
+                    "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+                    "secondary": {
+                        "context": "secondary-b",
+                        "cluster_uid": "uid-secondary-new",
+                    },
+                }
+            )
+
+        assert reloaded.get_current_phase() == Phase.PRIMARY_PREP
+
+    def test_ensure_hub_identities_rejects_whitespace_live_cluster_uid(self, tmp_path):
+        """Whitespace-only live UIDs must be rejected because they would defeat hub identity binding."""
+        state_path = tmp_path / "identity-whitespace-uid.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_hub_identities(
+            {
+                "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+                "secondary": {"context": "secondary-b", "cluster_uid": "uid-secondary"},
+            }
+        )
+
+        reloaded = StateManager(str(state_path))
+        with pytest.raises(StateIdentityMismatch, match="missing a live cluster UID"):
+            reloaded.ensure_hub_identities(
+                {
+                    "primary": {"context": "primary-a", "cluster_uid": "  \t\n  "},
+                    "secondary": {
+                        "context": "secondary-b",
+                        "cluster_uid": "uid-secondary",
+                    },
+                }
+            )
+
+        assert reloaded.state["hub_identities"]["primary"]["cluster_uid"] == "uid-primary"
 
     def test_get_state_age_valid_timestamp(self, state_manager):
         """Test get_state_age returns timedelta for valid timestamp."""
@@ -549,7 +1171,11 @@ class TestStateManagerExitRegistration:
 
         assert sm._run_lock_path == os.path.realpath(str(state_path)) + ".run.lock"
         registered = [call.args[0].__name__ for call in register.call_args_list]
-        assert registered == ["_release_run_lock", "_flush_on_exit", "_cleanup_temp_files"]
+        assert registered == [
+            "_release_run_lock",
+            "_flush_on_exit",
+            "_cleanup_temp_files",
+        ]
 
     def test_fail_phase_helper_reuses_existing_same_phase_and_message_error(self, tmp_path):
         """_fail_phase should not append another error when the last entry matches phase and message."""
@@ -600,7 +1226,7 @@ class TestStateManagerExitRegistration:
         sm = StateManager(str(tmp_path / "state.json"))
         sm.set_phase(Phase.ACTIVATION)
         sm.add_error("stale prior failure", phase=Phase.ACTIVATION.value)
-        sm._retry_error_baseline = {"phase": Phase.ACTIVATION.value, "count": 1}
+        sm.record_retry_error_baseline(Phase.ACTIVATION, 1)
         sm.add_error("specific root cause", phase=Phase.ACTIVATION.value)
 
         logger = logging.getLogger("test")
@@ -611,6 +1237,20 @@ class TestStateManagerExitRegistration:
         errors = sm.get_errors()
         assert len(errors) == 2
         assert errors[-1]["error"] == "specific root cause"
+
+    def test_retry_error_baseline_accessor_returns_copy(self, tmp_path):
+        """Reading the retry baseline should not expose mutable internal state."""
+        sm = StateManager(str(tmp_path / "state.json"))
+
+        sm.record_retry_error_baseline(Phase.ACTIVATION, 2)
+        baseline = sm.get_retry_error_baseline()
+
+        assert baseline == {"phase": Phase.ACTIVATION.value, "count": 2}
+        baseline["count"] = 999
+        assert sm.get_retry_error_baseline() == {
+            "phase": Phase.ACTIVATION.value,
+            "count": 2,
+        }
 
     def test_resume_after_failure_uses_recorded_phase(self, tmp_path):
         """After a phase failure, get_last_error_phase returns the phase to retry."""
@@ -648,6 +1288,18 @@ class TestVersionComparison:
     """Test cases for version comparison utilities."""
 
     @pytest.mark.parametrize(
+        "version,expected",
+        [
+            ("2.14.3-rc1", (2, 14, 3)),
+            ("2.14.3+build", (2, 14, 3)),
+            ("2.14.3-rc1+build", (2, 14, 3)),
+        ],
+    )
+    def test_parse_acm_version_accepts_numeric_prefix_with_suffix(self, version, expected):
+        """Suffixed ACM versions should keep the leading numeric comparison tuple."""
+        assert parse_acm_version(version) == expected
+
+    @pytest.mark.parametrize(
         "version1,version2",
         [
             ("2.12.0", "2.12.0"),
@@ -667,6 +1319,8 @@ class TestVersionComparison:
             ("3.0.0", "2.12.0"),
             ("2.12", "2.11"),
             ("2.12.0", "2.12"),
+            ("2.14.3-rc1", "2.12.0"),
+            ("2.14.3+build", "2.12.0"),
         ],
     )
     def test_is_acm_version_ge_greater(self, version1, version2):
@@ -692,6 +1346,7 @@ class TestVersionComparison:
             ("invalid", "2.12.0"),
             ("2.12.0", "invalid"),
             ("", "2.12.0"),
+            ("2", "2.12.0"),
         ],
     )
     def test_is_acm_version_ge_invalid(self, version1, version2):
@@ -807,8 +1462,8 @@ class TestDryRunSkipDecorator:
         assert result2 == "executed"
         assert obj2.executed is True
 
-    def test_decorator_with_missing_attribute(self):
-        """Test decorator gracefully handles missing attribute."""
+    def test_decorator_with_missing_attribute_raises(self):
+        """When the dry_run attribute doesn't exist, fail closed with an error."""
 
         class TestClass:
             def __init__(self):
@@ -821,11 +1476,27 @@ class TestDryRunSkipDecorator:
                 return "executed"
 
         obj = TestClass()
-        result = obj.test_method()
+        with pytest.raises(RuntimeError, match="dry_run"):
+            obj.test_method()
+        assert obj.executed is False
 
-        # Should execute since attribute is missing (falsy)
-        assert result == "executed"
-        assert obj.executed is True
+    def test_decorator_with_none_attribute_raises(self):
+        """When the dry_run attribute is present but None, fail closed with an error."""
+
+        class TestClass:
+            def __init__(self):
+                self.dry_run = None
+                self.executed = False
+
+            @dry_run_skip(message="None attr", return_value="skipped")
+            def test_method(self):
+                self.executed = True
+                return "executed"
+
+        obj = TestClass()
+        with pytest.raises(RuntimeError, match="dry_run"):
+            obj.test_method()
+        assert obj.executed is False
 
     def test_decorator_with_arguments(self):
         """Test decorator preserves function arguments."""
@@ -906,6 +1577,24 @@ class TestDryRunSkipDecorator:
 
         mock_get_logger.assert_called_with("acm_switchover")
         mock_logger.info.assert_called_with("[DRY-RUN] %s", "Custom skip message")
+
+    def test_decorator_raises_when_intermediate_attribute_is_none(self):
+        """When an intermediate in the dot-path is None, fail closed with an error."""
+
+        class Outer:
+            client = None  # intermediate is None
+
+        @dry_run_skip(
+            message="Should fail closed",
+            return_value="skipped",
+            dry_run_attr="client.dry_run",
+        )
+        def guarded_method(self):
+            return "executed"
+
+        obj = Outer()
+        with pytest.raises(RuntimeError, match="client.dry_run"):
+            guarded_method(obj)
 
 
 @pytest.mark.unit

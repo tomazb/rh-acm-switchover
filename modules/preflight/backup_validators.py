@@ -4,26 +4,43 @@ import logging
 import re
 import time
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from lib.constants import (
+    ACM_BACKUP_SCHEDULE_TYPE_LABEL,
     BACKUP_NAMESPACE,
     BACKUP_POLL_INTERVAL,
     BACKUP_SCHEDULE_DEFAULT_NAME,
+    BACKUP_SCHEDULE_PLURAL,
     BACKUP_VERIFY_TIMEOUT,
+    CLUSTER_BACKUP_API_GROUP,
+    CLUSTER_BACKUP_API_VERSION,
     LOCAL_CLUSTER_NAME,
-    RESTORE_ALREADY_AVAILABLE_MARKER,
+    MANAGED_CLUSTER_API_GROUP,
+    MANAGED_CLUSTER_API_VERSION,
+    MANAGED_CLUSTER_PLURAL,
     RESTORE_PASSIVE_SYNC_NAME,
+    SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_USE_MANAGED_SERVICE_ACCOUNT,
 )
 from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.validation import InputValidator, ValidationError
 
-from ..restore_discovery import find_passive_sync_restore
+from ..restore_discovery import find_passive_sync_restore, restore_messages_are_benign_already_available
 from .base_validator import BaseValidator
 
 logger = logging.getLogger("acm_switchover")
+
+
+def _as_mapping(value: Any) -> Dict[str, Any]:
+    """Return mapping values as-is and normalize malformed nested fields."""
+    return value if isinstance(value, dict) else {}
+
+
+def _labels_from(resource: Dict[str, Any]) -> Dict[str, Any]:
+    """Return metadata.labels from a Kubernetes resource, or an empty mapping."""
+    return _as_mapping(_as_mapping(resource.get("metadata")).get("labels"))
 
 
 def _format_condition_details(conditions: Optional[List[dict]]) -> str:
@@ -64,8 +81,8 @@ def _collect_bsl_unavailable_details(kube_client: KubeClient) -> str:
             plural="backupstoragelocations",
             namespace=BACKUP_NAMESPACE,
         )
-    except Exception as exc:
-        logger.debug("Failed to list BackupStorageLocations: %s", exc)
+    except Exception:
+        logger.debug("Unable to inspect BackupStorageLocations.")
         return ""
 
     if not bsls:
@@ -96,11 +113,7 @@ class BackupValidator(BaseValidator):
         if not in_progress:
             return []
 
-        logger.info(
-            "Backup(s) in progress: %s. Waiting up to %ds for completion...",
-            ", ".join(in_progress),
-            BACKUP_VERIFY_TIMEOUT,
-        )
+        logger.info("Backup work is still in progress; waiting for completion.")
 
         start_time = time.time()
         remaining = in_progress
@@ -114,8 +127,8 @@ class BackupValidator(BaseValidator):
                     plural="backups",
                     namespace=BACKUP_NAMESPACE,
                 )
-            except Exception as exc:
-                logger.debug("Failed to list backups while waiting: %s", exc)
+            except Exception:
+                logger.debug("Unable to inspect backups while waiting.")
                 return remaining
 
             remaining = [
@@ -169,8 +182,8 @@ class BackupValidator(BaseValidator):
                 freshness = "consider running a fresh backup"
 
             return f"age: {age_display}, {freshness}"
-        except (ValueError, AttributeError) as e:
-            logger.debug("Failed to parse backup timestamp %s: %s", completion_timestamp, e)
+        except (ValueError, AttributeError):
+            logger.debug("Unable to parse a backup timestamp.")
             return ""
 
     def run(self, primary: KubeClient) -> None:  # noqa: C901
@@ -299,9 +312,9 @@ class BackupScheduleValidator(BaseValidator):
         try:
             # Try to find a BackupSchedule resource
             backup_schedules = primary.list_custom_resources(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="backupschedules",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=BACKUP_SCHEDULE_PLURAL,
                 namespace=BACKUP_NAMESPACE,
             )
 
@@ -451,8 +464,8 @@ class PassiveSyncValidator(BaseValidator):
                     "Passive sync restore",
                     False,
                     "No passive sync restore found on secondary hub (required for passive method). "
-                    f"Expected a Restore with spec.syncRestoreWithNewBackups=true or named '{RESTORE_PASSIVE_SYNC_NAME}'. "
-                    f"Debug: oc --context={context} -n {BACKUP_NAMESPACE} get restore.cluster.open-cluster-management.io -o wide",
+                    f"Expected a sync-enabled passive Restore with spec.{SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS}=true. "
+                    f"Debug: oc --context={context} -n {BACKUP_NAMESPACE} get restore.{CLUSTER_BACKUP_API_GROUP} -o wide",
                     critical=True,
                 )
                 return
@@ -477,8 +490,7 @@ class PassiveSyncValidator(BaseValidator):
             # "Enabled" = continuous sync running
             # "Finished"/"Completed" = initial sync completed successfully (valid for switchover)
             # "Running" = actively syncing a new backup (transient, valid for passive-sync)
-            # "Unknown" = Velero restore in intermediate state during sync (transient)
-            if phase in ("Enabled", "Finished", "Completed", "Running", "Unknown"):
+            if phase in ("Enabled", "Finished", "Completed", "Running"):
                 self.add_result(
                     "Passive sync restore",
                     True,
@@ -487,7 +499,7 @@ class PassiveSyncValidator(BaseValidator):
                 )
             elif phase == "FinishedWithErrors":
                 messages = status.get("messages", [])
-                if messages and all(RESTORE_ALREADY_AVAILABLE_MARKER in m for m in messages):
+                if restore_messages_are_benign_already_available(messages):
                     self.add_result(
                         "Passive sync restore",
                         True,
@@ -546,22 +558,19 @@ class PassiveSyncValidator(BaseValidator):
                         )
                     else:
                         velero_details = f" Velero restore {velero_restore_name} phase={velero_phase}."
-            except Exception as exc:
-                logger.debug(
-                    "Failed to fetch Velero restore %s details: %s",
-                    velero_restore_name,
-                    exc,
-                )
+            except Exception:
+                logger.debug("Unable to inspect the related Velero restore.")
 
         error_message = f"{restore_name} in unexpected state: {phase} - {message}"
         if velero_details:
             error_message += f" {velero_details.strip()}"
         if bsl_details:
             error_message += f"{bsl_details}"
+        error_message += " Wait for the Restore to reach Enabled, Finished, Completed, or Running before activation."
         error_message += (
             " (check ACM restore + Velero restore for details). "
             f"Debug: oc --context={context} -n {BACKUP_NAMESPACE} get "
-            f"restore.cluster.open-cluster-management.io {restore_name} -o yaml; "
+            f"restore.{CLUSTER_BACKUP_API_GROUP} {restore_name} -o yaml; "
             f"oc --context={context} -n {BACKUP_NAMESPACE} get restore.velero.io -o wide"
         )
 
@@ -581,9 +590,9 @@ class ManagedClusterBackupValidator(BaseValidator):
         try:
             # Get all joined ManagedClusters (excluding local-cluster)
             managed_clusters = primary.list_custom_resources(
-                group="cluster.open-cluster-management.io",
-                version="v1",
-                plural="managedclusters",
+                group=MANAGED_CLUSTER_API_GROUP,
+                version=MANAGED_CLUSTER_API_VERSION,
+                plural=MANAGED_CLUSTER_PLURAL,
             )
 
             joined_clusters = []
@@ -631,12 +640,7 @@ class ManagedClusterBackupValidator(BaseValidator):
 
             # Filter for managed-clusters backups using ACM backup schedule type label
             mc_backups = [
-                b
-                for b in backups
-                if b.get("metadata", {})
-                .get("labels", {})
-                .get("cluster.open-cluster-management.io/backup-schedule-type")
-                == "managedClusters"
+                b for b in backups if _labels_from(b).get(ACM_BACKUP_SCHEDULE_TYPE_LABEL) == "managedClusters"
             ]
 
             if not mc_backups:
@@ -679,9 +683,9 @@ class ManagedClusterBackupValidator(BaseValidator):
                     # Check each joined cluster's creation time against backup time
                     for cluster_name in joined_clusters:
                         cluster_info = primary.get_custom_resource(
-                            group="cluster.open-cluster-management.io",
-                            version="v1",
-                            plural="managedclusters",
+                            group=MANAGED_CLUSTER_API_GROUP,
+                            version=MANAGED_CLUSTER_API_VERSION,
+                            plural=MANAGED_CLUSTER_PLURAL,
                             name=cluster_name,
                         )
                         if cluster_info:
@@ -690,9 +694,9 @@ class ManagedClusterBackupValidator(BaseValidator):
                                 cluster_time = datetime.fromisoformat(cluster_creation.replace("Z", "+00:00"))
                                 if cluster_time > backup_time:
                                     clusters_after_backup.append(cluster_name)
-                except (ValueError, TypeError) as e:
+                except (ValueError, TypeError):
                     # If timestamp parsing fails, log warning but continue
-                    logger.warning("Could not compare cluster timestamps: %s", e)
+                    logger.warning("Could not compare managed cluster timestamps.")
 
             # Report failure if clusters were imported after the backup
             if clusters_after_backup:

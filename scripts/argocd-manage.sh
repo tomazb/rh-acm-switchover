@@ -13,8 +13,14 @@
 #   0 - success
 #   1 - failure
 #   2 - invalid arguments
+#
+# DEPRECATED: Use the Python CLI (--argocd-manage) or the Ansible collection
+# (argocd_manage role) instead. This script will be removed in a future release.
 
 set -euo pipefail
+
+echo "⚠️  WARNING: argocd-manage.sh is deprecated. Use 'python acm_switchover.py --argocd-manage' or the Ansible argocd_manage role instead." >&2
+echo "" >&2
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "${SCRIPT_DIR}/constants.sh" ]]; then

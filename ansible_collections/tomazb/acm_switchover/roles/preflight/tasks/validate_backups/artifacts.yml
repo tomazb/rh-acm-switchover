@@ -1,0 +1,144 @@
+---
+- name: Record latest backup existence
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-backup-latest",
+            "severity": "critical",
+            "status": "pass" if (acm_primary_backups_info.resources | default([]) | length) > 0 else "fail",
+            "message": "primary hub has at least one backup artifact"
+              if (acm_primary_backups_info.resources | default([]) | length) > 0
+              else "primary hub has no Velero backup artifacts",
+            "details": {
+              "backup_count": acm_primary_backups_info.resources | default([]) | length
+            },
+            "recommended_action": "Run or repair ACM backup jobs on the primary hub"
+              if (acm_primary_backups_info.resources | default([]) | length) == 0
+              else None
+          }
+        ]
+      }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Record restore-only backup existence on target hub
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-backup-latest-restore-only",
+            "severity": "critical",
+            "status": "pass" if (acm_secondary_backups_info.resources | default([]) | length) > 0 else "fail",
+            "message": "restore-only target hub has at least one backup artifact"
+              if (acm_secondary_backups_info.resources | default([]) | length) > 0
+              else "restore-only target hub has no Velero backup artifacts",
+            "details": {
+              "backup_count": acm_secondary_backups_info.resources | default([]) | length
+            },
+            "recommended_action": "Verify the target hub points at the correct backup bucket and that Velero has synced the backup artifacts"
+              if (acm_secondary_backups_info.resources | default([]) | length) == 0
+              else None
+          }
+        ]
+      }}
+  when: acm_switchover_operation.restore_only | default(false)
+
+- name: Identify latest primary Velero backup
+  ansible.builtin.set_fact:
+    _acm_primary_latest_backup: >-
+      {%- set primary_backups = acm_primary_backups_info.resources | default([]) -%}
+      {%- set primary_backups_with_timestamps = primary_backups | selectattr('metadata.creationTimestamp', 'defined') | list -%}
+      {{
+        (primary_backups_with_timestamps | sort(attribute='metadata.creationTimestamp') | last)
+        if (primary_backups_with_timestamps | length) > 0
+        else (primary_backups | last | default({}))
+      }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Record latest primary Velero backup completion
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-backup-latest-completed",
+            "severity": "critical",
+            "status": "pass"
+              if (
+                (acm_primary_backups_info.resources | default([]) | length) > 0
+                and (_acm_primary_latest_backup.get('status', {}).get('phase', 'unknown') == 'Completed')
+              )
+              else "fail",
+            "message": "latest backup " + (_acm_primary_latest_backup.get('metadata', {}).get('name', 'unknown')) + " completed successfully"
+              if (
+                (acm_primary_backups_info.resources | default([]) | length) > 0
+                and (_acm_primary_latest_backup.get('status', {}).get('phase', 'unknown') == 'Completed')
+              )
+              else "latest backup " + (_acm_primary_latest_backup.get('metadata', {}).get('name', 'unknown')) + " in unexpected state: " + (_acm_primary_latest_backup.get('status', {}).get('phase', 'missing')),
+            "details": {
+              "backup_name": _acm_primary_latest_backup.get('metadata', {}).get('name'),
+              "phase": _acm_primary_latest_backup.get('status', {}).get('phase', 'missing')
+            },
+            "recommended_action": "Wait for the latest Velero backup to complete or run a fresh backup before switchover"
+              if (
+                (acm_primary_backups_info.resources | default([]) | length) == 0
+                or (_acm_primary_latest_backup.get('status', {}).get('phase', 'unknown') != 'Completed')
+              )
+              else None
+          }
+        ]
+      }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Identify latest restore-only target Velero backup
+  ansible.builtin.set_fact:
+    _acm_secondary_latest_backup: >-
+      {%- set secondary_backups = acm_secondary_backups_info.resources | default([]) -%}
+      {%- set secondary_backups_with_timestamps = secondary_backups | selectattr('metadata.creationTimestamp', 'defined') | list -%}
+      {{
+        (secondary_backups_with_timestamps | sort(attribute='metadata.creationTimestamp') | last)
+        if (secondary_backups_with_timestamps | length) > 0
+        else (secondary_backups | last | default({}))
+      }}
+  when: acm_switchover_operation.restore_only | default(false)
+
+- name: Record latest restore-only target Velero backup completion
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-backup-latest-completed-restore-only",
+            "severity": "critical",
+            "status": "pass"
+              if (
+                (acm_secondary_backups_info.resources | default([]) | length) > 0
+                and (_acm_secondary_latest_backup.get('status', {}).get('phase', 'unknown') == 'Completed')
+              )
+              else "fail",
+            "message": "latest backup " + (_acm_secondary_latest_backup.get('metadata', {}).get('name', 'unknown')) + " completed successfully"
+              if (
+                (acm_secondary_backups_info.resources | default([]) | length) > 0
+                and (_acm_secondary_latest_backup.get('status', {}).get('phase', 'unknown') == 'Completed')
+              )
+              else "latest backup " + (_acm_secondary_latest_backup.get('metadata', {}).get('name', 'unknown')) + " in unexpected state: " + (_acm_secondary_latest_backup.get('status', {}).get('phase', 'missing')),
+            "details": {
+              "backup_name": _acm_secondary_latest_backup.get('metadata', {}).get('name'),
+              "phase": _acm_secondary_latest_backup.get('status', {}).get('phase', 'missing')
+            },
+            "recommended_action": "Wait for the latest Velero backup to complete or sync a completed backup artifact to the target hub"
+              if (
+                (acm_secondary_backups_info.resources | default([]) | length) == 0
+                or (_acm_secondary_latest_backup.get('status', {}).get('phase', 'unknown') != 'Completed')
+              )
+              else None
+          }
+        ]
+      }}
+  when: acm_switchover_operation.restore_only | default(false)
