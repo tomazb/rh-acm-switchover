@@ -751,8 +751,8 @@ Rules:
 
 ### Issue tracker
 
-Issues are tracked in GitHub Issues (`gh` CLI). See `docs/agents/issue-tracker.md`.
+Issues are tracked in GitHub Issues (`gh` CLI). See [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md).
 
 ### Domain docs
 
-Single-context layout: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Single-context layout: `CONTEXT.md` and `docs/adr/` at the repo root. See [`docs/agents/domain.md`](docs/agents/domain.md).
