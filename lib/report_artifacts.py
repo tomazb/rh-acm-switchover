@@ -118,7 +118,7 @@ def build_operation_report(
         report["phase"] = REPORT_PHASE_PREFLIGHT
         report["results"] = results
 
-    argocd_status = ArgocdPauseRegister.status_from_config(config)
+    argocd_status = ArgocdPauseRegister.status_from_state_snapshot(config)
     if argocd_status.run_id or argocd_status.confirmed_paused_count:
         report["argocd"] = {
             "run_id": argocd_status.run_id or "",
