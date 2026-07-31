@@ -131,6 +131,45 @@ not a separate one.
 - Collection: `server_host()` in `module_utils/klusterlet.py` is replaced by the same
   full-URL normalization; comparison at `:285-297` uses it (SSA-03 parity item).
 
+#### Malformed server URLs fail closed before matching
+
+Canonicalization is only defined for a well-formed absolute `https`/`http` URL. Every
+`cluster.server` value — from the merged snapshot and from the expected-endpoint source
+alike — is validated **before** any matching, and a rejection is a fail-closed error with
+**zero mutating calls** for the affected scope. The complete rejection set:
+
+| rejected input | reason |
+| --- | --- |
+| `server` key missing | no endpoint to compare |
+| `server: null` | ditto |
+| `server` not a string (mapping, list, number, boolean) | not a URL |
+| empty or whitespace-only string | not a URL |
+| relative URL (no scheme, or scheme-relative `//host`) | no authority to compare; must not be resolved against anything |
+| scheme other than `http`/`https` | unsupported transport; never coerced to https |
+| userinfo present (`https://user:pw@host`) | credential-bearing authority; never matched, never echoed |
+| invalid port (non-numeric, empty after `:`, out of 1-65535) | unparseable authority |
+| invalid IPv4 literal (out-of-range or malformed octets) | unparseable host |
+| invalid IPv6 literal | unparseable host |
+| malformed bracketed IPv6 (unbalanced or missing brackets, or brackets around a non-IPv6 host) | unparseable authority; also blocks the `:`-splitting ambiguity |
+| malformed percent escape (`%` not followed by two hex digits) | undecodable; normalization is undefined |
+| query or fragment present | as already specified above — rejected, never silently stripped |
+| structurally invalid parse result (parser raises, or returns a result whose host is empty while an authority was expected) | no trustworthy authority |
+
+Rules that apply to all of them:
+
+- Rejection happens before endpoint matching, so no candidate is ever selected from an
+  unvalidated URL, and **zero mutating calls** are issued for the affected scope: a
+  malformed entry reachable by any cluster's resolution aborts that resolution under §5's
+  mutation barrier.
+- The error is sanitized and identifies **entry provenance** — entry kind, name, source
+  file path, and the zero-based in-file index defined in §2 — plus a stable reason code.
+- When userinfo is present the URL is **never echoed**, in whole or in part: the
+  diagnostic names the provenance and the reason code only. This is the one rejection
+  reason whose offending value is credential-bearing, and it is treated as such.
+- Python and the collection use identical canonicalization **and rejection** vectors; the
+  parity fixtures cover accept and reject cases together, so neither implementation can
+  normalize an input the other rejects.
+
 ### 4. Snapshot-built client
 
 - The selected context's client is built with `config.new_client_from_config_dict(...)`
@@ -141,9 +180,43 @@ not a separate one.
   time**, against the source file of the specific `cluster`/`user` entry that won
   first-wins deduplication — not against the selected context's file. A context, its
   cluster, and its user may each originate from different files; each entry's relative
-  paths resolve against its own provenance. Embedded `*-data` fields pass through
-  untouched; `exec` credential plugins pass through unchanged (their `command` resolution
-  is the plugin runtime's concern, as with the official loader).
+  paths resolve against its own provenance.
+
+#### File-backed credential contents are part of the snapshot
+
+Absolutizing a path is **not** a snapshot. `config.new_client_from_config_dict(...)` opens
+`certificate-authority`, `client-certificate`, `client-key`, and `tokenFile` when it
+builds the client, so a path-only snapshot still lets a file replaced or deleted between
+merge and client construction change the authenticated identity — the exact TOCTOU window
+this section exists to close. The merged snapshot therefore preserves the file **contents**
+captured at snapshot-construction time:
+
+- Each of the four file-backed credential fields is read **once**, at merge time, through
+  a race-resistant file boundary: open the absolutized path first and derive every check
+  from that one open descriptor (`O_NOFOLLOW`, then `fstat` on the descriptor rather than
+  a second path-based `stat`), so the file that is validated is the file that is read.
+- Validation before use: the descriptor must refer to a **regular file**, and its size
+  must be non-zero and within the same standard size limit §1 restores for merged inputs.
+  A symlink, directory, device, empty file, or oversized file is a fail-closed error, and
+  the read is not retried against the path.
+- The captured content is converted to the appropriate in-memory representation for the
+  config dict — the `*-data` form for `certificate-authority`, `client-certificate`, and
+  `client-key`; the in-memory token value for `tokenFile` — and the corresponding
+  file-path key is removed from the snapshot handed to the client, so client construction
+  has nothing left to re-read.
+- Fields already supplied as embedded `*-data` pass through **unchanged**; they are
+  already content, and are never re-encoded or normalized.
+- `exec` credential plugins are the one **documented exception**: they are invoked by the
+  client at construction time by design and cannot be snapshotted as bytes. They pass
+  through unchanged, exactly as with the official loader, and this design does not claim
+  snapshot immutability for a context whose user is exec-based.
+- The original absolutized paths are retained **separately**, as provenance for
+  diagnostics and tests only. They are never used to reconstruct the client and never
+  re-read after capture.
+- Captured credential contents are never logged, never returned in a module result, never
+  written to state or checkpoint data, and never included in any diagnostic. Parser and
+  client-construction errors that could embed the material are redacted to a stable reason
+  code plus the entry provenance of §2 — never the value, and never a byte offset into it.
 
 ### 5. Mutation barrier
 
@@ -166,6 +239,28 @@ not a separate one.
   resolve correctly; context, cluster, and user entries drawn from three different files
   each resolve against their own source file; embedded `*-data` untouched; exec
   passthrough.
+- Credential-content snapshot, per field (`certificate-authority`, `client-certificate`,
+  `client-key`, `tokenFile`): the source file is **modified** after snapshot construction
+  and the client still authenticates with the captured content; the source file is
+  **deleted** after snapshot construction and client construction still succeeds with the
+  captured content — both asserting zero post-capture file reads. Fail-closed vectors,
+  each with zero mutating calls: symlinked path, directory, device node, empty file,
+  oversized file. Assertions on the handed-off snapshot: the file-path key is gone and the
+  content key is present; pre-existing embedded `*-data` is byte-unchanged; an exec-based
+  user passes through unchanged and is documented as the exception rather than asserted
+  immutable. Redaction: no captured credential content appears in any log line, module
+  result, state/checkpoint payload, or parser/client error — including a deliberately
+  malformed PEM/token whose parse error is asserted to carry only a stable reason code and
+  the entry provenance.
+- Malformed server URLs, one vector per rejection-table row (missing, null, non-string,
+  empty/whitespace, relative and scheme-relative, unsupported scheme, userinfo, invalid
+  port forms, invalid IPv4, invalid IPv6, malformed bracketed IPv6, malformed percent
+  escape, query, fragment, structurally invalid parse): each asserts a fail-closed error
+  before matching, **zero mutating calls**, and a sanitized message carrying entry kind,
+  name, source path, zero-based index, and a stable reason code. The userinfo vector
+  additionally asserts no part of the URL — host, userinfo, or full value — appears in the
+  message. The same vectors run against the expected-endpoint source, not only the merged
+  snapshot. Python and the collection share the accept **and** reject vectors.
 - Duplicate-conflict source locations, per entry kind:
   - two same-name differing entries in **two different files** → ambiguity failure whose
     message reports both file paths and each entry's zero-based index;
@@ -237,3 +332,10 @@ This design document performs no changelog or version update itself.
    appears in the diagnostic.
 4. Python and collection normalize endpoints identically (shared test vectors).
 5. The `max_size=0` bypass is gone; oversized inputs fail closed.
+6. Every malformed `cluster.server` value in the §3 rejection table fails closed before
+   endpoint matching with zero mutating calls, and its diagnostic identifies the entry by
+   kind, name, source path, and zero-based index without echoing a credential-bearing URL.
+7. Replacing or deleting a `certificate-authority`, `client-certificate`, `client-key`, or
+   `tokenFile` file after the snapshot is built cannot change the identity the mutation
+   client authenticates as; captured credential contents never appear in logs, results,
+   state, or errors. Exec-plugin users are the single documented exception.
