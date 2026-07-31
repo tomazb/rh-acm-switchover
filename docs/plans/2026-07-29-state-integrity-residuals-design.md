@@ -47,7 +47,8 @@ memory-mode state (as designed for `main`) is explicitly rejected here.
 
 1. Simulation modes (validate-only, dry-run) leave the state file byte-identical, and a
    crashed simulation is detected — never silently trusted.
-2. State writes survive power failure (rename durability).
+2. State writes survive power failure (rename durability), and so does the absent-file
+   restoration that deletes one (unlink durability).
 3. One physical hub pair, one running switchover — regardless of state-file paths, Unix
    user, container, execution node, or host.
 4. State reset happens under the lock; `--force` cannot destroy progressed history.

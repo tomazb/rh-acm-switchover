@@ -267,8 +267,12 @@ at the first tier that applies:
 2. **`ownership_conflict`, or any state whose ownership is unproven or ambiguous** —
    blocking. No mutation, and **no successful terminal result of any kind**, including
    `restored_noop`.
-3. **Proven `applied` transaction and proven identity** — the transaction is ours and its
-   target is identified; proceed.
+3. **Proven transaction and proven identity** — a schema-valid `intent` or `applied`
+   record whose identity is established for its prior shape (the captured `uid` for a
+   `no_key`/`value` prior; a durable response-derived `created_uid`, or the documented
+   crash-window absence of one, for an `absent` prior). The transaction is ours and its
+   target is identified; proceed. The §2 `intent` bullet below is the crash-before-apply
+   case of this tier, not an exception to the ordering.
 4. **Live-state restore/no-op evaluation** — only here do the table rows below apply.
 
 Tier 2 is the rule the table rows do not encode on their own. An absent-prior record with
