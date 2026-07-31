@@ -398,12 +398,65 @@ Idempotent rerun resumes cleanly: already-deleted resources are absent and no-op
 non-interactive path (`interactive=False`, integrated decommission) is unaffected — it
 never prompts.
 
-### 3. Scoped strict list
+### 3. Shared strict inventory primitive
 
 Add `list_custom_resources_strict(...)` (or a `strict=True` flag on the existing method)
 in `lib/kube_client.py` that separates an object-list 404, positive CRD absence, positive
 namespace absence, a genuine empty list, and an API/discovery/read failure instead of
-collapsing them to `[]`. Used by decommission only:
+collapsing them to `[]`.
+
+This is **one shared primitive, not a decommission-private helper.** The migration
+evidence design (`2026-07-29-migration-evidence-design.md` §3) consumes the same contract
+for ManagedCluster inventory and Velero backup reads, and both designs must not diverge
+into two subtly different strict-list behaviours. The contract below is authoritative for
+every consumer; §3 of the migration design references it rather than restating it.
+
+#### Shared strict-list contract
+
+- **Supported operations.** Exactly two: a namespaced or cluster-scoped **list** of one
+  custom-resource kind (optionally selector-scoped), and a **GET by name** of one such
+  resource. Nothing else — no watch, no aggregation across kinds, no implicit fallback to
+  a different API group or version.
+- **Explicit kubeconfig and context.** Every call is made through an explicitly supplied
+  client whose kubeconfig and context are named by the caller. There is no ambient or
+  default-context resolution: a decommission read against the old hub and a migration read
+  against the destination hub are distinguishable at the call site and in the result.
+- **Pagination is mandatory and complete.** Lists are read through the API server's
+  `continue`/`limit` paging until the server reports no further continuation. A response
+  carrying a `continue` token that the caller does not follow is an incomplete read, not a
+  short list. An expired continue token restarts the read; it never truncates it.
+- **Complete-response validation.** The decoded response must carry the expected list
+  shape (`items` present and a list, `metadata` a mapping). A structurally invalid or
+  undecodable response is a read failure, never an empty inventory.
+- **Outcome algebra.** Every call resolves to exactly one of: `items` (possibly a genuine
+  empty list, positively proven complete), `crd_absent` (positive discovery-level absence
+  of the API group/resource), `namespace_absent` (positive absence of the named
+  namespace), `object_absent` (GET 404 for a named resource), or `error`.
+  `crd_absent`, `namespace_absent`, and `object_absent` are positive *absence proofs*;
+  `error` is not, and no consumer may read an `error` as absence or as an empty list.
+- **Authorization, discovery, timeout, transport, and decode failures are `error`** — the
+  403/401 case explicitly included, so a missing RBAC rule can never present as "nothing
+  is there".
+- **No silent partial aggregation.** The Collection implementation must not use
+  `failed_when: false`, `ignore_errors`, or a `default([])` filter to absorb a failed
+  read, and must not merge a partially-paged result into an inventory. A failed page fails
+  the whole read.
+- **Bounded calls.** Every call has a bounded retry/timeout budget stated by the caller;
+  exhausting it is `error`, never absence. The primitive itself never polls — bounded
+  polling loops live in the consumers, which repeat whole strict reads.
+- **Sanitized errors.** Error results carry the api group/version/kind, namespace, name or
+  selector, and a stable reason code — never response bodies, tokens, kubeconfig data, or
+  resource contents.
+- **No mutation.** The primitive issues read-only requests only.
+- **Ownership.** Python owns `lib/kube_client.py::list_custom_resources_strict`; the
+  Collection owns an independent module/helper with the identical outcome algebra. They
+  share no code and are held equal by parity fixtures.
+- **Tests are shared across consumers.** One vector set covers the outcome algebra,
+  pagination completeness, and the error-is-not-absence rule, and is exercised by both the
+  decommission and migration-evidence suites in both form factors — not duplicated with
+  divergent expectations.
+
+Decommission's own uses of the shared primitive:
 
 - `_delete_managed_clusters` inventory read: missing `cluster.open-cluster-management.io`
   discovery → fatal ("cannot verify inventory"), genuine empty list → clean "nothing to

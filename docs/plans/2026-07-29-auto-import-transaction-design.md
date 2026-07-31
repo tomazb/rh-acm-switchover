@@ -180,9 +180,9 @@ auto-import read, mutation, restore, or gate decision:
 - Required fields and shapes: `auto_import_txn_id` (non-empty string);
   `auto_import_txn` (exactly one of `intent`, `applied`, `ownership_conflict`);
   `auto_import_prior` (exactly one of the three §1 shapes — non-empty `uid` for
-  `no_key`/`value`, `created_uid` null or a non-empty string for `absent` — or the
-  legacy-migrated `{"state": "unknown_legacy"}` shape produced only by the migration
-  rules above);
+  `no_key`/`value`, and for `absent` a `created_uid` whose required/forbidden/null status
+  is given by the state-and-provenance table below — or the legacy-migrated
+  `{"state": "unknown_legacy"}` shape produced only by the migration rules above);
   `auto_import_conflict` (null or the complete sanitized object). When terminal
   restore evidence exists it must be one §2 table result carrying the matching
   `auto_import_txn_id`; when the §4 acknowledgement exists it must be the complete
@@ -195,12 +195,32 @@ auto-import read, mutation, restore, or gate decision:
   so neither can be inherited by a later transaction. Independently of that reset, the
   §4 gate matches evidence by id, so a stale record surviving any path is an id
   mismatch that blocks rather than satisfies the gate.
-- A non-null `created_uid` is valid only under the §1 create-response provenance
-  rules; a non-legacy record whose `created_uid` state cannot have arisen under those
-  rules and the §1 crash-window rules is malformed. The `unknown_legacy` prior never
-  carries `uid` or `created_uid`; the `absent` prior may carry a null `created_uid`
-  only in the documented crash-before-persistence window, where it keeps restore
-  fail-closed.
+- `created_uid` requirements are defined **by transaction state and provenance**, not by
+  a single universal rule. It is required to be non-null only when the record proves that
+  *this* transaction successfully created the ConfigMap; wherever creation was not proven
+  it must be absent/null, and a non-null value there is malformed. The complete table:
+
+  | record | `created_uid` | rationale |
+  | --- | --- | --- |
+  | `applied` with an `absent` prior | **required**, non-empty string | `applied` is reachable only through §1 steps 4-5, which persist the create-response UID before the transition |
+  | `intent` with an `absent` prior, crash before UID persistence | **null** | the create may have succeeded, but no response-derived UID is durable; restore stays fail-closed |
+  | `intent` with an `absent` prior, UID already durable | **required**, non-empty string | §1's crash-after-persistence row: the exact UID is reused and may only be verified |
+  | `ownership_conflict`, reason `already_exists` | **null (forbidden)** | 409 proves another actor owns the live object |
+  | `ownership_conflict`, reason `unexpected_patch` | **null (forbidden)** | a patch/mutation result is not a create; no ownership arises |
+  | `ownership_conflict`, reason `create_conflict` | **null (forbidden)** | the create did not succeed |
+  | `ownership_conflict`, reason `create_failure` | **null (forbidden)** | the create did not succeed |
+  | `ownership_conflict`, reason `create_outcome_ambiguous` | **null (forbidden)** | a transport failure may have hidden a create; ambiguity never becomes ownership, and a later GET cannot repair it |
+  | `ownership_conflict`, reason `create_response_missing_uid` | **null (forbidden)** | the create response carried no usable UID; a later GET cannot establish one |
+  | `ownership_conflict`, reasons `post_create_absent`, `post_create_unreadable`, `post_create_malformed`, `replacement_uid` | **required**, non-empty string | these arise only *after* a successful create response whose UID is already durable (§1); the conflict is about the later observation, not about creation |
+  | any record with a `no_key` or `value` prior | **absent (forbidden)** | those priors carry `uid`, the captured pre-existing identity; nothing was created |
+  | `unknown_legacy` prior | **absent (forbidden)** | a legacy record proves neither identity nor creation |
+
+- A present `created_uid` must originate **only** from the successful create response. A
+  name-based GET may verify equality with an already-persisted value; it may never
+  establish, replace, or backfill one. A record whose combination of state, prior shape,
+  conflict reason, and `created_uid` does not appear in the table above is internally
+  inconsistent, therefore malformed, and fails closed per the rule below — in particular a
+  non-null `created_uid` on any forbidden row, and a null one on any required row.
 
 A record that is malformed, partial, of unknown version, in an unknown state, or
 internally inconsistent (id mismatch between intent, terminal result, or
@@ -236,22 +256,56 @@ For an `absent` prior, "already matches prior" means the ConfigMap itself is abs
 present same-name ConfigMap never matches an absent prior merely because its key is
 missing or has a familiar value.
 
+#### Outcome precedence
+
+The table below evaluates live state, and live state alone never overrides the recorded
+transaction state. Restore therefore resolves its outcome in this fixed order, and stops
+at the first tier that applies:
+
+1. **Malformed or partial transaction record** (per the §1 schema rules) — fail closed.
+   No live read is used to repair it, and no terminal result is produced.
+2. **`ownership_conflict`, or any state whose ownership is unproven or ambiguous** —
+   blocking. No mutation, and **no successful terminal result of any kind**, including
+   `restored_noop`.
+3. **Proven `applied` transaction and proven identity** — the transaction is ours and its
+   target is identified; proceed.
+4. **Live-state restore/no-op evaluation** — only here do the table rows below apply.
+
+Tier 2 is the rule the table rows do not encode on their own. An absent-prior record with
+no `created_uid` and a live-absent ConfigMap looks identical whether the create never
+happened or an `ownership_conflict` was recorded, and treating both as `restored_noop`
+would let a blocking conflict satisfy the §4 decommission gate. It does not: **current
+live absence alone never erases a recorded `ownership_conflict`.** Such a record stays
+blocking until one of exactly three things happens:
+
+- ownership is safely proven (a durable response-derived `created_uid` matching the live
+  object's UID), or
+- a successful restoration occurs under that proven ownership, or
+- the matching durable audited acknowledgement contract of §4 is satisfied — bound to the
+  same `auto_import_txn_id`, with non-empty actor, timestamp, reason, and both compared
+  values.
+
+Nothing else clears it, and none of the three can be inferred from a read.
+
 | captured prior + live state | restore action | journal result |
 | --- | --- | --- |
 | `absent` with response-derived, durably persisted `created_uid`, live UID == `created_uid` | if live CM still matches the tool-owned shape (`data` is exactly our one key; no operator-added keys/labels/annotations beyond creation defaults) → delete CM with server-side UID precondition; otherwise patch removing only our key (operator content appeared post-creation — preserve it) | `restored_deleted` / `restored_key_removed` |
 | `absent` with `created_uid`, live UID ≠ `created_uid` | no patch, no delete — replacement object, ownership not ours, live object preserved unchanged | `restore_conflict` |
 | `absent` with `created_uid`, live CM absent | no-op — the tool-created object no longer exists (deleted by another actor or by an earlier interrupted restore); the captured prior already holds and nothing of ours can remain. No create, patch, delete, or retry | `restored_noop` |
-| `absent` without `created_uid`, live CM absent | no-op (nothing exists; nothing of ours can remain) | `restored_noop` |
+| `absent` without `created_uid`, live CM absent, **and the transaction is not in `ownership_conflict`** | no-op (nothing exists; nothing of ours can remain) | `restored_noop` |
+| `absent` without `created_uid`, live CM absent, transaction **in `ownership_conflict`** | no mutation; tier 2 dominates — live absence does not prove the conflict was resolved | conflict retained; **no terminal result**, gate stays blocked |
 | `absent` without `created_uid`, live CM present | no patch, no delete — creation ownership unprovable, live object preserved unchanged | `restore_conflict` |
 | `no_key` | patch removing only the `autoImportStrategy` key | `restored_key_removed` |
 | `value X` | patch the key back to `X` | `restored_value` |
-| any, live value already matches prior | no-op (this row takes precedence over every mutating row, including when the captured prior itself equals the temporary value) | `restored_noop` |
+| any **tier-3** record, live value already matches prior | no-op (this row takes precedence over every mutating row, including when the captured prior itself equals the temporary value) | `restored_noop` |
 | any, live value ≠ our temporary value and ≠ prior | preserve live value, no mutation | `restore_conflict` |
 
-Row precedence is explicit: the `restored_noop` row takes precedence over every
-mutating row (as noted in the table), and the final `restore_conflict` row takes
-precedence over the mutating rows — the `absent`/`no_key`/`value` inversion rows apply
-only when the pre-check found the live key value still equal to the temporary value
+Row precedence is explicit, and it applies **inside tier 4 only** — the four-tier order
+above is evaluated first, so no row can be reached by a malformed record or an
+unresolved `ownership_conflict`. Within tier 4: the `restored_noop` row takes precedence
+over every mutating row (as noted in the table), and the final `restore_conflict` row
+takes precedence over the mutating rows — the `absent`/`no_key`/`value` inversion rows
+apply only when the pre-check found the live key value still equal to the temporary value
 this run wrote. An operator-edited value on a tool-created ConfigMap is therefore
 preserved and journaled `restore_conflict` even though UID identity is proven.
 
@@ -285,10 +339,13 @@ explicit, separately designed acknowledgement path, before teardown.
   the unproven-ownership conflict row even when its value is `ImportAndSync`; the read
   cannot establish ownership. If a response-derived `created_uid` is already durable,
   the read may only verify that exact UID.
-- `ownership_conflict` never authorizes patch or delete. Finalization reports the stable
-  recovery reason and remains fail-closed until the operator uses the separately designed
-  acknowledgement path; acknowledgement may permit teardown but never retroactively
-  establishes `created_uid` or authorizes mutation of the live same-name object.
+- `ownership_conflict` never authorizes patch or delete **and never produces a successful
+  terminal result of any kind** — including `restored_noop`, and including when the live
+  ConfigMap is absent. Per tier 2 above it dominates every live-state row. Finalization
+  reports the stable recovery reason and remains fail-closed until the operator uses the
+  separately designed acknowledgement path; acknowledgement may permit teardown but never
+  retroactively establishes `created_uid` or authorizes mutation of the live same-name
+  object.
 - The delete uses a server-side UID precondition (`V1DeleteOptions.preconditions.uid` with
   the captured `created_uid`); `delete_configmap` gains an optional precondition
   parameter. Precondition mismatch (409/412) → leave the replacement ConfigMap intact,
@@ -403,6 +460,24 @@ and verified; a conflict or failure never reports a successful change.
   `created_uid` (replacement, with or without operator-added keys) → `restore_conflict`,
   no patch, no delete; tool-created CM (live UID == `created_uid`) with operator-added
   keys → key removal instead of delete, UID identity asserted in the test.
+- `created_uid` state-and-provenance table: every row asserted in both directions — each
+  required row rejects a null value as malformed, each forbidden row rejects a non-null
+  value as malformed, and each of the five creation-failure `ownership_conflict` reasons
+  (`already_exists`, `unexpected_patch`, `create_conflict`, `create_failure`,
+  `create_outcome_ambiguous`, `create_response_missing_uid`) is accepted as **valid** with
+  a null `created_uid` rather than rejected as malformed. The four post-create conflict
+  reasons (`post_create_absent`, `post_create_unreadable`, `post_create_malformed`,
+  `replacement_uid`) are asserted to require the durable response-derived value. `applied`
+  with a null `created_uid` on an `absent` prior, and any `created_uid` on a
+  `no_key`/`value`/`unknown_legacy` record, are malformed.
+- Outcome precedence: an `ownership_conflict` record with an `absent` prior, no
+  `created_uid`, and a **live-absent** ConfigMap produces no terminal result, no
+  `restored_noop`, and leaves the §4 decommission gate blocked — the direct regression test
+  for live absence erasing a conflict. The same record passes the gate only after the
+  durable audited acknowledgement bound to its `auto_import_txn_id`. A malformed record
+  with a live state that would otherwise map to `restored_noop` is rejected at tier 1 and
+  never reaches the table. A tier-3 record with live state matching the prior still
+  produces `restored_noop` normally, proving the precedence did not over-block.
 - Collection parity tests for capture record shape and restore table.
 - Cross-form-factor parity fixtures assert identical result categories, state transitions,
   no-adoption decisions, and reason codes while Python and the collection use independent
@@ -446,3 +521,13 @@ Plus one planned slice row referencing this design. `F20` cross-referenced as un
 8. Python and the collection independently implement the same create-only outcome,
    durable-state, resume, restore, and decommission-gate contract; neither uses
    `create_or_patch_configmap`/generic `state=present` as proof of creation.
+9. `created_uid` is required exactly where the record proves this transaction created the
+   ConfigMap and is forbidden everywhere else: the enumerated creation-failure
+   `ownership_conflict` reasons are valid records with a null `created_uid` and are never
+   rejected as malformed, while a non-null `created_uid` on any of them — or on a
+   `no_key`, `value`, or `unknown_legacy` record — is malformed and fails closed.
+10. An unresolved `ownership_conflict` is never converted into a successful restoration by
+    live state: with the ConfigMap absent, restore produces no terminal result and
+    integrated decommission stays blocked until ownership is proven, a successful
+    restoration occurs, or the durable audited acknowledgement bound to the same
+    `auto_import_txn_id` is recorded.

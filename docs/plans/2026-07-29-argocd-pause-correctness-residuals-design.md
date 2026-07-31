@@ -101,6 +101,74 @@ pause patch, post-pause re-read, resume resourceVersion precondition, marker-mis
   shape + verification (§3) — all correctness fixes to existing code paths. Everything else
   about the script is `SSA-05` scope.
 
+### 1a. Mutation/journal durability boundary
+
+`verify_pending` above covers a mutation whose *verification read* failed. It does not
+cover a mutation whose *journal write* failed: a successful pause leaves auto-sync
+disabled with no durable record at all, and a successful resume clears the marker while
+the entry stays non-terminal — after which §4's paused-entry check reads the missing
+marker as tampering and blocks every destructive gate permanently. Both pause and resume
+therefore run under one explicit durable state machine, and the guarantee is stated
+precisely: **no accepted mutation is untracked, and no failed evidence write is
+unrecoverable.**
+
+Each mutation carries an immutable `operation` record, minted once and never re-minted on
+retry:
+
+| field | meaning |
+| --- | --- |
+| `operation_id` | immutable unique id for this pause or resume attempt |
+| `kind` | `pause` or `resume` |
+| `namespace`, `name` | Application identity |
+| `expected_uid` | the Application UID observed at read time; a different live UID is a replacement, never adopted |
+| `expected_resource_version` | the resourceVersion the precondition was built from (Python and the collection; absent for Bash, which has none — §1) |
+| `owned_transition` | the intended `automated` transition: for `pause`, canonical `ACTIVE` payload → paused shape; for `resume`, paused shape → that same canonical payload |
+| `state` | one of the states below |
+
+States, in order: `intent_recorded` → `mutation_accepted` → `verify_pending` →
+`verified` → `settled`, with `recovery_required` reachable from any of them.
+
+Rules:
+
+- **No mutation before durable intent.** `intent_recorded` — the complete operation record
+  including `owned_transition` — is written and forced durable before the patch request is
+  submitted. This is what makes a crashed mutation reconcilable rather than invisible.
+- **A failed intent persistence means no mutation.** The patch is not sent; the step fails
+  closed with nothing changed on the cluster.
+- **Mutation accepted, evidence write failed → recoverable, not lost.** The durable
+  `intent_recorded` record already names the Application, the expected identity, and the
+  intended transition, so a resume or rerun can reconcile. A failure to advance the record
+  past `intent_recorded` never converts into a successful pause/resume result: the run
+  returns fatal/non-zero.
+- **Reconciliation re-reads live state and compares it to the recorded intent**, never the
+  reverse. For a `pause` intent: paused shape plus our marker and the expected UID →
+  advance to `verified` and write the §2a entry, whose `restore_payload` is the
+  `owned_transition` payload recorded *before* the mutation (the live paused Application no
+  longer carries it, which is exactly why intent-first ordering is required). For a
+  `resume` intent: `automated` deep-equal to the recorded payload and marker absent →
+  advance to `verified`, then `settled` when the journal entry is durably `resumed`.
+- **Replacement identity is never adopted.** A live UID differing from `expected_uid`
+  is `recovery_required` regardless of how well the observed value matches.
+- **Ambiguous transport or verification results fail closed** to `verify_pending` (read
+  ambiguity) or `recovery_required` (state ambiguity). Neither is terminal and neither
+  satisfies a gate.
+- **Completion is recorded only after live verification.** `settled` — and the `resumed`
+  journal state — is written only after the post-mutation re-read and the §3 deep-equality
+  and marker checks have passed.
+- **Partial or malformed operation state blocks all destructive gates**, exactly like the
+  §2a `recovery_required` state it shares.
+- **Resume-side marker absence is disambiguated by the record, not guessed.** An entry
+  whose operation record is `mutation_accepted`/`verify_pending` for `kind: resume`
+  explains a missing marker as our own accepted resume awaiting settlement; the gate
+  reconciles it rather than reporting tampering. A missing marker with no such record
+  remains the journal/cluster disagreement of §4.
+
+Bash parity is required for the record contents, ordering, states, and reconciliation
+decisions. Bash still has no resourceVersion precondition or compare-and-swap, so it
+records `expected_resource_version` as absent and its intent-first ordering narrows but
+does not eliminate the interleaving window described in §1. Nothing here claims Bash OCC
+parity.
+
 ### 2. Shared auto-sync classification
 
 Five-outcome rule, identical in `lib/argocd.py` (`is_autosync_enabled` → new
@@ -164,6 +232,119 @@ Application body, status payload, annotation value, or other potentially sensiti
 [argocd-application-crd]: https://github.com/argoproj/argo-cd/blob/stable/manifests/crds/application-crd.yaml
 [kubernetes-crd-nullable]: https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions/#defaulting-and-nullable
 
+### 2a. Versioned journal schema and strict validation
+
+The pause journal is a versioned durable record, and **no gate, resume, settlement, or
+mutation reads it without validating it first**. Validation is a whole-record schema
+check, not a field lookup: a record that does not validate is never partially trusted.
+
+`argocd_journal_schema_version: 2` is required on every record written by this design.
+Version `1` is the legacy shape defined in §2b and is accepted only through the migration
+contract there. Any other version — absent on a non-legacy record, unrecognized, or
+non-integer — is unknown-version and blocks.
+
+Per-entry required fields and shapes:
+
+| field | shape |
+| --- | --- |
+| `argocd_journal_schema_version` | integer `2` |
+| `namespace`, `name` | non-empty strings (or, when identity itself was malformed at discovery, the stable non-sensitive discovery index used by `classification_unknown`) |
+| `state` | exactly one of `paused`, `verify_pending`, `skipped_disabled`, `resumed`, `classification_unknown`, `recovery_required` |
+| `run_marker` | the exact pause-marker annotation value this run writes — the run identity gates compare against |
+| `restore_payload` | the canonical `ACTIVE` object of §2 (see rules below) |
+| `observed_value` | present only on `skipped_disabled` and `classification_unknown`; the sanitized observed object or stable reason code |
+| `operation` | the §2b durable operation record |
+
+`restore_payload` rules — this is the object a resume would send back, so it carries the
+whole restoration obligation:
+
+- It is **required and must be a schema-valid canonical `ACTIVE` object** for `paused`,
+  `verify_pending`, and `resumed` entries.
+- It is the **tool-owned `automated` object only**. It is never a full `syncPolicy`, never
+  a partial or reconstructed `spec`, and never contains sibling sync-policy keys. A
+  payload carrying anything other than the canonical `automated` object is structurally
+  impossible under this schema and is rejected.
+- Its keys are a subset of `enabled`, `prune`, `selfHeal`, `allowEmpty` with the §2 value
+  types, and a null-valued `enabled` has already been dropped at journaling time. An
+  `enabled: null` member surviving in a stored payload is a canonicalization violation and
+  is rejected, not re-canonicalized on read.
+- It is **absent** on `skipped_disabled` and `classification_unknown` entries (those never
+  incur a restoration obligation), and its presence there is malformed.
+
+Validation points are exhaustive and identical in all three form factors: every
+destructive-phase gate pass (§4), every resume eligibility check and every resume patch
+(§3), every `verify_pending` settlement, and every journal state transition. Each of them
+validates the complete record **before** evaluating live cluster state and **before** any
+mutation.
+
+A record that is missing, malformed, partial, of unknown version, in an unknown state, or
+structurally impossible transitions to the durable blocking state `recovery_required` and
+produces a fatal/non-zero result. `recovery_required` is never a successful
+paused/skipped/resumed state, never satisfies a gate, and is never repaired by re-reading
+live cluster state — in particular a live paused Application is never used to infer or
+reconstruct a restore payload, because the live paused shape by definition no longer
+contains the value that must be restored. It is cleared only by an operator or by a rerun
+of the normal pause flow durably replacing the evidence. Its diagnostics carry only the
+sanitized namespace/name (or discovery index), the schema version observed, and a stable
+reason code — never the malformed payload, the Application body, or annotation values.
+
+Parity: Python, the collection, and Bash each own an independent implementation of this
+validator, and the schema version, field names, state names, stable reason codes,
+accept/reject decisions, and sanitized output are parity fixtures.
+
+### 2b. Legacy journal migration (schema version 1)
+
+The collection's current pause path stores the **full** `spec.syncPolicy` in the
+`acm-switchover.argoproj.io/original-sync-policy` annotation
+(`ansible_collections/tomazb/acm_switchover/roles/argocd_manage/tasks/pause.yml:46-47`),
+and its patch rebuilds `syncPolicy` from that snapshot
+(`resume.yml:71`). An Application paused by that implementation before this slice ships
+therefore carries a legacy restore value that the §2a schema rejects. Upgrading must not
+strand it, and must not send it back blindly.
+
+Legacy identification is explicit, never inferred from a parse failure: a record is
+schema version `1` when it carries no `argocd_journal_schema_version` **and** its stored
+restore value is a mapping whose keys are sync-policy keys rather than the canonical
+`automated` members. Anything else lacking a recognized version is unknown-version per
+§2a, not legacy.
+
+Migration is a read-only conversion followed by one durable write, performed **before**
+any resume mutation and before any gate accepts the entry:
+
+1. Extract **only** the legacy `automated` member. Every sibling `syncPolicy` key
+   (`syncOptions`, `retry`, and any other) is discarded: pause never removed them, so
+   resume must never restore them. A legacy snapshot with no `automated` member, or with
+   a non-mapping `syncPolicy`, is not migratable.
+2. Classify the extracted member through the current strict §2 classifier. Only an
+   `ACTIVE` result is migratable. `INACTIVE_ABSENT`, `INACTIVE_NULL`, `INACTIVE_DISABLED`,
+   and `UNKNOWN` are not: an entry recorded as paused whose stored policy was never active
+   is an impossible legacy record.
+3. Canonicalize exactly as §2 requires — a null-valued `enabled` is dropped — so the
+   migrated payload is byte-comparable with a natively written one.
+4. Bind the migrated record to the existing Application identity and ownership marker:
+   the live Application must still carry the legacy pause marker for that run. A missing,
+   replaced, or foreign marker means the entry is no longer ours to restore.
+5. Durably write the complete schema-version-2 record — including `restore_payload`,
+   `run_marker`, and a §2b-minted `operation` record in state `verified` reflecting the
+   already-completed legacy pause — **before** any resume patch is sent. The migrated
+   record, not the legacy annotation, is what resume reads.
+6. Clear the legacy `original-sync-policy` annotation only in the same resume patch that
+   clears the pause marker, and only after a verified restore, so a failure between
+   migration and resume leaves the legacy evidence intact for a retry.
+
+Every non-migratable legacy record — malformed, ambiguous, missing `automated`,
+non-`ACTIVE`, marker-missing, marker-replaced, or bound to a replacement Application
+identity — becomes `recovery_required` per §2a. It is fatal, blocks every destructive
+gate, and its message names the Application and the stable legacy reason code. In no case
+is a restoration payload inferred from the live paused Application: the live value is the
+paused shape, so inferring from it would silently "restore" auto-sync to absent and
+permanently disable it.
+
+Bash and Python never wrote the legacy full-`syncPolicy` shape, so for them the migration
+path is a validator that recognizes and rejects a foreign legacy record rather than a
+converter; the collection owns the conversion. All three implement the same
+accept/reject decision table.
+
 ### 3. Resume shape and verification
 
 - Patch body becomes `{"spec": {"syncPolicy": {"automated": <stored original>}}}` plus a
@@ -174,8 +355,10 @@ Application body, status payload, annotation value, or other potentially sensiti
 - The "stored original" throughout this section is the canonical `ACTIVE` object defined
   in §2 (null-valued `enabled` already dropped at journaling time), so both the patch
   body and the deep-equality comparison use that one canonical representation.
-- Before resume mutates, it validates that the stored original is an exact schema-valid
-  `ACTIVE` object, that the live field has the exact paused shape (absent or `null`), and
+- Before resume mutates, it validates the complete journal record against the §2a schema
+  (a legacy record must already have been migrated per §2b), that the stored original is
+  an exact schema-valid canonical `ACTIVE` object carrying only the tool-owned `automated`
+  members, that the live field has the exact paused shape (absent or `null`), and
   that the live pause marker exactly equals the current journaled run identity immediately
   before the patch. A malformed stored value, an `UNKNOWN` live value, any live object —
   including valid `{"enabled": false}` — or a missing/replaced marker is a fail-closed
@@ -200,9 +383,22 @@ and an equivalent pre-task include in the collection:
 
 - Input: the persisted pause journal (state key `argocd_paused_apps` / collection
   checkpoint equivalent). If the journal is empty or absent, the gate passes trivially.
+- **Stored-record validation precedes every live read.** Before a gate evaluates any
+  entry's cluster state, it validates that entry against the §2a schema — including that
+  a `paused`, `verify_pending`, or `resumed` entry carries a present, schema-valid
+  canonical `ACTIVE` `restore_payload` limited to the tool-owned `automated` object, and
+  that a legacy (schema version 1) record has been migrated per §2b. A missing, malformed,
+  partial, unknown-version, non-`ACTIVE`, or structurally impossible stored payload is
+  `recovery_required`: the gate fails closed there, before ACTIVATION or FINALIZATION
+  proceeds. This closes the window in which a malformed journal entry passed the
+  destructive gates and was only rejected later by §3's resume-time validation, stranding
+  the Application paused with auto-sync disabled and no path forward.
+- Validation is per entry and does not short-circuit: every entry is validated and every
+  failure is reported together, so one bad record does not hide another.
 - Journal entry states and gate treatment: `paused` and `verify_pending` are non-terminal;
   `resumed` is the only terminal state and is skipped by gates. `skipped_disabled` is
   informational, never terminal, and is always re-read (below).
+  `recovery_required` (§2a/§2b/§1a) is a blocking error state and is never terminal.
   `classification_unknown` is a blocking error state: every gate performs a fresh,
   schema-aware read for a sanitized diagnosis, but the gate is read-only: it never
   promotes the entry directly to paused/skipped/resumed. Even when the object has since
@@ -272,6 +468,10 @@ and an equivalent pre-task include in the collection:
 | --- | --- | --- | --- |
 | Exhaustive §2 classifier, including `enabled: null` and all `UNKNOWN` shapes | typed shared helper | collection-owned parity helper used before Jinja mutation tasks | `jq -e` classifier with explicit type checks |
 | `UNKNOWN` outcome | fatal, sanitized blocking journal entry, no patch | failed task, sanitized blocking checkpoint entry, no patch | non-zero, sanitized blocking state entry, no patch |
+| §2a schema validation before every gate, resume, settlement, and mutation | typed record validator | collection-owned record validator | `jq -e` record validator |
+| §2b legacy (version 1) record handling | recognize and reject as foreign | recognize, convert, durably rewrite before resume | recognize and reject as foreign |
+| §1a durable operation record and reconciliation | full state machine with RV precondition | full state machine with RV precondition | full state machine, `expected_resource_version` absent (no OCC — §1) |
+| `recovery_required` outcome | fatal, blocks all destructive gates, sanitized | failed task, blocks all destructive gates, sanitized | non-zero, blocks all destructive gates, sanitized |
 | Pause success | exact absent/null verification before `paused` | same | same |
 | Resume eligibility and success | valid stored `ACTIVE`; live paused shape; exact post-read | same | same |
 | Destructive gates | ACTIVATION and FINALIZATION plus integrated teardown | same phase entries | any destructive workflow consuming Bash state; malformed state never reports success |
@@ -333,6 +533,45 @@ destructive gates, and returns fatal/non-zero. No new warning-only paths.
   classification vectors and asserts non-zero/no mutation/no successful state for every
   `UNKNOWN` category. Every form factor also tests that a missing/replaced run marker
   immediately before resume produces no patch and no `resumed` state.
+- **Journal schema validation (§2a)**, in all three form factors: for every validation
+  point (each destructive gate pass, resume eligibility, resume patch, `verify_pending`
+  settlement, every state transition), a record that is absent, malformed, partial, of
+  unknown or non-integer version, in an unknown state, or structurally impossible produces
+  `recovery_required`, a fatal/non-zero result, no mutation, and a sanitized diagnostic
+  carrying no payload or Application body. Payload-specific vectors: `restore_payload`
+  missing on a `paused`/`verify_pending`/`resumed` entry; present on a
+  `skipped_disabled`/`classification_unknown` entry; carrying a full `syncPolicy` or any
+  sibling sync-policy key; carrying an unknown member or a non-boolean
+  `prune`/`selfHeal`/`allowEmpty`; carrying a surviving `enabled: null` (canonicalization
+  violation — rejected, never re-canonicalized). Each asserts the gate fails **at the
+  gate**, before ACTIVATION or FINALIZATION proceeds, rather than at resume time. A
+  multi-entry journal with two distinct invalid records reports both.
+- **Legacy migration (§2b)**: a collection-written legacy record (no schema version, full
+  `spec.syncPolicy` with sibling `syncOptions`/`retry`) whose `automated` member is
+  `ACTIVE` migrates to a schema-version-2 record whose `restore_payload` is the canonical
+  `automated` object only, is durably written **before** any resume patch, and produces a
+  resume patch byte-identical to the natively journaled case — asserting the sibling keys
+  are never sent. Rejected legacy vectors, each `recovery_required` with no mutation: no
+  `automated` member; non-mapping `syncPolicy`; `automated` classifying `INACTIVE_ABSENT`,
+  `INACTIVE_NULL`, `INACTIVE_DISABLED`, or `UNKNOWN`; marker missing; marker replaced by a
+  foreign run; live Application UID differing from the bound identity. One test asserts
+  explicitly that no restore payload is ever derived from the live paused Application.
+  Python and Bash assert they recognize and reject a foreign legacy record rather than
+  converting it; the collection asserts the conversion. A migration that succeeds but
+  whose resume then fails leaves the legacy `original-sync-policy` annotation intact for
+  retry.
+- **Mutation/journal durability boundary (§1a)**: intent-persistence failure sends no
+  patch and leaves the cluster unchanged; a patch accepted with the subsequent evidence
+  write failing leaves a durable `intent_recorded` operation record, returns non-zero, and
+  is reconciled on rerun from the recorded `owned_transition` — asserting for `pause` that
+  the restore payload comes from the pre-mutation record and never from the live paused
+  Application; a resume whose journal write fails after an accepted patch is reconciled as
+  our own accepted resume rather than reported as marker tampering, closing the
+  permanent-block path; a live UID differing from `expected_uid` is `recovery_required` in
+  every state even when the observed value matches exactly; ambiguous transport outcomes
+  land in `verify_pending`/`recovery_required` and never in `settled`; `settled` is
+  asserted unreachable without a passing post-mutation re-read. Bash runs the same vectors
+  with `expected_resource_version` absent, and the suite asserts no test claims Bash OCC.
 - Changelog entry under `CHANGELOG.md` `## [Unreleased]` per the repository's Version
   Management policy. The implementation slice is ordinary development work, so it does
   not change released version identifiers or create a release tag; the accumulated
@@ -381,3 +620,18 @@ adjacent-not-superseded: `SSA-05` (script lifecycle), `TR2D-02` (collection resu
    run returns non-zero, and every destructive-phase gate blocks until a later re-read
    settles the entry. The guarantee is that no mutation is untracked or falsely
    reported successful — not that no mutation occurred.
+10. Every destructive-phase gate fails closed on a journal entry whose stored
+    `restore_payload` is missing, malformed, non-canonical, non-`ACTIVE`, or carries
+    anything beyond the tool-owned `automated` object — at the gate, before ACTIVATION or
+    FINALIZATION performs any mutation, and not merely at resume time.
+11. An Application paused by the pre-slice collection implementation (full `spec.syncPolicy`
+    snapshot) is either migrated to a schema-version-2 record whose restore payload is the
+    canonical `automated` object alone — durably written before resume, and producing a
+    resume patch containing no sibling `syncPolicy` key — or fails closed as
+    `recovery_required`. No restore payload is ever inferred from the live paused
+    Application.
+12. No pause or resume mutation is submitted without a durable `intent_recorded` operation
+    record, and a mutation accepted while its evidence write failed is recoverable rather
+    than untracked: rerun reconciles it from the recorded intent, a replacement UID is
+    never adopted, and a resume whose journal write failed never presents as marker
+    tampering that blocks the gates permanently.

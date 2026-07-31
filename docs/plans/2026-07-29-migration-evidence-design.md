@@ -420,12 +420,41 @@ Dry-run/check-mode and reporting contract:
 
 ### 3. Strict inventory reads
 
-The migration path adopts the strict list variant to be introduced by the decommission
-completion design (working name `list_custom_resources_strict` in
-`lib/kube_client.py`; it may land as a `strict=True` flag on the existing helper):
-ManagedCluster inventory reads in activation and post-activation, and the Velero backup
-list in §1. API-group/resource 404 → typed fatal error; genuine empty list → normal
-result (then judged against expectations).
+The migration path is a first-class consumer of the **shared strict inventory primitive**
+whose contract is defined once in
+`2026-07-29-decommission-completion-design.md` §3 (working name
+`list_custom_resources_strict` in `lib/kube_client.py`; it may land as a `strict=True`
+flag on the existing helper). That primitive is explicitly *not* decommission-scoped: the
+supported operations, explicit kubeconfig/context, mandatory pagination,
+complete-response validation, outcome algebra
+(`items` / `crd_absent` / `namespace_absent` / `object_absent` / `error`), the
+error-is-never-absence rule, the ban on `failed_when: false` and silent partial
+aggregation, bounded calls, sanitized errors, no-mutation guarantee, Python/Collection
+ownership split, and the shared test vectors all apply here verbatim and are not restated
+or varied.
+
+Consumers in this design:
+
+- ManagedCluster inventory reads in activation and post-activation.
+- The Velero backup list in §1.
+
+Consumer-specific mapping onto the shared outcome algebra:
+
+- `items` — the inventory, positively proven complete; a genuine empty list is a normal
+  result and is then judged against the §2 expectations (names plus the additive floor).
+- `crd_absent` / `namespace_absent` / `object_absent` — typed fatal error for these
+  consumers. Unlike decommission, whose teardown paths have legitimate clean-skip branches
+  for positive absence, a migration inventory read has no such branch: an absent
+  ManagedCluster API group or Velero backup namespace during activation or
+  post-activation means the evidence cannot be established, so it fails closed rather than
+  producing an empty inventory.
+- `error` — fatal, and never mapped to an empty inventory or to a satisfied expectation.
+  A discovery, authorization, timeout, transport, or decode failure must not be able to
+  make a fleet appear to match an expectation of zero clusters.
+
+Both form factors use the shared vectors from the decommission design's contract, plus
+these consumer-mapping assertions, so a future change to the primitive cannot silently
+diverge migration behaviour from decommission behaviour.
 
 ### 4. Evidence gate before integrated teardown
 
