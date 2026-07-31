@@ -1116,7 +1116,7 @@ class TestRegisterStatus:
         state = _make_real_state(tmp_path)
         register = ArgocdPauseRegister(state, dry_run=False)
 
-        assert register.status() == RegisterStatus(confirmed_paused_count=0, run_id=None)
+        assert register.status() == RegisterStatus(confirmed_paused_count=0, run_id=None, entry_count=0)
 
     def test_status_counts_applied_entries_only(self, tmp_path):
         state = _make_real_state(tmp_path)

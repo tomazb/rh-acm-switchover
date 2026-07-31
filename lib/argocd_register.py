@@ -8,7 +8,7 @@ hubs. Used by both PrimaryPreparation (full switchover) and restore-only mode.
 import copy
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
 from lib import argocd as argocd_lib
 from lib.constants import (
@@ -36,7 +36,7 @@ class RegisterStatus:
 
     confirmed_paused_count: int
     run_id: Optional[str]
-    entry_count: int = 0
+    entry_count: int
 
 
 @dataclass
@@ -49,6 +49,18 @@ class PauseSummary:
     ApplicationSet owns the Application), a failure means the patch itself
     did not succeed. ``dry_run`` tells callers which mode produced these
     counters, so they need not consult their own flag to phrase the outcome.
+
+    Per counter:
+
+    - ``newly_paused``: auto-sync was patched off this run (in dry-run, would
+      have been).
+    - ``already_paused``: a confirmed register entry whose Application already
+      had auto-sync off — nothing to do, the clobber guard skipped it.
+    - ``recovered``: the register claimed an unconfirmed pause and the live
+      pause marker proved it had landed, so the entry was confirmed.
+    - ``failed``: a pause patch was attempted and did not succeed.
+    - ``blocked``: the tool refused to pause because an ApplicationSet owns
+      the Application.
     """
 
     newly_paused: int = 0
@@ -94,8 +106,13 @@ class ArgocdPauseRegister:
         """
         return self._sanitize_entries(self.state.get_config(STATE_KEY_ARGOCD_PAUSED_APPS))
 
-    def paused_hub_roles(self) -> set:
-        """Hub roles referenced by the register — the hubs resume() would touch."""
+    def paused_hub_roles(self) -> Set[str]:
+        """Hub roles referenced by the register — the hubs resume() would touch.
+
+        Deliberately drawn from *all* entries, not only confirmed-applied ones:
+        it mirrors what resume() iterates, and over-approximating the set of
+        hubs whose identity must be validated is the safe direction.
+        """
         return {
             entry.get(STATE_KEY_ARGOCD_PAUSED_APP_HUB)
             for entry in self._load_entries()
@@ -140,7 +157,11 @@ class ArgocdPauseRegister:
     @staticmethod
     def _pause_entry_matches(entry: Dict[str, Any], hub: str, namespace: str, name: str) -> bool:
         """Return True when an Argo CD pause-state entry matches one Application."""
-        return entry.get("hub") == hub and entry.get("namespace") == namespace and entry.get("name") == name
+        return (
+            entry.get(STATE_KEY_ARGOCD_PAUSED_APP_HUB) == hub
+            and entry.get("namespace") == namespace
+            and entry.get("name") == name
+        )
 
     @staticmethod
     def _is_pause_applied(entry: Dict[str, Any]) -> bool:
@@ -211,7 +232,7 @@ class ArgocdPauseRegister:
             entry = {"hub": hub, "namespace": namespace, "name": name}
             paused_apps.append(entry)
 
-        self._mark_confirmed(entry, original_sync_policy, applied=pause_applied)
+        self._record_pause_state(entry, original_sync_policy, applied=pause_applied)
         return entry
 
     def _remove_pause_entry(
@@ -229,13 +250,17 @@ class ArgocdPauseRegister:
         self._persist_paused_apps(paused_apps)
 
     @staticmethod
-    def _mark_confirmed(
+    def _record_pause_state(
         entry: Dict[str, Any],
         original_sync_policy: Optional[Dict[str, Any]] = None,
         *,
-        applied: bool = True,
+        applied: bool,
     ) -> None:
-        """Record a known pause outcome: set the applied flag, clear provisional markers."""
+        """Record a known pause outcome: set the applied flag, clear provisional markers.
+
+        Writes the provisional (``applied=False``) state as well — the outcome
+        is known either way, only the pause itself may not have landed.
+        """
         if original_sync_policy is not None:
             entry["original_sync_policy"] = original_sync_policy
         entry["pause_applied"] = applied
@@ -432,7 +457,7 @@ class ArgocdPauseRegister:
         self._persist_paused_apps(paused_apps)
 
         result = argocd_lib.pause_autosync(client, impact.app, run_id)
-        self._apply_pause_result(entry, result, paused_apps, hub_label, namespace, name, run_id, summary)
+        self._apply_pause_result(entry, result, paused_apps, hub_label, namespace, name, run_id, summary=summary)
 
     def _reconcile_recorded_entry(
         self,
@@ -463,7 +488,7 @@ class ArgocdPauseRegister:
                     hub_label,
                 )
                 return True
-            self._mark_confirmed(existing_entry)
+            self._record_pause_state(existing_entry, applied=True)
             self._persist_paused_apps(paused_apps)
             summary.recovered += 1
             logger.info(
@@ -495,12 +520,13 @@ class ArgocdPauseRegister:
         namespace: str,
         name: str,
         run_id: str,
+        *,
         summary: PauseSummary,
     ) -> None:
         """Record one pause attempt: patched, failed with a known patch state, or skipped."""
         if result.patched:
             summary.newly_paused += 1
-            self._mark_confirmed(entry, result.original_sync_policy, applied=not self.dry_run)
+            self._record_pause_state(entry, result.original_sync_policy, applied=not self.dry_run)
             if self.dry_run:
                 logger.info(
                     "  [DRY-RUN] Would pause Argo CD Application %s/%s on %s",
@@ -518,7 +544,7 @@ class ArgocdPauseRegister:
             self._persist_paused_apps(paused_apps)
         elif result.error:
             if result.patch_applied is True:
-                self._mark_confirmed(entry, result.original_sync_policy)
+                self._record_pause_state(entry, result.original_sync_policy, applied=True)
                 self._persist_paused_apps(paused_apps)
             elif result.patch_applied is False:
                 self._forget(paused_apps, hub_label, namespace, name)
