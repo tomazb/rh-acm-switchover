@@ -253,7 +253,7 @@ Per-entry required fields and shapes:
 | `run_marker` | the exact pause-marker annotation value this run writes — the run identity gates compare against |
 | `restore_payload` | the canonical `ACTIVE` object of §2 (see rules below) |
 | `observed_value` | present only on `skipped_disabled` and `classification_unknown`; the sanitized observed object or stable reason code |
-| `operation` | the §2b durable operation record |
+| `operation` | the §1a durable operation record |
 
 `restore_payload` rules — this is the object a resume would send back, so it carries the
 whole restoration obligation:
