@@ -120,39 +120,43 @@ class ArgocdPauseRegister:
         }
 
     @classmethod
-    def _applied(cls, entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _applied_entries(cls, entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Entries whose pause is confirmed applied on the cluster."""
         return [entry for entry in entries if cls._is_pause_applied(entry)]
 
     @classmethod
-    def _status(cls, entries: List[Dict[str, Any]], run_id: Optional[str]) -> RegisterStatus:
+    def _build_status(cls, entries: List[Dict[str, Any]], run_id: Optional[str]) -> RegisterStatus:
         """Assemble a RegisterStatus from already-sanitized entries.
 
         Single assembly point so every reader of the register counts the same
         things and a new RegisterStatus field is added in one place.
         """
         return RegisterStatus(
-            confirmed_paused_count=len(cls._applied(entries)),
+            confirmed_paused_count=len(cls._applied_entries(entries)),
             run_id=run_id,
             entry_count=len(entries),
         )
 
     @classmethod
-    def status_from_state_snapshot(cls, snapshot: Mapping[str, Any]) -> RegisterStatus:
-        """Register snapshot read from a persisted state-file config mapping.
+    def status_from_state_config(cls, state_config: Mapping[str, Any]) -> RegisterStatus:
+        """Register snapshot read from a persisted state-file ``config`` mapping.
 
-        For callers that hold a state snapshot rather than a StateManager
-        (report artifacts). Keeps the register the only reader of its own
-        state keys and its own entry filtering rules.
+        For callers that hold raw state rather than a StateManager (report
+        artifacts). Keeps the register the only reader of its own state keys
+        and its own entry filtering rules.
+
+        Takes the ``config`` sub-mapping, not the whole state document -- the
+        parameter is named for what it consumes because passing the outer
+        document would silently yield an empty register rather than an error.
         """
-        return cls._status(
-            cls._sanitize_entries(snapshot.get(STATE_KEY_ARGOCD_PAUSED_APPS)),
-            snapshot.get(STATE_KEY_ARGOCD_RUN_ID),
+        return cls._build_status(
+            cls._sanitize_entries(state_config.get(STATE_KEY_ARGOCD_PAUSED_APPS)),
+            state_config.get(STATE_KEY_ARGOCD_RUN_ID),
         )
 
     def status(self) -> RegisterStatus:
         """Snapshot of the register: entry counts and run id."""
-        return self._status(self._load_entries(), self.state.get_config(STATE_KEY_ARGOCD_RUN_ID))
+        return self._build_status(self._load_entries(), self.state.get_config(STATE_KEY_ARGOCD_RUN_ID))
 
     @staticmethod
     def _pause_entry_matches(entry: Dict[str, Any], hub: str, namespace: str, name: str) -> bool:
@@ -260,6 +264,10 @@ class ArgocdPauseRegister:
 
         Writes the provisional (``applied=False``) state as well — the outcome
         is known either way, only the pause itself may not have landed.
+
+        ``original_sync_policy=None`` leaves any recorded policy untouched (the
+        recovery path already has it). Note ``_mark_unknown`` gives the same
+        parameter the opposite meaning: there ``None`` is stored.
         """
         if original_sync_policy is not None:
             entry["original_sync_policy"] = original_sync_policy
@@ -559,7 +567,7 @@ class ArgocdPauseRegister:
     def _handle_no_applications_crd(self) -> PauseSummary:
         """ADR-0001: preserve a non-empty register when the CRD is not visible; clear an empty one."""
         entries = self._load_entries()
-        applied = self._applied(entries)
+        applied = self._applied_entries(entries)
         run_id = self.state.get_config(STATE_KEY_ARGOCD_RUN_ID)
         if applied:
             logger.warning(
@@ -571,6 +579,7 @@ class ArgocdPauseRegister:
             return PauseSummary(applications_crd_visible=False, run_id=run_id, dry_run=self.dry_run)
         logger.info("Argo CD Applications CRD not found on any hub; skipping Argo CD pause")
         self._clear()
-        if not self.dry_run:
-            run_id = None
-        return PauseSummary(applications_crd_visible=False, run_id=run_id, dry_run=self.dry_run)
+        # This run paused nothing and cleared the register, so it produced no run id.
+        # Reporting the stale persisted one would make dry-run announce a pause that
+        # never happened (the summary is the sole reporter -- see ADR-0001).
+        return PauseSummary(applications_crd_visible=False, run_id=None, dry_run=self.dry_run)

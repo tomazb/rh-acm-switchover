@@ -1249,6 +1249,30 @@ class TestNoCrdRegisterPreservation:
         assert state.get_config("argocd_run_id") is None
         assert state.get_config("argocd_discovery_namespaces") == {}
 
+    def test_cleared_register_reports_no_run_id_even_in_dry_run(self, tmp_path):
+        """OO-017: a run that paused nothing must not report a stale persisted run id.
+
+        Dry-run leaves the state file alone, so the stale id is still on disk --
+        but the summary is the sole reporter (G1), and reporting it here would
+        announce a pause that never happened.
+        """
+        state = _make_real_state(tmp_path)
+        state.set_config("argocd_run_id", "stale-from-earlier-run")
+        state.set_config("argocd_paused_apps", [])
+        client = Mock()
+
+        with patch(
+            "lib.argocd_register.argocd_lib.detect_argocd_installation",
+            return_value=_discovery_without_crd(),
+        ):
+            summary = ArgocdPauseRegister(state, dry_run=True).pause_hubs([(client, "secondary")])
+
+        assert summary.run_id is None
+        assert summary.newly_paused == 0
+        assert summary.applications_crd_visible is False
+        # dry-run still must not touch persisted state
+        assert state.get_config("argocd_run_id") == "stale-from-earlier-run"
+
 
 @pytest.mark.unit
 class TestPauseSummaryReporting:

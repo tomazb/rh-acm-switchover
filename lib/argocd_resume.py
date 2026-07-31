@@ -307,7 +307,7 @@ def attempt_argocd_resume_on_failure(
             logger.warning(
                 "Argo CD resume-on-failure left %d Application(s) in the pause register. "
                 "Use --argocd-resume-only to retry manually.",
-                summary.remaining_in_register,
+                summary.projected_remaining,
             )
             return
 

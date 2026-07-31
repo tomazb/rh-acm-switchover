@@ -748,6 +748,28 @@ class TestAttemptArgoCDResumeOnFailure:
         assert "Argo CD resume contexts" in caplog.text
         assert "Resume-only contexts" not in caplog.text
 
+    def test_resume_on_failure_dry_run_warning_reports_projected_remaining(self, caplog):
+        """CA-011/OO-015: the warning must not contradict the summary line above it.
+
+        In dry-run nothing leaves the register, so remaining_in_register still
+        counts every entry -- reporting it would read "would have restored 1"
+        immediately followed by "left 1 in the pause register".
+        """
+        args = make_resume_on_failure_args()
+        state = self._make_state()
+        logger = logging.getLogger("test.resume_on_failure_dry_run_remaining")
+        primary, secondary = self._identity_clients()
+        summary = argocd_lib.ResumeSummary(
+            restored=1, already_resumed=0, failed=0, remaining_in_register=1, dry_run=True
+        )
+
+        with patch.object(ArgocdPauseRegister, "resume", return_value=summary):
+            with caplog.at_level(logging.WARNING):
+                _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
+
+        assert "left 0 Application(s) in the pause register" in caplog.text
+        assert "left 1 Application(s) in the pause register" not in caplog.text
+
     def test_resume_on_failure_uses_context_neutral_missing_client_message(self, caplog):
         args = make_resume_on_failure_args()
         state = self._make_state()
