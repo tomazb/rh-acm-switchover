@@ -47,7 +47,8 @@ class PauseSummary:
     of them report pre-existing register contents. ``blocked`` and ``failed``
     are deliberately distinct: a blocker means the tool refused to pause (an
     ApplicationSet owns the Application), a failure means the patch itself
-    did not succeed.
+    did not succeed. ``dry_run`` tells callers which mode produced these
+    counters, so they need not consult their own flag to phrase the outcome.
     """
 
     newly_paused: int = 0
@@ -57,6 +58,7 @@ class PauseSummary:
     blocked: int = 0
     applications_crd_visible: bool = True
     run_id: Optional[str] = None
+    dry_run: bool = False
 
 
 class ArgocdPauseRegister:
@@ -315,7 +317,7 @@ class ArgocdPauseRegister:
         run_id = argocd_lib.run_id_or_new(existing_run_id)
         if not self.dry_run:
             self.state.set_config(STATE_KEY_ARGOCD_RUN_ID, run_id)
-        summary = PauseSummary(run_id=run_id)
+        summary = PauseSummary(run_id=run_id, dry_run=self.dry_run)
         paused_apps: List[Dict[str, Any]] = self._load_entries()
 
         applications_by_hub, pause_blockers = self._collect_applications(
@@ -531,9 +533,9 @@ class ArgocdPauseRegister:
                 "clear the state file manually if Argo CD was permanently removed.",
                 len(applied),
             )
-            return PauseSummary(applications_crd_visible=False, run_id=run_id)
+            return PauseSummary(applications_crd_visible=False, run_id=run_id, dry_run=self.dry_run)
         logger.info("Argo CD Applications CRD not found on any hub; skipping Argo CD pause")
         self._clear()
         if not self.dry_run:
             run_id = None
-        return PauseSummary(applications_crd_visible=False, run_id=run_id)
+        return PauseSummary(applications_crd_visible=False, run_id=run_id, dry_run=self.dry_run)

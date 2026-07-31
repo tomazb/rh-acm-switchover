@@ -128,14 +128,13 @@ class PrimaryPreparation:
             )
         if summary.failed:
             raise SwitchoverError(f"Argo CD auto-sync pause failed for {summary.failed} Application(s)")
-        run_id = register.status().run_id
-        if run_id is not None:
+        if summary.run_id is not None:
             logger.info(
                 "Argo CD: %d Application(s) %s (run_id=%s). "
                 "Resume explicitly with --argocd-resume-only after retargeting Git.",
                 summary.newly_paused,
-                "would be paused" if self.dry_run else "paused",
-                run_id,
+                "would be paused" if summary.dry_run else "paused",
+                summary.run_id,
             )
 
     def _pause_backup_schedule(self):

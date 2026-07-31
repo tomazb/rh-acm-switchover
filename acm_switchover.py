@@ -500,14 +500,13 @@ def _run_restore_only_argocd_pause(
             logger,
         )
 
-    run_id = register.status().run_id
-    if run_id is not None:
+    if summary.run_id is not None:
         logger.info(
             "Argo CD: %d Application(s) %s on secondary hub (run_id=%s). "
             "Left paused by default; use --argocd-resume-only after retargeting Git.",
             summary.newly_paused,
-            "would be paused" if getattr(args, "dry_run", False) else "paused",
-            run_id,
+            "would be paused" if summary.dry_run else "paused",
+            summary.run_id,
         )
     if not getattr(args, "dry_run", False):
         state.mark_step_completed(STEP_PAUSE_ARGOCD_APPS)

@@ -151,6 +151,19 @@ class ResumeSummary:
     remaining_in_register: int = 0
     dry_run: bool = False
 
+    @property
+    def projected_remaining(self) -> int:
+        """Entries that would be left in the register once this run's outcome is applied.
+
+        Outside dry-run this is ``remaining_in_register`` itself, because
+        restored and already-resumed entries are removed as they succeed. In
+        dry-run nothing leaves the register, so subtract what a real run would
+        have removed instead of reporting a count that contradicts ``restored``.
+        """
+        if not self.dry_run:
+            return self.remaining_in_register
+        return max(self.remaining_in_register - self.restored - self.already_resumed, 0)
+
 
 def is_resume_noop(result: ResumeResult) -> bool:
     """Return True when resume did not patch because app is already resumed."""

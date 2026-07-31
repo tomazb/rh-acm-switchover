@@ -246,7 +246,7 @@ def run_argocd_resume_only(
             "%d would remain in the register.",
             summary.restored,
             summary.already_resumed,
-            summary.remaining_in_register,
+            summary.projected_remaining,
         )
     else:
         logger.info(

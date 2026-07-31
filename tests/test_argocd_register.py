@@ -1366,6 +1366,50 @@ class TestPauseSummaryReporting:
         assert summary.applications_crd_visible is True
         assert summary.run_id == "run-1"
 
+    def test_summary_reports_the_mode_the_run_used(self):
+        """G2: PauseSummary is self-describing about dry-run, like its ResumeSummary sibling."""
+        client = Mock()
+        app = _make_app("argocd", "app-1")
+
+        def _run(dry_run):
+            state = _make_state_manager({"argocd_run_id": None, "argocd_paused_apps": []})
+            with (
+                patch(
+                    "lib.argocd_register.argocd_lib.detect_argocd_installation",
+                    return_value=_discovery_with_crd(),
+                ),
+                patch("lib.argocd_register.argocd_lib.list_argocd_applications", return_value=[app]),
+                patch(
+                    "lib.argocd_register.argocd_lib.find_acm_touching_apps",
+                    return_value=[_make_impact(app)],
+                ),
+                patch("lib.argocd_register.argocd_lib.pause_autosync") as mock_pause,
+            ):
+                mock_pause.return_value = argocd_lib.PauseResult(
+                    namespace="argocd",
+                    name="app-1",
+                    original_sync_policy={"automated": {}},
+                    patched=True,
+                )
+                return ArgocdPauseRegister(state, dry_run=dry_run).pause_hubs([(client, "primary")])
+
+        dry_summary = _run(True)
+        assert dry_summary.dry_run is True
+        assert dry_summary.run_id
+        assert _run(False).dry_run is False
+
+    def test_no_crd_summary_reports_the_mode_the_run_used(self):
+        """G2: the ADR-0001 short-circuit paths describe their mode too."""
+        state = _make_state_manager({"argocd_run_id": None, "argocd_paused_apps": []})
+        with patch(
+            "lib.argocd_register.argocd_lib.detect_argocd_installation",
+            return_value=_discovery_without_crd(),
+        ):
+            summary = ArgocdPauseRegister(state, dry_run=True).pause_hubs([(Mock(), "primary")])
+
+        assert summary.dry_run is True
+        assert summary.applications_crd_visible is False
+
     def test_patch_failure_counts_failed_only(self):
         state = _make_state_manager({"argocd_run_id": None, "argocd_paused_apps": []})
         client = Mock()

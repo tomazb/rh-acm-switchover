@@ -912,3 +912,6 @@ def test_resume_only_dry_run_does_not_report_work_as_done(tmp_path, caplog):
     assert any("Would restore 1" in message for message in messages)
     assert not any(message.startswith("Restored ") for message in messages)
     assert state.get_config("argocd_paused_apps") != []
+    # G2: the projection must not contradict itself - restoring every entry leaves none behind.
+    assert any("0 would remain" in message for message in messages)
+    assert not any("1 would remain" in message for message in messages)

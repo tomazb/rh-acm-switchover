@@ -1115,6 +1115,47 @@ class TestSwitchoverPhaseFlow:
         coordinator.pause_hubs.assert_called_once_with([(secondary, HUB_ROLE_SECONDARY)])
         state.mark_step_completed.assert_not_called()
 
+    def test_restore_only_argocd_dry_run_pause_reports_run_id_from_summary(self):
+        """G1: dry-run persists no run id, so the report must come from the summary."""
+        args = SimpleNamespace(argocd_manage=True, dry_run=True)
+        state = Mock()
+        state.is_step_completed.return_value = False
+        state.get_config.return_value = None
+        secondary = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.ArgocdPauseRegister") as coordinator_class:
+            coordinator = coordinator_class.return_value
+            coordinator.pause_hubs.return_value = PauseSummary(newly_paused=2, run_id="run-9", dry_run=True)
+
+            result = _run_restore_only_argocd_pause(args, state, None, secondary, logger)
+
+        assert result is True
+        coordinator.status.assert_not_called()
+        messages = [call.args[0] % call.args[1:] for call in logger.info.call_args_list if call.args]
+        summary_lines = [message for message in messages if message.startswith("Argo CD: ")]
+        assert len(summary_lines) == 1
+        assert "2 Application(s) would be paused" in summary_lines[0]
+        assert "run_id=run-9" in summary_lines[0]
+
+    def test_restore_only_argocd_pause_phrases_from_summary_dry_run(self):
+        """G2: the caller reports the mode the register ran in, not its own flag."""
+        args = SimpleNamespace(argocd_manage=True, dry_run=False)
+        state = Mock()
+        state.is_step_completed.return_value = False
+        state.get_config.return_value = None
+        secondary = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.ArgocdPauseRegister") as coordinator_class:
+            coordinator = coordinator_class.return_value
+            coordinator.pause_hubs.return_value = PauseSummary(newly_paused=1, run_id="run-9", dry_run=True)
+
+            assert _run_restore_only_argocd_pause(args, state, None, secondary, logger) is True
+
+        messages = [call.args[0] % call.args[1:] for call in logger.info.call_args_list if call.args]
+        assert any("would be paused" in message for message in messages)
+
     def test_restore_only_argocd_dry_run_pause_fails_on_blockers(self):
         args = SimpleNamespace(argocd_manage=True, dry_run=True)
         state = Mock()
