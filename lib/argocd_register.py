@@ -570,16 +570,24 @@ class ArgocdPauseRegister:
             logger.debug("  Skip %s/%s (no auto-sync)", result.namespace, result.name)
 
     def _handle_no_applications_crd(self) -> PauseSummary:
-        """ADR-0001: preserve a non-empty register when the CRD is not visible; clear an empty one."""
+        """Preserve any non-empty register when the CRD is not visible; clear only a truly empty one.
+
+        Entries are unresolved resume obligations (ADR-0001). A provisional or
+        unknown entry means the pause may have landed, so discarding it destroys
+        the only record needed to put the Application back -- the gate is on
+        every sanitized entry, not just the confirmed-applied ones.
+        """
         entries = self._load_entries()
-        applied = self._applied_entries(entries)
         run_id = self.state.get_config(STATE_KEY_ARGOCD_RUN_ID)
-        if applied:
+        if entries:
+            confirmed = len(self._applied_entries(entries))
             logger.warning(
-                "Argo CD Applications CRD not visible on any hub but %d app(s) recorded paused; "
-                "keeping pause register (see ADR-0001). Resume with --argocd-resume-only, or "
-                "clear the state file manually if Argo CD was permanently removed.",
-                len(applied),
+                "Argo CD Applications CRD not visible on any hub but %d unresolved app(s) in the "
+                "register (%d confirmed paused); keeping pause register (see ADR-0001). Resume "
+                "with --argocd-resume-only, or clear the state file manually if Argo CD was "
+                "permanently removed.",
+                len(entries),
+                confirmed,
             )
             return PauseSummary(applications_crd_visible=False, run_id=run_id, dry_run=self.dry_run)
         logger.info("Argo CD Applications CRD not found on any hub; skipping Argo CD pause")

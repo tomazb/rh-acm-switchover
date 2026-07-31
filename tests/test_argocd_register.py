@@ -1228,6 +1228,99 @@ class TestNoCrdRegisterPreservation:
         assert state.get_config("argocd_run_id") == "run-1"
         assert any("keeping pause register" in record.message for record in caplog.records)
 
+    def test_no_crd_preserves_provisional_only_register(self, tmp_path, caplog):
+        """A provisional entry means the pause MAY have landed; it must survive CRD loss."""
+        state = _make_real_state(tmp_path)
+        entry = {
+            "hub": "secondary",
+            "namespace": "argocd",
+            "name": "app-1",
+            "original_sync_policy": {"automated": {}},
+            "pause_applied": False,
+        }
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config("argocd_paused_apps", [entry])
+        client = Mock()
+
+        with patch(
+            "lib.argocd_register.argocd_lib.detect_argocd_installation",
+            return_value=_discovery_without_crd(),
+        ):
+            register = ArgocdPauseRegister(state, dry_run=False)
+            with caplog.at_level("WARNING", logger="acm_switchover"):
+                summary = register.pause_hubs([(client, "secondary")])
+
+        assert summary.applications_crd_visible is False
+        assert summary.run_id == "run-1"
+        assert state.get_config("argocd_paused_apps") == [entry]
+        assert state.get_config("argocd_run_id") == "run-1"
+        assert any("keeping pause register" in record.message for record in caplog.records)
+
+    def test_no_crd_preserves_unknown_only_register(self, tmp_path):
+        """An unknown-outcome entry may correspond to a landed pause; never discard it."""
+        state = _make_real_state(tmp_path)
+        entry = {
+            "hub": "secondary",
+            "namespace": "argocd",
+            "name": "app-1",
+            "original_sync_policy": {"automated": {}},
+            "pause_applied": False,
+            "pause_state": "unknown",
+            "pause_run_id": "run-1",
+        }
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config("argocd_paused_apps", [entry])
+        state.set_config("argocd_discovery_namespaces", {"secondary": ["argocd"]})
+        client = Mock()
+
+        with patch(
+            "lib.argocd_register.argocd_lib.detect_argocd_installation",
+            return_value=_discovery_without_crd(),
+        ):
+            summary = ArgocdPauseRegister(state, dry_run=False).pause_hubs([(client, "secondary")])
+
+        assert summary.applications_crd_visible is False
+        assert summary.run_id == "run-1"
+        assert state.get_config("argocd_paused_apps") == [entry]
+        assert state.get_config("argocd_run_id") == "run-1"
+        assert state.get_config("argocd_discovery_namespaces") == {"secondary": ["argocd"]}
+
+    def test_no_crd_preserves_mixed_confirmed_and_unknown_register(self, tmp_path, caplog):
+        state = _make_real_state(tmp_path)
+        confirmed = {
+            "hub": "primary",
+            "namespace": "argocd",
+            "name": "app-confirmed",
+            "original_sync_policy": {"automated": {}},
+            "pause_applied": True,
+        }
+        unknown = {
+            "hub": "secondary",
+            "namespace": "argocd",
+            "name": "app-unknown",
+            "original_sync_policy": {"automated": {}},
+            "pause_applied": False,
+            "pause_state": "unknown",
+            "pause_run_id": "run-1",
+        }
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config("argocd_paused_apps", [confirmed, unknown])
+        client = Mock()
+
+        with patch(
+            "lib.argocd_register.argocd_lib.detect_argocd_installation",
+            return_value=_discovery_without_crd(),
+        ):
+            register = ArgocdPauseRegister(state, dry_run=False)
+            with caplog.at_level("WARNING", logger="acm_switchover"):
+                summary = register.pause_hubs([(client, "secondary")])
+
+        assert summary.applications_crd_visible is False
+        assert state.get_config("argocd_paused_apps") == [confirmed, unknown]
+        assert state.get_config("argocd_run_id") == "run-1"
+        warning = next(record.message for record in caplog.records if "keeping pause register" in record.message)
+        assert "2" in warning and "1" in warning
+
     def test_no_crd_clears_empty_register(self, tmp_path):
         state = _make_real_state(tmp_path)
         state.set_config("argocd_run_id", "stale")
