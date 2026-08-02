@@ -274,11 +274,19 @@ Per-entry required fields and shapes:
 | `argocd_journal_schema_version` | integer `2` |
 | `hub` | the same durable hub/cluster identity the §1a operation records; the entry is looked up and re-read only through that hub's client |
 | `namespace`, `name` | non-empty strings (or, when identity itself was malformed at discovery, the stable non-sensitive discovery index used by `classification_unknown`) |
-| `state` | exactly one of `paused`, `verify_pending`, `skipped_disabled`, `resumed`, `classification_unknown`, `recovery_required` |
+| `state` | exactly one of `paused`, `verify_pending`, `skipped_disabled`, `resumed`, `classification_unknown`, `recovery_required`, `journal_incomplete` |
 | `run_marker` | the exact pause-marker annotation value this run writes — the run identity gates compare against |
 | `restore_payload` | the canonical `ACTIVE` object of §2 (see rules below) |
 | `observed_value` | present only on `skipped_disabled` and `classification_unknown`; the sanitized observed object or stable reason code |
 | `operation` | the §1a durable operation record |
+
+Two **run-level** records sit alongside the per-entry records above and are validated by
+every gate before the per-entry evaluation:
+
+| record | meaning |
+| --- | --- |
+| `argocd_journal_attestation` | positive proof that a pause pass completed discovery and durably wrote every entry it produced: schema version, run identity, completion timestamp, and entry count. Required for the empty-journal fast path (§2a below) |
+| `journal_incomplete` | durable barrier recorded when an evidence write failed; blocks every destructive gate exactly as `recovery_required` does, regardless of the rest of the journal |
 
 `restore_payload` rules — this is the object a resume would send back, so it carries the
 whole restoration obligation:
@@ -325,13 +333,38 @@ was supposed to force. Therefore:
   discovery index) and the evidence that could not be written.
 - While a `journal_incomplete` barrier is present, every destructive-phase gate blocks
   exactly as for `recovery_required`, regardless of what the rest of the journal shows.
-- If even the barrier cannot be persisted, the run still fails fatally and the operator
-  message states explicitly that pause evidence may be missing and that the journal must
-  be treated as untrustworthy until a fresh pause pass rebuilds it. The design does not
-  claim a durability guarantee it cannot make when the state store itself is failing.
-- An **empty or absent journal is only a trivial gate pass when no barrier is present and
-  the run recorded no evidence obligation**; it is never inferred to mean "nothing was
-  paused" while a barrier exists.
+- If even the barrier cannot be persisted, the run still fails fatally — but a fatal exit
+  cannot protect a *later* invocation, which would find no barrier and no evidence to
+  inspect. Nothing durable can record "nothing durable could be written", so the
+  empty-journal fast path cannot be guarded by the **absence** of a marker. It is guarded
+  by the **presence of a positive attestation** instead.
+
+**The empty-journal fast path requires a positive attestation, not merely no barrier.**
+When the run contract records that `--argocd-manage` was active, a gate passes on an empty
+or absent journal **only** when the durable run-level record `argocd_journal_attestation`
+is present and valid — written by a pause pass that completed discovery and durably
+recorded every entry it produced (including "discovery found no Applications to manage").
+It carries the schema version, the run identity, the completing pass's timestamp, and the
+count of entries it wrote. Its absence is **blocking**, exactly like a barrier:
+
+| observed state | gate outcome |
+| --- | --- |
+| journal empty/absent, valid attestation present | pass — a successful pass proved there is nothing to manage |
+| journal empty/absent, attestation absent, barrier present | block (`journal_incomplete`) |
+| journal empty/absent, attestation absent, **no** barrier | **block** — indistinguishable from a run whose evidence *and* barrier writes both failed |
+| journal non-empty | normal per-entry evaluation of §4 |
+| `--argocd-manage` not active in the run contract | not applicable; no attestation required |
+
+The third row is the case this finding is about, and it fails closed. A state store that
+could not persist the barrier also could not persist the attestation, so the later
+invocation blocks rather than proceeding on an absence it cannot interpret. Recovery is a
+**fresh pause pass that durably establishes trustworthy evidence** — the same operator
+action that clears `recovery_required` — never an automatic downgrade to "assume nothing
+was paused".
+
+Scoping is deliberate: a run whose contract never requested `--argocd-manage` has no
+journal expectation and needs no attestation, so this cannot block runs that legitimately
+never touched Argo CD.
 
 **Discovery must not erase durable state.** The current `pause_hubs` path clears
 `argocd_paused_apps` and `argocd_run_id` when no Applications CRD is found. A transient
@@ -487,7 +520,11 @@ New helper `revalidate_argocd_pause_journal(...)` in `lib/argocd_coordinator.py`
 and an equivalent pre-task include in the collection:
 
 - Input: the persisted pause journal (state key `argocd_paused_apps` / collection
-  checkpoint equivalent). If the journal is empty or absent, the gate passes trivially.
+  checkpoint equivalent) plus the two run-level records of §2a. If the journal is empty or
+  absent, the gate passes **only** under the attestation rule in §2a — a valid
+  `argocd_journal_attestation` when the run contract had `--argocd-manage` active, or the
+  contract never requesting Argo CD management at all. An empty journal with neither is
+  blocking, not a trivial pass.
 - **Stored-record validation precedes every live read.** Before a gate evaluates any
   entry's cluster state, it validates that entry against the §2a schema — including that
   a `paused`, `verify_pending`, or `resumed` entry carries a present, schema-valid
@@ -652,6 +689,14 @@ destructive gates, and returns fatal/non-zero. No new warning-only paths.
   classification vectors and asserts non-zero/no mutation/no successful state for every
   `UNKNOWN` category. Every form factor also tests that a missing/replaced run marker
   immediately before resume produces no patch and no `resumed` state.
+- **Empty-journal attestation**: with `--argocd-manage` active, a gate passes an empty
+  journal only with a valid `argocd_journal_attestation`; it blocks when the attestation is
+  absent with a `journal_incomplete` barrier present, and — the regression test for this
+  finding — **also blocks when the attestation is absent and no barrier exists**,
+  simulating a run whose evidence and barrier writes both failed. A malformed or
+  wrong-run-identity attestation blocks. A run whose contract never requested
+  `--argocd-manage` passes without an attestation, proving the rule does not over-block.
+  Recovery is asserted to require a fresh pause pass that writes a valid attestation.
 - **Journal schema validation (§2a)**, in all three form factors: for every validation
   point (each destructive gate pass, resume eligibility, resume patch, `verify_pending`
   settlement, every state transition), a record that is absent, malformed, partial, of
@@ -744,6 +789,12 @@ adjacent-not-superseded: `SSA-05` (script lifecycle), `TR2D-02` (collection resu
    run returns non-zero, and every destructive-phase gate blocks until a later re-read
    settles the entry. The guarantee is that no mutation is untracked or falsely
    reported successful — not that no mutation occurred.
+10a. A destructive-phase gate passes on an empty or absent pause journal **only** when a
+    valid `argocd_journal_attestation` proves a pause pass completed and durably recorded
+    its evidence. With `--argocd-manage` active and no attestation, the gate blocks —
+    whether or not a `journal_incomplete` barrier exists — so a run whose evidence and
+    barrier writes both failed cannot let a later invocation proceed on an
+    uninterpretable absence. Recovery is a fresh pause pass, never an automatic downgrade.
 10. Every destructive-phase gate fails closed on a journal entry whose stored
     `restore_payload` is missing, malformed, non-canonical, non-`ACTIVE`, or carries
     anything beyond the tool-owned `automated` object — at the gate, before ACTIVATION or
