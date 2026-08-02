@@ -3,7 +3,8 @@
 Each operation documents its writer, reader, and ordering contract. The
 key literals below are an implementation detail of this module: no other
 production code may read or write them (guardrail:
-tests/test_run_record_guardrails.py). Durability, locking, and atomic
+tests/test_run_record_guardrails.py, arrives with Task 10). Durability,
+locking, and atomic
 writes belong to StateManager; this facade owns only the vocabulary.
 
 On-disk schema is unchanged: every operation reads and writes the exact
@@ -18,6 +19,9 @@ from lib.constants import (
     EXPECTED_MANAGED_CLUSTER_COUNT_KEY,
     EXPECTED_MANAGED_CLUSTER_NAMES_KEY,
     MANAGED_CLUSTER_EXPECTATION_KEY,
+    PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME,
+    RESUME_START_PHASE_KEY,
+    STATE_KEY_RESUME_SUMMARY,
 )
 
 _KEY_PRIMARY_VERSION = "primary_version"
@@ -134,3 +138,72 @@ class RunRecord:
             _KEY_PREFLIGHT_SUMMARY,
             {"passed": passed, "critical_failures": critical_failures, "total": len(results)},
         )
+
+    # -- auto-import override: activation writes, finalization discharges --
+
+    def record_auto_import_override(self) -> None:
+        """Activation set autoImportStrategy=ImportAndSync; finalization owes
+        a reset. Written by SecondaryActivation._maybe_set_auto_import_strategy."""
+        self._set(_KEY_AUTO_IMPORT_SET, True)
+
+    def clear_auto_import_override(self) -> None:
+        """Finalization proved the reset is complete (or the ConfigMap is gone)."""
+        self._set(_KEY_AUTO_IMPORT_SET, False)
+
+    def auto_import_override_pending(self) -> bool:
+        """False means no reset obligation — never recorded, or already cleared."""
+        return bool(self._get(_KEY_AUTO_IMPORT_SET, False))
+
+    # -- saved backup schedule: primary_prep writes, backup_schedule restores --
+
+    def record_saved_backup_schedule(self, schedule: dict) -> None:
+        """Persist the paused BackupSchedule so the new hub can recreate it.
+        Written by primary_prep before pausing; read by BackupScheduleManager."""
+        self._set(_KEY_SAVED_BACKUP_SCHEDULE, schedule)
+
+    def saved_backup_schedule(self) -> Optional[dict]:
+        """None means primary_prep never saved one (nothing to restore)."""
+        return self._get(_KEY_SAVED_BACKUP_SCHEDULE, None)
+
+    # -- backup watch: finalization internal, crash-resume safe --
+
+    def record_backup_watch_started(self, at_iso: str) -> None:
+        """BackupSchedule enabled at `at_iso`; new-backup detection restarts.
+        Ordering: written when finalization enables the schedule, before
+        record_new_backup can fire for the new watch window."""
+        self._set(_KEY_BACKUP_WATCH_STARTED_AT, at_iso)
+        self._set(_KEY_NEW_BACKUP_DETECTED, False)
+
+    def backup_watch_started_at(self) -> Optional[str]:
+        return self._get(_KEY_BACKUP_WATCH_STARTED_AT, None)
+
+    def record_new_backup(self, name: str) -> None:
+        """A post-switchover ACM backup was observed; resume reuses it."""
+        self._set(_KEY_NEW_BACKUP_DETECTED, True)
+        self._set(_KEY_NEW_BACKUP_NAME, name)
+
+    def new_backup(self) -> Optional[str]:
+        """Last recorded post-switchover backup name; None if never detected."""
+        return self._get(_KEY_NEW_BACKUP_NAME, None)
+
+    # -- archived restores: finalization -> audit/report --
+
+    def record_archived_restores(self, restores: list) -> None:
+        """Audit trail of restore resources deleted before enabling backups."""
+        self._set(_KEY_ARCHIVED_RESTORES, restores)
+
+    # -- pre-activation velero restore: activation internal --
+
+    def record_pre_activation_velero_restore(self, name: Optional[str]) -> None:
+        """Velero restore name seen before the activation patch; None clears
+        the new-restore-signal requirement."""
+        self._set(PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME, name)
+
+    def pre_activation_velero_restore(self) -> Optional[str]:
+        return self._get(PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME, None)
+
+    # -- resume summary: workflow -> report/show_state --
+
+    def record_resume_start_phase(self, phase_name: str) -> None:
+        """A resumed run starts at `phase_name`; recorded for reports."""
+        self._set(STATE_KEY_RESUME_SUMMARY, {RESUME_START_PHASE_KEY: phase_name})

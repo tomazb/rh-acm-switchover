@@ -64,7 +64,7 @@ class TestPreflightResults:
     def test_record_writes_results_and_summary(self, state, record):
         results = [{"check": "versions", "status": "pass", "message": "ok"}]
         record.record_preflight_results(results, passed=True, critical_failures=0)
-        # Interface-only persistence: the raw file keeps today's key names.
+        # Interface-only persistence: the captured state snapshot keeps today's key names.
         snapshot = state.capture_state_snapshot()
         assert snapshot["config"]["preflight_results"] == results
         assert snapshot["config"]["preflight_summary"] == {
@@ -72,3 +72,70 @@ class TestPreflightResults:
             "critical_failures": 0,
             "total": 1,
         }
+
+
+class TestAutoImportOverride:
+    def test_no_obligation_by_default(self, record):
+        assert record.auto_import_override_pending() is False
+
+    def test_record_then_clear(self, record):
+        record.record_auto_import_override()
+        assert record.auto_import_override_pending() is True
+        record.clear_auto_import_override()
+        assert record.auto_import_override_pending() is False
+
+
+class TestSavedBackupSchedule:
+    def test_none_by_default(self, record):
+        assert record.saved_backup_schedule() is None
+
+    def test_round_trip(self, record):
+        bs = {"metadata": {"name": "schedule-acm"}, "spec": {"veleroSchedule": "0 */4 * * *"}}
+        record.record_saved_backup_schedule(bs)
+        assert record.saved_backup_schedule() == bs
+
+
+class TestBackupWatch:
+    def test_defaults(self, record):
+        assert record.backup_watch_started_at() is None
+        assert record.new_backup() is None
+
+    def test_watch_start_resets_detection(self, record):
+        record.record_new_backup("acm-backup-1")
+        record.record_backup_watch_started("2026-08-02T18:00:00+00:00")
+        assert record.backup_watch_started_at() == "2026-08-02T18:00:00+00:00"
+        # A new watch window invalidates the previous detection flag but
+        # keeps the last recorded name for the resume fast path.
+        assert record.new_backup() == "acm-backup-1"
+
+    def test_record_new_backup(self, state, record):
+        record.record_new_backup("acm-backup-2")
+        assert record.new_backup() == "acm-backup-2"
+        snapshot = state.capture_state_snapshot()
+        assert snapshot["config"]["new_backup_detected"] is True
+        assert snapshot["config"]["post_switchover_backup_name"] == "acm-backup-2"
+
+
+class TestArchivedRestores:
+    def test_record(self, state, record):
+        restores = [{"name": "restore-acm-passive-sync", "phase": "Finished"}]
+        record.record_archived_restores(restores)
+        assert state.capture_state_snapshot()["config"]["archived_restores"] == restores
+
+
+class TestPreActivationVeleroRestore:
+    def test_none_by_default(self, record):
+        assert record.pre_activation_velero_restore() is None
+
+    def test_round_trip_and_clear(self, record):
+        record.record_pre_activation_velero_restore("velero-restore-1")
+        assert record.pre_activation_velero_restore() == "velero-restore-1"
+        record.record_pre_activation_velero_restore(None)
+        assert record.pre_activation_velero_restore() is None
+
+
+class TestResumeStartPhase:
+    def test_record_writes_resume_summary_shape(self, state, record):
+        record.record_resume_start_phase("activation")
+        snapshot = state.capture_state_snapshot()
+        assert snapshot["config"]["resume_summary"] == {"resume_start_phase": "activation"}
