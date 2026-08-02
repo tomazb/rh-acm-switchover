@@ -100,12 +100,13 @@ class TestBackupWatch:
         assert record.backup_watch_started_at() is None
         assert record.new_backup() is None
 
-    def test_watch_start_resets_detection(self, record):
+    def test_watch_start_resets_detection(self, state, record):
         record.record_new_backup("acm-backup-1")
         record.record_backup_watch_started("2026-08-02T18:00:00+00:00")
         assert record.backup_watch_started_at() == "2026-08-02T18:00:00+00:00"
         # A new watch window invalidates the previous detection flag but
         # keeps the last recorded name for the resume fast path.
+        assert state.capture_state_snapshot()["config"]["new_backup_detected"] is False
         assert record.new_backup() == "acm-backup-1"
 
     def test_record_new_backup(self, state, record):

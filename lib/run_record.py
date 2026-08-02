@@ -4,8 +4,8 @@ Each operation documents its writer, reader, and ordering contract. The
 key literals below are an implementation detail of this module: no other
 production code may read or write them (guardrail:
 tests/test_run_record_guardrails.py, arrives with Task 10). Durability,
-locking, and atomic
-writes belong to StateManager; this facade owns only the vocabulary.
+locking, and atomic writes belong to StateManager; this facade owns only
+the vocabulary.
 
 On-disk schema is unchanged: every operation reads and writes the exact
 config keys the tool has always used, so existing state files remain
