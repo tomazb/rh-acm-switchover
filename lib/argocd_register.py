@@ -331,9 +331,23 @@ class ArgocdPauseRegister:
                 self._forget(entries, hub, ns, name)
                 logger.info("  Resumed %s/%s on %s", ns, name, hub)
             elif argocd_lib.is_resume_noop(result):
-                summary.already_resumed += 1
-                self._forget(entries, hub, ns, name)
-                logger.info("  Already resumed %s/%s on %s", ns, name, hub)
+                # A missing marker alone does not prove the Application was resumed.
+                # Only an observed enabled auto-sync discharges the obligation;
+                # autosync_enabled=None (unobserved) keeps the entry (ADR-0001).
+                if result.autosync_enabled:
+                    summary.already_resumed += 1
+                    self._forget(entries, hub, ns, name)
+                    logger.info("  Already resumed %s/%s on %s", ns, name, hub)
+                else:
+                    summary.failed += 1
+                    logger.warning(
+                        "  %s/%s on %s: pause marker is gone but auto-sync is still disabled — the "
+                        "Application is still paused. Keeping the register entry; restore its sync "
+                        "policy manually or re-run --argocd-resume-only once the marker is understood.",
+                        ns,
+                        name,
+                        hub,
+                    )
             else:
                 summary.failed += 1
                 logger.warning("  Failed %s/%s: %s", ns, name, result.skip_reason or "not restored")

@@ -127,6 +127,9 @@ class ResumeResult:
     name: str
     restored: bool
     skip_reason: Optional[str] = None
+    # Observation only, never a patch decision: whether the live Application had
+    # auto-sync enabled when it was read. None means not observed (fetch failed).
+    autosync_enabled: Optional[bool] = None
 
 
 RESUME_SKIP_REASON_MARKER_MISSING = "marker missing or already resumed"
@@ -798,18 +801,24 @@ def resume_autosync(
     ann = metadata.get("annotations") or {}
     marker = ann.get(ARGOCD_PAUSED_BY_ANNOTATION)
     if marker != run_id:
+        # Observation only: record what the live Application says about auto-sync so
+        # callers can tell "already resumed" from "still paused, marker lost". It
+        # changes no branch, patch, or return value here.
+        autosync_enabled = is_autosync_enabled(current)
         if not marker:
             return ResumeResult(
                 namespace=namespace,
                 name=name,
                 restored=False,
                 skip_reason=RESUME_SKIP_REASON_MARKER_MISSING,
+                autosync_enabled=autosync_enabled,
             )
         return ResumeResult(
             namespace=namespace,
             name=name,
             restored=False,
             skip_reason=RESUME_SKIP_REASON_MARKER_MISMATCH,
+            autosync_enabled=autosync_enabled,
         )
     resource_version = metadata.get("resourceVersion")
     if not resource_version:

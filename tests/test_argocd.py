@@ -710,6 +710,82 @@ class TestResumeAutosync:
         )
         client.patch_custom_resource.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "sync_policy,expected",
+        [
+            ({"automated": {"prune": True}}, True),
+            ({}, False),
+        ],
+        ids=["autosync-enabled", "autosync-disabled"],
+    )
+    def test_marker_missing_reports_observed_autosync_state(self, sync_policy, expected):
+        """Observational only: autosync_enabled records what was read, changing no decision."""
+        client = MagicMock()
+        client.get_custom_resource.return_value = {
+            "metadata": {
+                "namespace": "team-argocd",
+                "name": "acm-policy-app",
+                "resourceVersion": "500",
+                "annotations": {},
+            },
+            "spec": {"syncPolicy": sync_policy},
+        }
+
+        result = argocd_lib.resume_autosync(
+            client,
+            "team-argocd",
+            "acm-policy-app",
+            {"automated": {}},
+            "current-run",
+        )
+
+        assert result.autosync_enabled is expected
+        assert result.restored is False
+        assert result.skip_reason == argocd_lib.RESUME_SKIP_REASON_MARKER_MISSING
+        assert argocd_lib.is_resume_noop(result) is True
+        client.patch_custom_resource.assert_not_called()
+
+    def test_marker_mismatch_reports_observed_autosync_state(self):
+        client = MagicMock()
+        client.get_custom_resource.return_value = {
+            "metadata": {
+                "namespace": "team-argocd",
+                "name": "acm-policy-app",
+                "resourceVersion": "500",
+                "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "other-run"},
+            },
+            "spec": {"syncPolicy": {"automated": {}}},
+        }
+
+        result = argocd_lib.resume_autosync(
+            client,
+            "team-argocd",
+            "acm-policy-app",
+            {"automated": {}},
+            "current-run",
+        )
+
+        assert result.autosync_enabled is True
+        assert result.restored is False
+        assert result.skip_reason == argocd_lib.RESUME_SKIP_REASON_MARKER_MISMATCH
+        client.patch_custom_resource.assert_not_called()
+
+    def test_autosync_enabled_defaults_to_none_when_unobserved(self):
+        """Fetch failures cannot observe the Application, so the field stays None."""
+        client = MagicMock()
+        client.get_custom_resource.side_effect = ApiException(status=500, reason="boom")
+
+        result = argocd_lib.resume_autosync(
+            client,
+            "team-argocd",
+            "acm-policy-app",
+            {"automated": {}},
+            "current-run",
+        )
+
+        assert result.autosync_enabled is None
+        assert result.restored is False
+
     def test_restores_when_marker_matches(self):
         client = MagicMock()
         client.get_custom_resource.return_value = {
