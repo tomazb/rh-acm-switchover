@@ -172,7 +172,7 @@ alike — is validated **before** any matching, and a rejection is a fail-closed
 | empty or whitespace-only string | not a URL |
 | relative URL (no scheme, or scheme-relative `//host`) | no authority to compare; must not be resolved against anything |
 | scheme other than `http`/`https` | unsupported transport; never coerced to https |
-| userinfo present (`https://user:pw@host`) | credential-bearing authority; never matched, never echoed |
+| userinfo present (`https://user@host`, with or without a password component) | credential-bearing authority; never matched, never echoed |
 | invalid port (non-numeric, empty after `:`, out of 1-65535) | unparseable authority |
 | invalid IPv4 literal (out-of-range or malformed octets) | unparseable host |
 | invalid IPv6 literal | unparseable host |
