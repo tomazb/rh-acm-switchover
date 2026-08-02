@@ -825,19 +825,19 @@ complementary (target identity/RBAC vs. completion/readiness).
    and identity-aware Pod checks against live state before relying on this teardown being
    complete, so a replacement appearing after the completion write is caught by that gate
    rather than masked by the stored proof.
-8. Before MCH DELETE, operator provenance is either durably bound to the enclosing MCH
+9. Before MCH DELETE, operator provenance is either durably bound to the enclosing MCH
    teardown record as exact CSV evidence plus Deployment namespace/name/UID, or explicitly
    unavailable. A name, prefix, label, service account, annotation, image, or current-lab
    observation alone never supplies that identity.
-9. During every MCH drain and final-verification pass, a Pod is excluded only after
-   `Pod owner UID → live ReplicaSet UID → Deployment owner UID → exact recorded
-   Deployment UID` succeeds. Every missing, malformed, ambiguous, unauthorized,
-   unreadable, timed-out, replaced, or inconsistent link blocks. Rolling-update
-   ReplicaSets are accepted only when each resolves to the same recorded Deployment UID.
-10. Prefix spoofing cannot change a Pod's classification. If pre-delete operator identity
+10. During every MCH drain and final-verification pass, a Pod is excluded only after
+    `Pod owner UID → live ReplicaSet UID → Deployment owner UID → exact recorded
+    Deployment UID` succeeds. Every missing, malformed, ambiguous, unauthorized,
+    unreadable, timed-out, replaced, or inconsistent link blocks. Rolling-update
+    ReplicaSets are accepted only when each resolves to the same recorded Deployment UID.
+11. Prefix spoofing cannot change a Pod's classification. If pre-delete operator identity
     is unavailable, only a strictly verified empty Pod list satisfies the drain; any Pod
     blocks. If an already recorded Deployment disappears or is replaced, the completion
     path fails closed or records `recovery_required`.
-11. Python and collection semantics, durable fields, bounded reads/waits, dry-run/check
+12. Python and collection semantics, durable fields, bounded reads/waits, dry-run/check
     mode, changed reporting, stable reason codes, redaction, RBAC requirements, and
     negative tests remain in parity without cross-importing implementation code.
