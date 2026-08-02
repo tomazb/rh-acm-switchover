@@ -364,7 +364,7 @@ The validation is integrated throughout the codebase:
    - Validates all resource names and namespaces before API calls
    - Prevents invalid inputs from reaching Kubernetes API
 
-3. **Preflight Validators** (`modules/preflight_validators.py`):
+3. **Preflight Validators** (`modules/preflight/`):
    - Validates context names and namespaces during preflight checks
    - Ensures all validation happens before critical operations
 

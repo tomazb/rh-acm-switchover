@@ -42,7 +42,6 @@ rh-acm-switchover/
 │   │   ├── reporter.py
 │   │   └── version_validators.py
 │   ├── preflight_coordinator.py   # Modular preflight orchestration
-│   ├── preflight_validators.py    # Deprecated compatibility shim
 │   └── primary_prep.py            # Old-primary preparation logic
 ├── scripts/
 │   ├── argocd-manage.sh           # Deprecated standalone Argo CD helper
@@ -257,7 +256,7 @@ Checks include:
 - RBAC validation
 - optional GitOps and Argo CD impact reporting
 
-`modules/preflight_validators.py` remains only as a deprecated compatibility shim.
+The deprecated `modules/preflight_validators.py` compatibility shim has been removed; import validators from `modules.preflight` directly.
 
 ### Primary preparation
 
@@ -441,7 +440,6 @@ Important test themes include:
 - Normal switchover assumes the old primary hub is reachable
 - The runbook remains the authoritative manual/operational fallback
 - GitOps support is advisory plus targeted Argo CD coordination, not full drift reconciliation
-- `modules/preflight_validators.py` remains in the tree for compatibility and should not be treated as the main implementation
 
 ## Ansible Collection
 

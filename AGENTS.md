@@ -143,7 +143,6 @@ The following files are **safety-critical operational documents** that AI agents
 **Workflow Modules** (`modules/`):
 - `preflight/` - Modular pre-flight validators
 - `preflight_coordinator.py` - Coordinates pre-flight validation across modules
-- `preflight_validators.py` - Deprecated compatibility shim (prefer `modules.preflight`)
 - `backup_schedule.py` - Shared helpers for BackupSchedule management
 - `primary_prep.py` - Pause backups, disable auto-import, scale down Thanos
 - `activation.py` - Patch restore resource to activate managed clusters

@@ -15,7 +15,7 @@ feat: implement comprehensive input validation and error handling
 - **New validation module** (`lib/validation.py`) with comprehensive validation rules
 - **CLI argument validation** in main entry point (`acm_switchover.py`)
 - **Kubernetes resource name validation** (`lib/kube_client.py`)
-- **Context and namespace validation** (`modules/preflight_validators.py`)
+- **Context and namespace validation** (`modules/preflight/`)
 - **Enhanced error handling** with `ValidationError` and `SecurityValidationError`
 - **Comprehensive test suite** (`tests/test_validation.py`) with 26 test cases
 - **Detailed documentation** (`docs/reference/validation-rules.md`)
@@ -85,7 +85,7 @@ The comprehensive input validation implementation addresses the following key ob
 |-------------|--------|-------------|
 | CLI Argument Validation | ✅ Complete | Comprehensive validation in `acm_switchover.py` |
 | Kubernetes Resource Validation | ✅ Complete | DNS-1123 compliant validation in `lib/kube_client.py` |
-| Context/Namespace Validation | ✅ Complete | Integrated validation in `modules/preflight_validators.py` |
+| Context/Namespace Validation | ✅ Complete | Integrated validation in `modules/preflight/` |
 | Error Handling Framework | ✅ Complete | `ValidationError` and `SecurityValidationError` classes |
 | Test Suite | ✅ Complete | 26 comprehensive test cases in `tests/test_validation.py` |
 | Documentation | ✅ Complete | Detailed validation rules in `docs/reference/validation-rules.md` |
@@ -189,7 +189,7 @@ lib/validation.py
    - Resource name validation for CRUD operations
    - Namespace validation for all namespaced operations
 
-3. **Preflight Validators** (`modules/preflight_validators.py`)
+3. **Preflight Validators** (`modules/preflight/`)
    - Context name validation in all validator classes
    - Namespace validation before existence checks
    - Security validation for sensitive operations
