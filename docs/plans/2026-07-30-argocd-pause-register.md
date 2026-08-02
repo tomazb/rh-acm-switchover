@@ -1,5 +1,13 @@
 # ArgocdPauseRegister Implementation Plan (retargeted to `ansible` branch)
 
+> **Superseded on the invariant.** This plan states the register invariant as
+> "entries = apps currently paused". That wording was wrong and produced two
+> data-loss defects; see the Correction section of
+> [`docs/adr/0001-pause-register-invariant.md`](../adr/0001-pause-register-invariant.md),
+> which defines entries as **unresolved resume obligations** (confirmed,
+> provisional, or unknown). The ADR is authoritative. This document is kept as
+> the record of what was executed, not as a current statement of the contract.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Finish deepening the Argo CD pause register: rename `ArgoCDPauseCoordinator` → `ArgocdPauseRegister`, give it `resume()`/`status()`, fix the no-CRD clobber, enforce the ADR-0001 invariant (entries = apps currently paused; resume removes entries on success; dry-run records nothing).

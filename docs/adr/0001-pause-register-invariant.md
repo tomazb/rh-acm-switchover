@@ -29,7 +29,9 @@ Three consequences, all deliberate:
   "resume finished". There is no in-state audit trail of resumed apps; logs and GitOps
   markers carry that history.
 - Dry-run records nothing in the register (the old `argocd_pause_dry_run` key is gone).
-  A register entry always means a real cluster mutation was attempted.
+  A register entry always describes a real run: a provisional entry is written just
+  before the pause patch is issued, so it records an intent that may or may not have
+  reached the cluster — never a simulated one.
 - When the Applications CRD is not visible but the register is non-empty, the register
   is preserved with a warning — never cleared. This holds for **every** non-empty
   register, including one containing only provisional or unknown entries.

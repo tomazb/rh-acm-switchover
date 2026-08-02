@@ -326,8 +326,13 @@ class TestIdempotentRepause:
         persisted = state._config["argocd_paused_apps"]
         assert persisted[0]["pause_applied"] is True
 
-    def test_does_not_recover_pending_entry_without_matching_marker(self):
-        """An unconfirmed entry must not be treated as ours when the live marker is absent."""
+    def test_keeps_pending_entry_without_matching_marker_as_unresolved(self):
+        """A missing marker does not prove the pause failed, so the obligation is kept (ADR-0001).
+
+        A passive-sync restore can overwrite the marker from an older backup while
+        the pause itself stands. Forgetting the entry here would discard the
+        original_sync_policy that is the only way to undo it.
+        """
         state = _make_state_manager(
             {
                 "argocd_run_id": "run-1",
@@ -368,7 +373,11 @@ class TestIdempotentRepause:
         mock_pause.assert_not_called()
         assert summary.failed == 0
         assert summary.recovered == 0
-        assert state._config["argocd_paused_apps"] == []
+        entries = state._config["argocd_paused_apps"]
+        assert len(entries) == 1
+        assert entries[0]["pause_state"] == "unknown"
+        assert entries[0]["pause_applied"] is False
+        assert entries[0]["original_sync_policy"] == {"automated": {"prune": True}}
 
     def test_recovers_unknown_entry_only_with_matching_marker(self):
         state = _make_state_manager(

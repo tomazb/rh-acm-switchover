@@ -109,7 +109,16 @@ class PauseRegisterStore:
         the persisted value the entries came from, used only to report how many
         records sanitization dropped.
         """
-        raw_count = len(raw) if isinstance(raw, list) else len(entries)
+        # A non-list, non-null persisted value is malformed durable state, not an
+        # empty register. Counting it as discarded keeps resume-only in its error
+        # path instead of treating the run id as leftover metadata and clearing
+        # the very evidence needed to recover.
+        if isinstance(raw, list):
+            raw_count = len(raw)
+        elif raw is None:
+            raw_count = 0
+        else:
+            raw_count = len(entries) + 1
         return RegisterStatus(
             confirmed_paused_count=len(cls._applied_entries(entries)),
             run_id=run_id,

@@ -222,10 +222,16 @@ def run_argocd_resume_only(
         # emptied by a successful resume -- finish its cleanup rather than failing
         # forever. A register whose records were dropped as unresumable is a
         # different situation and still falls through to the error below.
+        # finish_cleanup() is a no-op in dry-run, so say what will actually happen
+        # rather than claiming a write that dry-run never performs.
         logger.info(
-            "Argo CD pause register is already empty (run_id=%s); previous resume completed. "
-            "Clearing leftover run metadata.",
+            "Argo CD pause register is already empty (run_id=%s); previous resume completed. %s",
             status.run_id,
+            (
+                "[DRY-RUN] Would clear leftover run metadata."
+                if getattr(args, "dry_run", False)
+                else "Clearing leftover run metadata."
+            ),
         )
         register.finish_cleanup()
         return True

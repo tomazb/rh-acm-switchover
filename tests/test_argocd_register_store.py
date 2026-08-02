@@ -427,6 +427,24 @@ class TestRegisterStatus:
 
         assert register.status() == RegisterStatus(confirmed_paused_count=0, run_id=None, entry_count=0)
 
+    @pytest.mark.parametrize("malformed", [{"hub": "secondary"}, "corrupted", 7])
+    def test_malformed_register_state_counts_as_discarded(self, tmp_path, malformed):
+        """A non-list persisted value is corruption, not an empty register.
+
+        It must report a discarded record so resume-only stays in its error path
+        rather than treating the run id as leftover metadata and clearing the
+        evidence needed to recover.
+        """
+        state = _make_real_state(tmp_path)
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config("argocd_paused_apps", malformed)
+
+        status = ArgocdPauseRegister(state, dry_run=False).status()
+
+        assert status.entry_count == 0
+        assert status.discarded_entry_count >= 1
+        assert status.run_id == "run-1"
+
     def test_status_counts_applied_entries_only(self, tmp_path):
         state = _make_real_state(tmp_path)
         state.set_config("argocd_run_id", "run-1")

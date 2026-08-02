@@ -340,9 +340,22 @@ class ArgocdPauseRegister:
         if not self._store._is_pause_applied(existing_entry) and not self.dry_run and not has_automated:
             expected_run_id = existing_entry.get("pause_run_id") or run_id
             if not self._pause_marker_matches(impact.app, expected_run_id):
-                self._store._forget(paused_apps, hub_label, namespace, name)
-                logger.debug(
-                    "  Removed unconfirmed Argo CD pause state for %s/%s on %s (marker missing)",
+                # A missing marker does not prove the pause failed: a passive-sync
+                # restore can overwrite the annotation from an older backup while the
+                # pause itself stands. Discarding the entry here would throw away the
+                # original_sync_policy needed to undo it, so keep the obligation as
+                # unknown (ADR-0001) and let resume resolve it against the cluster.
+                self._store._mark_unknown(
+                    existing_entry,
+                    existing_entry.get("original_sync_policy"),
+                    expected_run_id,
+                )
+                self._store._persist_paused_apps(paused_apps)
+                logger.warning(
+                    "  Argo CD pause state for %s/%s on %s is unconfirmed and carries no matching "
+                    "marker, but auto-sync is off; keeping it as an unresolved obligation. "
+                    "Resume with --argocd-resume-only, or clear the entry once the Application's "
+                    "sync policy is confirmed correct.",
                     namespace,
                     name,
                     hub_label,
