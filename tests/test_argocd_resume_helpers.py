@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from lib import argocd as argocd_lib
+from lib.argocd_register import ArgocdPauseRegister
 from lib.argocd_resume import (
     _ensure_resume_identity_data,
     _required_resume_roles,
@@ -15,7 +16,6 @@ from lib.argocd_resume import (
 from lib.constants import (
     HUB_ROLE_PRIMARY,
     HUB_ROLE_SECONDARY,
-    STATE_KEY_ARGOCD_PAUSE_DRY_RUN,
     STATE_KEY_ARGOCD_PAUSED_APPS,
     STATE_KEY_ARGOCD_RUN_ID,
     STEP_PAUSE_ARGOCD_APPS,
@@ -59,7 +59,7 @@ def test_prepare_resume_clients_swaps_reversed_contexts():
     resume_primary, resume_secondary = prepare_argocd_resume_clients(
         args,
         state,
-        paused_apps,
+        {HUB_ROLE_PRIMARY},
         primary,
         secondary,
         logger,
@@ -82,7 +82,7 @@ def test_prepare_resume_clients_requires_force_for_missing_hub_identities():
         prepare_argocd_resume_clients(
             args,
             state,
-            paused_apps,
+            {HUB_ROLE_SECONDARY},
             primary,
             secondary,
             logger,
@@ -102,7 +102,7 @@ def test_prepare_resume_clients_loads_primary_client_only_when_allowed():
     resume_primary, resume_secondary = prepare_argocd_resume_clients(
         args,
         state,
-        paused_apps,
+        {HUB_ROLE_PRIMARY},
         None,
         secondary,
         logger,
@@ -115,24 +115,18 @@ def test_prepare_resume_clients_loads_primary_client_only_when_allowed():
     assert resume_secondary is secondary
 
 
-def test_required_resume_roles_combines_paused_apps_and_stored_identities():
-    paused_apps = [
-        {"hub": HUB_ROLE_PRIMARY, "namespace": "argocd", "name": "app-1"},
-        {"hub": "unknown", "namespace": "argocd", "name": "ignored"},
-        "not-a-mapping",
-    ]
+def test_required_resume_roles_combines_paused_hub_roles_and_stored_identities():
+    paused_hub_roles = {HUB_ROLE_PRIMARY, "unknown"}
     stored_identities = {
         HUB_ROLE_SECONDARY: {"context": "hub-b", "cluster_uid": "uid-secondary"},
         "legacy": {"context": "legacy", "cluster_uid": "uid-legacy"},
     }
 
-    assert _required_resume_roles(paused_apps, stored_identities) == {HUB_ROLE_PRIMARY, HUB_ROLE_SECONDARY}
+    assert _required_resume_roles(paused_hub_roles, stored_identities) == {HUB_ROLE_PRIMARY, HUB_ROLE_SECONDARY}
 
 
 def test_required_resume_roles_ignores_malformed_stored_identities():
-    paused_apps = [{"hub": HUB_ROLE_PRIMARY, "namespace": "argocd", "name": "app-1"}]
-
-    assert _required_resume_roles(paused_apps, "not-a-mapping") == {HUB_ROLE_PRIMARY}
+    assert _required_resume_roles({HUB_ROLE_PRIMARY}, "not-a-mapping") == {HUB_ROLE_PRIMARY}
 
 
 def test_ensure_resume_identity_data_requires_force_for_missing_identities():
@@ -158,30 +152,68 @@ def test_ensure_resume_identity_data_allows_legacy_state_with_force():
     _ensure_resume_identity_data(args, {}, logger)
 
 
-def test_run_argocd_resume_only_rejects_dry_run_pause_state():
-    paused_apps = [{"hub": HUB_ROLE_SECONDARY, "namespace": "argocd", "name": "app-2"}]
+def test_run_argocd_resume_only_finishes_cleanup_for_empty_register():
+    """Thermos 5: a run id over a genuinely empty register is a completed resume, not a failure.
+
+    resume() empties the register and clears the run id as two writes; a crash
+    between them leaves exactly this state, and rejecting it stranded the
+    operator forever. Dry-run can no longer produce it -- dry-run persists no
+    run id at all.
+    """
     state = Mock()
     state.get_config.side_effect = lambda key, default=None: {
-        STATE_KEY_ARGOCD_PAUSE_DRY_RUN: True,
         STATE_KEY_ARGOCD_RUN_ID: "run-1",
-        STATE_KEY_ARGOCD_PAUSED_APPS: paused_apps,
+        STATE_KEY_ARGOCD_PAUSED_APPS: [],
     }.get(key, default)
-    args = SimpleNamespace()
+    args = SimpleNamespace(dry_run=False)
     primary = Mock()
     secondary = Mock()
-    logger = logging.getLogger("test.run_only.dry_run")
+    logger = logging.getLogger("test.run_only.empty_register")
 
-    with patch("lib.argocd_resume.prepare_argocd_resume_clients") as prepare_clients, patch(
-        "lib.argocd_resume.argocd_lib.resume_recorded_applications"
-    ) as resume_recorded:
+    with patch("lib.argocd_resume.prepare_argocd_resume_clients") as prepare_clients, patch.object(
+        ArgocdPauseRegister, "resume"
+    ) as register_resume:
         result = run_argocd_resume_only(args, state, primary, secondary, logger)
+
+    assert result is True
+    prepare_clients.assert_not_called()
+    register_resume.assert_not_called()
+
+
+def test_run_argocd_resume_only_rejects_register_of_unresumable_records():
+    """Records dropped as unresumable are not a completed cleanup -- they are an error.
+
+    Legacy dry-run entries sanitize away to an empty register, which looks
+    identical to a finished resume through entry_count alone. Thermos 5's
+    idempotent-cleanup path must not swallow them.
+    """
+    state = Mock()
+    state.get_config.side_effect = lambda key, default=None: {
+        STATE_KEY_ARGOCD_RUN_ID: "run-1",
+        STATE_KEY_ARGOCD_PAUSED_APPS: [
+            {
+                "hub": "secondary",
+                "namespace": "argocd",
+                "name": "app-1",
+                "original_sync_policy": {"automated": {}},
+                "dry_run": True,
+            }
+        ],
+    }.get(key, default)
+    args = SimpleNamespace(dry_run=False)
+    logger = logging.getLogger("test.run_only.unresumable_records")
+
+    with patch("lib.argocd_resume.prepare_argocd_resume_clients") as prepare_clients, patch.object(
+        ArgocdPauseRegister, "resume"
+    ) as register_resume:
+        result = run_argocd_resume_only(args, state, Mock(), Mock(), logger)
 
     assert result is False
     prepare_clients.assert_not_called()
-    resume_recorded.assert_not_called()
+    register_resume.assert_not_called()
 
 
-def test_run_argocd_resume_only_uses_prepare_clients_and_resume_recorded_applications():
+def test_run_argocd_resume_only_uses_prepare_clients_and_register_resume():
     paused_apps = [{"hub": HUB_ROLE_SECONDARY, "namespace": "argocd", "name": "app-2"}]
     state = _mock_state(paused_apps)
     args = SimpleNamespace(primary_context="hub-a", secondary_context="hub-b", dry_run=False, force=False)
@@ -192,28 +224,24 @@ def test_run_argocd_resume_only_uses_prepare_clients_and_resume_recorded_applica
     with patch(
         "lib.argocd_resume.prepare_argocd_resume_clients",
         return_value=(primary, secondary),
-    ) as prepare_clients, patch("lib.argocd_resume.argocd_lib.resume_recorded_applications") as resume_recorded:
-        resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
+    ) as prepare_clients, patch.object(ArgocdPauseRegister, "resume") as register_resume:
+        register_resume.return_value = argocd_lib.ResumeSummary(
+            restored=1, already_resumed=0, failed=0, remaining_in_register=0
+        )
         result = run_argocd_resume_only(args, state, primary, secondary, logger)
 
     assert result is True
     prepare_clients.assert_called_once_with(
         args,
         state,
-        paused_apps,
+        {HUB_ROLE_SECONDARY},
         primary,
         secondary,
         logger,
         allow_primary_load_from_state=True,
         kube_client_factory=KubeClient,
     )
-    resume_recorded.assert_called_once_with(
-        paused_apps,
-        "run-1",
-        primary,
-        secondary,
-        logger,
-    )
+    register_resume.assert_called_once_with(primary, secondary)
 
 
 def test_attempt_argocd_resume_on_failure_clears_pause_state_only_after_full_success():
@@ -230,44 +258,42 @@ def test_attempt_argocd_resume_on_failure_clears_pause_state_only_after_full_suc
     with patch(
         "lib.argocd_resume.prepare_argocd_resume_clients",
         return_value=(primary, secondary),
-    ) as prepare_clients, patch("lib.argocd_resume.argocd_lib.resume_recorded_applications") as resume_recorded, patch(
-        "lib.argocd_resume.clear_argocd_pause_state"
-    ) as clear_pause_state:
-        resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
+    ) as prepare_clients, patch.object(ArgocdPauseRegister, "resume") as register_resume:
+        register_resume.return_value = argocd_lib.ResumeSummary(
+            restored=1, already_resumed=0, failed=0, remaining_in_register=1
+        )
         attempt_argocd_resume_on_failure(args, partial_state, primary, secondary, logger)
 
     prepare_clients.assert_called_once_with(
         args,
         partial_state,
-        paused_apps,
+        {HUB_ROLE_PRIMARY, HUB_ROLE_SECONDARY},
         primary,
         secondary,
         logger,
         allow_primary_load_from_state=False,
         kube_client_factory=KubeClient,
     )
-    clear_pause_state.assert_not_called()
     partial_state.clear_step_completed.assert_not_called()
 
     success_state = _mock_state(paused_apps)
     with patch(
         "lib.argocd_resume.prepare_argocd_resume_clients",
         return_value=(primary, secondary),
-    ) as prepare_clients, patch("lib.argocd_resume.argocd_lib.resume_recorded_applications") as resume_recorded, patch(
-        "lib.argocd_resume.clear_argocd_pause_state"
-    ) as clear_pause_state:
-        resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=1, failed=0)
+    ) as prepare_clients, patch.object(ArgocdPauseRegister, "resume") as register_resume:
+        register_resume.return_value = argocd_lib.ResumeSummary(
+            restored=1, already_resumed=1, failed=0, remaining_in_register=0
+        )
         attempt_argocd_resume_on_failure(args, success_state, primary, secondary, logger)
 
     prepare_clients.assert_called_once_with(
         args,
         success_state,
-        paused_apps,
+        {HUB_ROLE_PRIMARY, HUB_ROLE_SECONDARY},
         primary,
         secondary,
         logger,
         allow_primary_load_from_state=False,
         kube_client_factory=KubeClient,
     )
-    clear_pause_state.assert_called_once_with(success_state)
     success_state.clear_step_completed.assert_called_once_with(STEP_PAUSE_ARGOCD_APPS)

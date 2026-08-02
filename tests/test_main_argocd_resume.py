@@ -8,6 +8,7 @@ import pytest
 
 from acm_switchover import _attempt_argocd_resume_on_failure, _run_argocd_resume_only
 from lib import argocd as argocd_lib
+from lib.argocd_register import ArgocdPauseRegister
 from tests.main_test_helpers import make_resume_on_failure_args, make_resume_only_context_args
 
 
@@ -84,7 +85,7 @@ class TestArgocdResumeOnly:
         secondary.get_cluster_identity.return_value = {"context": "hub-b", "cluster_uid": "uid-secondary-new"}
         logger = logging.getLogger("test.resume_only_identity_mismatch")
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as resume_recorded:
+        with patch.object(ArgocdPauseRegister, "resume") as resume_recorded:
             resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
             with caplog.at_level(logging.ERROR):
                 result = _run_argocd_resume_only(args, state, primary, secondary, logger)
@@ -104,7 +105,7 @@ class TestArgocdResumeOnly:
         secondary.get_cluster_identity.side_effect = RuntimeError("kube-system UID unavailable")
         logger = logging.getLogger("test.resume_only_identity_missing")
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as resume_recorded:
+        with patch.object(ArgocdPauseRegister, "resume") as resume_recorded:
             resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
             with caplog.at_level(logging.ERROR):
                 result = _run_argocd_resume_only(args, state, primary, secondary, logger)
@@ -133,13 +134,50 @@ class TestArgocdResumeOnly:
         args = make_resume_only_context_args("hub-a", "hub-b")
         logger = logging.getLogger("test.resume_only_legacy_identity_missing")
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as resume_recorded:
+        with patch.object(ArgocdPauseRegister, "resume") as resume_recorded:
             with caplog.at_level(logging.ERROR):
                 result = _run_argocd_resume_only(args, state, Mock(), Mock(), logger)
 
         assert result is False
         assert "missing hub identity data" in caplog.text
         resume_recorded.assert_not_called()
+
+    def test_resume_only_finishes_interrupted_cleanup(self, tmp_path, caplog):
+        """Thermos 5: run id + empty register is a completed resume, not a failure.
+
+        resume() empties the register and clears the run id as two writes. A crash
+        between them must not leave resume-only rejecting the state forever.
+        """
+        state = self._make_identity_state(tmp_path)
+        state.set_config("argocd_paused_apps", [])
+        state.set_config("argocd_run_id", "run-1")
+        args = make_resume_only_context_args("hub-a", "hub-b")
+        logger = logging.getLogger("test.resume_only_interrupted_cleanup")
+
+        with patch.object(ArgocdPauseRegister, "resume") as resume_recorded:
+            with caplog.at_level(logging.INFO):
+                result = _run_argocd_resume_only(args, state, Mock(), Mock(), logger)
+
+        assert result is True
+        resume_recorded.assert_not_called()
+        assert "already empty" in caplog.text
+        assert state.get_config("argocd_run_id") is None
+
+    def test_resume_only_still_fails_when_state_has_nothing(self, tmp_path, caplog):
+        """No run id and no entries is genuinely nothing to resume -- still an error."""
+        state = self._make_identity_state(tmp_path)
+        state.set_config("argocd_paused_apps", [])
+        state.set_config("argocd_run_id", None)
+        args = make_resume_only_context_args("hub-a", "hub-b")
+        logger = logging.getLogger("test.resume_only_nothing_to_resume")
+
+        with patch.object(ArgocdPauseRegister, "resume") as resume_recorded:
+            with caplog.at_level(logging.ERROR):
+                result = _run_argocd_resume_only(args, state, Mock(), Mock(), logger)
+
+        assert result is False
+        resume_recorded.assert_not_called()
+        assert "No Argo CD paused apps in state file" in caplog.text
 
     def test_resume_only_force_allows_legacy_state_without_hub_identities(self, tmp_path):
         from lib.utils import StateManager
@@ -163,18 +201,39 @@ class TestArgocdResumeOnly:
         secondary.get_cluster_identity.return_value = {"context": "hub-b", "cluster_uid": "uid-secondary"}
         logger = logging.getLogger("test.resume_only_legacy_identity_force")
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as resume_recorded:
+        with patch.object(ArgocdPauseRegister, "resume") as resume_recorded:
             resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
 
             assert _run_argocd_resume_only(args, state, primary, secondary, logger) is True
 
-        resume_recorded.assert_called_once_with(
-            paused_apps,
-            "run-1",
-            primary,
-            secondary,
-            logger,
-        )
+        resume_recorded.assert_called_once_with(primary, secondary)
+
+    def test_resume_only_full_success_empties_register_and_clears_run_id(self, tmp_path):
+        """Integration: after a fully successful resume-only, the register is empty and run_id cleared (ADR-0001)."""
+        from acm_switchover import _run_argocd_resume_only
+
+        state = self._make_identity_state(tmp_path)
+        args = SimpleNamespace(primary_context="hub-a", secondary_context="hub-b", dry_run=False, force=False)
+        primary, secondary = self._identity_clients()
+        secondary.dry_run = False
+        secondary.get_custom_resource.return_value = {
+            "metadata": {
+                "namespace": "argocd",
+                "name": "app-2",
+                "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"},
+                "resourceVersion": "7",
+            },
+            "spec": {"syncPolicy": {}},
+        }
+        secondary.patch_custom_resource.return_value = None
+        logger = logging.getLogger("test.resume_only_integration")
+
+        assert _run_argocd_resume_only(args, state, primary, secondary, logger) is True
+
+        assert state.get_config("argocd_paused_apps") == []
+        assert state.get_config("argocd_run_id") is None
+        assert state.get_config("argocd_discovery_namespaces") == {}
+        secondary.patch_custom_resource.assert_called_once()
 
     def test_resume_only_builds_primary_client_from_recorded_state_when_primary_context_omitted(
         self,
@@ -195,21 +254,15 @@ class TestArgocdResumeOnly:
         created_primary = Mock(name="primary-client")
         logger = logging.getLogger("test")
 
-        with patch("acm_switchover.KubeClient", return_value=created_primary) as kube_client, patch(
-            "acm_switchover.argocd_lib.resume_recorded_applications"
+        with patch("acm_switchover.KubeClient", return_value=created_primary) as kube_client, patch.object(
+            ArgocdPauseRegister, "resume"
         ) as resume_recorded:
             resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
 
             assert _run_argocd_resume_only(args, state, None, secondary, logger) is True
 
         kube_client.assert_called_once_with("hub-a", dry_run=False)
-        resume_recorded.assert_called_once_with(
-            paused_apps,
-            "run-1",
-            created_primary,
-            secondary,
-            logger,
-        )
+        resume_recorded.assert_called_once_with(created_primary, secondary)
 
     def test_resume_only_swaps_clients_when_contexts_are_reversed(self):
         from acm_switchover import _run_argocd_resume_only
@@ -233,18 +286,12 @@ class TestArgocdResumeOnly:
         primary, secondary = self._identity_clients()
         logger = logging.getLogger("test")
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as resume_recorded:
+        with patch.object(ArgocdPauseRegister, "resume") as resume_recorded:
             resume_recorded.return_value = argocd_lib.ResumeSummary(restored=2, already_resumed=0, failed=0)
 
             assert _run_argocd_resume_only(args, state, primary, secondary, logger) is True
 
-        resume_recorded.assert_called_once_with(
-            paused_apps,
-            "run-1",
-            secondary,
-            primary,
-            logger,
-        )
+        resume_recorded.assert_called_once_with(secondary, primary)
 
     def test_resume_only_fails_when_state_missing(self):
         from acm_switchover import _run_argocd_resume_only
@@ -261,12 +308,12 @@ class TestArgocdResumeOnly:
 
         assert _run_argocd_resume_only(args, state, primary, secondary, logger) is False
 
-    def test_resume_only_rejects_dry_run_state(self):
+    def test_resume_only_rejects_legacy_dry_run_entries(self):
+        """Legacy dry_run entries are dropped on load (ADR-0001: dry-run records nothing), leaving nothing to resume."""
         from acm_switchover import _run_argocd_resume_only
 
         state = Mock()
         state.get_config.side_effect = lambda key, default=None: {
-            "argocd_pause_dry_run": True,
             "argocd_run_id": "run-1",
             "argocd_paused_apps": [
                 {
@@ -274,6 +321,7 @@ class TestArgocdResumeOnly:
                     "namespace": "argocd",
                     "name": "app-1",
                     "original_sync_policy": {"automated": {}},
+                    "dry_run": True,
                 }
             ],
         }.get(key, default)
@@ -321,7 +369,8 @@ class TestArgocdResumeOnly:
             ]
             assert _run_argocd_resume_only(args, state, primary, secondary, logger) is False
 
-    def test_resume_only_treats_marker_missing_as_already_resumed(self):
+    def _run_resume_only_with_marker_missing(self, autosync_enabled):
+        """Drive resume-only against one entry whose marker is gone, at a given observed auto-sync state."""
         from acm_switchover import _run_argocd_resume_only
         from lib import argocd as argocd_lib
 
@@ -344,8 +393,21 @@ class TestArgocdResumeOnly:
                 name="app-2",
                 restored=False,
                 skip_reason=argocd_lib.RESUME_SKIP_REASON_MARKER_MISSING,
+                autosync_enabled=autosync_enabled,
             )
-            assert _run_argocd_resume_only(args, state, primary, secondary, logger) is True
+            return _run_argocd_resume_only(args, state, primary, secondary, logger)
+
+    def test_resume_only_treats_marker_missing_with_autosync_on_as_already_resumed(self):
+        """Marker gone AND auto-sync observed back on: the obligation is genuinely discharged."""
+        assert self._run_resume_only_with_marker_missing(True) is True
+
+    def test_resume_only_fails_when_marker_missing_but_autosync_still_off(self):
+        """Thermos 2: a missing marker is not proof of restoration -- the app is still paused."""
+        assert self._run_resume_only_with_marker_missing(False) is False
+
+    def test_resume_only_fails_when_marker_missing_and_autosync_unobserved(self):
+        """Absence of evidence is not proof of restoration."""
+        assert self._run_resume_only_with_marker_missing(None) is False
 
     def test_resume_only_fails_on_marker_mismatch(self):
         from acm_switchover import _run_argocd_resume_only
@@ -393,8 +455,7 @@ class TestArgocdResumeOnly:
         with caplog.at_level(logging.WARNING):
             assert _run_argocd_resume_only(args, state, primary, secondary, logger) is False
 
-        assert "unexpected format" in caplog.text
-        assert "missing required fields" in caplog.text
+        assert "unusable record" in caplog.text
 
     def test_resume_only_ignores_malformed_context_mapping(self):
         paused_apps = [
@@ -411,18 +472,12 @@ class TestArgocdResumeOnly:
         primary, secondary = self._identity_clients()
         logger = logging.getLogger("test.resume_only_malformed_contexts")
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as resume_recorded:
+        with patch.object(ArgocdPauseRegister, "resume") as resume_recorded:
             resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
 
             assert _run_argocd_resume_only(args, state, primary, secondary, logger) is True
 
-        resume_recorded.assert_called_once_with(
-            paused_apps,
-            "run-1",
-            primary,
-            secondary,
-            logger,
-        )
+        resume_recorded.assert_called_once_with(primary, secondary)
 
     def test_resume_only_leaves_unknown_hub_entries_to_resume_summary(self, caplog):
         from acm_switchover import _run_argocd_resume_only
@@ -455,7 +510,7 @@ class TestArgocdResumeOnly:
             with caplog.at_level(logging.WARNING):
                 assert _run_argocd_resume_only(args, state, primary, secondary, logger) is False
 
-        assert "unrecognized hub=foo" in caplog.text
+        assert "unusable record or no client" in caplog.text
         assert "missing live client for recorded foo hub identity" not in caplog.text
 
 
@@ -530,8 +585,8 @@ class TestAttemptArgoCDResumeOnFailure:
         state = self._make_state()
         logger = logging.getLogger("test")
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
-            mock_resume.return_value = Mock(restored=1, already_resumed=0, failed=0)
+        with patch.object(ArgocdPauseRegister, "resume") as mock_resume:
+            mock_resume.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
             _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
 
         mock_resume.assert_called_once()
@@ -541,15 +596,26 @@ class TestAttemptArgoCDResumeOnFailure:
         from lib.utils import StateManager
 
         paused_apps = [
-            {"hub": "primary", "namespace": "argocd", "name": "app1"},
-            {"hub": "secondary", "namespace": "argocd", "name": "app2"},
+            {
+                "hub": "primary",
+                "namespace": "argocd",
+                "name": "app1",
+                "original_sync_policy": {"automated": {}},
+                "pause_applied": True,
+            },
+            {
+                "hub": "secondary",
+                "namespace": "argocd",
+                "name": "app2",
+                "original_sync_policy": {"automated": {}},
+                "pause_applied": True,
+            },
         ]
         state_path = tmp_path / "state.json"
         state = StateManager(str(state_path))
         self._bind_real_state(state)
         state.set_config("argocd_run_id", "run-1")
         state.set_config("argocd_paused_apps", paused_apps)
-        state.set_config("argocd_pause_dry_run", False)
         state.set_config(
             "argocd_discovery_namespaces",
             {"primary": ["argocd"], "secondary": ["openshift-gitops"]},
@@ -558,15 +624,24 @@ class TestAttemptArgoCDResumeOnFailure:
         args = make_resume_on_failure_args()
         logger = logging.getLogger("test")
         primary, secondary = self._identity_clients()
+        for client, app_name in ((primary, "app1"), (secondary, "app2")):
+            client.dry_run = False
+            client.get_custom_resource.return_value = {
+                "metadata": {
+                    "namespace": "argocd",
+                    "name": app_name,
+                    "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"},
+                    "resourceVersion": "5",
+                },
+                "spec": {"syncPolicy": {}},
+            }
+            client.patch_custom_resource.return_value = None
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
-            mock_resume.return_value = SimpleNamespace(restored=1, already_resumed=1, failed=0)
-            _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
+        _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
 
         reloaded = StateManager(str(state_path))
         assert reloaded.get_config("argocd_paused_apps") == []
         assert reloaded.get_config("argocd_run_id") is None
-        assert reloaded.get_config("argocd_pause_dry_run") is False
         assert reloaded.get_config("argocd_discovery_namespaces") == {}
         assert reloaded.is_step_completed("pause_argocd_apps") is False
 
@@ -588,8 +663,8 @@ class TestAttemptArgoCDResumeOnFailure:
         logger = logging.getLogger("test")
         primary, secondary = self._identity_clients()
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
-            mock_resume.return_value = SimpleNamespace(restored=1, already_resumed=0, failed=0)
+        with patch.object(ArgocdPauseRegister, "resume") as mock_resume:
+            mock_resume.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
             _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
 
         reloaded = StateManager(str(state_path))
@@ -614,8 +689,8 @@ class TestAttemptArgoCDResumeOnFailure:
         logger = logging.getLogger("test")
         _, secondary = self._identity_clients()
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
-            mock_resume.return_value = SimpleNamespace(restored=1, already_resumed=0, failed=0)
+        with patch.object(ArgocdPauseRegister, "resume") as mock_resume:
+            mock_resume.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
             _attempt_argocd_resume_on_failure(args, state, None, secondary, logger)
 
         reloaded = StateManager(str(state_path))
@@ -635,14 +710,15 @@ class TestAttemptArgoCDResumeOnFailure:
         self._bind_real_state(state)
         state.set_config("argocd_run_id", "run-1")
         state.set_config("argocd_paused_apps", paused_apps)
-        state.set_config("argocd_pause_dry_run", False)
         state.mark_step_completed("pause_argocd_apps")
         args = make_resume_on_failure_args()
         logger = logging.getLogger("test")
         primary, secondary = self._identity_clients()
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
-            mock_resume.return_value = SimpleNamespace(restored=1, already_resumed=0, failed=0)
+        with patch.object(ArgocdPauseRegister, "resume") as mock_resume:
+            mock_resume.return_value = argocd_lib.ResumeSummary(
+                restored=1, already_resumed=0, failed=0, remaining_in_register=1
+            )
             _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
 
         reloaded = StateManager(str(state_path))
@@ -656,7 +732,7 @@ class TestAttemptArgoCDResumeOnFailure:
         state = self._make_state()
         logger = logging.getLogger("test")
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+        with patch.object(ArgocdPauseRegister, "resume") as mock_resume:
             _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
 
         mock_resume.assert_not_called()
@@ -667,7 +743,7 @@ class TestAttemptArgoCDResumeOnFailure:
         state = self._make_state(paused_apps=[])
         logger = logging.getLogger("test")
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+        with patch.object(ArgocdPauseRegister, "resume") as mock_resume:
             _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
 
         mock_resume.assert_not_called()
@@ -678,7 +754,7 @@ class TestAttemptArgoCDResumeOnFailure:
         state = self._make_state(run_id=None)
         logger = logging.getLogger("test")
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+        with patch.object(ArgocdPauseRegister, "resume") as mock_resume:
             _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
 
         mock_resume.assert_not_called()
@@ -689,7 +765,7 @@ class TestAttemptArgoCDResumeOnFailure:
         state = self._make_state()
         logger = logging.getLogger("test")
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+        with patch.object(ArgocdPauseRegister, "resume") as mock_resume:
             mock_resume.side_effect = RuntimeError("API unreachable")
             # Must not raise
             _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
@@ -700,12 +776,12 @@ class TestAttemptArgoCDResumeOnFailure:
         state = self._make_state()
         logger = logging.getLogger("test")
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
-            mock_resume.return_value = Mock(restored=0, already_resumed=0, failed=1)
+        with patch.object(ArgocdPauseRegister, "resume") as mock_resume:
+            mock_resume.return_value = argocd_lib.ResumeSummary(failed=1, remaining_in_register=1)
             with caplog.at_level(logging.WARNING):
                 _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
 
-        assert "could not be resumed" in caplog.text
+        assert "in the pause register" in caplog.text
         state.set_config.assert_not_called()
         state.clear_step_completed.assert_not_called()
 
@@ -715,7 +791,7 @@ class TestAttemptArgoCDResumeOnFailure:
         logger = logging.getLogger("test.resume_on_failure_context_message")
         primary, secondary = self._identity_clients(primary_context="hub-x")
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+        with patch.object(ArgocdPauseRegister, "resume") as mock_resume:
             with caplog.at_level(logging.WARNING):
                 _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
 
@@ -723,13 +799,35 @@ class TestAttemptArgoCDResumeOnFailure:
         assert "Argo CD resume contexts" in caplog.text
         assert "Resume-only contexts" not in caplog.text
 
+    def test_resume_on_failure_dry_run_warning_reports_projected_remaining(self, caplog):
+        """CA-011/OO-015: the warning must not contradict the summary line above it.
+
+        In dry-run nothing leaves the register, so remaining_in_register still
+        counts every entry -- reporting it would read "would have restored 1"
+        immediately followed by "left 1 in the pause register".
+        """
+        args = make_resume_on_failure_args()
+        state = self._make_state()
+        logger = logging.getLogger("test.resume_on_failure_dry_run_remaining")
+        primary, secondary = self._identity_clients()
+        summary = argocd_lib.ResumeSummary(
+            restored=1, already_resumed=0, failed=0, remaining_in_register=1, dry_run=True
+        )
+
+        with patch.object(ArgocdPauseRegister, "resume", return_value=summary):
+            with caplog.at_level(logging.WARNING):
+                _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
+
+        assert "left 0 Application(s) in the pause register" in caplog.text
+        assert "left 1 Application(s) in the pause register" not in caplog.text
+
     def test_resume_on_failure_uses_context_neutral_missing_client_message(self, caplog):
         args = make_resume_on_failure_args()
         state = self._make_state()
         logger = logging.getLogger("test.resume_on_failure_missing_client_message")
         _, secondary = self._identity_clients()
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+        with patch.object(ArgocdPauseRegister, "resume") as mock_resume:
             with caplog.at_level(logging.WARNING):
                 _attempt_argocd_resume_on_failure(args, state, None, secondary, logger)
 
@@ -755,7 +853,7 @@ class TestAttemptArgoCDResumeOnFailure:
         secondary.get_cluster_identity.return_value = {"context": "hub-b", "cluster_uid": "uid-secondary"}
         logger = logging.getLogger("test.resume_on_failure_legacy_identity_missing")
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+        with patch.object(ArgocdPauseRegister, "resume") as mock_resume:
             with caplog.at_level(logging.WARNING):
                 _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
 
@@ -780,8 +878,8 @@ class TestAttemptArgoCDResumeOnFailure:
         secondary.get_cluster_identity.return_value = {"context": "hub-b", "cluster_uid": "uid-secondary"}
         logger = logging.getLogger("test.resume_on_failure_legacy_identity_force")
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
-            mock_resume.return_value = Mock(restored=1, already_resumed=0, failed=0)
+        with patch.object(ArgocdPauseRegister, "resume") as mock_resume:
+            mock_resume.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
             _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
 
         mock_resume.assert_called_once()
@@ -793,7 +891,6 @@ class TestArgocdResumeOnlyContextMismatch:
     def _make_state(self, primary_ctx, secondary_ctx):
         state = Mock()
         state.get_config.side_effect = lambda key, default=None: {
-            "argocd_pause_dry_run": False,
             "argocd_run_id": "run-123",
             "argocd_paused_apps": [{"hub": "secondary", "namespace": "argocd", "name": "app1"}],
         }.get(key, default)
@@ -820,8 +917,8 @@ class TestArgocdResumeOnlyContextMismatch:
         args = make_resume_only_context_args("hub-x", "hub-b", force=True)
         logger = logging.getLogger("test.argocd_resume_force")
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
-            mock_resume.return_value = Mock(restored=1, already_resumed=0, failed=0)
+        with patch.object(ArgocdPauseRegister, "resume") as mock_resume:
+            mock_resume.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
             result = _run_argocd_resume_only(args, state, Mock(), Mock(), logger)
 
         assert result is True
@@ -842,9 +939,52 @@ class TestArgocdResumeOnlyContextMismatch:
         args = make_resume_only_context_args(None, "hub-y", force=True)
         logger = logging.getLogger("test.argocd_resume_secondary_force")
 
-        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
-            mock_resume.return_value = Mock(restored=1, already_resumed=0, failed=0)
+        with patch.object(ArgocdPauseRegister, "resume") as mock_resume:
+            mock_resume.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
             result = _run_argocd_resume_only(args, state, Mock(), Mock(), logger)
 
         assert result is True
         assert "--force used" in caplog.text
+
+
+@pytest.mark.unit
+def test_resume_only_dry_run_does_not_report_work_as_done(tmp_path, caplog):
+    """F6: dry-run resume simulates; it must not log restored work."""
+    from lib.argocd_resume import run_argocd_resume_only
+    from lib.utils import StateManager
+
+    state = StateManager(str(tmp_path / "resume-state.json"))
+    state.ensure_contexts("hub-a", "hub-b")
+    state.ensure_hub_identities(
+        {"secondary": {"context": "hub-b", "cluster_uid": "uid-secondary"}},
+    )
+    state.set_config("argocd_run_id", "run-1")
+    state.set_config(
+        "argocd_paused_apps",
+        [
+            {
+                "hub": "secondary",
+                "namespace": "argocd",
+                "name": "app-2",
+                "original_sync_policy": {"automated": {}},
+                "pause_applied": True,
+            }
+        ],
+    )
+    args = SimpleNamespace(primary_context=None, secondary_context="hub-b", dry_run=True, force=False)
+    secondary = Mock(name="secondary-client")
+    secondary.context = "hub-b"
+    secondary.dry_run = True
+    secondary.get_cluster_identity.return_value = {"context": "hub-b", "cluster_uid": "uid-secondary"}
+    logger = logging.getLogger("acm_switchover")
+
+    with caplog.at_level("INFO", logger="acm_switchover"):
+        assert run_argocd_resume_only(args, state, None, secondary, logger) is True
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("Would restore 1" in message for message in messages)
+    assert not any(message.startswith("Restored ") for message in messages)
+    assert state.get_config("argocd_paused_apps") != []
+    # G2: the projection must not contradict itself - restoring every entry leaves none behind.
+    assert any("0 would remain" in message for message in messages)
+    assert not any("1 would remain" in message for message in messages)

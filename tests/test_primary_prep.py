@@ -298,10 +298,10 @@ class TestPrimaryPreparation:
         impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-1", resource_count=1, app=app)]
 
         with (
-            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
-            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as pause_autosync,
+            patch("lib.argocd_register.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_register.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_register.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as pause_autosync,
         ):
             pause_autosync.return_value = argocd_lib.PauseResult(
                 namespace="argocd",
@@ -323,8 +323,8 @@ class TestPrimaryPreparation:
         assert paused_apps[0]["name"] == "app-1"
         assert paused_apps[0]["pause_applied"] is True
 
-    def test_pause_argocd_acm_apps_dry_run_records_apps(self, mock_primary_client, mock_state_manager):
-        """Dry-run should still report and record ACM-touching apps as would-paused."""
+    def test_pause_argocd_acm_apps_dry_run_writes_no_state(self, mock_primary_client, mock_state_manager):
+        """ADR-0001: dry-run reports would-pause apps but writes no durable state."""
         prep = PrimaryPreparation(
             primary_client=mock_primary_client,
             state_manager=mock_state_manager,
@@ -351,10 +351,10 @@ class TestPrimaryPreparation:
         impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-2", resource_count=1, app=app)]
 
         with (
-            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
-            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as pause_autosync,
+            patch("lib.argocd_register.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_register.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_register.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as pause_autosync,
         ):
             pause_autosync.return_value = argocd_lib.PauseResult(
                 namespace="argocd",
@@ -365,20 +365,67 @@ class TestPrimaryPreparation:
 
             prep._pause_argocd_acm_apps()
 
-        paused_call = [
-            call for call in mock_state_manager.set_config.call_args_list if call.args[0] == "argocd_paused_apps"
-        ][-1]
-        paused_apps = paused_call.args[1]
-        assert paused_apps[0]["dry_run"] is True
-        assert paused_apps[0]["pause_applied"] is False
+        # ADR-0001: dry-run records nothing durable - no state writes at all.
+        mock_state_manager.set_config.assert_not_called()
 
-        dry_run_call = next(
-            call for call in mock_state_manager.set_config.call_args_list if call.args[0] == "argocd_pause_dry_run"
+    def test_pause_argocd_acm_apps_dry_run_reports_generated_run_id(
+        self, mock_primary_client, mock_state_manager, caplog
+    ):
+        """G1: dry-run against a clean register still reports the pause it would perform."""
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            has_observability=False,
+            dry_run=True,
+            argocd_manage=True,
         )
-        assert dry_run_call.args[1] is True
+        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+            "argocd_run_id": None,
+            "argocd_paused_apps": [],
+        }.get(key, default)
 
-    def test_pause_argocd_acm_apps_clears_state_when_no_crd(self, mock_primary_client, mock_state_manager):
-        """No Applications CRD should clear stale Argo CD pause state before returning."""
+        discovery = argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=True,
+            has_argocds_crd=False,
+            install_type="vanilla",
+        )
+        app = {
+            "metadata": {"namespace": "argocd", "name": "app-2"},
+            "spec": {"syncPolicy": {"automated": {"prune": True}}},
+            "status": {"resources": [{"kind": "Restore", "namespace": "open-cluster-management-backup"}]},
+        }
+        impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-2", resource_count=1, app=app)]
+
+        with (
+            patch("lib.argocd_register.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_register.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_register.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as pause_autosync,
+            caplog.at_level(logging.INFO, logger="acm_switchover"),
+        ):
+            pause_autosync.return_value = argocd_lib.PauseResult(
+                namespace="argocd",
+                name="app-2",
+                original_sync_policy={"automated": {"prune": True}},
+                patched=True,
+            )
+
+            prep._pause_argocd_acm_apps()
+
+        run_id = pause_autosync.call_args.args[2]
+        assert run_id
+        summary_lines = [
+            record.getMessage()
+            for record in caplog.records
+            if record.getMessage().startswith("Argo CD: ") and "would be paused" in record.getMessage()
+        ]
+        assert len(summary_lines) == 1
+        assert f"run_id={run_id}" in summary_lines[0]
+        assert "1 Application(s) would be paused" in summary_lines[0]
+
+    def test_pause_argocd_acm_apps_clears_empty_state_when_no_crd(self, mock_primary_client, mock_state_manager):
+        """No Applications CRD clears leftover run_id when the register is empty (ADR-0001)."""
         prep = PrimaryPreparation(
             primary_client=mock_primary_client,
             state_manager=mock_state_manager,
@@ -389,7 +436,7 @@ class TestPrimaryPreparation:
         )
         mock_state_manager.get_config.side_effect = lambda key, default=None: {
             "argocd_run_id": "stale-run",
-            "argocd_paused_apps": [{"hub": "primary", "namespace": "argocd", "name": "stale-app"}],
+            "argocd_paused_apps": [],
         }.get(key, default)
 
         discovery = argocd_lib.ArgocdDiscoveryResult(
@@ -399,16 +446,14 @@ class TestPrimaryPreparation:
         )
 
         with patch(
-            "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+            "lib.argocd_register.argocd_lib.detect_argocd_installation",
             return_value=discovery,
         ):
             prep._pause_argocd_acm_apps()
 
+        # ADR-0001: only an empty register is cleared on CRD-visibility loss.
         assert any(call.args == ("argocd_paused_apps", []) for call in mock_state_manager.set_config.call_args_list)
         assert any(call.args == ("argocd_run_id", None) for call in mock_state_manager.set_config.call_args_list)
-        assert any(
-            call.args == ("argocd_pause_dry_run", False) for call in mock_state_manager.set_config.call_args_list
-        )
 
     def test_pause_argocd_acm_apps_persists_each_app_incrementally(self, mock_primary_client, mock_state_manager):
         """Each paused app must be saved to state independently so a crash preserves prior pauses.
@@ -459,10 +504,10 @@ class TestPrimaryPreparation:
             )
 
         with (
-            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app1, app2]),
-            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
-            patch("lib.argocd_coordinator.argocd_lib.pause_autosync", side_effect=pause_side_effect),
+            patch("lib.argocd_register.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_register.argocd_lib.list_argocd_applications", return_value=[app1, app2]),
+            patch("lib.argocd_register.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_register.argocd_lib.pause_autosync", side_effect=pause_side_effect),
         ):
             prep._pause_argocd_acm_apps()
 
@@ -513,11 +558,11 @@ class TestPrimaryPreparation:
         impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-1", resource_count=1, app=app)]
 
         with (
-            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_register.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_register.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_register.argocd_lib.find_acm_touching_apps", return_value=impacts),
             patch(
-                "lib.argocd_coordinator.argocd_lib.pause_autosync",
+                "lib.argocd_register.argocd_lib.pause_autosync",
                 return_value=argocd_lib.PauseResult(
                     namespace="argocd",
                     name="app-1",
@@ -577,11 +622,11 @@ class TestPrimaryPreparation:
         impacts = [argocd_lib.AppImpact(namespace="openshift-gitops", name="acm-app", resource_count=1, app=app)]
 
         with (
-            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_register.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_register.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_register.argocd_lib.find_acm_touching_apps", return_value=impacts),
             patch(
-                "lib.argocd_coordinator.argocd_lib.pause_autosync",
+                "lib.argocd_register.argocd_lib.pause_autosync",
                 return_value=argocd_lib.PauseResult(
                     namespace="openshift-gitops",
                     name="acm-app",
@@ -638,10 +683,10 @@ class TestPrimaryPreparation:
         impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-1", resource_count=1, app=app)]
 
         with (
-            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
-            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as pause_autosync,
+            patch("lib.argocd_register.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_register.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_register.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as pause_autosync,
         ):
             prep._pause_argocd_acm_apps()
 
@@ -696,10 +741,10 @@ class TestPrimaryPreparation:
         impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-1", resource_count=1, app=app)]
 
         with (
-            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
-            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as pause_autosync,
+            patch("lib.argocd_register.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_register.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_register.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as pause_autosync,
         ):
             prep._pause_argocd_acm_apps()
 

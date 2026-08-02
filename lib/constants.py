@@ -201,7 +201,6 @@ STATE_FILE_SECONDARY_NONE_LABEL = "none"
 # Argo CD durable state keys
 STATE_KEY_ARGOCD_PAUSED_APPS = "argocd_paused_apps"
 STATE_KEY_ARGOCD_RUN_ID = "argocd_run_id"
-STATE_KEY_ARGOCD_PAUSE_DRY_RUN = "argocd_pause_dry_run"
 STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES = "argocd_discovery_namespaces"
 STATE_KEY_ARGOCD_PAUSED_APP_HUB = "hub"
 STATE_KEY_RESUME_SUMMARY = "resume_summary"

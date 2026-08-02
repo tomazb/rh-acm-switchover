@@ -9,7 +9,7 @@ from typing import Optional
 
 from kubernetes.client.rest import ApiException
 
-from lib.argocd_coordinator import ArgoCDPauseCoordinator
+from lib.argocd_register import ArgocdPauseRegister
 from lib.constants import (
     BACKUP_NAMESPACE,
     BACKUP_SCHEDULE_PLURAL,
@@ -116,19 +116,25 @@ class PrimaryPreparation:
     def _pause_argocd_acm_apps(self) -> None:
         """Pause auto-sync for ACM-touching Argo CD Applications on primary and optionally secondary hub."""
         hubs = [(self.primary, HUB_ROLE_PRIMARY)] + ([(self.secondary, HUB_ROLE_SECONDARY)] if self.secondary else [])
-        coordinator = ArgoCDPauseCoordinator(self.state, self.dry_run)
+        register = ArgocdPauseRegister(self.state, dry_run=self.dry_run)
         try:
-            paused_apps, failure_count = coordinator.pause_hubs(hubs)
+            summary = register.pause_hubs(hubs)
         except Exception as exc:
             raise SwitchoverError(f"Argo CD pause failed: {exc}") from exc
-        if failure_count:
-            raise SwitchoverError(f"Argo CD auto-sync pause failed for {failure_count} Application(s)")
-        run_id = self.state.get_config("argocd_run_id")
-        if run_id is not None:
+        if summary.blocked:
+            raise SwitchoverError(
+                f"Argo CD auto-sync pause blocked for {summary.blocked} Application(s); "
+                "pause the owning ApplicationSet first"
+            )
+        if summary.failed:
+            raise SwitchoverError(f"Argo CD auto-sync pause failed for {summary.failed} Application(s)")
+        if summary.run_id is not None:
             logger.info(
-                "Argo CD: %d Application(s) paused (run_id=%s). Resume explicitly with --argocd-resume-only after retargeting Git.",
-                len(paused_apps),
-                run_id,
+                "Argo CD: %d Application(s) %s (run_id=%s). "
+                "Resume explicitly with --argocd-resume-only after retargeting Git.",
+                summary.newly_paused,
+                "would be paused" if summary.dry_run else "paused",
+                summary.run_id,
             )
 
     def _pause_backup_schedule(self):

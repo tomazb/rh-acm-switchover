@@ -77,11 +77,11 @@ class TestStateHandoffContracts:
         ]
 
         with (
-            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
-            patch("lib.argocd_coordinator.argocd_lib.run_id_or_new", return_value="run-123"),
-            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as pause_autosync,
+            patch("lib.argocd_register.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_register.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_register.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_register.argocd_lib.run_id_or_new", return_value="run-123"),
+            patch("lib.argocd_register.argocd_lib.pause_autosync") as pause_autosync,
         ):
             pause_autosync.return_value = argocd_lib.PauseResult(
                 namespace="openshift-gitops",
@@ -95,7 +95,6 @@ class TestStateHandoffContracts:
         consumer_state = StateManager(state_file)
         paused_apps = consumer_state.get_config("argocd_paused_apps")
         assert consumer_state.get_config("argocd_run_id") == "run-123"
-        assert consumer_state.get_config("argocd_pause_dry_run", None) is False
         assert paused_apps == [
             {
                 "hub": "primary",

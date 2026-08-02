@@ -50,6 +50,7 @@ from acm_switchover import (
 )
 from lib import KubeClient
 from lib import argocd as argocd_lib
+from lib.argocd_register import PauseSummary
 from lib.constants import (
     DRY_RUN_RESTORE_ONLY_COMPLETION_MESSAGE,
     DRY_RUN_RESTORE_ONLY_NEXT_STEPS_MESSAGE,
@@ -1095,16 +1096,16 @@ class TestSwitchoverPhaseFlow:
         assert DRY_RUN_RESTORE_ONLY_NEXT_STEPS_MESSAGE in log_text
         assert RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE not in log_text
 
-    def test_restore_only_argocd_pause_dry_run_uses_coordinator_without_marking_step(self):
+    def test_restore_only_argocd_dry_run_pause_uses_register_without_marking_step(self):
         args = SimpleNamespace(argocd_manage=True, dry_run=True)
         state = Mock()
         state.is_step_completed.return_value = False
         secondary = Mock()
         logger = Mock()
 
-        with patch("acm_switchover.ArgoCDPauseCoordinator") as coordinator_class:
+        with patch("acm_switchover.ArgocdPauseRegister") as coordinator_class:
             coordinator = coordinator_class.return_value
-            coordinator.pause_hubs.return_value = ([{"hub": HUB_ROLE_SECONDARY, "name": "app-1"}], 0)
+            coordinator.pause_hubs.return_value = PauseSummary(newly_paused=1, run_id="run-1")
             state.get_config.return_value = "run-1"
 
             result = _run_restore_only_argocd_pause(args, state, None, secondary, logger)
@@ -1114,26 +1115,71 @@ class TestSwitchoverPhaseFlow:
         coordinator.pause_hubs.assert_called_once_with([(secondary, HUB_ROLE_SECONDARY)])
         state.mark_step_completed.assert_not_called()
 
-    def test_restore_only_argocd_pause_dry_run_fails_on_blockers(self):
+    def test_restore_only_argocd_dry_run_pause_reports_run_id_from_summary(self):
+        """G1: dry-run persists no run id, so the report must come from the summary."""
+        args = SimpleNamespace(argocd_manage=True, dry_run=True)
+        state = Mock()
+        state.is_step_completed.return_value = False
+        state.get_config.return_value = None
+        secondary = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.ArgocdPauseRegister") as coordinator_class:
+            coordinator = coordinator_class.return_value
+            coordinator.pause_hubs.return_value = PauseSummary(newly_paused=2, run_id="run-9", dry_run=True)
+
+            result = _run_restore_only_argocd_pause(args, state, None, secondary, logger)
+
+        assert result is True
+        coordinator.status.assert_not_called()
+        messages = [call.args[0] % call.args[1:] for call in logger.info.call_args_list if call.args]
+        summary_lines = [message for message in messages if message.startswith("Argo CD: ")]
+        assert len(summary_lines) == 1
+        assert "2 Application(s) would be paused" in summary_lines[0]
+        assert "run_id=run-9" in summary_lines[0]
+
+    def test_restore_only_argocd_pause_phrases_from_summary_dry_run(self):
+        """G2: the caller reports the mode the register ran in, not its own flag."""
+        args = SimpleNamespace(argocd_manage=True, dry_run=False)
+        state = Mock()
+        state.is_step_completed.return_value = False
+        state.get_config.return_value = None
+        secondary = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.ArgocdPauseRegister") as coordinator_class:
+            coordinator = coordinator_class.return_value
+            coordinator.pause_hubs.return_value = PauseSummary(newly_paused=1, run_id="run-9", dry_run=True)
+
+            assert _run_restore_only_argocd_pause(args, state, None, secondary, logger) is True
+
+        messages = [call.args[0] % call.args[1:] for call in logger.info.call_args_list if call.args]
+        assert any("would be paused" in message for message in messages)
+
+    def test_restore_only_argocd_dry_run_pause_fails_on_blockers(self):
         args = SimpleNamespace(argocd_manage=True, dry_run=True)
         state = Mock()
         state.is_step_completed.return_value = False
         secondary = Mock()
         logger = Mock()
 
-        with patch("acm_switchover.ArgoCDPauseCoordinator") as coordinator_class, patch(
+        with patch("acm_switchover.ArgocdPauseRegister") as coordinator_class, patch(
             "acm_switchover._fail_phase",
             return_value=False,
         ) as fail_phase:
             coordinator = coordinator_class.return_value
-            coordinator.pause_hubs.return_value = ([], 1)
+            coordinator.pause_hubs.return_value = PauseSummary(blocked=1)
 
             result = _run_restore_only_argocd_pause(args, state, None, secondary, logger)
 
         assert result is False
         coordinator_class.assert_called_once_with(state, dry_run=True)
         coordinator.pause_hubs.assert_called_once_with([(secondary, HUB_ROLE_SECONDARY)])
-        fail_phase.assert_called_once_with(state, "Argo CD auto-sync pause failed for 1 Application(s)", logger)
+        fail_phase.assert_called_once_with(
+            state,
+            "Argo CD auto-sync pause blocked for 1 Application(s); pause the owning ApplicationSet first",
+            logger,
+        )
         state.mark_step_completed.assert_not_called()
 
     def test_restore_only_argocd_pause_defaults_missing_dry_run_to_false(self):
@@ -1143,9 +1189,9 @@ class TestSwitchoverPhaseFlow:
         secondary = Mock()
         logger = Mock()
 
-        with patch("acm_switchover.ArgoCDPauseCoordinator") as coordinator_class:
+        with patch("acm_switchover.ArgocdPauseRegister") as coordinator_class:
             coordinator = coordinator_class.return_value
-            coordinator.pause_hubs.return_value = ([{"hub": HUB_ROLE_SECONDARY, "name": "app-1"}], 0)
+            coordinator.pause_hubs.return_value = PauseSummary(newly_paused=1, run_id="run-1")
 
             result = _run_restore_only_argocd_pause(args, state, None, secondary, logger)
 
@@ -1614,7 +1660,7 @@ class TestArgocdResumeDelegation:
     def test_prepare_argocd_resume_clients_delegates_to_lib_module(self):
         args = SimpleNamespace(primary_context="hub-a", secondary_context="hub-b", dry_run=False, force=False)
         state = Mock()
-        paused_apps = [{"hub": HUB_ROLE_SECONDARY, "namespace": "argocd", "name": "app-1"}]
+        paused_hub_roles = {HUB_ROLE_SECONDARY}
         primary = Mock()
         secondary = Mock()
         logger = Mock()
@@ -1626,7 +1672,7 @@ class TestArgocdResumeDelegation:
             result = _prepare_argocd_resume_clients(
                 args,
                 state,
-                paused_apps,
+                paused_hub_roles,
                 primary,
                 secondary,
                 logger,
@@ -1637,7 +1683,7 @@ class TestArgocdResumeDelegation:
         prepare_clients.assert_called_once_with(
             args,
             state,
-            paused_apps,
+            paused_hub_roles,
             primary,
             secondary,
             logger,

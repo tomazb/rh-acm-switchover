@@ -491,7 +491,7 @@ pytest tests/test_backup_schedule.py -q
   `find_acm_touching_apps`, `find_argocd_pause_blockers`, `is_resume_noop`,
   `_pause_ground_truth_applied`, and the discovery/pause/resume result
   dataclasses; `lib/gitops_detector.py` — `detect_gitops_markers`;
-  coordination surfaces in `lib/argocd_coordinator.py` and
+  coordination surfaces in `lib/argocd_register.py` and
   `lib/argocd_resume.py` where pure.
 - Collection: `ansible_collections/tomazb/acm_switchover/plugins/module_utils/argocd.py`
   — `is_autosync_enabled`, `is_acm_touching_application`,

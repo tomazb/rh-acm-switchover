@@ -39,7 +39,7 @@ from lib import (
     setup_logging,
     validate_decommission_permissions,
 )
-from lib.argocd_coordinator import ArgoCDPauseCoordinator
+from lib.argocd_register import ArgocdPauseRegister
 from lib.constants import (
     EXIT_FAILURE,
     EXIT_INTERRUPT,
@@ -55,7 +55,6 @@ from lib.constants import (
     MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
     OBSERVABILITY_NAMESPACE,
     STATE_DIR_ENV_VAR,
-    STATE_KEY_ARGOCD_RUN_ID,
     STEP_PAUSE_ARGOCD_APPS,
     TOKEN_DURATION_DEFAULT,
 )
@@ -481,25 +480,33 @@ def _run_restore_only_argocd_pause(
         return True
 
     try:
-        coordinator = ArgoCDPauseCoordinator(state, dry_run=getattr(args, "dry_run", False))
-        paused_apps, failure_count = coordinator.pause_hubs([(secondary, HUB_ROLE_SECONDARY)])
+        register = ArgocdPauseRegister(state, dry_run=getattr(args, "dry_run", False))
+        summary = register.pause_hubs([(secondary, HUB_ROLE_SECONDARY)])
     except Exception as exc:
         return _fail_phase(state, f"Argo CD pause on secondary hub failed: {exc}", logger)
 
-    if failure_count:
+    if summary.blocked:
         return _fail_phase(
             state,
-            f"Argo CD auto-sync pause failed for {failure_count} Application(s)",
+            f"Argo CD auto-sync pause blocked for {summary.blocked} Application(s); "
+            "pause the owning ApplicationSet first",
             logger,
         )
 
-    run_id = state.get_config(STATE_KEY_ARGOCD_RUN_ID)
-    if run_id is not None:
+    if summary.failed:
+        return _fail_phase(
+            state,
+            f"Argo CD auto-sync pause failed for {summary.failed} Application(s)",
+            logger,
+        )
+
+    if summary.run_id is not None:
         logger.info(
-            "Argo CD: %d Application(s) paused on secondary hub (run_id=%s). "
+            "Argo CD: %d Application(s) %s on secondary hub (run_id=%s). "
             "Left paused by default; use --argocd-resume-only after retargeting Git.",
-            len(paused_apps),
-            run_id,
+            summary.newly_paused,
+            "would be paused" if summary.dry_run else "paused",
+            summary.run_id,
         )
     if not getattr(args, "dry_run", False):
         state.mark_step_completed(STEP_PAUSE_ARGOCD_APPS)
@@ -1246,7 +1253,7 @@ def _resolve_state_file(
 def _prepare_argocd_resume_clients(
     args: argparse.Namespace,
     state: StateManager,
-    paused_apps: list[dict[str, Any]],
+    paused_hub_roles: set[str],
     primary: Optional[KubeClient],
     secondary: Optional[KubeClient],
     logger: logging.Logger,
@@ -1257,7 +1264,7 @@ def _prepare_argocd_resume_clients(
     return argocd_resume.prepare_argocd_resume_clients(
         args,
         state,
-        paused_apps,
+        paused_hub_roles,
         primary,
         secondary,
         logger,

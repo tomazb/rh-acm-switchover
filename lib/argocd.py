@@ -127,6 +127,9 @@ class ResumeResult:
     name: str
     restored: bool
     skip_reason: Optional[str] = None
+    # Observation only, never a patch decision: whether the live Application had
+    # auto-sync enabled when it was read. None means not observed (fetch failed).
+    autosync_enabled: Optional[bool] = None
 
 
 RESUME_SKIP_REASON_MARKER_MISSING = "marker missing or already resumed"
@@ -138,11 +141,31 @@ PAUSE_BLOCK_REASON_UNKNOWN_ACM_IMPACT = "unknown-acm-impact"
 
 @dataclass
 class ResumeSummary:
-    """Aggregated result of restoring a batch of paused Applications."""
+    """Aggregated result of restoring a batch of paused Applications.
+
+    In dry-run nothing is patched and nothing leaves the register: ``restored``
+    then counts simulated restores, and ``dry_run`` tells callers to phrase the
+    outcome accordingly.
+    """
 
     restored: int = 0
     already_resumed: int = 0
     failed: int = 0
+    remaining_in_register: int = 0
+    dry_run: bool = False
+
+    @property
+    def projected_remaining(self) -> int:
+        """Entries that would be left in the register once this run's outcome is applied.
+
+        Outside dry-run this is ``remaining_in_register`` itself, because
+        restored and already-resumed entries are removed as they succeed. In
+        dry-run nothing leaves the register, so subtract what a real run would
+        have removed instead of reporting a count that contradicts ``restored``.
+        """
+        if not self.dry_run:
+            return self.remaining_in_register
+        return max(self.remaining_in_register - self.restored - self.already_resumed, 0)
 
 
 def is_resume_noop(result: ResumeResult) -> bool:
@@ -557,72 +580,6 @@ def find_acm_touching_apps(
     return result
 
 
-def resume_recorded_applications(
-    paused_apps: List[Any],
-    run_id: str,
-    primary: Optional[KubeClient],
-    secondary: Optional[KubeClient],
-    logger: logging.Logger,
-) -> ResumeSummary:
-    """Restore auto-sync for recorded pause state and return an aggregated summary."""
-    summary = ResumeSummary()
-    for entry in paused_apps:
-        if not isinstance(entry, dict):
-            summary.failed += 1
-            logger.warning("  Skip entry with unexpected format in Argo CD pause state")
-            continue
-
-        hub = entry.get("hub")
-        ns = entry.get("namespace")
-        name = entry.get("name")
-        original_sync_policy = entry.get("original_sync_policy")
-
-        if entry.get("dry_run"):
-            summary.failed += 1
-            logger.warning("  Skip %s/%s (pause was dry-run only)", ns, name)
-            continue
-        if not entry.get("pause_applied", True):
-            summary.failed += 1
-            logger.warning("  Skip %s/%s (pause state was recorded but not confirmed)", ns, name)
-            continue
-        if not all([hub, ns, name, original_sync_policy is not None]):
-            summary.failed += 1
-            logger.warning(
-                "  Skip entry missing required fields (hub=%s, namespace=%s, name=%s)",
-                hub,
-                ns,
-                name,
-            )
-            continue
-
-        if hub == "primary":
-            client = primary
-        elif hub == "secondary":
-            client = secondary
-        else:
-            summary.failed += 1
-            logger.warning("  Skip %s/%s (unrecognized hub=%s)", ns, name, hub)
-            continue
-
-        if not client:
-            summary.failed += 1
-            logger.warning("  Skip %s/%s (no client for hub=%s)", ns, name, hub)
-            continue
-
-        result = resume_autosync(client, ns, name, original_sync_policy, run_id)
-        if result.restored:
-            summary.restored += 1
-            logger.info("  Resumed %s/%s on %s", ns, name, hub)
-        elif is_resume_noop(result):
-            summary.already_resumed += 1
-            logger.info("  Already resumed %s/%s on %s", ns, name, hub)
-        else:
-            summary.failed += 1
-            logger.warning("  Failed %s/%s: %s", ns, name, result.skip_reason or "not restored")
-
-    return summary
-
-
 # NOTE: dry_run_skip was designed for instance methods (it reads self.dry_run).
 # Applied here to a module-level function, KubeClient takes the "self" slot, so
 # dry-run is sourced from client.dry_run.  Callers must ensure the KubeClient
@@ -844,18 +801,24 @@ def resume_autosync(
     ann = metadata.get("annotations") or {}
     marker = ann.get(ARGOCD_PAUSED_BY_ANNOTATION)
     if marker != run_id:
+        # Observation only: record what the live Application says about auto-sync so
+        # callers can tell "already resumed" from "still paused, marker lost". It
+        # changes no branch, patch, or return value here.
+        autosync_enabled = is_autosync_enabled(current)
         if not marker:
             return ResumeResult(
                 namespace=namespace,
                 name=name,
                 restored=False,
                 skip_reason=RESUME_SKIP_REASON_MARKER_MISSING,
+                autosync_enabled=autosync_enabled,
             )
         return ResumeResult(
             namespace=namespace,
             name=name,
             restored=False,
             skip_reason=RESUME_SKIP_REASON_MARKER_MISMATCH,
+            autosync_enabled=autosync_enabled,
         )
     resource_version = metadata.get("resourceVersion")
     if not resource_version:
