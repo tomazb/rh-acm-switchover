@@ -44,7 +44,7 @@ that the builder and review-comment resolver passes are complete. GitHub
 readiness is separate, and every branch-head change requires fresh exact-head
 independent validation before a merge-readiness assessment.
 
-**Last Updated:** 2026-07-29
+**Last Updated:** 2026-08-02
 
 ## Post-Merge Revalidation (2026-06-03)
 
@@ -1624,6 +1624,225 @@ already-tracked `SSA-01` overlap was excluded, yielding 26 original R4 rows. `R4
 one additional PR-review-discovered row, so the tracker now contains **27 R4 rows**. It
 does not change the historical 20-confirmed/7-partially-amended external-hypothesis
 accounting.
+
+### Design-hardening ledger — PR #204 review rounds (2026-07-29 → 2026-08-02)
+
+PR #204 went through roughly fifteen exact-head review rounds (CodeRabbit exact-head
+reviews, Copilot advisories, Codex validation passes, and one independent bounded design
+review contributing 12 primary + 10 adversarial findings). All 143 review threads are
+resolved, and every accepted finding was folded into the six design documents themselves —
+**the designs at this branch head are authoritative; this ledger is an index, not a second
+normative source.** Its purpose is to stop re-derivation: before filing a new finding
+against these designs, check whether it is already adjudicated below.
+
+**Adjudicated factual corrections** (settled — do not re-litigate):
+
+1. **Legacy full-`syncPolicy` pause-record ownership: all three form factors wrote it.**
+   Collection (`pause.yml:46-47`), Bash (`scripts/argocd-manage.sh:325-337,432-433`), and
+   Python (`lib/argocd.py:660-711`, `lib/argocd_coordinator.py:101,183,240,261,272`, resume
+   `:612`). Two earlier correction rounds got this wrong (collection-only, then
+   collection+Bash). Final rule in §2b of the Argo CD design: each form factor converts
+   from its own store; a missing/empty/structurally incomplete `original_sync_policy` is
+   `recovery_required` and is never completed from live state.
+2. **`lib/kube_client.py` has no `update`/PUT custom-resource primitive**, only `patch`.
+   The Lease design depends on `resourceVersion`-conditional replacement, so `R4-05` must
+   add `update_custom_resource` (PUT); the RBAC verb set is valid only once the matching
+   primitive exists.
+3. **R3-X1 is not a run-lock handle leak** — the handle is intentionally process-lifetime
+   with an `atexit` release; R3-X1 tracks only the missing explicit close on normal
+   completion and long-lived embedding.
+
+**Review-added requirements now binding in each design** (implementation slices inherit
+these as acceptance criteria):
+
+*Area A — Argo CD (`R4-01`):*
+
+- Versioned journal schema v2 (§2a) strictly whole-record-validated before every gate,
+  resume, settlement, and state transition; `restore_payload` limited to the canonical
+  tool-owned `automated` object; malformed/partial/unknown-version records →
+  `recovery_required` at the gate.
+- §1a durable intent-before-mutation operation record: states `intent_recorded` →
+  `mutation_accepted` → `verify_pending` → `verified` → `settled`, plus
+  `recovery_required`; immutable `owned_marker` exact-matched at reconciliation and
+  settlement; `metadata.uid` compared against `operation.expected_uid` on every live read;
+  `verify_pending` reconciliation selected by `operation.kind`.
+- Operations and journal entries bound to a durable hub/cluster identity (same Application
+  name can exist on several hubs; the coordinator keys on `(client, hub_label)`).
+- Paused shape is `automated` absent/null (RFC 7396 deletes the key); gates reject any
+  surviving object including `enabled: false` with intact marker; `enabled: null` stays
+  ACTIVE and is canonicalized at journaling time; non-null non-boolean stays UNKNOWN.
+- `skipped_disabled` is always re-read, never terminal; gates skip only resumed-terminal
+  entries; non-terminal does not mean blocking (healthy `paused` passes; `verify_pending`
+  is settled by the gate's own re-read).
+- Failed classification-evidence writes are fatal and record a `journal_incomplete`
+  barrier; the empty/absent-journal fast path is guarded by a **positive
+  `argocd_journal_attestation`** — absence blocks whether or not a barrier exists, and
+  recovery is a fresh pause pass, never an automatic downgrade.
+- Discovery may clear `argocd_paused_apps` only on a positive no-CRD determination with no
+  surviving non-terminal entry.
+- Legacy migration sequencing is non-circular: v1 structural validation → identity-bound
+  live read → durable migration write → full v2 validation.
+- Bash concurrency boundary: request-atomic merge patch, detect-not-prevent re-read,
+  prevention gap stays `SSA-05`, no OCC parity claim; Bash post-patch read failure
+  journals a durable `verify_pending` entry and exits non-zero.
+
+*Area B — auto-import (`R4-02`):*
+
+- `created_uid` governed by a state-and-provenance table (`null; non-null forbidden` vs
+  `absent; any value forbidden`); the enumerated creation-failure `ownership_conflict`
+  reasons are valid records with a null value.
+- Explicit outcome precedence: malformed state → unresolved `ownership_conflict` (tier 2
+  scoped to a recorded conflict, or unproven ownership with a live same-name object) →
+  proven applied transaction/identity (tier 3 admits a schema-valid `intent` record with
+  prior-shape identity) → live-state evaluation.
+- `ownership_conflict` recovery is evidence-driven, never retry- or mutation-driven: only
+  the three post-create observation-failure reasons clear via a strict GET returning the
+  exact `created_uid`; the seven never-established reasons clear only via the audited
+  acknowledgement bound to the transaction id.
+- Every restore patch/delete is bound to observed `resourceVersion` **and** UID
+  (server-enforced preconditions); a failed test records `apply_precondition_failed` with
+  no mutation and no silent re-capture.
+- `restore_conflict` is durable, terminal-for-the-automatic-attempt, unsuccessful,
+  non-zero, and decommission-blocking; the decommission-gate acknowledgement is a durable
+  audited record.
+- `auto_import_schema_version` is persisted in the initial intent update; legacy
+  `auto_import_strategy_set: false` normalizes to **no transaction** (key dropped, nothing
+  synthesized); combined with any other auto-import key it fails closed.
+- Restore table is self-contained with `restored_noop` precedence; resume continues the
+  existing intent transaction; minting a new transaction id clears stale terminal
+  evidence and acknowledgements in the same durable update.
+
+*Area C — decommission (`R4-03`):*
+
+- Exactly one durable operator-identity outcome (resolved `operator_deployment` or a
+  complete `operator_identity_unavailable` record) persisted **before** MCH DELETE;
+  persistence failure blocks DELETE; reruns reuse the outcome immutably.
+- Shared strict inventory primitive algebra separates discovery-404 from object-404
+  (`object_absent` only after successful discovery; timeouts/authorization/unparseable
+  discovery are `error`); error is never absence.
+- Source observability is re-read immediately before deletion (never trusting the
+  preflight boolean); `--acknowledge-observability-not-migrated` is accepted only against
+  a positively verified absent destination.
+- `completed` records proof **at the instant of the final read** (carrying `observed_at`
+  and per-resource `resourceVersion` values) and is necessary but never sufficient for a
+  later destructive decision: integrated teardown must re-run the CR-absence and
+  identity-aware Pod checks against live state.
+- Teardown-phase record survives drain-timeout reruns; replacement CRs are fatal in
+  acceptance; MCH drain Pod classification binds through the recorded operator Deployment
+  UID (`R4-C6`), not a name prefix.
+
+*Area D — migration evidence (`R4-04`):*
+
+- A journaled backup requires `status.phase == "Completed"` **plus** a well-formed
+  `status.completionTimestamp` and zero `status.errors`.
+- Terminal success per resource: ACM `Restore` `Finished`, Velero `Restore` `Completed`;
+  every other phase — `FinishedWithErrors` included, no benign-message allow-list — is
+  fail-closed.
+- Evidence is bound to restore `namespace`/`name`/`uid`/`generation`/`spec_fingerprint`
+  (canonical SHA-256 over a deterministic JSON projection, parity-identical); identity is
+  journaled **at mutation time** (create response / pre-patch read) and the terminal GET
+  verifies equality, so a same-name replacement fails closed.
+- The strict-read primitive must satisfy its contract **before** consumers are wired to it
+  (today's `list_custom_resources` maps list 404 to `[]`, accepts invalid `items`, and can
+  truncate with a `continue` token outstanding); `find_passive_sync_restore` routes
+  through the strict contract instead of collapsing failure to `None`.
+- Cleanup delete of the run's own Restore carries a server-side UID precondition
+  (collection: `acm_uid_guarded_delete`); a 404 at delete time without a journaled prior
+  delete fails closed; §4a live revalidation barrier runs at finalization **before**
+  cleanup deletes the Restore, durably recording `teardown_revalidated_at`.
+- Bundle interrupted between ordered writes: the retry repeats full live validation,
+  fails closed on disagreement with any persisted field, writes only missing fields, and
+  writes `completed_at` strictly last.
+- The waiver covers only the name predicate, and carries actor/reason/optional request id
+  plus explicit `scope`/`outcome` fields; provenance, restore completion, and
+  post-activation completion are unconditional.
+
+*Area E — state integrity (`R4-05`):*
+
+- Three-class run-contract model: Class A immutable/destructive (fatal once its window
+  closes, never overridable), Class B overridable only with `--accept-changed-options`
+  plus a durable audit record written first, Class C informational; `--force` authorizes
+  nothing in any class; the full ten-field contract set is enumerated for both form
+  factors.
+- The two Argo CD flags bind different obligations: `--argocd-manage` a gate obligation
+  (any entry other than `resumed`, including `skipped_disabled`),
+  `--argocd-resume-after-switchover` a restoration obligation (`paused` /
+  `verify_pending` / `classification_unknown` / `recovery_required`).
+- Progressed legacy state requires `--reset-state` or an explicit audited legacy migration
+  with operator-supplied Class A values — never defaulted from the current invocation;
+  an accepted Class B override is one atomic committed transition (versioned
+  pending/committed protocol where a backend cannot commit atomically).
+- Directory-fsync capability is determined explicitly up front; `ENOTSUP`/`EINVAL` may be
+  tolerated only after that determination; a post-`os.replace` fsync failure is recorded
+  as an indeterminate transition (with `transition_id`) and reconciled before retry; the
+  absent-file unlink restore path fsyncs its containing directory; the §2 durability
+  protocol also governs `--reset-state`.
+- Per-hub `coordination.k8s.io/v1` Lease locks keyed on hub cluster UID: deterministic
+  sorted-UID acquisition, bounded duration with crash expiry,
+  `resourceVersion`-conditional takeover of expired Leases only, guarded release,
+  check-mode acquisition, post-acquisition strict UID revalidation barrier before any
+  mutation, missing Lease permission fatal; local flock survives only as a same-host
+  optimization; collection check-mode claim is scoped to state/checkpoint writes (Leases
+  are still created and renewed).
+
+*Area F — kubeconfig (`R4-06` / `SSA-03`):*
+
+- Enumerated fail-closed rejection set for malformed `cluster.server` values (missing,
+  null, non-string, empty/whitespace, relative/scheme-relative, unsupported scheme,
+  userinfo, invalid port, invalid IP literals, malformed percent escape, query, fragment,
+  structurally invalid parse), applied before endpoint matching and to the
+  expected-endpoint source; zero mutating calls; sanitized diagnostics that never echo a
+  credential-bearing URL.
+- Structural schema validation of every parsed document (mapping root, list entry
+  collections, mapping entries, non-empty string names); one shared inclusive 10 MiB size
+  limit governing merged files and credential reads in both form factors, with
+  `ACM_KUBECONFIG_MAX_SIZE` unable to disable it (closes both the `<= 0` and `max_size=0`
+  bypasses).
+- File-backed credential **contents** (CA, client cert, client key, `tokenFile`) captured
+  at snapshot time through a race-resistant descriptor-based boundary; path keys dropped
+  from the handed-off snapshot; contents never logged, returned, or persisted; exec-based
+  users are **rejected** on the repair path, not exempted (an exec plugin runs at client
+  construction, outside the snapshot).
+- `token` over `tokenFile` precedence, the deliberate trailing-whitespace divergence from
+  the official loader, empty-value handling, and exact file-to-field transformation rules
+  are pinned; deterministic KUBECONFIG precedence with default-path fallback; merge errors
+  sanitized to stable reason codes; the matched context is passed explicitly to
+  `new_client_from_config_dict`; the collection's `build_core_v1_client` /
+  `build_apps_v1_client` route through the frozen snapshot.
+- Duplicate rule generalized to `(kind, name)` groups: more than one distinct content
+  variant fails with full `(kind, name, source_file, zero-based index)` provenance;
+  byte-identical duplicates remain first-wins; same-file list entries are covered; the
+  mutation barrier covers client-construction failure after a unique match.
+
+*Cross-cutting (all six designs):*
+
+- Implementation slices record a `CHANGELOG.md` `[Unreleased]` entry and never change
+  released version identifiers or create release tags (AGENTS.md Version Management);
+  the former "version bump per repo policy" test items are replaced accordingly.
+- External citations (Argo CD, Kubernetes, kubernetes python-client, kubernetes.core) use
+  mutable refs and must be pinned to the depended-on versions before implementation.
+- The seven external source specifications have no resolvable immutable reference from
+  this repository; the limitation is stated plainly in each affected place rather than a
+  path invented.
+
+### Design convergence rule (2026-08-02)
+
+The six design documents at this branch head are the **accepted implementation baseline**
+for `R4-01`–`R4-06`. From this point:
+
+1. A new review finding against these designs is filed as a tracker row scoped into the
+   owning implementation slice (`R4-01`–`R4-06`), where it becomes a testable acceptance
+   criterion — **not** as another design-document amendment round on PR #204.
+2. The only exception is a demonstrated fail-open safety contradiction *inside a design*:
+   a path where the design as written permits an unproven destructive action. That, and
+   only that, reopens the design document.
+3. Editorial, wording, numbering, and cross-reference consistency findings that do not
+   change any acceptance criterion are out of scope for further PR #204 rounds.
+
+Rationale: every amendment commit invalidates all prior exact-head reviews and restarts
+the review cycle; fifteen rounds in, the marginal findings are consistency nitpicks, not
+safety gaps. Convergence requires freezing the baseline and moving residual precision into
+implementation slices, where a test can hold it.
 
 ## Open-Findings Assessment And Ranking (2026-07-29)
 
