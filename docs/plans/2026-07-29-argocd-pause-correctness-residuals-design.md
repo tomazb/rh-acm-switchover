@@ -97,9 +97,14 @@ pause patch, post-pause re-read, resume resourceVersion precondition, marker-mis
   with their resourceVersion preconditions. Closing the remaining prevention gap in
   Bash stays `SSA-05` scope unless a later operator decision moves it; nothing in this
   design or `R4-01` claims Bash OCC parity.
-- The only other Bash changes are the shared classification expression (§2) and the resume
-  shape + verification (§3) — all correctness fixes to existing code paths. Everything else
-  about the script is `SSA-05` scope.
+- The Bash work this slice owns is exactly the set of obligations the normative sections
+  place on it: the shared classification expression (§2), the resume shape + verification
+  (§3), the §1a durable operation/journal parity for the pause and resume paths this slice
+  touches (including the durable `verify_pending` entry on a post-patch read failure), and
+  the §2b legacy conversion from the Bash state file. Everything else about the script —
+  lifecycle, argument surface, and the concurrency-prevention gap noted above — is
+  `SSA-05` scope. Where this summary and a normative section disagree, the normative
+  section governs.
 
 ### 1a. Mutation/journal durability boundary
 
@@ -345,17 +350,29 @@ or absent journal **only** when the durable run-level record `argocd_journal_att
 is present and valid — written by a pause pass that completed discovery and durably
 recorded every entry it produced (including "discovery found no Applications to manage").
 It carries the schema version, the run identity, the completing pass's timestamp, and the
-count of entries it wrote. Its absence is **blocking**, exactly like a barrier:
+count of entries it wrote (`entries_written`). An attestation is **valid** only when its
+schema version is known, its run identity matches the current run contract, and its
+`entries_written` equals the number of journal entries actually observed by the gate — the
+attestation binds to the journal contents, not merely to its own existence. Its absence is
+**blocking**, exactly like a barrier:
 
 | observed state | gate outcome |
 | --- | --- |
-| journal empty/absent, valid attestation present | pass — a successful pass proved there is nothing to manage |
+| journal empty/absent, valid attestation with `entries_written == 0` | pass — a successful pass proved there is nothing to manage |
+| journal empty/absent, attestation present but `entries_written > 0` or wrong run identity | **block** — a stale or orphaned attestation never authorizes an empty journal (entries were written and are now missing) |
 | journal empty/absent, attestation absent, barrier present | block (`journal_incomplete`) |
 | journal empty/absent, attestation absent, **no** barrier | **block** — indistinguishable from a run whose evidence *and* barrier writes both failed |
-| journal non-empty | normal per-entry evaluation of §4 |
+| journal non-empty, valid attestation with matching `entries_written` | normal per-entry evaluation of §4 |
+| journal non-empty, attestation absent or `entries_written` ≠ observed entries | **block** — a partial journal (lost entries) is indistinguishable from a complete one without the count binding |
 | `--argocd-manage` not active in the run contract | not applicable; no attestation required |
 
-The third row is the case this finding is about, and it fails closed. A state store that
+Per-entry state transitions performed after the pause pass (resume, gate settlement)
+update entries in place and never add or remove them, so `entries_written` remains the
+invariant count for the run; a fresh pause pass rewrites both the journal and the
+attestation together. Tests cover the stale non-zero attestation over an empty journal and
+the partial journal (fewer entries than attested) — both must block.
+
+The barrier-absent empty-journal row fails closed. A state store that
 could not persist the barrier also could not persist the attestation, so the later
 invocation blocks rather than proceeding on an absence it cannot interpret. Recovery is a
 **fresh pause pass that durably establishes trustworthy evidence** — the same operator
@@ -437,7 +454,18 @@ any resume mutation and before any gate accepts the entry:
 5. Durably write the complete schema-version-2 record — including `restore_payload`,
    `run_marker`, and a §2b-minted `operation` record in state `verified` reflecting the
    already-completed legacy pause — **before** any resume patch is sent. The migrated
-   record, not the legacy annotation, is what resume reads.
+   record, not the legacy annotation, is what resume reads. The minted record's
+   `expected_uid` is the UID observed at the identity-bound migration read of step 4, and
+   this is a **documented downgrade** from native records, whose UID is captured before
+   the pause mutation: no legacy store recorded a pre-pause UID, so pre-migration UID
+   continuity is not claimed for migrated records, and a replacement Application that
+   also carries a deliberately copied pause marker is not detectable by UID at migration
+   time. The step 4 marker rules (missing, replaced, or foreign marker →
+   `recovery_required`) are the identity defense legacy evidence supports, the adopted
+   UID binds every read and patch from migration onward, and the worst-case exposure is
+   bounded by §3: the only mutation a migrated record can ever authorize is restoring the
+   canonical `automated` object and clearing this run's marker key. `expected_uid` is
+   never inferred for a record whose marker rules fail.
 6. Clear the legacy `original-sync-policy` annotation only in the same resume patch that
    clears the pause marker, and only after a verified restore, so a failure between
    migration and resume leaves the legacy evidence intact for a retry.

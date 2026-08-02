@@ -362,18 +362,24 @@ these surfaces **together**, and this design is not implementable until it does:
     protect — logged at info.
   - **Progressed** legacy state (beyond PREFLIGHT) is *not* adoptable by
     `--accept-changed-options`. That flag is the class B override, and a legacy record
-    carries no baseline for the class A fields (`method`, `activation_method`,
-    `old_hub_action`, `manage_auto_import_strategy`), so adopting the current invocation
-    would let those destructive values be set from an unverified command line **after**
-    the work they govern has already run — precisely the silent change class A exists to
-    prevent, and it would be indistinguishable from an operator resuming with different
-    destructive options. Two paths only: `--reset-state`, or an explicit audited legacy
-    migration in which the operator states the class A values the recorded progress was
-    executed under. That migration is accepted only when those values are supplied
-    explicitly (never defaulted from the current invocation), is journaled with actor,
-    timestamp, reason, and the supplied values, and is refused when the state's own
-    evidence contradicts them. Class B and C fields are recorded from the current
-    invocation in the same durable act. After migration the contract is ordinary and all
+    carries no baseline for any class A field — the four unconditionally class A fields
+    (`method`, `activation_method`, `old_hub_action`, `manage_auto_import_strategy`)
+    **and every conditionally class A field whose condition holds for the recorded
+    state**, including `--argocd-manage` and `--argocd-resume-after-switchover` whenever
+    the recorded journal obligations make them class A per the canonical table. Adopting
+    the current invocation would let those destructive values be set from an unverified
+    command line **after** the work they govern has already run — precisely the silent
+    change class A exists to prevent, and for the ArgoCD flags it would let a legacy
+    adoption silently withdraw a gate or restoration obligation while paused
+    Applications are outstanding. Two paths only: `--reset-state`, or an explicit
+    audited legacy migration in which the operator states the values of every field that
+    is class A under the recorded phase and journal state (both ArgoCD flags included
+    whenever their condition holds). That migration is accepted only when those values
+    are supplied explicitly (never defaulted from the current invocation), is journaled
+    with actor, timestamp, reason, and the supplied values, and is refused when the
+    state's own evidence contradicts them. Only fields that are class B or C under the
+    recorded condition are recorded from the current invocation in the same durable act.
+    The legacy-state tests cover both ArgoCD flags under an outstanding pause journal. After migration the contract is ordinary and all
     three classes apply normally.
 
 #### Mismatch decision model
@@ -533,7 +539,8 @@ safety-critical behavior; it is recorded for diagnostics only.
   and logged at debug only once it is established; an `ENOENT` unlink still performs the
   directory fsync and succeeds.
 - Distributed locking: two runs against the same hub UIDs **as different Unix users** →
-  the second fails fast (the direct regression test for the per-euid namespace); same for
+  the second fails fast (the direct regression test for the **removed** euid-scoped lock
+  namespace — cross-euid contention is the expected result); same for
   two runs with different `--state-file` paths, and for a run in a container against a run
   on the host. Different UID pairs → no contention. Acquisition order stable under
   reversed context order. Lease behaviour: an unexpired Lease held by another identity is
@@ -608,8 +615,10 @@ safety-critical behavior; it is recorded for diagnostics only.
     including their any-phase override eligibility;
   - progressed legacy state is refused by `--accept-changed-options` alone and requires
     either `--reset-state` or the audited legacy migration with explicitly supplied
-    class A values, which is journaled and is refused when the state's own evidence
-    contradicts the supplied values; un-progressed legacy state adopts silently.
+    values for every field that is class A under the recorded phase and journal state —
+    vectors include both ArgoCD flags under an outstanding pause journal — which is
+    journaled and is refused when the state's own evidence contradicts the supplied
+    values; un-progressed legacy state adopts silently.
 - Collection: the same vectors over the same complete field set produce the same
   class, phase decision, override outcome, and audit-record content as Python.
 

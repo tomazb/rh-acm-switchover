@@ -1863,6 +1863,46 @@ are consumables for the implementation wave, not permanently maintained document
    adjudication record it preserves (including this ledger) exists to prevent
    re-litigation, not to invite it.
 
+### Convergence-rule triage — CodeRabbit round of 2026-08-02 (18 findings)
+
+First application of the rule above. Disposition of all 18 threads:
+
+**Refuted, already adjudicated (1):** the `journal_incomplete` cross-invocation
+durability claim — the attestation table in the Argo CD design already blocks the
+empty-journal fast path whenever the positive attestation is absent, barrier or no
+barrier; durability of the barrier is not load-bearing.
+
+**Fail-open contradictions, designs amended under rule 2 (7, four files):** attestation
+now binds to journal contents (`entries_written` must match observed entries; empty fast
+path requires attested count zero; stale or partial journals block); legacy-migration
+`expected_uid` adoption is a stated, bounded downgrade with marker rules as the legacy
+identity defense, never inferred when marker rules fail; the Bash scope summary now
+enumerates the §1a/§2/§2b/§3 obligations instead of excluding them; the decommission
+rerun no-op is conditional on the absence of a teardown record; progressed legacy-state
+migration requires explicit historical values for every *conditionally* class A field
+(both ArgoCD flags under an outstanding pause journal); the cross-euid lock test
+description states the removed-namespace invariant; `auth-provider` users are rejected on
+the repair path (`auth_provider_unsupported`) for the same construction-time-identity
+reason as exec plugins.
+
+**Converted to implementation-slice obligations under rule 1 (8):** the rows below extend
+the named slice's acceptance scope; the designs are intentionally not amended for them.
+
+| Slice | Obligation (from 2026-08-02 triage) |
+| --- | --- |
+| R4-01 | *(no rule-1 rows this round; see rule-2 amendments above)* |
+| R4-02 | Add `apply_precondition_failed` to the canonical conflict-reason list and recoverability table: non-recoverable, no automatic retry. |
+| R4-03 | Apply the shared strict 404 algebra to the deletion boundary's named-object GET and final-verification reads: a 404 proves absence only after successful discovery; discovery, authorization, transport, decode, and timeout failures stay unverifiable and can never yield a false absent result. |
+| R4-04 | Journaled-backup schema persists the status fields the contract validates (`phase`, `errors`, `warnings`) or states explicitly that they are validated but not persisted — same rule in both form factors. |
+| R4-04 | Decide Backup provenance strength: store namespace + `metadata.uid` per consumed category and revalidate in both form factors, **or** state explicitly that same-name Backup replacement is outside the guarantee. |
+| R4-04 | Define and journal the ACM-to-Velero Restore association (namespace/name/UID + strict correlation rule); both identities and terminal statuses required before `restore.completed_at`; cover unrelated, replaced, missing, and mismatched Velero Restores. |
+| R4-04 | Include `cleanupBeforeRestore` in the journal projection, fingerprint, comparisons, and parity tests, **or** narrow the exact-spec claim to the method-scoped backup projection. |
+| R4-05 | Define Lease release-failure handling: `403`/`409`/API failures never fall back to unconditional delete or report successful cleanup under uncertain ownership; a failed release leaves the Lease to bounded expiry with an operator-visible error. |
+| R4-06 | Validate resolver-consumed nested fields before matching: `context.cluster` non-empty string, `context.user` non-empty string when present, each `cluster`/`user` member a mapping; violations fail closed with sanitized provenance; parity vectors added. |
+
+Where a row offers an **or**, the implementing slice makes the call in its implementation
+plan and records it; both branches satisfy the obligation.
+
 ## Open-Findings Assessment And Ranking (2026-07-29)
 
 Method: three parallel evidence-based verification passes over every open/planned/

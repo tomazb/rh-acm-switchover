@@ -309,6 +309,17 @@ byte-fidelity of every field after the source file is modified or deleted post-c
   proving the constructed client authenticates as the identity matching selected — which
   is out of scope here and not claimed. Tests assert the rejection and the zero-mutation
   property, and that a non-exec user in the same merge still proceeds.
+- `auth-provider` users are rejected on the repair path for the identical reason and with
+  the identical mechanics. An auth-provider block resolves or refreshes credentials at
+  client-construction time — in-memory, outside the snapshot — so the constructed client
+  can authenticate as an identity the snapshot never contained, leaving Goal 2 and
+  acceptance criterion 2 false exactly as for exec plugins. A selected context whose user
+  carries `auth-provider` is a fail-closed per-cluster error under §5's mutation barrier:
+  zero mutating calls for that cluster, a sanitized diagnostic with the same entry
+  metadata and the stable reason `auth_provider_unsupported`, the cluster reported in the
+  per-cluster summary, and other clusters and non-auth-provider users in the same merge
+  unaffected. Re-admission requires the same designed identity-attestation mechanism as
+  exec, out of scope here. Tests mirror the exec vectors.
 - The original absolutized paths are retained **separately**, as provenance for
   diagnostics and tests only. They are never used to reconstruct the client and never
   re-read after capture.

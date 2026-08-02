@@ -425,7 +425,9 @@ Any interactive "no" at the MCO, ManagedCluster, or MCH prompt:
 - prints a summary of what was completed vs. refused/not attempted,
 - makes `decommission()` return failure (CLI exit non-zero).
 
-Idempotent rerun resumes cleanly: already-deleted resources are absent and no-op. The
+Idempotent rerun resumes cleanly: a resource proven absent **with no teardown record** is
+a clean no-op. A recorded resource follows the phase table, including fresh live
+validation for `completed`, exactly as §5's record-present rules require. The
 non-interactive path (`interactive=False`, integrated decommission) is unaffected — it
 never prompts.
 
