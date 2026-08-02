@@ -142,6 +142,43 @@ class TestArgocdResumeOnly:
         assert "missing hub identity data" in caplog.text
         resume_recorded.assert_not_called()
 
+    def test_resume_only_finishes_interrupted_cleanup(self, tmp_path, caplog):
+        """Thermos 5: run id + empty register is a completed resume, not a failure.
+
+        resume() empties the register and clears the run id as two writes. A crash
+        between them must not leave resume-only rejecting the state forever.
+        """
+        state = self._make_identity_state(tmp_path)
+        state.set_config("argocd_paused_apps", [])
+        state.set_config("argocd_run_id", "run-1")
+        args = make_resume_only_context_args("hub-a", "hub-b")
+        logger = logging.getLogger("test.resume_only_interrupted_cleanup")
+
+        with patch.object(ArgocdPauseRegister, "resume") as resume_recorded:
+            with caplog.at_level(logging.INFO):
+                result = _run_argocd_resume_only(args, state, Mock(), Mock(), logger)
+
+        assert result is True
+        resume_recorded.assert_not_called()
+        assert "already empty" in caplog.text
+        assert state.get_config("argocd_run_id") is None
+
+    def test_resume_only_still_fails_when_state_has_nothing(self, tmp_path, caplog):
+        """No run id and no entries is genuinely nothing to resume -- still an error."""
+        state = self._make_identity_state(tmp_path)
+        state.set_config("argocd_paused_apps", [])
+        state.set_config("argocd_run_id", None)
+        args = make_resume_only_context_args("hub-a", "hub-b")
+        logger = logging.getLogger("test.resume_only_nothing_to_resume")
+
+        with patch.object(ArgocdPauseRegister, "resume") as resume_recorded:
+            with caplog.at_level(logging.ERROR):
+                result = _run_argocd_resume_only(args, state, Mock(), Mock(), logger)
+
+        assert result is False
+        resume_recorded.assert_not_called()
+        assert "No Argo CD paused apps in state file" in caplog.text
+
     def test_resume_only_force_allows_legacy_state_without_hub_identities(self, tmp_path):
         from lib.utils import StateManager
 
@@ -332,7 +369,8 @@ class TestArgocdResumeOnly:
             ]
             assert _run_argocd_resume_only(args, state, primary, secondary, logger) is False
 
-    def test_resume_only_treats_marker_missing_as_already_resumed(self):
+    def _run_resume_only_with_marker_missing(self, autosync_enabled):
+        """Drive resume-only against one entry whose marker is gone, at a given observed auto-sync state."""
         from acm_switchover import _run_argocd_resume_only
         from lib import argocd as argocd_lib
 
@@ -355,8 +393,21 @@ class TestArgocdResumeOnly:
                 name="app-2",
                 restored=False,
                 skip_reason=argocd_lib.RESUME_SKIP_REASON_MARKER_MISSING,
+                autosync_enabled=autosync_enabled,
             )
-            assert _run_argocd_resume_only(args, state, primary, secondary, logger) is True
+            return _run_argocd_resume_only(args, state, primary, secondary, logger)
+
+    def test_resume_only_treats_marker_missing_with_autosync_on_as_already_resumed(self):
+        """Marker gone AND auto-sync observed back on: the obligation is genuinely discharged."""
+        assert self._run_resume_only_with_marker_missing(True) is True
+
+    def test_resume_only_fails_when_marker_missing_but_autosync_still_off(self):
+        """Thermos 2: a missing marker is not proof of restoration -- the app is still paused."""
+        assert self._run_resume_only_with_marker_missing(False) is False
+
+    def test_resume_only_fails_when_marker_missing_and_autosync_unobserved(self):
+        """Absence of evidence is not proof of restoration."""
+        assert self._run_resume_only_with_marker_missing(None) is False
 
     def test_resume_only_fails_on_marker_mismatch(self):
         from acm_switchover import _run_argocd_resume_only

@@ -37,6 +37,11 @@ class RegisterStatus:
     confirmed_paused_count: int
     run_id: Optional[str]
     entry_count: int
+    # Entries present in persisted state but dropped as unresumable (legacy
+    # dry-run records, malformed values). Distinguishes "the register was
+    # emptied by a successful resume" from "it held only records we cannot act
+    # on" -- the two look identical through entry_count alone.
+    discarded_entry_count: int = 0
 
 
 @dataclass
@@ -130,16 +135,25 @@ class ArgocdPauseRegister:
         return [entry for entry in entries if cls._is_pause_applied(entry)]
 
     @classmethod
-    def _build_status(cls, entries: List[Dict[str, Any]], run_id: Optional[str]) -> RegisterStatus:
+    def _build_status(
+        cls,
+        entries: List[Dict[str, Any]],
+        run_id: Optional[str],
+        raw: Any = None,
+    ) -> RegisterStatus:
         """Assemble a RegisterStatus from already-sanitized entries.
 
         Single assembly point so every reader of the register counts the same
-        things and a new RegisterStatus field is added in one place.
+        things and a new RegisterStatus field is added in one place. ``raw`` is
+        the persisted value the entries came from, used only to report how many
+        records sanitization dropped.
         """
+        raw_count = len(raw) if isinstance(raw, list) else len(entries)
         return RegisterStatus(
             confirmed_paused_count=len(cls._applied_entries(entries)),
             run_id=run_id,
             entry_count=len(entries),
+            discarded_entry_count=max(0, raw_count - len(entries)),
         )
 
     @classmethod
@@ -154,14 +168,21 @@ class ArgocdPauseRegister:
         parameter is named for what it consumes because passing the outer
         document would silently yield an empty register rather than an error.
         """
+        raw = state_config.get(STATE_KEY_ARGOCD_PAUSED_APPS)
         return cls._build_status(
-            cls._sanitize_entries(state_config.get(STATE_KEY_ARGOCD_PAUSED_APPS)),
+            cls._sanitize_entries(raw),
             state_config.get(STATE_KEY_ARGOCD_RUN_ID),
+            raw,
         )
 
     def status(self) -> RegisterStatus:
         """Snapshot of the register: entry counts and run id."""
-        return self._build_status(self._load_entries(), self.state.get_config(STATE_KEY_ARGOCD_RUN_ID))
+        raw = self.state.get_config(STATE_KEY_ARGOCD_PAUSED_APPS)
+        return self._build_status(
+            self._sanitize_entries(raw),
+            self.state.get_config(STATE_KEY_ARGOCD_RUN_ID),
+            raw,
+        )
 
     @staticmethod
     def _pause_entry_matches(entry: Dict[str, Any], hub: str, namespace: str, name: str) -> bool:
@@ -214,6 +235,17 @@ class ArgocdPauseRegister:
         self.state.set_config(STATE_KEY_ARGOCD_PAUSED_APPS, [])
         self.state.set_config(STATE_KEY_ARGOCD_RUN_ID, None)
         self.state.set_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, {})
+
+    def finish_cleanup(self) -> None:
+        """Discard leftover run metadata for a register with no obligations left.
+
+        resume() empties the entry list and clears the run id as two writes. A
+        crash between them leaves a run id with an empty register -- no
+        outstanding obligations, but metadata that makes the state look
+        resumable. Completing the cleanup is always safe here because there is
+        nothing left to resume; callers must check ``entry_count`` first.
+        """
+        self._clear()
 
     def _get_discovery_namespaces_by_hub(self) -> Dict[str, List[str]]:
         stored = self.state.get_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES) or {}

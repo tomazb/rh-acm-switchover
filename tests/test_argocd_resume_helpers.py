@@ -152,8 +152,14 @@ def test_ensure_resume_identity_data_allows_legacy_state_with_force():
     _ensure_resume_identity_data(args, {}, logger)
 
 
-def test_run_argocd_resume_only_rejects_empty_register():
-    """Dry-run pause records nothing (ADR-0001), so resume-only on such state fails the no-apps precheck."""
+def test_run_argocd_resume_only_finishes_cleanup_for_empty_register():
+    """Thermos 5: a run id over a genuinely empty register is a completed resume, not a failure.
+
+    resume() empties the register and clears the run id as two writes; a crash
+    between them leaves exactly this state, and rejecting it stranded the
+    operator forever. Dry-run can no longer produce it -- dry-run persists no
+    run id at all.
+    """
     state = Mock()
     state.get_config.side_effect = lambda key, default=None: {
         STATE_KEY_ARGOCD_RUN_ID: "run-1",
@@ -168,6 +174,39 @@ def test_run_argocd_resume_only_rejects_empty_register():
         ArgocdPauseRegister, "resume"
     ) as register_resume:
         result = run_argocd_resume_only(args, state, primary, secondary, logger)
+
+    assert result is True
+    prepare_clients.assert_not_called()
+    register_resume.assert_not_called()
+
+
+def test_run_argocd_resume_only_rejects_register_of_unresumable_records():
+    """Records dropped as unresumable are not a completed cleanup -- they are an error.
+
+    Legacy dry-run entries sanitize away to an empty register, which looks
+    identical to a finished resume through entry_count alone. Thermos 5's
+    idempotent-cleanup path must not swallow them.
+    """
+    state = Mock()
+    state.get_config.side_effect = lambda key, default=None: {
+        STATE_KEY_ARGOCD_RUN_ID: "run-1",
+        STATE_KEY_ARGOCD_PAUSED_APPS: [
+            {
+                "hub": "secondary",
+                "namespace": "argocd",
+                "name": "app-1",
+                "original_sync_policy": {"automated": {}},
+                "dry_run": True,
+            }
+        ],
+    }.get(key, default)
+    args = SimpleNamespace(dry_run=False)
+    logger = logging.getLogger("test.run_only.unresumable_records")
+
+    with patch("lib.argocd_resume.prepare_argocd_resume_clients") as prepare_clients, patch.object(
+        ArgocdPauseRegister, "resume"
+    ) as register_resume:
+        result = run_argocd_resume_only(args, state, Mock(), Mock(), logger)
 
     assert result is False
     prepare_clients.assert_not_called()

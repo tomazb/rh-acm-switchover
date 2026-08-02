@@ -216,6 +216,19 @@ def run_argocd_resume_only(
     """Load state and restore Argo CD auto-sync for previously paused Applications, then exit."""
     register = ArgocdPauseRegister(state, dry_run=getattr(args, "dry_run", False))
     status = register.status()
+    if status.run_id and not status.entry_count and not status.discarded_entry_count:
+        # resume() empties the register and clears the run id as two writes; a crash
+        # between them leaves this state. Nothing was discarded, so the register was
+        # emptied by a successful resume -- finish its cleanup rather than failing
+        # forever. A register whose records were dropped as unresumable is a
+        # different situation and still falls through to the error below.
+        logger.info(
+            "Argo CD pause register is already empty (run_id=%s); previous resume completed. "
+            "Clearing leftover run metadata.",
+            status.run_id,
+        )
+        register.finish_cleanup()
+        return True
     if not status.run_id or not status.entry_count:
         logger.error("No Argo CD paused apps in state file (argocd_run_id or argocd_paused_apps missing).")
         return False
