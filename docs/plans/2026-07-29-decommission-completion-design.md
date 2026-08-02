@@ -116,6 +116,28 @@ Shared pattern for MCO and MCH (and per-cluster for ManagedClusters):
    operator Deployment, or an unverifiable final read is fatal — replacements and drain
    regressions stay fatal through the completion boundary, matching the collection's
    post-wait re-list.
+
+   **What `completed` actually asserts.** The final reads and the durable `completed`
+   write are separate operations, and no compare-and-swap exists across a CR, a Pod list, a
+   Deployment, and a namespace — a reservation barrier spanning four unrelated resources is
+   not available in the Kubernetes API and this design does not invent one. So the guarantee
+   is stated at the strength it actually has rather than overclaimed: **`completed` records
+   that the teardown was proven complete at the instant of the final read**, together with
+   the `observed_at` timestamp and the resourceVersions the proof was taken from. It does
+   not assert that nothing was recreated afterwards, and nothing downstream may treat it as
+   though it does.
+
+   Two consequences follow, and both are binding:
+
+   - The `completed` write carries the final read's `observed_at` and per-resource
+     `resourceVersion` values, so a later consumer can see exactly what was proven and
+     when.
+   - **Integrated teardown requires a fresh live gate**, not the stored `completed` record.
+     Before any subsequent destructive step relies on this teardown being complete, it
+     re-runs the CR-absence and identity-aware Pod checks against live state. A `completed`
+     record is necessary but never sufficient for a later destructive decision, and a
+     replacement appearing after the completion write is caught by that gate rather than
+     being masked by the stored proof.
 6. Timeout at any stage, a still-present same-UID CR, or inability to obtain any remaining
    phase proof → `SwitchoverError` and, where the response is ambiguous, durable
    `recovery_required`. The MCH
@@ -783,7 +805,10 @@ complementary (target identity/RBAC vs. completion/readiness).
 2. A refused substep yields a non-zero result and an accurate summary.
 3. Missing API discovery aborts before any deletion decision that depends on the list.
 4. Integrated decommission with source observability and a destination without it fails
-   closed absent the acknowledgement flag.
+   closed absent the acknowledgement flag; source observability is re-read fresh
+   immediately before deletion rather than taken from preflight, and the acknowledgement is
+   accepted only against a **positively verified absent** destination — never against an
+   unverifiable one.
 5. Existing Hive `preserveOnDelete` behavior unchanged.
 6. The MCO/MCH clean skip for absent CRD plus absent namespace is available only when no
    teardown record or prior mutation/drain obligation exists. Every recorded
@@ -794,6 +819,12 @@ complementary (target identity/RBAC vs. completion/readiness).
    fixed-namespace pod-scope proof; API/list errors never count as absence. `drained` and
    `completed` are written only after their full required checks succeed, identically for
    MCO and MCH in Python and the collection.
+8. `completed` asserts completeness **at the instant of its final read**, not for all time:
+   it carries that read's `observed_at` and per-resource `resourceVersion` values, and no
+   consumer treats it as proof of current state. Integrated teardown re-runs the CR-absence
+   and identity-aware Pod checks against live state before relying on this teardown being
+   complete, so a replacement appearing after the completion write is caught by that gate
+   rather than masked by the stored proof.
 8. Before MCH DELETE, operator provenance is either durably bound to the enclosing MCH
    teardown record as exact CSV evidence plus Deployment namespace/name/UID, or explicitly
    unavailable. A name, prefix, label, service account, annotation, image, or current-lab

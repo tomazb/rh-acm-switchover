@@ -75,8 +75,11 @@ Python (`modules/activation.py`):
      satisfy this one's gate.
    - `auto_import_prior`: one of
      `{"state": "absent", "created_uid": null}` |
-     `{"state": "no_key", "uid": <cm-uid>}` |
-     `{"state": "value", "value": "<X>", "uid": <cm-uid>}`
+     `{"state": "no_key", "uid": <cm-uid>, "resource_version": <rv>}` |
+     `{"state": "value", "value": "<X>", "uid": <cm-uid>, "resource_version": <rv>}`
+     — for the two pre-existing priors the `resourceVersion` observed in the **same read**
+     that captured `uid` and `value` is persisted alongside them, because that read is what
+     the apply decision is based on.
    - `auto_import_txn`: `"intent"`
    - `auto_import_conflict`: `null`
    The allowed non-terminal transaction states are `intent` and
@@ -87,11 +90,20 @@ Python (`modules/activation.py`):
      distinguishes `created` (and carries the exact create response), `already_exists`
      (HTTP 409), `patched_or_mutated` (an impossible/unsafe helper outcome), `conflict`,
      and `failure`. It never patches after 409.
-   - For a captured `no_key`/`value` prior, use a UID-guarded key patch against the
-     captured UID — server-enforced as one RFC 6902 JSON Patch whose first operation is
-     a `test` against `/metadata/uid` (the same conditional mechanism as §2's restore
-     patches). Its typed result must say `patched`; `created`, `already_exists`,
-     replacement/conflict, ambiguous mutation, or failure is not accepted.
+   - For a captured `no_key`/`value` prior, use an identity- **and** version-guarded key
+     patch — server-enforced as one RFC 6902 JSON Patch whose first two operations are a
+     `test` against `/metadata/uid` for the captured UID and a `test` against
+     `/metadata/resourceVersion` for the captured `resource_version`, both preceding any
+     mutating operation (the same conditional mechanism as §2's restore patches). The UID
+     test alone is insufficient: a ConfigMap edited between prior-state capture and apply
+     keeps its UID, so a UID-only guard would overwrite a newer `autoImportStrategy` value
+     and leave the transaction holding a prior that no longer reflects what was replaced —
+     which restore would then faithfully put back. Its typed result must say `patched`;
+     `created`, `already_exists`, replacement/conflict, ambiguous mutation, or failure is
+     not accepted. A failed `test` fails the whole atomic PATCH with **no mutation** and
+     records `ownership_conflict` with the stable reason `apply_precondition_failed`; the
+     run does not silently re-capture and retry, because the newer state was never
+     evaluated.
    Python adds a narrow create-only/result helper while leaving
    `create_or_patch_configmap` unchanged for its other callers. The collection uses an
    independent collection-owned module/helper with the same result algebra; native
@@ -134,6 +146,44 @@ The absent-prior failure rules are exact:
   later GET may verify it and finish the transition; a mismatch is a conflict and never
   rebinds the transaction.
 
+#### Conflict recoverability and the transition out of `ownership_conflict`
+
+`ownership_conflict` blocks, but it is not uniformly permanent. Some reasons record a
+*transient observation failure* over an ownership fact that is already durably established;
+others record that ownership was never established at all. Collapsing the two would force a
+transient `post_create_unreadable` down the acknowledgement path even though the tool holds
+a response-derived `created_uid` that a later read can simply confirm.
+
+| reason | recoverable? | why |
+| --- | --- | --- |
+| `post_create_unreadable` | **yes** | `created_uid` is durable; only the confirming read failed |
+| `post_create_absent` | **yes** | `created_uid` is durable; absence is re-checkable and may be a stale/lagging read |
+| `post_create_malformed` | **yes** | `created_uid` is durable; the response, not the ownership, was unreadable |
+| `already_exists` | no | another actor owns the live object; no create of ours occurred |
+| `unexpected_patch` | no | the protocol outcome was unsafe; no create occurred |
+| `create_conflict` | no | the create did not succeed |
+| `create_failure` | no | the create did not succeed |
+| `create_outcome_ambiguous` | no | a create may have occurred but no UID is durable, so nothing can ever confirm it |
+| `create_response_missing_uid` | no | no usable UID was ever captured; a later GET cannot establish one |
+| `replacement_uid` | no | the live object is provably **not** ours |
+
+**The recovery transition, for recoverable reasons only.** On a later run, a fresh strict
+GET is performed. When it returns an object whose `metadata.uid` **exactly equals** the
+durable `created_uid`, ownership is confirmed by the same evidence rule that would have
+applied originally: the record clears `auto_import_conflict`, transitions to `applied`
+(the create is proven and verified), and normal restore proceeds. When the GET returns a
+different UID the record transitions to the non-recoverable `replacement_uid`. When it
+returns absent, the `absent`-prior/`created_uid`/live-absent row applies —
+`restored_noop`, since the tool-created object no longer exists. When the GET fails again,
+the record stays in its current recoverable conflict and the run stays blocked.
+
+The transition is **evidence-driven, never retry-driven**: no mutation is attempted to
+resolve a conflict, `created_uid` is never re-derived, and the transition happens only on a
+successful read that confirms the already-durable UID. Non-recoverable reasons have no such
+transition — they are superseded only by the §4 durable audited acknowledgement, and even
+then acknowledgement permits teardown without ever establishing ownership or authorizing
+mutation of the live object.
+
 `auto_import_conflict`, when non-null, is a complete sanitized object containing the
 transaction id, one stable reason code (`already_exists`, `unexpected_patch`,
 `create_conflict`, `create_failure`, `create_outcome_ambiguous`,
@@ -143,7 +193,19 @@ namespace/name. It never contains a newly observed UID as ownership, response bo
 kubeconfig/client data, or ConfigMap content. `ownership_conflict` is non-terminal for
 successful restoration and blocks the decommission gate.
 
-Legacy migration: a state with the old `auto_import_strategy_set: true` boolean and no
+Legacy migration, `false` first because it is the common case: finalization persists
+`auto_import_strategy_set: false` after a completed restoration
+(`modules/finalization.py:1535,1542,1566`), so a legacy state that already finished its
+restore carries the key set to `false`. That value means **the transaction is already
+restored and nothing is outstanding**, so it is normalized to *no transaction*: the key is
+dropped in the same durable update that would otherwise migrate it, no transaction id is
+minted, no prior is synthesized, and the §4 gate passes it exactly as it passes a state
+with no auto-import keys at all. It is never migrated to `applied`, because doing so would
+manufacture a restore obligation that was already discharged. A legacy `false` **combined
+with** any other auto-import key is not this case — it is an internally inconsistent record
+and fails closed per the validation rules below.
+
+A state with the old `auto_import_strategy_set: true` boolean and no
 `auto_import_prior` is migrated to `applied` with the explicit prior shape
 `{"state": "unknown_legacy"}` (no `uid`, no `created_uid`). A legacy record carries
 neither a captured `uid` nor a `created_uid`, so object identity is unprovable — the
@@ -173,10 +235,11 @@ The persisted transaction record is versioned and validated as a whole before an
 auto-import read, mutation, restore, or gate decision:
 
 - `auto_import_schema_version: 1` is required on every new record. The only inputs
-  accepted without it are the legacy `auto_import_strategy_set` boolean (migrated per
-  the rules above) and the complete absence of all auto-import keys — auto-import
-  management genuinely not requested, which is the only state the §4 gate passes as
-  "no transaction".
+  accepted without it are the legacy `auto_import_strategy_set` boolean — `true` migrated
+  to `applied` and `false` normalized away as already-restored, per the rules above — and
+  the complete absence of all auto-import keys. Both the key-absent case and the
+  normalized legacy `false` resolve to "no transaction", which is the only condition the
+  §4 gate passes on that basis.
 - Required fields and shapes: `auto_import_txn_id` (non-empty string);
   `auto_import_txn` (exactly one of `intent`, `applied`, `ownership_conflict`);
   `auto_import_prior` (exactly one of the three §1 shapes — non-empty `uid` for
@@ -539,6 +602,22 @@ and verified; a conflict or failure never reports a successful change.
   with a live state that would otherwise map to `restored_noop` is rejected at tier 1 and
   never reaches the table. A tier-3 record with live state matching the prior still
   produces `restored_noop` normally, proving the precedence did not over-block.
+- Conflict recoverability: each of `post_create_unreadable`, `post_create_absent`, and
+  `post_create_malformed` transitions to `applied` on a later GET returning the durable
+  `created_uid`, then restores normally; the same records transition to `replacement_uid`
+  on a differing UID, to `restored_noop` on live absence, and stay blocked on a repeated
+  read failure. Each non-recoverable reason is asserted to have **no** such transition —
+  a later confirming GET does not clear it, and only the audited acknowledgement unblocks
+  the gate. One test asserts no mutation is issued on any recovery path.
+- Apply-path `resourceVersion` precondition: a same-UID edit landing between prior-state
+  capture and apply fails the `/metadata/resourceVersion` `test`, performs no mutation,
+  records `ownership_conflict` with reason `apply_precondition_failed`, and does not
+  re-capture and retry. Asserted for both `no_key` and `value` priors, including that the
+  persisted prior is not overwritten by the newer live value.
+- Legacy `auto_import_strategy_set: false` (as persisted by
+  `modules/finalization.py:1535,1542,1566`): normalized to no transaction, key dropped, no
+  txn id minted, no prior synthesized, §4 gate passes; the same key set to `false`
+  **alongside** any other auto-import key is internally inconsistent and fails closed.
 - Collection parity tests for capture record shape and restore table.
 - Cross-form-factor parity fixtures assert identical result categories, state transitions,
   no-adoption decisions, and reason codes while Python and the collection use independent
