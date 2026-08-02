@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from lib import path_safety
-from lib.argocd_register import ArgocdPauseRegister
+from lib.argocd_register_store import PauseRegisterStore
 from lib.constants import (
     REPORT_DEFAULT_CHECK,
     REPORT_ID_PREFIX_PREFLIGHT,
@@ -118,7 +118,7 @@ def build_operation_report(
         report["phase"] = REPORT_PHASE_PREFLIGHT
         report["results"] = results
 
-    argocd_status = ArgocdPauseRegister.status_from_state_config(config)
+    argocd_status = PauseRegisterStore.status_from_state_config(config)
     if argocd_status.run_id or argocd_status.confirmed_paused_count:
         report["argocd"] = {
             "run_id": argocd_status.run_id or "",
