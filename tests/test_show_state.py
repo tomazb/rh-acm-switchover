@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from lib.runtime_bootstrap import get_default_state_dir
 from show_state import (
     _default_state_dir,
     find_state_files,
@@ -25,28 +26,21 @@ class TestShowStateHelpers:
         monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", "/tmp/acm-state")
         assert _default_state_dir() == "/tmp/acm-state"
 
-    def test_default_state_dir_falls_back_on_invalid_env(self, monkeypatch: pytest.MonkeyPatch):
-        # Use a clearly unsafe path and force validator to raise
+    def test_default_state_dir_matches_cli(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        # The viewer must look where the CLI writes, so state-dir resolution is
+        # shared: no independent validation/fallback in show_state.
+        monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path / "custom-state"))
+        assert _default_state_dir() == get_default_state_dir()
+
+    def test_default_state_dir_matches_cli_for_relative_env(self, monkeypatch: pytest.MonkeyPatch):
+        # Previously rejected by InputValidator and silently replaced with
+        # ".state"; now honoured exactly as the CLI honours it.
         monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", "../bad")
+        assert _default_state_dir() == get_default_state_dir() == "../bad"
 
-        # Monkeypatch validator to raise so we exercise the fallback branch
-        import show_state as ss
-
-        original_validator = ss.InputValidator.validate_safe_filesystem_path
-
-        def _raise_validation(path: str, field_name: str) -> None:  # pragma: no cover - trivial wrapper
-            raise ss.ValidationError(f"bad path for {field_name}: {path}")
-
-        monkeypatch.setattr(ss.InputValidator, "validate_safe_filesystem_path", staticmethod(_raise_validation))
-        try:
-            assert _default_state_dir() == ".state"
-        finally:
-            # Restore original to avoid side effects on other tests
-            monkeypatch.setattr(
-                ss.InputValidator,
-                "validate_safe_filesystem_path",
-                staticmethod(original_validator),
-            )
+    def test_default_state_dir_defaults_without_env(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("ACM_SWITCHOVER_STATE_DIR", raising=False)
+        assert _default_state_dir() == get_default_state_dir() == ".state"
 
     def test_find_state_files_discovers_json_files(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         state_dir = tmp_path / ".state"
