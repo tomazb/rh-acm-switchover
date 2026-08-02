@@ -30,7 +30,6 @@ from lib.constants import (
     MCE_NAMESPACE,
     PATCH_VERIFY_MAX_RETRIES,
     PATCH_VERIFY_RETRY_DELAY,
-    PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME,
     RESTORE_FAST_POLL_INTERVAL,
     RESTORE_FAST_POLL_TIMEOUT,
     RESTORE_FULL_NAME,
@@ -46,6 +45,7 @@ from lib.constants import (
 from lib.exceptions import FatalError, SwitchoverError
 from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
+from lib.run_record import RunRecord
 from lib.utils import Phase, StateManager, is_acm_version_ge
 from lib.waiter import WaitConditionResult, wait_for_condition, wait_for_restore_deletion
 
@@ -86,6 +86,7 @@ class SecondaryActivation:
         self._passive_sync_restore_name: Optional[str] = None
         self._activation_restore_name: Optional[str] = None
         self._require_new_velero_restore_signal = True
+        self.run_record = RunRecord(self.state)
 
     def _get_passive_sync_restore_name(self) -> str:
         """
@@ -245,7 +246,7 @@ class SecondaryActivation:
         restore_before = self._get_restore_or_raise(restore_name)
 
         if self._activation_already_applied(restore_before):
-            self.state.set_config(PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME, None)
+            self.run_record.record_pre_activation_velero_restore(None)
             self._require_new_velero_restore_signal = False
             return
 
@@ -253,9 +254,8 @@ class SecondaryActivation:
         # cannot activate against a degraded restore.
         self._assert_passive_restore_ready(restore_before, restore_name)
 
-        self.state.set_config(
-            PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME,
-            restore_before.get("status", {}).get("veleroManagedClustersRestoreName"),
+        self.run_record.record_pre_activation_velero_restore(
+            restore_before.get("status", {}).get("veleroManagedClustersRestoreName")
         )
         self._require_new_velero_restore_signal = True
 
@@ -287,7 +287,7 @@ class SecondaryActivation:
         logger.info("Activating managed clusters via activation restore (Option B)...")
 
         self._activation_restore_name = MANAGED_CLUSTER_RESTORE_NAME
-        self.state.set_config(PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME, None)
+        self.run_record.record_pre_activation_velero_restore(None)
         self._require_new_velero_restore_signal = False
 
         # Discover passive sync restore if it still exists; tolerate missing restore on resume
@@ -593,7 +593,7 @@ class SecondaryActivation:
     def _maybe_set_auto_import_strategy(self) -> None:
         """If requested, set ImportAndSync on secondary for ACM 2.14+ with existing clusters."""
         try:
-            version = str(self.state.get_config("secondary_version", "unknown"))
+            version = self.run_record.hub_facts().secondary_version
             if not is_acm_version_ge(version, "2.14.0"):
                 return
             # Count non-local clusters
@@ -632,7 +632,7 @@ class SecondaryActivation:
                 name=IMPORT_CONTROLLER_CONFIG_CM,
                 data={AUTO_IMPORT_STRATEGY_KEY: AUTO_IMPORT_STRATEGY_SYNC},
             )
-            self.state.set_config("auto_import_strategy_set", True)
+            self.run_record.record_auto_import_override()
         except Exception as e:
             if self.manage_auto_import_strategy:
                 raise SwitchoverError(f"Failed to manage autoImportStrategy on destination hub: {e}") from e
@@ -655,7 +655,7 @@ class SecondaryActivation:
 
     def _apply_immediate_import_annotations(self) -> None:
         """Apply immediate-import annotations when ImportOnly is in effect (ACM 2.14+)."""
-        version = str(self.state.get_config("secondary_version", "unknown"))
+        version = self.run_record.hub_facts().secondary_version
         if not is_acm_version_ge(version, "2.14.0"):
             logger.info("Skipping immediate-import annotations (ACM %s < 2.14)", version)
             return
@@ -929,9 +929,7 @@ class SecondaryActivation:
         """
         logger.info("Waiting for managed clusters Velero restore to complete...")
         previous_velero_restore_name = (
-            self.state.get_config(PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME, None)
-            if self._require_new_velero_restore_signal
-            else None
+            self.run_record.pre_activation_velero_restore() if self._require_new_velero_restore_signal else None
         )
 
         def _poll_velero_restore():
