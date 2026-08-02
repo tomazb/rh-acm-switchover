@@ -427,7 +427,8 @@ Any interactive "no" at the MCO, ManagedCluster, or MCH prompt:
 
 Idempotent rerun resumes cleanly: a resource proven absent **with no teardown record** is
 a clean no-op. A recorded resource follows the phase table, including fresh live
-validation for `completed`, exactly as §5's record-present rules require. The
+validation for `completed`, exactly as the §1 phase rules and the §3 record-present
+lookup rules require. The
 non-interactive path (`interactive=False`, integrated decommission) is unaffected — it
 never prompts.
 

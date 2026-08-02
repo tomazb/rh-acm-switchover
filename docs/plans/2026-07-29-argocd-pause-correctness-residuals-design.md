@@ -290,7 +290,7 @@ every gate before the per-entry evaluation:
 
 | record | meaning |
 | --- | --- |
-| `argocd_journal_attestation` | positive proof that a pause pass completed discovery and durably wrote every entry it produced: schema version, run identity, completion timestamp, and entry count. Required for the empty-journal fast path (§2a below) |
+| `argocd_journal_attestation` | positive proof that a pause pass completed discovery and durably wrote every entry it produced: schema version, run identity, completion timestamp, and `entries_written`. Required whenever the run contract has `--argocd-manage` active: the empty-journal fast path needs an attested count of zero, and a non-empty journal needs a matching `entries_written` (§2a below) |
 | `journal_incomplete` | durable barrier recorded when an evidence write failed; blocks every destructive gate exactly as `recovery_required` does, regardless of the rest of the journal |
 
 `restore_payload` rules — this is the object a resume would send back, so it carries the
@@ -717,12 +717,16 @@ destructive gates, and returns fatal/non-zero. No new warning-only paths.
   classification vectors and asserts non-zero/no mutation/no successful state for every
   `UNKNOWN` category. Every form factor also tests that a missing/replaced run marker
   immediately before resume produces no patch and no `resumed` state.
-- **Empty-journal attestation**: with `--argocd-manage` active, a gate passes an empty
-  journal only with a valid `argocd_journal_attestation`; it blocks when the attestation is
+- **Journal attestation**: with `--argocd-manage` active, a gate passes an empty
+  journal only with a valid `argocd_journal_attestation` whose `entries_written` is zero;
+  it blocks when the attestation is
   absent with a `journal_incomplete` barrier present, and — the regression test for this
   finding — **also blocks when the attestation is absent and no barrier exists**,
   simulating a run whose evidence and barrier writes both failed. A malformed or
-  wrong-run-identity attestation blocks. A run whose contract never requested
+  wrong-run-identity attestation blocks; a **stale attestation with `entries_written > 0`
+  over an empty journal blocks**; and a **non-empty journal with fewer entries than
+  attested (partial journal) blocks**, while a matching count proceeds to normal
+  per-entry evaluation. A run whose contract never requested
   `--argocd-manage` passes without an attestation, proving the rule does not over-block.
   Recovery is asserted to require a fresh pause pass that writes a valid attestation.
 - **Journal schema validation (§2a)**, in all three form factors: for every validation
@@ -818,11 +822,15 @@ adjacent-not-superseded: `SSA-05` (script lifecycle), `TR2D-02` (collection resu
    settles the entry. The guarantee is that no mutation is untracked or falsely
    reported successful — not that no mutation occurred.
 10a. A destructive-phase gate passes on an empty or absent pause journal **only** when a
-    valid `argocd_journal_attestation` proves a pause pass completed and durably recorded
-    its evidence. With `--argocd-manage` active and no attestation, the gate blocks —
+    valid `argocd_journal_attestation` with `entries_written == 0` proves a pause pass
+    completed and durably recorded that there was nothing to manage. With
+    `--argocd-manage` active and no attestation, the gate blocks —
     whether or not a `journal_incomplete` barrier exists — so a run whose evidence and
     barrier writes both failed cannot let a later invocation proceed on an
-    uninterpretable absence. Recovery is a fresh pause pass, never an automatic downgrade.
+    uninterpretable absence. The attestation binds to the journal contents: a stale
+    attestation with a non-zero count never authorizes an empty journal, and a non-empty
+    journal whose entry count differs from `entries_written` blocks as a partial journal.
+    Recovery is a fresh pause pass, never an automatic downgrade.
 10. Every destructive-phase gate fails closed on a journal entry whose stored
     `restore_payload` is missing, malformed, non-canonical, non-`ACTIVE`, or carries
     anything beyond the tool-owned `automated` object — at the gate, before ACTIVATION or

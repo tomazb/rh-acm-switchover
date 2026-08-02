@@ -377,7 +377,9 @@ captured contents, mirroring the Python vectors.
   oversized file. Assertions on the handed-off snapshot: the file-path key is gone and the
   content key is present; pre-existing embedded `*-data` is byte-unchanged; an exec-based
   selected user is rejected fail-closed with `exec_credential_unsupported` and zero
-  mutating calls, while a non-exec user in the same merge still proceeds. Redaction: no captured credential content appears in any log line, module
+  mutating calls, an `auth-provider` selected user is rejected fail-closed with
+  `auth_provider_unsupported` and zero mutating calls, and a user with neither in the
+  same merge still proceeds. Redaction: no captured credential content appears in any log line, module
   result, state/checkpoint payload, or parser/client error — including a deliberately
   malformed PEM/token whose parse error is asserted to carry only a stable reason code and
   the entry provenance.
