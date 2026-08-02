@@ -1844,6 +1844,25 @@ the review cycle; fifteen rounds in, the marginal findings are consistency nitpi
 safety gaps. Convergence requires freezing the baseline and moving residual precision into
 implementation slices, where a test can hold it.
 
+**Design-document lifecycle (supersede-at-merge, tests authoritative).** The six designs
+are consumables for the implementation wave, not permanently maintained documentation:
+
+1. **Until a slice merges**, its design document is the spec: the slice's tests are
+   written from the design's acceptance criteria, and the Spec And Design Gate's
+   verification-evidence requirement is judged against the design.
+2. **When a slice merges into `ansible`**, the behavior contract transfers to the merged
+   tests and code. The design document is marked superseded — a header note naming the
+   implementing PR and stating that the tests are now authoritative and the document is a
+   historical record — in that slice's own PR or the next tracker update.
+3. **After supersession, the document is never updated again.** Refactors that move code
+   or restructure modules do not touch it, and drift between a superseded design and the
+   current code is expected and is not a finding. Behavioral questions are answered by
+   the tests; the superseded design records only the rationale for why the contract is
+   shaped the way it is.
+4. A superseded design is **not** a valid citation for reopening a settled decision; the
+   adjudication record it preserves (including this ledger) exists to prevent
+   re-litigation, not to invite it.
+
 ## Open-Findings Assessment And Ranking (2026-07-29)
 
 Method: three parallel evidence-based verification passes over every open/planned/
