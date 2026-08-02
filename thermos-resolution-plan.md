@@ -1885,12 +1885,13 @@ description states the removed-namespace invariant; `auth-provider` users are re
 the repair path (`auth_provider_unsupported`) for the same construction-time-identity
 reason as exec plugins.
 
-**Converted to implementation-slice obligations under rule 1 (8):** the rows below extend
-the named slice's acceptance scope; the designs are intentionally not amended for them.
+**Converted to implementation-slice obligations under rule 1 (10 threads, 9 rows — two
+threads share the `cleanupBeforeRestore` row):** the rows below extend the named slice's
+acceptance scope; the designs are intentionally not amended for them.
 
 | Slice | Obligation (from 2026-08-02 triage) |
 | --- | --- |
-| R4-01 | *(no rule-1 rows this round; see rule-2 amendments above)* |
+| R4-01 | Journal schema separates per-entry state schemas from run-level record schemas: required and forbidden fields defined per entry state (non-mutating `skipped_disabled`/`classification_unknown` entries carry no synthetic `run_marker`/`operation`), and `journal_incomplete` plus the attestation get distinct run-level shapes a strict validator can check. |
 | R4-02 | Add `apply_precondition_failed` to the canonical conflict-reason list and recoverability table: non-recoverable, no automatic retry. |
 | R4-03 | Apply the shared strict 404 algebra to the deletion boundary's named-object GET and final-verification reads: a 404 proves absence only after successful discovery; discovery, authorization, transport, decode, and timeout failures stay unverifiable and can never yield a false absent result. |
 | R4-04 | Journaled-backup schema persists the status fields the contract validates (`phase`, `errors`, `warnings`) or states explicitly that they are validated but not persisted — same rule in both form factors. |
