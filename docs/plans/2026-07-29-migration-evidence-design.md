@@ -69,7 +69,19 @@ At activation start — after PRIMARY_PREP has paused the BackupSchedule, so the
 backup is final:
 
 1. List Velero backups (strict read, §3) and resolve the alias once — **only for the
-   fields the method actually sets**. The per-field Restore contract is preserved
+   fields the method actually sets**. A backup is eligible to be journaled only when it is
+   **provably successful**, and `completed_at` alone does not establish that: require
+   `status.phase == "Completed"` **and** a present, well-formed `status.completionTimestamp`
+   (which is the value journaled as `completed_at`). `PartiallyFailed`, `FailedValidation`,
+   `Failed`, and every other failure phase are non-success, as are in-progress phases
+   (`New`, `InProgress`, `Finalizing`, `WaitingForPluginOperations` and equivalents) and a
+   missing, non-string, or unrecognized phase. `status.errors`, when present, must be a
+   non-negative integer and **zero**; a non-zero count is non-success. `status.warnings`,
+   when present, must be a non-negative integer and is recorded but does not by itself
+   disqualify a backup. A missing or malformed `errors`/`warnings` value is malformed
+   status and therefore non-success — never treated as zero. Selecting a non-eligible
+   backup is fatal at activation entry rather than deferred, and the identical rules apply
+   in Python and the collection. The per-field Restore contract is preserved
    exactly: the passive patch path changes only `veleroManagedClustersBackupName`
    (credentials/resources fields untouched), and restore-create paths keep
    `VELERO_BACKUP_SKIP` on any field the current code skips — this design substitutes
@@ -123,7 +135,7 @@ backup is final:
      post_activation:
        names_verified_at: null | "<iso8601>"  # set when post-activation name check passed
        completed_at: null | "<iso8601>"       # set last, only when every required post-activation operation succeeded
-     waiver: null | {flag: "<flag/var name>", journaled_at: "<iso8601>"}
+     waiver: null | {flag: "<flag/var name>", journaled_at: "<iso8601>", actor: "<non-empty>", reason: "<non-empty>", request_id: null | "<non-empty>", scope: "activation" | "post_activation" | "both", outcome: "waived"}
    ```
 
    `run_id`, `cleanup.operation_id`, and all timestamps are strings;
@@ -304,9 +316,36 @@ The evidence bundle is produced in exactly this order:
    durable write of the ordered sequence. Under either protocol, a bundle missing any
    field is the non-terminal partial record defined below and blocks.
 
+#### Terminal-success condition, per resource
+
+"Completed" is asserted separately for the two resources involved, because they do not
+share a phase vocabulary and conflating them would let a partially-failed data restore
+present as success:
+
+- **ACM `Restore`** (`cluster.open-cluster-management.io`): terminal success is
+  `status.phase == "Finished"`. `Completed` is **not** accepted for this kind — the
+  implementation must confirm the accepted literal against the ACM version the repository
+  targets and pin that reference; if the targeted version emits `Completed` instead, the
+  design accepts exactly one literal and states which, never both as interchangeable.
+- **The associated Velero `Restore`**: terminal success is `status.phase == "Completed"`.
+
+Every other observed phase is **non-success and fail-closed** for either kind, explicitly
+including `New`, `Enabled`, `InProgress`, `Failed`, `PartiallyFailed`,
+`FinishedWithErrors`, `Unknown`, a missing `status`, a missing or non-string `phase`, and
+any unrecognized literal. In particular `FinishedWithErrors` is **not** a success variant:
+this design defines **no** benign-message allow-list, because classifying error text as
+benign is exactly the kind of judgement that silently converts a partial data restore into
+a completion claim. If a future slice needs one, it must enumerate the exact messages and
+justify each; until then the phase blocks unconditionally.
+
+Tests cover every enumerated phase for both kinds, plus missing status, missing phase,
+non-string phase, and an unrecognized literal, asserting fail-closed with no completion
+evidence written.
+
 Any map with a missing/extra key, missing/empty/non-string value, wrong method scope,
 skipped or absent category drift, unreadable Restore, missing UID or expected field,
-unexpected `latest`/`skip` value, generation or fingerprint inconsistency, or malformed
+unexpected `latest`/`skip` value, generation or fingerprint inconsistency, non-terminal or
+unrecognized `status.phase` for either resource, or malformed
 response → fail closed; no completion evidence is written. A partial record missing any
 identity, version, activation method, explicit backup map, fingerprint, provenance, or
 completion field is **non-terminal**: it blocks resume continuation, finalization,
@@ -412,10 +451,23 @@ Dry-run/check-mode and reporting contract:
   names, no longer a replacement. Explicit `0` keeps name enforcement.
 - Disabling name enforcement requires a new explicit flag
   (`--skip-managed-cluster-expectations`; final name at implementation), which is:
-  - journaled in state as a waiver (who-asked-for-it evidence),
-  - rejected by validation when no expectation exists to waive,
+  - journaled in state as a waiver carrying **actual** who-asked-for-it evidence — a
+    non-empty `actor` (the invoking principal) and a non-empty `reason`, plus an optional
+    `request_id` — not merely the flag name and a timestamp. A waiver missing `actor` or
+    `reason` is malformed and does not satisfy the gate; the claim and the schema now
+    match.
+  - **scoped and outcome-bearing**, because the §4 gate evaluates the activation and
+    post-activation name predicates separately. One global boolean cannot say which
+    predicate was waived, nor distinguish "waived" from "evidence missing". The waiver
+    therefore records `scope` (`activation`, `post_activation`, or `both`) and `outcome`
+    (`waived`), and the gate **consumes those fields** rather than inferring scope from
+    the flag's presence: a predicate is treated as waived only when a waiver record whose
+    `scope` covers it is present, and an uncovered predicate with no evidence remains a
+    missing-evidence failure, never a silent pass.
+  - rejected by validation when no expectation exists to waive **within the waived
+    scope**,
   - never used to rewrite the recorded expectation — the discovery fact stays intact
-    (waiver ≠ evidence).
+    (waiver ≠ evidence). A waived predicate is recorded as waived, never as succeeded.
 - Restore-only mode keeps its existing default floor of one.
 
 ### 3. Strict inventory reads
@@ -437,6 +489,16 @@ Consumers in this design:
 
 - ManagedCluster inventory reads in activation and post-activation.
 - The Velero backup list in §1.
+- **Passive Restore discovery.** `modules/restore_discovery.py::find_passive_sync_restore`
+  currently calls `list_custom_resources` directly, so a discovery 404, an incomplete
+  page, or a malformed `items` collapses to an empty result and the helper returns `None`
+  — after which activation proceeds *as if no passive Restore exists* and can create or
+  patch against that false premise. The strict GET in §1b cannot repair this, because it
+  runs only after a candidate has already been selected. Passive Restore discovery is
+  therefore a first-class strict-read consumer: discovery errors, malformed items, and
+  incomplete pagination fail closed **before any create, patch, or delete decision**, and
+  "no passive Restore found" is a conclusion available only from a positively complete
+  read.
 
 Consumer-specific mapping onto the shared outcome algebra:
 

@@ -119,7 +119,8 @@ retry:
 | --- | --- |
 | `operation_id` | immutable unique id for this pause or resume attempt |
 | `kind` | `pause` or `resume` |
-| `namespace`, `name` | Application identity |
+| `hub` | the durable hub/cluster identity the Application lives on — the coordinator's `(client, hub_label)` key plus the hub cluster UID. The same Application name can exist on several hubs, so this is what selects the client **before** `expected_uid` is compared; without it a resume or gate could read the right name on the wrong hub |
+| `namespace`, `name` | Application identity within that hub |
 | `expected_uid` | the Application UID observed at read time; a different live UID is a replacement, never adopted |
 | `expected_resource_version` | the resourceVersion the precondition was built from (Python and the collection; absent for Bash, which has none — §1) |
 | `owned_marker` | the exact pause-marker annotation value **this operation** writes or clears, fixed at mint time |
@@ -228,7 +229,15 @@ remains `UNKNOWN` and is never canonicalized or journaled as active.
 These semantics are grounded in the Argo CD
 [automated-sync documentation][argocd-auto-sync] and the current
 [Application CRD schema][argocd-application-crd], together with Kubernetes'
-[CRD nullable/defaulting rules][kubernetes-crd-nullable]. In particular, the
+[CRD nullable/defaulting rules][kubernetes-crd-nullable].
+
+**Provenance limitation, stated rather than implied:** those three links target mutable
+`stable`/branch references, so they are **not immutable evidence** — the semantics they
+document today can change under the same URL. Before implementation, the slice must pin
+the exact source commits (or capture repository-local excerpts) for the two load-bearing
+facts: Argo CD documenting `enabled: null` as enabled, and Kubernetes' non-nullable CRD
+field normalization. Until pinned, treat the citations as indicative rather than
+authoritative, and do not weaken any fail-closed rule on their basis. In particular, the
 documentation explicitly defines `enabled: null` as enabled and Kubernetes explains its
 non-nullable normalization; the implementations must not infer that case from language
 truthiness.
@@ -263,6 +272,7 @@ Per-entry required fields and shapes:
 | field | shape |
 | --- | --- |
 | `argocd_journal_schema_version` | integer `2` |
+| `hub` | the same durable hub/cluster identity the §1a operation records; the entry is looked up and re-read only through that hub's client |
 | `namespace`, `name` | non-empty strings (or, when identity itself was malformed at discovery, the stable non-sensitive discovery index used by `classification_unknown`) |
 | `state` | exactly one of `paused`, `verify_pending`, `skipped_disabled`, `resumed`, `classification_unknown`, `recovery_required` |
 | `run_marker` | the exact pause-marker annotation value this run writes — the run identity gates compare against |
@@ -303,28 +313,77 @@ of the normal pause flow durably replacing the evidence. Its diagnostics carry o
 sanitized namespace/name (or discovery index), the schema version observed, and a stable
 reason code — never the malformed payload, the Application body, or annotation values.
 
+**Evidence-persistence failure is itself fail-closed.** §2 requires durable
+`classification_unknown` and `skipped_disabled` entries, and §1 requires a durable
+`verify_pending`. If any of those journal writes fails, the run must not simply return
+non-zero and leave the journal absent or short — a later gate pass reading an empty or
+missing journal would pass trivially and skip the block or re-read that the lost entry
+was supposed to force. Therefore:
+
+- A failed evidence write is a **fatal** result for the current run, and the run attempts
+  to record a durable `journal_incomplete` barrier naming the affected Application (or
+  discovery index) and the evidence that could not be written.
+- While a `journal_incomplete` barrier is present, every destructive-phase gate blocks
+  exactly as for `recovery_required`, regardless of what the rest of the journal shows.
+- If even the barrier cannot be persisted, the run still fails fatally and the operator
+  message states explicitly that pause evidence may be missing and that the journal must
+  be treated as untrustworthy until a fresh pause pass rebuilds it. The design does not
+  claim a durability guarantee it cannot make when the state store itself is failing.
+- An **empty or absent journal is only a trivial gate pass when no barrier is present and
+  the run recorded no evidence obligation**; it is never inferred to mean "nothing was
+  paused" while a barrier exists.
+
+**Discovery must not erase durable state.** The current `pause_hubs` path clears
+`argocd_paused_apps` and `argocd_run_id` when no Applications CRD is found. A transient
+discovery, permission, or API failure would then destroy a pending pause or operation
+record before any gate could read it. Clearing is permitted **only** when the no-CRD
+result is a positive determination per the §3 strict-read rules of the decommission design
+(the API server answered and the resource is genuinely not served) **and** the existing
+journal holds no non-terminal entry and no operation record. A transient or unverifiable
+discovery outcome, or any surviving non-terminal entry, preserves the state and fails
+closed.
+
 Parity: Python, the collection, and Bash each own an independent implementation of this
 validator, and the schema version, field names, state names, stable reason codes,
 accept/reject decisions, and sanitized output are parity fixtures.
 
 ### 2b. Legacy journal migration (schema version 1)
 
-Two current pause paths store the **full** `spec.syncPolicy` rather than the canonical
-`automated` object. The collection writes it into the
+All three current pause paths store the **full** `spec.syncPolicy` rather than the
+canonical `automated` object: the collection in the
 `acm-switchover.argoproj.io/original-sync-policy` annotation
-(`ansible_collections/tomazb/acm_switchover/roles/argocd_manage/tasks/pause.yml:46-47`)
-and rebuilds `syncPolicy` from that snapshot on resume (`resume.yml:71`); the Bash script
-writes it into its state file as `original_sync_policy`
-(`scripts/argocd-manage.sh:325-326,336-337,355-356`) and sends the whole stored object
-back on resume (`:432-433`). An Application paused by **either** implementation before
-this slice ships therefore carries a legacy restore value that the §2a schema rejects.
-Upgrading must not strand it, and must not send it back blindly.
+(`ansible_collections/tomazb/acm_switchover/roles/argocd_manage/tasks/pause.yml:46-47`,
+rebuilt on resume at `resume.yml:71`); Bash in its state file's `original_sync_policy`
+(`scripts/argocd-manage.sh:325-326,336-337,355-356`, sent back whole at `:432-433`); and
+Python in the same-named state field (`lib/argocd.py:660-661,635`, written into pause
+entries by `lib/argocd_coordinator.py:101,183,240` and sent back at `:612`). An
+Application paused by **any** implementation before this slice ships therefore carries a
+legacy restore value that the §2a schema rejects. Upgrading must not strand it, and must
+not send it back blindly.
 
 Legacy identification is explicit, never inferred from a parse failure: a record is
 schema version `1` when it carries no `argocd_journal_schema_version` **and** its stored
 restore value is a mapping whose keys are sync-policy keys rather than the canonical
 `automated` members. Anything else lacking a recognized version is unknown-version per
 §2a, not legacy.
+
+**Validation ordering for legacy records**, since a version-1 record cannot satisfy the
+version-2 validator that §2a requires before every live read — and §2b step 4 needs a live
+read to bind identity. The two are sequenced rather than circular:
+
+1. **Local version-1 structural validation**, with no live read: the record is
+   recognizable as version 1 per the identification rule above, its stored restore value
+   is a mapping, and its identity fields are present and well-formed. A record failing
+   this is `recovery_required` immediately.
+2. **The identity-bound live read** of §2b step 4, permitted at this point precisely
+   because step 1 has established the record is structurally sound version-1 evidence.
+3. **The durable migration write** producing the version-2 record.
+4. **Full §2a version-2 validation**, which every gate, resume, settlement, and mutation
+   then applies as normal.
+
+§2a's "validate before every live read" rule therefore means *validate at the schema
+version the record actually declares*; only the step-2 identity read is exempt from the
+version-2 validator, and nothing mutates before step 4 has passed.
 
 Migration is a read-only conversion followed by one durable write, performed **before**
 any resume mutation and before any gate accepts the entry:
@@ -358,33 +417,38 @@ is a restoration payload inferred from the live paused Application: the live val
 paused shape, so inferring from it would silently "restore" auto-sync to absent and
 permanently disable it.
 
-**Two implementations wrote the legacy shape, not one.** Besides the collection, the Bash
-script also stores the full `spec.syncPolicy` — `scripts/argocd-manage.sh:325-326` captures
-`.spec.syncPolicy` into `original_sync_policy`, `:336-337` and `:355-356` journal it into
-the state file, and resume at `:432-433` sends that whole stored object back. Bash
-therefore needs the **same migration or recovery path** as the collection, not a
-foreign-record rejection.
+**All three implementations wrote the legacy shape.** Every form factor stores the full
+`spec.syncPolicy` today, so none of them can treat a legacy record as foreign:
 
-Form-factor ownership of §2b is consequently:
-
-| implementation | legacy records it wrote | §2b role |
+| implementation | where the legacy full `syncPolicy` is written | §2b role |
 | --- | --- | --- |
-| collection | full `spec.syncPolicy` in the `original-sync-policy` annotation (`pause.yml:46-47`) | owns conversion of its own legacy records |
-| Bash | full `spec.syncPolicy` in the state file's `original_sync_policy` (`argocd-manage.sh:325-326,336-337,355-356`) | owns conversion of its own legacy records, by the identical rules |
-| Python | none — never wrote a full-`syncPolicy` restore value | validator only: recognizes a legacy record and rejects it as foreign |
+| collection | the `original-sync-policy` annotation (`pause.yml:46-47`), rebuilt on resume (`resume.yml:71`) | owns conversion of its own legacy records |
+| Bash | the state file's `original_sync_policy` (`scripts/argocd-manage.sh:325-326,336-337,355-356`), sent back whole on resume (`:432-433`) | owns conversion of its own legacy records, identical rules |
+| Python | `lib/argocd.py:660-661` copies the entire `syncPolicy` into `original_sync_policy` and persists it (`:635,666,674,711`); `lib/argocd_coordinator.py:101,183,240,261,272` writes it into pause entries; resume sends it back (`:612`) | owns conversion of its own legacy records, identical rules |
 
-Bash's conversion follows steps 1-6 above unchanged, reading `original_sync_policy` from
-its state file rather than an annotation, and writing the migrated schema-version-2 record
-back to that state file before any resume patch. A Bash legacy record that is not
-migratable is `recovery_required` exactly as elsewhere. Because Bash has no
+Each form factor converts **its own** legacy records by steps 1-6 above, reading from its
+own store — annotation, Bash state file, or Python state entry — and durably writing the
+migrated schema-version-2 record back to that same store before any resume patch. A
+non-migratable legacy record is `recovery_required` everywhere. Because Bash has no
 resourceVersion precondition (§1), its migrated `operation` record carries no
-`expected_resource_version`; the `expected_uid` and `owned_marker` bindings still apply.
+`expected_resource_version`; the `expected_uid`, `owned_marker`, and hub-identity bindings
+still apply in all three.
 
-All three implementations share one accept/reject decision table, and the Bash resume
-suite covers the legacy state explicitly — a stored full `syncPolicy` with sibling
-`syncOptions`/`retry` keys must migrate to the canonical `automated`-only payload and
-produce a resume patch containing no sibling key, and every non-migratable legacy shape
-must fail closed with no patch sent.
+**Provisional and incomplete Python entries** are covered explicitly, because
+`lib/argocd_coordinator.py` upserts a pause entry before the patch result is known and
+then overwrites `original_sync_policy` from the result (`:240,261,272`). A pre-slice entry
+may therefore exist with the full `syncPolicy` present, with it absent, or with only
+partial fields. An entry carrying a usable legacy `automated` member migrates by the
+normal rules; an entry whose `original_sync_policy` is missing, empty, or structurally
+incomplete is **not** migratable and becomes `recovery_required` — it is never completed
+by re-reading the live Application, since the live paused shape no longer contains the
+value to restore.
+
+All three implementations share one accept/reject decision table, and each form factor's
+resume suite covers its own legacy state explicitly: a stored full `syncPolicy` with
+sibling `syncOptions`/`retry` keys must migrate to the canonical `automated`-only payload
+and produce a resume patch containing no sibling key; every non-migratable legacy shape,
+including Python's provisional/incomplete entries, must fail closed with no patch sent.
 
 ### 3. Resume shape and verification
 
@@ -524,7 +588,7 @@ and an equivalent pre-task include in the collection:
 | Exhaustive §2 classifier, including `enabled: null` and all `UNKNOWN` shapes | typed shared helper | collection-owned parity helper used before Jinja mutation tasks | `jq -e` classifier with explicit type checks |
 | `UNKNOWN` outcome | fatal, sanitized blocking journal entry, no patch | failed task, sanitized blocking checkpoint entry, no patch | non-zero, sanitized blocking state entry, no patch |
 | §2a schema validation before every gate, resume, settlement, and mutation | typed record validator | collection-owned record validator | `jq -e` record validator |
-| §2b legacy (version 1) record handling | recognize and reject as foreign (never wrote the shape) | recognize, convert from the annotation, durably rewrite before resume | recognize, convert from the state file's `original_sync_policy`, durably rewrite before resume |
+| §2b legacy (version 1) record handling | recognize, convert from the state entry's `original_sync_policy` (including provisional/incomplete entries), durably rewrite before resume | recognize, convert from the annotation, durably rewrite before resume | recognize, convert from the state file's `original_sync_policy`, durably rewrite before resume |
 | §1a durable operation record and reconciliation | full state machine with RV precondition | full state machine with RV precondition | full state machine, `expected_resource_version` absent (no OCC — §1) |
 | `recovery_required` outcome | fatal, blocks all destructive gates, sanitized | failed task, blocks all destructive gates, sanitized | non-zero, blocks all destructive gates, sanitized |
 | Pause success | exact absent/null verification before `paused` | same | same |
@@ -611,13 +675,15 @@ destructive gates, and returns fatal/non-zero. No new warning-only paths.
   `INACTIVE_NULL`, `INACTIVE_DISABLED`, or `UNKNOWN`; marker missing; marker replaced by a
   foreign run; live Application UID differing from the bound identity. One test asserts
   explicitly that no restore payload is ever derived from the live paused Application.
-  The collection asserts conversion from its `original-sync-policy` annotation and Bash
-  asserts the identical conversion from its state file's `original_sync_policy` — both
-  including a legacy snapshot carrying sibling `syncOptions`/`retry` keys, whose migrated
-  resume patch must contain no sibling key. Python asserts it recognizes and rejects a
-  foreign legacy record rather than converting one, since it never wrote the shape. A
-  migration that succeeds but whose resume then fails leaves the legacy evidence — the
-  annotation for the collection, the state-file entry for Bash — intact for retry.
+  Each form factor asserts conversion from its **own** store — the collection from its
+  `original-sync-policy` annotation, Bash from its state file's `original_sync_policy`,
+  and Python from the same-named state field — each including a legacy snapshot carrying
+  sibling `syncOptions`/`retry` keys, whose migrated resume patch must contain no sibling
+  key. Python additionally asserts the provisional/incomplete coordinator entry cases:
+  a missing, empty, or structurally incomplete `original_sync_policy` is
+  `recovery_required` with no patch, and is never completed from live state. A migration
+  that succeeds but whose resume then fails leaves the legacy evidence intact for retry in
+  all three stores.
 - **Mutation/journal durability boundary (§1a)**: intent-persistence failure sends no
   patch and leaves the cluster unchanged; a patch accepted with the subsequent evidence
   write failing leaves a durable `intent_recorded` operation record, returns non-zero, and
@@ -682,12 +748,13 @@ adjacent-not-superseded: `SSA-05` (script lifecycle), `TR2D-02` (collection resu
     `restore_payload` is missing, malformed, non-canonical, non-`ACTIVE`, or carries
     anything beyond the tool-owned `automated` object — at the gate, before ACTIVATION or
     FINALIZATION performs any mutation, and not merely at resume time.
-11. An Application paused by the pre-slice collection implementation (full `spec.syncPolicy`
-    snapshot) is either migrated to a schema-version-2 record whose restore payload is the
-    canonical `automated` object alone — durably written before resume, and producing a
-    resume patch containing no sibling `syncPolicy` key — or fails closed as
-    `recovery_required`. No restore payload is ever inferred from the live paused
-    Application.
+11. An Application paused by **any** pre-slice implementation — collection, Bash, or
+    Python, all of which store the full `spec.syncPolicy` — is either migrated to a
+    schema-version-2 record whose restore payload is the canonical `automated` object
+    alone, durably written before resume and producing a resume patch containing no
+    sibling `syncPolicy` key, or fails closed as `recovery_required`. Python's provisional
+    or incomplete coordinator entries fail closed rather than being completed from live
+    state. No restore payload is ever inferred from the live paused Application.
 12. No pause or resume mutation is submitted without a durable `intent_recorded` operation
     record, and a mutation accepted while its evidence write failed is recoverable rather
     than untracked: rerun reconciles it from the recorded intent, a replacement UID is

@@ -74,6 +74,29 @@ klusterlet restart) based on that resolution. Beyond the tracked hostname-collap
   source line, and any key material are never included. Test coverage includes malformed
   YAML whose invalid region contains a token and a private key, asserting neither appears
   in the returned error, the module result, or any log line.
+- **Structural schema validation of every parsed document**, before any entry is merged.
+  Today an empty or `null` file decodes to an empty mapping and is accepted, malformed
+  entries are appended unvalidated, and a scalar or list root surfaces as an unstructured
+  `AttributeError`. The contract instead requires: the document root is a **mapping** (a
+  scalar, list, `null`, or empty document is a fail-closed structural error, not an empty
+  kubeconfig); `clusters`, `contexts`, and `users`, when present, are **lists**; every
+  entry in them is a **mapping**; every entry has a `name` that is a **non-empty string**;
+  and a `context` entry's `context` member, when present, is a mapping. Any violation
+  aborts the whole merge before per-cluster work, with the same sanitized reason-code and
+  provenance contract as the other §1 failures — never an `AttributeError` and never a
+  silently skipped entry. Parity tests cover each violation in both form factors.
+- **One shared size limit, defined once and applied everywhere.** The canonical limit is
+  the Python default of `10 * 1024 * 1024` bytes. It applies **inclusively** — a file of
+  exactly `limit` bytes is accepted and `limit + 1` is rejected — and it governs both
+  merged kubeconfig files and the file-backed credential reads of §4, which is why §4
+  refers to "the same standard size limit" rather than defining its own. The
+  `ACM_KUBECONFIG_MAX_SIZE` override may raise or lower the limit but **may not disable
+  it**: a value that is absent, non-numeric, zero, or negative resolves to the canonical
+  default rather than to "unlimited", closing the current `<= 0` bypass alongside the
+  `max_size=0` call-site bypass. The collection adopts the identical limit, override
+  semantics, and boundary. Parity tests assert acceptance at exactly `limit` and rejection
+  at `limit + 1` in both form factors, and that each disabling override value falls back
+  to the default.
 - The `max_size=0` bypass is removed; the standard size limit applies to every merged file.
 - YAML parsing uses a loader that **errors on duplicate mapping keys** instead of silently
   keeping the last.
@@ -238,6 +261,19 @@ captured at snapshot-construction time:
   has nothing left to re-read.
 - Fields already supplied as embedded `*-data` pass through **unchanged**; they are
   already content, and are never re-encoded or normalized.
+- **`token` takes precedence over `tokenFile`, and the divergence from the loader is
+  deliberate and recorded.** When a user entry carries both, the in-line `token` wins and
+  `tokenFile` is not read — matching the official client, which selects the data key when
+  present and initializes the file fallback only when it is absent. Two points must be
+  settled against the **pinned** client version before implementation rather than against
+  a moving `master`: first, the official file read returns the file content *without* the
+  trailing-whitespace strip specified above, so this design **intentionally diverges** by
+  stripping — a trailing newline in a token file would otherwise become part of the bearer
+  credential — and that divergence is stated here so it is not later "fixed" back;
+  second, an empty or whitespace-only value is fail-closed in both fields (an empty
+  `token`, or a `tokenFile` whose content strips to empty, is a structural error, not an
+  anonymous client). Python and the collection share vectors for both-present,
+  `token`-only, `tokenFile`-only, empty-`token`, and empty-`tokenFile` cases.
 
 **Exact transformation rules**, so Python and the collection produce byte-identical
 snapshots. Each file is read in **binary mode**; no text decoding, universal-newline
@@ -258,10 +294,21 @@ other field-specific normalization exists. Parity tests assert both transformati
 byte-for-byte across the two form factors, including a CRLF-terminated PEM, a certificate
 file with no trailing newline, a token file with and without a trailing newline, and
 byte-fidelity of every field after the source file is modified or deleted post-capture.
-- `exec` credential plugins are the one **documented exception**: they are invoked by the
-  client at construction time by design and cannot be snapshotted as bytes. They pass
-  through unchanged, exactly as with the official loader, and this design does not claim
-  snapshot immutability for a context whose user is exec-based.
+- `exec` credential plugins **cannot satisfy this section's guarantee and are therefore
+  rejected on the repair path.** An exec plugin runs at client-construction time, after
+  endpoint matching; its output is not part of the snapshot, can differ between
+  invocations, can fail independently, and can return credentials for a different identity
+  than the one matching validated. Passing it through would leave Goal 2 ("the client is
+  built from the exact snapshot that matching used") and acceptance criterion 2 false for
+  exactly the users most likely to be short-lived-credential based. So a selected context
+  whose user is exec-based is a **fail-closed per-cluster error** under §5's mutation
+  barrier: zero mutating calls for that cluster, a sanitized diagnostic naming the entry
+  kind, name, source path, index, and the stable reason `exec_credential_unsupported`, and
+  the cluster reported in the per-cluster summary. Other clusters are unaffected.
+  Re-admitting exec users requires a designed and tested identity-attestation mechanism —
+  proving the constructed client authenticates as the identity matching selected — which
+  is out of scope here and not claimed. Tests assert the rejection and the zero-mutation
+  property, and that a non-exec user in the same merge still proceeds.
 - The original absolutized paths are retained **separately**, as provenance for
   diagnostics and tests only. They are never used to reconstruct the client and never
   re-read after capture.
@@ -294,16 +341,22 @@ captured contents, mirroring the Python vectors.
 ## Testing
 
 - Failure matrix, each case asserting **zero mutating calls**: missing file, unreadable
-  file, oversized file, YAML error, duplicate YAML keys, duplicate name differing,
-  zero-match, multi-match.
+  file, oversized file (at exactly `limit + 1`, with `limit` accepted), YAML error,
+  duplicate YAML keys, duplicate name differing, structurally invalid document (scalar
+  root, list root, empty/`null` document, non-list `clusters`/`contexts`/`users`,
+  non-mapping entry, missing or non-string `name`), zero-match, multi-match,
+  exec-based selected user, and **client-construction failure after a unique match** —
+  `new_client_from_config_dict(...)` raising once resolution has already succeeded must
+  still leave that cluster with zero bootstrap-secret deletes, zero import-manifest
+  applies, and zero klusterlet restarts, per §5.
 - Duplicate name identical (byte-equal) is a *valid* case: asserts first-occurrence
   selection and normal mutation proceeds.
 - Snapshot client: file modified between merge and client build → client uses snapshot
   values (assert via config dict), no re-read.
 - Relative-path absolutization: CA/cert/key/tokenFile relative to a non-CWD source file
   resolve correctly; context, cluster, and user entries drawn from three different files
-  each resolve against their own source file; embedded `*-data` untouched; exec
-  passthrough.
+  each resolve against their own source file; embedded `*-data` untouched; an exec-based
+  selected user is rejected per §4 rather than passed through.
 - Credential-content snapshot, per field (`certificate-authority`, `client-certificate`,
   `client-key`, `tokenFile`): the source file is **modified** after snapshot construction
   and the client still authenticates with the captured content; the source file is
@@ -312,8 +365,8 @@ captured contents, mirroring the Python vectors.
   each with zero mutating calls: symlinked path, directory, device node, empty file,
   oversized file. Assertions on the handed-off snapshot: the file-path key is gone and the
   content key is present; pre-existing embedded `*-data` is byte-unchanged; an exec-based
-  user passes through unchanged and is documented as the exception rather than asserted
-  immutable. Redaction: no captured credential content appears in any log line, module
+  selected user is rejected fail-closed with `exec_credential_unsupported` and zero
+  mutating calls, while a non-exec user in the same merge still proceeds. Redaction: no captured credential content appears in any log line, module
   result, state/checkpoint payload, or parser/client error — including a deliberately
   malformed PEM/token whose parse error is asserted to carry only a stable reason code and
   the entry provenance.
@@ -382,8 +435,9 @@ This design document performs no changelog or version update itself.
 
 ## Acceptance criteria
 
-1. No mutating repair action can occur after any merge-level failure, or for any cluster
-   whose resolution was not exactly one candidate.
+1. No mutating repair action can occur after any merge-level failure, for any cluster
+   whose resolution was not exactly one candidate, for a cluster whose selected user is
+   exec-based, or for a cluster whose client construction failed after a unique match.
 2. The client used for mutation is provably built from the matched snapshot (no file
    re-read between match and mutate).
 3. A same-name group carrying more than one distinct content variant anywhere in the
@@ -403,4 +457,5 @@ This design document performs no changelog or version update itself.
 7. Replacing or deleting a `certificate-authority`, `client-certificate`, `client-key`, or
    `tokenFile` file after the snapshot is built cannot change the identity the mutation
    client authenticates as; captured credential contents never appear in logs, results,
-   state, or errors. Exec-plugin users are the single documented exception.
+   state, or errors. Exec-plugin users cannot satisfy this property and are rejected
+   fail-closed on the repair path rather than exempted from it.

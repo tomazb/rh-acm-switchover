@@ -112,6 +112,30 @@ after the fact:
 The same rule governs every durability point: after `os.replace`, after any rename, and
 after the absent-file unlink below.
 
+**A failed directory fsync leaves an *indeterminate* outcome, not an unchanged one.**
+`os.replace` has already changed the visible directory entry by the time the fsync runs,
+and a failed fsync does not roll that back. So the new content may be visible while its
+durability is unknown — which means a failed durable write **cannot** be reported as
+"the previous state still holds". This matters most for the Class B contract transition
+of §5, whose whole guarantee is that a failed write leaves the old contract in force.
+The reconciliation contract is therefore:
+
+- A durability failure after `os.replace` records the transition as **indeterminate**,
+  carrying the same immutable `transition_id` as the attempted commit, rather than as
+  either committed or unchanged.
+- **Before any retry and before any mismatch evaluation**, the next run reconciles the
+  indeterminate record against what is actually on disk: if the file carries the new
+  contract with that `transition_id`, the transition is completed and marked committed; if
+  it carries the old contract, the transition is re-attempted from the same
+  `transition_id`; if it carries neither cleanly, the run fails closed.
+- `transition_id` makes that reconciliation **idempotent** — a completed transition is
+  never reapplied and never produces a duplicate audit entry, which is the same property
+  the pending/committed protocol relies on.
+- An outcome that cannot be determined at all fails closed; the design never resolves an
+  indeterminate durability result by assuming either direction.
+
+Python and the collection apply this identically.
+
 **The same requirement applies to the unlink path.** §1 restores an originally-absent
 state file by deleting the generated one, and a rename is not the only directory-entry
 change that can be lost across power failure — an unlink can be too, resurrecting the
@@ -287,7 +311,14 @@ these surfaces **together**, and this design is not implementable until it does:
 
 - `--reset-state` moves into StateManager as a construction mode that never parses or
   validates the existing payload: resolve the state path → acquire the run lock → then
-  reinitialize/remove the file under the lock. A corrupt or schema-invalid state file must
+  reinitialize/remove the file under the lock, **using the §2 durability protocol for
+  whichever operation it performs**. A reset that removes the file follows the
+  unlink + directory-fsync sequence; a reset that reinitializes it follows the
+  temp-write + `os.replace` + directory-fsync sequence; both inherit the §2 capability
+  rule and the indeterminate-outcome reconciliation. Without this, a power loss just
+  after a reset could resurrect the old progressed state or a `simulation_in_progress`
+  marker — the exact condition reset exists to clear — and the run that follows would
+  trust it. A reset whose durability step fails is **not** reported successful. A corrupt or schema-invalid state file must
   not make reset fail on load — reset exists precisely for that case. Normal (non-reset)
   construction keeps fail-closed payload validation. The pre-construction `os.remove` at
   `acm_switchover.py:1073-1083` is deleted. A concurrent run holding the lock makes reset
@@ -526,7 +557,16 @@ safety-critical behavior; it is recorded for diagnostics only.
   identity, and API error at re-read. A stable UID passes the barrier and proceeds. The
   re-read is asserted to occur **after** both locks are held, not between them.
 - Reset: concurrent lock holder → reset fails fast, live state intact; reset under lock
-  reinitializes.
+  reinitializes. Reset durability: both the remove and the reinitialize paths perform the
+  §2 directory fsync (asserted by call ordering), a failing fsync means the reset is not
+  reported successful, and a simulated power loss immediately after reset does not
+  resurrect the prior state or a `simulation_in_progress` marker.
+- Indeterminate post-`os.replace` durability: an fsync failure after a successful rename
+  records the transition as indeterminate with its `transition_id`, and the next run
+  reconciles against on-disk content **before** any retry or mismatch evaluation —
+  completing forward when the new contract is present, re-attempting from the same id when
+  the old one is, and failing closed when neither is cleanly present. Replaying the same
+  `transition_id` produces no duplicate audit entry.
 - `--force` on progressed state no longer resets; message points to `--reset-state`.
 - Contract, by mismatch class over the complete field set:
   - every **immutable-at-the-current-phase** field mismatch is fatal before mutation both

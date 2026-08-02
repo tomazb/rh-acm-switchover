@@ -82,6 +82,10 @@ Python (`modules/activation.py`):
      the apply decision is based on.
    - `auto_import_txn`: `"intent"`
    - `auto_import_conflict`: `null`
+   - `auto_import_schema_version`: `1` — written in this **same** durable update, not
+     later. The validation rules below make it mandatory on every new record, so an
+     implementation that follows this step without it would create a record its own
+     validator rejects before apply or restore.
    The allowed non-terminal transaction states are `intent` and
    `ownership_conflict`; `applied` is reachable only through the proof steps below.
 3. Apply through an explicit outcome boundary, not
@@ -266,17 +270,23 @@ auto-import read, mutation, restore, or gate decision:
   | record | `created_uid` | rationale |
   | --- | --- | --- |
   | `applied` with an `absent` prior | **required**, non-empty string | `applied` is reachable only through §1 steps 4-5, which persist the create-response UID before the transition |
-  | `intent` with an `absent` prior, crash before UID persistence | **null** | the create may have succeeded, but no response-derived UID is durable; restore stays fail-closed |
+  | `intent` with an `absent` prior, crash before UID persistence | **`null`; non-null forbidden** | the create may have succeeded, but no response-derived UID is durable; restore stays fail-closed |
   | `intent` with an `absent` prior, UID already durable | **required**, non-empty string | §1's crash-after-persistence row: the exact UID is reused and may only be verified |
-  | `ownership_conflict`, reason `already_exists` | **null (forbidden)** | 409 proves another actor owns the live object |
-  | `ownership_conflict`, reason `unexpected_patch` | **null (forbidden)** | a patch/mutation result is not a create; no ownership arises |
-  | `ownership_conflict`, reason `create_conflict` | **null (forbidden)** | the create did not succeed |
-  | `ownership_conflict`, reason `create_failure` | **null (forbidden)** | the create did not succeed |
-  | `ownership_conflict`, reason `create_outcome_ambiguous` | **null (forbidden)** | a transport failure may have hidden a create; ambiguity never becomes ownership, and a later GET cannot repair it |
-  | `ownership_conflict`, reason `create_response_missing_uid` | **null (forbidden)** | the create response carried no usable UID; a later GET cannot establish one |
+  | `ownership_conflict`, reason `already_exists` | **`null`; non-null forbidden** | 409 proves another actor owns the live object |
+  | `ownership_conflict`, reason `unexpected_patch` | **`null`; non-null forbidden** | a patch/mutation result is not a create; no ownership arises |
+  | `ownership_conflict`, reason `create_conflict` | **`null`; non-null forbidden** | the create did not succeed |
+  | `ownership_conflict`, reason `create_failure` | **`null`; non-null forbidden** | the create did not succeed |
+  | `ownership_conflict`, reason `create_outcome_ambiguous` | **`null`; non-null forbidden** | a transport failure may have hidden a create; ambiguity never becomes ownership, and a later GET cannot repair it |
+  | `ownership_conflict`, reason `create_response_missing_uid` | **`null`; non-null forbidden** | the create response carried no usable UID; a later GET cannot establish one |
   | `ownership_conflict`, reasons `post_create_absent`, `post_create_unreadable`, `post_create_malformed`, `replacement_uid` | **required**, non-empty string | these arise only *after* a successful create response whose UID is already durable (§1); the conflict is about the later observation, not about creation |
-  | any record with a `no_key` or `value` prior | **absent (forbidden)** | those priors carry `uid`, the captured pre-existing identity; nothing was created |
-  | `unknown_legacy` prior | **absent (forbidden)** | a legacy record proves neither identity nor creation |
+  | any record with a `no_key` or `value` prior | **absent; any value forbidden** | those priors carry `uid`, the captured pre-existing identity; nothing was created |
+  | `unknown_legacy` prior | **absent; any value forbidden** | a legacy record proves neither identity nor creation |
+
+Read the notation exactly: **`null`; non-null forbidden** means a null value is *valid and
+expected* on that row and only a non-null value is malformed — the enumerated
+creation-failure `ownership_conflict` records are well-formed with `created_uid: null`.
+**absent; any value forbidden** means the field must not appear at all. **required** means
+a non-empty string is mandatory and null is malformed.
 
 - A present `created_uid` must originate **only** from the successful create response. A
   name-based GET may verify equality with an already-persisted value; it may never

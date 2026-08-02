@@ -408,6 +408,15 @@ Primary API basis:
 [kubernetes-python-delete-options]: https://github.com/kubernetes-client/python/blob/master/kubernetes/client/models/v1_delete_options.py
 [kubernetes-core-delete]: https://docs.ansible.com/projects/ansible/latest/collections/kubernetes/core/k8s_module.html
 
+**Citation provenance limitation.** The Python client link targets `master` and the
+`kubernetes.core` link targets `latest` — both mutable refs, so neither is immutable
+evidence for the precondition behaviour asserted above. Before implementation the slice
+must replace them with references pinned to the exact client and collection versions the
+repository depends on (commit SHA or released version tag) and record the retrieval date;
+until then these two links are **indicative, not authoritative**, and no fail-closed rule
+here may be relaxed on their basis. The Kubernetes API definition link is versioned
+upstream and is unaffected.
+
 ### 2. Refusal aborts
 
 Any interactive "no" at the MCO, ManagedCluster, or MCH prompt:
