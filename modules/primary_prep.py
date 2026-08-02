@@ -29,6 +29,7 @@ from lib.constants import (
 )
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
+from lib.run_record import RunRecord
 from lib.utils import Phase, StateManager
 from lib.waiter import WaitConditionResult, wait_for_condition
 
@@ -57,6 +58,7 @@ class PrimaryPreparation:
         self.dry_run = dry_run
         self.argocd_manage = argocd_manage
         self.secondary = secondary_client
+        self.run_record = RunRecord(self.state)
 
     def prepare(self) -> bool:
         """
@@ -168,14 +170,14 @@ class PrimaryPreparation:
         if bs.get("spec", {}).get("paused") is True:
             logger.info("BackupSchedule %s is already paused", bs_name)
             # Still save to state for finalization (in case new hub needs it)
-            if not self.state.get_config("saved_backup_schedule"):
-                self.state.set_config("saved_backup_schedule", bs)
+            if not self.run_record.saved_backup_schedule():
+                self.run_record.record_saved_backup_schedule(bs)
             return
 
         # Always save the BackupSchedule to state for finalization
         # This allows the new hub to recreate the schedule if it doesn't have one
         # (common in passive sync scenarios where secondary only had a Restore)
-        self.state.set_config("saved_backup_schedule", bs)
+        self.run_record.record_saved_backup_schedule(bs)
 
         # ACM 2.12+ supports pausing via spec.paused
         if acm_supports_backup_schedule_pause(self.acm_version):

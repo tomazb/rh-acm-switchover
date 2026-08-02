@@ -40,6 +40,8 @@ _KEY_NEW_BACKUP_DETECTED = "new_backup_detected"
 _KEY_NEW_BACKUP_NAME = "post_switchover_backup_name"
 _KEY_ARCHIVED_RESTORES = "archived_restores"
 
+_UNSET = object()
+
 
 @dataclass(frozen=True)
 class HubFacts:
@@ -166,7 +168,12 @@ class RunRecord:
     def _set(self, key: str, value: Any) -> None:
         self._state.set_config(key, value)
 
-    def _get(self, key: str, default: Any = None) -> Any:
+    def _get(self, key: str, default: Any = _UNSET) -> Any:
+        # Forward the default only when the caller supplied one, so reads keep
+        # the exact single-argument get_config call shape they had before the
+        # facade existed (StateManager already defaults to None).
+        if default is _UNSET:
+            return self._state.get_config(key)
         return self._state.get_config(key, default)
 
     # -- hub facts: written by CLI preflight, read by every later phase --
@@ -251,7 +258,7 @@ class RunRecord:
 
     def saved_backup_schedule(self) -> Optional[dict]:
         """None means primary_prep never saved one (nothing to restore)."""
-        return self._get(_KEY_SAVED_BACKUP_SCHEDULE, None)
+        return self._get(_KEY_SAVED_BACKUP_SCHEDULE)
 
     # -- backup watch: finalization internal, crash-resume safe --
 

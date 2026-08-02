@@ -7,9 +7,7 @@ from datetime import datetime, timedelta
 from typing import Any, Callable, Collection, Optional, Tuple
 
 from lib.constants import (
-    RESUME_START_PHASE_KEY,
     STALE_STATE_THRESHOLD,
-    STATE_KEY_RESUME_SUMMARY,
     WORKFLOW_ALREADY_COMPLETED_MESSAGE,
     WORKFLOW_BANNER,
     WORKFLOW_BLANK_LINE,
@@ -39,6 +37,7 @@ from lib.constants import (
     WORKFLOW_STATE_FILE_MESSAGE,
 )
 from lib.exceptions import SwitchoverError
+from lib.run_record import RunRecord
 from lib.utils import CANONICAL_PHASE_NAMES, Phase, StateManager
 
 PhaseHandler = Callable[
@@ -234,12 +233,7 @@ def run_phase_flow(
 
     resume_start_phase = CANONICAL_PHASE_NAMES.get(current_phase)
     if current_phase != Phase.INIT and resume_start_phase is not None:
-        state.set_config(
-            STATE_KEY_RESUME_SUMMARY,
-            {
-                RESUME_START_PHASE_KEY: resume_start_phase,
-            },
-        )
+        RunRecord(state).record_resume_start_phase(resume_start_phase)
 
     ran_phase = False
     for handler, allowed_states, expected_phase in phase_flow:
