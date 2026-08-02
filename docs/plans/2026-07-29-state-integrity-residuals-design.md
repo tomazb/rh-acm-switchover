@@ -490,13 +490,17 @@ safety-critical behavior; it is recorded for diagnostics only.
 - Simulated crash: capture marker written, process killed → next load fails closed naming
   the mode; `--reset-state` then recovers.
 - `_write_state` calls dir-fsync (mock `os.fsync` counts); `EIO`-class dir-fsync failure
-  propagates (write not reported successful); `ENOTSUP`/`EINVAL` suppressed at debug.
+  propagates (write not reported successful); `ENOTSUP`/`EINVAL` **propagates when the §2
+  capability determination is undetermined**, and is logged at debug **only** once that
+  determination has established the durability guarantee holds without a directory fsync.
 - Absent-file restoration durability: the restore path unlinks and **then** fsyncs the
   containing directory, asserted by call ordering (unlink precedes the directory fsync,
   and the descriptor fsynced is the directory's). An `EIO`-class directory-fsync failure
   after the unlink propagates and the restoration is **not** reported successful;
-  `ENOTSUP`/`EINVAL` are suppressed at debug exactly as on the rename path; an `ENOENT`
-  unlink still performs the directory fsync and succeeds.
+  `ENOTSUP`/`EINVAL` follows the §2 capability rule exactly as on the rename path —
+  propagating (restoration not reported successful) while the capability is undetermined,
+  and logged at debug only once it is established; an `ENOENT` unlink still performs the
+  directory fsync and succeeds.
 - Distributed locking: two runs against the same hub UIDs **as different Unix users** →
   the second fails fast (the direct regression test for the per-euid namespace); same for
   two runs with different `--state-file` paths, and for a run in a container against a run
