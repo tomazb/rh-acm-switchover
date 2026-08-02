@@ -6,7 +6,7 @@ reaching into StateManager internals beyond constructing it.
 
 import pytest
 
-from lib.run_record import HubFacts, ManagedClusterExpectation, RunRecord
+from lib.run_record import ErrorRecord, HubFacts, ManagedClusterExpectation, RunRecord, RunSummary, StepRecord
 from lib.utils import StateManager
 
 
@@ -140,3 +140,50 @@ class TestResumeStartPhase:
         record.record_resume_start_phase("activation")
         snapshot = state.capture_state_snapshot()
         assert snapshot["config"]["resume_summary"] == {"resume_start_phase": "activation"}
+
+
+class TestRunSummary:
+    def test_from_snapshot_happy_path(self):
+        snapshot = {
+            "current_phase": "finalization",
+            "completed_steps": [
+                {"name": "preflight_validation", "phase": "preflight", "timestamp": "t1"},
+                {"name": "activate_managed_clusters", "phase": "activation", "timestamp": "t2"},
+            ],
+            "errors": [{"error": "boom", "phase": "activation", "timestamp": "t3"}],
+            "config": {"preflight_results": [{"check": "versions", "status": "pass"}]},
+        }
+        summary = RunSummary.from_snapshot(snapshot)
+        assert summary.current_phase == "finalization"
+        assert summary.completed_steps == (
+            StepRecord(name="preflight_validation", phase="preflight", timestamp="t1"),
+            StepRecord(name="activate_managed_clusters", phase="activation", timestamp="t2"),
+        )
+        assert summary.errors == (ErrorRecord(error="boom", phase="activation", timestamp="t3"),)
+        assert summary.preflight_results == ({"check": "versions", "status": "pass"},)
+
+    @pytest.mark.parametrize(
+        "snapshot",
+        [
+            None,
+            "not a dict",
+            {},
+            {"completed_steps": "not a list", "errors": 7, "config": []},
+            {"completed_steps": [None, "str", {"phase": 3}], "errors": [None, []]},
+        ],
+    )
+    def test_from_snapshot_never_raises_on_malformed_input(self, snapshot):
+        summary = RunSummary.from_snapshot(snapshot)
+        assert isinstance(summary, RunSummary)
+        for step in summary.completed_steps:
+            assert isinstance(step, StepRecord)
+        for err in summary.errors:
+            assert isinstance(err, ErrorRecord)
+
+    def test_live_summary_matches_snapshot_summary(self, state, record):
+        state.mark_step_completed("preflight_validation")
+        record.record_preflight_results([{"check": "versions", "status": "pass"}], passed=True, critical_failures=0)
+        live = record.summary()
+        offline = RunSummary.from_snapshot(state.capture_state_snapshot())
+        assert live == offline
+        assert live.completed_steps[0].name == "preflight_validation"

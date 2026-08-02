@@ -67,6 +67,94 @@ class ManagedClusterExpectation:
     mode: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class StepRecord:
+    """One completed step as recorded by StateManager.mark_step_completed."""
+
+    name: str
+    phase: Optional[str] = None
+    timestamp: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ErrorRecord:
+    """One recorded run error as written by StateManager.add_error."""
+
+    error: str
+    phase: Optional[str] = None
+    timestamp: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class RunSummary:
+    """Typed view of a run's lifecycle for report writers and show_state.
+
+    Built from a live StateManager (RunRecord.summary()) or from a state
+    snapshot read off disk (RunSummary.from_snapshot()); the two paths are
+    equivalent for the same underlying state. from_snapshot never raises on
+    malformed shapes — unknown or wrong-typed fields degrade to defaults,
+    matching the historical tolerance of the report readers.
+    """
+
+    current_phase: Optional[str] = None
+    completed_steps: tuple = field(default_factory=tuple)
+    errors: tuple = field(default_factory=tuple)
+    preflight_results: tuple = field(default_factory=tuple)
+
+    @classmethod
+    def from_snapshot(cls, snapshot: Any) -> "RunSummary":
+        if not isinstance(snapshot, dict):
+            return cls()
+
+        steps = []
+        raw_steps = snapshot.get("completed_steps", [])
+        if isinstance(raw_steps, list):
+            for step in raw_steps:
+                if not isinstance(step, dict):
+                    continue
+                name = step.get("name", "")
+                phase = step.get("phase")
+                timestamp = step.get("timestamp")
+                steps.append(
+                    StepRecord(
+                        name=name if isinstance(name, str) else "",
+                        phase=phase if isinstance(phase, str) else None,
+                        timestamp=timestamp if isinstance(timestamp, str) else None,
+                    )
+                )
+
+        errors = []
+        raw_errors = snapshot.get("errors", [])
+        if isinstance(raw_errors, list):
+            for err in raw_errors:
+                if not isinstance(err, dict):
+                    continue
+                message = err.get("error", "")
+                phase = err.get("phase")
+                timestamp = err.get("timestamp")
+                errors.append(
+                    ErrorRecord(
+                        error=message if isinstance(message, str) else "",
+                        phase=phase if isinstance(phase, str) else None,
+                        timestamp=timestamp if isinstance(timestamp, str) else None,
+                    )
+                )
+
+        config = snapshot.get("config", {})
+        if not isinstance(config, dict):
+            config = {}
+        raw_results = config.get(_KEY_PREFLIGHT_RESULTS) or []
+        results = tuple(r for r in raw_results if isinstance(r, dict)) if isinstance(raw_results, list) else ()
+
+        current_phase = snapshot.get("current_phase")
+        return cls(
+            current_phase=current_phase if isinstance(current_phase, str) else None,
+            completed_steps=tuple(steps),
+            errors=tuple(errors),
+            preflight_results=results,
+        )
+
+
 class RunRecord:
     """Named operations over the cross-phase facts of one switchover run."""
 
@@ -207,3 +295,9 @@ class RunRecord:
     def record_resume_start_phase(self, phase_name: str) -> None:
         """A resumed run starts at `phase_name`; recorded for reports."""
         self._set(STATE_KEY_RESUME_SUMMARY, {RESUME_START_PHASE_KEY: phase_name})
+
+    # -- lifecycle view: read side for report writers and show_state --
+
+    def summary(self) -> RunSummary:
+        """Typed lifecycle view of the bound state (live path)."""
+        return RunSummary.from_snapshot(self._state.capture_state_snapshot())
