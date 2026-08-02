@@ -324,7 +324,7 @@ class TestPrimaryPreparation:
         assert paused_apps[0]["pause_applied"] is True
 
     def test_pause_argocd_acm_apps_dry_run_writes_no_state(self, mock_primary_client, mock_state_manager):
-        """Dry-run should still report and record ACM-touching apps as would-paused."""
+        """ADR-0001: dry-run reports would-pause apps but writes no durable state."""
         prep = PrimaryPreparation(
             primary_client=mock_primary_client,
             state_manager=mock_state_manager,

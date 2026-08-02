@@ -144,7 +144,10 @@ class TestNoCrdRegisterPreservation:
         assert state.get_config("argocd_paused_apps") == [confirmed, unknown]
         assert state.get_config("argocd_run_id") == "run-1"
         warning = next(record.message for record in caplog.records if "keeping pause register" in record.message)
-        assert "2" in warning and "1" in warning
+        # Assert the rendered counts, not bare digits: "ADR-0001" in the message
+        # body makes a substring check for "1" pass regardless of the real count.
+        assert "2 unresolved app(s)" in warning
+        assert "(1 confirmed paused)" in warning
 
     def test_no_crd_clears_empty_register(self, tmp_path):
         state = _make_real_state(tmp_path)
