@@ -180,6 +180,23 @@ class TestRunSummary:
         for err in summary.errors:
             assert isinstance(err, ErrorRecord)
 
+    def test_from_snapshot_degrades_field_values(self):
+        summary = RunSummary.from_snapshot(
+            {
+                "current_phase": 5,
+                "completed_steps": [{"name": 3, "phase": 7, "timestamp": 9}],
+                "errors": [{"error": [], "phase": 1, "timestamp": {}}],
+                "config": {"preflight_results": ["junk", {"ok": 1}]},
+            }
+        )
+        assert summary.current_phase is None
+        assert summary.completed_steps == (StepRecord(name="", phase=None, timestamp=None),)
+        assert summary.errors == (ErrorRecord(error="", phase=None, timestamp=None),)
+        assert summary.preflight_results == ({"ok": 1},)
+
+    def test_from_snapshot_non_list_preflight_results(self):
+        assert RunSummary.from_snapshot({"config": {"preflight_results": "nope"}}).preflight_results == ()
+
     def test_live_summary_matches_snapshot_summary(self, state, record):
         state.mark_step_completed("preflight_validation")
         record.record_preflight_results([{"check": "versions", "status": "pass"}], passed=True, critical_failures=0)
