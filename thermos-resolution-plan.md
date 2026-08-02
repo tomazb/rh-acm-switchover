@@ -44,7 +44,7 @@ that the builder and review-comment resolver passes are complete. GitHub
 readiness is separate, and every branch-head change requires fresh exact-head
 independent validation before a merge-readiness assessment.
 
-**Last Updated:** 2026-07-28
+**Last Updated:** 2026-08-02
 
 ## Post-Merge Revalidation (2026-06-03)
 
@@ -53,7 +53,7 @@ independent validation before a merge-readiness assessment.
 - `F31` is resolved: path-safety now routes through canonical `path_safety` helpers plus adversarial parity coverage.
 - `F34` is resolved: Python and collection klusterlet remediation now patch/create `bootstrap-hub-kubeconfig`; managed-cluster RBAC/docs were realigned to `patch`.
 - `F35` is resolved: Helm rendering now rejects mutating `rbac.customValidatorRules` verbs before template output.
-- `F37` is resolved: standalone collection `argocd_resume.yml` validates checkpoint hub UID identity against live hubs before resuming Applications.
+- `F37` is resolved: standalone collection `argocd_resume.yml` validates checkpoint hub UID identity against live hubs before resuming Applications on **checkpoint-loaded** runs. (Scope per the authoritative `F37` row below: the gate lives in `ansible_collections/tomazb/acm_switchover/playbooks/argocd_resume.yml:107-177` and reads the checkpoint; a stateless standalone invocation that supplies an explicit `run_id` skips the checkpoint lookup entirely (`:6-14`, the same range as the Codex note below) and therefore has no checkpoint identity to validate, and direct `argocd_manage` role resume has no identity check — that identity-free surface is scoped into `TR2D-02`/`R4-01`. No identity gate is claimed for the modes that carry no checkpoint identity.)
 - Historical note: `F38` was the first residual follow-up after this snapshot and
   was later resolved by `PR 21`. The current source of truth is the resolved
   validation matrix and PR sequence below.
@@ -424,7 +424,7 @@ worktrees when their slice-specific designs establish no dependency conflict.
 | --- | --- | --- | --- | --- |
 | SSA-01 | planned | SSA-A2, SSA-P2 | Add a shared-behavior, fail-closed physical-hub distinction guard before any mutation. | Python/collection parity; wrong-context and same-UID safety |
 | SSA-02 | planned | SSA-P1, SSA-PY4 | Strengthen standalone and embedded decommission target/RBAC checks without requiring prior switchover state. | destructive-operation, RBAC, parity, and dry-run review |
-| SSA-03 | planned | SSA-PY2, SSA-A6 | Make klusterlet endpoint selection unambiguous and bound collection worker concurrency. | post-activation parity, timeout, and scale review |
+| SSA-03 | planned | SSA-PY2, SSA-A6 | Make klusterlet endpoint selection unambiguous and bound collection worker concurrency. Extended by `R4-06`: implement against `docs/plans/2026-07-29-kubeconfig-ambiguity-guard-design.md` (§1 fail-closed merge with deterministic KUBECONFIG precedence and sanitized merge errors, §2 duplicate-name rule, §3 full normalized-URL endpoint equality **plus the enumerated fail-closed rejection set for malformed server URLs**, §4 snapshot-built client **whose file-backed credential contents — CA, client certificate, client key, and `tokenFile` — are captured at snapshot time and never re-read during client construction**, and §5 mutation barrier). | post-activation parity, timeout, and scale review |
 | SSA-04 | planned | SSA-R1, SSA-R2 | Require explicit release-profile authorization for live decommission and reject safety-critical adapter overrides. | lab-controller trust boundary and release evidence review |
 | SSA-05 | planned | SSA-S1, SSA-S3 | Remove the deprecated Argo CD shell path if compatibility permits; otherwise make state identity, permissions, and context parsing fail closed. | operator migration, shell safety, and documentation review |
 | SSA-06 | planned | SSA-C1, SSA-C2 | Establish required dependency/secret gates and pin third-party actions and security tools immutably. | CI availability, false-positive, and update-process review |
@@ -574,9 +574,12 @@ worktrees when their slice-specific designs establish no dependency conflict.
   confirming supported Python and collection replacements cover every documented
   operator workflow.
 - If removal is not yet compatible, reject legacy resume state that lacks bound
-  context/UID identity, treat explicit context mismatch as fatal, create state
-  files under `umask 077`, and use kubeconfig-aware context resolution that
-  handles quoted names.
+  context/UID identity, treat explicit context mismatch as fatal, and create state
+  files under `umask 077`. (2026-07-29 assessment: the former "kubeconfig-aware
+  context resolution for quoted names" clause described no existing code — the
+  script never parses kubeconfig and already forwards `--context` safely quoted
+  (`scripts/argocd-manage.sh:64-121,184-193`); any such resolution would be new work, not
+  a fix, and is dropped from this slice.)
 - Coordinate related deprecated-shell cleanup with issue #157 so the same
   compatibility surface is not changed twice.
 
@@ -585,8 +588,10 @@ worktrees when their slice-specific designs establish no dependency conflict.
   state/context mismatch.
 - Any retained state file is owner-only from creation, not repaired only after
   writing.
-- Shell tests cover legacy state, mismatched context, quoted context names, and
-  secure file creation.
+- Shell tests cover legacy state, mismatched context, missing-UID state, wrong-UID state,
+  and secure file creation. The two UID cases are listed separately because "mismatched
+  context" does not imply them: a state file can carry the right context and no hub UID at
+  all, or a UID belonging to a different cluster.
 - Migration docs and `CHANGELOG.md` direct operators to supported replacements.
   Protected runbook/SKILL files remain unchanged unless separately approved.
 
@@ -829,19 +834,19 @@ hardening + 2 rejected/non-actionable + 1 routed to the existing `H3` track =
 | R3-T2 | Medium | Tests | `lib/utils.py:98` deliberately uses `if obj is True:` to avoid truthy object references, but every test in `TestDryRunSkipDecorator` passes exact `True`/`False`. Relaxing it to `if obj:` keeps the suite green, and a non-bool truthy `dry_run` (e.g. `1`, a config-parsed `"true"`) silently *runs* the mutation — the coupling `lib/argocd.py:628` warns about is unpinned. |
 | R3-T3 | Medium | Tests | `tests/test_argocd_constants_parity.py:52-87` claims to verify `build_pause_patch` against `pause.yml`'s Jinja but never loads the file; the oracle is hand-written Python. It is already wrong: `pause.yml` gates the whole task on `automated is not none` and issues no patch when absent, while the test asserts a patch body for exactly that case. |
 | R3-T4 | Medium | Tests | `test_acm_namespaces_parity` and `test_ansible_argocd_filters_match_acm_sub_namespaces` assert only positive matches, so widening `ARGOCD_ACM_NS_REGEX` to `.*` passes — the dangerous direction, since that regex selects which Applications get paused. The filter test passes against a stub `return True` and consults neither Python nor Bash. |
-| R3-T5 | Medium | Tests | `tests/test_ci_guardrails.py:31-38` is an exact-version denylist, not a floor (`actions/checkout@v3`, Node16 and EOL, passes), and its positive assertions match the concatenated corpus, so regressing one workflow passes while another still carries `@v6`. `upload-artifact`, `cache`, `download-artifact`, and `github-script` are unguarded. |
+| R3-T5 | Medium | Tests | (2026-07-29 assessment: the guardrail now lives at `tests/test_ci_guardrails.py:62-68`, `test_github_actions_use_node24_action_versions`; defect unchanged.) `tests/test_ci_guardrails.py:62-68` is an exact-version denylist, not a floor (`actions/checkout@v3`, Node16 and EOL, passes), and its positive assertions match the concatenated corpus, so regressing one workflow passes while another still carries `@v6`. `upload-artifact`, `cache`, `download-artifact`, and `github-script` are unguarded. |
 | R3-T6 | Medium | Tests | `tests/properties/conftest.py` registers `ci` and `deep` Hypothesis profiles, but `HYPOTHESIS_PROFILE` is set nowhere in the repo, so CI silently runs `dev` (50 examples) across the eight `test_*.py` property modules (count corrected 2026-07-26; the figure includes `test_scaffolding.py`). `tests/properties/test_scaffolding.py:17-19` cannot detect this — it reads the same env var with the same default and compares against a duplicated literal table. |
 | R3-T7 | Medium | Tests | `run_tests.sh:97` and `.github/workflows/ci-cd.yml:46` measure and upload coverage with no `--cov-fail-under` and no Codecov threshold, so coverage can regress arbitrarily. This is the mechanism by which `R3-T1` stayed invisible. |
 | R3-T8 | Medium | Tests | `tests/release/conftest.py:52-53` accepts `ACM_RELEASE_PROFILE` as equivalent to the explicit `--release-profile` flag, so a stale shell export turns a plain `pytest tests/` into a real-cluster run with no confirmation. `test_lab_controller_phase8j_live_opt_in.py` models the correct pattern (explicit allowlist plus a separate live-contact flag). |
 | R3-T9 | Medium | Tests | `create_mock_step_context` is byte-identical in four workflow suites and its sibling `mock_state_manager` has already drifted in `test_finalization.py`. There is **no `tests/conftest.py`**, contradicting `AGENTS.md:337`. The helper is also an unpinned hand-rolled double of `lib/utils.py:808 StepContext`, which works against a real `StateManager` on `tmp_path`. |
-| R3-T10 | Medium | Tests | `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/action/test_checkpoint_phase_runtime.py:661` seeds stale `operational_data`, `errors`, and `report_refs` but asserts none of them, despite `checkpoint_phase.py:44-45` naming that exact hazard. It also asserts only the in-memory result and never re-reads the checkpoint file. |
+| R3-T10 | Medium | Tests | `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/action/test_checkpoint_phase_runtime.py:661-721` seeds stale `operational_data`, `errors`, and `report_refs` but asserts none of them, despite `checkpoint_phase.py:44-45` naming that exact hazard. It also asserts only the in-memory result and never re-reads the checkpoint file. (2026-07-29 assessment: the sibling reset test at `:407-461` does re-read via the saved file — the defect is specific to this test block.) |
 | R3-T12 | Medium | Tests | Found during the 2026-07-26 revalidation. `tests/test_api_literal_guardrails.py:11,15-18` walks only `MODULES_DIR`, so the `R2-H2` residual — 7 hardcoded `cluster.open-cluster-management.io` literals at `lib/rbac_validator.py:118,149,154,193,194,238,261` — is outside the guardrail's scan root and can grow without failing CI. A guardrail with a blind spot reads as coverage it does not provide. |
-| R3-T11 | Low | Tests | Batch: `time.sleep(0.05)` mtime dependence (`test_post_activation.py:1846`); the 1279-line doc-substring module whose `_assert_no_real_live_config_literals` misses `sha256~` tokens, `client-certificate-data` blobs, and real FQDNs; the tautological `assert "tests" in text` (`test_ci_guardrails.py:48`); a needlessly `@_requires_opt_in`-skipped blocks-without-opt-in assertion; two vacuous `validate_rbac_permissions` tests; and the `OC_VERSION=4.21` pin that will rot. **Withdrawn 2026-07-26:** the import-time `sys.modules` stubbing at `tests/test_rbac_collection_parity.py:18-34` was called a dead fallback; it is not — it supports root-lane CI jobs running without `ansible-core`, which `AGENTS.md` requires. |
+| R3-T11 | Low | Tests | Batch: `time.sleep(0.05)` mtime dependence (2026-07-29 assessment: now at `test_post_activation.py:1758` and `:1861`); the 1279-line doc-substring module whose `_assert_no_real_live_config_literals` misses `sha256~` tokens, `client-certificate-data` blobs, and real FQDNs; the tautological `assert "tests" in text` (2026-07-29 assessment: now `test_ci_guardrails.py:78`, redundant to the stronger `:77`); a needlessly `@_requires_opt_in`-skipped blocks-without-opt-in assertion; two vacuous `validate_rbac_permissions` tests; and the `OC_VERSION=4.21` pin that will rot. **Withdrawn 2026-07-26:** the import-time `sys.modules` stubbing at `tests/test_rbac_collection_parity.py:18-34` was called a dead fallback; it is not — it supports root-lane CI jobs running without `ansible-core`, which `AGENTS.md` requires. |
 | R3-Q1 | Medium | Quality | Counts re-measured 2026-07-26, superseding the original "twelve files, seven crossing": **36** tracked Python files exceed 1000 lines (excluding vendored `container-bootstrap/get-pip.py`), and **21** crossed the threshold in this branch measured against merge base `aca2d296`. Largest new arrivals: `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/action/test_checkpoint_phase_runtime.py` 2111, `tests/properties/strategies.py` 1843, `tests/release/lab_controller/read_only_preflight_pilot.py` 1732. Growth in pre-existing files: `test_rbac_validator.py` 589→1312, `test_argocd.py` 448→1192, `lib/rbac_validator.py` 794→1131, `modules/post_activation.py` →1622, `test_post_activation.py` →2744. |
 | R3-Q2 | Low | Quality | Counts verified 2026-07-26: 44 `WORKFLOW_*` / `DRY_RUN_*` / `OPERATION_*` / `*_MESSAGE` entries in `lib/constants.py`, of which **35 are referenced from exactly one external file** — none is unreferenced. They are log and banner text, not shared configuration (`WORKFLOW_BLANK_LINE = ""`, `WORKFLOW_BANNER = "=" * 60`), so the indirection costs a jump to a 381-line module to read a log line. |
 | R3-Q3 | Low | Quality | Corrected 2026-07-26: the original "twelve" was an overcount. `acm_switchover.py:964-1302` holds 15 functions, of which a subset — including `:964-981`, `:1205-1218`, and `:1221-1302` — are same-signature one-line pass-throughs to `lib.*`; `run_setup`, `_prepare_runtime`, `main`, and hook construction are substantive and must stay. If the delegates exist only as test seams, patching the `lib` functions at their call sites is equally testable and shorter. |
 | R3-Q4 | Low | Quality | `scripts/release/run_lab_role_controller.py:15-42` puts `REPO_ROOT` on `sys.path` and imports seven modules from `tests.release.lab_controller.*`, making the test tree a runtime dependency of a `scripts/` entrypoint. |
-| R3-X1 | Low | Python | Both full suite runs end with `ResourceWarning: unclosed file … state.json.run.lock`; a `StateManager` run-lock handle is leaked. Surfaced by the tests, but the fix belongs in `lib/utils.py`. |
+| R3-X1 | Low | Python | Both full suite runs end with `ResourceWarning: unclosed file … state.json.run.lock`. (2026-07-29 assessment: restated — not a leak; the handle is intentionally process-lifetime with an `atexit` release (`lib/utils.py:150-163,230-254`). The gap is the absence of an explicit close on normal completion / for long-lived embedding, which is what the tests surface.) Fix belongs in `lib/utils.py`. |
 
 ### Categories Verified Clean
 
@@ -1528,6 +1533,434 @@ states all live outside git. They are recorded as provenance, not proof. A
 reader re-deriving any finding should re-run the check rather than trust the
 narration.
 
+## Spec-Sourced Safety Review (2026-07-29)
+
+Origin: seven safety design specs written against `main` (external hypothesis
+source, not part of this branch) were cross-validated against `ansible` HEAD
+`0bf55db9` by two independent read-only passes (Claude exploration agents, then a
+full Codex revalidation of 27 claims: 20 confirmed, 7 partially amended, 0
+refuted).
+
+**Provenance limitation, stated explicitly rather than implied.** Those seven inputs are
+**hypothesis sources only**, and no immutable reference for them is recorded here because
+none is available from this repository: they are not present on `origin/main`, on this
+branch, or anywhere else in the tree, so no path, commit, or archive identifier can be
+cited that a reader could resolve. Anyone re-deriving this review should therefore treat
+the seven specs as unavailable and re-run the checks directly.
+
+That is workable precisely because no finding below rests on them. Each of the 26 rows
+carries its own `ansible`-side `file:line` evidence re-verified against `0bf55db9`, and
+each states its claim in full, so every row is checkable against this branch alone without
+retrieving any source spec. The seven inputs determined *what was looked at*, not *what
+was concluded*. The six derived design documents under `docs/plans/` on this branch are
+distinct from these seven inputs and are not themselves evidence.
+
+Supplying resolvable references for the seven sources — if they are archived outside this
+repository — remains an open documentation gap. One confirmed claim — the missing primary≠secondary hub-UID distinctness
+check — is already tracked as `SSA-01` and is therefore excluded, leaving 26
+**original** R4 finding rows. A later focused PR review independently discovered and
+source-validated one additional finding, `R4-C6` (prefix-only MCH operator-Pod identity).
+It was not one of the 27 external hypotheses. The table below therefore contains 27 R4
+rows in total: 26 original rows plus one review-discovered row. Only findings confirmed
+open on `ansible` and untracked above are recorded here, grouped
+into the **six** new slice designs in `docs/plans/2026-07-29-*-design.md` (six, not
+seven: tracked-elsewhere issues were excluded and the kubeconfig design folds into
+existing `SSA-03`). Each slice follows the standard Spec And Design Gate (the
+designs exist; implementation plans are still required).
+
+### Validated findings
+
+| Finding | Severity | Surface | Summary |
+| --- | --- | --- | --- |
+| R4-A1 | High | Bash | `scripts/argocd-manage.sh:341,345` pause builds `jq 'del(.automated)'` + `--type=merge` — RFC 7396 no-op; auto-sync stays enabled while the script prints `Paused` and journals success. Python/collection are fixed; Bash is divergent. |
+| R4-A2 | Medium | All three | `automated.enabled: false` (Argo CD ≥2.13) classified as active auto-sync in Python (`lib/argocd.py:423-426`), Bash (`:326-330`), and collection (`pause.yml:58-61`). |
+| R4-A3 | Medium | All three | Resume sends the whole stored `syncPolicy` (overwrites pre-existing keys with stale values; merge patch does not delete added siblings) and never verifies post-resume; Bash also lacks the RV precondition. `TR2D-02` covers collection OCC parity only. |
+| R4-A4 | Medium | Python + collection | Pause step is checkpointed (`modules/primary_prep.py:71-81`); a run resumed at ACTIVATION, and integrated decommission, never revalidate journaled pause state. |
+| R4-B1 | High | Python + collection | Auto-import restore deletes the entire `import-controller-config` ConfigMap (`modules/finalization.py:1545-1553`; collection `state: absent`) — operator-owned keys destroyed; unset ownership only warns and leaves `ImportAndSync` behind. |
+| R4-B2 | Medium | Python + collection | ConfigMap mutated before ownership recorded (`modules/activation.py:630-635`); collection ownership is `set_fact`, durable only via optional checkpointing. |
+| R4-B3 | Medium | Python + collection | `data: null` raises `AttributeError` → misleading `SwitchoverError` or silent skip (`modules/activation.py:615-616`; both collection roles share the pattern). |
+| R4-B4 | Medium | Python + collection | Decommission ignores an unrestored auto-import transaction. |
+| R4-C1 | High | Python | MCH completion fails open: lingering non-operator pods only warn, MCH CR absence never re-checked, decommission reports success (`modules/decommission.py:420-455`). |
+| R4-C2 | High | Python | Interactive refusal of MCO/ManagedCluster/MCH prompts logs a skip and still flows to `return True` (`modules/decommission.py:69-98`). |
+| R4-C3 | Medium | Python + collection | No server-side UID-preconditioned DELETE or CR-absence proof for MCO/MCH/ManagedCluster deletion; pod waits are namespace-wide with no label selector. |
+| R4-C4 | Medium | Python | 404→`[]` (`lib/kube_client.py:724-748`) makes missing discovery indistinguishable from an empty inventory in `_delete_managed_clusters` (`modules/decommission.py:172-176`). |
+| R4-C5 | Medium | Python + collection | No destination-observability check before source MCO deletion when destination observability was never detected (metrics continuity ends silently). |
+| R4-C6 | Medium | Python + collection | Review-discovered: MCH drain logic excludes Pods by `multiclusterhub-operator` name prefix in Python (`modules/decommission.py:420-434`) and the collection (`roles/decommission/tasks/delete_multiclusterhub.yml:33-79`). An unrelated prefixed Pod can evade the drain proof because neither form factor validates controller ownership. R4-03 must bind exclusions through a stable Kubernetes identity contract, preferably `Pod → ReplicaSet →` the exact durably recorded operator Deployment UID; no implementation is present in this PR. |
+| R4-D1 | High | Python + collection | Restores bind to the moving `latest` alias (`modules/activation.py:339-350,453,793-804`); the consumed backup is never journaled; resume re-resolves. |
+| R4-D2 | Medium | Python | Explicit `--min-managed-clusters` replaces name enforcement with count-only; explicit `0` disables enforcement (`acm_switchover.py:869-875`). |
+| R4-D3 | Medium | Python | 404→`[]` yields empty baselines on activation/post-activation inventory reads. |
+| R4-D4 | Medium | Python + collection | Integrated teardown consumes no migration evidence. |
+| R4-E1 | High | Python | A killed dry-run/validate-only leaves durable intermediate state (snapshot restore only in `finally`) that later runs trust; no crash marker. |
+| R4-E2 | Medium | Python | Validate-only checkpoint restores phase/errors/timestamp only; preflight `config` writes leak (`lib/utils.py:482-505`). |
+| R4-E3 | Medium | Python + collection | No run contract: resume silently accepts changed safety-critical options (`old_hub_action`, method, ArgoCD/auto-import management). |
+| R4-E4 | Medium | Python | Locks are state-file-scoped (`lib/utils.py:156`) and host-local; the same physical hubs don't contend across different `--state-file` paths, and a host-local lock cannot contend across Unix users, containers, AAP execution nodes, or hosts either. The design (`docs/plans/2026-07-29-state-integrity-residuals-design.md` §3) makes a per-hub `coordination.k8s.io/v1` Lease keyed on the hub cluster UID the authoritative lock, with a strict post-acquisition UID revalidation barrier; a local flock survives only as a same-host optimization. No implementation is present in this PR. The implementation slice must add namespaced `coordination.k8s.io/leases` `get`/`create`/`update`/`delete` to `deploy/rbac/role.yaml`, `deploy/helm/acm-switchover-rbac`, and `deploy/acm-policies/` together, and a missing Lease permission fails closed rather than running unlocked. |
+| R4-E5 | Medium | Python | `--reset-state` removes the state file before the run lock exists (`acm_switchover.py:1073-1083`); `--force` resets progressed state. |
+| R4-E6 | Low | Python | `_write_state` lacks a parent-directory fsync after `os.replace` (`lib/utils.py:367-384`). |
+| R4-F1 | Medium | Python | Klusterlet-repair kubeconfig merge fails open: unreadable/oversized/YAML-invalid files are debug-skips, and the repair call site passes `max_size=0` (`modules/post_activation.py:1311-1317,1377-1404,1438-1444`); mutations proceed on the partial view. |
+| R4-F2 | Medium | Python | The mutation client is built by re-reading kubeconfig files (`new_client_from_config`, `:1118-1134`) after manual matching — TOCTOU and dual-resolver disagreement. |
+| R4-F3 | Low | Python | Duplicate entry names and duplicate YAML mapping keys silently last-write-win in the manual merge. |
+
+### Planned resolution slices
+
+| Slice | Status | Findings | Design | Proposed resolution boundary |
+| --- | --- | --- | --- | --- |
+| R4-01 | planned | R4-A1, R4-A2, R4-A3, R4-A4 | `docs/plans/2026-07-29-argocd-pause-correctness-residuals-design.md` | Minimal Bash pause fix (lifecycle stays `SSA-05`), shared five-outcome fail-closed auto-sync classification, versioned journal schema strictly validated before every gate/resume/settlement/mutation, versioned migration of legacy full-`syncPolicy` pause records, durable intent-before-mutation operation record with reconciliation, `automated`-only resume with post-resume verification, journal-scoped destructive-phase gates. |
+| R4-02 | planned | R4-B1, R4-B2, R4-B3, R4-B4 | `docs/plans/2026-07-29-auto-import-transaction-design.md` | Prior-state capture with durable intent before mutation, `created_uid` required/forbidden by transaction state and create-response provenance, explicit outcome precedence in which an unresolved `ownership_conflict` dominates live-state restore/no-op evaluation, key-level restore, `data: null` normalization, decommission gate. |
+| R4-03 | planned | R4-C1, R4-C2, R4-C3, R4-C4, R4-C5, R4-C6 | `docs/plans/2026-07-29-decommission-completion-design.md` | Server-side UID-preconditioned DELETE with CR-absence proof, refusal-aborts semantics, one shared strict Kubernetes inventory primitive (contract owned here, consumed by `R4-04` — not decommission-private), destination-observability gate, and identity-bound MCH Pod classification through the exact recorded operator Deployment UID rather than a name prefix. |
+| R4-04 | planned | R4-D1, R4-D2, R4-D3, R4-D4 | `docs/plans/2026-07-29-migration-evidence-design.md` | Freeze `latest` to journaled concrete backup names at activation entry, additive name+count expectations with explicit waiver, strict inventory reads through the shared primitive whose contract `R4-03` owns (error is never absence; absence is fatal for migration consumers), evidence bound to Restore identity/spec, atomic UID+resourceVersion passive patch, durable cleanup state machine with fail-closed ambiguous recovery, final validated UID+resourceVersion DELETE, evidence/cleanup gate before teardown. |
+| R4-05 | planned | R4-E1, R4-E2, R4-E3, R4-E4, R4-E5, R4-E6 | `docs/plans/2026-07-29-state-integrity-residuals-design.md` | Full-fidelity simulation snapshot with crash marker, parent-dir fsync on both the rename and the absent-file unlink path, per-hub `coordination.k8s.io/v1` Lease locks with a post-acquisition UID revalidation barrier (requires a coordinated RBAC update — see `R4-E4`), reset-under-lock with narrowed `--force`, run contract with atomic committed contract transitions. |
+| R4-06 | planned | R4-F1, R4-F2, R4-F3 (+ SSA-PY2, SSA-A6) | `docs/plans/2026-07-29-kubeconfig-ambiguity-guard-design.md` | Extends `SSA-03`: fail-closed merge, duplicate-name rule, full-URL endpoint normalization with an enumerated fail-closed rejection set for malformed server URLs, snapshot-built client whose file-backed credential **contents** (CA/cert/key/`tokenFile`) are captured at snapshot time rather than re-read at client construction, mutation barrier. `SSA-03` implementation should use this design. |
+
+Cross-references (adjacent, not superseded): `SSA-01` (hub distinctness — excluded,
+already tracked), `SSA-02` (decommission target/RBAC — complementary to `R4-03`),
+`SSA-05` (Bash script lifecycle — owns everything beyond the narrow `R4-01` Bash
+correctness fixes for `R4-A1`/`R4-A2`/`R4-A3`, including the remaining Bash
+concurrency-prevention gap), `TR2D-02` (collection resume OCC parity), `R3-10a` (discovery blast radius —
+`R4-01` gates are journal-scoped to avoid conflict), `R3-T3` (parity-test oracle),
+`F19`/`F20` (unrelated refactors), `R2-M2`, `R3-P7`, `R3-A6`, `R3-X1`.
+
+R4 count reconciliation: the external source contributed 27 validated hypotheses; the
+already-tracked `SSA-01` overlap was excluded, yielding 26 original R4 rows. `R4-C6` is
+one additional PR-review-discovered row, so the tracker now contains **27 R4 rows**. It
+does not change the historical 20-confirmed/7-partially-amended external-hypothesis
+accounting.
+
+### Design-hardening ledger — PR #204 review rounds (2026-07-29 → 2026-08-02)
+
+PR #204 went through roughly fifteen exact-head review rounds (CodeRabbit exact-head
+reviews, Copilot advisories, Codex validation passes, and one independent bounded design
+review contributing 12 primary + 10 adversarial findings). All 143 review threads are
+resolved, and every accepted finding was folded into the six design documents themselves —
+**the designs at this branch head are authoritative; this ledger is an index, not a second
+normative source.** Its purpose is to stop re-derivation: before filing a new finding
+against these designs, check whether it is already adjudicated below.
+
+**Adjudicated factual corrections** (settled — do not re-litigate):
+
+1. **Legacy full-`syncPolicy` pause-record ownership: all three form factors wrote it.**
+   Collection (`pause.yml:46-47`), Bash (`scripts/argocd-manage.sh:325-337,432-433`), and
+   Python (`lib/argocd.py:660-711`, `lib/argocd_coordinator.py:101,183,240,261,272`, resume
+   `:612`). Two earlier correction rounds got this wrong (collection-only, then
+   collection+Bash). Final rule in §2b of the Argo CD design: each form factor converts
+   from its own store; a missing/empty/structurally incomplete `original_sync_policy` is
+   `recovery_required` and is never completed from live state.
+2. **`lib/kube_client.py` has no `update`/PUT custom-resource primitive**, only `patch`.
+   The Lease design depends on `resourceVersion`-conditional replacement, so `R4-05` must
+   add `update_custom_resource` (PUT); the RBAC verb set is valid only once the matching
+   primitive exists.
+3. **R3-X1 is not a run-lock handle leak** — the handle is intentionally process-lifetime
+   with an `atexit` release; R3-X1 tracks only the missing explicit close on normal
+   completion and long-lived embedding.
+
+**Review-added requirements now binding in each design** (implementation slices inherit
+these as acceptance criteria):
+
+*Area A — Argo CD (`R4-01`):*
+
+- Versioned journal schema v2 (§2a) strictly whole-record-validated before every gate,
+  resume, settlement, and state transition; `restore_payload` limited to the canonical
+  tool-owned `automated` object; malformed/partial/unknown-version records →
+  `recovery_required` at the gate.
+- §1a durable intent-before-mutation operation record: states `intent_recorded` →
+  `mutation_accepted` → `verify_pending` → `verified` → `settled`, plus
+  `recovery_required`; immutable `owned_marker` exact-matched at reconciliation and
+  settlement; `metadata.uid` compared against `operation.expected_uid` on every live read;
+  `verify_pending` reconciliation selected by `operation.kind`.
+- Operations and journal entries bound to a durable hub/cluster identity (same Application
+  name can exist on several hubs; the coordinator keys on `(client, hub_label)`).
+- Paused shape is `automated` absent/null (RFC 7396 deletes the key); gates reject any
+  surviving object including `enabled: false` with intact marker; `enabled: null` stays
+  ACTIVE and is canonicalized at journaling time; non-null non-boolean stays UNKNOWN.
+- `skipped_disabled` is always re-read, never terminal; gates skip only resumed-terminal
+  entries; non-terminal does not mean blocking (healthy `paused` passes; `verify_pending`
+  is settled by the gate's own re-read).
+- Failed classification-evidence writes are fatal and record a `journal_incomplete`
+  barrier; the empty/absent-journal fast path is guarded by a **positive
+  `argocd_journal_attestation`** — absence blocks whether or not a barrier exists, and
+  recovery is a fresh pause pass, never an automatic downgrade.
+- Discovery may clear `argocd_paused_apps` only on a positive no-CRD determination with no
+  surviving non-terminal entry.
+- Legacy migration sequencing is non-circular: v1 structural validation → identity-bound
+  live read → durable migration write → full v2 validation.
+- Bash concurrency boundary: request-atomic merge patch, detect-not-prevent re-read,
+  prevention gap stays `SSA-05`, no OCC parity claim; Bash post-patch read failure
+  journals a durable `verify_pending` entry and exits non-zero.
+
+*Area B — auto-import (`R4-02`):*
+
+- `created_uid` governed by a state-and-provenance table (`null; non-null forbidden` vs
+  `absent; any value forbidden`); the enumerated creation-failure `ownership_conflict`
+  reasons are valid records with a null value.
+- Explicit outcome precedence: malformed state → unresolved `ownership_conflict` (tier 2
+  scoped to a recorded conflict, or unproven ownership with a live same-name object) →
+  proven applied transaction/identity (tier 3 admits a schema-valid `intent` record with
+  prior-shape identity) → live-state evaluation.
+- `ownership_conflict` recovery is evidence-driven, never retry- or mutation-driven: only
+  the three post-create observation-failure reasons clear via a strict GET returning the
+  exact `created_uid`; the seven never-established reasons clear only via the audited
+  acknowledgement bound to the transaction id.
+- Every restore patch/delete is bound to observed `resourceVersion` **and** UID
+  (server-enforced preconditions); a failed test records `apply_precondition_failed` with
+  no mutation and no silent re-capture.
+- `restore_conflict` is durable, terminal-for-the-automatic-attempt, unsuccessful,
+  non-zero, and decommission-blocking; the decommission-gate acknowledgement is a durable
+  audited record.
+- `auto_import_schema_version` is persisted in the initial intent update; legacy
+  `auto_import_strategy_set: false` normalizes to **no transaction** (key dropped, nothing
+  synthesized); combined with any other auto-import key it fails closed.
+- Restore table is self-contained with `restored_noop` precedence; resume continues the
+  existing intent transaction; minting a new transaction id clears stale terminal
+  evidence and acknowledgements in the same durable update.
+
+*Area C — decommission (`R4-03`):*
+
+- Exactly one durable operator-identity outcome (resolved `operator_deployment` or a
+  complete `operator_identity_unavailable` record) persisted **before** MCH DELETE;
+  persistence failure blocks DELETE; reruns reuse the outcome immutably.
+- Shared strict inventory primitive algebra separates discovery-404 from object-404
+  (`object_absent` only after successful discovery; timeouts/authorization/unparseable
+  discovery are `error`); error is never absence.
+- Source observability is re-read immediately before deletion (never trusting the
+  preflight boolean); `--acknowledge-observability-not-migrated` is accepted only against
+  a positively verified absent destination.
+- `completed` records proof **at the instant of the final read** (carrying `observed_at`
+  and per-resource `resourceVersion` values) and is necessary but never sufficient for a
+  later destructive decision: integrated teardown must re-run the CR-absence and
+  identity-aware Pod checks against live state.
+- Teardown-phase record survives drain-timeout reruns; replacement CRs are fatal in
+  acceptance; MCH drain Pod classification binds through the recorded operator Deployment
+  UID (`R4-C6`), not a name prefix.
+
+*Area D — migration evidence (`R4-04`):*
+
+- A journaled backup requires `status.phase == "Completed"` **plus** a well-formed
+  `status.completionTimestamp` and zero `status.errors`.
+- Terminal success per resource: ACM `Restore` `Finished`, Velero `Restore` `Completed`;
+  every other phase — `FinishedWithErrors` included, no benign-message allow-list — is
+  fail-closed.
+- Evidence is bound to restore `namespace`/`name`/`uid`/`generation`/`spec_fingerprint`
+  (canonical SHA-256 over a deterministic JSON projection, parity-identical); identity is
+  journaled **at mutation time** (create response / pre-patch read) and the terminal GET
+  verifies equality, so a same-name replacement fails closed.
+- The strict-read primitive must satisfy its contract **before** consumers are wired to it
+  (today's `list_custom_resources` maps list 404 to `[]`, accepts invalid `items`, and can
+  truncate with a `continue` token outstanding); `find_passive_sync_restore` routes
+  through the strict contract instead of collapsing failure to `None`.
+- Cleanup delete of the run's own Restore carries a server-side UID precondition
+  (collection: `acm_uid_guarded_delete`); a 404 at delete time without a journaled prior
+  delete fails closed; §4a live revalidation barrier runs at finalization **before**
+  cleanup deletes the Restore, durably recording `teardown_revalidated_at`.
+- Bundle interrupted between ordered writes: the retry repeats full live validation,
+  fails closed on disagreement with any persisted field, writes only missing fields, and
+  writes `completed_at` strictly last.
+- The waiver covers only the name predicate, and carries actor/reason/optional request id
+  plus explicit `scope`/`outcome` fields; provenance, restore completion, and
+  post-activation completion are unconditional.
+
+*Area E — state integrity (`R4-05`):*
+
+- Three-class run-contract model: Class A immutable/destructive (fatal once its window
+  closes, never overridable), Class B overridable only with `--accept-changed-options`
+  plus a durable audit record written first, Class C informational; `--force` authorizes
+  nothing in any class; the full ten-field contract set is enumerated for both form
+  factors.
+- The two Argo CD flags bind different obligations: `--argocd-manage` a gate obligation
+  (any entry other than `resumed`, including `skipped_disabled`),
+  `--argocd-resume-after-switchover` a restoration obligation (`paused` /
+  `verify_pending` / `classification_unknown` / `recovery_required`).
+- Progressed legacy state requires `--reset-state` or an explicit audited legacy migration
+  with operator-supplied Class A values — never defaulted from the current invocation;
+  an accepted Class B override is one atomic committed transition (versioned
+  pending/committed protocol where a backend cannot commit atomically).
+- Directory-fsync capability is determined explicitly up front; `ENOTSUP`/`EINVAL` may be
+  tolerated only after that determination; a post-`os.replace` fsync failure is recorded
+  as an indeterminate transition (with `transition_id`) and reconciled before retry; the
+  absent-file unlink restore path fsyncs its containing directory; the §2 durability
+  protocol also governs `--reset-state`.
+- Per-hub `coordination.k8s.io/v1` Lease locks keyed on hub cluster UID: deterministic
+  sorted-UID acquisition, bounded duration with crash expiry,
+  `resourceVersion`-conditional takeover of expired Leases only, guarded release,
+  check-mode acquisition, post-acquisition strict UID revalidation barrier before any
+  mutation, missing Lease permission fatal; local flock survives only as a same-host
+  optimization; collection check-mode claim is scoped to state/checkpoint writes (Leases
+  are still created and renewed).
+
+*Area F — kubeconfig (`R4-06` / `SSA-03`):*
+
+- Enumerated fail-closed rejection set for malformed `cluster.server` values (missing,
+  null, non-string, empty/whitespace, relative/scheme-relative, unsupported scheme,
+  userinfo, invalid port, invalid IP literals, malformed percent escape, query, fragment,
+  structurally invalid parse), applied before endpoint matching and to the
+  expected-endpoint source; zero mutating calls; sanitized diagnostics that never echo a
+  credential-bearing URL.
+- Structural schema validation of every parsed document (mapping root, list entry
+  collections, mapping entries, non-empty string names); one shared inclusive 10 MiB size
+  limit governing merged files and credential reads in both form factors, with
+  `ACM_KUBECONFIG_MAX_SIZE` unable to disable it (closes both the `<= 0` and `max_size=0`
+  bypasses).
+- File-backed credential **contents** (CA, client cert, client key, `tokenFile`) captured
+  at snapshot time through a race-resistant descriptor-based boundary; path keys dropped
+  from the handed-off snapshot; contents never logged, returned, or persisted; exec-based
+  users are **rejected** on the repair path, not exempted (an exec plugin runs at client
+  construction, outside the snapshot).
+- `token` over `tokenFile` precedence, the deliberate trailing-whitespace divergence from
+  the official loader, empty-value handling, and exact file-to-field transformation rules
+  are pinned; deterministic KUBECONFIG precedence with default-path fallback; merge errors
+  sanitized to stable reason codes; the matched context is passed explicitly to
+  `new_client_from_config_dict`; the collection's `build_core_v1_client` /
+  `build_apps_v1_client` route through the frozen snapshot.
+- Duplicate rule generalized to `(kind, name)` groups: more than one distinct content
+  variant fails with full `(kind, name, source_file, zero-based index)` provenance;
+  byte-identical duplicates remain first-wins; same-file list entries are covered; the
+  mutation barrier covers client-construction failure after a unique match.
+
+*Cross-cutting (all six designs):*
+
+- Implementation slices record a `CHANGELOG.md` `[Unreleased]` entry and never change
+  released version identifiers or create release tags (AGENTS.md Version Management);
+  the former "version bump per repo policy" test items are replaced accordingly.
+- External citations (Argo CD, Kubernetes, kubernetes python-client, kubernetes.core) use
+  mutable refs and must be pinned to the depended-on versions before implementation.
+- The seven external source specifications have no resolvable immutable reference from
+  this repository; the limitation is stated plainly in each affected place rather than a
+  path invented.
+
+### Design convergence rule (2026-08-02)
+
+The six design documents at this branch head are the **accepted implementation baseline**
+for `R4-01`–`R4-06`. From this point:
+
+1. A new review finding against these designs is filed as a tracker row scoped into the
+   owning implementation slice (`R4-01`–`R4-06`), where it becomes a testable acceptance
+   criterion — **not** as another design-document amendment round on PR #204.
+2. The only exception is a demonstrated fail-open safety contradiction *inside a design*:
+   a path where the design as written permits an unproven destructive action. That, and
+   only that, reopens the design document.
+3. Editorial, wording, numbering, and cross-reference consistency findings that do not
+   change any acceptance criterion are out of scope for further PR #204 rounds.
+
+Rationale: every amendment commit invalidates all prior exact-head reviews and restarts
+the review cycle; fifteen rounds in, the marginal findings are consistency nitpicks, not
+safety gaps. Convergence requires freezing the baseline and moving residual precision into
+implementation slices, where a test can hold it.
+
+**Design-document lifecycle (supersede-at-merge, tests authoritative).** The six designs
+are consumables for the implementation wave, not permanently maintained documentation:
+
+1. **Until a slice merges**, its design document is the spec: the slice's tests are
+   written from the design's acceptance criteria, and the Spec And Design Gate's
+   verification-evidence requirement is judged against the design.
+2. **When a slice merges into `ansible`**, the behavior contract transfers to the merged
+   tests and code. The design document is marked superseded — a header note naming the
+   implementing PR and stating that the tests are now authoritative and the document is a
+   historical record — in that slice's own PR or the next tracker update.
+3. **After supersession, the document is never updated again.** Refactors that move code
+   or restructure modules do not touch it, and drift between a superseded design and the
+   current code is expected and is not a finding. Behavioral questions are answered by
+   the tests; the superseded design records only the rationale for why the contract is
+   shaped the way it is.
+4. A superseded design is **not** a valid citation for reopening a settled decision; the
+   adjudication record it preserves (including this ledger) exists to prevent
+   re-litigation, not to invite it.
+
+### Convergence-rule triage — CodeRabbit round of 2026-08-02 (18 findings)
+
+First application of the rule above. Disposition of all 18 threads:
+
+**Refuted, already adjudicated (1):** the `journal_incomplete` cross-invocation
+durability claim — the attestation table in the Argo CD design already blocks the
+empty-journal fast path whenever the positive attestation is absent, barrier or no
+barrier; durability of the barrier is not load-bearing.
+
+**Fail-open contradictions, designs amended under rule 2 (7, four files):** attestation
+now binds to journal contents (`entries_written` must match observed entries; empty fast
+path requires attested count zero; stale or partial journals block); legacy-migration
+`expected_uid` adoption is a stated, bounded downgrade with marker rules as the legacy
+identity defense, never inferred when marker rules fail; the Bash scope summary now
+enumerates the §1a/§2/§2b/§3 obligations instead of excluding them; the decommission
+rerun no-op is conditional on the absence of a teardown record; progressed legacy-state
+migration requires explicit historical values for every *conditionally* class A field
+(both ArgoCD flags under an outstanding pause journal); the cross-euid lock test
+description states the removed-namespace invariant; `auth-provider` users are rejected on
+the repair path (`auth_provider_unsupported`) for the same construction-time-identity
+reason as exec plugins.
+
+**Converted to implementation-slice obligations under rule 1 (10 threads, 9 rows — two
+threads share the `cleanupBeforeRestore` row):** the rows below extend the named slice's
+acceptance scope; the designs are intentionally not amended for them.
+
+| Slice | Obligation (from 2026-08-02 triage) |
+| --- | --- |
+| R4-01 | Journal schema separates per-entry state schemas from run-level record schemas: required and forbidden fields defined per entry state (non-mutating `skipped_disabled`/`classification_unknown` entries carry no synthetic `run_marker`/`operation`), and `journal_incomplete` plus the attestation get distinct run-level shapes a strict validator can check. |
+| R4-02 | Add `apply_precondition_failed` to the canonical conflict-reason list and recoverability table: non-recoverable, no automatic retry. |
+| R4-03 | Apply the shared strict 404 algebra to the deletion boundary's named-object GET and final-verification reads: a 404 proves absence only after successful discovery; discovery, authorization, transport, decode, and timeout failures stay unverifiable and can never yield a false absent result. |
+| R4-04 | Journaled-backup schema persists the status fields the contract validates (`phase`, `errors`, `warnings`) or states explicitly that they are validated but not persisted — same rule in both form factors. |
+| R4-04 | Decide Backup provenance strength: store namespace + `metadata.uid` per consumed category and revalidate in both form factors, **or** state explicitly that same-name Backup replacement is outside the guarantee. |
+| R4-04 | Define and journal the ACM-to-Velero Restore association (namespace/name/UID + strict correlation rule); both identities and terminal statuses required before `restore.completed_at`; cover unrelated, replaced, missing, and mismatched Velero Restores. |
+| R4-04 | Include `cleanupBeforeRestore` in the journal projection, fingerprint, comparisons, and parity tests, **or** narrow the exact-spec claim to the method-scoped backup projection. |
+| R4-05 | Define Lease release-failure handling: `403`/`409`/API failures never fall back to unconditional delete or report successful cleanup under uncertain ownership; a failed release leaves the Lease to bounded expiry with an operator-visible error. |
+| R4-06 | Validate resolver-consumed nested fields before matching: `context.cluster` non-empty string, `context.user` non-empty string when present, each `cluster`/`user` member a mapping; violations fail closed with sanitized provenance; parity vectors added. |
+
+Where a row offers an **or**, the implementing slice makes the call in its implementation
+plan and records it; both branches satisfy the obligation.
+
+## Open-Findings Assessment And Ranking (2026-07-29)
+
+Method: three parallel evidence-based verification passes over every open/planned/
+deferred finding (SSA family; R3 findings, tests, quality; TR2D; R2-L deferred rows; H3)
+plus a regression spot-check of ten high-risk resolved claims, followed by a full
+independent Codex validation pass (all still-apply verdicts and corrections confirmed;
+several priority calls amended on Codex evidence and adopted below). R4 rows were
+excluded from re-validation (validated twice on 2026-07-28/29) but are ranked.
+
+**Results: no open finding is stale — every open row still applies at HEAD `0bf55db9`**
+(SSA-A6 remains the only partial, as already recorded). **All ten spot-checked resolved
+claims hold** (F1, F2, F5, F31, F34, F35, F37, F39, R3-01/TR2D-01, B1) — no regressions.
+
+### Priority ranking
+
+P1 = fix before the next switchover on that form factor; P2 = fix soon; P3 = hardening;
+P4 = hygiene/docs. Conditional P1s bind to the named operation, not the switchover.
+
+| Rank | Findings | Rationale |
+| --- | --- | --- |
+| P1 | SSA-A2 + SSA-P2 (`SSA-01`) | No primary≠secondary cluster-UID comparison anywhere in product code; a same-cluster misconfiguration runs the destructive sequence against one hub. |
+| P1 | R3-A4 (`R3-02`) | Collection compactor drain `failed_when: false` fail-open — backup can run against a live compactor. |
+| P1 | R3-P1 (`R3-10b` scope) | Single 180s batch deadline for all klusterlet workers → false post-activation `SwitchoverError` at fleet scale, after production moved. |
+| P1 | R4-D1 (`R4-04`) | Restores bind to the moving `latest` alias on the normal activation path in both form factors; consumed backup never journaled. |
+| P1 (conditional: before next standalone/non-interactive decommission) | SSA-P1 (`SSA-02`) | No wrong-target identity check; `--skip-rbac-validation` + `--non-interactive` remove every remaining gate. |
+| P1 (conditional: any recovery run using persistent `reset_from`) | R3-A6 (`R3-06`) | Truthy `reset_from` disables checkpoint identity validation for the whole run; empty shipped default is inert. |
+| P1 (conditional: auto-import management enabled) | R4-B1 (`R4-02`) | Restore deletes the entire operator-owned import-controller ConfigMap. |
+| P1 (release/test boundary) | R3-T8 | Ambient `ACM_RELEASE_PROFILE` env var unskips live certification tests that invoke the release orchestrator. |
+| P2 | SSA-PY4, SSA-PY2, SSA-R1, SSA-R2, SSA-S1, SSA-PY5, R3-A2, R3-A5, R3-A8, R3-P2, R3-P4, R3-T1, TR2D-02, R2-L7a, R2-L7c; R4-A1, R4-C1, R4-C2, R4-E1 | Real correctness/safety defects with a mitigating precondition: interactive-only paths, deprecated-but-shipped script, reporting-only impact (R3-A5 — unsuppressed identity reads fail first), fleet-scale or shared-hub topology required, or spec'd R4 High rows on non-switchover paths. |
+| P3 | SSA-A6, SSA-S3, SSA-C1, SSA-C2, SSA-C3, SSA-S2, SSA-PY3, R3-A3, R3-A7, R3-A9, R3-A10, R3-P3, R3-P5, R3-P6, R3-P7, R3-P9, R3-P12, R3-T2, R3-T3, R3-T4, R3-T7, R3-T10, R3-T12, R2-L6, R2-L7b, R2-L8, H3; R4 Medium rows (including review-discovered R4-C6) | Hardening: fail-open windows needing an adversary/misconfiguration, guardrail blind spots, duplication with drift risk. |
+| P4 | SSA-A5, R3-A11, R3-P8, R3-P13, R3-X1, R3-T5, R3-T6, R3-T9, R3-T11, R3-Q1..Q4, TR2D-03, TR2D-04, R2-L1, `/tmp/run` residual; R4-E6, R4-F3 | Hygiene, docs, conventions, design-gated refactors. |
+
+### Corrections applied in this pass
+
+Marked "2026-07-29 assessment" at the affected rows: R3-T5 test reference
+(`tests/test_ci_guardrails.py:62-68`); R3-T10 path/range
+(`ansible_collections/tomazb/acm_switchover/tests/unit/plugins/action/test_checkpoint_phase_runtime.py:661-721`,
+sibling `:407-461` does re-read); R3-T11 line refs (`:1758`/`:1861`, guardrail `:78` redundant to `:77`);
+R3-X1 restated (process-lifetime handle with `atexit` release, not a leak); SSA-05
+acceptance clause and SSA-S3 matrix row (no kubeconfig/JSONPath context parsing exists in
+the script — `--context` is forwarded safely quoted; the clause described work to add and
+is dropped); F37 scope (gate lives in `playbooks/argocd_resume.yml:107-177`,
+checkpoint-loaded standalone runs only). Verified already-accurate, no edit needed:
+R3-A3 (row already scoped to the `_old_hub_existing_restore_info` pair — the other three
+publish sites are guarded), B1/PR 32 (kwarg-retained/field-removed already recorded).
+Issue-body inaccuracy noted, not a tracker edit: #153 (R2-L6) claims "every other role"
+follows the discover_resources convention — five of ten roles do. Detail amendments from
+Codex adopted: SSA-PY5 has ~8 concrete `str(ApiException)` render sites (not 14);
+SSA-R2's dry-run override vector is specifically the Ansible adapter's trailing `-e`
+append.
+
+**New note (Codex):** the F37/F39 identity protections do not cover the identity-free
+resume surface — explicit `run_id` skips checkpoint lookup
+(`playbooks/argocd_resume.yml:6-14`) and direct `argocd_manage` role resume requires only
+the run-id marker (`roles/argocd_manage/tasks/resume.yml:5-21`). Fold into `TR2D-02` /
+`R4-01` implementation scope.
+
 ## Finding Validation Matrix
 
 | Finding | Validation | Resolution PR | Notes |
@@ -1568,7 +2001,7 @@ narration.
 | F34 | resolved | PR 17 | Python and collection klusterlet remediation now patch/create `bootstrap-hub-kubeconfig`; managed-cluster RBAC/docs were realigned from `delete` to `patch`. |
 | F35 | resolved | PR 19 | Helm render now rejects mutating `rbac.customValidatorRules` verbs through `validateValidatorCustomRules`, with static tests covering allowed and rejected cases. |
 | F36 | resolved | PR 15 | Service-account token generation defaults were reduced to `24h`; longer lifetimes remain explicit operator opt-in. |
-| F37 | resolved | PR 20 | Standalone collection `argocd_resume.yml` validates checkpoint hub UID identity against the live hubs before resuming Applications. |
+| F37 | resolved | PR 20 | Standalone collection resume validates checkpoint hub UID identity against the live hubs before resuming Applications. (2026-07-29 assessment: the gate lives in `playbooks/argocd_resume.yml:107-177` and applies to checkpoint-loaded standalone runs; explicit `run_id` invocations skip checkpoint lookup and direct `argocd_manage` role resume has no identity check — that identity-free surface is scoped into `TR2D-02`/`R4-01`.) |
 | F38 | resolved | PR 21 | Python klusterlet verification now fails closed for broad API/client inspection failures instead of downgrading them to informational `unreachable`. |
 | F39 | resolved | PR 22 | Python `--argocd-resume-only` now fails closed for legacy state without hub identity binding when `argocd_paused_apps` exist but `hub_identities` are absent. |
 | F40 | resolved | PR 23 | Python dry-run Argo CD management now performs discovery and blocker reporting in parity with the collection dry-run path. |
@@ -1615,7 +2048,7 @@ narration.
 | SSA-C3 | confirmed, corrected P2 | SSA-07 (planned) | Blocking Bandit omits collection plugins, and CI/release dependency resolution has minimum floors without reviewed constraints or lock artifacts. |
 | SSA-PY5 | confirmed with direct reusable-helper exposure, corrected P2 | SSA-09 (planned) | `KubeClient.patch_custom_resource()` logs status, reason, bounded raw API response body, and the rendered exception; full-list aggregation remains a separate lower-urgency subproblem within the same design gate. |
 | SSA-A6 | confirmed with narrower scope, corrected P3 | SSA-03 (planned) | Collection worker configuration has no upper cap; defaults and API timeouts mitigate impact, and the original check-mode concern was not substantiated. |
-| SSA-S3 | confirmed with lower composite impact, corrected P3 | SSA-05 (planned) | Deprecated Argo CD state may be created mode `0644`, and shell jsonpath context lookup can break on quoted context names; token stdout is documented and its wrapper already writes mode `0600`. |
+| SSA-S3 | confirmed with lower composite impact, corrected P3 | SSA-05 (planned) | Deprecated Argo CD state may be created mode `0644`; token stdout is documented and its wrapper already writes mode `0600`. (2026-07-29 assessment: the "shell jsonpath context lookup breaks on quoted names" claim is withdrawn — the script performs no kubeconfig/JSONPath context parsing; `--context` is forwarded safely quoted.) |
 | R3-A1 | merged, High | R3-01 / TR2D-01; issue #199; PR #200 | The correction assigns distinct scoped, cluster-wide, validation, and published variables and guards publication behind complete positive validation. Non-mock primary-prep retry and standalone resume prove the former no-op paths; exact validated head `0bc1a4b6701508f6c3d4cd898515d82b8a29b6a3` merged as `786f8325493c6086e136cb9694a9997557f12e02`, and issue #199 is closed as completed. |
 | R3-A2 | confirmed empirically, Medium | R3-01b (planned) | Same clobber pattern makes the finalization dry-run preview always report `restore_count: 0`. |
 | R3-A3 | confirmed empirically, Medium | R3-01b (planned) | Same clobber pattern defeats the file's own fixture-injection guard; currently benign. |
@@ -1656,7 +2089,7 @@ narration.
 | R3-Q2 | confirmed maintainability, Low | R3-10f (planned) | 44 matching constants exist; 35 have exactly one external consumer. Evaluate them through the focused constants/quality design. |
 | R3-Q3 | confirmed maintainability with corrected scope, Low | R3-10f (planned) | The original twelve-wrapper count was overstated; only the verified pass-through subset is in scope. |
 | R3-Q4 | confirmed layering issue, Low | R3-10f (planned) | A `scripts/` entrypoint imports seven modules from `tests.release.lab_controller.*`, making the test tree a runtime dependency. |
-| R3-X1 | confirmed, Low | R3-10g (planned) | `StateManager` run-lock file handle leaked; surfaced by the suite as a `ResourceWarning`, fix belongs in `lib/utils.py`. |
+| R3-X1 | confirmed, Low | R3-10g (planned) | `StateManager` intentionally holds the run-lock handle for process lifetime and releases it through `atexit`; that lifetime is not itself a leak. The gap surfaced by the suite's `ResourceWarning` is no explicit close on normal completion or during long-lived embedding/reuse; the fix belongs in `lib/utils.py`. |
 | TR2D-M1 / TR2D-L1 | merged | R3-01 / TR2D-01; issue #199; PR #200 | Folded with `R3-A1` into one boundary. The implementation requires complete positive all-namespace success, rejects malformed and mixed shapes, and preserves sanitized no-mutation advisory behavior; exact validated head `0bc1a4b6701508f6c3d4cd898515d82b8a29b6a3` merged as `786f8325493c6086e136cb9694a9997557f12e02`, and issue #199 is closed as completed. |
 | TR2D-M2 | confirmed | TR2D-02 (planned) | Collection resume uses discovery-time Application data; align fresh re-read, marker ownership, current resource version, OCC refusal/conflict, and changed semantics with Python. |
 | TR2D-Q1 | confirmed maintainability/review risk | TR2D-03 (planned/design input) | Phase 9B decomposition is a strong design input or preferred predecessor, not a mandatory Phase 9C prerequisite absent an authoritative design amendment. Phase 9C remains non-mutating. |
