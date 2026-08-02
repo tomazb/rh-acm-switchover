@@ -21,6 +21,7 @@ from lib.constants import (
     REPORT_STATUS_FAIL,
     REPORT_STATUS_PASS,
 )
+from lib.run_record import RunSummary
 
 SCHEMA_VERSION = REPORT_SCHEMA_VERSION
 SOURCE = REPORT_SOURCE_PYTHON_CLI
@@ -49,6 +50,15 @@ def _normalise_validation_result(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _summarize_state(state_snapshot: dict[str, Any], status: str) -> dict[str, Any]:
+    """Count raw snapshot entries, deliberately not RunSummary's typed view.
+
+    RunSummary.from_snapshot filters non-dict entries out of both collections
+    and degrades a non-str current_phase to None, but the report's counts are
+    pinned to the raw lists by
+    tests/properties/test_report_artifact_properties.py (state summary and
+    report-schema properties, whose errors strategy generates arbitrary
+    JSON-native values). Keep the raw reads until that contract moves.
+    """
     errors = state_snapshot.get("errors", []) or []
     completed_steps = state_snapshot.get("completed_steps", []) or []
     return {
@@ -90,8 +100,14 @@ def build_operation_report(
 ) -> dict[str, Any]:
     """Build a schema-compatible report for Python CLI operations."""
     config = state_snapshot.get("config", {}) or {}
-    raw_results = config.get("preflight_results") or []
-    results = [_normalise_validation_result(item) for item in raw_results]
+    summary = RunSummary.from_snapshot(state_snapshot)
+    # Typed view for preflight results: every entry it yields is a dict, which
+    # is what _normalise_validation_result requires. Malformed entries used to
+    # raise here and lose the whole report; now they are skipped.
+    results = [_normalise_validation_result(item) for item in summary.preflight_results]
+    # Raw errors list on purpose: tests/properties/test_report_artifact_properties.py
+    # pins report["errors"] to the snapshot's list verbatim, including the
+    # non-dict entries RunSummary.from_snapshot filters out.
     errors = state_snapshot.get("errors", []) or []
 
     report: dict[str, Any] = {
