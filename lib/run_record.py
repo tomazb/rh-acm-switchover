@@ -163,7 +163,7 @@ class RunRecord:
     def __init__(self, state) -> None:
         self._state = state
 
-    # -- internal accessors (single indirection point for Task 10 rename) --
+    # -- internal accessors (indirection carries the _UNSET forwarding in _get) --
 
     def _set(self, key: str, value: Any) -> None:
         self._state._set_config(key, value)
@@ -297,10 +297,13 @@ class RunRecord:
     def pre_activation_velero_restore(self) -> Optional[str]:
         return self._get(PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME, None)
 
-    # -- resume summary: workflow -> report/show_state --
+    # -- resume summary: workflow -> test-release tooling / collection --
 
     def record_resume_start_phase(self, phase_name: str) -> None:
-        """A resumed run starts at `phase_name`; recorded for reports."""
+        """A resumed run starts at `phase_name`. Written by workflow on resume;
+        no production report reads it — the readers are the test-release
+        tooling and the Ansible collection's checkpoint_phase. show_state
+        surfaces it only via its generic config listing."""
         self._set(STATE_KEY_RESUME_SUMMARY, {RESUME_START_PHASE_KEY: phase_name})
 
     # -- lifecycle view: read side for report writers and show_state --

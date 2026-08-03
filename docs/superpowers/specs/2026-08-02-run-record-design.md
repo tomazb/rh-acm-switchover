@@ -68,7 +68,7 @@ Never-recorded reads return explicit typed defaults with documented meaning.
 | 6 | Backup verification | finalization internal | `record_backup_watch_started(at)` · `record_new_backup(name)` · `new_backup() -> str \| None` |
 | 7 | Restore archival | finalization → reports | `record_archived_restores(names)` |
 | 8 | Pre-activation Velero restore | activation internal | existing `PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME` key moves behind `RunRecord` |
-| 9 | Resume summary | workflow → reports, show_state | `record_resume_start_phase(phase)` · exposed via `summary()` |
+| 9 | Resume summary | workflow → release-test orchestrator, collection `checkpoint_phase` | `record_resume_start_phase(phase)` · write-only on the Python side (no `RunSummary` field); readers are the release-test orchestrator and the collection's `checkpoint_phase`, and `show_state` shows it only via its generic config dump |
 
 Operation names are the contract; exact parameter shapes are settled in the
 implementation plan against the current call sites. The table's writer→reader
@@ -122,8 +122,12 @@ Any straggler breaks loudly at test time — never a silent default at runtime.
 
 The on-disk schema is unchanged and every well-formed state file behaves
 identically. These are the deltas for *malformed* inputs, recorded so the
-convergence is not mistaken for a pure no-op. None is exercised by the suite;
-all were verified against the shipped code by inspection or reproduction.
+convergence is not mistaken for a pure no-op. The field-level degradations are
+pinned at the `RunSummary` level by `tests/test_run_record.py`
+(`test_from_snapshot_degrades_field_values`,
+`test_from_snapshot_non_list_preflight_results`); what no test exercises is the
+end-to-end path through the report writers. All were verified against the
+shipped code by inspection or reproduction.
 
 **Malformed report inputs now degrade instead of losing the artifact.** The
 report writers wrap their work in a broad `except`, so a raise anywhere inside
