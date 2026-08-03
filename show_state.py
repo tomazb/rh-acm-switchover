@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from lib import __version__, __version_date__
+from lib.exceptions import ValidationError
 from lib.run_record import RunSummary
 from lib.runtime_bootstrap import get_default_state_dir
 
@@ -109,8 +110,14 @@ def format_timestamp(iso_timestamp: str) -> str:
 
 def _default_state_dir() -> str:
     # Deliberately identical to the CLI's resolution: the viewer must look
-    # where the CLI writes, including ACM_SWITCHOVER_STATE_DIR edge cases.
-    return get_default_state_dir()
+    # where the CLI writes. The shared resolver enforces the safety posture,
+    # so an unsafe env value fails loudly here exactly as the CLI refuses it.
+    try:
+        return get_default_state_dir()
+    except ValidationError as exc:
+        print(f"Error: unsafe ACM_SWITCHOVER_STATE_DIR: {exc}", file=sys.stderr)
+        print("Unset the variable or pass an explicit state file path instead.", file=sys.stderr)
+        sys.exit(1)
 
 
 def find_state_files(state_dir: Optional[str] = None) -> List[str]:

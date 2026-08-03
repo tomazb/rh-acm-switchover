@@ -51,7 +51,6 @@ from lib.constants import (
     MANAGED_CLUSTER_EXPECTATION_EXPLICIT_MINIMUM,
     MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
     OBSERVABILITY_NAMESPACE,
-    STATE_DIR_ENV_VAR,
     STEP_PAUSE_ARGOCD_APPS,
     TOKEN_DURATION_DEFAULT,
 )
@@ -365,11 +364,11 @@ def validate_args(args: argparse.Namespace, logger: logging.Logger) -> None:
         # provided when not in decommission mode
         InputValidator.validate_all_cli_args(args)
 
-        # Validate state dir env var only when it would be used
+        # Resolve the state dir early so an unsafe ACM_SWITCHOVER_STATE_DIR
+        # fails here with a clean message. The safety posture itself lives in
+        # runtime_bootstrap.get_default_state_dir (shared with show_state).
         if not getattr(args, "state_file", None):
-            env_state_dir = os.environ.get(STATE_DIR_ENV_VAR)
-            if env_state_dir and env_state_dir.strip():
-                InputValidator.validate_safe_filesystem_path(env_state_dir.strip(), STATE_DIR_ENV_VAR)
+            runtime_bootstrap.get_default_state_dir()
         else:
             # Validate user-specified state file path to prevent unsafe locations
             InputValidator.validate_safe_filesystem_path(args.state_file, "--state-file")

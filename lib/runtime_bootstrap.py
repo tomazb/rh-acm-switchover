@@ -30,9 +30,18 @@ def sanitize_context_identifier(value: str) -> str:
 
 
 def get_default_state_dir() -> str:
+    """Resolve the state directory, enforcing the env-var safety posture.
+
+    Single owner of the ACM_SWITCHOVER_STATE_DIR contract: every consumer
+    (CLI and show_state viewer) resolves through here, so an unsafe value
+    fails loudly for all of them (SecurityValidationError) instead of one
+    component honouring a path another rejects.
+    """
     env_state_dir = os.environ.get(STATE_DIR_ENV_VAR)
     if env_state_dir and env_state_dir.strip():
-        return env_state_dir.strip()
+        candidate = env_state_dir.strip()
+        InputValidator.validate_safe_filesystem_path(candidate, STATE_DIR_ENV_VAR)
+        return candidate
     return STATE_DIR_DEFAULT
 
 

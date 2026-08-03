@@ -33,11 +33,17 @@ class TestShowStateHelpers:
         monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path / "custom-state"))
         assert _default_state_dir() == get_default_state_dir()
 
-    def test_default_state_dir_matches_cli_for_relative_env(self, monkeypatch: pytest.MonkeyPatch):
-        # Previously rejected by InputValidator and silently replaced with
-        # ".state"; now honoured exactly as the CLI honours it.
+    def test_default_state_dir_rejects_unsafe_env_loudly(self, monkeypatch: pytest.MonkeyPatch, capsys):
+        # Same posture as the CLI: an unsafe ACM_SWITCHOVER_STATE_DIR fails
+        # loudly with a clear message — never silently swapped for another
+        # directory (the old fallback) and never honoured (the interim state).
         monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", "../bad")
-        assert _default_state_dir() == get_default_state_dir() == "../bad"
+        with pytest.raises(SystemExit) as exc_info:
+            _default_state_dir()
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "ACM_SWITCHOVER_STATE_DIR" in err
+        assert "explicit" in err
 
     def test_default_state_dir_defaults_without_env(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("ACM_SWITCHOVER_STATE_DIR", raising=False)

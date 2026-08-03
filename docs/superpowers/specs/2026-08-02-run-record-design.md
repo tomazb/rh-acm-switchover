@@ -166,14 +166,18 @@ stringifies (`2.14` float → `"2.14"`) where the old raw read passed the value
 through. Production writers always persist strings, so this is unreachable in
 practice.
 
-**`show_state` state-dir validation posture (open question).** `show_state.py`
-now shares `runtime_bootstrap.get_default_state_dir()` with the CLI, which fixed
+**`show_state` state-dir validation posture (resolved).** `show_state.py`
+shares `runtime_bootstrap.get_default_state_dir()` with the CLI, which fixed
 the divergence that sent the viewer to a different directory than the writer.
-The residue: the CLI's `validate_args` aborts on an unsafe
-`ACM_SWITCHOVER_STATE_DIR` when `--state-file` is absent, while the viewer does
-not validate at all — it just resolves and reads. Which posture is canonical
-(viewer should also refuse unsafe values, or reading is deliberately permissive)
-is not settled here.
+The posture question this left open — the CLI validated
+`ACM_SWITCHOVER_STATE_DIR` while the viewer honoured any value — is settled as
+**validate everywhere, fail loud, one owner**: `get_default_state_dir()` itself
+enforces `validate_safe_filesystem_path` and raises `SecurityValidationError`
+on unsafe values. The CLI's `validate_args` invokes the resolver early for a
+clean pre-flight failure; the viewer catches the error and exits with a message
+pointing at the env var and the explicit-path escape hatch. Neither component
+can diverge again, and the old silent fallback (viewer quietly reading
+`.state`) cannot recur.
 
 ## Testing
 

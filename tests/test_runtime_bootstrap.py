@@ -3,7 +3,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from lib.exceptions import SecurityValidationError
 from lib.runtime_bootstrap import (
+    get_default_state_dir,
     client_context_name,
     collect_hub_identities,
     initialize_clients,
@@ -26,6 +28,27 @@ def test_resolve_state_file_prefers_requested_path(monkeypatch: pytest.MonkeyPat
         )
         == "custom/state.json"
     )
+
+
+def test_get_default_state_dir_rejects_unsafe_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The resolver is the single owner of the ACM_SWITCHOVER_STATE_DIR posture:
+    # unsafe values fail loudly for every consumer (CLI and viewer alike).
+    monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", "../bad")
+
+    with pytest.raises(SecurityValidationError):
+        get_default_state_dir()
+
+
+def test_get_default_state_dir_uses_valid_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", "/tmp/acm-state")
+
+    assert get_default_state_dir() == "/tmp/acm-state"
+
+
+def test_get_default_state_dir_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ACM_SWITCHOVER_STATE_DIR", raising=False)
+
+    assert get_default_state_dir() == ".state"
 
 
 def test_initialize_clients_passes_dry_run_to_each_context() -> None:
