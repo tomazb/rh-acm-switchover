@@ -29,10 +29,16 @@ ACCESSOR = re.compile(r"\.(?:_set_config|_get_config|set_config|get_config)\(")
 
 # Reading a named config key straight off a state snapshot bypasses the accessors
 # entirely, so the accessor scan alone would let `snapshot["config"]["primary_version"]`
-# through. Match the chained subscript with a literal key. Key-agnostic reads
-# (`state.get("config", {})` handed on whole, or iterated generically) are the
-# supported way to touch the config bag from outside the seam and do not match.
-RAW_CONFIG_KEY = re.compile(r"\[\s*[\"']config[\"']\s*\]\s*\[\s*[\"']")
+# through. Match any single-expression access to the config bag — subscript or
+# `.get("config", ...)` — chained to a literal key (subscript or `.get`).
+# Key-agnostic reads (`state.get("config", {})` handed on whole, or iterated
+# generically) are the supported way to touch the config bag from outside the
+# seam and do not match. Known limit: a two-step read split across lines
+# (`config = snapshot["config"]` then `config["key"]`) needs an AST visitor,
+# not a longer regex — see the pattern regression test below.
+_CONFIG_BAG = r"(?:\[\s*[\"']config[\"']\s*\]|\.get\(\s*[\"']config[\"'][^)]*\))"
+_LITERAL_KEY = r"\s*(?:\[\s*[\"']|\.get\(\s*[\"'])"
+RAW_CONFIG_KEY = re.compile(_CONFIG_BAG + _LITERAL_KEY)
 
 
 def _production_files():
@@ -64,6 +70,36 @@ def test_config_accessors_only_used_by_allowed_modules():
 def test_raw_config_keys_only_read_by_allowed_modules():
     offenders = _scan(RAW_CONFIG_KEY)
     assert not offenders, "raw config-key reads outside the run-record seam:\n" + "\n".join(offenders)
+
+
+def test_raw_config_key_pattern_catches_known_bypass_shapes():
+    """Regression probe for the detector itself (external review, PR #215).
+
+    Every shape that reads a named key off the config bag in one expression
+    must match; the two supported key-agnostic shapes must not. A two-step
+    read split across lines (`config = snapshot["config"]` then
+    `config["key"]`) is a documented limitation of line-based scanning.
+    """
+    bypasses = [
+        'snapshot["config"]["primary_version"]',
+        "snapshot['config']['primary_version']",
+        'snapshot.get("config", {})["primary_version"]',
+        'snapshot.get("config", {}).get("primary_version")',
+        'snapshot["config"].get("primary_version", None)',
+        'state.get("config").get("saved_backup_schedule")',
+    ]
+    for line in bypasses:
+        assert RAW_CONFIG_KEY.search(line), f"detector must catch: {line}"
+
+    key_agnostic = [
+        'config = state_snapshot.get("config", {}) or {}',
+        'config = state.get("config", {})',
+        "for key, value in config.items():",
+        "argocd_status = PauseRegisterStore.status_from_state_config(config)",
+        "summary = RunSummary.from_snapshot(state_snapshot)",
+    ]
+    for line in key_agnostic:
+        assert not RAW_CONFIG_KEY.search(line), f"false positive on supported shape: {line}"
 
 
 def test_public_accessors_are_gone():
