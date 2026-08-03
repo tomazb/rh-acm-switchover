@@ -118,6 +118,59 @@ Any straggler breaks loudly at test time — never a silent default at runtime.
   defaults, matching today's tolerant readers; it never raises on shape.
 - Corruption, locking, IO: unchanged — `StateManager`'s existing behaviour.
 
+### Tolerance changes vs. pre-RunRecord readers
+
+The on-disk schema is unchanged and every well-formed state file behaves
+identically. These are the deltas for *malformed* inputs, recorded so the
+convergence is not mistaken for a pure no-op. None is exercised by the suite;
+all were verified against the shipped code by inspection or reproduction.
+
+**Malformed report inputs now degrade instead of losing the artifact.** The
+report writers wrap their work in a broad `except`, so a raise anywhere inside
+previously discarded the whole diagnostic artifact. Five cases in
+`cli_outcomes.phase_report_from_state` / `report_artifacts.build_operation_report`:
+
+1. Completed step with a non-`str` `name` that carries a valid recorded phase:
+   the raw value used to be appended to `steps`; now `""` is (value degraded in
+   place, artifact unaffected).
+2. Completed step with a non-`str` `name` and no valid recorded phase:
+   `fallback_phase_for_step(name)` raised `AttributeError` and the whole report
+   was skipped; now the step is skipped and the report is written.
+3. Completed step with an unhashable `phase` (list/dict): the frozenset
+   membership test raised `TypeError` and the report was lost; now the phase
+   degrades to `None` and takes the fallback path.
+4. Non-dict *entry* in `config["preflight_results"]`:
+   `_normalise_validation_result` raised and the report was lost; now the entry
+   is skipped. (This does **not** extend to a non-dict `config`, which still
+   raises in the pause-register read.)
+5. Truthy non-list `config["preflight_results"]` (e.g. a string): iteration used
+   to hand a fragment to `_normalise_validation_result` and raise; now
+   `from_snapshot` yields `()` and the results section is silently empty.
+
+**One case where the new code loses data the old code kept.** A `config` that is
+a `Mapping` but not a `dict` (e.g. `MappingProxyType`, or any custom Mapping)
+used to yield its `preflight_results` via `config.get(...)`;
+`RunSummary.from_snapshot` does `if not isinstance(config, dict): config = {}`
+and returns `()`. The same applies to a non-`dict` Mapping snapshot as a whole.
+Theoretical for JSON-loaded snapshots (`json.load` only produces `dict`), but it
+is a genuine narrowing — consider widening `from_snapshot` to
+`collections.abc.Mapping` if a non-`dict` Mapping ever reaches it.
+
+**`str()` coercion of hub versions.** `RunRecord.hub_facts()` coerces the version
+fields with `str()`, so a hand-edited state file holding a numeric version now
+stringifies (`2.14` float → `"2.14"`) where the old raw read passed the value
+through. Production writers always persist strings, so this is unreachable in
+practice.
+
+**`show_state` state-dir validation posture (open question).** `show_state.py`
+now shares `runtime_bootstrap.get_default_state_dir()` with the CLI, which fixed
+the divergence that sent the viewer to a different directory than the writer.
+The residue: the CLI's `validate_args` aborts on an unsafe
+`ACM_SWITCHOVER_STATE_DIR` when `--state-file` is absent, while the viewer does
+not validate at all — it just resolves and reads. Which posture is canonical
+(viewer should also refuse unsafe values, or reading is deliberately permissive)
+is not settled here.
+
 ## Testing
 
 - `RunRecord`/`RunSummary` unit tests exercise the public interface only —

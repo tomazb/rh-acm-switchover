@@ -4,6 +4,8 @@ All tests go through the public interface only: no raw key literals, no
 reaching into StateManager internals beyond constructing it.
 """
 
+import json
+
 import pytest
 
 from lib.run_record import ErrorRecord, HubFacts, ManagedClusterExpectation, RunRecord, RunSummary, StepRecord
@@ -204,3 +206,40 @@ class TestRunSummary:
         offline = RunSummary.from_snapshot(state.capture_state_snapshot())
         assert live == offline
         assert live.completed_steps[0].name == "preflight_validation"
+
+
+class TestInterfaceOnlyPersistence:
+    """A state file written by the pre-RunRecord tool loads identically.
+
+    The refactor is interface-only: the on-disk JSON schema and every config
+    key name are unchanged, so a state file produced by the previous release
+    stays resumable and every cross-phase fact is still readable — now through
+    named RunRecord operations instead of raw key lookups.
+    """
+
+    def test_legacy_state_file_reads_through_run_record(self, tmp_path):
+        # Shape produced by the previous release: raw keys in config.
+        legacy = {
+            "version": "1.0",
+            "current_phase": "finalization",
+            "completed_steps": [{"name": "activate_managed_clusters", "phase": "activation", "timestamp": "t"}],
+            "errors": [],
+            "config": {
+                "primary_version": "2.13.2",
+                "primary_has_observability": True,
+                "secondary_version": "2.14.0",
+                "auto_import_strategy_set": True,
+                "saved_backup_schedule": {"metadata": {"name": "schedule-acm"}},
+                "post_switchover_backup_name": "acm-backup-9",
+                "new_backup_detected": True,
+            },
+        }
+        state_file = tmp_path / "switchover-legacy.json"
+        state_file.write_text(json.dumps(legacy))
+
+        record = RunRecord(StateManager(str(state_file)))
+        assert record.hub_facts().primary_version == "2.13.2"
+        assert record.hub_facts().primary_has_observability is True
+        assert record.auto_import_override_pending() is True
+        assert record.saved_backup_schedule() == {"metadata": {"name": "schedule-acm"}}
+        assert record.new_backup() == "acm-backup-9"
