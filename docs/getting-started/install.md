@@ -414,6 +414,8 @@ export KUBECONFIG=/path/to/kubeconfig
 export ACM_SWITCHOVER_STATE_DIR=/path/to/state
 
 # Precedence: --state-file > ACM_SWITCHOVER_STATE_DIR > .state/
+# Unsafe values (e.g. path traversal like "../dir") are rejected with an error
+# by both the CLI and show_state.py; unset the variable or pass an explicit path.
 
 # Enable debug logging
 export ACM_SWITCHOVER_DEBUG=1

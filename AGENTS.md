@@ -139,6 +139,10 @@ The following files are **safety-critical operational documents** that AI agents
 - `argocd_register_store.py` - `PauseRegisterStore`: the register's durable-state codec (entry schema, legacy migration, persistence, `RegisterStatus`); no Argo CD or Kubernetes dependencies
 - `gitops_detector.py` - GitOps marker detection for resources (Argo CD, Flux) to warn operators before mutations
 - `report_artifacts.py` - Machine-readable report artifact helpers for the Python CLI
+- `run_record.py` - `RunRecord` facade: named, typed operations for cross-phase run facts (the only production reader/writer of `StateManager` config keys; guardrail: `tests/test_run_record_guardrails.py`); `RunSummary` typed lifecycle view for report writers and `show_state`
+- `runtime_bootstrap.py` - Client initialization, state-file naming, and state-dir resolution; `get_default_state_dir()` owns the `ACM_SWITCHOVER_STATE_DIR` safety posture (validates, fails loud) for CLI and viewer alike
+- `workflow.py` / `operation_runners.py` / `cli_outcomes.py` - Phase-flow engine, operation runners, and CLI exit/report paths
+- `path_safety.py` - Filesystem path safety validation (twin: collection `module_utils/path_safety.py`)
 
 **Workflow Modules** (`modules/`):
 - `preflight/` - Modular pre-flight validators

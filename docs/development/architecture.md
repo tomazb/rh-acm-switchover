@@ -20,14 +20,24 @@ rh-acm-switchover/
 ├── lib/
 │   ├── __init__.py
 │   ├── argocd.py                  # Argo CD discovery, pause, and resume helpers
+│   ├── argocd_register.py         # ArgocdPauseRegister: pause register (ADR-0001)
+│   ├── argocd_register_store.py   # PauseRegisterStore: register durable-state codec
+│   ├── argocd_resume.py           # --argocd-resume-only flow
+│   ├── cli_outcomes.py            # CLI exit paths and phase report assembly
 │   ├── constants.py               # Shared constants and timeouts
 │   ├── exceptions.py              # Switchover exception hierarchy
 │   ├── gitops_detector.py         # GitOps marker collection and reporting
 │   ├── kube_client.py             # Kubernetes API wrapper with retries/dry-run support
+│   ├── operation_runners.py       # Switchover/restore-only operation runners
+│   ├── path_safety.py             # Filesystem path safety validation
 │   ├── rbac_validator.py          # Permission validation helpers
+│   ├── report_artifacts.py        # Machine-readable report artifacts
+│   ├── run_record.py              # RunRecord facade: cross-phase run facts; RunSummary
+│   ├── runtime_bootstrap.py       # Client/state-file/state-dir resolution (env posture)
 │   ├── utils.py                   # StateManager, Phase enum, logging, helpers
 │   ├── validation.py              # CLI and input validation
-│   └── waiter.py                  # Polling and wait utilities
+│   ├── waiter.py                  # Polling and wait utilities
+│   └── workflow.py                # Phase-flow execution engine
 ├── modules/
 │   ├── activation.py              # Secondary hub activation logic
 │   ├── backup_schedule.py         # BackupSchedule helpers
