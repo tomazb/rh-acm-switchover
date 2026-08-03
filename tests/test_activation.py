@@ -3,6 +3,7 @@
 Tests cover SecondaryActivation class for activating the secondary hub.
 """
 
+import copy
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -71,11 +72,23 @@ def mock_state_manager():
         mock.mark_step_completed,
     )
     # Back the config accessors with a real dict so tests can seed and read
-    # cross-phase facts through RunRecord instead of raw key literals.
+    # cross-phase facts through RunRecord instead of raw key literals. The
+    # deep copies mirror StateManager's ownership contract (stored and returned
+    # values are isolated from the caller); unseeded keys resolve to the
+    # caller-supplied default.
     config: dict = {}
     mock.config = config
-    mock.set_config.side_effect = config.__setitem__
-    mock.get_config.side_effect = lambda key, default=None: config.get(key, default)
+
+    def _set_config(key, value):
+        config[key] = copy.deepcopy(value)
+
+    def _get_config(key, default=None):
+        if key not in config:
+            return default
+        return copy.deepcopy(config[key])
+
+    mock.set_config.side_effect = _set_config
+    mock.get_config.side_effect = _get_config
     return mock
 
 

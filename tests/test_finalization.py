@@ -3,6 +3,7 @@
 Tests cover Finalization class for completing the switchover.
 """
 
+import copy
 import logging
 import sys
 from contextlib import contextmanager
@@ -60,12 +61,23 @@ def mock_state_manager():
     )
     mock.state = {"completed_steps": []}
     # Back the config accessors with a real dict so tests can seed and read
-    # cross-phase facts through RunRecord instead of raw key literals.
-    # Unseeded keys still resolve to the caller-supplied default (None).
+    # cross-phase facts through RunRecord instead of raw key literals. The
+    # deep copies mirror StateManager's ownership contract (stored and returned
+    # values are isolated from the caller); unseeded keys resolve to the
+    # caller-supplied default.
     config: dict = {}
     mock.config = config
-    mock.set_config.side_effect = config.__setitem__
-    mock.get_config.side_effect = lambda key, default=None: config.get(key, default)
+
+    def _set_config(key, value):
+        config[key] = copy.deepcopy(value)
+
+    def _get_config(key, default=None):
+        if key not in config:
+            return default
+        return copy.deepcopy(config[key])
+
+    mock.set_config.side_effect = _set_config
+    mock.get_config.side_effect = _get_config
     return mock
 
 
@@ -137,16 +149,6 @@ class TestFinalization:
                     "status": {"phase": "InProgress"},
                 }
             ],  # Loop iteration 2 - new ACM backup
-            [
-                {
-                    "metadata": {
-                        "name": "backup-1",
-                        "creationTimestamp": backup_ts,
-                        "labels": ACM_BACKUP_LABEL,
-                    },
-                    "status": {"phase": "Completed", "completionTimestamp": backup_ts},
-                }
-            ],  # verify_backup_integrity
         ]
 
         mch_response = {"metadata": {"name": "multiclusterhub"}, "status": {"phase": "Running"}}
@@ -294,10 +296,13 @@ class TestFinalization:
         mock_secondary_client.list_custom_resources.return_value = [recorded_backup]
         mock_secondary_client.get_custom_resource.return_value = recorded_backup
         RunRecord(finalization.state).record_new_backup("acm-backup-001")
+        finalization.state.set_config.reset_mock()
 
         finalization._verify_new_backups(timeout=10)
 
         mock_secondary_client.get_custom_resource.assert_called_once()
+        # The reuse path must re-record the name, not merely leave the seeded value in place.
+        assert finalization.state.set_config.called
         assert RunRecord(finalization.state).new_backup() == "acm-backup-001"
 
     def test_verify_new_backups_accepts_existing_post_enable_backup_on_resume(
@@ -818,8 +823,7 @@ class TestFinalization:
         }
         mock_secondary_client.list_custom_resources.return_value = [backup]
         mock_secondary_client.get_pods.return_value = []
-        # No recorded backup name → falls back to latest-by-timestamp, age check skipped
-        finalization.state.get_config.return_value = None
+        # Nothing recorded (fixture default) → falls back to latest-by-timestamp, age check skipped
 
         finalization._verify_backup_integrity(max_age_seconds=600)
 
@@ -854,7 +858,7 @@ class TestFinalization:
             },
         ]
         mock_secondary_client.get_pods.return_value = []
-        finalization.state.get_config.return_value = None
+        # Nothing recorded (fixture default) → the fallback path selects the latest ACM-owned backup
         finalization._cached_schedules = [
             {
                 "metadata": {"name": "acm-hub-backup"},
@@ -1629,16 +1633,6 @@ class TestFinalization:
                     "status": {"phase": "InProgress"},
                 }
             ],  # Loop iteration 2 - new ACM backup
-            [
-                {
-                    "metadata": {
-                        "name": "backup-1",
-                        "creationTimestamp": backup_ts,
-                        "labels": ACM_BACKUP_LABEL,
-                    },
-                    "status": {"phase": "Completed", "completionTimestamp": backup_ts},
-                }
-            ],  # verify_backup_integrity
         ]
         mock_secondary_client.get_custom_resource.side_effect = [
             {"metadata": {"name": "schedule", "uid": "uid-1"}, "spec": {}},  # before deletion
@@ -1702,7 +1696,8 @@ class TestFinalization:
 
         # Mock all required responses with side_effect for sequential calls
         # Order: _cleanup_restore_resources, verify_backup_schedule_enabled, fix_backup_collision,
-        # _get_backup_verify_timeout, verify_new_backups (2x), verify_backup_integrity
+        # _get_backup_verify_timeout, verify_new_backups (2x). verify_backup_integrity re-reads the
+        # recorded backup by name via get_custom_resource, so it consumes no list response.
         mock_secondary_client.list_custom_resources.side_effect = [
             [],  # _cleanup_restore_resources - no restores to clean up
             [{"metadata": {"name": "schedule"}, "spec": {"paused": False}}],  # verify_backup_schedule_enabled
@@ -1726,16 +1721,6 @@ class TestFinalization:
                     "status": {"phase": "InProgress"},
                 }
             ],  # New ACM backup detected
-            [
-                {
-                    "metadata": {
-                        "name": "backup-1",
-                        "creationTimestamp": backup_ts,
-                        "labels": ACM_BACKUP_LABEL,
-                    },
-                    "status": {"phase": "Completed", "completionTimestamp": backup_ts},
-                }
-            ],  # verify_backup_integrity
         ]
         mock_secondary_client.get_custom_resource.side_effect = [
             {"metadata": {"name": "schedule", "uid": "uid-1"}, "spec": {}},  # before deletion
