@@ -211,8 +211,8 @@ pytest tests/test_path_safety.py -q   # existing example suite stays green
 
 **Target code**
 - Python: `lib/utils.py` — `StateManager` (`mark_step_completed`,
-  `clear_step_completed`, `is_step_completed`, `set_phase`, `set_config`,
-  `get_config`, `save_state`, `flush_state`,
+  `clear_step_completed`, `is_step_completed`, `set_phase`, `_set_config`,
+  `_get_config`, `save_state`, `flush_state`,
   `capture_state_snapshot`/`restore_state_snapshot`, `ensure_contexts`,
   `ensure_hub_identities`), `Phase` enum, `StateIdentityMismatch`.
 - Collection: `ansible_collections/tomazb/acm_switchover/plugins/module_utils/checkpoint.py`

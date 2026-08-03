@@ -1,12 +1,17 @@
 """Seam lock for the run record (spec 2026-08-02-run-record-design.md).
 
-The config-key vocabulary belongs to lib/run_record.py. StateManager's
-storage accessors are private; the pause-register modules keep a narrow,
-documented allowance (their seam converges separately under issue #208).
+The config-key vocabulary belongs to lib/run_record.py. Production code
+reaches it two ways, and the spec (section "Migration", step 4) forbids
+both from outside the seam: calling StateManager's storage accessors, and
+reading a named key straight off a state snapshot. The pause-register
+modules keep a narrow, documented allowance (their seam converges
+separately under issue #208).
 """
 
 import pathlib
 import re
+
+from lib.utils import StateManager
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 
@@ -22,25 +27,43 @@ ALLOWED = {
 
 ACCESSOR = re.compile(r"\.(?:_set_config|_get_config|set_config|get_config)\(")
 
+# Reading a named config key straight off a state snapshot bypasses the accessors
+# entirely, so the accessor scan alone would let `snapshot["config"]["primary_version"]`
+# through. Match the chained subscript with a literal key. Key-agnostic reads
+# (`state.get("config", {})` handed on whole, or iterated generically) are the
+# supported way to touch the config bag from outside the seam and do not match.
+RAW_CONFIG_KEY = re.compile(r"\[\s*[\"']config[\"']\s*\]\s*\[\s*[\"']")
+
 
 def _production_files():
     for root in PRODUCTION_ROOTS:
         path = REPO / root
+        assert path.exists(), root
         if path.is_file():
             yield path
         else:
             yield from sorted(path.rglob("*.py"))
 
 
-def test_config_accessors_only_used_by_allowed_modules():
+def _scan(pattern):
     offenders = []
     for path in _production_files():
         if path in ALLOWED:
             continue
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if ACCESSOR.search(line):
+            if pattern.search(line):
                 offenders.append(f"{path.relative_to(REPO)}:{lineno}: {line.strip()}")
+    return offenders
+
+
+def test_config_accessors_only_used_by_allowed_modules():
+    offenders = _scan(ACCESSOR)
     assert not offenders, "config accessors outside the run-record seam:\n" + "\n".join(offenders)
+
+
+def test_raw_config_keys_only_read_by_allowed_modules():
+    offenders = _scan(RAW_CONFIG_KEY)
+    assert not offenders, "raw config-key reads outside the run-record seam:\n" + "\n".join(offenders)
 
 
 def test_public_accessors_are_gone():
@@ -49,3 +72,9 @@ def test_public_accessors_are_gone():
     assert "def get_config(" not in utils_src
     assert "def _set_config(" in utils_src
     assert "def _get_config(" in utils_src
+    # Source text alone would miss an alias (`set_config = _set_config`) or a
+    # re-export, so assert against the imported class too.
+    assert not hasattr(StateManager, "set_config")
+    assert not hasattr(StateManager, "get_config")
+    assert hasattr(StateManager, "_set_config")
+    assert hasattr(StateManager, "_get_config")

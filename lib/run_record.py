@@ -3,7 +3,7 @@
 Each operation documents its writer, reader, and ordering contract. The
 key literals below are an implementation detail of this module: no other
 production code may read or write them (guardrail:
-tests/test_run_record_guardrails.py, arrives with Task 10). Durability,
+tests/test_run_record_guardrails.py). Durability,
 locking, and atomic writes belong to StateManager; this facade owns only
 the vocabulary.
 
