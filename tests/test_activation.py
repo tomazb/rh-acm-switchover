@@ -23,7 +23,6 @@ from lib.constants import (
     IMMEDIATE_IMPORT_ANNOTATION,
     MANAGED_CLUSTER_RESTORE_NAME,
     PATCH_VERIFY_RETRY_DELAY,
-    PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME,
     RESTORE_PASSIVE_SYNC_NAME,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
@@ -31,6 +30,7 @@ from lib.constants import (
     VELERO_BACKUP_SKIP,
 )
 from lib.exceptions import FatalError
+from lib.run_record import HubFacts, RunRecord
 from lib.waiter import WaitConditionResult
 
 SecondaryActivation = activation_module.SecondaryActivation
@@ -70,6 +70,12 @@ def mock_state_manager():
         mock.is_step_completed,
         mock.mark_step_completed,
     )
+    # Back the config accessors with a real dict so tests can seed and read
+    # cross-phase facts through RunRecord instead of raw key literals.
+    config: dict = {}
+    mock.config = config
+    mock.set_config.side_effect = config.__setitem__
+    mock.get_config.side_effect = lambda key, default=None: config.get(key, default)
     return mock
 
 
@@ -817,9 +823,7 @@ class TestSecondaryActivation:
         self, activation_passive, mock_secondary_client, mock_state_manager
     ):
         """Activation must wait for a new Velero managed-clusters restore signal after patching."""
-        mock_state_manager.get_config.side_effect = lambda key, default=None: {
-            PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME: "velero-mc-old",
-        }.get(key, default)
+        RunRecord(mock_state_manager).record_pre_activation_velero_restore("velero-mc-old")
         mock_secondary_client.get_custom_resource.return_value = {
             "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
             "status": {
@@ -847,9 +851,7 @@ class TestSecondaryActivation:
     ):
         """Idempotent passive reruns must not reject the existing Velero restore signal as stale."""
         activation_passive._require_new_velero_restore_signal = False
-        mock_state_manager.get_config.side_effect = lambda key, default=None: {
-            PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME: "velero-mc-existing",
-        }.get(key, default)
+        RunRecord(mock_state_manager).record_pre_activation_velero_restore("velero-mc-existing")
 
         def get_custom_resource_side_effect(**kwargs):
             if kwargs.get("plural") == "restores" and kwargs.get("group") == "cluster.open-cluster-management.io":
@@ -903,14 +905,13 @@ class TestSecondaryActivation:
         }
         activation_passive._passive_sync_restore_name = RESTORE_PASSIVE_SYNC_NAME
         mock_secondary_client.get_custom_resource.return_value = restore_before
+        run_record = RunRecord(mock_state_manager)
+        run_record.record_pre_activation_velero_restore("velero-mc-stale")
 
         activation_passive._activate_via_passive_sync()
 
         mock_secondary_client.patch_custom_resource.assert_not_called()
-        mock_state_manager.set_config.assert_any_call(
-            PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME,
-            None,
-        )
+        assert run_record.pre_activation_velero_restore() is None
         assert activation_passive._require_new_velero_restore_signal is False
 
     @patch("lib.waiter.wait_for_condition", return_value=True)
@@ -920,7 +921,7 @@ class TestSecondaryActivation:
     ):
         """Test passive activation using restore-acm-activate (Option B)."""
         mock_wait.return_value = True
-        mock_state_manager.get_config.return_value = "2.13.0"
+        RunRecord(mock_state_manager).record_hub_facts(HubFacts(secondary_version="2.13.0"))
 
         activation = SecondaryActivation(
             secondary_client=mock_secondary_client,
@@ -1080,7 +1081,7 @@ class TestSecondaryActivation:
 
     def test_apply_immediate_import_annotations(self, mock_secondary_client, mock_state_manager):
         """Test immediate-import annotation application under ImportOnly."""
-        mock_state_manager.get_config.return_value = "2.14.0"
+        RunRecord(mock_state_manager).record_hub_facts(HubFacts(secondary_version="2.14.0"))
         activation = SecondaryActivation(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
@@ -1105,7 +1106,7 @@ class TestSecondaryActivation:
         self, mock_secondary_client, mock_state_manager
     ):
         """Ensure Completed annotations are reset via delete-and-add."""
-        mock_state_manager.get_config.return_value = "2.14.1"
+        RunRecord(mock_state_manager).record_hub_facts(HubFacts(secondary_version="2.14.1"))
         activation = SecondaryActivation(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
@@ -1131,7 +1132,7 @@ class TestSecondaryActivation:
         self, mock_secondary_client, mock_state_manager
     ):
         """Skip annotation when autoImportStrategy already ImportAndSync."""
-        mock_state_manager.get_config.return_value = "2.14.2"
+        RunRecord(mock_state_manager).record_hub_facts(HubFacts(secondary_version="2.14.2"))
         activation = SecondaryActivation(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
@@ -1149,7 +1150,7 @@ class TestSecondaryActivation:
 
     def test_apply_immediate_import_annotations_raises_on_failures(self, mock_secondary_client, mock_state_manager):
         """Ensure failures raise and do not mark the step completed."""
-        mock_state_manager.get_config.return_value = "2.14.0"
+        RunRecord(mock_state_manager).record_hub_facts(HubFacts(secondary_version="2.14.0"))
         activation = SecondaryActivation(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,

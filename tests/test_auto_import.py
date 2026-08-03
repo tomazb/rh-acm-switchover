@@ -15,6 +15,7 @@ from lib.constants import (
     MCE_NAMESPACE,
 )
 from lib.exceptions import SwitchoverError
+from lib.run_record import HubFacts, RunRecord
 from lib.utils import StateManager
 from modules.activation import SecondaryActivation
 from modules.finalization import Finalization
@@ -67,7 +68,7 @@ class TestActivationManageFlag:
     def test_sets_import_and_sync_when_flag_on(self, tmp_path):
         # Prepare state with ACM >= 2.14
         state = StateManager(str(tmp_path / "state.json"))
-        state.set_config("secondary_version", "2.14.2")
+        RunRecord(state).record_hub_facts(HubFacts(secondary_version="2.14.2"))
 
         # Mock client with one non-local managed cluster and default strategy
         client = Mock()
@@ -89,12 +90,12 @@ class TestActivationManageFlag:
         assert kwargs["namespace"] == MCE_NAMESPACE
         assert kwargs["name"] == IMPORT_CONTROLLER_CONFIGMAP
         assert kwargs["data"][AUTO_IMPORT_STRATEGY_KEY] == AUTO_IMPORT_STRATEGY_SYNC
-        assert state.get_config("auto_import_strategy_set") is True
+        assert RunRecord(state).auto_import_override_pending() is True
 
     def test_raises_when_explicit_management_fails(self, tmp_path):
         """Explicit autoImportStrategy management should fail closed on patch errors."""
         state = StateManager(str(tmp_path / "state.json"))
-        state.set_config("secondary_version", "2.14.2")
+        RunRecord(state).record_hub_facts(HubFacts(secondary_version="2.14.2"))
 
         client = Mock()
         client.list_custom_resources.return_value = [{"metadata": {"name": "cluster-a"}}]
@@ -114,7 +115,7 @@ class TestActivationManageFlag:
     def test_detect_only_logs_warning_when_strategy_lookup_fails(self, tmp_path):
         """Detect-only mode should remain non-fatal when strategy lookup fails."""
         state = StateManager(str(tmp_path / "state.json"))
-        state.set_config("secondary_version", "2.14.2")
+        RunRecord(state).record_hub_facts(HubFacts(secondary_version="2.14.2"))
 
         client = Mock()
         client.list_custom_resources.return_value = [{"metadata": {"name": "cluster-a"}}]
@@ -152,7 +153,7 @@ class TestFinalizationReset:
 
     def test_clears_state_flag_after_reset(self, tmp_path):
         state = StateManager(str(tmp_path / "state.json"))
-        state.set_config("auto_import_strategy_set", True)
+        RunRecord(state).record_auto_import_override()
         fin = Finalization(
             secondary_client=Mock(),
             state_manager=state,
@@ -164,4 +165,4 @@ class TestFinalizationReset:
         fin._ensure_auto_import_default()
 
         fin.secondary.delete_configmap.assert_called_once_with(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIGMAP)
-        assert state.get_config("auto_import_strategy_set") is False
+        assert RunRecord(state).auto_import_override_pending() is False

@@ -27,6 +27,7 @@ from lib.constants import (
     THANOS_COMPACTOR_LABEL_SELECTOR,
 )
 from lib.exceptions import SwitchoverError
+from lib.run_record import RunRecord
 from lib.waiter import WaitConditionResult
 
 PrimaryPreparation = primary_prep_module.PrimaryPreparation
@@ -67,6 +68,12 @@ def mock_state_manager():
         mock.is_step_completed,
         mock.mark_step_completed,
     )
+    # Back the config accessors with a real dict so tests can seed and read
+    # cross-phase facts through RunRecord instead of raw key literals.
+    config: dict = {}
+    mock.config = config
+    mock.set_config.side_effect = config.__setitem__
+    mock.get_config.side_effect = lambda key, default=None: config.get(key, default)
     return mock
 
 
@@ -761,7 +768,8 @@ class TestPrimaryPreparation:
         mock_primary_client.list_custom_resources.return_value = [backup_schedule]
 
         def patch_side_effect(**_kwargs):
-            mock_state_manager.set_config.assert_called_once_with("saved_backup_schedule", backup_schedule)
+            # The snapshot must already be persisted before the pause patch is issued.
+            assert RunRecord(mock_state_manager).saved_backup_schedule() == backup_schedule
             return True
 
         mock_primary_client.patch_custom_resource.side_effect = patch_side_effect
@@ -799,7 +807,8 @@ class TestPrimaryPreparation:
         mock_primary_client.list_custom_resources.return_value = [backup_schedule]
 
         def delete_side_effect(**_kwargs):
-            mock_state_manager.set_config.assert_called_once_with("saved_backup_schedule", backup_schedule)
+            # The snapshot must already be persisted before the BackupSchedule is deleted.
+            assert RunRecord(mock_state_manager).saved_backup_schedule() == backup_schedule
             return True
 
         mock_primary_client.delete_custom_resource.side_effect = delete_side_effect
@@ -829,12 +838,10 @@ class TestPrimaryPreparation:
         """Already-paused reruns must persist the BackupSchedule when no saved schedule exists."""
         backup_schedule = {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}
         mock_primary_client.list_custom_resources.return_value = [backup_schedule]
-        mock_state_manager.get_config.return_value = None
 
         primary_prep_with_obs._pause_backup_schedule()
 
-        mock_state_manager.get_config.assert_called_once_with("saved_backup_schedule")
-        mock_state_manager.set_config.assert_called_once_with("saved_backup_schedule", backup_schedule)
+        assert RunRecord(mock_state_manager).saved_backup_schedule() == backup_schedule
         mock_primary_client.patch_custom_resource.assert_not_called()
         mock_primary_client.delete_custom_resource.assert_not_called()
 
@@ -845,11 +852,13 @@ class TestPrimaryPreparation:
         mock_primary_client.list_custom_resources.return_value = [
             {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}
         ]
-        mock_state_manager.get_config.return_value = {"metadata": {"name": "previous-schedule"}}
+        previous_schedule = {"metadata": {"name": "previous-schedule"}}
+        RunRecord(mock_state_manager).record_saved_backup_schedule(previous_schedule)
+        mock_state_manager.set_config.reset_mock()
 
         primary_prep_with_obs._pause_backup_schedule()
 
-        mock_state_manager.get_config.assert_called_once_with("saved_backup_schedule")
+        assert RunRecord(mock_state_manager).saved_backup_schedule() == previous_schedule
         mock_state_manager.set_config.assert_not_called()
         mock_primary_client.patch_custom_resource.assert_not_called()
         mock_primary_client.delete_custom_resource.assert_not_called()

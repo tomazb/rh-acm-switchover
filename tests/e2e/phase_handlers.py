@@ -13,6 +13,7 @@ from typing import Callable, List, Optional
 
 from lib.constants import ACM_NAMESPACE, OBSERVABILITY_NAMESPACE
 from lib.kube_client import KubeClient
+from lib.run_record import HubFacts, RunRecord
 from lib.utils import StateManager
 from modules import (
     Finalization,
@@ -386,9 +387,13 @@ class PhaseHandlers:
             acm_version = "unknown"
 
         # Store config in state manager
-        state_manager.set_config("primary_version", acm_version)
-        state_manager.set_config("primary_has_observability", primary_has_obs)
-        state_manager.set_config("secondary_has_observability", secondary_has_obs)
+        RunRecord(state_manager).record_hub_facts(
+            HubFacts(
+                primary_version=acm_version,
+                primary_has_observability=primary_has_obs,
+                secondary_has_observability=secondary_has_obs,
+            )
+        )
 
         # Phase 2: Primary hub preparation
         self.logger.info("")

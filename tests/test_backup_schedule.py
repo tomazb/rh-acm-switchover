@@ -204,11 +204,11 @@ class TestBackupScheduleManagerIntegration:
 
     def test_full_workflow_with_state(self, mock_kube_client, tmp_path):
         """Test complete workflow with real StateManager."""
+        from lib.run_record import RunRecord
         from lib.utils import StateManager
 
         state = StateManager(str(tmp_path / "state.json"))
-        state.set_config(
-            "saved_backup_schedule",
+        RunRecord(state).record_saved_backup_schedule(
             {"metadata": {"name": "saved"}, "spec": {"schedule": "0 */6 * * *"}},
         )
 
