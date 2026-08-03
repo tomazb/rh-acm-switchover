@@ -12,6 +12,7 @@ from show_state import (
     find_state_files,
     format_timestamp,
     load_state,
+    print_state,
 )
 
 
@@ -70,6 +71,35 @@ class TestShowStateHelpers:
         captured = capsys.readouterr().out
         assert "Error: State file not found" in captured
         assert "Error: Invalid JSON in state file" in captured
+
+
+@pytest.mark.unit
+class TestPrintState:
+    """Golden output for the RunSummary-rendered lifecycle sections."""
+
+    def test_print_state_renders_phase_steps_and_errors(self, capsys):
+        state = {
+            "current_phase": "activation",
+            "completed_steps": [
+                {"name": "pause_backup_schedule", "phase": "primary_preparation", "timestamp": "2026-01-01T00:00:00Z"},
+                {"name": "custom_step", "phase": "activation", "timestamp": ""},
+            ],
+            "errors": [{"phase": "activation", "error": "restore stalled", "timestamp": "2026-01-01T01:00:00Z"}],
+        }
+
+        print_state(state, use_color=False)
+        out = capsys.readouterr().out
+
+        # Phase renders through PHASE_INFO, not the raw key.
+        assert "  Activation: Activating secondary hub as new primary" in out
+        # Known step renders its description; unknown step falls back to its name.
+        assert "  ✓  1. Paused BackupSchedule on primary hub" in out
+        assert "       2026-01-01 00:00:00 (" in out
+        assert "  ✓  2. custom_step" in out
+        # An empty timestamp keeps the historical "unknown" render.
+        assert "       unknown" in out
+        assert "━ Errors (1) ━" in out
+        assert "  ✗ [activation] restore stalled" in out
 
 
 @pytest.mark.unit
