@@ -43,7 +43,7 @@ class TestArgocdResumeOnly:
         if identities:
             state_data["hub_identities"] = identities
         state.state = state_data
-        state.get_config.side_effect = lambda key, default=None: {
+        state._get_config.side_effect = lambda key, default=None: {
             "argocd_run_id": "run-1",
             "argocd_paused_apps": paused_apps,
         }.get(key, default)
@@ -60,8 +60,8 @@ class TestArgocdResumeOnly:
                 "secondary": {"context": "hub-b", "cluster_uid": "uid-secondary"},
             }
         )
-        state.set_config("argocd_run_id", "run-1")
-        state.set_config(
+        state._set_config("argocd_run_id", "run-1")
+        state._set_config(
             "argocd_paused_apps",
             [
                 {
@@ -119,8 +119,8 @@ class TestArgocdResumeOnly:
 
         state = StateManager(str(tmp_path / "legacy-resume-state.json"))
         state.ensure_contexts("hub-a", "hub-b")
-        state.set_config("argocd_run_id", "run-1")
-        state.set_config(
+        state._set_config("argocd_run_id", "run-1")
+        state._set_config(
             "argocd_paused_apps",
             [
                 {
@@ -149,8 +149,8 @@ class TestArgocdResumeOnly:
         between them must not leave resume-only rejecting the state forever.
         """
         state = self._make_identity_state(tmp_path)
-        state.set_config("argocd_paused_apps", [])
-        state.set_config("argocd_run_id", "run-1")
+        state._set_config("argocd_paused_apps", [])
+        state._set_config("argocd_run_id", "run-1")
         args = make_resume_only_context_args("hub-a", "hub-b")
         logger = logging.getLogger("test.resume_only_interrupted_cleanup")
 
@@ -161,13 +161,13 @@ class TestArgocdResumeOnly:
         assert result is True
         resume_recorded.assert_not_called()
         assert "already empty" in caplog.text
-        assert state.get_config("argocd_run_id") is None
+        assert state._get_config("argocd_run_id") is None
 
     def test_resume_only_still_fails_when_state_has_nothing(self, tmp_path, caplog):
         """No run id and no entries is genuinely nothing to resume -- still an error."""
         state = self._make_identity_state(tmp_path)
-        state.set_config("argocd_paused_apps", [])
-        state.set_config("argocd_run_id", None)
+        state._set_config("argocd_paused_apps", [])
+        state._set_config("argocd_run_id", None)
         args = make_resume_only_context_args("hub-a", "hub-b")
         logger = logging.getLogger("test.resume_only_nothing_to_resume")
 
@@ -184,7 +184,7 @@ class TestArgocdResumeOnly:
 
         state = StateManager(str(tmp_path / "legacy-resume-force-state.json"))
         state.ensure_contexts("hub-a", "hub-b")
-        state.set_config("argocd_run_id", "run-1")
+        state._set_config("argocd_run_id", "run-1")
         paused_apps = [
             {
                 "hub": "secondary",
@@ -193,7 +193,7 @@ class TestArgocdResumeOnly:
                 "original_sync_policy": {"automated": {}},
             }
         ]
-        state.set_config("argocd_paused_apps", paused_apps)
+        state._set_config("argocd_paused_apps", paused_apps)
         args = make_resume_only_context_args("hub-a", "hub-b", force=True)
         primary = Mock(name="primary-client")
         primary.get_cluster_identity.return_value = {"context": "hub-a", "cluster_uid": "uid-primary"}
@@ -230,9 +230,9 @@ class TestArgocdResumeOnly:
 
         assert _run_argocd_resume_only(args, state, primary, secondary, logger) is True
 
-        assert state.get_config("argocd_paused_apps") == []
-        assert state.get_config("argocd_run_id") is None
-        assert state.get_config("argocd_discovery_namespaces") == {}
+        assert state._get_config("argocd_paused_apps") == []
+        assert state._get_config("argocd_run_id") is None
+        assert state._get_config("argocd_discovery_namespaces") == {}
         secondary.patch_custom_resource.assert_called_once()
 
     def test_resume_only_builds_primary_client_from_recorded_state_when_primary_context_omitted(
@@ -297,7 +297,7 @@ class TestArgocdResumeOnly:
         from acm_switchover import _run_argocd_resume_only
 
         state = Mock()
-        state.get_config.side_effect = lambda key, default=None: {
+        state._get_config.side_effect = lambda key, default=None: {
             "argocd_run_id": None,
             "argocd_paused_apps": [],
         }.get(key, default)
@@ -313,7 +313,7 @@ class TestArgocdResumeOnly:
         from acm_switchover import _run_argocd_resume_only
 
         state = Mock()
-        state.get_config.side_effect = lambda key, default=None: {
+        state._get_config.side_effect = lambda key, default=None: {
             "argocd_run_id": "run-1",
             "argocd_paused_apps": [
                 {
@@ -560,7 +560,7 @@ class TestAttemptArgoCDResumeOnFailure:
                 }
             },
         }
-        state.get_config.side_effect = lambda key, *a: {
+        state._get_config.side_effect = lambda key, *a: {
             "argocd_run_id": run_id,
             "argocd_paused_apps": paused_apps,
         }.get(key, a[0] if a else None)
@@ -614,9 +614,9 @@ class TestAttemptArgoCDResumeOnFailure:
         state_path = tmp_path / "state.json"
         state = StateManager(str(state_path))
         self._bind_real_state(state)
-        state.set_config("argocd_run_id", "run-1")
-        state.set_config("argocd_paused_apps", paused_apps)
-        state.set_config(
+        state._set_config("argocd_run_id", "run-1")
+        state._set_config("argocd_paused_apps", paused_apps)
+        state._set_config(
             "argocd_discovery_namespaces",
             {"primary": ["argocd"], "secondary": ["openshift-gitops"]},
         )
@@ -640,9 +640,9 @@ class TestAttemptArgoCDResumeOnFailure:
         _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
 
         reloaded = StateManager(str(state_path))
-        assert reloaded.get_config("argocd_paused_apps") == []
-        assert reloaded.get_config("argocd_run_id") is None
-        assert reloaded.get_config("argocd_discovery_namespaces") == {}
+        assert reloaded._get_config("argocd_paused_apps") == []
+        assert reloaded._get_config("argocd_run_id") is None
+        assert reloaded._get_config("argocd_discovery_namespaces") == {}
         assert reloaded.is_step_completed("pause_argocd_apps") is False
 
     def test_resume_success_rewinds_switchover_retry_to_primary_prep(self, tmp_path):
@@ -656,8 +656,8 @@ class TestAttemptArgoCDResumeOnFailure:
         state.set_phase(Phase.POST_ACTIVATION)
         state.add_error("post activation failed", Phase.POST_ACTIVATION.value)
         state.set_phase(Phase.FAILED)
-        state.set_config("argocd_run_id", "run-1")
-        state.set_config("argocd_paused_apps", paused_apps)
+        state._set_config("argocd_run_id", "run-1")
+        state._set_config("argocd_paused_apps", paused_apps)
         state.mark_step_completed("pause_argocd_apps")
         args = make_resume_on_failure_args()
         logger = logging.getLogger("test")
@@ -682,8 +682,8 @@ class TestAttemptArgoCDResumeOnFailure:
         state.set_phase(Phase.POST_ACTIVATION)
         state.add_error("post activation failed", Phase.POST_ACTIVATION.value)
         state.set_phase(Phase.FAILED)
-        state.set_config("argocd_run_id", "run-1")
-        state.set_config("argocd_paused_apps", paused_apps)
+        state._set_config("argocd_run_id", "run-1")
+        state._set_config("argocd_paused_apps", paused_apps)
         state.mark_step_completed("pause_argocd_apps")
         args = make_resume_on_failure_args(restore_only=True)
         logger = logging.getLogger("test")
@@ -708,8 +708,8 @@ class TestAttemptArgoCDResumeOnFailure:
         state_path = tmp_path / "state.json"
         state = StateManager(str(state_path))
         self._bind_real_state(state)
-        state.set_config("argocd_run_id", "run-1")
-        state.set_config("argocd_paused_apps", paused_apps)
+        state._set_config("argocd_run_id", "run-1")
+        state._set_config("argocd_paused_apps", paused_apps)
         state.mark_step_completed("pause_argocd_apps")
         args = make_resume_on_failure_args()
         logger = logging.getLogger("test")
@@ -722,8 +722,8 @@ class TestAttemptArgoCDResumeOnFailure:
             _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
 
         reloaded = StateManager(str(state_path))
-        assert reloaded.get_config("argocd_paused_apps") == paused_apps
-        assert reloaded.get_config("argocd_run_id") == "run-1"
+        assert reloaded._get_config("argocd_paused_apps") == paused_apps
+        assert reloaded._get_config("argocd_run_id") == "run-1"
         assert reloaded.is_step_completed("pause_argocd_apps") is True
 
     def test_no_resume_when_flag_not_set(self):
@@ -782,7 +782,7 @@ class TestAttemptArgoCDResumeOnFailure:
                 _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
 
         assert "in the pause register" in caplog.text
-        state.set_config.assert_not_called()
+        state._set_config.assert_not_called()
         state.clear_step_completed.assert_not_called()
 
     def test_resume_on_failure_uses_context_neutral_context_mismatch_message(self, caplog):
@@ -841,8 +841,8 @@ class TestAttemptArgoCDResumeOnFailure:
         state = StateManager(str(tmp_path / "resume-on-failure-legacy.json"))
         state.ensure_contexts("hub-a", "hub-b")
         state.set_phase(Phase.POST_ACTIVATION)
-        state.set_config("argocd_run_id", "run-1")
-        state.set_config(
+        state._set_config("argocd_run_id", "run-1")
+        state._set_config(
             "argocd_paused_apps",
             [{"hub": "primary", "namespace": "argocd", "name": "app1", "original_sync_policy": {"automated": {}}}],
         )
@@ -866,8 +866,8 @@ class TestAttemptArgoCDResumeOnFailure:
         state = StateManager(str(tmp_path / "resume-on-failure-legacy-force.json"))
         state.ensure_contexts("hub-a", "hub-b")
         state.set_phase(Phase.POST_ACTIVATION)
-        state.set_config("argocd_run_id", "run-1")
-        state.set_config(
+        state._set_config("argocd_run_id", "run-1")
+        state._set_config(
             "argocd_paused_apps",
             [{"hub": "primary", "namespace": "argocd", "name": "app1", "original_sync_policy": {"automated": {}}}],
         )
@@ -890,7 +890,7 @@ class TestArgocdResumeOnlyContextMismatch:
 
     def _make_state(self, primary_ctx, secondary_ctx):
         state = Mock()
-        state.get_config.side_effect = lambda key, default=None: {
+        state._get_config.side_effect = lambda key, default=None: {
             "argocd_run_id": "run-123",
             "argocd_paused_apps": [{"hub": "secondary", "namespace": "argocd", "name": "app1"}],
         }.get(key, default)
@@ -958,8 +958,8 @@ def test_resume_only_dry_run_does_not_report_work_as_done(tmp_path, caplog):
     state.ensure_hub_identities(
         {"secondary": {"context": "hub-b", "cluster_uid": "uid-secondary"}},
     )
-    state.set_config("argocd_run_id", "run-1")
-    state.set_config(
+    state._set_config("argocd_run_id", "run-1")
+    state._set_config(
         "argocd_paused_apps",
         [
             {
@@ -984,7 +984,7 @@ def test_resume_only_dry_run_does_not_report_work_as_done(tmp_path, caplog):
     messages = [record.getMessage() for record in caplog.records]
     assert any("Would restore 1" in message for message in messages)
     assert not any(message.startswith("Restored ") for message in messages)
-    assert state.get_config("argocd_paused_apps") != []
+    assert state._get_config("argocd_paused_apps") != []
     # G2: the projection must not contradict itself - restoring every entry leaves none behind.
     assert any("0 would remain" in message for message in messages)
     assert not any("1 would remain" in message for message in messages)

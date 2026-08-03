@@ -96,7 +96,7 @@ class TestManageAutoImportFlag:
             restore_only=False,
         )
         state = MagicMock()
-        state.get_config = MagicMock(side_effect=lambda key, default=None: default)
+        state._get_config = MagicMock(side_effect=lambda key, default=None: default)
         secondary = MagicMock()
 
         # Activation: SecondaryActivation constructor receives the fallback

@@ -981,7 +981,7 @@ class TestSwitchoverPhaseFlow:
 
         state_file = tmp_path / "state.json"
         state = StateManager(str(state_file))
-        state.set_config("operator_note", "keep")
+        state._set_config("operator_note", "keep")
         original_timestamp = state.state["last_updated"]
 
         args = SimpleNamespace(
@@ -1000,7 +1000,7 @@ class TestSwitchoverPhaseFlow:
             def _handler(_args, phase_state, *_rest):
                 phase_state.set_phase(next_phase)
                 phase_state.mark_step_completed(step_name)
-                phase_state.set_config("dry_run_only", step_name)
+                phase_state._set_config("dry_run_only", step_name)
                 return True
 
             return _handler
@@ -1026,8 +1026,8 @@ class TestSwitchoverPhaseFlow:
 
         reloaded = StateManager(str(state_file))
         assert reloaded.get_current_phase() == Phase.INIT
-        assert reloaded.get_config("operator_note") == "keep"
-        assert reloaded.get_config("dry_run_only") is None
+        assert reloaded._get_config("operator_note") == "keep"
+        assert reloaded._get_config("dry_run_only") is None
         assert reloaded.state["completed_steps"] == []
         assert reloaded.state["last_updated"] == original_timestamp
         log_text = "\n".join(str(call.args[0]) for call in logger.info.call_args_list if call.args)
@@ -1041,7 +1041,7 @@ class TestSwitchoverPhaseFlow:
 
         state_file = tmp_path / "state.json"
         state = StateManager(str(state_file))
-        state.set_config("restore_note", "keep")
+        state._set_config("restore_note", "keep")
         original_timestamp = state.state["last_updated"]
 
         args = SimpleNamespace(
@@ -1061,7 +1061,7 @@ class TestSwitchoverPhaseFlow:
             def _handler(_args, phase_state, *_rest):
                 phase_state.set_phase(next_phase)
                 phase_state.mark_step_completed(step_name)
-                phase_state.set_config("dry_run_only", step_name)
+                phase_state._set_config("dry_run_only", step_name)
                 return True
 
             return _handler
@@ -1084,8 +1084,8 @@ class TestSwitchoverPhaseFlow:
 
         reloaded = StateManager(str(state_file))
         assert reloaded.get_current_phase() == Phase.INIT
-        assert reloaded.get_config("restore_note") == "keep"
-        assert reloaded.get_config("dry_run_only") is None
+        assert reloaded._get_config("restore_note") == "keep"
+        assert reloaded._get_config("dry_run_only") is None
         assert reloaded.state["completed_steps"] == []
         assert reloaded.state["last_updated"] == original_timestamp
         log_text = "\n".join(str(call.args[0]) for call in logger.info.call_args_list if call.args)
@@ -1103,7 +1103,7 @@ class TestSwitchoverPhaseFlow:
         with patch("acm_switchover.ArgocdPauseRegister") as coordinator_class:
             coordinator = coordinator_class.return_value
             coordinator.pause_hubs.return_value = PauseSummary(newly_paused=1, run_id="run-1")
-            state.get_config.return_value = "run-1"
+            state._get_config.return_value = "run-1"
 
             result = _run_restore_only_argocd_pause(args, state, None, secondary, logger)
 
@@ -1117,7 +1117,7 @@ class TestSwitchoverPhaseFlow:
         args = SimpleNamespace(argocd_manage=True, dry_run=True)
         state = Mock()
         state.is_step_completed.return_value = False
-        state.get_config.return_value = None
+        state._get_config.return_value = None
         secondary = Mock()
         logger = Mock()
 
@@ -1140,7 +1140,7 @@ class TestSwitchoverPhaseFlow:
         args = SimpleNamespace(argocd_manage=True, dry_run=False)
         state = Mock()
         state.is_step_completed.return_value = False
-        state.get_config.return_value = None
+        state._get_config.return_value = None
         secondary = Mock()
         logger = Mock()
 
@@ -1521,7 +1521,7 @@ class TestSwitchoverPhaseFlow:
         state = Mock()
         state.get_current_phase.return_value = SimpleNamespace(value="finalization")
         state.get_errors.return_value = [{"phase": "activation", "error": "prior"}]
-        state.get_config.return_value = None
+        state._get_config.return_value = None
         logger = Mock()
 
         result = _fail_phase(state, "current failure", logger)

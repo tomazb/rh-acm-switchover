@@ -87,8 +87,8 @@ def mock_state_manager():
             return default
         return copy.deepcopy(config[key])
 
-    mock.set_config.side_effect = _set_config
-    mock.get_config.side_effect = _get_config
+    mock._set_config.side_effect = _set_config
+    mock._get_config.side_effect = _get_config
     return mock
 
 
@@ -1768,7 +1768,7 @@ class TestActivationResumeStalenessGuard:
             activation._activate_via_passive_sync()
 
         mock_secondary_client.patch_custom_resource.assert_not_called()
-        mock_state_manager.set_config.assert_not_called()
+        mock_state_manager._set_config.assert_not_called()
 
     def test_patch_activation_already_applied_skips_revalidation(self, mock_secondary_client, mock_state_manager):
         """A patched restore legitimately transitions phases; already-applied must stay an early return."""

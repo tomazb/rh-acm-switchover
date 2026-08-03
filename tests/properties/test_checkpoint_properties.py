@@ -833,8 +833,8 @@ def _apply_state_operations(manager: StateManager, operations: list) -> dict:
         elif operation.name == "clear_step":
             manager.clear_step_completed(operation.key)
             model["steps"] = [step for step in model["steps"] if step != operation.key]
-        elif operation.name == "set_config":
-            manager.set_config(operation.key, operation.value)
+        elif operation.name == "_set_config":
+            manager._set_config(operation.key, operation.value)
             model["config"][operation.key] = copy.deepcopy(operation.value)
         elif operation.name == "capture_snapshot":
             captured_state = manager.capture_state_snapshot()
@@ -912,16 +912,16 @@ def test_state_manager_setting_same_config_value_does_not_write_again(tmp_path: 
     state_path = _fresh_state_path(tmp_path)
     with _state_manager_scope() as make_manager:
         manager = make_manager(state_path)
-        manager.set_config(key, value)
+        manager._set_config(key, value)
         durable_before = state_path.read_bytes()
 
         with patch.object(manager, "_write_state", wraps=manager._write_state) as write_spy:
-            manager.set_config(key, copy.deepcopy(value))
+            manager._set_config(key, copy.deepcopy(value))
 
         assert write_spy.call_count == 0, f"unchanged config triggered a write for key={key!r}, value={value!r}"
         assert state_path.read_bytes() == durable_before
         reloaded = make_manager(state_path)
-        assert reloaded.get_config(key) == value
+        assert reloaded._get_config(key) == value
 
 
 @pytest.mark.property
@@ -948,14 +948,14 @@ def test_state_manager_snapshot_is_deep_isolated_and_restores_every_durable_fiel
         manager.ensure_hub_identities(identities)
         manager.set_phase(phase)
         manager.mark_step_completed(step_name)
-        manager.set_config("generated", config_value)
+        manager._set_config("generated", config_value)
         manager.add_error("captured-error", phase.value)
 
         snapshot = manager.capture_state_snapshot()
         expected_snapshot = copy.deepcopy(snapshot)
         manager.set_phase(Phase.FAILED)
         manager.clear_step_completed(step_name)
-        manager.set_config("generated", {"mutated": True})
+        manager._set_config("generated", {"mutated": True})
         manager.add_error("later-error", Phase.FAILED.value)
         manager.state["contexts"] = {"primary": "mutated-primary", "secondary": "mutated-secondary"}
         manager.state["hub_identities"] = {"primary": {"context": "mutated-primary", "cluster_uid": "mutated-uid"}}
@@ -990,7 +990,7 @@ def test_state_manager_context_changes_reset_progress_before_rebinding(tmp_path:
         manager.ensure_contexts(case.stored["primary"], case.stored["secondary"])
         manager.set_phase(Phase.ACTIVATION)
         manager.mark_step_completed("activate_restore")
-        manager.set_config("stale", True)
+        manager._set_config("stale", True)
         manager.add_error("stale-error", Phase.ACTIVATION.value)
         expected_errors = copy.deepcopy(manager.get_errors())
 
@@ -1000,7 +1000,7 @@ def test_state_manager_context_changes_reset_progress_before_rebinding(tmp_path:
         if case.changed_role is None:
             assert reloaded.get_current_phase() is Phase.ACTIVATION
             assert reloaded.is_step_completed("activate_restore") is True
-            assert reloaded.get_config("stale") is True
+            assert reloaded._get_config("stale") is True
             assert (
                 reloaded.get_errors() == expected_errors
             ), f"matching contexts discarded or corrupted errors for {case!r}"
@@ -1023,7 +1023,7 @@ def test_state_manager_missing_stored_contexts_reset_in_progress_state(tmp_path:
         manager = make_manager(state_path)
         manager.set_phase(Phase.PRIMARY_PREP)
         manager.mark_step_completed("pause_backups")
-        manager.set_config("stale", True)
+        manager._set_config("stale", True)
         manager.add_error("stale-error", Phase.PRIMARY_PREP.value)
         manager.state.pop("contexts", None)
         manager.flush_state()

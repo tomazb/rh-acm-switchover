@@ -76,8 +76,8 @@ def mock_state_manager():
             return default
         return copy.deepcopy(config[key])
 
-    mock.set_config.side_effect = _set_config
-    mock.get_config.side_effect = _get_config
+    mock._set_config.side_effect = _set_config
+    mock._get_config.side_effect = _get_config
     return mock
 
 
@@ -296,13 +296,13 @@ class TestFinalization:
         mock_secondary_client.list_custom_resources.return_value = [recorded_backup]
         mock_secondary_client.get_custom_resource.return_value = recorded_backup
         RunRecord(finalization.state).record_new_backup("acm-backup-001")
-        finalization.state.set_config.reset_mock()
+        finalization.state._set_config.reset_mock()
 
         finalization._verify_new_backups(timeout=10)
 
         mock_secondary_client.get_custom_resource.assert_called_once()
         # The reuse path must re-record the name, not merely leave the seeded value in place.
-        assert finalization.state.set_config.called
+        assert finalization.state._set_config.called
         assert RunRecord(finalization.state).new_backup() == "acm-backup-001"
 
     def test_verify_new_backups_accepts_existing_post_enable_backup_on_resume(
@@ -416,7 +416,7 @@ class TestFinalization:
         with pytest.raises(SwitchoverError, match="Failed to delete restore resource"):
             finalization._cleanup_restore_resources()
 
-        mock_state_manager.set_config.assert_called_once_with("archived_restores", ANY)
+        mock_state_manager._set_config.assert_called_once_with("archived_restores", ANY)
 
     @patch("modules.finalization.time")
     def test_verify_new_backups_fails_fast_on_permanent_list_error(
@@ -686,7 +686,7 @@ class TestFinalization:
 
         mock_secondary_client.get_configmap.assert_not_called()
         mock_secondary_client.delete_configmap.assert_not_called()
-        mock_state_manager.set_config.assert_not_called()
+        mock_state_manager._set_config.assert_not_called()
         mock_state_manager.mark_step_completed.assert_not_called()
 
     def test_ensure_auto_import_default_warns_and_skips_when_lookup_fails(
@@ -1991,8 +1991,8 @@ class TestFinalization:
         )
 
         # Verify archive was saved to state
-        mock_state_manager.set_config.assert_called_once()
-        call_args = mock_state_manager.set_config.call_args
+        mock_state_manager._set_config.assert_called_once()
+        call_args = mock_state_manager._set_config.call_args
         assert call_args[0][0] == "archived_restores"
 
         archived = call_args[0][1]
@@ -2045,7 +2045,7 @@ class TestFinalization:
             else:
                 finalization._cleanup_restore_resources()
 
-        mock_state_manager.set_config.assert_called_once()
+        mock_state_manager._set_config.assert_called_once()
         if expect_warning:
             assert "Error deleting restore restore-acm-passive-sync" in caplog.text
         else:
@@ -2072,7 +2072,7 @@ class TestFinalization:
             finalization._cleanup_restore_resources()
 
         mock_secondary_client.delete_custom_resource.assert_not_called()
-        mock_state_manager.set_config.assert_not_called()
+        mock_state_manager._set_config.assert_not_called()
 
     def test_archive_restore_details_extracts_all_fields(self, finalization):
         """Test that _archive_restore_details extracts all important fields."""

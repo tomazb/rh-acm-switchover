@@ -166,15 +166,15 @@ class RunRecord:
     # -- internal accessors (single indirection point for Task 10 rename) --
 
     def _set(self, key: str, value: Any) -> None:
-        self._state.set_config(key, value)
+        self._state._set_config(key, value)
 
     def _get(self, key: str, default: Any = _UNSET) -> Any:
         # Forward the default only when the caller supplied one, so reads keep
-        # the exact single-argument get_config call shape they had before the
+        # the exact single-argument _get_config call shape they had before the
         # facade existed (StateManager already defaults to None).
         if default is _UNSET:
-            return self._state.get_config(key)
-        return self._state.get_config(key, default)
+            return self._state._get_config(key)
+        return self._state._get_config(key, default)
 
     # -- hub facts: written by CLI preflight, read by every later phase --
 

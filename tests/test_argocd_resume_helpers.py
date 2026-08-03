@@ -40,7 +40,7 @@ def _mock_state(paused_apps, *, primary_ctx="hub-a", secondary_ctx="hub-b", iden
             HUB_ROLE_SECONDARY: {"context": secondary_ctx, "cluster_uid": "uid-secondary"},
         }
     state.ensure_hub_identities = Mock()
-    state.get_config.side_effect = lambda key, default=None: {
+    state._get_config.side_effect = lambda key, default=None: {
         STATE_KEY_ARGOCD_RUN_ID: "run-1",
         STATE_KEY_ARGOCD_PAUSED_APPS: paused_apps,
     }.get(key, default)
@@ -161,7 +161,7 @@ def test_run_argocd_resume_only_finishes_cleanup_for_empty_register():
     run id at all.
     """
     state = Mock()
-    state.get_config.side_effect = lambda key, default=None: {
+    state._get_config.side_effect = lambda key, default=None: {
         STATE_KEY_ARGOCD_RUN_ID: "run-1",
         STATE_KEY_ARGOCD_PAUSED_APPS: [],
     }.get(key, default)
@@ -188,7 +188,7 @@ def test_run_argocd_resume_only_rejects_register_of_unresumable_records():
     idempotent-cleanup path must not swallow them.
     """
     state = Mock()
-    state.get_config.side_effect = lambda key, default=None: {
+    state._get_config.side_effect = lambda key, default=None: {
         STATE_KEY_ARGOCD_RUN_ID: "run-1",
         STATE_KEY_ARGOCD_PAUSED_APPS: [
             {

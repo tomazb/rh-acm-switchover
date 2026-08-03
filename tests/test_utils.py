@@ -52,7 +52,7 @@ class TestStateManager:
         """Test initial state creation."""
         assert state_manager.get_current_phase() == Phase.INIT
         assert state_manager.is_step_completed("any_step") is False
-        assert state_manager.get_config("key") is None
+        assert state_manager._get_config("key") is None
 
     def test_bare_filename(self, tmp_path):
         """Test that StateManager works with bare filename (no directory)."""
@@ -151,22 +151,22 @@ class TestStateManager:
 
     def test_set_get_config(self, state_manager):
         """Test configuration storage."""
-        state_manager.set_config("acm_version", "2.12.0")
-        assert state_manager.get_config("acm_version") == "2.12.0"
-        assert state_manager.get_config("nonexistent") is None
+        state_manager._set_config("acm_version", "2.12.0")
+        assert state_manager._get_config("acm_version") == "2.12.0"
+        assert state_manager._get_config("nonexistent") is None
 
         # Test with default
-        assert state_manager.get_config("missing", "default") == "default"
+        assert state_manager._get_config("missing", "default") == "default"
 
     def test_set_config_persists_immediately(self, tmp_path):
         """Config updates should be persisted without explicit save_state."""
         state_path = tmp_path / "state-config.json"
         sm = StateManager(str(state_path))
 
-        sm.set_config("key", "value")
+        sm._set_config("key", "value")
 
         reloaded = StateManager(str(state_path))
-        assert reloaded.get_config("key") == "value"
+        assert reloaded._get_config("key") == "value"
 
     def test_set_config_persists_explicit_none(self, tmp_path):
         """An explicit None config value must remain distinct from an absent key."""
@@ -174,7 +174,7 @@ class TestStateManager:
         sm = StateManager(str(state_path))
         assert "method" not in sm.state["config"]
 
-        sm.set_config("method", None)
+        sm._set_config("method", None)
 
         assert "method" in sm.state["config"]
         assert sm.state["config"]["method"] is None
@@ -183,27 +183,27 @@ class TestStateManager:
         assert "method" in reloaded.state["config"]
         assert reloaded.state["config"]["method"] is None
         sentinel = object()
-        assert reloaded.get_config("method", sentinel) is None
+        assert reloaded._get_config("method", sentinel) is None
 
     def test_set_config_repeated_none_is_idempotent(self, tmp_path):
         """Equal present values must not trigger another durable write."""
         state_path = tmp_path / "state-config-idempotent.json"
         sm = StateManager(str(state_path))
-        sm.set_config("method", None)
+        sm._set_config("method", None)
         assert "method" in sm.state["config"]
 
         with patch.object(sm, "_write_state", wraps=sm._write_state) as mock_write:
-            sm.set_config("method", None)
+            sm._set_config("method", None)
             mock_write.assert_not_called()
             assert "method" in sm.state["config"]
             assert sm.state["config"]["method"] is None
 
-            sm.set_config("method", "passive")
+            sm._set_config("method", "passive")
             mock_write.assert_called_once()
-            assert StateManager(str(state_path)).get_config("method") == "passive"
+            assert StateManager(str(state_path))._get_config("method") == "passive"
 
             mock_write.reset_mock()
-            sm.set_config("method", "passive")
+            sm._set_config("method", "passive")
             mock_write.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -232,7 +232,7 @@ class TestStateManager:
         sm = StateManager(str(state_path))
         expected = json.loads(json.dumps(value))
 
-        sm.set_config("operation", value)
+        sm._set_config("operation", value)
         mutate(value)
 
         assert sm.state["config"]["operation"] == expected
@@ -262,10 +262,10 @@ class TestStateManager:
         """Mutating a retrieved value must not change memory or durable config."""
         state_path = tmp_path / "state-config-get-alias.json"
         sm = StateManager(str(state_path))
-        sm.set_config("operation", stored)
+        sm._set_config("operation", stored)
         expected = json.loads(json.dumps(stored))
 
-        returned = sm.get_config("operation")
+        returned = sm._get_config("operation")
         mutate(returned)
 
         assert sm.state["config"]["operation"] == expected
@@ -275,11 +275,11 @@ class TestStateManager:
         """A modified retrieved copy must persist when passed back explicitly."""
         state_path = tmp_path / "state-config-explicit-update.json"
         sm = StateManager(str(state_path))
-        sm.set_config("operation", {"modes": [{"method": "passive"}]})
-        updated = sm.get_config("operation")
+        sm._set_config("operation", {"modes": [{"method": "passive"}]})
+        updated = sm._get_config("operation")
         updated["modes"][0]["method"] = "full"
 
-        sm.set_config("operation", updated)
+        sm._set_config("operation", updated)
 
         expected = {"modes": [{"method": "full"}]}
         assert sm.state["config"]["operation"] == expected
@@ -289,26 +289,26 @@ class TestStateManager:
         """An equal mutable value must remain write-free after ownership isolation."""
         state_path = tmp_path / "state-config-mutable-idempotent.json"
         sm = StateManager(str(state_path))
-        sm.set_config("operation", {"modes": ["passive"]})
+        sm._set_config("operation", {"modes": ["passive"]})
 
         with patch.object(sm, "_write_state", wraps=sm._write_state) as mock_write:
-            sm.set_config("operation", {"modes": ["passive"]})
+            sm._set_config("operation", {"modes": ["passive"]})
 
         mock_write.assert_not_called()
 
     @pytest.mark.parametrize("value", [None, "passive", True, False, 0, 42, 1.5])
     def test_set_get_config_preserves_json_scalar_behavior(self, state_manager, value):
         """Immutable JSON scalars and explicit None retain their value semantics."""
-        state_manager.set_config("scalar", value)
+        state_manager._set_config("scalar", value)
 
         assert "scalar" in state_manager.state["config"]
-        assert state_manager.get_config("scalar") == value
+        assert state_manager._get_config("scalar") == value
 
     def test_get_config_returns_absent_mutable_default_without_retaining_it(self, state_manager):
         """An absent-key default remains caller-owned and is never stored."""
         default = {"modes": ["passive"]}
 
-        returned = state_manager.get_config("missing", default)
+        returned = state_manager._get_config("missing", default)
         returned["modes"].append("full")
 
         assert returned is default
@@ -318,7 +318,7 @@ class TestStateManager:
         """Mutating a captured snapshot must not change memory or durable state."""
         state_path = tmp_path / "state-config-snapshot.json"
         sm = StateManager(str(state_path))
-        sm.set_config("operation", {"modes": [{"method": "passive"}]})
+        sm._set_config("operation", {"modes": [{"method": "passive"}]})
 
         snapshot = sm.capture_state_snapshot()
         snapshot["config"]["operation"]["modes"][0]["method"] = "full"
@@ -331,10 +331,10 @@ class TestStateManager:
         """Mutating a restored snapshot input must not change memory or disk."""
         state_path = tmp_path / "state-config-restore-snapshot.json"
         sm = StateManager(str(state_path))
-        sm.set_config("operation", {"modes": [{"method": "passive"}]})
+        sm._set_config("operation", {"modes": [{"method": "passive"}]})
         snapshot = sm.capture_state_snapshot()
 
-        sm.set_config("operation", {"modes": [{"method": "temporary"}]})
+        sm._set_config("operation", {"modes": [{"method": "temporary"}]})
         sm.restore_state_snapshot(snapshot)
         snapshot["config"]["operation"]["modes"][0]["method"] = "full"
 
@@ -345,10 +345,10 @@ class TestStateManager:
     def test_reloaded_config_values_follow_getter_ownership_contract(self, tmp_path):
         """Values loaded from JSON must remain isolated when returned to callers."""
         state_path = tmp_path / "state-config-reload.json"
-        StateManager(str(state_path)).set_config("operation", {"modes": [{"method": "passive"}]})
+        StateManager(str(state_path))._set_config("operation", {"modes": [{"method": "passive"}]})
         reloaded = StateManager(str(state_path))
 
-        returned = reloaded.get_config("operation")
+        returned = reloaded._get_config("operation")
         returned["modes"][0]["method"] = "full"
 
         expected = {"modes": [{"method": "passive"}]}
@@ -367,15 +367,15 @@ class TestStateManager:
             write_count += 1
             original_write(state)
             if write_count == 1:
-                sm.set_config("nested", "value")
+                sm._set_config("nested", "value")
 
         with patch.object(sm, "_write_state", side_effect=reentrant_write):
-            sm.set_config("outer", "value")
+            sm._set_config("outer", "value")
 
         assert write_count == 2
         reloaded = StateManager(str(state_path))
-        assert reloaded.get_config("outer") == "value"
-        assert reloaded.get_config("nested") == "value"
+        assert reloaded._get_config("outer") == "value"
+        assert reloaded._get_config("nested") == "value"
 
     def test_add_error(self, state_manager):
         """Test error recording."""
@@ -442,28 +442,28 @@ class TestStateManager:
         """Test state reset."""
         state_manager.set_phase(Phase.ACTIVATION)
         state_manager.mark_step_completed("step1")
-        state_manager.set_config("key", "value")
+        state_manager._set_config("key", "value")
         state_manager.add_error("error")
 
         state_manager.reset()
 
         assert state_manager.get_current_phase() == Phase.INIT
         assert state_manager.is_step_completed("step1") is False
-        assert state_manager.get_config("key") is None
+        assert state_manager._get_config("key") is None
         assert len(state_manager.state["errors"]) == 0
 
     def test_persistence(self, state_manager, temp_state_file):
         """Test state persistence to file."""
         state_manager.set_phase(Phase.PRIMARY_PREP)
         state_manager.mark_step_completed("backup_paused")
-        state_manager.set_config("observability", True)
+        state_manager._set_config("observability", True)
         state_manager.save_state()  # Ensure dirty state is persisted
 
         # Load in new instance
         loaded_state = StateManager(str(temp_state_file))
         assert loaded_state.get_current_phase() == Phase.PRIMARY_PREP
         assert loaded_state.is_step_completed("backup_paused") is True
-        assert loaded_state.get_config("observability") is True
+        assert loaded_state._get_config("observability") is True
 
     def test_atomic_write_no_temp_file_left(self, state_manager, temp_state_file):
         """Test that atomic write doesn't leave temp files after success."""
@@ -533,13 +533,13 @@ class TestStateManager:
         checkpoint = sm.capture_runtime_checkpoint()
 
         sm.set_phase(Phase.PREFLIGHT)
-        sm.set_config("primary_version", "2.14.0")
+        sm._set_config("primary_version", "2.14.0")
 
         sm.restore_runtime_checkpoint(checkpoint)
 
         reloaded = StateManager(str(state_path))
         assert reloaded.get_current_phase() == Phase.INIT
-        assert reloaded.get_config("primary_version") == "2.14.0"
+        assert reloaded._get_config("primary_version") == "2.14.0"
         assert reloaded.state["last_updated"] == original_timestamp
 
     def test_restore_state_snapshot_rolls_back_full_durable_state(self, tmp_path):
@@ -548,7 +548,7 @@ class TestStateManager:
         sm = StateManager(str(state_path))
         sm.set_phase(Phase.POST_ACTIVATION)
         sm.mark_step_completed("original_step")
-        sm.set_config("original_key", {"nested": ["value"]})
+        sm._set_config("original_key", {"nested": ["value"]})
         sm.add_error("original failure", Phase.POST_ACTIVATION.value)
         original_timestamp = sm.state["last_updated"]
 
@@ -556,8 +556,8 @@ class TestStateManager:
 
         sm.set_phase(Phase.FINALIZATION)
         sm.mark_step_completed("dry_run_step")
-        sm.set_config("original_key", {"nested": ["changed"]})
-        sm.set_config("dry_run_key", "discard")
+        sm._set_config("original_key", {"nested": ["changed"]})
+        sm._set_config("dry_run_key", "discard")
         sm.add_error("dry-run failure", Phase.FINALIZATION.value)
 
         sm.restore_state_snapshot(snapshot)
@@ -565,8 +565,8 @@ class TestStateManager:
         reloaded = StateManager(str(state_path))
         assert reloaded.get_current_phase() == Phase.POST_ACTIVATION
         assert [step["name"] for step in reloaded.state["completed_steps"]] == ["original_step"]
-        assert reloaded.get_config("original_key") == {"nested": ["value"]}
-        assert reloaded.get_config("dry_run_key") is None
+        assert reloaded._get_config("original_key") == {"nested": ["value"]}
+        assert reloaded._get_config("dry_run_key") is None
         assert reloaded.state["last_updated"] == original_timestamp
         errors = reloaded.get_errors()
         assert len(errors) == 1
@@ -634,14 +634,14 @@ class TestStateManager:
         sm.ensure_contexts("primary-a", "secondary-b")
         sm.set_phase(Phase.PRIMARY_PREP)
         sm.mark_step_completed("step1")
-        sm.set_config("preserved", "no")
+        sm._set_config("preserved", "no")
 
         reloaded = StateManager(str(state_path))
         reloaded.ensure_contexts("primary-other", "secondary-b")
 
         assert reloaded.get_current_phase() == Phase.INIT
         assert reloaded.state["completed_steps"] == []
-        assert reloaded.get_config("preserved") is None
+        assert reloaded._get_config("preserved") is None
         assert reloaded.state["contexts"] == {
             "primary": "primary-other",
             "secondary": "secondary-b",

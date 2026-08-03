@@ -205,7 +205,7 @@ Critical operations automatically call `flush_state()`:
 
 Non-critical operations persist state via `save_state()`:
 - `mark_step_completed()` - Step completion tracking (immediate durability via `save_state()`)
-- `set_config()` - Configuration storage (immediate durability via `save_state()`)
+- `_set_config()` - Configuration storage (immediate durability via `save_state()`). Private storage accessor: production code reaches it through `lib/run_record.RunRecord`; the pause-register modules hold a documented allowance (issue #208).
 
 State is automatically flushed on program termination (SIGTERM/SIGINT/atexit) to prevent data loss.
 
