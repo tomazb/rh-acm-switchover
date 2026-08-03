@@ -8,6 +8,7 @@ modules keep a narrow, documented allowance (their seam converges
 separately under issue #208).
 """
 
+import ast
 import pathlib
 import re
 
@@ -33,12 +34,67 @@ ACCESSOR = re.compile(r"\.(?:_set_config|_get_config|set_config|get_config)\(")
 # `.get("config", ...)` — chained to a literal key (subscript or `.get`).
 # Key-agnostic reads (`state.get("config", {})` handed on whole, or iterated
 # generically) are the supported way to touch the config bag from outside the
-# seam and do not match. Known limit: a two-step read split across lines
-# (`config = snapshot["config"]` then `config["key"]`) needs an AST visitor,
-# not a longer regex — see the pattern regression test below.
+# seam and do not match. A two-step read split across lines
+# (`config = snapshot["config"]` then `config["key"]`) is invisible to any
+# line regex — the AST detector below (`_config_bag_bypasses`) covers it.
 _CONFIG_BAG = r"(?:\[\s*[\"']config[\"']\s*\]|\.get\(\s*[\"']config[\"'][^)]*\))"
 _LITERAL_KEY = r"\s*(?:\[\s*[\"']|\.get\(\s*[\"'])"
 RAW_CONFIG_KEY = re.compile(_CONFIG_BAG + _LITERAL_KEY)
+
+
+def _is_config_bag_expr(node):
+    """True for an expression that produces the config bag itself:
+    ``x["config"]`` or ``x.get("config"[, default])``."""
+    if isinstance(node, ast.Subscript):
+        return isinstance(node.slice, ast.Constant) and node.slice.value == "config"
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get":
+        return bool(node.args) and isinstance(node.args[0], ast.Constant) and node.args[0].value == "config"
+    return False
+
+
+def _config_bag_bypasses(source):
+    """AST complement to RAW_CONFIG_KEY: finds named-key reads off the config
+    bag even when the bag is first bound to a variable (the two-step read the
+    line regex cannot see). Returns [(lineno, key), ...].
+
+    Key-agnostic uses — handing the whole bag on, or iterating it — never
+    subscript a literal key and are not flagged. Only simple single-name
+    assignments (optionally behind ``or {}``) are tracked; a name is treated
+    as the bag file-wide, which is safe because unrelated dicts named the
+    same only become offenders if code reads a literal key off them, and
+    tuple/attribute assignments (e.g. ``passed, config = validate_all()``)
+    are deliberately not tracked.
+    """
+    tree = ast.parse(source)
+
+    bag_names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            value = node.value
+            candidates = [value] + (value.values if isinstance(value, ast.BoolOp) else [])
+            if any(_is_config_bag_expr(candidate) for candidate in candidates):
+                bag_names.add(node.targets[0].id)
+
+    def _is_bag(node):
+        return _is_config_bag_expr(node) or (isinstance(node, ast.Name) and node.id in bag_names)
+
+    offenders = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Subscript):
+            key = node.slice
+            if isinstance(key, ast.Constant) and isinstance(key.value, str) and _is_bag(node.value):
+                offenders.append((node.lineno, key.value))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get":
+            if node.args:
+                key = node.args[0]
+                if (
+                    isinstance(key, ast.Constant)
+                    and isinstance(key.value, str)
+                    and key.value != "config"
+                    and _is_bag(node.func.value)
+                ):
+                    offenders.append((node.lineno, key.value))
+    return offenders
 
 
 def _production_files():
@@ -100,6 +156,46 @@ def test_raw_config_key_pattern_catches_known_bypass_shapes():
     ]
     for line in key_agnostic:
         assert not RAW_CONFIG_KEY.search(line), f"false positive on supported shape: {line}"
+
+
+def test_config_bag_detector_catches_two_step_reads():
+    """Regression probe for the AST detector (Thermos external review).
+
+    The line-based regex cannot see a read split across statements. The AST
+    detector tracks names bound from a config-bag expression and flags any
+    literal-key subscript or .get() on them, closing the bag-then-read gap.
+    """
+    bypasses = [
+        # two-step: bind the bag, read a named key later
+        'config = snapshot["config"]\nvalue = config["primary_version"]\n',
+        'config = snapshot.get("config", {}) or {}\nvalue = config.get("saved_backup_schedule")\n',
+        # single-expression forms must also be caught (parity with the regex)
+        'value = snapshot["config"]["auto_import_strategy_set"]\n',
+        'value = snapshot.get("config", {}).get("new_backup_detected")\n',
+    ]
+    for source in bypasses:
+        assert _config_bag_bypasses(source), f"detector must catch:\n{source}"
+
+    supported = [
+        # hand the whole bag on, key-agnostic
+        'config = state_snapshot.get("config", {}) or {}\nstatus = PauseRegisterStore.status_from_state_config(config)\n',
+        # iterate generically
+        'config = state.get("config", {})\nfor key, value in config.items():\n    print(key, value)\n',
+        # an unrelated name called config (e.g. preflight validator results)
+        'passed, config = validator.validate_all()\nversion = config["primary_version"]\n',
+    ]
+    for source in supported:
+        assert not _config_bag_bypasses(source), f"false positive on supported shape:\n{source}"
+
+
+def test_config_bag_two_step_reads_only_in_allowed_modules():
+    offenders = []
+    for path in _production_files():
+        if path in ALLOWED:
+            continue
+        for lineno, key in _config_bag_bypasses(path.read_text(encoding="utf-8")):
+            offenders.append(f"{path.relative_to(REPO)}:{lineno}: config-bag read of {key!r}")
+    assert not offenders, "config-bag reads outside the run-record seam:\n" + "\n".join(offenders)
 
 
 def test_public_accessors_are_gone():

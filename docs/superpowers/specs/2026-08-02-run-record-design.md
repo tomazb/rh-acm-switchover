@@ -83,8 +83,16 @@ tests are untouched.
 ## Readers converge
 
 - `lib/cli_outcomes.phase_report_from_state` and
-  `lib/report_artifacts._summarize_state` consume `RunSummary` instead of
-  re-parsing raw dicts.
+  `lib/report_artifacts._summarize_state` consume `RunSummary` where its view
+  is provably behaviour-identical (the completed-step walk, the failed-phase
+  check, preflight-result normalisation). **Deliberately partial**: the raw
+  errors list and raw counts stay raw because property tests pin exact
+  passthrough of malformed entries `RunSummary` would filter
+  (`tests/properties/test_report_artifact_properties.py`); each kept-raw site
+  carries a comment naming its pinning test. `RunSummary` is the read model
+  for new code; the kept-raw sites are a bounded, documented exception — not
+  a second dialect — and can converge only if those property contracts are
+  re-pinned first.
 - `show_state.py` consumes `RunSummary.from_snapshot()` and adopts
   `runtime_bootstrap.get_default_state_dir()` for state-dir resolution —
   removing the divergence. Behavioural change is deliberate and documented:
