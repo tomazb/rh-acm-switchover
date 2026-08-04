@@ -23,6 +23,10 @@ class RuntimeContext:
     secondary: Optional[KubeClient]
     should_bind_state: bool
     should_record_state_errors: bool
+    # Snapshot taken BEFORE ensure_contexts under --dry-run, so a rehearsal can
+    # never destroy a real in-progress state file via the context-mismatch
+    # reset (parity audit finding H10). None outside dry-run.
+    dry_run_state_guard: Optional[dict] = None
 
 
 def sanitize_context_identifier(value: str) -> str:

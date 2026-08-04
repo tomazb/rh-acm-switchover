@@ -88,12 +88,15 @@ class TestManageAutoImportFlag:
         and _run_phase_finalization must default to False (matching the CLI
         store_true default), not True.
         """
-        # Namespace WITHOUT manage_auto_import_strategy to exercise getattr fallback
+        # Namespace WITHOUT manage_auto_import_strategy to exercise getattr fallback.
+        # min_managed_clusters is set explicitly: with no recorded expectation in
+        # state, the resolver now fails closed instead of disabling enforcement.
         args = Namespace(
             method="full",
             dry_run=False,
             old_hub_action="none",
             restore_only=False,
+            min_managed_clusters=1,
         )
         state = MagicMock()
         state._get_config = MagicMock(side_effect=lambda key, default=None: default)

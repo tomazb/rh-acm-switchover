@@ -1,0 +1,112 @@
+"""Guards from the 2026-08-03 parity audit (findings H1 and H10).
+
+H1: a resumed run whose state carries no managed-cluster expectation must
+fail closed instead of silently disabling all enforcement.
+H10: --dry-run must never destroy a real in-progress state file, even when
+the invocation's contexts differ from the file's (ensure_contexts reset).
+"""
+
+import argparse
+import json
+import logging
+from unittest.mock import patch
+
+import pytest
+
+from acm_switchover import _prepare_runtime, _resolve_managed_cluster_expectation
+from lib.exceptions import SwitchoverError
+from lib.run_record import RunRecord
+from lib.utils import StateManager
+
+pytestmark = pytest.mark.unit
+
+
+def _args(**overrides):
+    defaults = {
+        "min_managed_clusters": None,
+        "dry_run": False,
+        "argocd_resume_only": False,
+        "decommission": False,
+        "primary_context": "hub-a",
+        "secondary_context": "hub-b",
+    }
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
+
+
+class TestExpectationFailsClosed:
+    def test_missing_expectation_record_raises(self, tmp_path):
+        state = StateManager(str(tmp_path / "switchover-x.json"))
+
+        with pytest.raises(SwitchoverError) as exc_info:
+            _resolve_managed_cluster_expectation(_args(), state)
+
+        message = str(exc_info.value)
+        assert "--min-managed-clusters" in message
+        assert "preflight" in message
+
+    def test_recorded_expectation_still_resolves(self, tmp_path):
+        state = StateManager(str(tmp_path / "switchover-x.json"))
+        RunRecord(state).record_managed_cluster_expectation(names=["c1", "c2"], count=2, mode="derived_from_preflight")
+
+        assert _resolve_managed_cluster_expectation(_args(), state) == (2, ["c1", "c2"], True)
+
+    def test_restore_only_mode_still_resolves(self, tmp_path):
+        state = StateManager(str(tmp_path / "switchover-x.json"))
+        RunRecord(state).record_managed_cluster_expectation(names=[], count=0, mode="restore_only")
+
+        assert _resolve_managed_cluster_expectation(_args(), state) == (1, [], False)
+
+    def test_explicit_min_overrides_missing_record(self, tmp_path):
+        state = StateManager(str(tmp_path / "switchover-x.json"))
+
+        assert _resolve_managed_cluster_expectation(_args(min_managed_clusters=3), state) == (3, [], False)
+        assert _resolve_managed_cluster_expectation(_args(min_managed_clusters=0), state) == (0, [], False)
+
+
+class TestDryRunStateGuard:
+    def _progressed_state_file(self, tmp_path):
+        path = tmp_path / "switchover-guard.json"
+        state = StateManager(str(path))
+        state.ensure_contexts("old-primary", "old-secondary")
+        state.mark_step_completed("preflight_validation")
+        state.flush_state()
+        return path
+
+    def test_dry_run_guard_predates_context_reset(self, tmp_path, caplog):
+        path = self._progressed_state_file(tmp_path)
+        args = _args(dry_run=True, primary_context="new-primary", secondary_context="new-secondary")
+
+        with patch("acm_switchover._initialize_clients", return_value=(None, None)):
+            ctx = _prepare_runtime(args, logging.getLogger("test"), str(path))
+
+        assert ctx.dry_run_state_guard is not None
+        # The guard captured the state BEFORE ensure_contexts reset it.
+        assert ctx.dry_run_state_guard["contexts"] == {"primary": "old-primary", "secondary": "old-secondary"}
+        assert any(step.get("name") == "preflight_validation" for step in ctx.dry_run_state_guard["completed_steps"])
+
+        # Restoring the guard brings the on-disk file back to the original run.
+        ctx.state.restore_state_snapshot(ctx.dry_run_state_guard)
+        on_disk = json.loads(path.read_text())
+        assert on_disk["contexts"] == {"primary": "old-primary", "secondary": "old-secondary"}
+        assert any(step.get("name") == "preflight_validation" for step in on_disk["completed_steps"])
+
+    def test_real_run_has_no_guard_and_keeps_reset(self, tmp_path):
+        path = self._progressed_state_file(tmp_path)
+        args = _args(dry_run=False, primary_context="new-primary", secondary_context="new-secondary")
+
+        with patch("acm_switchover._initialize_clients", return_value=(None, None)):
+            ctx = _prepare_runtime(args, logging.getLogger("test"), str(path))
+
+        assert ctx.dry_run_state_guard is None
+        on_disk = json.loads(path.read_text())
+        assert on_disk["contexts"] == {"primary": "new-primary", "secondary": "new-secondary"}
+
+    def test_dry_run_guard_absent_for_unbound_operations(self, tmp_path):
+        path = self._progressed_state_file(tmp_path)
+        args = _args(dry_run=True, argocd_resume_only=True)
+
+        with patch("acm_switchover._initialize_clients", return_value=(None, None)):
+            ctx = _prepare_runtime(args, logging.getLogger("test"), str(path))
+
+        assert ctx.dry_run_state_guard is None
