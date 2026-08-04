@@ -56,7 +56,7 @@ class TestDryRun:
 
         assert summary.failed == 0
         assert summary.newly_paused == 1
-        state.set_config.assert_not_called()
+        state._set_config.assert_not_called()
 
 
 @pytest.mark.unit
@@ -151,8 +151,8 @@ class TestStatePersistence:
         assert summary.failed == 0
         assert summary.newly_paused == 2
 
-        # Verify set_config was called multiple times (provisional + confirmed for each app)
-        paused_calls = [call for call in state.set_config.call_args_list if call.args[0] == "argocd_paused_apps"]
+        # Verify _set_config was called multiple times (provisional + confirmed for each app)
+        paused_calls = [call for call in state._set_config.call_args_list if call.args[0] == "argocd_paused_apps"]
         # 2 apps × 2 persists each (provisional + confirmed) = 4
         assert len(paused_calls) == 4
 
@@ -413,7 +413,7 @@ class TestClearArgocdPauseState:
 
         ArgocdPauseRegister(state, dry_run=True)._clear()
 
-        assert state.set_config.call_count == 0
+        assert state._set_config.call_count == 0
         assert state._config["argocd_run_id"] == "run-1"
 
 
@@ -436,8 +436,8 @@ class TestRegisterStatus:
         evidence needed to recover.
         """
         state = _make_real_state(tmp_path)
-        state.set_config("argocd_run_id", "run-1")
-        state.set_config("argocd_paused_apps", malformed)
+        state._set_config("argocd_run_id", "run-1")
+        state._set_config("argocd_paused_apps", malformed)
 
         status = ArgocdPauseRegister(state, dry_run=False).status()
 
@@ -447,8 +447,8 @@ class TestRegisterStatus:
 
     def test_status_counts_applied_entries_only(self, tmp_path):
         state = _make_real_state(tmp_path)
-        state.set_config("argocd_run_id", "run-1")
-        state.set_config(
+        state._set_config("argocd_run_id", "run-1")
+        state._set_config(
             "argocd_paused_apps",
             [
                 {
@@ -492,7 +492,7 @@ class TestRegisterStatus:
 
     def test_status_drops_garbage_and_legacy_dry_run(self, tmp_path):
         state = _make_real_state(tmp_path)
-        state.set_config(
+        state._set_config(
             "argocd_paused_apps",
             [
                 {"hub": "primary", "namespace": "argocd", "name": "app-1", "pause_applied": True},
@@ -511,7 +511,7 @@ class TestRegisterStatus:
 
     def test_register_reads_do_not_expose_mutable_state(self, tmp_path):
         state = _make_real_state(tmp_path)
-        state.set_config(
+        state._set_config(
             "argocd_paused_apps",
             [{"hub": "primary", "namespace": "argocd", "name": "app-1", "pause_applied": True}],
         )
@@ -520,7 +520,7 @@ class TestRegisterStatus:
         entries = register._load_entries()
         entries[0]["name"] = "mutated"
 
-        assert state.get_config("argocd_paused_apps")[0]["name"] == "app-1"
+        assert state._get_config("argocd_paused_apps")[0]["name"] == "app-1"
 
 
 @pytest.mark.unit
@@ -550,7 +550,7 @@ class TestDryRunRecordsNothing:
         assert summary.newly_paused == 1
         client.patch_custom_resource.assert_not_called()
         for key in ("argocd_paused_apps", "argocd_run_id", "argocd_discovery_namespaces"):
-            assert not state.get_config(key)
+            assert not state._get_config(key)
 
     def test_dry_run_pause_preserves_existing_real_state(self, tmp_path):
         state = _make_real_state(tmp_path)
@@ -561,9 +561,9 @@ class TestDryRunRecordsNothing:
             "original_sync_policy": {"automated": {}},
             "pause_applied": True,
         }
-        state.set_config("argocd_run_id", "run-1")
-        state.set_config("argocd_paused_apps", [real_entry])
-        state.set_config("argocd_discovery_namespaces", {"secondary": ["argocd"]})
+        state._set_config("argocd_run_id", "run-1")
+        state._set_config("argocd_paused_apps", [real_entry])
+        state._set_config("argocd_discovery_namespaces", {"secondary": ["argocd"]})
         client = Mock()
         client.dry_run = True
         app = _make_app("argocd", "app-1")
@@ -581,13 +581,13 @@ class TestDryRunRecordsNothing:
             register = ArgocdPauseRegister(state, dry_run=True)
             register.pause_hubs([(client, "primary")])
 
-        assert state.get_config("argocd_paused_apps") == [real_entry]
-        assert state.get_config("argocd_run_id") == "run-1"
-        assert state.get_config("argocd_discovery_namespaces") == {"secondary": ["argocd"]}
+        assert state._get_config("argocd_paused_apps") == [real_entry]
+        assert state._get_config("argocd_run_id") == "run-1"
+        assert state._get_config("argocd_discovery_namespaces") == {"secondary": ["argocd"]}
 
     def test_dry_run_no_crd_does_not_clear_state(self, tmp_path):
         state = _make_real_state(tmp_path)
-        state.set_config("argocd_discovery_namespaces", {"secondary": ["argocd"]})
+        state._set_config("argocd_discovery_namespaces", {"secondary": ["argocd"]})
         client = Mock()
         client.dry_run = True
 
@@ -600,4 +600,4 @@ class TestDryRunRecordsNothing:
 
         assert (summary.newly_paused, summary.failed) == (0, 0)
         assert summary.applications_crd_visible is False
-        assert state.get_config("argocd_discovery_namespaces") == {"secondary": ["argocd"]}
+        assert state._get_config("argocd_discovery_namespaces") == {"secondary": ["argocd"]}

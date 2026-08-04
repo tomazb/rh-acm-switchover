@@ -567,8 +567,13 @@ class StateManager:
         """
         return StepContext(self, step_name, logger)
 
-    def set_config(self, key: str, value: Any) -> None:
-        """Store an owned copy of a JSON-native configuration value."""
+    def _set_config(self, key: str, value: Any) -> None:
+        """Store an owned copy of a JSON-native configuration value.
+
+        Private storage accessor — production access goes through
+        lib/run_record.RunRecord; the pause-register modules hold a documented
+        allowance (issue #208).
+        """
         config = self.state["config"]
         if key in config and config[key] == value:
             return
@@ -576,8 +581,13 @@ class StateManager:
         self._dirty = True
         self.save_state()
 
-    def get_config(self, key: str, default: Any = None) -> Any:
-        """Return an isolated copy of a stored value, or the caller-owned default."""
+    def _get_config(self, key: str, default: Any = None) -> Any:
+        """Return an isolated copy of a stored value, or the caller-owned default.
+
+        Private storage accessor — production access goes through
+        lib/run_record.RunRecord; the pause-register modules hold a documented
+        allowance (issue #208).
+        """
         config = self.state["config"]
         if key not in config:
             return default

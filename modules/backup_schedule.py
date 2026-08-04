@@ -14,6 +14,7 @@ from lib.constants import (
 )
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
+from lib.run_record import RunRecord
 from lib.utils import StateManager, parse_acm_version
 
 logger = logging.getLogger("acm_switchover")
@@ -65,6 +66,7 @@ class BackupScheduleManager:
         self.state = state_manager
         self.hub_label = hub_label
         self.dry_run = dry_run
+        self.run_record = RunRecord(self.state)
 
     def ensure_enabled(self, acm_version: str) -> None:
         """Ensure a BackupSchedule exists and is not paused."""
@@ -129,7 +131,7 @@ class BackupScheduleManager:
         )
 
     def _restore_saved_schedule(self) -> None:
-        saved_bs = self.state.get_config("saved_backup_schedule")
+        saved_bs = self.run_record.saved_backup_schedule()
         if not saved_bs:
             logger.warning(
                 "No BackupSchedule found on %s and none saved in state",

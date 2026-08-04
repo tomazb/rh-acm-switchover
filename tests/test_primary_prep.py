@@ -27,6 +27,7 @@ from lib.constants import (
     THANOS_COMPACTOR_LABEL_SELECTOR,
 )
 from lib.exceptions import SwitchoverError
+from lib.run_record import RunRecord
 from lib.waiter import WaitConditionResult
 
 PrimaryPreparation = primary_prep_module.PrimaryPreparation
@@ -67,6 +68,24 @@ def mock_state_manager():
         mock.is_step_completed,
         mock.mark_step_completed,
     )
+    # Back the config accessors with a real dict so tests can seed and read
+    # cross-phase facts through RunRecord instead of raw key literals. The
+    # deep copies mirror StateManager's ownership contract (stored and returned
+    # values are isolated from the caller); unseeded keys resolve to the
+    # caller-supplied default.
+    config: dict = {}
+    mock.config = config
+
+    def _set_config(key, value):
+        config[key] = copy.deepcopy(value)
+
+    def _get_config(key, default=None):
+        if key not in config:
+            return default
+        return copy.deepcopy(config[key])
+
+    mock._set_config.side_effect = _set_config
+    mock._get_config.side_effect = _get_config
     return mock
 
 
@@ -280,7 +299,7 @@ class TestPrimaryPreparation:
             dry_run=False,
             argocd_manage=True,
         )
-        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+        mock_state_manager._get_config.side_effect = lambda key, default=None: {
             "argocd_run_id": None,
             "argocd_paused_apps": [],
         }.get(key, default)
@@ -315,7 +334,7 @@ class TestPrimaryPreparation:
         pause_autosync.assert_called_once()
 
         paused_call = [
-            call for call in mock_state_manager.set_config.call_args_list if call.args[0] == "argocd_paused_apps"
+            call for call in mock_state_manager._set_config.call_args_list if call.args[0] == "argocd_paused_apps"
         ][-1]
         paused_apps = paused_call.args[1]
         assert len(paused_apps) == 1
@@ -333,7 +352,7 @@ class TestPrimaryPreparation:
             dry_run=True,
             argocd_manage=True,
         )
-        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+        mock_state_manager._get_config.side_effect = lambda key, default=None: {
             "argocd_run_id": None,
             "argocd_paused_apps": [],
         }.get(key, default)
@@ -366,7 +385,7 @@ class TestPrimaryPreparation:
             prep._pause_argocd_acm_apps()
 
         # ADR-0001: dry-run records nothing durable - no state writes at all.
-        mock_state_manager.set_config.assert_not_called()
+        mock_state_manager._set_config.assert_not_called()
 
     def test_pause_argocd_acm_apps_dry_run_reports_generated_run_id(
         self, mock_primary_client, mock_state_manager, caplog
@@ -380,7 +399,7 @@ class TestPrimaryPreparation:
             dry_run=True,
             argocd_manage=True,
         )
-        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+        mock_state_manager._get_config.side_effect = lambda key, default=None: {
             "argocd_run_id": None,
             "argocd_paused_apps": [],
         }.get(key, default)
@@ -434,7 +453,7 @@ class TestPrimaryPreparation:
             dry_run=False,
             argocd_manage=True,
         )
-        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+        mock_state_manager._get_config.side_effect = lambda key, default=None: {
             "argocd_run_id": "stale-run",
             "argocd_paused_apps": [],
         }.get(key, default)
@@ -452,13 +471,13 @@ class TestPrimaryPreparation:
             prep._pause_argocd_acm_apps()
 
         # ADR-0001: only an empty register is cleared on CRD-visibility loss.
-        assert any(call.args == ("argocd_paused_apps", []) for call in mock_state_manager.set_config.call_args_list)
-        assert any(call.args == ("argocd_run_id", None) for call in mock_state_manager.set_config.call_args_list)
+        assert any(call.args == ("argocd_paused_apps", []) for call in mock_state_manager._set_config.call_args_list)
+        assert any(call.args == ("argocd_run_id", None) for call in mock_state_manager._set_config.call_args_list)
 
     def test_pause_argocd_acm_apps_persists_each_app_incrementally(self, mock_primary_client, mock_state_manager):
         """Each paused app must be saved to state independently so a crash preserves prior pauses.
 
-        Verifies that set_config receives a fresh list copy on every iteration (not the same
+        Verifies that _set_config receives a fresh list copy on every iteration (not the same
         mutable reference), so the equality guard in StateManager correctly detects changes.
         """
         prep = PrimaryPreparation(
@@ -469,7 +488,7 @@ class TestPrimaryPreparation:
             dry_run=False,
             argocd_manage=True,
         )
-        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+        mock_state_manager._get_config.side_effect = lambda key, default=None: {
             "argocd_run_id": None,
             "argocd_paused_apps": [],
         }.get(key, default)
@@ -512,9 +531,9 @@ class TestPrimaryPreparation:
             prep._pause_argocd_acm_apps()
 
         paused_calls = [
-            call for call in mock_state_manager.set_config.call_args_list if call.args[0] == "argocd_paused_apps"
+            call for call in mock_state_manager._set_config.call_args_list if call.args[0] == "argocd_paused_apps"
         ]
-        assert len(paused_calls) == 4, "set_config must persist provisional and confirmed state for each app"
+        assert len(paused_calls) == 4, "_set_config must persist provisional and confirmed state for each app"
 
         first_list = paused_calls[0].args[1]
         second_list = paused_calls[1].args[1]
@@ -540,7 +559,7 @@ class TestPrimaryPreparation:
             dry_run=False,
             argocd_manage=True,
         )
-        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+        mock_state_manager._get_config.side_effect = lambda key, default=None: {
             "argocd_run_id": None,
             "argocd_paused_apps": [],
         }.get(key, default)
@@ -576,7 +595,7 @@ class TestPrimaryPreparation:
                 prep._pause_argocd_acm_apps()
 
         paused_calls = [
-            call for call in mock_state_manager.set_config.call_args_list if call.args[0] == "argocd_paused_apps"
+            call for call in mock_state_manager._set_config.call_args_list if call.args[0] == "argocd_paused_apps"
         ]
         assert paused_calls[-1].args == ("argocd_paused_apps", [])
 
@@ -602,10 +621,10 @@ class TestPrimaryPreparation:
                 }
             ],
         }
-        mock_state_manager.get_config.side_effect = lambda key, default=None: copy.deepcopy(
+        mock_state_manager._get_config.side_effect = lambda key, default=None: copy.deepcopy(
             state_config.get(key, default)
         )
-        mock_state_manager.set_config.side_effect = lambda key, value: state_config.__setitem__(
+        mock_state_manager._set_config.side_effect = lambda key, value: state_config.__setitem__(
             key, copy.deepcopy(value)
         )
 
@@ -639,7 +658,7 @@ class TestPrimaryPreparation:
             with pytest.raises(SwitchoverError, match="pause failed for 1"):
                 prep._pause_argocd_acm_apps()
 
-        assert mock_state_manager.get_config("argocd_paused_apps") == []
+        assert mock_state_manager._get_config("argocd_paused_apps") == []
 
     def test_pause_argocd_acm_apps_recovers_pending_entry_when_app_already_paused(
         self, mock_primary_client, mock_state_manager
@@ -653,7 +672,7 @@ class TestPrimaryPreparation:
             dry_run=False,
             argocd_manage=True,
         )
-        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+        mock_state_manager._get_config.side_effect = lambda key, default=None: {
             "argocd_run_id": "run-1",
             "argocd_paused_apps": [
                 {
@@ -692,7 +711,7 @@ class TestPrimaryPreparation:
 
         pause_autosync.assert_not_called()
         paused_call = [
-            call for call in mock_state_manager.set_config.call_args_list if call.args[0] == "argocd_paused_apps"
+            call for call in mock_state_manager._set_config.call_args_list if call.args[0] == "argocd_paused_apps"
         ][-1]
         paused_apps = paused_call.args[1]
         assert paused_apps[0]["pause_applied"] is True
@@ -721,10 +740,10 @@ class TestPrimaryPreparation:
             "argocd_run_id": "run-1",
             "argocd_paused_apps": [recorded_entry],
         }
-        mock_state_manager.get_config.side_effect = lambda key, default=None: copy.deepcopy(
+        mock_state_manager._get_config.side_effect = lambda key, default=None: copy.deepcopy(
             state_config.get(key, default)
         )
-        mock_state_manager.set_config.side_effect = lambda key, value: state_config.__setitem__(
+        mock_state_manager._set_config.side_effect = lambda key, value: state_config.__setitem__(
             key, copy.deepcopy(value)
         )
 
@@ -749,7 +768,7 @@ class TestPrimaryPreparation:
             prep._pause_argocd_acm_apps()
 
         pause_autosync.assert_not_called()
-        assert not any(call.args[0] == "argocd_paused_apps" for call in mock_state_manager.set_config.call_args_list)
+        assert not any(call.args[0] == "argocd_paused_apps" for call in mock_state_manager._set_config.call_args_list)
         assert state_config["argocd_paused_apps"] == [recorded_entry]
 
     def test_pause_backup_schedule_acm_212(self, primary_prep_with_obs, mock_primary_client, mock_state_manager):
@@ -761,7 +780,9 @@ class TestPrimaryPreparation:
         mock_primary_client.list_custom_resources.return_value = [backup_schedule]
 
         def patch_side_effect(**_kwargs):
-            mock_state_manager.set_config.assert_called_once_with("saved_backup_schedule", backup_schedule)
+            # The snapshot must already be persisted — exactly once — before the pause patch.
+            assert mock_state_manager._set_config.call_count == 1
+            assert RunRecord(mock_state_manager).saved_backup_schedule() == backup_schedule
             return True
 
         mock_primary_client.patch_custom_resource.side_effect = patch_side_effect
@@ -799,7 +820,9 @@ class TestPrimaryPreparation:
         mock_primary_client.list_custom_resources.return_value = [backup_schedule]
 
         def delete_side_effect(**_kwargs):
-            mock_state_manager.set_config.assert_called_once_with("saved_backup_schedule", backup_schedule)
+            # The snapshot must already be persisted — exactly once — before the delete.
+            assert mock_state_manager._set_config.call_count == 1
+            assert RunRecord(mock_state_manager).saved_backup_schedule() == backup_schedule
             return True
 
         mock_primary_client.delete_custom_resource.side_effect = delete_side_effect
@@ -829,12 +852,11 @@ class TestPrimaryPreparation:
         """Already-paused reruns must persist the BackupSchedule when no saved schedule exists."""
         backup_schedule = {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}
         mock_primary_client.list_custom_resources.return_value = [backup_schedule]
-        mock_state_manager.get_config.return_value = None
 
         primary_prep_with_obs._pause_backup_schedule()
 
-        mock_state_manager.get_config.assert_called_once_with("saved_backup_schedule")
-        mock_state_manager.set_config.assert_called_once_with("saved_backup_schedule", backup_schedule)
+        assert mock_state_manager._set_config.call_count == 1
+        assert RunRecord(mock_state_manager).saved_backup_schedule() == backup_schedule
         mock_primary_client.patch_custom_resource.assert_not_called()
         mock_primary_client.delete_custom_resource.assert_not_called()
 
@@ -845,12 +867,14 @@ class TestPrimaryPreparation:
         mock_primary_client.list_custom_resources.return_value = [
             {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}
         ]
-        mock_state_manager.get_config.return_value = {"metadata": {"name": "previous-schedule"}}
+        previous_schedule = {"metadata": {"name": "previous-schedule"}}
+        RunRecord(mock_state_manager).record_saved_backup_schedule(previous_schedule)
+        mock_state_manager._set_config.reset_mock()
 
         primary_prep_with_obs._pause_backup_schedule()
 
-        mock_state_manager.get_config.assert_called_once_with("saved_backup_schedule")
-        mock_state_manager.set_config.assert_not_called()
+        assert RunRecord(mock_state_manager).saved_backup_schedule() == previous_schedule
+        mock_state_manager._set_config.assert_not_called()
         mock_primary_client.patch_custom_resource.assert_not_called()
         mock_primary_client.delete_custom_resource.assert_not_called()
 

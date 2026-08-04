@@ -133,7 +133,7 @@ class ArgocdPauseRegister:
         retry.  When the register empties, all Argo CD pause state is cleared.
         """
         entries = self._load_entries()
-        run_id = self.state.get_config(STATE_KEY_ARGOCD_RUN_ID)
+        run_id = self.state._get_config(STATE_KEY_ARGOCD_RUN_ID)
         summary = argocd_lib.ResumeSummary(dry_run=self.dry_run)
         if not run_id or not entries:
             logger.info("No Argo CD paused apps in state; nothing to resume")
@@ -205,10 +205,10 @@ class ArgocdPauseRegister:
         if not any(discovery.has_applications_crd for _, _, discovery in discoveries):
             return self._handle_no_applications_crd()
 
-        existing_run_id = self.state.get_config(STATE_KEY_ARGOCD_RUN_ID)
+        existing_run_id = self.state._get_config(STATE_KEY_ARGOCD_RUN_ID)
         run_id = argocd_lib.run_id_or_new(existing_run_id)
         if not self.dry_run:
-            self.state.set_config(STATE_KEY_ARGOCD_RUN_ID, run_id)
+            self.state._set_config(STATE_KEY_ARGOCD_RUN_ID, run_id)
         summary = PauseSummary(run_id=run_id, dry_run=self.dry_run)
         paused_apps: List[Dict[str, Any]] = self._load_entries()
 
@@ -438,7 +438,7 @@ class ArgocdPauseRegister:
         every sanitized entry, not just the confirmed-applied ones.
         """
         entries = self._load_entries()
-        run_id = self.state.get_config(STATE_KEY_ARGOCD_RUN_ID)
+        run_id = self.state._get_config(STATE_KEY_ARGOCD_RUN_ID)
         if entries:
             confirmed = len(self._store._applied_entries(entries))
             logger.warning(

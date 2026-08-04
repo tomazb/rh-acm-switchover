@@ -18,6 +18,7 @@ from lib.constants import (
 from lib.exceptions import SwitchoverError
 from lib.report_artifacts import SOURCE as PYTHON_REPORT_SOURCE
 from lib.report_artifacts import build_operation_report, write_json_report_artifact
+from lib.run_record import RunSummary
 from lib.utils import CANONICAL_PHASE_NAMES, Phase, StateIdentityMismatch, StateManager
 
 # Fallback for state entries recorded before completion-time phases existed.
@@ -73,27 +74,33 @@ def report_target(args: Any) -> tuple[str, str]:
 
 
 def phase_report_from_state(state_snapshot: dict) -> dict[str, dict[str, Any]]:
-    """Build a compact phase map from durable state."""
+    """Build a compact phase map from durable state.
+
+    Takes the raw snapshot rather than a RunSummary because the failed-phase
+    branch below still needs the unfiltered errors list; the completed-step
+    walk reads the typed view.
+    """
     phases: dict[str, dict[str, Any]] = {}
 
     if not isinstance(state_snapshot, dict):
         return phases
 
-    completed_steps = state_snapshot.get("completed_steps", [])
-    if not isinstance(completed_steps, list):
-        completed_steps = []
+    summary = RunSummary.from_snapshot(state_snapshot)
 
-    for step in completed_steps:
-        if not isinstance(step, dict):
-            continue
-        name = step.get("name", "")
-        recorded_phase = step.get("phase")
-        phase = recorded_phase if recorded_phase in _REPORT_PHASE_VALUES else fallback_phase_for_step(name)
+    # RunSummary.from_snapshot drops non-dict step entries exactly like the
+    # per-entry isinstance skip this loop used to do
+    # (tests/test_cli_outcomes.py::test_phase_report_from_state_ignores_malformed_snapshot_entries).
+    for step in summary.completed_steps:
+        phase = step.phase if step.phase in _REPORT_PHASE_VALUES else fallback_phase_for_step(step.name)
         if not phase:
             continue
-        phases.setdefault(phase, {"phase": phase, "status": "pass", "steps": []})["steps"].append(name)
+        phases.setdefault(phase, {"phase": phase, "status": "pass", "steps": []})["steps"].append(step.name)
 
-    if state_snapshot.get("current_phase") == Phase.FAILED.value:
+    if summary.current_phase == Phase.FAILED.value:
+        # Raw errors list on purpose: summary.errors omits non-dict entries, so
+        # its last element can differ from the snapshot's last element when a
+        # malformed entry trails the list. Keep the historical "last recorded
+        # entry, dict or not" semantics.
         errors = state_snapshot.get("errors", [])
         if not isinstance(errors, list):
             errors = []

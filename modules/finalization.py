@@ -57,6 +57,7 @@ from lib.constants import (
 from lib.exceptions import FatalError, SwitchoverError, TransientError
 from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient, is_retryable_error
+from lib.run_record import RunRecord
 from lib.utils import Phase, StateManager, dry_run_skip, is_acm_version_ge
 from lib.waiter import WaitConditionResult, wait_for_condition, wait_for_restore_deletion
 
@@ -103,6 +104,7 @@ class Finalization:
             dry_run=dry_run,
         )
         self._cached_schedules: Optional[List[Dict]] = None  # Cache for backup schedules
+        self.run_record = RunRecord(self.state)
 
     @staticmethod
     def _get_acm_backup_ownership_signal(backup: Dict) -> Optional[str]:
@@ -277,8 +279,7 @@ class Finalization:
 
         # Now create/enable the BackupSchedule
         self.backup_manager.ensure_enabled(self.acm_version)
-        self.state.set_config("backup_schedule_enabled_at", datetime.now(timezone.utc).isoformat())
-        self.state.set_config("new_backup_detected", False)
+        self.run_record.record_backup_watch_started(datetime.now(timezone.utc).isoformat())
 
     @staticmethod
     def _is_cleanup_candidate_restore(restore: Dict) -> bool:
@@ -362,7 +363,7 @@ class Finalization:
 
         # Save archived restores to state for audit trail
         if archived_restores:
-            self.state.set_config("archived_restores", archived_restores)
+            self.run_record.record_archived_restores(archived_restores)
             logger.info("Saved %s restore record(s) to state file", len(archived_restores))
 
         if delete_failures:
@@ -440,7 +441,7 @@ class Finalization:
                 "Failed to list Velero backups before waiting for a new ACM backup: " f"{exc}"
             ) from exc
 
-        recorded_backup_name = self.state.get_config("post_switchover_backup_name")
+        recorded_backup_name = self.run_record.new_backup()
         if recorded_backup_name:
             recorded_backup = self.secondary.get_custom_resource(
                 group="velero.io",
@@ -458,8 +459,7 @@ class Finalization:
                     "Reusing previously recorded post-switchover backup: %s",
                     recorded_backup_name,
                 )
-                self.state.set_config("new_backup_detected", True)
-                self.state.set_config("post_switchover_backup_name", recorded_backup_name)
+                self.run_record.record_new_backup(recorded_backup_name)
                 return
 
         enabled_at = self._get_backup_schedule_enabled_at()
@@ -470,8 +470,7 @@ class Finalization:
                 "Found existing post-enable ACM backup on resume: %s",
                 existing_backup_name,
             )
-            self.state.set_config("new_backup_detected", True)
-            self.state.set_config("post_switchover_backup_name", existing_backup_name)
+            self.run_record.record_new_backup(existing_backup_name)
             return
 
         initial_backups = current_backups
@@ -512,8 +511,7 @@ class Finalization:
 
                         # Velero uses "InProgress" and "Completed" phases
                         if phase in ("InProgress", "Completed", "New"):
-                            self.state.set_config("new_backup_detected", True)
-                            self.state.set_config("post_switchover_backup_name", backup_name)
+                            self.run_record.record_new_backup(backup_name)
                             logger.info("New backup is being created successfully!")
                             return
 
@@ -570,7 +568,7 @@ class Finalization:
         return default_max_age
 
     def _get_backup_schedule_enabled_at(self) -> Optional[datetime]:
-        enabled_at_raw = self.state.get_config("backup_schedule_enabled_at")
+        enabled_at_raw = self.run_record.backup_watch_started_at()
         enabled_at = self._parse_timestamp(enabled_at_raw)
         if enabled_at:
             return enabled_at
@@ -741,7 +739,7 @@ class Finalization:
         logger.info("Verifying backup integrity...")
         effective_max_age_seconds = self._get_backup_max_age_seconds(max_age_seconds)
 
-        post_switchover_backup_name = self.state.get_config("post_switchover_backup_name")
+        post_switchover_backup_name = self.run_record.new_backup()
 
         if post_switchover_backup_name:
             logger.info("Verifying post-switchover backup: %s", post_switchover_backup_name)
@@ -768,7 +766,7 @@ class Finalization:
                 backup_name = post_switchover_backup_name
 
         if not post_switchover_backup_name:
-            if not self.state.get_config("post_switchover_backup_name"):
+            if not self.run_record.new_backup():
                 logger.warning("No post-switchover backup name recorded; falling back to latest backup in namespace")
             try:
                 backups = self._list_acm_owned_velero_backups()
@@ -1517,7 +1515,7 @@ class Finalization:
         if not is_acm_version_ge(self.acm_version, "2.14.0"):
             return True
 
-        auto_import_strategy_set = self.state.get_config("auto_import_strategy_set", False)
+        auto_import_strategy_set = self.run_record.auto_import_override_pending()
         try:
             cm = self.secondary.get_configmap(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM)
         except ApiException as e:
@@ -1532,14 +1530,14 @@ class Finalization:
         if not cm:
             if auto_import_strategy_set:
                 # ConfigMap is gone — reset is complete; clear flag so retries skip re-entering
-                self.state.set_config("auto_import_strategy_set", False)
+                self.run_record.clear_auto_import_override()
             return True
 
         strategy = (cm.get("data") or {}).get(AUTO_IMPORT_STRATEGY_KEY, "default")
         if strategy != AUTO_IMPORT_STRATEGY_SYNC:
             if auto_import_strategy_set:
                 # Strategy already at non-sync value — reset is complete; clear flag
-                self.state.set_config("auto_import_strategy_set", False)
+                self.run_record.clear_auto_import_override()
             return True
 
         if auto_import_strategy_set:
@@ -1563,7 +1561,7 @@ class Finalization:
                         "Failed to reset autoImportStrategy to default by deleting "
                         f"{MCE_NAMESPACE}/{IMPORT_CONTROLLER_CONFIG_CM}: {e.status} {e.reason}"
                     ) from e
-            self.state.set_config("auto_import_strategy_set", False)
+            self.run_record.clear_auto_import_override()
             return True
 
         logger.warning(

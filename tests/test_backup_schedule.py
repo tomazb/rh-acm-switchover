@@ -29,7 +29,7 @@ def mock_kube_client():
 def mock_state_manager():
     """Create a mock StateManager."""
     mock = Mock()
-    mock.get_config.return_value = None
+    mock._get_config.return_value = None
     return mock
 
 
@@ -129,7 +129,7 @@ class TestBackupScheduleManager:
             "metadata": {"name": "saved-schedule"},
             "spec": {"schedule": "0 */6 * * *"},
         }
-        mock_state_manager.get_config.return_value = saved_schedule
+        mock_state_manager._get_config.return_value = saved_schedule
 
         schedule_manager.ensure_enabled("2.12.0")
 
@@ -139,7 +139,7 @@ class TestBackupScheduleManager:
     def test_no_schedule_and_none_saved(self, schedule_manager, mock_kube_client, mock_state_manager):
         """Test warning when no schedule exists and none saved."""
         mock_kube_client.list_custom_resources.return_value = []
-        mock_state_manager.get_config.return_value = None
+        mock_state_manager._get_config.return_value = None
 
         # Should handle gracefully (log warning)
         schedule_manager.ensure_enabled("2.12.0")
@@ -204,11 +204,11 @@ class TestBackupScheduleManagerIntegration:
 
     def test_full_workflow_with_state(self, mock_kube_client, tmp_path):
         """Test complete workflow with real StateManager."""
+        from lib.run_record import RunRecord
         from lib.utils import StateManager
 
         state = StateManager(str(tmp_path / "state.json"))
-        state.set_config(
-            "saved_backup_schedule",
+        RunRecord(state).record_saved_backup_schedule(
             {"metadata": {"name": "saved"}, "spec": {"schedule": "0 */6 * * *"}},
         )
 

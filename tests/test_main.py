@@ -59,12 +59,9 @@ from lib.constants import (
     EXIT_FAILURE,
     EXIT_INTERRUPT,
     EXIT_SUCCESS,
-    EXPECTED_MANAGED_CLUSTER_COUNT_KEY,
-    EXPECTED_MANAGED_CLUSTER_NAMES_KEY,
     HUB_ROLE_SECONDARY,
     MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
     MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED,
-    MANAGED_CLUSTER_EXPECTATION_KEY,
     MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
     RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE,
     STEP_PAUSE_ARGOCD_APPS,
@@ -984,7 +981,7 @@ class TestSwitchoverPhaseFlow:
 
         state_file = tmp_path / "state.json"
         state = StateManager(str(state_file))
-        state.set_config("operator_note", "keep")
+        state._set_config("operator_note", "keep")
         original_timestamp = state.state["last_updated"]
 
         args = SimpleNamespace(
@@ -1003,7 +1000,7 @@ class TestSwitchoverPhaseFlow:
             def _handler(_args, phase_state, *_rest):
                 phase_state.set_phase(next_phase)
                 phase_state.mark_step_completed(step_name)
-                phase_state.set_config("dry_run_only", step_name)
+                phase_state._set_config("dry_run_only", step_name)
                 return True
 
             return _handler
@@ -1029,8 +1026,8 @@ class TestSwitchoverPhaseFlow:
 
         reloaded = StateManager(str(state_file))
         assert reloaded.get_current_phase() == Phase.INIT
-        assert reloaded.get_config("operator_note") == "keep"
-        assert reloaded.get_config("dry_run_only") is None
+        assert reloaded._get_config("operator_note") == "keep"
+        assert reloaded._get_config("dry_run_only") is None
         assert reloaded.state["completed_steps"] == []
         assert reloaded.state["last_updated"] == original_timestamp
         log_text = "\n".join(str(call.args[0]) for call in logger.info.call_args_list if call.args)
@@ -1044,7 +1041,7 @@ class TestSwitchoverPhaseFlow:
 
         state_file = tmp_path / "state.json"
         state = StateManager(str(state_file))
-        state.set_config("restore_note", "keep")
+        state._set_config("restore_note", "keep")
         original_timestamp = state.state["last_updated"]
 
         args = SimpleNamespace(
@@ -1064,7 +1061,7 @@ class TestSwitchoverPhaseFlow:
             def _handler(_args, phase_state, *_rest):
                 phase_state.set_phase(next_phase)
                 phase_state.mark_step_completed(step_name)
-                phase_state.set_config("dry_run_only", step_name)
+                phase_state._set_config("dry_run_only", step_name)
                 return True
 
             return _handler
@@ -1087,8 +1084,8 @@ class TestSwitchoverPhaseFlow:
 
         reloaded = StateManager(str(state_file))
         assert reloaded.get_current_phase() == Phase.INIT
-        assert reloaded.get_config("restore_note") == "keep"
-        assert reloaded.get_config("dry_run_only") is None
+        assert reloaded._get_config("restore_note") == "keep"
+        assert reloaded._get_config("dry_run_only") is None
         assert reloaded.state["completed_steps"] == []
         assert reloaded.state["last_updated"] == original_timestamp
         log_text = "\n".join(str(call.args[0]) for call in logger.info.call_args_list if call.args)
@@ -1106,7 +1103,7 @@ class TestSwitchoverPhaseFlow:
         with patch("acm_switchover.ArgocdPauseRegister") as coordinator_class:
             coordinator = coordinator_class.return_value
             coordinator.pause_hubs.return_value = PauseSummary(newly_paused=1, run_id="run-1")
-            state.get_config.return_value = "run-1"
+            state._get_config.return_value = "run-1"
 
             result = _run_restore_only_argocd_pause(args, state, None, secondary, logger)
 
@@ -1120,7 +1117,7 @@ class TestSwitchoverPhaseFlow:
         args = SimpleNamespace(argocd_manage=True, dry_run=True)
         state = Mock()
         state.is_step_completed.return_value = False
-        state.get_config.return_value = None
+        state._get_config.return_value = None
         secondary = Mock()
         logger = Mock()
 
@@ -1143,7 +1140,7 @@ class TestSwitchoverPhaseFlow:
         args = SimpleNamespace(argocd_manage=True, dry_run=False)
         state = Mock()
         state.is_step_completed.return_value = False
-        state.get_config.return_value = None
+        state._get_config.return_value = None
         secondary = Mock()
         logger = Mock()
 
@@ -1524,7 +1521,7 @@ class TestSwitchoverPhaseFlow:
         state = Mock()
         state.get_current_phase.return_value = SimpleNamespace(value="finalization")
         state.get_errors.return_value = [{"phase": "activation", "error": "prior"}]
-        state.get_config.return_value = None
+        state._get_config.return_value = None
         logger = Mock()
 
         result = _fail_phase(state, "current failure", logger)
@@ -2505,7 +2502,10 @@ class TestPreflightPhase:
         assert failures[0]["check"] == "ManagedCluster inventory"
         assert "403 Forbidden" in failures[0]["message"]
 
-    def test_run_phase_preflight_persists_expected_managed_clusters_from_primary(self):
+    def test_run_phase_preflight_persists_expected_managed_clusters_from_primary(self, tmp_path):
+        from lib.run_record import RunRecord
+        from lib.utils import StateManager
+
         args = SimpleNamespace(
             method="passive",
             old_hub_action="secondary",
@@ -2517,7 +2517,7 @@ class TestPreflightPhase:
             restore_only=False,
             min_managed_clusters=None,
         )
-        state = Mock()
+        state = StateManager(str(tmp_path / "state.json"))
         primary = Mock()
         secondary = Mock()
         logger = Mock()
@@ -2536,14 +2536,15 @@ class TestPreflightPhase:
             result = _run_phase_preflight(args, state, primary, secondary, logger)
 
         assert result is True
-        state.set_config.assert_any_call(EXPECTED_MANAGED_CLUSTER_NAMES_KEY, ["cluster-a", "cluster-b"])
-        state.set_config.assert_any_call(EXPECTED_MANAGED_CLUSTER_COUNT_KEY, 2)
-        state.set_config.assert_any_call(
-            MANAGED_CLUSTER_EXPECTATION_KEY,
-            MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
-        )
+        expectation = RunRecord(state).managed_cluster_expectation()
+        assert expectation.names == ("cluster-a", "cluster-b")
+        assert expectation.count == 2
+        assert expectation.mode == MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT
 
-    def test_restore_only_preflight_persists_empty_expected_managed_clusters(self):
+    def test_restore_only_preflight_persists_empty_expected_managed_clusters(self, tmp_path):
+        from lib.run_record import RunRecord
+        from lib.utils import StateManager
+
         args = SimpleNamespace(
             method="full",
             old_hub_action=None,
@@ -2555,7 +2556,7 @@ class TestPreflightPhase:
             restore_only=True,
             min_managed_clusters=None,
         )
-        state = Mock()
+        state = StateManager(str(tmp_path / "state.json"))
         secondary = Mock()
         config = {
             "primary_version": "unknown",
@@ -2570,14 +2571,15 @@ class TestPreflightPhase:
             result = _run_phase_preflight(args, state, None, secondary, Mock())
 
         assert result is True
-        state.set_config.assert_any_call(EXPECTED_MANAGED_CLUSTER_NAMES_KEY, [])
-        state.set_config.assert_any_call(EXPECTED_MANAGED_CLUSTER_COUNT_KEY, 0)
-        state.set_config.assert_any_call(
-            MANAGED_CLUSTER_EXPECTATION_KEY,
-            MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
-        )
+        expectation = RunRecord(state).managed_cluster_expectation()
+        assert expectation.names == ()
+        assert expectation.count == 0
+        assert expectation.mode == MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY
 
-    def test_run_phase_activation_uses_derived_expected_count_when_min_omitted(self):
+    def test_run_phase_activation_uses_derived_expected_count_when_min_omitted(self, tmp_path):
+        from lib.run_record import RunRecord
+        from lib.utils import StateManager
+
         args = SimpleNamespace(
             method="passive",
             activation_method="patch",
@@ -2585,12 +2587,12 @@ class TestPreflightPhase:
             old_hub_action="secondary",
             min_managed_clusters=None,
         )
-        state = Mock()
-        state.get_config.side_effect = lambda key, default=None: {
-            "expected_managed_cluster_names": ["cluster-a", "cluster-b"],
-            "expected_managed_cluster_count": 2,
-            MANAGED_CLUSTER_EXPECTATION_KEY: MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
-        }.get(key, default)
+        state = StateManager(str(tmp_path / "state.json"))
+        RunRecord(state).record_managed_cluster_expectation(
+            names=["cluster-a", "cluster-b"],
+            count=2,
+            mode=MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
+        )
         secondary = Mock()
 
         with patch("acm_switchover.SecondaryActivation") as activation_class:
@@ -2603,7 +2605,10 @@ class TestPreflightPhase:
         assert kwargs["expected_managed_cluster_names"] == ["cluster-a", "cluster-b"]
         assert kwargs["enforce_expected_managed_cluster_names"] is True
 
-    def test_run_phase_activation_preserves_explicit_zero_opt_out(self):
+    def test_run_phase_activation_preserves_explicit_zero_opt_out(self, tmp_path):
+        from lib.run_record import RunRecord
+        from lib.utils import StateManager
+
         args = SimpleNamespace(
             method="passive",
             activation_method="patch",
@@ -2611,12 +2616,12 @@ class TestPreflightPhase:
             old_hub_action="secondary",
             min_managed_clusters=0,
         )
-        state = Mock()
-        state.get_config.side_effect = lambda key, default=None: {
-            "expected_managed_cluster_names": ["cluster-a"],
-            "expected_managed_cluster_count": 1,
-            MANAGED_CLUSTER_EXPECTATION_KEY: MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED,
-        }.get(key, default)
+        state = StateManager(str(tmp_path / "state.json"))
+        RunRecord(state).record_managed_cluster_expectation(
+            names=["cluster-a"],
+            count=1,
+            mode=MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED,
+        )
         secondary = Mock()
 
         with patch("acm_switchover.SecondaryActivation") as activation_class:
@@ -2628,7 +2633,10 @@ class TestPreflightPhase:
         assert kwargs["expected_managed_cluster_names"] == []
         assert kwargs["enforce_expected_managed_cluster_names"] is False
 
-    def test_run_phase_activation_restore_only_defaults_to_one_when_min_omitted(self):
+    def test_run_phase_activation_restore_only_defaults_to_one_when_min_omitted(self, tmp_path):
+        from lib.run_record import RunRecord
+        from lib.utils import StateManager
+
         args = SimpleNamespace(
             method="full",
             activation_method="patch",
@@ -2636,12 +2644,12 @@ class TestPreflightPhase:
             old_hub_action=None,
             min_managed_clusters=None,
         )
-        state = Mock()
-        state.get_config.side_effect = lambda key, default=None: {
-            "expected_managed_cluster_names": [],
-            "expected_managed_cluster_count": 0,
-            MANAGED_CLUSTER_EXPECTATION_KEY: MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
-        }.get(key, default)
+        state = StateManager(str(tmp_path / "state.json"))
+        RunRecord(state).record_managed_cluster_expectation(
+            names=[],
+            count=0,
+            mode=MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
+        )
         secondary = Mock()
 
         with patch("acm_switchover.SecondaryActivation") as activation_class:
@@ -2655,18 +2663,23 @@ class TestPreflightPhase:
 
     def test_run_phase_post_activation_restore_only_defaults_to_one_when_min_omitted(
         self,
+        tmp_path,
     ):
+        from lib.run_record import HubFacts, RunRecord
+        from lib.utils import StateManager
+
         args = SimpleNamespace(
             dry_run=False,
             min_managed_clusters=None,
         )
-        state = Mock()
-        state.get_config.side_effect = lambda key, default=None: {
-            "expected_managed_cluster_names": [],
-            "expected_managed_cluster_count": 0,
-            MANAGED_CLUSTER_EXPECTATION_KEY: MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
-            "secondary_has_observability": False,
-        }.get(key, default)
+        state = StateManager(str(tmp_path / "state.json"))
+        run_record = RunRecord(state)
+        run_record.record_managed_cluster_expectation(
+            names=[],
+            count=0,
+            mode=MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
+        )
+        run_record.record_hub_facts(HubFacts(secondary_has_observability=False))
         secondary = Mock()
 
         with patch("acm_switchover.PostActivationVerification") as verification_class:

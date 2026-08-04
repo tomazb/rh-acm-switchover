@@ -138,7 +138,7 @@ class TestPhaseFlowIntegration:
         assert "preflight" not in call_order
         assert call_order[0] == "primary_prep"
         reloaded = StateManager(str(state_file))
-        assert reloaded.get_config("resume_summary") == {"resume_start_phase": "primary_prep"}
+        assert reloaded._get_config("resume_summary") == {"resume_start_phase": "primary_prep"}
 
     def test_resume_from_activation_skips_earlier_phases(self, tmp_path):
         """When state is ACTIVATION, only activation onward should execute."""
@@ -205,7 +205,7 @@ class TestPhaseFlowIntegration:
 
         assert result is True
         reloaded = StateManager(str(state_file))
-        assert reloaded.get_config("resume_summary") == {"resume_start_phase": "activation"}
+        assert reloaded._get_config("resume_summary") == {"resume_start_phase": "activation"}
 
     def test_resume_from_preflight_persists_resume_summary(self, tmp_path):
         """Resuming from persisted PREFLIGHT should record a preflight restart."""
@@ -239,7 +239,7 @@ class TestPhaseFlowIntegration:
         assert result is True
         assert call_order[0] == "preflight"
         reloaded = StateManager(str(state_file))
-        assert reloaded.get_config("resume_summary") == {"resume_start_phase": "preflight"}
+        assert reloaded._get_config("resume_summary") == {"resume_start_phase": "preflight"}
 
 
 @pytest.mark.unit
@@ -928,7 +928,7 @@ class TestRestoreOnlyFlow:
         args = make_restore_only_args()
         state = Mock()
         state.get_current_phase.return_value = Phase.PREFLIGHT
-        state.get_config.return_value = False
+        state._get_config.return_value = False
         secondary = Mock()
 
         with patch("acm_switchover.PreflightValidator") as validator_class:
@@ -988,7 +988,7 @@ class TestRestoreOnlyFlow:
         args.method = "full"
         state = Mock()
         state.get_current_phase.return_value = Phase.POST_ACTIVATION
-        state.get_config.side_effect = lambda key, default=None: default
+        state._get_config.side_effect = lambda key, default=None: default
         secondary = Mock()
 
         with patch("acm_switchover.Finalization") as finalization_class:

@@ -6,11 +6,13 @@ from pathlib import Path
 
 import pytest
 
+from lib.runtime_bootstrap import get_default_state_dir
 from show_state import (
     _default_state_dir,
     find_state_files,
     format_timestamp,
     load_state,
+    print_state,
 )
 
 
@@ -25,28 +27,27 @@ class TestShowStateHelpers:
         monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", "/tmp/acm-state")
         assert _default_state_dir() == "/tmp/acm-state"
 
-    def test_default_state_dir_falls_back_on_invalid_env(self, monkeypatch: pytest.MonkeyPatch):
-        # Use a clearly unsafe path and force validator to raise
+    def test_default_state_dir_matches_cli(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        # The viewer must look where the CLI writes, so state-dir resolution is
+        # shared: no independent validation/fallback in show_state.
+        monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path / "custom-state"))
+        assert _default_state_dir() == get_default_state_dir()
+
+    def test_default_state_dir_rejects_unsafe_env_loudly(self, monkeypatch: pytest.MonkeyPatch, capsys):
+        # Same posture as the CLI: an unsafe ACM_SWITCHOVER_STATE_DIR fails
+        # loudly with a clear message — never silently swapped for another
+        # directory (the old fallback) and never honoured (the interim state).
         monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", "../bad")
+        with pytest.raises(SystemExit) as exc_info:
+            _default_state_dir()
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "ACM_SWITCHOVER_STATE_DIR" in err
+        assert "explicit" in err
 
-        # Monkeypatch validator to raise so we exercise the fallback branch
-        import show_state as ss
-
-        original_validator = ss.InputValidator.validate_safe_filesystem_path
-
-        def _raise_validation(path: str, field_name: str) -> None:  # pragma: no cover - trivial wrapper
-            raise ss.ValidationError(f"bad path for {field_name}: {path}")
-
-        monkeypatch.setattr(ss.InputValidator, "validate_safe_filesystem_path", staticmethod(_raise_validation))
-        try:
-            assert _default_state_dir() == ".state"
-        finally:
-            # Restore original to avoid side effects on other tests
-            monkeypatch.setattr(
-                ss.InputValidator,
-                "validate_safe_filesystem_path",
-                staticmethod(original_validator),
-            )
+    def test_default_state_dir_defaults_without_env(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("ACM_SWITCHOVER_STATE_DIR", raising=False)
+        assert _default_state_dir() == get_default_state_dir() == ".state"
 
     def test_find_state_files_discovers_json_files(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         state_dir = tmp_path / ".state"
@@ -76,6 +77,35 @@ class TestShowStateHelpers:
         captured = capsys.readouterr().out
         assert "Error: State file not found" in captured
         assert "Error: Invalid JSON in state file" in captured
+
+
+@pytest.mark.unit
+class TestPrintState:
+    """Golden output for the RunSummary-rendered lifecycle sections."""
+
+    def test_print_state_renders_phase_steps_and_errors(self, capsys):
+        state = {
+            "current_phase": "activation",
+            "completed_steps": [
+                {"name": "pause_backup_schedule", "phase": "primary_preparation", "timestamp": "2026-01-01T00:00:00Z"},
+                {"name": "custom_step", "phase": "activation", "timestamp": ""},
+            ],
+            "errors": [{"phase": "activation", "error": "restore stalled", "timestamp": "2026-01-01T01:00:00Z"}],
+        }
+
+        print_state(state, use_color=False)
+        out = capsys.readouterr().out
+
+        # Phase renders through PHASE_INFO, not the raw key.
+        assert "  Activation: Activating secondary hub as new primary" in out
+        # Known step renders its description; unknown step falls back to its name.
+        assert "  ✓  1. Paused BackupSchedule on primary hub" in out
+        assert "       2026-01-01 00:00:00 (" in out
+        assert "  ✓  2. custom_step" in out
+        # An empty timestamp keeps the historical "unknown" render.
+        assert "       unknown" in out
+        assert "━ Errors (1) ━" in out
+        assert "  ✗ [activation] restore stalled" in out
 
 
 @pytest.mark.unit

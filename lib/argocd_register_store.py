@@ -75,7 +75,7 @@ class PauseRegisterStore:
         never survive this filter, an entry without ``pause_applied`` is
         always a legacy real pause and counts as applied.
         """
-        return self._sanitize_entries(self.state.get_config(STATE_KEY_ARGOCD_PAUSED_APPS))
+        return self._sanitize_entries(self.state._get_config(STATE_KEY_ARGOCD_PAUSED_APPS))
 
     def paused_hub_roles(self) -> Set[str]:
         """Hub roles referenced by the register — the hubs resume() would touch.
@@ -147,10 +147,10 @@ class PauseRegisterStore:
 
     def status(self) -> RegisterStatus:
         """Snapshot of the register: entry counts and run id."""
-        raw = self.state.get_config(STATE_KEY_ARGOCD_PAUSED_APPS)
+        raw = self.state._get_config(STATE_KEY_ARGOCD_PAUSED_APPS)
         return self._build_status(
             self._sanitize_entries(raw),
-            self.state.get_config(STATE_KEY_ARGOCD_RUN_ID),
+            self.state._get_config(STATE_KEY_ARGOCD_RUN_ID),
             raw,
         )
 
@@ -187,7 +187,7 @@ class PauseRegisterStore:
         """
         if self.dry_run:
             return
-        self.state.set_config(STATE_KEY_ARGOCD_PAUSED_APPS, copy.deepcopy(paused_apps))
+        self.state._set_config(STATE_KEY_ARGOCD_PAUSED_APPS, copy.deepcopy(paused_apps))
 
     def _clear(self) -> None:
         """Clear persisted Argo CD pause and discovery namespace state.
@@ -196,9 +196,9 @@ class PauseRegisterStore:
         """
         if self.dry_run:
             return
-        self.state.set_config(STATE_KEY_ARGOCD_PAUSED_APPS, [])
-        self.state.set_config(STATE_KEY_ARGOCD_RUN_ID, None)
-        self.state.set_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, {})
+        self.state._set_config(STATE_KEY_ARGOCD_PAUSED_APPS, [])
+        self.state._set_config(STATE_KEY_ARGOCD_RUN_ID, None)
+        self.state._set_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, {})
 
     def finish_cleanup(self) -> None:
         """Discard leftover run metadata for a register with no obligations left.
@@ -212,7 +212,7 @@ class PauseRegisterStore:
         self._clear()
 
     def _get_discovery_namespaces_by_hub(self) -> Dict[str, List[str]]:
-        stored = self.state.get_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES) or {}
+        stored = self.state._get_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES) or {}
         if not isinstance(stored, dict):
             return {}
         return copy.deepcopy(stored)
@@ -220,7 +220,7 @@ class PauseRegisterStore:
     def _persist_discovery_namespaces_by_hub(self, namespaces_by_hub: Dict[str, List[str]]) -> None:
         if self.dry_run:
             return
-        self.state.set_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, copy.deepcopy(namespaces_by_hub))
+        self.state._set_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, copy.deepcopy(namespaces_by_hub))
 
     def _upsert_pause_entry(
         self,

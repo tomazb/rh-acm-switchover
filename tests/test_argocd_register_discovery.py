@@ -34,8 +34,8 @@ class TestNoCrdRegisterPreservation:
             "original_sync_policy": {"automated": {}},
             "pause_applied": True,
         }
-        state.set_config("argocd_run_id", "run-1")
-        state.set_config("argocd_paused_apps", [entry])
+        state._set_config("argocd_run_id", "run-1")
+        state._set_config("argocd_paused_apps", [entry])
         client = Mock()
 
         with patch(
@@ -49,8 +49,8 @@ class TestNoCrdRegisterPreservation:
         assert summary.failed == 0
         assert summary.newly_paused == 0
         assert summary.applications_crd_visible is False
-        assert state.get_config("argocd_paused_apps") == [entry]
-        assert state.get_config("argocd_run_id") == "run-1"
+        assert state._get_config("argocd_paused_apps") == [entry]
+        assert state._get_config("argocd_run_id") == "run-1"
         assert any("keeping pause register" in record.message for record in caplog.records)
 
     def test_no_crd_preserves_provisional_only_register(self, tmp_path, caplog):
@@ -63,8 +63,8 @@ class TestNoCrdRegisterPreservation:
             "original_sync_policy": {"automated": {}},
             "pause_applied": False,
         }
-        state.set_config("argocd_run_id", "run-1")
-        state.set_config("argocd_paused_apps", [entry])
+        state._set_config("argocd_run_id", "run-1")
+        state._set_config("argocd_paused_apps", [entry])
         client = Mock()
 
         with patch(
@@ -77,8 +77,8 @@ class TestNoCrdRegisterPreservation:
 
         assert summary.applications_crd_visible is False
         assert summary.run_id == "run-1"
-        assert state.get_config("argocd_paused_apps") == [entry]
-        assert state.get_config("argocd_run_id") == "run-1"
+        assert state._get_config("argocd_paused_apps") == [entry]
+        assert state._get_config("argocd_run_id") == "run-1"
         assert any("keeping pause register" in record.message for record in caplog.records)
 
     def test_no_crd_preserves_unknown_only_register(self, tmp_path):
@@ -93,9 +93,9 @@ class TestNoCrdRegisterPreservation:
             "pause_state": "unknown",
             "pause_run_id": "run-1",
         }
-        state.set_config("argocd_run_id", "run-1")
-        state.set_config("argocd_paused_apps", [entry])
-        state.set_config("argocd_discovery_namespaces", {"secondary": ["argocd"]})
+        state._set_config("argocd_run_id", "run-1")
+        state._set_config("argocd_paused_apps", [entry])
+        state._set_config("argocd_discovery_namespaces", {"secondary": ["argocd"]})
         client = Mock()
 
         with patch(
@@ -106,9 +106,9 @@ class TestNoCrdRegisterPreservation:
 
         assert summary.applications_crd_visible is False
         assert summary.run_id == "run-1"
-        assert state.get_config("argocd_paused_apps") == [entry]
-        assert state.get_config("argocd_run_id") == "run-1"
-        assert state.get_config("argocd_discovery_namespaces") == {"secondary": ["argocd"]}
+        assert state._get_config("argocd_paused_apps") == [entry]
+        assert state._get_config("argocd_run_id") == "run-1"
+        assert state._get_config("argocd_discovery_namespaces") == {"secondary": ["argocd"]}
 
     def test_no_crd_preserves_mixed_confirmed_and_unknown_register(self, tmp_path, caplog):
         state = _make_real_state(tmp_path)
@@ -128,8 +128,8 @@ class TestNoCrdRegisterPreservation:
             "pause_state": "unknown",
             "pause_run_id": "run-1",
         }
-        state.set_config("argocd_run_id", "run-1")
-        state.set_config("argocd_paused_apps", [confirmed, unknown])
+        state._set_config("argocd_run_id", "run-1")
+        state._set_config("argocd_paused_apps", [confirmed, unknown])
         client = Mock()
 
         with patch(
@@ -141,8 +141,8 @@ class TestNoCrdRegisterPreservation:
                 summary = register.pause_hubs([(client, "secondary")])
 
         assert summary.applications_crd_visible is False
-        assert state.get_config("argocd_paused_apps") == [confirmed, unknown]
-        assert state.get_config("argocd_run_id") == "run-1"
+        assert state._get_config("argocd_paused_apps") == [confirmed, unknown]
+        assert state._get_config("argocd_run_id") == "run-1"
         warning = next(record.message for record in caplog.records if "keeping pause register" in record.message)
         # Assert the rendered counts, not bare digits: "ADR-0001" in the message
         # body makes a substring check for "1" pass regardless of the real count.
@@ -151,9 +151,9 @@ class TestNoCrdRegisterPreservation:
 
     def test_no_crd_clears_empty_register(self, tmp_path):
         state = _make_real_state(tmp_path)
-        state.set_config("argocd_run_id", "stale")
-        state.set_config("argocd_paused_apps", [])
-        state.set_config("argocd_discovery_namespaces", {"secondary": ["argocd"]})
+        state._set_config("argocd_run_id", "stale")
+        state._set_config("argocd_paused_apps", [])
+        state._set_config("argocd_discovery_namespaces", {"secondary": ["argocd"]})
         client = Mock()
 
         with patch(
@@ -166,9 +166,9 @@ class TestNoCrdRegisterPreservation:
         assert summary.newly_paused == 0
         assert summary.failed == 0
         assert summary.applications_crd_visible is False
-        assert state.get_config("argocd_paused_apps") == []
-        assert state.get_config("argocd_run_id") is None
-        assert state.get_config("argocd_discovery_namespaces") == {}
+        assert state._get_config("argocd_paused_apps") == []
+        assert state._get_config("argocd_run_id") is None
+        assert state._get_config("argocd_discovery_namespaces") == {}
 
     def test_cleared_register_reports_no_run_id_even_in_dry_run(self, tmp_path):
         """OO-017: a run that paused nothing must not report a stale persisted run id.
@@ -178,8 +178,8 @@ class TestNoCrdRegisterPreservation:
         announce a pause that never happened.
         """
         state = _make_real_state(tmp_path)
-        state.set_config("argocd_run_id", "stale-from-earlier-run")
-        state.set_config("argocd_paused_apps", [])
+        state._set_config("argocd_run_id", "stale-from-earlier-run")
+        state._set_config("argocd_paused_apps", [])
         client = Mock()
 
         with patch(
@@ -192,7 +192,7 @@ class TestNoCrdRegisterPreservation:
         assert summary.newly_paused == 0
         assert summary.applications_crd_visible is False
         # dry-run still must not touch persisted state
-        assert state.get_config("argocd_run_id") == "stale-from-earlier-run"
+        assert state._get_config("argocd_run_id") == "stale-from-earlier-run"
 
 
 @pytest.mark.unit
@@ -209,8 +209,8 @@ class TestPauseSummaryReporting:
             "original_sync_policy": {"automated": {}},
             "pause_applied": True,
         }
-        state.set_config("argocd_run_id", "run-1")
-        state.set_config("argocd_paused_apps", [entry])
+        state._set_config("argocd_run_id", "run-1")
+        state._set_config("argocd_paused_apps", [entry])
         client = Mock()
 
         with patch(

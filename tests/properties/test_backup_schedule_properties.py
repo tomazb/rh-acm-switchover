@@ -149,7 +149,7 @@ class RecordingStateManager:
         self.saved_schedule = saved_schedule
         self.get_config_calls: list[str] = []
 
-    def get_config(self, key: str) -> Any:
+    def _get_config(self, key: str) -> Any:
         self.get_config_calls.append(key)
         return self.saved_schedule
 

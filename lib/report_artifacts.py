@@ -21,6 +21,7 @@ from lib.constants import (
     REPORT_STATUS_FAIL,
     REPORT_STATUS_PASS,
 )
+from lib.run_record import RunSummary
 
 SCHEMA_VERSION = REPORT_SCHEMA_VERSION
 SOURCE = REPORT_SOURCE_PYTHON_CLI
@@ -49,6 +50,23 @@ def _normalise_validation_result(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _summarize_state(state_snapshot: dict[str, Any], status: str) -> dict[str, Any]:
+    """Count raw snapshot entries, deliberately not RunSummary's typed view.
+
+    Only ``error_count`` is genuinely pinned to the raw list: the errors
+    strategy generates arbitrary JSON-native values (ints, strings, None), all
+    of which RunSummary.from_snapshot would filter out, while
+    tests/properties/test_report_artifact_properties.py::
+    test_state_summary_uses_exact_counts_status_and_empty_collection_semantics
+    asserts the count equals len(raw errors).
+
+    ``completed_steps`` and ``current_phase`` are kept raw for contract
+    consistency, not because a test forces it -- the strategies only generate
+    well-typed values there (steps are always {"name": str}, current_phase is
+    always a Phase value), so the typed view would agree on every generated
+    input. They stay raw so this function has one provenance, and because
+    from_snapshot's filtering/degradation would change the reported numbers for
+    malformed real-world state.
+    """
     errors = state_snapshot.get("errors", []) or []
     completed_steps = state_snapshot.get("completed_steps", []) or []
     return {
@@ -90,8 +108,18 @@ def build_operation_report(
 ) -> dict[str, Any]:
     """Build a schema-compatible report for Python CLI operations."""
     config = state_snapshot.get("config", {}) or {}
-    raw_results = config.get("preflight_results") or []
-    results = [_normalise_validation_result(item) for item in raw_results]
+    summary = RunSummary.from_snapshot(state_snapshot)
+    # Typed view for preflight results: every entry it yields is a dict, which
+    # is what _normalise_validation_result requires. A non-dict entry, or a
+    # truthy non-list preflight_results, used to raise here and lose the whole
+    # report; both are now skipped. Trade-off: from_snapshot only accepts a
+    # dict config, so a non-dict Mapping config yields no results at all where
+    # the old config.get() read them fine (see the task 7 report).
+    results = [_normalise_validation_result(item) for item in summary.preflight_results]
+    # Raw errors list on purpose: tests/properties/test_report_artifact_properties.py::
+    # test_python_operation_report_schema_fields_round_trip_and_exclude_sensitive_config
+    # pins report["errors"] to the snapshot's list verbatim, including the
+    # non-dict entries RunSummary.from_snapshot filters out.
     errors = state_snapshot.get("errors", []) or []
 
     report: dict[str, Any] = {

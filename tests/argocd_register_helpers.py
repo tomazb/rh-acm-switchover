@@ -15,8 +15,8 @@ def _make_state_manager(config=None):
     """Create a mock StateManager backed by a real dict for config tracking."""
     state_config = config or {}
     mock = Mock()
-    mock.get_config.side_effect = lambda key, default=None: copy.deepcopy(state_config.get(key, default))
-    mock.set_config.side_effect = lambda key, value: state_config.__setitem__(key, copy.deepcopy(value))
+    mock._get_config.side_effect = lambda key, default=None: copy.deepcopy(state_config.get(key, default))
+    mock._set_config.side_effect = lambda key, value: state_config.__setitem__(key, copy.deepcopy(value))
     mock._config = state_config
     return mock
 

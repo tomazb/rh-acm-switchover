@@ -44,23 +44,20 @@ from lib.constants import (
     EXIT_FAILURE,
     EXIT_INTERRUPT,
     EXIT_SUCCESS,
-    EXPECTED_MANAGED_CLUSTER_COUNT_KEY,
-    EXPECTED_MANAGED_CLUSTER_NAMES_KEY,
     HUB_ROLE_PRIMARY,
     HUB_ROLE_SECONDARY,
     MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
     MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED,
     MANAGED_CLUSTER_EXPECTATION_EXPLICIT_MINIMUM,
-    MANAGED_CLUSTER_EXPECTATION_KEY,
     MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
     OBSERVABILITY_NAMESPACE,
-    STATE_DIR_ENV_VAR,
     STEP_PAUSE_ARGOCD_APPS,
     TOKEN_DURATION_DEFAULT,
 )
 from lib.exceptions import StateLoadError, StateLockError
 from lib.gitops_detector import GitOpsCollector
 from lib.report_artifacts import validate_report_artifact_directory
+from lib.run_record import HubFacts, RunRecord
 from lib.validation import InputValidator, ValidationError
 from modules import (
     Decommission,
@@ -367,11 +364,11 @@ def validate_args(args: argparse.Namespace, logger: logging.Logger) -> None:
         # provided when not in decommission mode
         InputValidator.validate_all_cli_args(args)
 
-        # Validate state dir env var only when it would be used
+        # Resolve the state dir early so an unsafe ACM_SWITCHOVER_STATE_DIR
+        # fails here with a clean message. The safety posture itself lives in
+        # runtime_bootstrap.get_default_state_dir (shared with show_state).
         if not getattr(args, "state_file", None):
-            env_state_dir = os.environ.get(STATE_DIR_ENV_VAR)
-            if env_state_dir and env_state_dir.strip():
-                InputValidator.validate_safe_filesystem_path(env_state_dir.strip(), STATE_DIR_ENV_VAR)
+            runtime_bootstrap.get_default_state_dir()
         else:
             # Validate user-specified state file path to prevent unsafe locations
             InputValidator.validate_safe_filesystem_path(args.state_file, "--state-file")
@@ -644,50 +641,40 @@ def _run_phase_preflight(
         restore_only=is_restore_only,
     )
     passed, config = validator.validate_all()
-    preflight_results = list(validator.reporter.results)
-    state.set_config("preflight_results", preflight_results)
-    state.set_config(
-        "preflight_summary",
-        {
-            "passed": passed,
-            "critical_failures": len(validator.reporter.critical_failures()),
-            "total": len(preflight_results),
-        },
+    run_record = RunRecord(state)
+    run_record.record_preflight_results(
+        validator.reporter.results,
+        passed=passed,
+        critical_failures=len(validator.reporter.critical_failures()),
     )
 
     if not passed:
         return _fail_phase(state, "Pre-flight validation failed! Cannot proceed.", logger)
 
     if is_restore_only:
-        state.set_config("primary_version", "unknown")
-        state.set_config("primary_observability_detected", False)
-        state.set_config("primary_has_observability", False)
+        primary_version = "unknown"
+        primary_obs_detected = False
+        primary_obs_enabled = False
         expected_managed_cluster_names: list[str] = []
     else:
-        state.set_config("primary_version", config["primary_version"])
-        state.set_config(
-            "primary_observability_detected",
-            config["primary_observability_detected"],
-        )
-        primary_obs_enabled = config["primary_observability_detected"] and not args.skip_observability_checks
-        state.set_config("primary_has_observability", primary_obs_enabled)
+        primary_version = config["primary_version"]
+        primary_obs_detected = config["primary_observability_detected"]
+        primary_obs_enabled = primary_obs_detected and not args.skip_observability_checks
         expected_managed_cluster_names = list(config.get("expected_managed_cluster_names", []))
 
-    state.set_config("secondary_version", config["secondary_version"])
-    state.set_config(
-        "secondary_observability_detected",
-        config["secondary_observability_detected"],
+    secondary_obs_detected = config["secondary_observability_detected"]
+    secondary_obs_enabled = secondary_obs_detected and not args.skip_observability_checks
+    run_record.record_hub_facts(
+        HubFacts(
+            primary_version=primary_version,
+            primary_observability_detected=primary_obs_detected,
+            primary_has_observability=primary_obs_enabled,
+            secondary_version=config["secondary_version"],
+            secondary_observability_detected=secondary_obs_detected,
+            secondary_has_observability=secondary_obs_enabled,
+            has_observability=primary_obs_enabled or secondary_obs_enabled,
+        )
     )
-
-    secondary_obs_enabled = config["secondary_observability_detected"] and not args.skip_observability_checks
-    state.set_config("secondary_has_observability", secondary_obs_enabled)
-    state.set_config(
-        "has_observability",
-        state.get_config("primary_has_observability", False) or secondary_obs_enabled,
-    )
-    expected_managed_cluster_count = len(expected_managed_cluster_names)
-    state.set_config(EXPECTED_MANAGED_CLUSTER_NAMES_KEY, expected_managed_cluster_names)
-    state.set_config(EXPECTED_MANAGED_CLUSTER_COUNT_KEY, expected_managed_cluster_count)
     if is_restore_only:
         expectation_mode = MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY
     elif getattr(args, "min_managed_clusters", None) is None:
@@ -696,7 +683,11 @@ def _run_phase_preflight(
         expectation_mode = MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED
     else:
         expectation_mode = MANAGED_CLUSTER_EXPECTATION_EXPLICIT_MINIMUM
-    state.set_config(MANAGED_CLUSTER_EXPECTATION_KEY, expectation_mode)
+    run_record.record_managed_cluster_expectation(
+        names=expected_managed_cluster_names,
+        count=len(expected_managed_cluster_names),
+        mode=expectation_mode,
+    )
 
     if not getattr(args, "skip_gitops_check", False):
         _report_argocd_acm_impact(
@@ -789,11 +780,12 @@ def _run_phase_primary_prep(
     _log_phase_banner("PHASE 2: PRIMARY HUB PREPARATION", logger)
     state.set_phase(Phase.PRIMARY_PREP)
 
+    facts = RunRecord(state).hub_facts()
     prep = PrimaryPreparation(
         primary,
         state,
-        state.get_config("primary_version", "unknown"),
-        state.get_config("primary_has_observability", False),
+        facts.primary_version,
+        facts.primary_has_observability,
         dry_run=args.dry_run,
         argocd_manage=getattr(args, "argocd_manage", False),
         secondary_client=secondary,
@@ -847,10 +839,11 @@ def _run_phase_post_activation(
     state.set_phase(Phase.POST_ACTIVATION)
     min_managed_clusters, expected_names, enforce_expected_names = _resolve_managed_cluster_expectation(args, state)
 
+    facts = RunRecord(state).hub_facts()
     verification = PostActivationVerification(
         secondary,
         state,
-        state.get_config("secondary_has_observability", False),
+        facts.secondary_has_observability,
         dry_run=args.dry_run,
         min_managed_clusters=min_managed_clusters,
         expected_managed_cluster_names=expected_names,
@@ -870,12 +863,12 @@ def _resolve_managed_cluster_expectation(
 ) -> tuple[int, list[str], bool]:
     """Return effective ManagedCluster count/name enforcement for activation phases."""
     raw_min = getattr(args, "min_managed_clusters", None)
-    expected_names = list(state.get_config(EXPECTED_MANAGED_CLUSTER_NAMES_KEY, []) or [])
-    expected_count = int(state.get_config(EXPECTED_MANAGED_CLUSTER_COUNT_KEY, len(expected_names)) or 0)
+    expectation = RunRecord(state).managed_cluster_expectation()
+    expected_names = list(expectation.names)
+    expected_count = expectation.count
 
     if raw_min is None:
-        expectation_mode = state.get_config(MANAGED_CLUSTER_EXPECTATION_KEY, None)
-        if expectation_mode == MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY and expected_count == 0 and not expected_names:
+        if expectation.mode == MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY and expected_count == 0 and not expected_names:
             return 1, [], False
         return expected_count, expected_names, bool(expected_names)
     if raw_min == 0:
@@ -895,12 +888,13 @@ def _run_phase_finalization(
 
     is_restore_only = getattr(args, "restore_only", False)
     old_hub_action = "none" if is_restore_only else args.old_hub_action
+    facts = RunRecord(state).hub_facts()
     finalization = Finalization(
         secondary_client=secondary,
         state_manager=state,
-        acm_version=state.get_config("secondary_version", "unknown"),
+        acm_version=facts.secondary_version,
         primary_client=primary,
-        primary_has_observability=state.get_config("primary_has_observability", False),
+        primary_has_observability=facts.primary_has_observability,
         dry_run=args.dry_run,
         old_hub_action=old_hub_action,
         manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", False),

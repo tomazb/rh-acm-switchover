@@ -20,9 +20,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from lib import __version__, __version_date__
-from lib.validation import InputValidator, ValidationError
-
-STATE_DIR_ENV_VAR = "ACM_SWITCHOVER_STATE_DIR"
+from lib.exceptions import ValidationError
+from lib.run_record import RunSummary
+from lib.runtime_bootstrap import get_default_state_dir
 
 # ANSI colors for terminal output
 COLORS = {
@@ -109,15 +109,15 @@ def format_timestamp(iso_timestamp: str) -> str:
 
 
 def _default_state_dir() -> str:
-    env_state_dir = os.environ.get(STATE_DIR_ENV_VAR)
-    if env_state_dir and env_state_dir.strip():
-        try:
-            InputValidator.validate_safe_filesystem_path(env_state_dir.strip(), STATE_DIR_ENV_VAR)
-            return env_state_dir.strip()
-        except ValidationError:
-            # Viewer tool: ignore unsafe env var and fall back to default
-            return ".state"
-    return ".state"
+    # Deliberately identical to the CLI's resolution: the viewer must look
+    # where the CLI writes. The shared resolver enforces the safety posture,
+    # so an unsafe env value fails loudly here exactly as the CLI refuses it.
+    try:
+        return get_default_state_dir()
+    except ValidationError as exc:
+        print(f"Error: unsafe ACM_SWITCHOVER_STATE_DIR: {exc}", file=sys.stderr)
+        print("Unset the variable or pass an explicit state file path instead.", file=sys.stderr)
+        sys.exit(1)
 
 
 def find_state_files(state_dir: Optional[str] = None) -> List[str]:
@@ -158,6 +158,12 @@ def print_section(title: str, use_color: bool = True):
 def print_state(state: Dict[str, Any], use_color: bool = True):
     """Print formatted state information."""
 
+    # Lifecycle sections (phase/steps/errors) render from the typed view; the
+    # Overview, Contexts and Configuration sections keep reading the raw file
+    # because the viewer must show whatever is on disk, including keys this
+    # facade does not own.
+    summary = RunSummary.from_snapshot(state)
+
     # Header
     print_header("ACM Switchover State", use_color)
 
@@ -176,7 +182,7 @@ def print_state(state: Dict[str, Any], use_color: bool = True):
 
     # Current phase
     print_section("Current Phase", use_color)
-    phase = state.get("current_phase", "unknown")
+    phase = summary.current_phase or "unknown"
     phase_name, phase_desc = PHASE_INFO.get(phase, (phase, "Unknown phase"))
 
     phase_colors = {
@@ -190,11 +196,13 @@ def print_state(state: Dict[str, Any], use_color: bool = True):
 
     # Completed steps
     print_section("Completed Steps", use_color)
-    steps = state.get("completed_steps", [])
+    steps = summary.completed_steps
     if steps:
         for i, step in enumerate(steps, 1):
-            step_name = step.get("name", "unknown")
-            step_time = format_timestamp(step.get("timestamp", ""))
+            # RunSummary degrades a missing/malformed name to "": keep the
+            # historical "unknown" label rather than rendering a blank line.
+            step_name = step.name or "unknown"
+            step_time = format_timestamp(step.timestamp or "")
             step_desc = STEP_INFO.get(step_name, step_name)
             print(f"  {color('✓', 'green', use_color)} {i:2}. {step_desc}")
             print(f"       {color(step_time, 'gray', use_color)}")
@@ -219,13 +227,15 @@ def print_state(state: Dict[str, Any], use_color: bool = True):
                 print(f"  {key}: {value}")
 
     # Errors
-    errors = state.get("errors", [])
+    errors = summary.errors
     if errors:
         print_section(f"Errors ({len(errors)})", use_color)
         for error in errors:
-            err_phase = error.get("phase", "unknown")
-            err_msg = error.get("error", "unknown error")
-            err_time = format_timestamp(error.get("timestamp", ""))
+            # Same degradation contract as the steps loop above: "" means the
+            # field was missing or malformed, so keep the historical labels.
+            err_phase = error.phase or "unknown"
+            err_msg = error.error or "unknown error"
+            err_time = format_timestamp(error.timestamp or "")
             print(f"  {color('✗', 'red', use_color)} [{err_phase}] {err_msg}")
             print(f"       {color(err_time, 'gray', use_color)}")
 

@@ -17,6 +17,7 @@ from lib.constants import (
     IMPORT_CONTROLLER_CONFIG_CM,
     MCE_NAMESPACE,
 )
+from lib.run_record import HubFacts, RunRecord
 from lib.utils import StateManager
 from modules.activation import SecondaryActivation
 from modules.backup_schedule import BackupScheduleManager
@@ -93,8 +94,8 @@ class TestStateHandoffContracts:
             prep._pause_argocd_acm_apps()
 
         consumer_state = StateManager(state_file)
-        paused_apps = consumer_state.get_config("argocd_paused_apps")
-        assert consumer_state.get_config("argocd_run_id") == "run-123"
+        paused_apps = consumer_state._get_config("argocd_paused_apps")
+        assert consumer_state._get_config("argocd_run_id") == "run-123"
         assert paused_apps == [
             {
                 "hub": "primary",
@@ -108,7 +109,7 @@ class TestStateHandoffContracts:
     def test_activation_flag_causes_finalization_to_delete_import_configmap(self, state_file, secondary_client):
         """Activation-owned auto-import state should trigger the finalization cleanup."""
         producer_state = StateManager(state_file)
-        producer_state.set_config("secondary_version", "2.14.1")
+        RunRecord(producer_state).record_hub_facts(HubFacts(secondary_version="2.14.1"))
         activation = SecondaryActivation(
             secondary_client=secondary_client,
             state_manager=producer_state,
@@ -139,7 +140,7 @@ class TestStateHandoffContracts:
             data={AUTO_IMPORT_STRATEGY_KEY: AUTO_IMPORT_STRATEGY_SYNC},
         )
         secondary_client.delete_configmap.assert_called_once_with(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM)
-        assert consumer_state.get_config("auto_import_strategy_set", False) is False
+        assert RunRecord(consumer_state).auto_import_override_pending() is False
 
     def test_saved_backup_schedule_is_restored_from_state(self, state_file, primary_client, secondary_client):
         """BackupScheduleManager should recreate the saved primary schedule from state."""

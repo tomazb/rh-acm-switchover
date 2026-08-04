@@ -1011,7 +1011,7 @@ def _state_mutations() -> SearchStrategy[StateOperation]:
         readable_step_names().map(lambda step: StateOperation("mark_step", key=step)),
         readable_step_names().map(lambda step: StateOperation("clear_step", key=step)),
         st.tuples(config_keys, json_native_values()).map(
-            lambda item: StateOperation("set_config", key=item[0], value=item[1])
+            lambda item: StateOperation("_set_config", key=item[0], value=item[1])
         ),
     )
 
