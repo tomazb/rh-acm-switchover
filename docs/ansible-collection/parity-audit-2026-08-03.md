@@ -103,13 +103,13 @@ default posture inverts the safety story operators expect from the CLI.
 | H2 | Zero managed clusters post-restore | warns, "informational only" (`modules/activation.py:1080-1087`), post-activation returns complete | hard-fails unless `allow_zero_managed_clusters` (`plugins/modules/acm_cluster_verify.py:74-82`) | empty restore passes Python, fails collection |
 | H3 | Backup freshness proof | prefers `status.completionTimestamp`; resume shortcut accepts recorded name on ownership+phase alone (`modules/finalization.py:158-179,444-463`) | `creationTimestamp >= baseline` only (`roles/finalization/tasks/verify_backups.yml:69-76`) | pre-activation backup completing late: Python accepts as post-switchover proof, collection fails |
 | H4 | BackupSchedule collision repair | raises, leaves hub with **no** BackupSchedule (`modules/finalization.py:1349-1351`) | rollback path restores it (`repair_backup_schedule_collision.yml:100-134`) | collection recovers where Python strands |
-| H5 | RBAC: missing hub namespace | preflight fails (`lib/rbac_validator.py:633-638`) | no namespace-existence check; SSAR answers `allowed` regardless | hub missing `open-cluster-management-backup` passes collection preflight |
+| H5 | RBAC: missing hub namespace | RBAC validator itself fails on a missing namespace (`lib/rbac_validator.py:633-638`) | RBAC component has no namespace-existence gate (SSAR answers `allowed` regardless), but preflight covers it separately: `roles/preflight/tasks/validate_namespaces.yml` marks a missing `open-cluster-management-backup` **critical** on both hubs | *corrected in review*: no missing safety gate — same cluster state fails both preflights; the difference is component-level diagnostics (skip/filter the namespace check and the collection's RBAC verdict alone is `allowed` where Python's is not) |
 | H6 | RBAC: SSAR API failure | distinct `ValidationError` abort ("cannot determine" ≠ "denied") | folded into ordinary denials (`roles/preflight/tasks/run_ssar.yml:36-50`) | both fail closed, but diagnosis differs |
 | H7 | Preflight scope | `thanos-object-storage` secret check, **critical** (`modules/preflight/namespace_validators.py:137-170`) — collection has zero equivalent | spoke RBAC validated inside preflight — Python only via standalone `check_rbac.py --managed-cluster` | secondary missing the Thanos secret passes collection preflight, fails Python's |
 | H8 | Klusterlet restart failure | warn-and-continue, remediation reported done (`modules/post_activation.py:1305-1306`) | cluster marked `failed` (`module_utils/klusterlet.py:563-571`) | opposite fail-open/fail-closed postures |
 | H9 | Klusterlet drift cluster | `acm-switchover/restart` epoch annotation; single hub-route expected-hub; malformed spoke kubeconfig = skip | `acm-switchover/restartedAt` ISO annotation; per-cluster import-secret expected-hub; malformed kubeconfig = hard fail; no secret-visibility wait | neither runtime sees the other's restarts; same cluster can be `verified` on one and `wrong_hub` on the other |
 | H10 | Python `--dry-run` durable-state leak | `ensure_contexts` resets and flushes a real in-progress state file on context mismatch **before** the dry-run snapshot (`lib/utils.py:696-713` via `acm_switchover.py:1103`); `--dry-run --reset-state` really deletes | collection never writes under dry_run/validate/check (`checkpoint_phase.py:85-88,169,182-186`) | the one case where a dry run destroys durable data — Python-side bug, found incidentally |
-| H11 | Report artifacts | full schema: `status`, `summary`, `hubs`, `errors`, uniform `phases`, `generated_at` (`lib/report_artifacts.py:101-156`) | playbook-inlined: no `status`/`summary`/`hubs`/`errors`; `operation` is a string vs Python's dict; `preflight` absent from `phases`; decommission artifact needs an explicit `summary_path` (never derives from `report_dir`); standalone argocd resume writes **no artifact** | any downstream consumer keyed on the Python schema breaks on collection output; `runtime_parity.py:137-170` — the supposed contract check — reads keys **neither** side emits |
+| H11 | Report artifacts | full schema: `status`, `summary`, `hubs`, `errors`, uniform `phases`, `generated_at` (`lib/report_artifacts.py:101-156`) | playbook-inlined: no `status`/`summary`/`hubs`/`errors`; `operation` is a string vs Python's dict; `preflight` absent from `phases`; decommission artifact needs an explicit `summary_path` (never derives from `report_dir`); standalone argocd resume writes **no artifact** | any downstream consumer keyed on the Python schema breaks on collection output; `tests/release/scenarios/runtime_parity.py:137-170` — the supposed contract check — reads keys **neither** side emits |
 | H12 | Dead operator knobs | `--force` covers legacy-identity backfill, stale-COMPLETED rerun, unknown-phase reset | `acm_switchover_execution.force` and `.verbose` declared in six files, mapped in `cli-migration-map.md:17`, **consumed nowhere**; `--check` mode unusable (SSAR all-denied, `validate_tooling.yml:23-31` crashes on skipped command) | operator sets `force: true` expecting Python semantics, gets silence |
 
 Python-only stale-state guard (H13): 6-hour COMPLETED-state age gate
@@ -149,10 +149,14 @@ downstream prune) has no Python analogue.
   `validate_safe_path(path)`), unrelated exception classes (collection's local
   `ValidationError` loses the SECURITY severity signal), artifact-path
   validation stricter on the collection side, and the collection's error
-  message omits cwd from the allowed-roots list it actually enforces. No
-  direct guardrail; the shared fixture's 10 path cases have no symlink or
+  message omits cwd from the allowed-roots list it actually enforces.
+  Behavioural drift IS guarded cross-form — `tests/properties/test_path_safety_properties.py`
+  imports both implementations and compares general, artifact-path,
+  directory-validator, and symlink verdicts (see M4) — so the residual gaps
+  are narrower: the shared YAML fixture's 10 path cases lack symlink and
   directory-validator coverage and pin only lowest-common-denominator
-  substrings.
+  substrings, and the structural drift above (names, arity, exception
+  classes, messages) is pinned by nothing.
 - **M6. Validation surface asymmetry the fixture can't see**: the four
   Kubernetes name/namespace/label validators and all CLI-combination rules are
   Python-only; `validate_context_name` is duplicated with zero fixture cases;
@@ -271,7 +275,7 @@ loads collection checkpoint as fresh run), and the D-series doc defects.
    inherit from `enabled: false`.
 3. **H1, H10** — two Python-side safety bugs independent of parity.
 4. **H11 + M8** — pick one report contract, fix or delete the phantom
-   `runtime_parity` normalizer, align result-ID vocabularies.
+   `tests/release/scenarios/runtime_parity.py` normalizer, align result-ID vocabularies.
 5. **M1/M2/M5 + D-series** — cheap guardrail and documentation fixes
    (pin the annotation, meta-check the constants map, path_safety fixture,
    correct AGENTS.md/parity-matrix, document the property-suite layer).
