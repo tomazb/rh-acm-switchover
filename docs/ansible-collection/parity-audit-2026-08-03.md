@@ -1,8 +1,9 @@
 # Python ↔ Ansible Feature Parity Audit — 2026-08-03
 
-Audited tree: branch `feat/run-record-spec` at `bc4bafbd` (PR #215; interface-only
-refactor over `origin/ansible`, so findings apply to the `ansible` tip except
-where a `lib/run_record.py` reference is explicit). Method: four parallel
+Audited tree: branch `feat/run-record-spec` at `bc4bafbd` — since squash-merged
+to `ansible` as `21978adc` (PR #215), with the shim removal following as
+`e7bcad94` (PR #213); neither merge changed audited behaviour, so findings
+apply to the current `ansible` tip directly. Method: four parallel
 read-only audits — workflow coverage, shared-twin modules, behavioral/safety
 semantics, and parity-guardrail coverage — each with file:line evidence,
 synthesized and de-duplicated here. This document records findings only; no
