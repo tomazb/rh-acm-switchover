@@ -87,7 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- None.
+- Removed the deprecated `modules/preflight_validators.py` compatibility shim (past its announced 2026-06-30 removal date) and its backward-compatibility test. Downstream code importing `modules.preflight_validators` now raises `ModuleNotFoundError`; import validators directly from `modules.preflight` instead.
 
 ## [1.7.10] - 2026-05-12
 

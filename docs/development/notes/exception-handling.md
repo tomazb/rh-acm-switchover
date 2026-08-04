@@ -44,7 +44,7 @@ This document describes the improvements made to exception handling specificity 
    - Line 180: Replaced `except Exception as e:` with `except (RuntimeError, ValueError, Exception) as e:`
    - Line 370: Replaced `except Exception as e:` with `except (RuntimeError, ValueError, Exception) as e:`
 
-8. **modules/preflight_validators.py**
+8. **modules/preflight_validators.py** *(historical: this compatibility shim was removed in 2026-08; the validators and their exception handling live in `modules/preflight/`)*
    - Line 208: Replaced `except Exception as exc:` with `except (RuntimeError, ValueError, Exception) as exc:`
    - Line 281: Replaced `except Exception as exc:` with `except (RuntimeError, ValueError, Exception) as exc:`
    - Line 328: Replaced `except Exception as exc:` with `except (RuntimeError, ValueError, Exception) as exc:`
