@@ -1106,7 +1106,14 @@ def _prepare_runtime(
     should_bind_state = not getattr(args, "argocd_resume_only", False) and not getattr(args, "decommission", False)
     should_record_state_errors = not getattr(args, "decommission", False)
 
+    dry_run_state_guard = None
     if should_bind_state:
+        if getattr(args, "dry_run", False):
+            # Capture BEFORE ensure_contexts: its context-mismatch reset flushes
+            # to disk, and a later snapshot would only preserve the wiped state
+            # (parity audit finding H10). main() restores this guard after the
+            # rehearsal completes.
+            dry_run_state_guard = state.capture_state_snapshot()
         state.ensure_contexts(getattr(args, "primary_context", None), getattr(args, "secondary_context", None))
 
     try:
@@ -1122,6 +1129,7 @@ def _prepare_runtime(
         secondary=secondary,
         should_bind_state=should_bind_state,
         should_record_state_errors=should_record_state_errors,
+        dry_run_state_guard=dry_run_state_guard,
     )
 
 
@@ -1194,19 +1202,26 @@ def main():
     runtime = _prepare_runtime(args, logger, resolved_state_file)
     state = runtime.state
 
-    operation_exit_code = cli_outcomes.run_operation_mode(
-        args,
-        state,
-        runtime.primary,
-        runtime.secondary,
-        logger,
-        should_bind_state=runtime.should_bind_state,
-        should_record_state_errors=runtime.should_record_state_errors,
-        hooks=_build_cli_operation_hooks(),
-        exit_success=EXIT_SUCCESS,
-        exit_failure=EXIT_FAILURE,
-        exit_interrupt=EXIT_INTERRUPT,
-    )
+    try:
+        operation_exit_code = cli_outcomes.run_operation_mode(
+            args,
+            state,
+            runtime.primary,
+            runtime.secondary,
+            logger,
+            should_bind_state=runtime.should_bind_state,
+            should_record_state_errors=runtime.should_record_state_errors,
+            hooks=_build_cli_operation_hooks(),
+            exit_success=EXIT_SUCCESS,
+            exit_failure=EXIT_FAILURE,
+            exit_interrupt=EXIT_INTERRUPT,
+        )
+    finally:
+        if runtime.dry_run_state_guard is not None:
+            # H10 guard: put the state file back exactly as it was before the
+            # dry-run rehearsal, including a context-mismatch reset that
+            # ensure_contexts may have flushed in _prepare_runtime.
+            state.restore_state_snapshot(runtime.dry_run_state_guard)
     sys.exit(operation_exit_code)
 
 
