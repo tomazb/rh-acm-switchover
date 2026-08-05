@@ -209,3 +209,38 @@ class TestDryRunStateGuard:
         on_disk = json.loads(path.read_text())
         assert on_disk["contexts"] == {"primary": "old-primary", "secondary": "old-secondary"}
         assert any(step.get("name") == "preflight_validation" for step in on_disk["completed_steps"])
+
+    def test_dry_run_rejects_reset_state(self, tmp_path):
+        path = self._progressed_state_file(tmp_path)
+        args = _args(
+            dry_run=True,
+            reset_state=True,
+            primary_context="new-primary",
+            secondary_context="new-secondary",
+        )
+
+        with pytest.raises(SystemExit):
+            _prepare_runtime(args, logging.getLogger("test"), str(path))
+
+        # The rehearsal must never delete the real state file (parity audit H10).
+        assert path.exists()
+        on_disk = json.loads(path.read_text())
+        assert on_disk["contexts"] == {"primary": "old-primary", "secondary": "old-secondary"}
+        assert any(step.get("name") == "preflight_validation" for step in on_disk["completed_steps"])
+
+    def test_real_reset_state_still_deletes(self, tmp_path):
+        path = self._progressed_state_file(tmp_path)
+        args = _args(
+            dry_run=False,
+            reset_state=True,
+            primary_context="new-primary",
+            secondary_context="new-secondary",
+        )
+
+        with patch("acm_switchover._initialize_clients", return_value=(None, None)):
+            _prepare_runtime(args, logging.getLogger("test"), str(path))
+
+        # Real --reset-state is unchanged: the old contexts/steps are gone.
+        on_disk = json.loads(path.read_text())
+        assert on_disk["contexts"] != {"primary": "old-primary", "secondary": "old-secondary"}
+        assert not any(step.get("name") == "preflight_validation" for step in on_disk["completed_steps"])

@@ -872,8 +872,8 @@ def _resolve_managed_cluster_expectation(
             raise SwitchoverError(
                 "No managed-cluster expectation is recorded in the state file (preflight has not "
                 "run in this state, or the state predates expectation recording). Refusing to skip "
-                "managed-cluster verification on a resumed run: pass --min-managed-clusters "
-                "explicitly, or re-run preflight to record the expectation."
+                "managed-cluster verification: pass --min-managed-clusters explicitly, or re-run "
+                "preflight to record the expectation."
             )
         if expectation.mode == MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY and expected_count == 0 and not expected_names:
             return 1, [], False
@@ -1072,12 +1072,29 @@ def run_setup(
         return False
 
 
+def _reject_dry_run_reset_state(args: argparse.Namespace, logger: logging.Logger) -> None:
+    """Fail closed if --reset-state is combined with --dry-run (parity audit H10).
+
+    Capture-before-delete is not viable here: a corrupt, unparseable state file
+    is the primary --reset-state use case, so there may be nothing to snapshot.
+    """
+    if getattr(args, "reset_state", False) and getattr(args, "dry_run", False):
+        logger.error(
+            "--reset-state cannot be combined with --dry-run: a dry run must never "
+            "delete durable switchover state (parity audit H10). Run --reset-state "
+            "without --dry-run if you really intend to discard the state file."
+        )
+        sys.exit(EXIT_FAILURE)
+
+
 def _prepare_runtime(
     args: argparse.Namespace,
     logger: logging.Logger,
     resolved_state_file: str,
 ) -> runtime_bootstrap.RuntimeContext:
     """Create state and clients while preserving existing entrypoint ordering."""
+    _reject_dry_run_reset_state(args, logger)
+
     if getattr(args, "reset_state", False):
         # --reset-state: delete existing state file before loading so StateManager
         # starts fresh.  We handle this before constructing StateManager to allow

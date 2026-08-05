@@ -2,10 +2,12 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Provenance:** This plan documents the implementation shipped as PR #220
-> (branch `fix/audit-h1-h10`, commit `3d6383cd`). It is written so the change
-> can be reviewed against — or re-executed from — the parity-audit spec
-> (`docs/ansible-collection/parity-audit-2026-08-03.md`, findings H1 and H10).
+> **Provenance:** This plan was originally drafted against the parity-audit
+> spec, mirroring the (since-closed) draft PR #220 (branch `fix/audit-h1-h10`,
+> commit `3d6383cd`); it was executed and hardened in this PR (#222). It is
+> written so the change can be reviewed against — or re-executed from — the
+> parity-audit spec (`docs/ansible-collection/parity-audit-2026-08-03.md`,
+> findings H1 and H10).
 
 **Goal:** Close two Python-side safety bugs from the 2026-08-03 parity audit: a resumed run silently disabling all managed-cluster enforcement when the state file carries no expectation record (H1), and `--dry-run` destructively flushing a context-mismatch reset over a real in-progress state file (H10).
 
@@ -393,7 +395,8 @@ Expected: **3172 passed, 29 skipped** (base was 3165 passed; +7 new tests, no re
 
 - [ ] **Step 2: Formatting gates**
 
-Run: `black --line-length 120 --check . && isort --check-only .`
+Run (scoped to the files touched by this plan — see File Structure — to avoid traversing venvs/generated dirs):
+`black --line-length 120 --check acm_switchover.py lib/runtime_bootstrap.py tests/test_resume_safety_guards.py tests/test_cli_auto_import.py tests/test_main.py && isort --check-only acm_switchover.py lib/runtime_bootstrap.py tests/test_resume_safety_guards.py tests/test_cli_auto_import.py tests/test_main.py`
 Expected: clean (no diffs).
 
 - [ ] **Step 3: flake8 baseline comparison**
