@@ -167,7 +167,7 @@ class TestDryRunStateGuard:
             "acm_switchover._resolve_state_file", return_value=str(path)
         ), patch(
             "acm_switchover._prepare_runtime", return_value=runtime
-        ) as mock_prepare, patch(
+        ), patch(
             "acm_switchover._bind_runtime_hub_identities"
         ), patch(
             "acm_switchover._execute_operation"
