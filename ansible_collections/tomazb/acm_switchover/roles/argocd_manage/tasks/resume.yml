@@ -1,4 +1,28 @@
 ---
+# A non-empty acm_switchover_argocd.run_id means a pause may have landed (minted
+# only after pause-mode discovery confirmed Argo CD installed, or supplied via
+# checkpoint/operator). If discovery cannot see Applications now, resume cannot
+# prove those obligations are discharged — skipping silently would be ADR-0001's
+# explicitly rejected "clear register when CRD absent" behaviour. The
+# execution.run_id fallback is deliberately NOT consulted here: it is non-empty
+# on every run and would fail switchovers on clusters that never had Argo CD.
+- name: Fail when resume cannot verify obligations (Application CRD not visible)
+  ansible.builtin.fail:
+    msg: >-
+      Cannot verify Argo CD resume obligations: run_id
+      '{{ (acm_switchover_argocd | default({})).get('run_id', '') }}' indicates
+      applications may have been paused, but Application discovery on this hub
+      reported status
+      '{{ (acm_switchover_argocd_discovery_status | default({})).get('status', 'unknown') }}'.
+      Refusing to report resume success without proof (ADR-0001). Pause markers
+      remain on the cluster in 'acm-switchover.argoproj.io/paused-by' annotations;
+      restore API visibility and retry, or resume Python-paused applications with
+      acm_switchover.py --argocd-resume-only.
+  when:
+    - not (acm_switchover_argocd_installed | default(false))
+    - acm_switchover_argocd_mock_apps is not defined
+    - ((acm_switchover_argocd | default({})).get('run_id', '') | length) > 0
+
 - name: Resume auto-sync on previously paused applications
   when: acm_switchover_argocd_installed | default(false)
   block:

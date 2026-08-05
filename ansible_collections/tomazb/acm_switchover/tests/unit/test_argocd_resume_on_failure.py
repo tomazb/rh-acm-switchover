@@ -339,10 +339,19 @@ def _load_resume_tasks():
     return yaml.safe_load((ROLES_DIR / "argocd_manage" / "tasks" / "resume.yml").read_text())
 
 
+def _resume_block_tasks(tasks_list):
+    """Return the tasks of the main resume block (resume.yml also has top-level
+    guard tasks, e.g. the CRD-absent obligation gate, before the block)."""
+    for task in tasks_list:
+        if "block" in task:
+            return task["block"]
+    raise AssertionError("resume.yml must contain a block task")
+
+
 def test_resume_fails_when_run_id_is_empty():
     """resume.yml must contain a fail task that fires when _argocd_expected_run_id is empty."""
     tasks_list = _load_resume_tasks()
-    block_tasks = tasks_list[0]["block"]
+    block_tasks = _resume_block_tasks(tasks_list)
 
     fail_tasks = [t for t in block_tasks if "ansible.builtin.fail" in t]
     assert len(fail_tasks) >= 1, "resume.yml must have at least one ansible.builtin.fail task"
@@ -358,7 +367,7 @@ def test_resume_fails_when_run_id_is_empty():
 def test_resume_fail_task_precedes_patch_task():
     """The run_id fail-safe must come before the live-mode patch task."""
     tasks_list = _load_resume_tasks()
-    block_tasks = tasks_list[0]["block"]
+    block_tasks = _resume_block_tasks(tasks_list)
 
     fail_idx = None
     patch_idx = None
@@ -376,7 +385,7 @@ def test_resume_fail_task_precedes_patch_task():
 def test_resume_patch_has_no_empty_run_id_wildcard():
     """The patch task's when condition must NOT allow empty run_id to match all apps."""
     tasks_list = _load_resume_tasks()
-    block_tasks = tasks_list[0]["block"]
+    block_tasks = _resume_block_tasks(tasks_list)
 
     patch_tasks = [t for t in block_tasks if "kubernetes.core.k8s" in t]
     assert len(patch_tasks) == 1, "Expected exactly one k8s patch task in resume.yml"
@@ -396,7 +405,7 @@ def test_resume_patch_has_no_empty_run_id_wildcard():
 def test_resume_patch_uses_discovered_resource_version_precondition():
     """The patch must fail closed when Application ownership changes after discovery."""
     tasks_list = _load_resume_tasks()
-    block_tasks = tasks_list[0]["block"]
+    block_tasks = _resume_block_tasks(tasks_list)
     patch_tasks = [t for t in block_tasks if "kubernetes.core.k8s" in t]
     assert len(patch_tasks) == 1, "Expected exactly one k8s patch task in resume.yml"
 

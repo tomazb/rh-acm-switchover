@@ -363,3 +363,42 @@ class TestArgoCDResumeFailClosed:
         task = self._task("orphaned original-sync-policy")
         when = _when_text(task)
         assert "paused-by" in when and "original-sync-policy" in when
+
+
+class TestArgoCDResumeCrdAbsent:
+    """CRD invisible at resume must not be a silent no-op when a pause run_id exists.
+
+    discover.yml's rescue sets installed=false and blanks the app lists on a
+    CRD-absent error; resume.yml's main block is gated on installed. Without this
+    gate that combination is ADR-0001's explicitly rejected 'clear register when
+    CRD absent' behaviour: restored: 0, exit 0.
+    """
+
+    def setup_method(self):
+        raw = yaml.safe_load(ARGOCD_RESUME.read_text()) or []
+        self.top_level = raw
+        self.tasks = _flatten_tasks(raw)
+
+    def _gate(self):
+        gates = [t for t in self.tasks if "cannot verify obligations" in (t.get("name") or "")]
+        assert gates, "resume.yml must fail when CRD is absent but a run_id is known"
+        return gates[0]
+
+    def test_crd_absent_gate_exists_and_fails(self):
+        assert "ansible.builtin.fail" in self._gate()
+
+    def test_gate_uses_strong_run_id_signal(self):
+        when = _when_text(self._gate())
+        assert "acm_switchover_argocd" in when and "run_id" in when
+        assert "acm_switchover_execution" not in when, (
+            "Gate must key on acm_switchover_argocd.run_id only; the execution.run_id "
+            "fallback is non-empty on every run and would hard-fail switchovers on "
+            "clusters that never had Argo CD installed"
+        )
+        assert "acm_switchover_argocd_installed" in when
+
+    def test_gate_is_top_level_before_installed_block(self):
+        names = [t.get("name") or "" for t in self.top_level]
+        gate_idx = next(i for i, n in enumerate(names) if "cannot verify obligations" in n)
+        block_idx = next(i for i, n in enumerate(names) if "Resume auto-sync" in n)
+        assert gate_idx < block_idx, "Gate must run before the installed-gated resume block"
