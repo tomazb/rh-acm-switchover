@@ -54,7 +54,7 @@ from lib.constants import (
     STEP_PAUSE_ARGOCD_APPS,
     TOKEN_DURATION_DEFAULT,
 )
-from lib.exceptions import StateLoadError, StateLockError
+from lib.exceptions import StateLoadError, StateLockError, SwitchoverError
 from lib.gitops_detector import GitOpsCollector
 from lib.report_artifacts import validate_report_artifact_directory
 from lib.run_record import HubFacts, RunRecord
@@ -868,6 +868,13 @@ def _resolve_managed_cluster_expectation(
     expected_count = expectation.count
 
     if raw_min is None:
+        if expectation.mode is None:
+            raise SwitchoverError(
+                "No managed-cluster expectation is recorded in the state file (preflight has not "
+                "run in this state, or the state predates expectation recording). Refusing to skip "
+                "managed-cluster verification on a resumed run: pass --min-managed-clusters "
+                "explicitly, or re-run preflight to record the expectation."
+            )
         if expectation.mode == MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY and expected_count == 0 and not expected_names:
             return 1, [], False
         return expected_count, expected_names, bool(expected_names)
