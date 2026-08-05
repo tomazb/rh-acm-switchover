@@ -21,7 +21,6 @@ from tests.properties.strategies import (
     argocd_application_lists,
     argocd_resume_cases,
     argocd_run_ids,
-    argocd_sync_policies,
     gitops_marker_metadata,
 )
 
@@ -225,24 +224,6 @@ def test_applicationset_owned_acm_applications_are_blockers(case: ArgocdApplicat
     assert len(collection_blocker) == 1
     assert python_blocker[0].reason == python_argocd.PAUSE_BLOCK_REASON_APPLICATIONSET_MANAGED
     assert collection_blocker[0]["reason"] == collection_argocd.PAUSE_BLOCK_REASON_APPLICATIONSET_MANAGED
-
-
-@given(argocd_sync_policies(), argocd_run_ids())
-def test_collection_pause_patch_disables_automated_sync_and_preserves_input(
-    sync_policy: dict[str, Any],
-    run_id: str,
-) -> None:
-    original = deepcopy(sync_policy)
-
-    patch = collection_argocd.build_pause_patch(sync_policy, run_id)
-    patched_policy = patch["spec"]["syncPolicy"]
-
-    assert sync_policy == original
-    assert patch["metadata"]["annotations"][collection_argocd.ARGOCD_PAUSED_BY_ANNOTATION] == run_id
-    assert patched_policy.get("automated") is None
-    assert {key: value for key, value in patched_policy.items() if key != "automated"} == {
-        key: value for key, value in original.items() if key != "automated"
-    }
 
 
 @given(gitops_marker_metadata())

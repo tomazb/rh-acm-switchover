@@ -9,7 +9,6 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
     ARGOCD_ACM_KINDS,
     ARGOCD_ACM_NAMESPACE_PATTERN,
     ARGOCD_ACM_NAMESPACES,
-    ARGOCD_PAUSED_BY_ANNOTATION,
 )
 
 ACM_NAMESPACES = ARGOCD_ACM_NAMESPACES
@@ -146,17 +145,6 @@ def find_argocd_pause_blockers(applications: list[dict]) -> list[dict]:
                 }
             )
     return blockers
-
-
-def build_pause_patch(sync_policy: dict, run_id: str) -> dict:
-    """Build a patch that removes automated sync and marks the app as paused."""
-    sync_policy = dict(sync_policy or {})
-    if "automated" in sync_policy:
-        sync_policy["automated"] = None
-    return {
-        "metadata": {"annotations": {ARGOCD_PAUSED_BY_ANNOTATION: run_id}},
-        "spec": {"syncPolicy": sync_policy},
-    }
 
 
 def has_applicationset_owner(app: dict) -> bool:

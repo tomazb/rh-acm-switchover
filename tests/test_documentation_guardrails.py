@@ -42,9 +42,9 @@ def _assert_argocd_script_only_in_deprecated_context(path: str, content: str) ->
         window_start = max(0, idx - 2)
         window_end = min(len(lines), idx + 3)
         context = "\n".join(lines[window_start:window_end]).lower()
-        assert "deprecated" in context or "removed" in context, (
-            f"Active argocd-manage.sh guidance remains in {path}: {line}"
-        )
+        assert (
+            "deprecated" in context or "removed" in context
+        ), f"Active argocd-manage.sh guidance remains in {path}: {line}"
 
 
 def _assert_no_real_live_config_literals(path: str, content: str) -> None:

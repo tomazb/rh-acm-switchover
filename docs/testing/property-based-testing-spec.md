@@ -496,7 +496,7 @@ pytest tests/test_backup_schedule.py -q
 - Collection: `ansible_collections/tomazb/acm_switchover/plugins/module_utils/argocd.py`
   — `is_autosync_enabled`, `is_acm_touching_application`,
   `filter_acm_applications`, `find_argocd_pause_blockers`,
-  `build_pause_patch`, `has_applicationset_owner`;
+  `has_applicationset_owner`;
   `ansible_collections/tomazb/acm_switchover/plugins/module_utils/gitops.py`;
   entry module
   `ansible_collections/tomazb/acm_switchover/plugins/modules/acm_argocd_filter.py`.
@@ -512,11 +512,12 @@ pytest tests/test_backup_schedule.py -q
   selection and blocker correspondence are unambiguous.
 
 **Properties / invariants**
-- **Pause patch safety**: for any generated `syncPolicy`,
-  `build_pause_patch` output never contains an enabled `automated` sync
-  policy (an existing `automated` key is nulled, never preserved enabled),
-  always records the paused-by annotation with the given run id, and does
-  not mutate the input sync policy.
+- **Pause patch safety**: the shipped pause patch (inline YAML in
+  `roles/argocd_manage/tasks/pause.yml`) never leaves an enabled `automated`
+  sync policy (the key is nulled via `combine({'automated': none})`) and
+  always records the paused-by annotation with the run id; guarded by the
+  shipped-YAML contract tests in `tests/test_argocd_constants_parity.py`
+  rather than a property over a helper the role does not call.
 - **Filter selection and enrichment**: let `selected` be the input
   Applications for which `is_acm_touching_application` is true, in input
   order. `filter_acm_applications(apps)` returns one enriched shallow copy

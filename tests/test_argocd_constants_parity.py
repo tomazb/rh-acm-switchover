@@ -1,5 +1,7 @@
 """Parity contract: Ansible and Python ACM_KINDS / ACM_NAMESPACES must match."""
 
+import pathlib
+
 
 def test_acm_kinds_parity():
     """Ansible and Python ACM_KINDS must contain the same entries."""
@@ -51,37 +53,52 @@ def test_ansible_argocd_filters_match_acm_sub_namespaces():
     assert is_acm_touching_application(app) is True
 
 
-def test_build_pause_patch_matches_jinja_logic():
-    """Verify build_pause_patch produces same result as pause.yml Jinja template.
+_ROLE_TASKS = pathlib.Path("ansible_collections/tomazb/acm_switchover/roles/argocd_manage/tasks")
 
-    pause.yml Jinja and build_pause_patch both keep existing syncPolicy keys
-    but set automated to null when automated sync is present so merge patch
-    semantics delete the CRD map key.
-    """
-    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import (
-        build_pause_patch,
+
+def test_paused_by_annotation_identical_across_all_definitions():
+    """Triple-defined constant (audit M1): drift silently orphans every paused Application."""
+    import lib.argocd
+    import lib.constants
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils import constants as ans_constants
+
+    assert (
+        lib.argocd.ARGOCD_PAUSED_BY_ANNOTATION
+        == lib.constants.ARGOCD_PAUSED_BY_ANNOTATION
+        == ans_constants.ARGOCD_PAUSED_BY_ANNOTATION
     )
-    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
-        ARGOCD_PAUSED_BY_ANNOTATION,
-    )
 
-    test_cases = [
-        {"automated": {"prune": True}, "syncOptions": ["CreateNamespace=true"]},
-        {"automated": {"selfHeal": True}},
-        {"syncOptions": ["CreateNamespace=true"]},
-        {},
-    ]
-    run_id = "test-run-123"
 
-    for sync_policy in test_cases:
-        patch = build_pause_patch(sync_policy, run_id)
+def test_shipped_task_yaml_uses_the_shared_annotation_keys():
+    """Guard the artifact that ships (audit M3): the inline YAML patch in the role
+    task files, not a helper nothing calls. Every acm-switchover annotation literal
+    in pause.yml/resume.yml must be one of the shared constants."""
+    import re
 
-        jinja_sync = dict(sync_policy)
-        if "automated" in jinja_sync:
-            jinja_sync["automated"] = None
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils import constants as ans_constants
 
-        assert patch["spec"]["syncPolicy"] == jinja_sync, (
-            f"Divergence for input {sync_policy}: "
-            f"build_pause_patch={patch['spec']['syncPolicy']}, jinja={jinja_sync}"
-        )
-        assert patch["metadata"]["annotations"][ARGOCD_PAUSED_BY_ANNOTATION] == run_id
+    pause_text = (_ROLE_TASKS / "pause.yml").read_text()
+    resume_text = (_ROLE_TASKS / "resume.yml").read_text()
+
+    for text, name in ((pause_text, "pause.yml"), (resume_text, "resume.yml")):
+        assert ans_constants.ARGOCD_PAUSED_BY_ANNOTATION in text, f"{name} must use the paused-by key"
+        assert ans_constants.ARGOCD_ORIGINAL_SYNC_POLICY_ANNOTATION in text, f"{name} must use the policy key"
+        keys = set(re.findall(r"acm-switchover\.argoproj\.io/[a-z-]+", text))
+        assert keys <= {
+            ans_constants.ARGOCD_PAUSED_BY_ANNOTATION,
+            ans_constants.ARGOCD_ORIGINAL_SYNC_POLICY_ANNOTATION,
+        }, f"{name} uses unexpected annotation keys: {keys}"
+
+
+def test_pause_patch_shape_matches_python():
+    """Python pause sets syncPolicy.automated=None so merge-patch deletes the key
+    (lib/argocd.py). The shipped pause.yml must do the same."""
+    pause_text = (_ROLE_TASKS / "pause.yml").read_text()
+    assert "combine({'automated': none})" in pause_text
+
+
+def test_resume_never_defaults_missing_policy():
+    """Cross-runtime data-loss guard (audit C1 / issue #184): a missing
+    original-sync-policy annotation must never be defaulted to an empty policy."""
+    resume_text = (_ROLE_TASKS / "resume.yml").read_text()
+    assert "default('{}')" not in resume_text
