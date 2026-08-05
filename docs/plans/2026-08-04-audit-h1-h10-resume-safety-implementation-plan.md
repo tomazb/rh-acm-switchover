@@ -1,7 +1,7 @@
 # Audit H1/H10 Resume-Safety Guards Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
+>
 > **Provenance:** This plan was originally drafted against the parity-audit
 > spec, mirroring the (since-closed) draft PR #220 (branch `fix/audit-h1-h10`,
 > commit `3d6383cd`); it was executed and hardened in this PR (#222). It is
@@ -20,7 +20,7 @@
 - Base branch: `ansible` (never `main`) — parity via `coexistence.md`.
 - Formatting: `black --line-length 120 <files>` (CI enforces 120; repo has no black config, default 88 is wrong).
 - Imports: `isort` clean; `flake8` findings must be byte-identical to base.
-- Test command: `python -m pytest tests/ -q` — full suite must pass (base: 3165 passed, 29 skipped; after this plan: 3172 passed).
+- Test command: `python -m pytest tests/ -q` — full suite must pass (base: 3165 passed, 29 skipped; after this plan's tasks: 3172 passed; final shipped result including the review-driven hardening tests added during execution: 3178 passed).
 - Test-first: both defects must be reproduced as failing tests before the fixes land.
 - Behaviour-preserving everywhere else: the three prior expectation paths (recorded, restore-only, explicit `--min-managed-clusters`) are pinned unchanged by tests.
 - Commit messages: conventional-commit style, no Co-Authored-By / AI-attribution trailers.
@@ -391,7 +391,7 @@ git commit -m "fix: guard dry-run against destroying real state file (audit H10)
 - [ ] **Step 1: Full test suite**
 
 Run: `python -m pytest tests/ -q`
-Expected: **3172 passed, 29 skipped** (base was 3165 passed; +7 new tests, no regressions).
+Expected: **3172 passed, 29 skipped** (base was 3165 passed; +7 new tests, no regressions). Final shipped result after the review-driven hardening tests added during execution: **3178 passed, 29 skipped**.
 
 - [ ] **Step 2: Formatting gates**
 

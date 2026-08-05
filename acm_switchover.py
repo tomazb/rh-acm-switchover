@@ -1131,7 +1131,18 @@ def _prepare_runtime(
             # (parity audit finding H10). main() restores this guard after the
             # rehearsal completes.
             dry_run_state_guard = state.capture_state_snapshot()
-        state.ensure_contexts(getattr(args, "primary_context", None), getattr(args, "secondary_context", None))
+        try:
+            state.ensure_contexts(getattr(args, "primary_context", None), getattr(args, "secondary_context", None))
+        except BaseException:
+            # H10 guard: ensure_contexts flushes its context-mismatch reset as
+            # a critical checkpoint, so an interrupt or I/O error raised during
+            # the call can leave the wiped state on disk with main()'s finally
+            # never reached. Restore before propagating. If the restore write
+            # fails too (same disk fault), let it propagate — the original
+            # exception is preserved as __context__.
+            if dry_run_state_guard is not None:
+                state.restore_state_snapshot(dry_run_state_guard)
+            raise
 
     try:
         primary, secondary = _initialize_clients(args, logger)

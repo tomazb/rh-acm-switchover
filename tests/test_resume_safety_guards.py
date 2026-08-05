@@ -142,6 +142,30 @@ class TestDryRunStateGuard:
         assert on_disk["contexts"] == {"primary": "old-primary", "secondary": "old-secondary"}
         assert any(step.get("name") == "preflight_validation" for step in on_disk["completed_steps"])
 
+    def test_dry_run_restores_state_when_ensure_contexts_raises(self, tmp_path):
+        path = self._progressed_state_file(tmp_path)
+        args = _args(dry_run=True, primary_context="new-primary", secondary_context="new-secondary")
+
+        # Simulate ensure_contexts failing AFTER it has already reset and
+        # flushed the mismatched state to disk (e.g. an interrupt or I/O error
+        # raised at the end of the critical-checkpoint flush): the guard must
+        # still restore the original run before the exception propagates.
+        real_ensure_contexts = StateManager.ensure_contexts
+
+        def _mutate_then_raise(self, primary_context, secondary_context):
+            real_ensure_contexts(self, primary_context, secondary_context)
+            raise RuntimeError("boom during context binding")
+
+        with patch.object(StateManager, "ensure_contexts", _mutate_then_raise), patch(
+            "acm_switchover._initialize_clients", return_value=(None, None)
+        ):
+            with pytest.raises(RuntimeError, match="boom during context binding"):
+                _prepare_runtime(args, logging.getLogger("test"), str(path))
+
+        on_disk = json.loads(path.read_text())
+        assert on_disk["contexts"] == {"primary": "old-primary", "secondary": "old-secondary"}
+        assert any(step.get("name") == "preflight_validation" for step in on_disk["completed_steps"])
+
     def test_dry_run_restores_state_when_operation_raises(self, tmp_path):
         from types import SimpleNamespace
         from unittest.mock import Mock
