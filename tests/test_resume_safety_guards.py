@@ -126,6 +126,22 @@ class TestDryRunStateGuard:
         assert on_disk["contexts"] == {"primary": "old-primary", "secondary": "old-secondary"}
         assert any(step.get("name") == "preflight_validation" for step in on_disk["completed_steps"])
 
+    def test_dry_run_restores_state_when_client_init_is_interrupted(self, tmp_path):
+        path = self._progressed_state_file(tmp_path)
+        args = _args(dry_run=True, primary_context="new-primary", secondary_context="new-secondary")
+
+        # Simulate Ctrl-C during _initialize_clients's live network connects
+        # (audit H10 finding 1): KeyboardInterrupt is not an Exception
+        # subclass, so it must still trigger the state restore.
+        with patch("acm_switchover._initialize_clients", side_effect=KeyboardInterrupt):
+            with pytest.raises(KeyboardInterrupt):
+                _prepare_runtime(args, logging.getLogger("test"), str(path))
+
+        # Verify the state was restored before the interrupt propagated
+        on_disk = json.loads(path.read_text())
+        assert on_disk["contexts"] == {"primary": "old-primary", "secondary": "old-secondary"}
+        assert any(step.get("name") == "preflight_validation" for step in on_disk["completed_steps"])
+
     def test_dry_run_restores_state_when_operation_raises(self, tmp_path):
         from types import SimpleNamespace
         from unittest.mock import Mock
@@ -161,6 +177,14 @@ class TestDryRunStateGuard:
             dry_run_state_guard=None,  # Will be set by _prepare_runtime
         )
 
+        def _mutate_state_then_raise(*_args, **_kwargs):
+            # Simulate the rehearsal actually mutating the on-disk state
+            # (e.g. via a later ensure_contexts/flush) before it fails, so
+            # this test can only pass if main()'s finally-restore runs.
+            mutator = StateManager(str(path))
+            mutator.ensure_contexts("mutated-primary", "mutated-secondary")
+            raise RuntimeError("operation boom")
+
         with patch("acm_switchover.parse_args", return_value=args), patch(
             "acm_switchover.setup_logging", return_value=logger
         ), patch("acm_switchover.validate_args"), patch(
@@ -168,13 +192,9 @@ class TestDryRunStateGuard:
         ), patch(
             "acm_switchover._prepare_runtime", return_value=runtime
         ), patch(
-            "acm_switchover._bind_runtime_hub_identities"
-        ), patch(
-            "acm_switchover._execute_operation"
-        ), patch(
             "acm_switchover._build_cli_operation_hooks", return_value={}
         ), patch(
-            "acm_switchover.cli_outcomes.run_operation_mode", side_effect=RuntimeError("operation boom")
+            "acm_switchover.cli_outcomes.run_operation_mode", side_effect=_mutate_state_then_raise
         ), patch(
             "acm_switchover.GitOpsCollector.get_instance"
         ):

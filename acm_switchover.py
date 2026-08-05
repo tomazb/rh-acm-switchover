@@ -1118,7 +1118,7 @@ def _prepare_runtime(
 
     try:
         primary, secondary = _initialize_clients(args, logger)
-    except Exception as exc:  # pragma: no cover - fatal init error
+    except Exception as exc:
         logger.error("Failed to initialize Kubernetes clients: %s", exc)
         # H10 guard: restore dry-run state before exiting, so the rehearsal's
         # on-disk effects (including the ensure_contexts reset) are always
@@ -1126,6 +1126,15 @@ def _prepare_runtime(
         if dry_run_state_guard is not None:
             state.restore_state_snapshot(dry_run_state_guard)
         sys.exit(EXIT_FAILURE)
+    except BaseException:
+        # H10 guard: _initialize_clients performs live network connects, so a
+        # Ctrl-C (KeyboardInterrupt) or SystemExit here is realistic and is
+        # not caught by the Exception arm above. Restore the dry-run state
+        # before propagating so the rehearsal's on-disk effects are always
+        # rolled back, even on interruption.
+        if dry_run_state_guard is not None:
+            state.restore_state_snapshot(dry_run_state_guard)
+        raise
 
     return runtime_bootstrap.RuntimeContext(
         state_file=resolved_state_file,
