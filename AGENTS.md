@@ -450,7 +450,7 @@ For parity-sensitive changes, do not verify only one form factor.
 **New workflow step**: Follow idempotent pattern with `state.is_step_completed()` / `mark_step_completed()`
 **New validation**: Add to `lib/validation.py` with `InputValidator` static method
 **Hub discovery and preflight**: Use `./scripts/discover-hub.sh --auto --run` to discover hub contexts and run smart preflight checks
-**Argo CD pause/resume**: Use `python acm_switchover.py --argocd-manage` (Python CLI) or the `argocd_manage` Ansible role. See `docs/operations/usage.md` for Python flags (`--argocd-manage`, `--argocd-resume-only`, `--argocd-resume-on-failure`). The Bash script `scripts/argocd-manage.sh` is **deprecated** and will be removed in a future release. Note: `app.kubernetes.io/instance` is flagged as `UNRELIABLE` by GitOps marker detection and must not be used as a definitive GitOps signal.
+**Argo CD pause/resume**: Use `python acm_switchover.py --argocd-manage` (Python CLI) or the `argocd_manage` Ansible role. See `docs/operations/usage.md` for Python flags (`--argocd-manage`, `--argocd-resume-only`, `--argocd-resume-on-failure`). The Bash script `scripts/argocd-manage.sh` was **removed** (one pause register per form factor; ADR-0001, #207). Note: `app.kubernetes.io/instance` is flagged as `UNRELIABLE` by GitOps marker detection and must not be used as a definitive GitOps signal.
 
 ### CLI Validation Guidance (Contributor note)
 - CLI validation is implemented in `lib/validation.py` (class `InputValidator`). When changing existing arguments or adding new ones, update the validator accordingly and add tests in `tests/test_validation.py`.

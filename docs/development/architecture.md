@@ -54,7 +54,6 @@ rh-acm-switchover/
 │   ├── preflight_coordinator.py   # Modular preflight orchestration
 │   └── primary_prep.py            # Old-primary preparation logic
 ├── scripts/
-│   ├── argocd-manage.sh           # Deprecated standalone Argo CD helper
 │   ├── discover-hub.sh            # Hub discovery and preflight launcher
 │   ├── generate-merged-kubeconfig.sh
 │   ├── generate-sa-kubeconfig.sh
@@ -415,7 +414,6 @@ The shell scripts are not alternate implementations of the full Python workflow.
 - `preflight-check.sh` / `postflight-check.sh`: standalone operational checks
 - `setup-rbac.sh`: RBAC deployment and kubeconfig generation wrapper
 - `generate-sa-kubeconfig.sh` / `generate-merged-kubeconfig.sh`: credential packaging helpers
-- `argocd-manage.sh`: deprecated standalone Argo CD helper; prefer Python/Ansible workflows
 
 This split keeps the Python CLI focused on orchestration while leaving smaller operator tasks available as composable shell utilities.
 

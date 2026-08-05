@@ -772,14 +772,6 @@ class TestFullValidation:
                 current_secondary,
             )
 
-            # Verify argocd-manage.sh status shows paused state
-            result = run_shell_script(
-                "argocd-manage.sh",
-                ["--context", current_secondary, "--mode", "status"],
-                timeout=60,
-            )
-            logger.info("argocd status:\n%s", result.output[:2000])
-
             # Verify state file records completion
             with open(state) as f:
                 st = json.load(f)
@@ -872,19 +864,6 @@ class TestFullValidation:
                 phase6_secondary,
             )
 
-            # argocd-manage.sh status after resume (check both hubs)
-            for ctx in (phase6_primary, phase6_secondary):
-                result = run_shell_script(
-                    "argocd-manage.sh",
-                    ["--context", ctx, "--mode", "status"],
-                    timeout=60,
-                )
-                logger.info(
-                    "Phase 7 argocd status on %s:\n%s",
-                    ctx,
-                    result.output[:2000],
-                )
-
             passed = True
         finally:
             PhaseTracker.mark("phase7", passed)
@@ -956,14 +935,6 @@ class TestFullValidation:
                 f"Phase 8: expected 0 paused apps after explicit resume, " f"found {len(still_paused)}"
             )
             logger.info("Phase 8: switchover + explicit resume OK on %s", current_secondary)
-
-            # argocd-manage.sh status after resume
-            result = run_shell_script(
-                "argocd-manage.sh",
-                ["--context", current_secondary, "--mode", "status"],
-                timeout=60,
-            )
-            logger.info("Phase 8 argocd status:\n%s", result.output[:2000])
 
             # show_state.py after real switchover
             result = run_python_tool("show_state.py", ["--state-file", state], timeout=60)

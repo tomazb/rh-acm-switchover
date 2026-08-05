@@ -13,7 +13,6 @@ This slice covers the repo's shell-centric and CLI-adjacent tooling, not just th
 - `test_scripts_integration.py` covers mocked end-to-end shell scenarios and RBAC packaging guidance.
 - `test_check_rbac.py` covers `check_rbac.py`.
 - `test_generate_merged_kubeconfig_script.py` covers `scripts/generate-merged-kubeconfig.sh`.
-- `test_argocd_manage_script.py` covers failure handling and safety edges in `scripts/argocd-manage.sh`.
 
 ## What These Tests Emphasize
 
@@ -30,7 +29,6 @@ This slice covers the repo's shell-centric and CLI-adjacent tooling, not just th
 ```bash
 pytest tests/test_scripts.py tests/test_scripts_integration.py \
   tests/test_check_rbac.py tests/test_generate_merged_kubeconfig_script.py \
-  tests/test_argocd_manage_script.py -v
 ```
 
 ### Original Pre/Post-Flight Slice
@@ -44,7 +42,6 @@ pytest tests/test_scripts.py tests/test_scripts_integration.py -v
 ```bash
 pytest tests/test_check_rbac.py -v
 pytest tests/test_generate_merged_kubeconfig_script.py -v
-pytest tests/test_argocd_manage_script.py -v
 ```
 
 ## Notes

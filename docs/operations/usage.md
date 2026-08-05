@@ -660,7 +660,7 @@ With `--argocd-manage --dry-run`, the Python CLI still discovers ACM-touching Ap
 
 **Resume on failure:** Add `--argocd-resume-on-failure` alongside `--argocd-manage` to automatically attempt ArgoCD resume if the switchover fails. This is safe because Git repos have not been updated yet, so ArgoCD syncing back to the original desired state helps restore pre-switchover state. Resume errors are logged but do not compound the original failure. The Python CLI now reuses the same hub identity validation as standalone resume, so legacy state without hub UID bindings requires `--force` before any best-effort resume patch is attempted. For Ansible, set `acm_switchover_features.argocd.resume_on_failure: true` in your vars file.
 
-**Bash alternative (deprecated):** `./scripts/argocd-manage.sh` is deprecated and will be removed in a future release. It is not updated for the ApplicationSet and unknown-status blockers above; use the Python CLI (`--argocd-manage`) or the Ansible collection (`argocd_manage` role) instead.
+**Bash alternative:** `./scripts/argocd-manage.sh` was removed (one pause register per form factor; ADR-0001, #207). Use the Python CLI (`--argocd-manage`) or the Ansible collection (`argocd_manage` role) instead.
 
 ### Issue: Script Hangs During Restore
 

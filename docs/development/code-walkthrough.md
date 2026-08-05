@@ -546,7 +546,6 @@ and migration support.
 | `preflight-check.sh` | Read-only operational companion | Validates prerequisites before switchover |
 | `postflight-check.sh` | Read-only operational companion | Verifies state after switchover |
 | `setup-rbac.sh` | Deprecated mutating bridge | Applies RBAC and generates kubeconfigs; collection RBAC bootstrap is preferred |
-| `argocd-manage.sh` | Deprecated mutating bridge | Pauses/resumes Argo CD Application auto-sync using a state file; collection Argo CD workflows are preferred |
 | `generate-sa-kubeconfig.sh` | Support helper | Generates kubeconfig from a service account |
 | `generate-merged-kubeconfig.sh` | Support helper | Merges kubeconfigs for multi-hub operations |
 | `install-completions.sh` | Support helper | Installs shell completions |
@@ -566,7 +565,6 @@ flowchart TD
     Preflight[preflight-check.sh]
     Postflight[postflight-check.sh]
     Setup[setup-rbac.sh]
-    ArgoCD[argocd-manage.sh]
     SA[generate-sa-kubeconfig.sh]
     Merged[generate-merged-kubeconfig.sh]
 
@@ -574,7 +572,6 @@ flowchart TD
     Constants --> Preflight
     Constants --> Postflight
     Constants --> Setup
-    Constants --> ArgoCD
     Constants --> SA
     Constants --> Merged
 
@@ -582,7 +579,6 @@ flowchart TD
     Common --> Preflight
     Common --> Postflight
     Common --> Setup
-    Common --> ArgoCD
 ```
 
 `lib-common.sh` provides:
@@ -661,15 +657,12 @@ flowchart TD
     Check --> Done
 ```
 
-### Argo CD Management Script
+### Argo CD Management Script (removed)
 
-`argocd-manage.sh` predates the collection Argo CD role. It discovers
-Applications that touch ACM resources, patches automated sync out of
-`spec.syncPolicy`, records original sync policy in a state file, and can later
-resume from that state file.
-
-The collection implementation uses annotations and role-managed state instead,
-so cross-tool resume compatibility is intentionally limited.
+`argocd-manage.sh` predated the collection Argo CD role and kept a second
+pause register in a JSON state file. It was removed so each form factor keeps
+exactly one pause register (ADR-0001, #207); use the Python CLI or the
+collection `argocd_manage` role.
 
 ## Cross-Surface Parity and Behavior Mapping
 
@@ -732,7 +725,7 @@ flowchart LR
 | Kubernetes API access | `KubeClient` | `kubernetes.core` plus custom modules | `oc` or `kubectl` |
 | Preflight validation | `PreflightValidator` and `modules/preflight/` | `roles/preflight` tasks and modules | `preflight-check.sh` read-only checks |
 | Activation | `SecondaryActivation` | `roles/activation` | no full Bash orchestrator |
-| Argo CD management | `lib/argocd.py` and coordinator | `roles/argocd_manage` | deprecated `argocd-manage.sh` |
+| Argo CD management | `lib/argocd.py` and coordinator | `roles/argocd_manage` | removed (`argocd-manage.sh`) |
 | RBAC validation/bootstrap | `check_rbac.py`, `lib/rbac_validator.py`, setup wrapper | `roles/rbac_bootstrap`, `acm_rbac_validate` | deprecated `setup-rbac.sh`, kubeconfig helpers |
 | Reports | `lib/report_artifacts.py` | report modules and playbook `always` blocks | terminal summaries only |
 

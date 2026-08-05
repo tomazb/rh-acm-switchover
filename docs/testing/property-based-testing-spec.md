@@ -546,8 +546,7 @@ pytest tests/test_backup_schedule.py -q
   whose outcome made no cluster-visible change.
 
 **Non-goals**
-- No property coverage of live pause/resume orchestration, retries, or the
-  `scripts/argocd-manage.sh` Bash path (script tests own that).
+- No property coverage of live pause/resume orchestration or retries.
 - No modeling of Argo CD controller reconciliation behavior.
 
 **Acceptance criteria**
