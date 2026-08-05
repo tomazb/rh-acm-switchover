@@ -110,3 +110,82 @@ class TestDryRunStateGuard:
             ctx = _prepare_runtime(args, logging.getLogger("test"), str(path))
 
         assert ctx.dry_run_state_guard is None
+
+    def test_dry_run_restores_state_when_client_init_fails(self, tmp_path):
+        path = self._progressed_state_file(tmp_path)
+        args = _args(dry_run=True, primary_context="new-primary", secondary_context="new-secondary")
+
+        # Simulate _initialize_clients failure in a dry run
+        with patch("acm_switchover._initialize_clients", side_effect=RuntimeError("client init boom")):
+            with patch("sys.exit", side_effect=SystemExit(1)):
+                with pytest.raises(SystemExit):
+                    _prepare_runtime(args, logging.getLogger("test"), str(path))
+
+        # Verify the state was restored before exit (the fix should do this)
+        on_disk = json.loads(path.read_text())
+        assert on_disk["contexts"] == {"primary": "old-primary", "secondary": "old-secondary"}
+        assert any(step.get("name") == "preflight_validation" for step in on_disk["completed_steps"])
+
+    def test_dry_run_restores_state_when_operation_raises(self, tmp_path):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        from acm_switchover import main
+
+        path = self._progressed_state_file(tmp_path)
+        args = SimpleNamespace(
+            dry_run=True,
+            primary_context="new-primary",
+            secondary_context="new-secondary",
+            state_file=str(path),
+            reset_state=False,
+            verbose=False,
+            log_format="text",
+            force=False,
+            validate_only=False,
+            argocd_resume_only=False,
+            decommission=False,
+            skip_gitops_check=False,
+            setup=False,
+        )
+        logger = Mock()
+        state_mock = Mock()
+        state_mock.restore_state_snapshot = StateManager(str(path)).restore_state_snapshot
+
+        runtime = SimpleNamespace(
+            state=state_mock,
+            primary=None,
+            secondary=None,
+            should_bind_state=True,
+            should_record_state_errors=True,
+            dry_run_state_guard=None,  # Will be set by _prepare_runtime
+        )
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file", return_value=str(path)
+        ), patch(
+            "acm_switchover._prepare_runtime", return_value=runtime
+        ) as mock_prepare, patch(
+            "acm_switchover._bind_runtime_hub_identities"
+        ), patch(
+            "acm_switchover._execute_operation"
+        ), patch(
+            "acm_switchover._build_cli_operation_hooks", return_value={}
+        ), patch(
+            "acm_switchover.cli_outcomes.run_operation_mode", side_effect=RuntimeError("operation boom")
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance"
+        ):
+            # Set dry_run_state_guard on the runtime to simulate _prepare_runtime's capture
+            with pytest.raises(RuntimeError):
+                # Capture the progressed state before operation
+                guard_snapshot = StateManager(str(path)).capture_state_snapshot()
+                runtime.dry_run_state_guard = guard_snapshot
+                main()
+
+        # Verify the state was restored in the finally block even though operation raised
+        on_disk = json.loads(path.read_text())
+        assert on_disk["contexts"] == {"primary": "old-primary", "secondary": "old-secondary"}
+        assert any(step.get("name") == "preflight_validation" for step in on_disk["completed_steps"])

@@ -1120,6 +1120,11 @@ def _prepare_runtime(
         primary, secondary = _initialize_clients(args, logger)
     except Exception as exc:  # pragma: no cover - fatal init error
         logger.error("Failed to initialize Kubernetes clients: %s", exc)
+        # H10 guard: restore dry-run state before exiting, so the rehearsal's
+        # on-disk effects (including the ensure_contexts reset) are always
+        # rolled back, even on client-init failure.
+        if dry_run_state_guard is not None:
+            state.restore_state_snapshot(dry_run_state_guard)
         sys.exit(EXIT_FAILURE)
 
     return runtime_bootstrap.RuntimeContext(
