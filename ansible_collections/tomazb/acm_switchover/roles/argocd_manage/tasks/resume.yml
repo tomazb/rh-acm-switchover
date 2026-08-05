@@ -71,7 +71,6 @@
             syncPolicy: >-
               {{
                 item.metadata.annotations['acm-switchover.argoproj.io/original-sync-policy']
-                | default('{}')
                 | from_json
               }}
       loop: "{{ acm_switchover_argocd_all_apps | default([]) | selectattr('metadata.annotations', 'defined') | list }}"
@@ -82,6 +81,9 @@
         - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
         - "'acm-switchover.argoproj.io/paused-by' in item.metadata.annotations"
         - item.metadata.annotations['acm-switchover.argoproj.io/paused-by'] == _argocd_expected_run_id
+        - "'acm-switchover.argoproj.io/original-sync-policy' in item.metadata.annotations"
+        - (item.metadata.annotations['acm-switchover.argoproj.io/original-sync-policy'] | trim | length) > 0
+        - (item.metadata.annotations['acm-switchover.argoproj.io/original-sync-policy'] | trim) != '{}'
       register: acm_argocd_resume_results
 
     - name: Warn about apps paused by a different run
@@ -140,3 +142,46 @@
               })
           }}
       when: acm_switchover_argocd_mock_apps is not defined
+
+    # Ownership cannot be established for a policy annotation without its marker;
+    # mutating would risk resuming an application paused by someone else.
+    - name: Warn about applications with orphaned original-sync-policy annotation
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.metadata.namespace }}/{{ item.metadata.name }} carries
+          'acm-switchover.argoproj.io/original-sync-policy' but no
+          'acm-switchover.argoproj.io/paused-by' marker. Ownership cannot be
+          established; leaving the application untouched. Inspect and remove the
+          orphaned annotation manually.
+      loop: "{{ acm_switchover_argocd_all_apps | default([]) | selectattr('metadata.annotations', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+      when:
+        - acm_switchover_argocd_mock_apps is not defined
+        - "'acm-switchover.argoproj.io/paused-by' not in item.metadata.annotations"
+        - "'acm-switchover.argoproj.io/original-sync-policy' in item.metadata.annotations"
+
+    # Runs after the patch loop and summary so recoverable applications are
+    # restored first; the phase still fails, keeping the unrecoverable resume
+    # obligations visible (ADR-0001). Fires in dry-run too — only mock is excluded.
+    - name: Fail on unrecoverable original-sync-policy annotations
+      ansible.builtin.fail:
+        msg: >-
+          Refusing to resume {{ item.metadata.namespace }}/{{ item.metadata.name }}:
+          the pause marker matches run_id '{{ _argocd_expected_run_id }}' but the
+          'acm-switchover.argoproj.io/original-sync-policy' annotation is missing or
+          empty, so the original sync policy cannot be restored. If this application
+          was paused by the Python tool, resume it with:
+          acm_switchover.py --argocd-resume-only. Never patching spec.syncPolicy
+          without a recoverable policy (ADR-0001).
+      loop: "{{ acm_switchover_argocd_all_apps | default([]) | selectattr('metadata.annotations', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+      when:
+        - acm_switchover_argocd_mock_apps is not defined
+        - "'acm-switchover.argoproj.io/paused-by' in item.metadata.annotations"
+        - item.metadata.annotations['acm-switchover.argoproj.io/paused-by'] == _argocd_expected_run_id
+        - >-
+          'acm-switchover.argoproj.io/original-sync-policy' not in item.metadata.annotations
+          or (item.metadata.annotations['acm-switchover.argoproj.io/original-sync-policy'] | trim | length) == 0
+          or (item.metadata.annotations['acm-switchover.argoproj.io/original-sync-policy'] | trim) == '{}'

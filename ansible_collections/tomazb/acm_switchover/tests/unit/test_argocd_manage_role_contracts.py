@@ -21,6 +21,7 @@ ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 ARGOCD_MAIN = ROLES_DIR / "argocd_manage" / "tasks" / "main.yml"
 ARGOCD_DISCOVER = ROLES_DIR / "argocd_manage" / "tasks" / "discover.yml"
 ARGOCD_PAUSE = ROLES_DIR / "argocd_manage" / "tasks" / "pause.yml"
+ARGOCD_RESUME = ROLES_DIR / "argocd_manage" / "tasks" / "resume.yml"
 
 
 class TestArgoCDManageMain:
@@ -318,3 +319,47 @@ class TestArgoCDPause:
                         "acm_switchover_hubs[_argocd_discover_hub | default('primary')] "
                         "to support both primary and secondary hub Argo CD targeting"
                     )
+
+
+class TestArgoCDResumeFailClosed:
+    """resume.yml must never patch spec.syncPolicy without a recoverable policy (ADR-0001, issue #184)."""
+
+    def setup_method(self):
+        self.text = ARGOCD_RESUME.read_text()
+        self.tasks = _flatten_tasks(yaml.safe_load(self.text) or [])
+
+    def _task(self, name_fragment):
+        matches = [t for t in self.tasks if name_fragment in (t.get("name") or "")]
+        assert matches, f"resume.yml must contain a task matching {name_fragment!r}"
+        return matches[0]
+
+    def test_restore_patch_never_defaults_policy_to_empty(self):
+        """The rejected shape: default('{}') silently patches syncPolicy to {} for
+        Python-paused apps (whose policy lives in the state file, not the annotation)."""
+        assert "default('{}')" not in self.text, (
+            "resume.yml must not default a missing original-sync-policy annotation to '{}' "
+            "— that destroys the sync policy of Python-paused Applications (audit C1)"
+        )
+
+    def test_restore_patch_requires_policy_annotation(self):
+        task = self._task("Restore original sync policy")
+        when = _when_text(task)
+        assert (
+            "original-sync-policy" in when
+        ), "Restore patch must be gated on the original-sync-policy annotation being present"
+        assert "length" in when, "Restore patch must require a non-empty policy annotation"
+
+    def test_unrecoverable_policy_fails_the_phase(self):
+        task = self._task("Fail on unrecoverable original-sync-policy annotations")
+        assert "ansible.builtin.fail" in task
+        msg = str(task["ansible.builtin.fail"].get("msg", ""))
+        assert (
+            "--argocd-resume-only" in msg
+        ), "Failure message must route Python-paused Applications to the Python resume path"
+        when = _when_text(task)
+        assert "paused-by" in when and "original-sync-policy" in when
+
+    def test_orphaned_policy_annotation_is_reported(self):
+        task = self._task("orphaned original-sync-policy")
+        when = _when_text(task)
+        assert "paused-by" in when and "original-sync-policy" in when
