@@ -54,7 +54,7 @@ from lib.constants import (
     STEP_PAUSE_ARGOCD_APPS,
     TOKEN_DURATION_DEFAULT,
 )
-from lib.exceptions import StateLoadError, StateLockError
+from lib.exceptions import StateLoadError, StateLockError, SwitchoverError
 from lib.gitops_detector import GitOpsCollector
 from lib.report_artifacts import validate_report_artifact_directory
 from lib.run_record import HubFacts, RunRecord
@@ -868,6 +868,13 @@ def _resolve_managed_cluster_expectation(
     expected_count = expectation.count
 
     if raw_min is None:
+        if expectation.mode is None:
+            raise SwitchoverError(
+                "No managed-cluster expectation is recorded in the state file (preflight has not "
+                "run in this state, or the state predates expectation recording). Refusing to skip "
+                "managed-cluster verification: pass --min-managed-clusters explicitly, or re-run "
+                "preflight to record the expectation."
+            )
         if expectation.mode == MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY and expected_count == 0 and not expected_names:
             return 1, [], False
         return expected_count, expected_names, bool(expected_names)
@@ -1065,12 +1072,55 @@ def run_setup(
         return False
 
 
+def _reject_dry_run_reset_state(args: argparse.Namespace, logger: logging.Logger) -> None:
+    """Fail closed if --reset-state is combined with --dry-run (parity audit H10).
+
+    Capture-before-delete is not viable here: a corrupt, unparseable state file
+    is the primary --reset-state use case, so there may be nothing to snapshot.
+    """
+    if getattr(args, "reset_state", False) and getattr(args, "dry_run", False):
+        logger.error(
+            "--reset-state cannot be combined with --dry-run: a dry run must never "
+            "delete durable switchover state (parity audit H10). Run --reset-state "
+            "without --dry-run if you really intend to discard the state file."
+        )
+        sys.exit(EXIT_FAILURE)
+
+
+def _bind_contexts_with_dry_run_guard(state: StateManager, args: argparse.Namespace) -> Optional[dict]:
+    """Bind invocation contexts, returning the dry-run state guard (or None).
+
+    Under --dry-run the snapshot is captured BEFORE ensure_contexts: its
+    context-mismatch reset flushes to disk, and a later snapshot would only
+    preserve the wiped state (parity audit finding H10). main() restores the
+    returned guard after the rehearsal completes.
+    """
+    dry_run_state_guard = None
+    if getattr(args, "dry_run", False):
+        dry_run_state_guard = state.capture_state_snapshot()
+    try:
+        state.ensure_contexts(getattr(args, "primary_context", None), getattr(args, "secondary_context", None))
+    except BaseException:
+        # H10 guard: ensure_contexts flushes its context-mismatch reset as a
+        # critical checkpoint, so an interrupt or I/O error raised during the
+        # call can leave the wiped state on disk with main()'s finally never
+        # reached. Restore before propagating. If the restore write fails too
+        # (same disk fault), let it propagate — the original exception is
+        # preserved as __context__.
+        if dry_run_state_guard is not None:
+            state.restore_state_snapshot(dry_run_state_guard)
+        raise
+    return dry_run_state_guard
+
+
 def _prepare_runtime(
     args: argparse.Namespace,
     logger: logging.Logger,
     resolved_state_file: str,
 ) -> runtime_bootstrap.RuntimeContext:
     """Create state and clients while preserving existing entrypoint ordering."""
+    _reject_dry_run_reset_state(args, logger)
+
     if getattr(args, "reset_state", False):
         # --reset-state: delete existing state file before loading so StateManager
         # starts fresh.  We handle this before constructing StateManager to allow
@@ -1099,14 +1149,29 @@ def _prepare_runtime(
     should_bind_state = not getattr(args, "argocd_resume_only", False) and not getattr(args, "decommission", False)
     should_record_state_errors = not getattr(args, "decommission", False)
 
+    dry_run_state_guard = None
     if should_bind_state:
-        state.ensure_contexts(getattr(args, "primary_context", None), getattr(args, "secondary_context", None))
+        dry_run_state_guard = _bind_contexts_with_dry_run_guard(state, args)
 
     try:
         primary, secondary = _initialize_clients(args, logger)
-    except Exception as exc:  # pragma: no cover - fatal init error
+    except Exception as exc:
         logger.error("Failed to initialize Kubernetes clients: %s", exc)
+        # H10 guard: restore dry-run state before exiting, so the rehearsal's
+        # on-disk effects (including the ensure_contexts reset) are always
+        # rolled back, even on client-init failure.
+        if dry_run_state_guard is not None:
+            state.restore_state_snapshot(dry_run_state_guard)
         sys.exit(EXIT_FAILURE)
+    except BaseException:
+        # H10 guard: _initialize_clients performs live network connects, so a
+        # Ctrl-C (KeyboardInterrupt) or SystemExit here is realistic and is
+        # not caught by the Exception arm above. Restore the dry-run state
+        # before propagating so the rehearsal's on-disk effects are always
+        # rolled back, even on interruption.
+        if dry_run_state_guard is not None:
+            state.restore_state_snapshot(dry_run_state_guard)
+        raise
 
     return runtime_bootstrap.RuntimeContext(
         state_file=resolved_state_file,
@@ -1115,6 +1180,7 @@ def _prepare_runtime(
         secondary=secondary,
         should_bind_state=should_bind_state,
         should_record_state_errors=should_record_state_errors,
+        dry_run_state_guard=dry_run_state_guard,
     )
 
 
@@ -1187,19 +1253,26 @@ def main():
     runtime = _prepare_runtime(args, logger, resolved_state_file)
     state = runtime.state
 
-    operation_exit_code = cli_outcomes.run_operation_mode(
-        args,
-        state,
-        runtime.primary,
-        runtime.secondary,
-        logger,
-        should_bind_state=runtime.should_bind_state,
-        should_record_state_errors=runtime.should_record_state_errors,
-        hooks=_build_cli_operation_hooks(),
-        exit_success=EXIT_SUCCESS,
-        exit_failure=EXIT_FAILURE,
-        exit_interrupt=EXIT_INTERRUPT,
-    )
+    try:
+        operation_exit_code = cli_outcomes.run_operation_mode(
+            args,
+            state,
+            runtime.primary,
+            runtime.secondary,
+            logger,
+            should_bind_state=runtime.should_bind_state,
+            should_record_state_errors=runtime.should_record_state_errors,
+            hooks=_build_cli_operation_hooks(),
+            exit_success=EXIT_SUCCESS,
+            exit_failure=EXIT_FAILURE,
+            exit_interrupt=EXIT_INTERRUPT,
+        )
+    finally:
+        if runtime.dry_run_state_guard is not None:
+            # H10 guard: put the state file back exactly as it was before the
+            # dry-run rehearsal, including a context-mismatch reset that
+            # ensure_contexts may have flushed in _prepare_runtime.
+            state.restore_state_snapshot(runtime.dry_run_state_guard)
     sys.exit(operation_exit_code)
 
 

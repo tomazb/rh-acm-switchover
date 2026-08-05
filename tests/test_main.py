@@ -1781,6 +1781,7 @@ class TestMainGitOpsReporting:
             secondary=Mock(),
             should_bind_state=True,
             should_record_state_errors=True,
+            dry_run_state_guard=None,
         )
 
         with patch("acm_switchover.parse_args", return_value=args), patch(
@@ -3305,6 +3306,7 @@ class TestCliOutcomesDelegation:
             secondary=secondary,
             should_bind_state=True,
             should_record_state_errors=True,
+            dry_run_state_guard=None,
         )
 
         with patch("acm_switchover.parse_args", return_value=args), patch(
