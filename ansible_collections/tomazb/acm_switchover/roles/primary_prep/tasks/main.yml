@@ -106,7 +106,7 @@
         status: fail
         error: "{{ ansible_failed_result.msg | default('unknown failure') }}"
         operational_data:
-          argocd_run_id: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('')) }}"
+          argocd_run_id: "{{ acm_switchover_argocd.run_id | default('') }}"
           argocd_discovery_namespaces: "{{ acm_switchover_argocd_discovery_namespaces | default({}) }}"
           saved_backup_schedule: "{{ acm_switchover_saved_backup_schedule | default('') }}"
       when: acm_switchover_execution.checkpoint.enabled | default(false)
@@ -122,7 +122,7 @@
     checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
     status: pass
     operational_data:
-      argocd_run_id: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('')) }}"
+      argocd_run_id: "{{ acm_switchover_argocd.run_id | default('') }}"
       argocd_discovery_namespaces: "{{ acm_switchover_argocd_discovery_namespaces | default({}) }}"
       saved_backup_schedule: "{{ acm_switchover_saved_backup_schedule | default('') }}"
   when:

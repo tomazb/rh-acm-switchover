@@ -207,10 +207,14 @@ def test_discover_namespace_defaults_to_omit():
 
 
 def test_discover_mode_does_not_generate_pause_run_id():
-    """Read-only Argo CD advisory discovery must not create pause metadata."""
+    """Read-only Argo CD advisory discovery must not create pause metadata.
+
+    run_id generation is gated on mode == 'pause' (which excludes both resume
+    and discover-only modes) and on discovery confirming Argo CD is installed.
+    """
     text = (ROLE_DIR / "discover.yml").read_text()
     assert "== 'pause'" in text
-    assert "!= 'resume'" in text
+    assert "acm_switchover_argocd_installed | default(false)" in text
 
 
 def test_argocd_manage_supports_discover_only_mode():
@@ -620,8 +624,9 @@ def test_discover_run_id_gated_by_resume_mode():
                 if isinstance(when, str):
                     when = [when]
                 when_text = " ".join(str(w) for w in when)
-                assert "resume" in when_text, (
-                    "discover.yml run_id generation must be gated to exclude resume mode. " f"Current when: {when}"
+                assert "== 'pause'" in when_text, (
+                    "discover.yml run_id generation must be gated to pause mode only "
+                    f"(which excludes resume mode). Current when: {when}"
                 )
                 return
 

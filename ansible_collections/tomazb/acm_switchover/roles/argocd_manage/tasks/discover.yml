@@ -56,18 +56,6 @@
         _argocd_discovery_error: ""
       no_log: true
 
-    - name: Generate run_id if not provided
-      ansible.builtin.set_fact:
-        acm_switchover_argocd: >-
-          {{
-            acm_switchover_argocd | default({})
-            | combine({'run_id': lookup('pipe', 'python3 -c "import uuid; print(uuid.uuid4().hex[:12])"')})
-          }}
-      when:
-        - ((acm_switchover_argocd | default({})).get('run_id', '')) == ''
-        - (acm_switchover_argocd_mode_override | default((acm_switchover_argocd | default({})).get('mode', 'pause'))) != 'resume'
-        - (acm_switchover_argocd_mode_override | default((acm_switchover_argocd | default({})).get('mode', 'pause'))) == 'pause'
-
     - name: Resolve raw trusted Argo CD discovery namespaces for current hub
       ansible.builtin.set_fact:
         _argocd_raw_trusted_discovery_namespaces: >-
@@ -248,6 +236,22 @@
           status: absent
       no_log: true
       when: _argocd_published_discovery.status == 'absent'
+
+    # Minted only after discovery confirms Argo CD is installed: a non-empty
+    # acm_switchover_argocd.run_id is the durable "a pause may have landed"
+    # signal that resume's CRD-absent gate keys on (ADR-0001). Minting before
+    # discovery would set the signal on clusters that never had Argo CD.
+    - name: Generate run_id if not provided
+      ansible.builtin.set_fact:
+        acm_switchover_argocd: >-
+          {{
+            acm_switchover_argocd | default({})
+            | combine({'run_id': lookup('pipe', 'python3 -c "import uuid; print(uuid.uuid4().hex[:12])"')})
+          }}
+      when:
+        - acm_switchover_argocd_installed | default(false)
+        - ((acm_switchover_argocd | default({})).get('run_id', '')) == ''
+        - (acm_switchover_argocd_mode_override | default((acm_switchover_argocd | default({})).get('mode', 'pause'))) == 'pause'
 
     - name: Record discovered Application namespaces for current hub
       ansible.builtin.set_fact:

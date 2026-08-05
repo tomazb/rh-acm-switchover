@@ -30,6 +30,19 @@
           }}
       when: acm_switchover_argocd_mock_apps is defined
 
+    # Discovery mints a run_id in pause mode when Argo CD is installed; a pause
+    # marker written without one could never be matched by any resume run.
+    - name: Require run_id before pausing
+      ansible.builtin.fail:
+        msg: >-
+          Cannot pause Argo CD applications without a run_id; discovery mints one
+          in pause mode when Argo CD is installed. Refusing to write an
+          unmatchable pause marker.
+      when:
+        - acm_switchover_argocd_mock_apps is not defined
+        - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+        - ((acm_switchover_argocd | default({})).get('run_id', '') | length) == 0
+
     - name: Remove automated sync policy and annotate with run-id
       kubernetes.core.k8s:
         kubeconfig: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].kubeconfig | default(omit) }}"
@@ -42,7 +55,7 @@
         definition:
           metadata:
             annotations:
-              acm-switchover.argoproj.io/paused-by: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('unknown')) }}"
+              acm-switchover.argoproj.io/paused-by: "{{ acm_switchover_argocd.run_id }}"
               acm-switchover.argoproj.io/original-sync-policy: >-
                 {{ item.spec.syncPolicy | default({}) | to_json }}
           spec:

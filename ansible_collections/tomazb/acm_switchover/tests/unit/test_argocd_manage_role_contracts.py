@@ -402,3 +402,49 @@ class TestArgoCDResumeCrdAbsent:
         gate_idx = next(i for i, n in enumerate(names) if "cannot verify obligations" in n)
         block_idx = next(i for i, n in enumerate(names) if "Resume auto-sync" in n)
         assert gate_idx < block_idx, "Gate must run before the installed-gated resume block"
+
+
+class TestArgoCDRunIdLifecycle:
+    """run_id must exist iff a pause may have landed (ADR-0001 obligation signal)."""
+
+    def setup_method(self):
+        self.discover_text = ARGOCD_DISCOVER.read_text()
+        self.pause_text = ARGOCD_PAUSE.read_text()
+        self.discover_tasks = _flatten_tasks(yaml.safe_load(self.discover_text) or [])
+        self.pause_tasks = _flatten_tasks(yaml.safe_load(self.pause_text) or [])
+
+    def test_run_id_minted_only_when_installed(self):
+        mint = [t for t in self.discover_tasks if "Generate run_id" in (t.get("name") or "")]
+        assert mint, "discover.yml must keep the run_id generation task"
+        when = _when_text(mint[0])
+        assert "acm_switchover_argocd_installed" in when, (
+            "run_id must be minted only after discovery confirms Argo CD is installed; "
+            "an unconditional mint makes run_id useless as an obligation signal"
+        )
+
+    def test_pause_marker_never_falls_back_to_unknown(self):
+        assert "'unknown'" not in self.pause_text and '"unknown"' not in self.pause_text, (
+            "pause.yml must not write paused-by: unknown — an 'unknown' marker can never "
+            "be matched by any resume run_id and orphans the pause"
+        )
+
+    def test_pause_requires_run_id(self):
+        req = [t for t in self.pause_tasks if "Require run_id" in (t.get("name") or "")]
+        assert req and "ansible.builtin.fail" in req[0]
+
+    def test_checkpoint_persist_has_no_execution_fallback(self):
+        collection_root = ROLES_DIR.parent
+        offenders = []
+        for path in [
+            ROLES_DIR / "primary_prep" / "tasks" / "main.yml",
+            ROLES_DIR / "activation" / "tasks" / "main.yml",
+            collection_root / "playbooks" / "switchover.yml",
+            collection_root / "playbooks" / "restore_only.yml",
+        ]:
+            for i, line in enumerate(path.read_text().splitlines(), 1):
+                if "argocd_run_id:" in line and "acm_switchover_execution" in line:
+                    offenders.append(f"{path.name}:{i}")
+        assert not offenders, (
+            f"argocd_run_id persisted with execution.run_id fallback at {offenders}; the "
+            "checkpoint value must be non-empty only when an Argo CD pause run_id exists"
+        )
