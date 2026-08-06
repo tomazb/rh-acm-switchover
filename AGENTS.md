@@ -523,6 +523,15 @@ Before creating any PR:
   the PR.
 - Keep local verification evidence ready for the PR body.
 
+## Branch Policy
+
+**`ansible` is the primary development branch.** Until further notice, all PRs
+target and merge into `ansible`, not `main`:
+
+- Base every new branch and worktree on the latest `origin/ansible`.
+- Open every PR with `--base ansible`; do not target `main`.
+- `main` receives no direct feature merges while this policy is in effect.
+
 ## Pull Request Merge Gate
 
 Before merging any PR:
