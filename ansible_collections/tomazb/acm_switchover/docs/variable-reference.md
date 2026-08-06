@@ -98,6 +98,23 @@ When `acm_switchover_features.argocd.manage` is `true`, the collection refuses t
 
 Auto-sync Applications also block when `status.resources` is empty or stale because the role cannot rule out ACM impact. Refresh or sync the Application until Argo CD reports current resources, or inspect and pause it manually. After patching, the role re-reads each Application and fails if `spec.syncPolicy.automated` remains enabled.
 
+Resume is fail-closed on unresolved obligations (ADR-0001; see `coexistence.md`):
+
+- `acm_switchover_argocd.run_id` is the obligation signal. It is minted only
+  after pause-mode discovery confirms Argo CD is installed, and checkpoints
+  persist it without the `acm_switchover_execution.run_id` fallback — a
+  non-empty value means a pause may have landed.
+- Resume fails when that run_id is set but Application discovery reports Argo
+  CD absent (or errors); a silent no-op would drop the resume obligations.
+  Restore API visibility and retry.
+- Resume never patches `spec.syncPolicy` without a recoverable
+  `acm-switchover.argoproj.io/original-sync-policy` annotation. A matching
+  pause marker with a missing or empty policy annotation fails the phase;
+  Applications paused by the Python tool (whose policy lives in the Python
+  state file) must be resumed with `acm_switchover.py --argocd-resume-only`.
+- An `original-sync-policy` annotation without its `paused-by` marker is
+  reported and left untouched — ownership cannot be established.
+
 ## Preflight Result Facts
 
 | Variable | Type | Description |

@@ -121,6 +121,13 @@ only when the stored context and UID pairs match. Its final
 secondary plus a once-derived `restored` total; only patch results whose
 `changed` value is exactly Boolean `true` are counted.
 
+Collection resume is fail-closed on unresolved obligations (ADR-0001): it
+fails when a pause `run_id` is recorded but the Application CRD is not visible
+on the hub, and it refuses to patch any Application whose matching pause
+marker lacks a recoverable `original-sync-policy` annotation — that is the
+signature of a Python-paused Application, which must be resumed with
+`acm_switchover.py --argocd-resume-only`.
+
 **State file tracking:**
 The script creates `.state/switchover-<primary>__<secondary>.json` tracking progress:
 ```json
