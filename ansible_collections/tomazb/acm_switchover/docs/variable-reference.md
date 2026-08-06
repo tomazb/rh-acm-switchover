@@ -106,7 +106,10 @@ Resume is fail-closed on unresolved obligations (ADR-0001; see `coexistence.md`)
   non-empty value means a pause may have landed.
 - Resume fails when that run_id is set but Application discovery reports Argo
   CD absent (or errors); a silent no-op would drop the resume obligations.
-  Restore API visibility and retry.
+  Restore API visibility and retry. The gate is per-hub: when the checkpointed
+  discovery-namespaces map carries per-hub evidence, a hub with no recorded
+  pause discovery is skipped so the other hub is still resumed; the standalone
+  playbook attempts both hubs and aggregates failures at the end.
 - Resume never patches `spec.syncPolicy` without a recoverable
   `acm-switchover.argoproj.io/original-sync-policy` annotation. A matching
   pause marker with a missing or empty policy annotation fails the phase;

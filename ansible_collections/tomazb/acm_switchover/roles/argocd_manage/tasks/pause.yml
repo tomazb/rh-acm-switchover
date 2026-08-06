@@ -43,6 +43,33 @@
         - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
         - ((acm_switchover_argocd | default({})).get('run_id', '') | length) == 0
 
+    # An existing original-sync-policy annotation this run does not own is the
+    # only record of a previous pause's original policy; overwriting it with
+    # the current (possibly already-paused) policy would destroy that record.
+    - name: Fail on existing original-sync-policy annotation not owned by this run
+      ansible.builtin.fail:
+        msg: >-
+          Refusing to pause {{ item.metadata.namespace }}/{{ item.metadata.name }}:
+          it already carries 'acm-switchover.argoproj.io/original-sync-policy'
+          {{
+            "with pause marker '" ~ (item.metadata.annotations | default({}))['acm-switchover.argoproj.io/paused-by'] ~ "'"
+            if ('acm-switchover.argoproj.io/paused-by' in (item.metadata.annotations | default({})))
+            else "without a paused-by marker"
+          }}, and overwriting it would destroy the saved original policy.
+          Resume or clean up the earlier pause first (Python-paused Applications:
+          acm_switchover.py --argocd-resume-only).
+      loop: "{{ acm_switchover_argocd_acm_apps }}"
+      loop_control:
+        label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+      when:
+        - acm_switchover_argocd_mock_apps is not defined
+        - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+        - "(item.spec.syncPolicy | default({})).automated | default(none) is not none"
+        - "'acm-switchover.argoproj.io/original-sync-policy' in (item.metadata.annotations | default({}))"
+        - >-
+          (item.metadata.annotations | default({}))['acm-switchover.argoproj.io/paused-by'] | default('')
+          != acm_switchover_argocd.run_id
+
     - name: Remove automated sync policy and annotate with run-id
       kubernetes.core.k8s:
         kubeconfig: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].kubeconfig | default(omit) }}"
@@ -56,8 +83,15 @@
           metadata:
             annotations:
               acm-switchover.argoproj.io/paused-by: "{{ acm_switchover_argocd.run_id }}"
+              # Same-run re-pause (e.g. auto-sync re-enabled externally after a
+              # pause landed): keep the annotation already recorded by this run —
+              # it holds the true original policy, the current one may not.
               acm-switchover.argoproj.io/original-sync-policy: >-
-                {{ item.spec.syncPolicy | default({}) | to_json }}
+                {{
+                  (item.metadata.annotations | default({}))['acm-switchover.argoproj.io/original-sync-policy']
+                  if ('acm-switchover.argoproj.io/original-sync-policy' in (item.metadata.annotations | default({})))
+                  else (item.spec.syncPolicy | default({}) | to_json)
+                }}
           spec:
             syncPolicy: >-
               {{

@@ -92,13 +92,47 @@ def test_shipped_task_yaml_uses_the_shared_annotation_keys():
 
 def test_pause_patch_shape_matches_python():
     """Python pause sets syncPolicy.automated=None so merge-patch deletes the key
-    (lib/argocd.py). The shipped pause.yml must do the same."""
+    (lib/argocd.py). The shipped pause.yml must do the same, and must stamp the
+    paused-by marker with the strict run_id (no fallback that could write an
+    unmatchable marker)."""
     pause_text = (_ROLE_TASKS / "pause.yml").read_text()
     assert "combine({'automated': none})" in pause_text
+    assert 'acm-switchover.argoproj.io/paused-by: "{{ acm_switchover_argocd.run_id }}"' in pause_text
+
+
+def _resume_restore_task():
+    import yaml
+
+    tasks = yaml.safe_load((_ROLE_TASKS / "resume.yml").read_text()) or []
+    pending = list(tasks)
+    while pending:
+        task = pending.pop()
+        if not isinstance(task, dict):
+            continue
+        for key in ("block", "rescue", "always"):
+            pending.extend(task.get(key, []) or [])
+        if "Restore original sync policy" in (task.get("name") or ""):
+            return task
+    raise AssertionError("resume.yml must contain the 'Restore original sync policy' task")
 
 
 def test_resume_never_defaults_missing_policy():
-    """Cross-runtime data-loss guard (audit C1 / issue #184): a missing
-    original-sync-policy annotation must never be defaulted to an empty policy."""
-    resume_text = (_ROLE_TASKS / "resume.yml").read_text()
-    assert "default('{}')" not in resume_text
+    """Cross-runtime data-loss guard (audit C1 / issue #184): resume must read
+    the original-sync-policy annotation with no fallback of any kind, and its
+    guard must require the annotation to exist with a non-empty, non-'{}'
+    value. A default (whether '{}', {}, or anything else) silently patches
+    spec.syncPolicy for Python-paused Applications."""
+    task = _resume_restore_task()
+
+    sync_policy_template = str(task["kubernetes.core.k8s"]["definition"]["spec"]["syncPolicy"])
+    assert "original-sync-policy" in sync_policy_template
+    assert "from_json" in sync_policy_template
+    assert (
+        "default" not in sync_policy_template
+    ), f"Restore template must not default the policy annotation: {sync_policy_template}"
+
+    when = task.get("when", [])
+    when_text = " ".join(str(w) for w in when) if isinstance(when, list) else str(when)
+    assert "'acm-switchover.argoproj.io/original-sync-policy' in item.metadata.annotations" in when_text
+    assert "| trim | length) > 0" in when_text
+    assert "| trim) != '{}'" in when_text

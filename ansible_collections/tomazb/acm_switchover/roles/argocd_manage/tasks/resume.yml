@@ -22,6 +22,14 @@
     - not (acm_switchover_argocd_installed | default(false))
     - acm_switchover_argocd_mock_apps is not defined
     - ((acm_switchover_argocd | default({})).get('run_id', '') | length) > 0
+    # Per-hub scoping: when the checkpointed discovery-namespaces map carries
+    # per-hub evidence, only a hub that showed Argo CD during pause discovery
+    # can hold obligations — a hub absent from the map is skipped so the other
+    # hub still gets resumed (standalone playbook resumes secondary first).
+    # An empty/missing map (no checkpoint) keeps the conservative fail.
+    - >-
+      (acm_switchover_argocd_discovery_namespaces | default({}) | length) == 0
+      or (_argocd_discover_hub | default('secondary')) in (acm_switchover_argocd_discovery_namespaces | default({}))
 
 - name: Resume auto-sync on previously paused applications
   when: acm_switchover_argocd_installed | default(false)

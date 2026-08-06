@@ -348,6 +348,7 @@ class TestArgoCDResumeFailClosed:
             "original-sync-policy" in when
         ), "Restore patch must be gated on the original-sync-policy annotation being present"
         assert "length" in when, "Restore patch must require a non-empty policy annotation"
+        assert "!= '{}'" in when, "Restore patch must reject an empty JSON object policy"
 
     def test_unrecoverable_policy_fails_the_phase(self):
         task = self._task("Fail on unrecoverable original-sync-policy annotations")
@@ -448,3 +449,59 @@ class TestArgoCDRunIdLifecycle:
             f"argocd_run_id persisted with execution.run_id fallback at {offenders}; the "
             "checkpoint value must be non-empty only when an Argo CD pause run_id exists"
         )
+
+
+class TestArgoCDResumeGateHubScope:
+    """The CRD-absent gate must not abort resume for a hub that never had Argo CD
+    while another hub still holds obligations (standalone playbook resumes the
+    secondary hub first)."""
+
+    def setup_method(self):
+        self.tasks = _flatten_tasks(yaml.safe_load(ARGOCD_RESUME.read_text()) or [])
+
+    def test_gate_scoped_by_per_hub_discovery_evidence(self):
+        gate = [t for t in self.tasks if "cannot verify obligations" in (t.get("name") or "")][0]
+        when = _when_text(gate)
+        assert "acm_switchover_argocd_discovery_namespaces" in when and "_argocd_discover_hub" in when, (
+            "Gate must consult the per-hub checkpointed discovery-namespaces map so a hub "
+            "with no pause evidence is skipped while other hubs are still processed"
+        )
+
+
+class TestArgoCDPausePreservesExistingPolicyAnnotation:
+    """Pause must never overwrite an original-sync-policy annotation it cannot
+    prove it owns; overwriting destroys the only record of the true original
+    policy (ADR-0001)."""
+
+    def setup_method(self):
+        self.text = ARGOCD_PAUSE.read_text()
+        self.tasks = _flatten_tasks(yaml.safe_load(self.text) or [])
+
+    def test_foreign_policy_annotation_fails_closed(self):
+        fail_tasks = [t for t in self.tasks if "not owned by this run" in (t.get("name") or "")]
+        assert fail_tasks and "ansible.builtin.fail" in fail_tasks[0], (
+            "pause.yml must fail before patching an app whose existing original-sync-policy "
+            "annotation lacks a matching paused-by marker"
+        )
+        when = _when_text(fail_tasks[0])
+        assert "original-sync-policy" in when and "paused-by" in when
+
+    def test_same_run_annotation_preserved_not_overwritten(self):
+        patch = [t for t in self.tasks if "Remove automated sync policy" in (t.get("name") or "")][0]
+        ann = patch["kubernetes.core.k8s"]["definition"]["metadata"]["annotations"]
+        policy_tmpl = str(ann["acm-switchover.argoproj.io/original-sync-policy"])
+        assert "item.metadata.annotations" in policy_tmpl, (
+            "Same-run re-pause must preserve the existing original-sync-policy annotation "
+            "value instead of overwriting it with the current (possibly already-paused) policy"
+        )
+
+
+class TestActivationRehydratesRunId:
+    """Activation checkpoints must not erase the pause obligation recorded by
+    primary_prep when the run resumes from a checkpoint."""
+
+    def test_activation_rehydrates_argocd_run_id(self):
+        text = (ROLES_DIR / "activation" / "tasks" / "main.yml").read_text()
+        idx = text.find("Rehydrate Argo CD run_id from checkpoint")
+        assert idx != -1, "activation/main.yml must rehydrate argocd_run_id from the entered checkpoint"
+        assert idx < text.find("Run activation phase"), "Rehydration must happen before the activation block"

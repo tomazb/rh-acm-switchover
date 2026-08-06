@@ -185,25 +185,56 @@
         acm_switchover_argocd_summary_by_hub: {}
 
   tasks:
+    # Each hub is attempted even if the other fails its fail-closed obligation
+    # gate (ADR-0001) — a secondary-hub failure must not leave primary
+    # Applications paused. Failures are collected and re-raised at the end.
     - name: Resume autosync on secondary hub
-      ansible.builtin.include_role:
-        name: tomazb.acm_switchover.argocd_manage
-      vars:
-        acm_switchover_hubs: "{{ _argocd_resume_effective_hubs }}"
-        acm_switchover_argocd_mode_override: resume
-        _argocd_discover_hub: secondary
+      block:
+        - name: Include argocd_manage for secondary hub resume
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.argocd_manage
+          vars:
+            acm_switchover_hubs: "{{ _argocd_resume_effective_hubs }}"
+            acm_switchover_argocd_mode_override: resume
+            _argocd_discover_hub: secondary
+      rescue:
+        - name: Record secondary hub resume failure
+          ansible.builtin.set_fact:
+            _argocd_resume_hub_failures: >-
+              {{
+                (_argocd_resume_hub_failures | default([]))
+                + [{'hub': 'secondary', 'error': (ansible_failed_result.msg | default('unknown failure'))}]
+              }}
 
     - name: Resume autosync on primary hub
-      ansible.builtin.include_role:
-        name: tomazb.acm_switchover.argocd_manage
-      vars:
-        acm_switchover_hubs: "{{ _argocd_resume_effective_hubs }}"
-        acm_switchover_argocd_mode_override: resume
-        _argocd_discover_hub: primary
       when:
         - _argocd_resume_effective_hubs.primary is defined
         - ((_argocd_resume_effective_hubs.primary | default({})).kubeconfig | default('')) | length > 0
         - ((_argocd_resume_effective_hubs.primary | default({})).context | default('')) | length > 0
+      block:
+        - name: Include argocd_manage for primary hub resume
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.argocd_manage
+          vars:
+            acm_switchover_hubs: "{{ _argocd_resume_effective_hubs }}"
+            acm_switchover_argocd_mode_override: resume
+            _argocd_discover_hub: primary
+      rescue:
+        - name: Record primary hub resume failure
+          ansible.builtin.set_fact:
+            _argocd_resume_hub_failures: >-
+              {{
+                (_argocd_resume_hub_failures | default([]))
+                + [{'hub': 'primary', 'error': (ansible_failed_result.msg | default('unknown failure'))}]
+              }}
+
+    - name: Fail when any hub resume left unresolved obligations
+      ansible.builtin.fail:
+        msg: >-
+          Argo CD resume failed on
+          {{ _argocd_resume_hub_failures | map(attribute='hub') | join(', ') }}:
+          {{ _argocd_resume_hub_failures | map(attribute='error') | join(' | ') }}
+      when: (_argocd_resume_hub_failures | default([]) | length) > 0
 
     - name: Publish standalone Argo CD resume result
       ansible.builtin.set_fact:

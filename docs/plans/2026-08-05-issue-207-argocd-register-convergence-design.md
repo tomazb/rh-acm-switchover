@@ -58,9 +58,11 @@ Residual divergences, accepted and documented:
 ## Changes
 
 1. **Fail resume when CRD is absent but a run_id is known.** In resume mode,
-   if an expected run_id resolves (explicit var, execution run_id, or
-   checkpoint) and Application CRD discovery reports absent, fail with
-   retry guidance instead of skipping. No run_id at all → legitimate no-op
+   if `acm_switchover_argocd.run_id` is non-empty (supplied by the operator
+   or a checkpoint — never the generic `acm_switchover_execution.run_id`,
+   which exists on every switchover including ones where Argo CD was never
+   installed) and Application CRD discovery reports absent, fail with retry
+   guidance instead of skipping. No obligation run_id → legitimate no-op
    (Argo CD never installed, nothing was ever paused).
 2. **Fail closed on missing/empty `original-sync-policy` (C1, #184).**
    Never patch `spec.syncPolicy` without a recoverable policy. Apps with a
