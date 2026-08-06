@@ -53,6 +53,7 @@ ARGOCD_IO = "argoproj.io"
 APIEXTENSIONS_K8S_IO = "apiextensions.k8s.io"
 
 ARGOCD_PAUSED_BY_ANNOTATION = "acm-switchover.argoproj.io/paused-by"
+ARGOCD_ORIGINAL_SYNC_POLICY_ANNOTATION = "acm-switchover.argoproj.io/original-sync-policy"
 ARGOCD_ACM_NAMESPACES = {
     ACM_NAMESPACE,
     BACKUP_NAMESPACE,

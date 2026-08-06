@@ -7,6 +7,24 @@
   register: _checkpoint_enter
   when: acm_switchover_execution.checkpoint.enabled | default(false)
 
+# Without this, a checkpoint-resumed run writes argocd_run_id: '' at phase end,
+# erasing the pause obligation recorded by primary_prep, and the rescue-path
+# Argo CD resume has no run_id to match markers with.
+- name: Rehydrate Argo CD run_id from checkpoint before activation
+  ansible.builtin.set_fact:
+    acm_switchover_argocd: >-
+      {{
+        acm_switchover_argocd | default({})
+        | combine({
+            'run_id': (((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {}).get('operational_data', {}).get('argocd_run_id')
+          })
+      }}
+  when:
+    - acm_switchover_features.argocd.manage | default(false)
+    - acm_switchover_execution.checkpoint.enabled | default(false)
+    - (acm_switchover_argocd.run_id | default('')) | length == 0
+    - ((((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {}).get('operational_data', {}).get('argocd_run_id', '') | length) > 0
+
 - name: Run activation phase
   when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
   block:
@@ -54,7 +72,7 @@
         status: fail
         error: "{{ ansible_failed_result.msg | default('unknown failure') }}"
         operational_data:
-          argocd_run_id: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('')) }}"
+          argocd_run_id: "{{ acm_switchover_argocd.run_id | default('') }}"
           argocd_discovery_namespaces: >-
             {{
               acm_switchover_argocd_discovery_namespaces | default({})
@@ -81,7 +99,7 @@
     checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
     status: pass
     operational_data:
-      argocd_run_id: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('')) }}"
+      argocd_run_id: "{{ acm_switchover_argocd.run_id | default('') }}"
       argocd_discovery_namespaces: >-
         {{
           acm_switchover_argocd_discovery_namespaces | default({})

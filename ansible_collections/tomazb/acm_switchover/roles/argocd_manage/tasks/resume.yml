@@ -1,4 +1,36 @@
 ---
+# A non-empty acm_switchover_argocd.run_id means a pause may have landed (minted
+# only after pause-mode discovery confirmed Argo CD installed, or supplied via
+# checkpoint/operator). If discovery cannot see Applications now, resume cannot
+# prove those obligations are discharged — skipping silently would be ADR-0001's
+# explicitly rejected "clear register when CRD absent" behaviour. The
+# execution.run_id fallback is deliberately NOT consulted here: it is non-empty
+# on every run and would fail switchovers on clusters that never had Argo CD.
+- name: Fail when resume cannot verify obligations (Application CRD not visible)
+  ansible.builtin.fail:
+    msg: >-
+      Cannot verify Argo CD resume obligations: run_id
+      '{{ (acm_switchover_argocd | default({})).get('run_id', '') }}' indicates
+      applications may have been paused, but Application discovery on this hub
+      reported status
+      '{{ (acm_switchover_argocd_discovery_status | default({})).get('status', 'unknown') }}'.
+      Refusing to report resume success without proof (ADR-0001). Pause markers
+      remain on the cluster in 'acm-switchover.argoproj.io/paused-by' annotations;
+      restore API visibility and retry, or resume Python-paused applications with
+      acm_switchover.py --argocd-resume-only.
+  when:
+    - not (acm_switchover_argocd_installed | default(false))
+    - acm_switchover_argocd_mock_apps is not defined
+    - ((acm_switchover_argocd | default({})).get('run_id', '') | length) > 0
+    # Per-hub scoping: when the checkpointed discovery-namespaces map carries
+    # per-hub evidence, only a hub that showed Argo CD during pause discovery
+    # can hold obligations — a hub absent from the map is skipped so the other
+    # hub still gets resumed (standalone playbook resumes secondary first).
+    # An empty/missing map (no checkpoint) keeps the conservative fail.
+    - >-
+      (acm_switchover_argocd_discovery_namespaces | default({}) | length) == 0
+      or (_argocd_discover_hub | default('secondary')) in (acm_switchover_argocd_discovery_namespaces | default({}))
+
 - name: Resume auto-sync on previously paused applications
   when: acm_switchover_argocd_installed | default(false)
   block:
@@ -71,7 +103,6 @@
             syncPolicy: >-
               {{
                 item.metadata.annotations['acm-switchover.argoproj.io/original-sync-policy']
-                | default('{}')
                 | from_json
               }}
       loop: "{{ acm_switchover_argocd_all_apps | default([]) | selectattr('metadata.annotations', 'defined') | list }}"
@@ -82,6 +113,9 @@
         - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
         - "'acm-switchover.argoproj.io/paused-by' in item.metadata.annotations"
         - item.metadata.annotations['acm-switchover.argoproj.io/paused-by'] == _argocd_expected_run_id
+        - "'acm-switchover.argoproj.io/original-sync-policy' in item.metadata.annotations"
+        - (item.metadata.annotations['acm-switchover.argoproj.io/original-sync-policy'] | trim | length) > 0
+        - (item.metadata.annotations['acm-switchover.argoproj.io/original-sync-policy'] | trim) != '{}'
       register: acm_argocd_resume_results
 
     - name: Warn about apps paused by a different run
@@ -140,3 +174,46 @@
               })
           }}
       when: acm_switchover_argocd_mock_apps is not defined
+
+    # Ownership cannot be established for a policy annotation without its marker;
+    # mutating would risk resuming an application paused by someone else.
+    - name: Warn about applications with orphaned original-sync-policy annotation
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.metadata.namespace }}/{{ item.metadata.name }} carries
+          'acm-switchover.argoproj.io/original-sync-policy' but no
+          'acm-switchover.argoproj.io/paused-by' marker. Ownership cannot be
+          established; leaving the application untouched. Inspect and remove the
+          orphaned annotation manually.
+      loop: "{{ acm_switchover_argocd_all_apps | default([]) | selectattr('metadata.annotations', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+      when:
+        - acm_switchover_argocd_mock_apps is not defined
+        - "'acm-switchover.argoproj.io/paused-by' not in item.metadata.annotations"
+        - "'acm-switchover.argoproj.io/original-sync-policy' in item.metadata.annotations"
+
+    # Runs after the patch loop and summary so recoverable applications are
+    # restored first; the phase still fails, keeping the unrecoverable resume
+    # obligations visible (ADR-0001). Fires in dry-run too — only mock is excluded.
+    - name: Fail on unrecoverable original-sync-policy annotations
+      ansible.builtin.fail:
+        msg: >-
+          Refusing to resume {{ item.metadata.namespace }}/{{ item.metadata.name }}:
+          the pause marker matches run_id '{{ _argocd_expected_run_id }}' but the
+          'acm-switchover.argoproj.io/original-sync-policy' annotation is missing or
+          empty, so the original sync policy cannot be restored. If this application
+          was paused by the Python tool, resume it with:
+          acm_switchover.py --argocd-resume-only. Never patching spec.syncPolicy
+          without a recoverable policy (ADR-0001).
+      loop: "{{ acm_switchover_argocd_all_apps | default([]) | selectattr('metadata.annotations', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+      when:
+        - acm_switchover_argocd_mock_apps is not defined
+        - "'acm-switchover.argoproj.io/paused-by' in item.metadata.annotations"
+        - item.metadata.annotations['acm-switchover.argoproj.io/paused-by'] == _argocd_expected_run_id
+        - >-
+          'acm-switchover.argoproj.io/original-sync-policy' not in item.metadata.annotations
+          or (item.metadata.annotations['acm-switchover.argoproj.io/original-sync-policy'] | trim | length) == 0
+          or (item.metadata.annotations['acm-switchover.argoproj.io/original-sync-policy'] | trim) == '{}'

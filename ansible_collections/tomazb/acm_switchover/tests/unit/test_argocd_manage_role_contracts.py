@@ -21,6 +21,7 @@ ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 ARGOCD_MAIN = ROLES_DIR / "argocd_manage" / "tasks" / "main.yml"
 ARGOCD_DISCOVER = ROLES_DIR / "argocd_manage" / "tasks" / "discover.yml"
 ARGOCD_PAUSE = ROLES_DIR / "argocd_manage" / "tasks" / "pause.yml"
+ARGOCD_RESUME = ROLES_DIR / "argocd_manage" / "tasks" / "resume.yml"
 
 
 class TestArgoCDManageMain:
@@ -318,3 +319,189 @@ class TestArgoCDPause:
                         "acm_switchover_hubs[_argocd_discover_hub | default('primary')] "
                         "to support both primary and secondary hub Argo CD targeting"
                     )
+
+
+class TestArgoCDResumeFailClosed:
+    """resume.yml must never patch spec.syncPolicy without a recoverable policy (ADR-0001, issue #184)."""
+
+    def setup_method(self):
+        self.text = ARGOCD_RESUME.read_text()
+        self.tasks = _flatten_tasks(yaml.safe_load(self.text) or [])
+
+    def _task(self, name_fragment):
+        matches = [t for t in self.tasks if name_fragment in (t.get("name") or "")]
+        assert matches, f"resume.yml must contain a task matching {name_fragment!r}"
+        return matches[0]
+
+    def test_restore_patch_never_defaults_policy_to_empty(self):
+        """The rejected shape: default('{}') silently patches syncPolicy to {} for
+        Python-paused apps (whose policy lives in the state file, not the annotation)."""
+        assert "default('{}')" not in self.text, (
+            "resume.yml must not default a missing original-sync-policy annotation to '{}' "
+            "— that destroys the sync policy of Python-paused Applications (audit C1)"
+        )
+
+    def test_restore_patch_requires_policy_annotation(self):
+        task = self._task("Restore original sync policy")
+        when = _when_text(task)
+        assert (
+            "original-sync-policy" in when
+        ), "Restore patch must be gated on the original-sync-policy annotation being present"
+        assert "length" in when, "Restore patch must require a non-empty policy annotation"
+        assert "!= '{}'" in when, "Restore patch must reject an empty JSON object policy"
+
+    def test_unrecoverable_policy_fails_the_phase(self):
+        task = self._task("Fail on unrecoverable original-sync-policy annotations")
+        assert "ansible.builtin.fail" in task
+        msg = str(task["ansible.builtin.fail"].get("msg", ""))
+        assert (
+            "--argocd-resume-only" in msg
+        ), "Failure message must route Python-paused Applications to the Python resume path"
+        when = _when_text(task)
+        assert "paused-by" in when and "original-sync-policy" in when
+
+    def test_orphaned_policy_annotation_is_reported(self):
+        task = self._task("orphaned original-sync-policy")
+        when = _when_text(task)
+        assert "paused-by" in when and "original-sync-policy" in when
+
+
+class TestArgoCDResumeCrdAbsent:
+    """CRD invisible at resume must not be a silent no-op when a pause run_id exists.
+
+    discover.yml's rescue sets installed=false and blanks the app lists on a
+    CRD-absent error; resume.yml's main block is gated on installed. Without this
+    gate that combination is ADR-0001's explicitly rejected 'clear register when
+    CRD absent' behaviour: restored: 0, exit 0.
+    """
+
+    def setup_method(self):
+        raw = yaml.safe_load(ARGOCD_RESUME.read_text()) or []
+        self.top_level = raw
+        self.tasks = _flatten_tasks(raw)
+
+    def _gate(self):
+        gates = [t for t in self.tasks if "cannot verify obligations" in (t.get("name") or "")]
+        assert gates, "resume.yml must fail when CRD is absent but a run_id is known"
+        return gates[0]
+
+    def test_crd_absent_gate_exists_and_fails(self):
+        assert "ansible.builtin.fail" in self._gate()
+
+    def test_gate_uses_strong_run_id_signal(self):
+        when = _when_text(self._gate())
+        assert "acm_switchover_argocd" in when and "run_id" in when
+        assert "acm_switchover_execution" not in when, (
+            "Gate must key on acm_switchover_argocd.run_id only; the execution.run_id "
+            "fallback is non-empty on every run and would hard-fail switchovers on "
+            "clusters that never had Argo CD installed"
+        )
+        assert "acm_switchover_argocd_installed" in when
+
+    def test_gate_is_top_level_before_installed_block(self):
+        names = [t.get("name") or "" for t in self.top_level]
+        gate_idx = next(i for i, n in enumerate(names) if "cannot verify obligations" in n)
+        block_idx = next(i for i, n in enumerate(names) if "Resume auto-sync" in n)
+        assert gate_idx < block_idx, "Gate must run before the installed-gated resume block"
+
+
+class TestArgoCDRunIdLifecycle:
+    """run_id must exist iff a pause may have landed (ADR-0001 obligation signal)."""
+
+    def setup_method(self):
+        self.discover_text = ARGOCD_DISCOVER.read_text()
+        self.pause_text = ARGOCD_PAUSE.read_text()
+        self.discover_tasks = _flatten_tasks(yaml.safe_load(self.discover_text) or [])
+        self.pause_tasks = _flatten_tasks(yaml.safe_load(self.pause_text) or [])
+
+    def test_run_id_minted_only_when_installed(self):
+        mint = [t for t in self.discover_tasks if "Generate run_id" in (t.get("name") or "")]
+        assert mint, "discover.yml must keep the run_id generation task"
+        when = _when_text(mint[0])
+        assert "acm_switchover_argocd_installed" in when, (
+            "run_id must be minted only after discovery confirms Argo CD is installed; "
+            "an unconditional mint makes run_id useless as an obligation signal"
+        )
+
+    def test_pause_marker_never_falls_back_to_unknown(self):
+        assert "'unknown'" not in self.pause_text and '"unknown"' not in self.pause_text, (
+            "pause.yml must not write paused-by: unknown — an 'unknown' marker can never "
+            "be matched by any resume run_id and orphans the pause"
+        )
+
+    def test_pause_requires_run_id(self):
+        req = [t for t in self.pause_tasks if "Require run_id" in (t.get("name") or "")]
+        assert req and "ansible.builtin.fail" in req[0]
+
+    def test_checkpoint_persist_has_no_execution_fallback(self):
+        collection_root = ROLES_DIR.parent
+        offenders = []
+        for path in [
+            ROLES_DIR / "primary_prep" / "tasks" / "main.yml",
+            ROLES_DIR / "activation" / "tasks" / "main.yml",
+            collection_root / "playbooks" / "switchover.yml",
+            collection_root / "playbooks" / "restore_only.yml",
+        ]:
+            for i, line in enumerate(path.read_text().splitlines(), 1):
+                if "argocd_run_id:" in line and "acm_switchover_execution" in line:
+                    offenders.append(f"{path.name}:{i}")
+        assert not offenders, (
+            f"argocd_run_id persisted with execution.run_id fallback at {offenders}; the "
+            "checkpoint value must be non-empty only when an Argo CD pause run_id exists"
+        )
+
+
+class TestArgoCDResumeGateHubScope:
+    """The CRD-absent gate must not abort resume for a hub that never had Argo CD
+    while another hub still holds obligations (standalone playbook resumes the
+    secondary hub first)."""
+
+    def setup_method(self):
+        self.tasks = _flatten_tasks(yaml.safe_load(ARGOCD_RESUME.read_text()) or [])
+
+    def test_gate_scoped_by_per_hub_discovery_evidence(self):
+        gate = [t for t in self.tasks if "cannot verify obligations" in (t.get("name") or "")][0]
+        when = _when_text(gate)
+        assert "acm_switchover_argocd_discovery_namespaces" in when and "_argocd_discover_hub" in when, (
+            "Gate must consult the per-hub checkpointed discovery-namespaces map so a hub "
+            "with no pause evidence is skipped while other hubs are still processed"
+        )
+
+
+class TestArgoCDPausePreservesExistingPolicyAnnotation:
+    """Pause must never overwrite an original-sync-policy annotation it cannot
+    prove it owns; overwriting destroys the only record of the true original
+    policy (ADR-0001)."""
+
+    def setup_method(self):
+        self.text = ARGOCD_PAUSE.read_text()
+        self.tasks = _flatten_tasks(yaml.safe_load(self.text) or [])
+
+    def test_foreign_policy_annotation_fails_closed(self):
+        fail_tasks = [t for t in self.tasks if "not owned by this run" in (t.get("name") or "")]
+        assert fail_tasks and "ansible.builtin.fail" in fail_tasks[0], (
+            "pause.yml must fail before patching an app whose existing original-sync-policy "
+            "annotation lacks a matching paused-by marker"
+        )
+        when = _when_text(fail_tasks[0])
+        assert "original-sync-policy" in when and "paused-by" in when
+
+    def test_same_run_annotation_preserved_not_overwritten(self):
+        patch = [t for t in self.tasks if "Remove automated sync policy" in (t.get("name") or "")][0]
+        ann = patch["kubernetes.core.k8s"]["definition"]["metadata"]["annotations"]
+        policy_tmpl = str(ann["acm-switchover.argoproj.io/original-sync-policy"])
+        assert "item.metadata.annotations" in policy_tmpl, (
+            "Same-run re-pause must preserve the existing original-sync-policy annotation "
+            "value instead of overwriting it with the current (possibly already-paused) policy"
+        )
+
+
+class TestActivationRehydratesRunId:
+    """Activation checkpoints must not erase the pause obligation recorded by
+    primary_prep when the run resumes from a checkpoint."""
+
+    def test_activation_rehydrates_argocd_run_id(self):
+        text = (ROLES_DIR / "activation" / "tasks" / "main.yml").read_text()
+        idx = text.find("Rehydrate Argo CD run_id from checkpoint")
+        assert idx != -1, "activation/main.yml must rehydrate argocd_run_id from the entered checkpoint"
+        assert idx < text.find("Run activation phase"), "Rehydration must happen before the activation block"

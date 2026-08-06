@@ -250,7 +250,7 @@ python acm_switchover.py ... --argocd-manage
 python acm_switchover.py --argocd-resume-only --primary-context <p> --secondary-context <s>
 ```
 
-Bash (deprecated): `./scripts/argocd-manage.sh` is deprecated. Use the Python CLI or Ansible collection instead.
+Bash: `./scripts/argocd-manage.sh` was removed. Use the Python CLI or Ansible collection instead.
 
 Safety: Managed pause blocks ApplicationSet-managed child Applications, auto-sync Applications with empty or stale `status.resources`, and any Application that still has auto-sync after the pause patch is re-read. Remediate ApplicationSet cases by pausing/updating the parent ApplicationSet, generator, or template, not the child Application.
 

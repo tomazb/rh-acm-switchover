@@ -13,7 +13,7 @@ Production-ready Ansible Collection for ACM hub switchover automation.
 
 ## Argo CD Safety Boundary
 
-The `argocd_manage` role fails closed instead of patching unsafe child Applications. It blocks auto-sync Applications managed by an ApplicationSet when they touch ACM resources, blocks auto-sync Applications with empty or stale `status.resources`, and re-reads patched Applications to confirm auto-sync is disabled. For ApplicationSet-managed cases, pause or update the parent ApplicationSet, generator, or template rather than the generated child Application.
+The `argocd_manage` role fails closed instead of patching unsafe child Applications. It blocks auto-sync Applications managed by an ApplicationSet when they touch ACM resources, blocks auto-sync Applications with empty or stale `status.resources`, and re-reads patched Applications to confirm auto-sync is disabled. Resume is fail-closed too (ADR-0001): it fails when a pause run_id is recorded but the Application CRD is not visible, and it never patches `spec.syncPolicy` without a recoverable `original-sync-policy` annotation — Applications paused by the Python tool must be resumed with `acm_switchover.py --argocd-resume-only`. For ApplicationSet-managed cases, pause or update the parent ApplicationSet, generator, or template rather than the generated child Application.
 
 ## Explicit Non-Scope
 

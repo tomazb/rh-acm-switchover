@@ -128,7 +128,47 @@ entries stay for retry. Dry-run records nothing in the register, and the registe
 is never cleared just because the Applications CRD stops being visible — only a
 truly empty register is cleaned up on CRD-visibility loss.
 
-The collection's checkpoint/cluster-as-truth model is the equivalent register
-on the Ansible side: the cluster-side `paused-by` markers plus the checkpoint
-scope play the same role, and both form factors share the marker-ownership and
-resourceVersion-conditional patch rules documented above.
+### Collection register decision (issue #207)
+
+The collection's register **is** the cluster: the annotation pair
+(`acm-switchover.argoproj.io/paused-by`,
+`acm-switchover.argoproj.io/original-sync-policy`) written in the same patch
+that pauses the Application. The collection deliberately does not duplicate the
+Python state-file register or its confirmed/provisional/unknown states:
+
+- Python needs three resolution states because its pause is two steps — persist
+  the register entry, then patch. The collection's record rides inside the pause
+  patch itself, so record and mutation are one atomic API call and there is no
+  provisional window to describe. A failed or ambiguous patch is a failed task;
+  the operator retries with the same run_id and the patch is idempotent.
+- ADR-0001's load-bearing invariant — an obligation is discharged only when
+  resume is proven complete; fail closed on ambiguity — is enforced directly:
+  - resume fails when Application discovery reports Argo CD absent (or errors)
+    while `acm_switchover_argocd.run_id` is set, so the rejected "clear register
+    when CRD absent" shape is unreachable;
+  - resume never patches `spec.syncPolicy` without a recoverable
+    `original-sync-policy` annotation; a matching marker with a missing/empty
+    policy fails the phase and routes Python-paused Applications to
+    `acm_switchover.py --argocd-resume-only`;
+  - an orphaned `original-sync-policy` annotation (marker absent) is reported
+    and left untouched — ownership cannot be established.
+- `acm_switchover_argocd.run_id` is the obligation signal: minted only after
+  pause-mode discovery confirms Argo CD is installed, and persisted to
+  checkpoints without the `acm_switchover_execution.run_id` fallback. A
+  non-empty run_id means a pause may have landed, so resume must prove
+  discharge or fail. (The `_argocd_expected_run_id` fallback chain used for
+  marker *matching* keeps the execution fallback for compatibility with markers
+  written by older versions.)
+
+Accepted residual divergences:
+
+- The run_id reaches the checkpoint only at phase end. A crash between the
+  first pause patch and checkpoint persistence leaves pauses whose run_id is in
+  no checkpoint — but it is durable on the cluster in every `paused-by`
+  annotation, and the standalone resume playbook accepts an explicit run_id.
+- Simultaneous loss of both annotations (external strip, backup restore) is
+  unrecoverable by the collection alone — the same class of loss as deleting
+  the Python state file.
+
+Both form factors share the marker-ownership and resourceVersion-conditional
+patch rules documented above.

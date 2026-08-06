@@ -206,11 +206,34 @@ def test_discover_namespace_defaults_to_omit():
     assert "default(omit)" in ns, f"cluster-wide discover namespace should use default(omit), got: {ns}"
 
 
+def _find_generate_run_id_task():
+    tasks = _load_yaml("discover.yml")
+    for task in tasks:
+        for block_task in task.get("block", []):
+            if "Generate run_id" in (block_task.get("name") or ""):
+                return task["block"], block_task
+    raise AssertionError("discover.yml: Could not find 'Generate run_id' task")
+
+
 def test_discover_mode_does_not_generate_pause_run_id():
-    """Read-only Argo CD advisory discovery must not create pause metadata."""
-    text = (ROLE_DIR / "discover.yml").read_text()
-    assert "== 'pause'" in text
-    assert "!= 'resume'" in text
+    """Read-only Argo CD advisory discovery must not create pause metadata.
+
+    The generation task itself (not just some task in the file) must be gated
+    on pause mode, on discovery confirming Argo CD is installed, and on a
+    non-dry-run execution mode (dry-run records nothing, ADR-0001), and it
+    must run only after discovery results are recorded.
+    """
+    block_tasks, mint = _find_generate_run_id_task()
+    when = mint.get("when", [])
+    when_text = " ".join(str(w) for w in when) if isinstance(when, list) else str(when)
+    assert "== 'pause'" in when_text
+    assert "acm_switchover_argocd_installed | default(false)" in when_text
+    assert "!= 'dry_run'" in when_text, "run_id must not be minted during dry-run (no pause patch is written)"
+
+    names = [bt.get("name") or "" for bt in block_tasks]
+    mint_idx = names.index(mint["name"])
+    recorded_idx = next(i for i, n in enumerate(names) if "Record discovered ACM apps" in n)
+    assert mint_idx > recorded_idx, "run_id generation must come after discovery results are recorded"
 
 
 def test_argocd_manage_supports_discover_only_mode():
@@ -543,11 +566,18 @@ def test_standalone_argocd_resume_validates_live_identity_before_resume():
     validate_indices = [
         idx for idx, task in enumerate(pre_tasks) if "tomazb.acm_switchover.acm_checkpoint_identity_validate" in task
     ]
-    resume_indices = [
-        idx
-        for idx, task in enumerate(all_tasks)
-        if task.get("ansible.builtin.include_role", {}).get("name") == "tomazb.acm_switchover.argocd_manage"
-    ]
+
+    def _includes_argocd_manage(task):
+        pending = [task]
+        while pending:
+            current = pending.pop()
+            if current.get("ansible.builtin.include_role", {}).get("name") == "tomazb.acm_switchover.argocd_manage":
+                return True
+            for key in ("block", "rescue", "always"):
+                pending.extend(current.get(key, []) or [])
+        return False
+
+    resume_indices = [idx for idx, task in enumerate(all_tasks) if _includes_argocd_manage(task)]
 
     assert primary_identity_indices, "argocd_resume.yml must read live primary kube-system UID"
     assert secondary_identity_indices, "argocd_resume.yml must read live secondary kube-system UID"
@@ -596,9 +626,16 @@ def test_standalone_argocd_resume_uses_swapped_mapping_for_effective_hubs():
     secondary_resume = next(task for task in tasks if task.get("name") == "Resume autosync on secondary hub")
     primary_resume = next(task for task in tasks if task.get("name") == "Resume autosync on primary hub")
 
-    assert "_argocd_resume_effective_hubs" in str(secondary_resume.get("vars", {}))
-    assert "_argocd_resume_effective_hubs" in str(primary_resume.get("vars", {}))
+    # The include_role now sits inside a block so per-hub gate failures can be
+    # collected and the other hub still resumed; vars live on the inner task.
+    secondary_include = next(bt for bt in secondary_resume["block"] if "ansible.builtin.include_role" in bt)
+    primary_include = next(bt for bt in primary_resume["block"] if "ansible.builtin.include_role" in bt)
+    assert "_argocd_resume_effective_hubs" in str(secondary_include.get("vars", {}))
+    assert "_argocd_resume_effective_hubs" in str(primary_include.get("vars", {}))
     assert "_argocd_resume_effective_hubs.primary" in " ".join(str(item) for item in primary_resume.get("when", []))
+    assert (
+        "rescue" in secondary_resume and "rescue" in primary_resume
+    ), "Each hub resume must collect its failure so the other hub is still attempted"
 
 
 def test_discover_run_id_gated_by_resume_mode():
@@ -620,8 +657,9 @@ def test_discover_run_id_gated_by_resume_mode():
                 if isinstance(when, str):
                     when = [when]
                 when_text = " ".join(str(w) for w in when)
-                assert "resume" in when_text, (
-                    "discover.yml run_id generation must be gated to exclude resume mode. " f"Current when: {when}"
+                assert "== 'pause'" in when_text, (
+                    "discover.yml run_id generation must be gated to pause mode only "
+                    f"(which excludes resume mode). Current when: {when}"
                 )
                 return
 

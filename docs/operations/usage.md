@@ -121,6 +121,13 @@ only when the stored context and UID pairs match. Its final
 secondary plus a once-derived `restored` total; only patch results whose
 `changed` value is exactly Boolean `true` are counted.
 
+Collection resume is fail-closed on unresolved obligations (ADR-0001): it
+fails when a pause `run_id` is recorded but the Application CRD is not visible
+on the hub, and it refuses to patch any Application whose matching pause
+marker lacks a recoverable `original-sync-policy` annotation — that is the
+signature of a Python-paused Application, which must be resumed with
+`acm_switchover.py --argocd-resume-only`.
+
 **State file tracking:**
 The script creates `.state/switchover-<primary>__<secondary>.json` tracking progress:
 ```json
@@ -660,7 +667,7 @@ With `--argocd-manage --dry-run`, the Python CLI still discovers ACM-touching Ap
 
 **Resume on failure:** Add `--argocd-resume-on-failure` alongside `--argocd-manage` to automatically attempt ArgoCD resume if the switchover fails. This is safe because Git repos have not been updated yet, so ArgoCD syncing back to the original desired state helps restore pre-switchover state. Resume errors are logged but do not compound the original failure. The Python CLI now reuses the same hub identity validation as standalone resume, so legacy state without hub UID bindings requires `--force` before any best-effort resume patch is attempted. For Ansible, set `acm_switchover_features.argocd.resume_on_failure: true` in your vars file.
 
-**Bash alternative (deprecated):** `./scripts/argocd-manage.sh` is deprecated and will be removed in a future release. It is not updated for the ApplicationSet and unknown-status blockers above; use the Python CLI (`--argocd-manage`) or the Ansible collection (`argocd_manage` role) instead.
+**Bash alternative:** `./scripts/argocd-manage.sh` was removed (one pause register per form factor; ADR-0001, #207). Use the Python CLI (`--argocd-manage`) or the Ansible collection (`argocd_manage` role) instead.
 
 ### Issue: Script Hangs During Restore
 

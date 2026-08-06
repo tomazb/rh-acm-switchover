@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the deprecated `scripts/argocd-manage.sh` and its `.state/argocd-pause-state.json`
+  register (with `tests/test_argocd_manage_script.py`). Use `acm_switchover.py --argocd-resume-only`
+  or the `argocd_manage` collection role; each form factor keeps exactly one pause register
+  (ADR-0001, #207).
+- Removed the production-dead `build_pause_patch()` helper from the collection `module_utils/argocd.py`
+  and the unit tests certifying its unshipped patch shape; parity tests now guard the shipped
+  `pause.yml`/`resume.yml` task YAML directly.
+
 ### Added
 
 - Added the disabled-by-default Phase 9B lab-controller live discovery client for bounded typed read-only physical hub

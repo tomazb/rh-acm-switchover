@@ -42,7 +42,9 @@ def _assert_argocd_script_only_in_deprecated_context(path: str, content: str) ->
         window_start = max(0, idx - 2)
         window_end = min(len(lines), idx + 3)
         context = "\n".join(lines[window_start:window_end]).lower()
-        assert "deprecated" in context, f"Non-deprecated argocd-manage.sh guidance remains in {path}: {line}"
+        assert (
+            "deprecated" in context or "removed" in context
+        ), f"Active argocd-manage.sh guidance remains in {path}: {line}"
 
 
 def _assert_no_real_live_config_literals(path: str, content: str) -> None:
@@ -81,7 +83,6 @@ def test_tests_readmes_cover_current_test_surfaces():
     assert "tests/e2e/README.md" in tests_readme
     assert "check_rbac.py" in scripts_readme
     assert "generate-merged-kubeconfig.sh" in scripts_readme
-    assert "argocd-manage.sh" in scripts_readme
 
 
 def test_contributing_matches_current_dev_workflow():
@@ -148,15 +149,14 @@ def test_active_operator_docs_do_not_recommend_deprecated_argocd_script():
         _assert_argocd_script_only_in_deprecated_context(path, _read(path))
 
 
-def test_deprecated_bash_argocd_boundary_documents_supported_safety_gap():
-    """Deprecated Bash Argo CD docs must point production safety checks to supported paths."""
+def test_removed_bash_argocd_script_routes_to_supported_paths():
+    """The argocd-manage.sh removal note must route operators to the supported form factors."""
     content = _read("scripts/README.md")
 
-    assert "Deprecated boundary" in content
-    assert "ApplicationSet child-Application blocker" in content
-    assert "post-patch auto-sync verification" in content
-    assert "Python CLI `--argocd-manage`" in content
-    assert "Ansible collection `argocd_manage` role" in content
+    assert "argocd-manage.sh" in content
+    assert "removed" in content
+    assert "--argocd-resume-only" in content
+    assert "argocd_manage" in content
 
 
 def test_collection_migration_map_tracks_current_cli_surface():

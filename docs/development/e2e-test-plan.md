@@ -61,6 +61,10 @@
 
 ### Category 3: ArgoCD Management (A1–A4)
 
+> A1–A3 are historical results for `scripts/argocd-manage.sh`, since removed
+> (ADR-0001, #207). Argo CD pause/resume is now exercised via `--argocd-manage`
+> / `--argocd-resume-only` and the collection `argocd_manage` role.
+
 | ID | Test | Command | Expected | Result | Notes |
 |----|------|---------|----------|--------|-------|
 | A1 | argocd-manage.sh dry-run pause | `./scripts/argocd-manage.sh --context mgmt1 --mode pause --state-file argocd-test.json --dry-run` | Lists apps that would be paused, no changes | ✅ PASS | 7 apps identified, no changes |

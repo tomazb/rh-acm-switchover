@@ -169,7 +169,10 @@ def test_scoped_result_contract_fails_closed(
     ("mode", "advisory", "expected_returncode"),
     [
         ("pause", False, 2),
-        ("resume", True, 0),
+        # Resume with a known run_id must fail closed when discovery cannot see
+        # Applications (ADR-0001): a paused app with a matching marker exists,
+        # so exiting 0 would silently drop an unresolved resume obligation.
+        ("resume", True, 2),
     ],
 )
 def test_mixed_live_namespace_result_never_reaches_pause_or_resume_and_stays_sanitized(
@@ -218,8 +221,11 @@ def test_mixed_live_namespace_result_never_reaches_pause_or_resume_and_stays_san
         assert "seeded-secret-token" not in output
         assert "/sensitive/kubeconfig" not in output
         assert primary.patches == []
-        if advisory:
-            assert "DISCOVERY_STATUS=error" in output
+        if mode == "resume":
+            # The obligation gate aborts the play before the post-role debug
+            # task, so the sanitized discovery status surfaces in its message.
+            assert "Cannot verify Argo CD resume obligations" in output, output
+            assert "reported status" in output and "'error'" in output, output
         else:
             assert "Argo CD discovery failed; verify controller access and input, then retry." in output
     finally:
