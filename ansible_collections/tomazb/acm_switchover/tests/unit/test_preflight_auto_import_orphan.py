@@ -44,6 +44,30 @@ def test_orphan_check_omits_empty_context():
     )
 
 
+def test_orphan_check_skips_primary_in_restore_only_mode():
+    """restore_only is the documented secondary-only flow (AGENTS.md): the
+    primary hub may be entirely undefined, so the loop must not template
+    acm_switchover_hubs.primary at all in that mode."""
+    tasks = yaml.safe_load(ORPHAN_FILE.read_text())
+    read_task = next(t for t in _flatten(tasks) if "kubernetes.core.k8s_info" in t)
+    loop_text = str(read_task.get("loop", ""))
+    assert "restore_only" in loop_text, "primary probe must be gated on restore_only"
+    assert loop_text.index("restore_only") < loop_text.index("primary"), (
+        "the restore_only branch must decide whether the primary item is built "
+        "before any acm_switchover_hubs.primary reference is evaluated"
+    )
+
+
+def test_orphan_recommendation_matches_reset_target_per_hub():
+    """reset_auto_import.yml only targets the secondary (destination) hub, so
+    only secondary findings may promise finalization discharge; primary
+    findings must recommend manual cleanup."""
+    text = ORPHAN_FILE.read_text()
+    assert "if item.item.hub == 'secondary'" in text
+    assert "manually" in text
+    assert "finalization only resets the secondary" in text
+
+
 def test_orphan_warning_uses_marker_and_import_and_sync():
     from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
         AUTO_IMPORT_MARKER_ANNOTATION,

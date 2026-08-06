@@ -13,13 +13,24 @@
     context: "{{ item.context if ((item.context | default('')) | length > 0) else omit }}"
   register: _auto_import_orphan_reads
   ignore_errors: true
-  loop:
-    - hub: primary
-      kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-      context: "{{ acm_switchover_hubs.primary.context | default('') }}"
-    - hub: secondary
-      kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-      context: "{{ acm_switchover_hubs.secondary.context | default('') }}"
+  # restore_only is the documented secondary-only flow (AGENTS.md): the primary
+  # hub may be entirely undefined there, so it must not even be templated.
+  loop: >-
+    {{
+      (
+        []
+        if (acm_switchover_operation.restore_only | default(false))
+        else [{
+          'hub': 'primary',
+          'kubeconfig': acm_switchover_hubs.primary.kubeconfig,
+          'context': acm_switchover_hubs.primary.context | default('')
+        }]
+      ) + [{
+        'hub': 'secondary',
+        'kubeconfig': acm_switchover_hubs.secondary.kubeconfig,
+        'context': acm_switchover_hubs.secondary.context | default('')
+      }]
+    }}
   loop_control:
     label: "{{ item.hub }}"
   when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
@@ -35,7 +46,11 @@
             "status": "fail",
             "message": "Hub '" ~ item.item.hub ~ "' has autoImportStrategy=ImportAndSync set by a previous acm-switchover run (unresolved reset obligation)",
             "details": {"hub": item.item.hub},
-            "recommended_action": "Finalization of this run will reset it; if not running finalization, delete multicluster-engine/import-controller-config manually"
+            "recommended_action": (
+              "Finalization of this run will reset it; if not running finalization, delete multicluster-engine/import-controller-config manually"
+              if item.item.hub == 'secondary'
+              else "Delete multicluster-engine/import-controller-config on the primary hub manually — finalization only resets the secondary (destination) hub"
+            )
           }
         ]
       }}
