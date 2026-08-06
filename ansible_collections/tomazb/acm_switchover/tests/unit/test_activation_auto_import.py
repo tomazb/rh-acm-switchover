@@ -246,3 +246,19 @@ def test_constants_include_auto_import():
     assert "AUTO_IMPORT_STRATEGY_SYNC" in content
     assert "IMMEDIATE_IMPORT_ANNOTATION" in content
     assert "LOCAL_CLUSTER_NAME" in content
+
+
+def test_import_and_sync_patch_carries_ownership_marker():
+    """Issue #214 / audit C3: the obligation marker must ride the mutation itself,
+    so an interruption can never separate the change from its evidence."""
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+        AUTO_IMPORT_MARKER_ANNOTATION,
+        AUTO_IMPORT_MARKER_VALUE,
+    )
+
+    tasks = yaml.safe_load((ACTIVATION_TASKS / "manage_auto_import.yml").read_text())
+    patch_task = next(t for t in tasks if t.get("name") == "Set autoImportStrategy to ImportAndSync")
+    definition = patch_task["kubernetes.core.k8s"]["definition"]
+    annotations = definition["metadata"].get("annotations", {})
+    assert annotations.get(AUTO_IMPORT_MARKER_ANNOTATION) == AUTO_IMPORT_MARKER_VALUE
+    assert definition["data"]["autoImportStrategy"] == "ImportAndSync"
