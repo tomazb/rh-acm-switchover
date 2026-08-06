@@ -50,6 +50,17 @@ def test_checkpoint_facts_degrades_malformed_shapes_to_defaults():
         assert facts["resume_start_phase"] == ""
 
 
+def test_auto_import_flag_requires_actual_boolean_true():
+    """A malformed checkpoint (hand-edited, corrupt) carrying the STRING "false"
+    must not coerce truthy — the flag feeds finalization's legacy discharge
+    branch, which deletes the auto-import ConfigMap (external review, PR #224)."""
+    for malformed_value in ("false", "true", "yes", 1, [True], {"v": True}):
+        facts = checkpoint_facts({"operational_data": {"auto_import_strategy_changed": malformed_value}})
+        assert facts["auto_import_strategy_changed"] is False, repr(malformed_value)
+    facts = checkpoint_facts({"operational_data": {"auto_import_strategy_changed": True}})
+    assert facts["auto_import_strategy_changed"] is True
+
+
 def test_record_resume_start_phase_replaces_whole_summary():
     """Convergence on Python RunRecord.record_resume_start_phase: replace, not fill-if-unset."""
     checkpoint = {"operational_data": {"resume_summary": {"resume_start_phase": "preflight", "extra": "stale"}}}

@@ -145,7 +145,10 @@ def checkpoint_facts(checkpoint) -> dict:
     return {
         KEY_ARGOCD_RUN_ID: data.get(KEY_ARGOCD_RUN_ID) or "",
         KEY_ARGOCD_DISCOVERY_NAMESPACES: namespaces if isinstance(namespaces, dict) else {},
-        KEY_AUTO_IMPORT_STRATEGY_CHANGED: bool(data.get(KEY_AUTO_IMPORT_STRATEGY_CHANGED, False)),
+        # Strict boolean: a malformed value like the string "false" must degrade
+        # to False, never coerce truthy — this flag feeds finalization's legacy
+        # discharge branch, which deletes the auto-import ConfigMap.
+        KEY_AUTO_IMPORT_STRATEGY_CHANGED: data.get(KEY_AUTO_IMPORT_STRATEGY_CHANGED, False) is True,
         KEY_EXPECTED_MANAGED_CLUSTER_NAMES: data.get(KEY_EXPECTED_MANAGED_CLUSTER_NAMES),
         KEY_EXPECTED_MANAGED_CLUSTER_COUNT: data.get(KEY_EXPECTED_MANAGED_CLUSTER_COUNT),
         KEY_PRIMARY_HAS_OBSERVABILITY: data.get(KEY_PRIMARY_HAS_OBSERVABILITY),
