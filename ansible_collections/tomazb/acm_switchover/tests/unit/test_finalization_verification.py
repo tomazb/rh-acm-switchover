@@ -146,7 +146,7 @@ def test_main_restores_backup_baseline_from_checkpoint():
     text = (FINALIZATION_TASKS / "main.yml").read_text()
     assert "operational_data" in text
     assert "backup_schedule_enabled_at" in text
-    assert "_checkpoint_enter.checkpoint" in text
+    assert "_checkpoint_enter.facts" in text
     assert "default(omit)" not in text, "main.yml must not persist nested omit placeholders into checkpoint data"
 
 

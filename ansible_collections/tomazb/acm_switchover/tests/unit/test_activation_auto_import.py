@@ -106,9 +106,9 @@ def test_activation_result_defaults_unknown_changed_to_false():
 def test_finalization_restores_auto_import_reset_flag_from_checkpoint():
     """finalization/main.yml must rehydrate auto-import reset intent before reset runs."""
     text = (FINALIZATION_TASKS / "main.yml").read_text()
-    assert "_checkpoint_enter.checkpoint" in text
+    assert "_checkpoint_enter.facts" in text
     assert "auto_import_strategy_changed" in text, (
-        "finalization/main.yml must restore auto_import_strategy_changed from checkpoint operational_data "
+        "finalization/main.yml must restore auto_import_strategy_changed from checkpoint facts "
         "before including reset_auto_import.yml"
     )
 
