@@ -2109,3 +2109,95 @@ def test_reset_from_does_not_reprune_phases_completed_in_current_run(tmp_path):
     assert (
         "activation" in result["checkpoint"]["completed_phases"]
     ), "activation must not be re-pruned by reset_from on subsequent enter calls"
+
+
+def _write_resumable_checkpoint(tmp_path, task_vars, completed=("preflight",)):
+    """Persist a schema-2.0 checkpoint with completed phases for resume tests."""
+    identity = build_operation_identity(
+        hubs=task_vars.get("acm_switchover_hubs") or {},
+        operation=task_vars.get("acm_switchover_operation") or {},
+        collection_version=task_vars.get("acm_switchover_collection_version"),
+        hub_identities=task_vars.get("acm_switchover_hub_identities") or {},
+    )
+    checkpoint_path = tmp_path / "checkpoint.json"
+    record = {
+        "schema_version": "2.0",
+        "phase": "preflight",
+        "completed_phases": list(completed),
+        "operational_data": {"argocd_run_id": "run-7"},
+        "operation_identity": identity,
+        "errors": [],
+        "report_refs": [],
+        "created_at": "2026-08-06T00:00:00+00:00",
+        "updated_at": "2026-08-06T00:00:00+00:00",
+    }
+    checkpoint_path.write_text(json.dumps(record))
+    return str(checkpoint_path)
+
+
+def test_enter_returns_named_facts(tmp_path):
+    task_vars = _task_vars_with_operation_identity()
+    path = _write_resumable_checkpoint(tmp_path, task_vars)
+    action = _make_checkpoint_action(
+        {"phase": "primary_prep", "status": "enter", "checkpoint": {"enabled": True, "path": path}}
+    )
+    result = action.run(task_vars=task_vars)
+    assert result.get("failed") is not True
+    assert result["facts"]["argocd_run_id"] == "run-7"
+    assert result["facts"]["auto_import_strategy_changed"] is False
+    assert result["facts"]["resume_start_phase"] == "primary_prep"
+
+
+def test_resumed_enter_replaces_resume_summary_and_flags_process(tmp_path):
+    """First non-completed enter of a process replaces resume_summary wholesale."""
+    task_vars = _task_vars_with_operation_identity()
+    path = _write_resumable_checkpoint(tmp_path, task_vars)
+    with open(path, encoding="utf-8") as fh:
+        record = json.load(fh)
+    record["operational_data"]["resume_summary"] = {"resume_start_phase": "preflight", "stale": "yes"}
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(record, fh)
+
+    action = _make_checkpoint_action(
+        {"phase": "activation", "status": "enter", "checkpoint": {"enabled": True, "path": path}}
+    )
+    result = action.run(task_vars=task_vars)
+    assert result.get("failed") is not True
+    assert result["ansible_facts"] == {"_acm_switchover_resume_recorded": True}
+    with open(path, encoding="utf-8") as fh:
+        persisted = json.load(fh)
+    assert persisted["operational_data"]["resume_summary"] == {"resume_start_phase": "activation"}
+
+
+def test_same_process_later_enter_does_not_overwrite_resume_summary(tmp_path):
+    task_vars = _task_vars_with_operation_identity()
+    task_vars["_acm_switchover_resume_recorded"] = True
+    path = _write_resumable_checkpoint(tmp_path, task_vars)
+    with open(path, encoding="utf-8") as fh:
+        record = json.load(fh)
+    record["operational_data"]["resume_summary"] = {"resume_start_phase": "primary_prep"}
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(record, fh)
+
+    action = _make_checkpoint_action(
+        {"phase": "post_activation", "status": "enter", "checkpoint": {"enabled": True, "path": path}}
+    )
+    result = action.run(task_vars=task_vars)
+    assert result.get("failed") is not True
+    assert "ansible_facts" not in result
+    with open(path, encoding="utf-8") as fh:
+        persisted = json.load(fh)
+    assert persisted["operational_data"]["resume_summary"] == {"resume_start_phase": "primary_prep"}
+
+
+def test_fresh_run_records_no_resume_summary(tmp_path):
+    """Empty completed_phases = not a resume: no resume_summary, no process flag."""
+    task_vars = _task_vars_with_operation_identity()
+    path = str(tmp_path / "checkpoint.json")
+    action = _make_checkpoint_action(
+        {"phase": "preflight", "status": "enter", "checkpoint": {"enabled": True, "path": path}}
+    )
+    result = action.run(task_vars=task_vars)
+    assert result.get("failed") is not True
+    assert "ansible_facts" not in result
+    assert result["facts"]["resume_start_phase"] == ""

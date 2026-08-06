@@ -19,8 +19,10 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint i
     CheckpointIdentityMismatch,
     build_checkpoint_record,
     build_operation_identity,
+    checkpoint_facts,
     is_unsafe_legacy_checkpoint,
     normalize_operation_identity,
+    record_resume_start_phase,
     reset_completed_phases_from,
     should_resume_phase,
     validate_operation_identity,
@@ -174,18 +176,18 @@ class ActionModule(ActionBase):
         if status == "enter":
             resume_summary_changed = False
             already_done = False if execution_mode == "validate" else not should_resume_phase(checkpoint_data, phase)
-            if not is_non_mutating and checkpoint_data.get("completed_phases") and not already_done:
-                current_operational_data = checkpoint_data.get("operational_data")
-                if not isinstance(current_operational_data, dict):
-                    current_operational_data = {}
-                    checkpoint_data["operational_data"] = current_operational_data
-                resume_summary = current_operational_data.get("resume_summary")
-                if not isinstance(resume_summary, dict):
-                    resume_summary = {}
-                    current_operational_data["resume_summary"] = resume_summary
-                if not resume_summary.get("resume_start_phase"):
-                    resume_summary["resume_start_phase"] = phase
-                    resume_summary_changed = True
+            if (
+                not is_non_mutating
+                and checkpoint_data.get("completed_phases")
+                and not already_done
+                and not task_vars.get("_acm_switchover_resume_recorded")
+            ):
+                # First executing phase of this process on a resumed checkpoint:
+                # replace resume_summary wholesale (parity with Python RunRecord —
+                # last resume wins). Later enters in the same process are fenced
+                # by the _acm_switchover_resume_recorded fact returned below.
+                record_resume_start_phase(checkpoint_data, phase)
+                resume_summary_changed = True
             if (
                 (operation_identity_changed or reset_from or resume_summary_changed)
                 and backend == CHECKPOINT_BACKEND_FILE
@@ -196,11 +198,15 @@ class ActionModule(ActionBase):
                 save_result = self._save_checkpoint(path, checkpoint_data)
                 if save_result is not None and save_result.get("failed"):
                     return save_result
-            return {
+            result = {
                 "changed": False,
                 "checkpoint": checkpoint_data,
                 "skipped_phase": already_done,
+                "facts": checkpoint_facts(checkpoint_data),
             }
+            if resume_summary_changed:
+                result["ansible_facts"] = {"_acm_switchover_resume_recorded": True}
+            return result
 
         if is_non_mutating:
             result = {
