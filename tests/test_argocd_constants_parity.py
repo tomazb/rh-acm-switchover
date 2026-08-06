@@ -53,7 +53,15 @@ def test_ansible_argocd_filters_match_acm_sub_namespaces():
     assert is_acm_touching_application(app) is True
 
 
-_ROLE_TASKS = pathlib.Path("ansible_collections/tomazb/acm_switchover/roles/argocd_manage/tasks")
+_ROLE_TASKS = (
+    pathlib.Path(__file__).resolve().parents[1]
+    / "ansible_collections"
+    / "tomazb"
+    / "acm_switchover"
+    / "roles"
+    / "argocd_manage"
+    / "tasks"
+)
 
 
 def test_paused_by_annotation_identical_across_all_definitions():
