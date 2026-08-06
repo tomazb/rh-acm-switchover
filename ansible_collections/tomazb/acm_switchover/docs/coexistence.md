@@ -69,6 +69,36 @@ match the checkpoint. After both role invocations, it publishes
 `restored_by_hub.secondary`, their once-derived `restored` total, and a Boolean
 `changed` value.
 
+## Auto-import reset obligation (issue #214, audit C3/C4)
+
+**The cluster is the collection's register** for the auto-import reset
+obligation, exactly as it is for the Argo CD pause register: activation's
+`ImportAndSync` patch writes the ownership annotation
+`acm-switchover.open-cluster-management.io/import-strategy-set-by: acm-switchover`
+in the same API call as the mutation. Finalization discharges by observation —
+it deletes `multicluster-engine/import-controller-config` when the marker is
+present (or the legacy `auto_import_strategy_changed` signal fires) and the
+strategy is still `ImportAndSync`. Preflight reports a non-blocking warning
+(`preflight-auto-import-orphan`) when either hub carries a marked
+`ImportAndSync` ConfigMap left by an interrupted run.
+
+Equivalence with the Python CLI: Python's state file is always on, so its
+`auto_import_strategy_set` obligation survives interruption by construction.
+The collection reaches the same invariant — an obligation is discharged only
+when the reset is proven — via the cluster marker, without requiring
+checkpointing to be enabled.
+
+**Default posture (audit C4):** `checkpoint.enabled` remains `false` by
+default. Without checkpointing the collection has no resume and no
+hub-identity binding for resumed runs; enabling it is the operator's opt-in
+for resumable executions. The safety obligations that must survive
+interruption (Argo CD pause register, auto-import reset) live on the cluster
+and do not depend on this setting.
+
+**resume_summary:** both runtimes now use replace semantics — each resumed
+process records the phase it started at (`resume_start_phase`), last resume
+wins. Shared key names are pinned by `tests/test_checkpoint_state_parity.py`.
+
 ## GitOps Integration Boundary
 
 Generic GitOps marker detection in the collection is **read-only and warning-oriented**.
