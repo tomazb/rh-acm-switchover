@@ -61,9 +61,6 @@
 
     - name: Reset auto-import strategy to default after backup and MCH verification
       ansible.builtin.include_tasks: reset_auto_import.yml
-      when: >-
-        (acm_switchover_features.manage_auto_import_strategy | default(false))
-        or (_auto_import_strategy_changed | default(false) | bool)
 
     - name: Handle old hub disposition
       ansible.builtin.include_tasks: handle_old_hub.yml

@@ -262,3 +262,56 @@ def test_import_and_sync_patch_carries_ownership_marker():
     annotations = definition["metadata"].get("annotations", {})
     assert annotations.get(AUTO_IMPORT_MARKER_ANNOTATION) == AUTO_IMPORT_MARKER_VALUE
     assert definition["data"]["autoImportStrategy"] == "ImportAndSync"
+
+
+def _load_reset_tasks():
+    return yaml.safe_load((FINALIZATION_TASKS / "reset_auto_import.yml").read_text())
+
+
+def _when_text(task):
+    when = task.get("when", "")
+    if isinstance(when, list):
+        return " ".join(str(w) for w in when)
+    return str(when)
+
+
+def test_reset_read_is_not_gated_on_legacy_flag():
+    """The CM read must always run in execute mode: marker observation is the
+    primary discharge signal and cannot depend on in-memory state (audit C3)."""
+    tasks = _load_reset_tasks()
+    read_task = next(t for t in tasks if t.get("name") == "Read import-controller-config before reset")
+    when = _when_text(read_task)
+    assert "_auto_import_strategy_changed" not in when
+    assert "!= 'dry_run'" in when
+
+
+def test_reset_delete_discharges_on_marker_or_legacy_signal():
+    tasks = _load_reset_tasks()
+    delete_task = next(
+        t for t in tasks if t.get("name") == "Delete import-controller-config to restore default autoImportStrategy"
+    )
+    when = _when_text(delete_task)
+    assert "_auto_import_marker_present" in when
+    assert "_auto_import_strategy_changed" in when
+    assert "ImportAndSync" in when
+
+
+def test_finalization_always_includes_reset_auto_import():
+    """The include must not be fenced by feature flag or legacy fact — the
+    observation inside reset_auto_import.yml decides (audit C3 orphan discharge)."""
+    main = yaml.safe_load((FINALIZATION_TASKS / "main.yml").read_text())
+
+    def _find_include(tasks):
+        for task in tasks or []:
+            if task.get("ansible.builtin.include_tasks") == "reset_auto_import.yml":
+                return task
+            for key in ("block", "rescue", "always"):
+                if key in task:
+                    found = _find_include(task[key])
+                    if found:
+                        return found
+        return None
+
+    include_task = _find_include(main)
+    assert include_task is not None
+    assert "when" not in include_task, "reset_auto_import include must be unconditional; inner tasks gate on mode"

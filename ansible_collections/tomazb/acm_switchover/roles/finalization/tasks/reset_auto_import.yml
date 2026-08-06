@@ -1,10 +1,15 @@
 ---
 # Reset autoImportStrategy to the controller default after backup/MCH verification.
 #
-# This mirrors the Python CLI: modules/finalization.py deletes
+# The cluster is the collection's register (issue #214, audit C3): the ownership
+# marker written by activation's ImportAndSync patch is the primary discharge
+# signal, so an interrupted run's obligation survives regardless of checkpoint
+# state. The legacy _auto_import_strategy_changed signal keeps discharging
+# obligations created by pre-marker collection versions.
+#
+# Mirrors the Python CLI: modules/finalization.py deletes
 # multicluster-engine/import-controller-config after backup enable/verify,
-# backup integrity, and MCH health checks complete.  Deleting the temporary
-# ConfigMap restores the import controller default.
+# backup integrity, and MCH health checks complete.
 - name: Read import-controller-config before reset
   kubernetes.core.k8s_info:
     api_version: v1
@@ -15,7 +20,19 @@
     context: "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
   register: _auto_import_reset_cm
   when:
-    - _auto_import_strategy_changed | default(false) | bool
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Determine auto-import discharge obligation from cluster marker
+  ansible.builtin.set_fact:
+    _auto_import_marker_present: >-
+      {{
+        (
+          (_auto_import_reset_cm.resources | default([]) | first | default({}))
+          .get('metadata', {}).get('annotations', {})
+          .get('acm-switchover.open-cluster-management.io/import-strategy-set-by', '')
+        ) == 'acm-switchover'
+      }}
+  when:
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
 - name: Delete import-controller-config to restore default autoImportStrategy
@@ -29,8 +46,10 @@
     state: absent
   register: acm_switchover_reset_auto_import_result
   when:
-    - _auto_import_strategy_changed | default(false) | bool
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - >-
+      (_auto_import_marker_present | default(false) | bool)
+      or (_auto_import_strategy_changed | default(false) | bool)
     - >-
       (
         _auto_import_reset_cm.resources
