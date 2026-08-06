@@ -35,7 +35,8 @@ def test_checkpoint_facts_reads_named_values():
 
 
 def test_checkpoint_facts_degrades_malformed_shapes_to_defaults():
-    for checkpoint in (None, [], {}, {"operational_data": "bogus"}, {"operational_data": {"resume_summary": "bogus"}}):
+    malformed: tuple = (None, [], {}, {"operational_data": "bogus"}, {"operational_data": {"resume_summary": "bogus"}})
+    for checkpoint in malformed:
         facts = checkpoint_facts(checkpoint)
         assert facts["argocd_run_id"] == ""
         assert facts["argocd_discovery_namespaces"] == {}
@@ -57,7 +58,7 @@ def test_record_resume_start_phase_replaces_whole_summary():
 
 
 def test_record_resume_start_phase_creates_operational_data():
-    checkpoint = {}
+    checkpoint: dict = {}
     record_resume_start_phase(checkpoint, "post_activation")
     assert checkpoint["operational_data"]["resume_summary"] == {"resume_start_phase": "post_activation"}
 
