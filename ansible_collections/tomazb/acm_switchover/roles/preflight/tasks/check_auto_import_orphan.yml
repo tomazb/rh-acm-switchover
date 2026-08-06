@@ -10,9 +10,9 @@
     name: import-controller-config
     namespace: multicluster-engine
     kubeconfig: "{{ item.kubeconfig }}"
-    context: "{{ item.context | default(omit) }}"
+    context: "{{ item.context if ((item.context | default('')) | length > 0) else omit }}"
   register: _auto_import_orphan_reads
-  failed_when: false
+  ignore_errors: true
   loop:
     - hub: primary
       kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
@@ -45,6 +45,7 @@
   when:
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - not (item.failed | default(false))
+    - item.resources is defined
     - >-
       (
         (item.resources | default([]) | first | default({}))
@@ -75,4 +76,4 @@
     label: "{{ item.item.hub | default('unknown') }}"
   when:
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-    - item.failed | default(false)
+    - (item.failed | default(false)) or (item.resources is not defined)
