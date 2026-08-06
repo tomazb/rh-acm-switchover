@@ -45,8 +45,12 @@ def test_orphan_check_omits_empty_context():
 
 
 def test_orphan_warning_uses_marker_and_import_and_sync():
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+        AUTO_IMPORT_MARKER_ANNOTATION,
+    )
+
     text = ORPHAN_FILE.read_text()
-    assert "acm-switchover.open-cluster-management.io/import-strategy-set-by" in text
+    assert AUTO_IMPORT_MARKER_ANNOTATION in text
     assert "ImportAndSync" in text
     assert "preflight-auto-import-orphan" in text
     assert "acm_switchover_validation_results" in text

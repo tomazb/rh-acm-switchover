@@ -88,6 +88,14 @@ The collection reaches the same invariant — an obligation is discharged only
 when the reset is proven — via the cluster marker, without requiring
 checkpointing to be enabled.
 
+**Intentional divergence on read failure:** the collection fails finalization
+closed when `import-controller-config` cannot be read, because the cluster is
+its only register and it has nothing else to consult; the Python CLI, by
+contrast, warns and continues when its state file records no pending
+`auto_import_strategy_set` obligation (`modules/finalization.py`
+`_ensure_auto_import_default`), since an unreadable ConfigMap without a
+recorded obligation cannot represent an undischarged reset.
+
 **Default posture (audit C4):** `checkpoint.enabled` remains `false` by
 default. Without checkpointing the collection has no resume and no
 hub-identity binding for resumed runs; enabling it is the operator's opt-in

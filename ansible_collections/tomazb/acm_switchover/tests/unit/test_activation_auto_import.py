@@ -275,6 +275,22 @@ def _when_text(task):
     return str(when)
 
 
+def test_reset_auto_import_reads_marker_via_constants():
+    """Issue #214 / audit C3: the discharge reader in reset_auto_import.yml must
+    observe the same marker annotation/value that activation's ImportAndSync patch
+    pins (see test_import_and_sync_patch_carries_ownership_marker above). A rename
+    of either constant must fail this test rather than silently degrading discharge
+    to the legacy-only fallback with no red signal."""
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+        AUTO_IMPORT_MARKER_ANNOTATION,
+        AUTO_IMPORT_MARKER_VALUE,
+    )
+
+    text = (FINALIZATION_TASKS / "reset_auto_import.yml").read_text()
+    assert AUTO_IMPORT_MARKER_ANNOTATION in text
+    assert AUTO_IMPORT_MARKER_VALUE in text
+
+
 def test_reset_read_is_not_gated_on_legacy_flag():
     """The CM read must always run in execute mode: marker observation is the
     primary discharge signal and cannot depend on in-memory state (audit C3)."""
