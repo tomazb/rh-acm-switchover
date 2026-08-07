@@ -38,6 +38,8 @@ The audited `ansible` revision is:
 98a228212d56418b50d09a4089dab18f53c26cf0
 ```
 
+The PR's original recorded base was `1e0486eb9edde99b10d37d13a051523c57901ba7`; this publication baseline was re-audited against current `origin/ansible` before update.
+
 The current branch already has a substantial testing architecture.
 
 ### 2.1 Existing conventional testing
@@ -672,7 +674,15 @@ FAIL_CLOSED                  — execution stopped without claiming success beca
 
 `MUTATION_OUTCOME_AMBIGUOUS` is not success and must never be normalized directly to `MUTATION_CONFIRMED`.
 
-For NET-BEFORE-SEND and NET-AFTER-SEND-BEFORE-COMMIT fault classes, outcomes must remain non-success unless non-commit or required post-state is proven. For NET-AFTER-COMMIT-BEFORE-RESPONSE and NET-PARTIAL-RESPONSE classes, ambiguity is expected until reconciliation establishes a safe authoritative outcome.
+Outcome normalization rules:
+
+- proven non-commit maps to `MUTATION_NOT_APPLIED` and remains non-success;
+- proven required post-state maps to `MUTATION_CONFIRMED`;
+- neither proven maps to `MUTATION_OUTCOME_AMBIGUOUS` until reconciliation.
+
+`RECOVERED_BY_RECONCILIATION` and `FAIL_CLOSED` are terminal, mutually exclusive outcome classes for a mutation attempt.
+
+For NET-BEFORE-SEND and NET-AFTER-SEND-BEFORE-COMMIT fault classes, apply the normalization rules above. For NET-AFTER-COMMIT-BEFORE-RESPONSE and NET-PARTIAL-RESPONSE classes, ambiguity is expected until reconciliation establishes a safe authoritative outcome.
 
 The current Collection Argo CD crash-before-checkpoint residual divergence should become one of the first characterized cases.
 
