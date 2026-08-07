@@ -38,6 +38,10 @@ The Python tool and the collection use separate checkpoint file formats.  They a
 
 When a collection checkpoint exists at `acm_switchover_execution.checkpoint.path`, the
 `checkpoint_phase` action plugin skips any phase listed in `completed_phases` on resume.
+Checkpoints written under ansible-core 2.15–2.18 (classic Jinja) may carry
+stringified scalars (for example `"2"` or `"True"` where 2.19+ writes native
+types); the facts layer coerces digit strings and Ansible's boolean vocabulary
+back to native types on read, so those checkpoints resume identically.
 A fresh run (or `checkpoint.reset: true`) starts from the beginning regardless of any
 pre-existing checkpoint file.
 Dry-run, validate, and native Ansible check-mode collection runs do not write
@@ -78,9 +82,12 @@ obligation, exactly as it is for the Argo CD pause register: activation's
 in the same API call as the mutation. Finalization discharges by observation —
 it deletes `multicluster-engine/import-controller-config` when the marker is
 present (or the legacy `auto_import_strategy_changed` signal fires) and the
-strategy is still `ImportAndSync`. Preflight reports a non-blocking warning
-(`preflight-auto-import-orphan`) when either hub carries a marked
-`ImportAndSync` ConfigMap left by an interrupted run.
+strategy is still `ImportAndSync`. The delete itself runs only in `execute`
+mode — `dry_run` and `validate` stay read-only. Preflight reports a
+non-blocking warning (`preflight-auto-import-orphan`) when either hub carries
+a marked `ImportAndSync` ConfigMap left by an interrupted run (in
+`restore_only` mode only the secondary hub is probed, since the primary hub
+may not be configured at all in that flow).
 
 Equivalence with the Python CLI: Python's state file is always on, so its
 `auto_import_strategy_set` obligation survives interruption by construction.
