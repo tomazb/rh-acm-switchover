@@ -331,3 +331,16 @@ def test_finalization_always_includes_reset_auto_import():
     include_task = _find_include(main)
     assert include_task is not None
     assert "when" not in include_task, "reset_auto_import include must be unconditional; inner tasks gate on mode"
+
+
+def test_reset_delete_requires_execute_mode():
+    """validate mode is documented read-only: the discharge delete must be
+    gated on mode == 'execute', not merely != 'dry_run' (external review,
+    PR #224)."""
+    tasks = _load_reset_tasks()
+    delete_task = next(
+        t for t in tasks if t.get("name") == "Delete import-controller-config to restore default autoImportStrategy"
+    )
+    when = _when_text(delete_task)
+    assert "== 'execute'" in when
+    assert "!= 'dry_run'" not in when

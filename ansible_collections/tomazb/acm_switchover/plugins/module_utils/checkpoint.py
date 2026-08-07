@@ -131,6 +131,39 @@ def _operational_data(checkpoint) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+# On the collection's ansible-core floor (2.15-2.18, jinja2_native off) folded
+# set_fact scalars are stringified before they reach checkpoint_phase, so a
+# checkpoint written there can carry "2" or "True" where 2.19+ writes native
+# types. The coercions below accept exactly Ansible's own boolean vocabulary
+# and digit strings; anything else degrades to the never-recorded default.
+_BOOL_TRUE_STRINGS = frozenset({"true", "yes", "on", "1"})
+_BOOL_FALSE_STRINGS = frozenset({"false", "no", "off", "0"})
+
+
+def _coerce_bool(value):
+    """Return a real bool for bools and Ansible-stringified bools, else None."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in _BOOL_TRUE_STRINGS:
+            return True
+        if lowered in _BOOL_FALSE_STRINGS:
+            return False
+    return None
+
+
+def _coerce_count(value):
+    """Return a non-negative int for ints and digit strings, else None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
 def checkpoint_facts(checkpoint) -> dict:
     """Flattened named view of a checkpoint's cross-phase facts.
 
@@ -151,16 +184,18 @@ def checkpoint_facts(checkpoint) -> dict:
     return {
         KEY_ARGOCD_RUN_ID: data.get(KEY_ARGOCD_RUN_ID) or "",
         KEY_ARGOCD_DISCOVERY_NAMESPACES: namespaces if isinstance(namespaces, dict) else {},
-        # Strict boolean: a malformed value like the string "false" must degrade
-        # to False, never coerce truthy — this flag feeds finalization's legacy
-        # discharge branch, which deletes the auto-import ConfigMap.
-        KEY_AUTO_IMPORT_STRATEGY_CHANGED: data.get(KEY_AUTO_IMPORT_STRATEGY_CHANGED, False) is True,
+        # Ansible's own boolean vocabulary coerces; anything else — e.g. a
+        # hand-edited "banana" — degrades to False, never truthy: this flag
+        # feeds finalization's legacy discharge branch, which deletes the
+        # auto-import ConfigMap. The string forms exist because the ansible-core
+        # floor stringifies folded scalars (see _coerce_bool).
+        KEY_AUTO_IMPORT_STRATEGY_CHANGED: _coerce_bool(data.get(KEY_AUTO_IMPORT_STRATEGY_CHANGED, False)) is True,
         # None means never recorded; wrong-typed values degrade to None so the
         # roles' `is not none` guards treat them as never recorded.
         KEY_EXPECTED_MANAGED_CLUSTER_NAMES: names if isinstance(names, list) else None,
-        KEY_EXPECTED_MANAGED_CLUSTER_COUNT: count if isinstance(count, int) and not isinstance(count, bool) else None,
-        KEY_PRIMARY_HAS_OBSERVABILITY: primary_obs if isinstance(primary_obs, bool) else None,
-        KEY_SECONDARY_HAS_OBSERVABILITY: secondary_obs if isinstance(secondary_obs, bool) else None,
+        KEY_EXPECTED_MANAGED_CLUSTER_COUNT: _coerce_count(count),
+        KEY_PRIMARY_HAS_OBSERVABILITY: _coerce_bool(primary_obs),
+        KEY_SECONDARY_HAS_OBSERVABILITY: _coerce_bool(secondary_obs),
         KEY_SAVED_BACKUP_SCHEDULE: saved_schedule if isinstance(saved_schedule, dict) else None,
         KEY_BACKUP_SCHEDULE_ENABLED_AT: data.get(KEY_BACKUP_SCHEDULE_ENABLED_AT) or "",
         KEY_RESUME_START_PHASE: resume_summary.get(KEY_RESUME_START_PHASE) or "",

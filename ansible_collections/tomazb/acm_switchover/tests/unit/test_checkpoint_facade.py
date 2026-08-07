@@ -50,15 +50,19 @@ def test_checkpoint_facts_degrades_malformed_shapes_to_defaults():
         assert facts["resume_start_phase"] == ""
 
 
-def test_auto_import_flag_requires_actual_boolean_true():
-    """A malformed checkpoint (hand-edited, corrupt) carrying the STRING "false"
-    must not coerce truthy — the flag feeds finalization's legacy discharge
-    branch, which deletes the auto-import ConfigMap (external review, PR #224)."""
-    for malformed_value in ("false", "true", "yes", 1, [True], {"v": True}):
-        facts = checkpoint_facts({"operational_data": {"auto_import_strategy_changed": malformed_value}})
-        assert facts["auto_import_strategy_changed"] is False, repr(malformed_value)
-    facts = checkpoint_facts({"operational_data": {"auto_import_strategy_changed": True}})
-    assert facts["auto_import_strategy_changed"] is True
+def test_auto_import_flag_coerces_ansible_bool_vocabulary_only():
+    """The ansible-core floor (2.15-2.18, jinja2_native off) stringifies folded
+    scalars, so checkpoints written there may carry "True"/"true" where 2.19+
+    writes a native bool — those must keep discharging the legacy branch.
+    Anything outside Ansible's boolean vocabulary (hand-edited, corrupt) must
+    degrade to False, never coerce truthy: the flag feeds finalization's legacy
+    discharge branch, which deletes the auto-import ConfigMap."""
+    for truthy in (True, "true", "True", "TRUE", "yes", "on", "1"):
+        facts = checkpoint_facts({"operational_data": {"auto_import_strategy_changed": truthy}})
+        assert facts["auto_import_strategy_changed"] is True, repr(truthy)
+    for falsy in (False, "false", "False", "no", "off", "0", "banana", 1, 2, [True], {"v": True}, None):
+        facts = checkpoint_facts({"operational_data": {"auto_import_strategy_changed": falsy}})
+        assert facts["auto_import_strategy_changed"] is False, repr(falsy)
 
 
 def test_record_resume_start_phase_replaces_whole_summary():
@@ -84,16 +88,39 @@ def test_auto_import_marker_constants():
     assert AUTO_IMPORT_MARKER_VALUE == "acm-switchover"
 
 
+def test_floor_stringified_scalars_coerce_to_native_types():
+    """ansible-core 2.15-2.18 (jinja2_native off) stringifies folded set_fact
+    scalars before they reach checkpoint_phase — verified by a live 2.18
+    round-trip: expected_managed_cluster_count lands as the string "2". Those
+    checkpoints must still resume: digit strings coerce to int, Ansible bool
+    vocabulary coerces to bool (external review, PR #224)."""
+    facts = checkpoint_facts(
+        {
+            "operational_data": {
+                "expected_managed_cluster_names": ["c1", "c2"],
+                "expected_managed_cluster_count": "2",
+                "primary_has_observability": "True",
+                "secondary_has_observability": "false",
+                "auto_import_strategy_changed": "True",
+            }
+        }
+    )
+    assert facts["expected_managed_cluster_names"] == ["c1", "c2"]
+    assert facts["expected_managed_cluster_count"] == 2
+    assert facts["primary_has_observability"] is True
+    assert facts["secondary_has_observability"] is False
+    assert facts["auto_import_strategy_changed"] is True
+
+
 def test_wrong_typed_expectation_and_observability_values_degrade_to_none():
-    """The docstring's degradation contract covers every key: wrong-typed
-    values must read as never-recorded (None) so the roles' `is not none`
-    guards skip them (external review, PR #224)."""
+    """Values outside the coercible vocabulary read as never-recorded (None)
+    so the roles' `is not none` guards skip them (external review, PR #224)."""
     facts = checkpoint_facts(
         {
             "operational_data": {
                 "expected_managed_cluster_names": "not-a-list",
-                "expected_managed_cluster_count": "3",
-                "primary_has_observability": "yes",
+                "expected_managed_cluster_count": "not-a-number",
+                "primary_has_observability": "maybe",
                 "secondary_has_observability": 1,
             }
         }

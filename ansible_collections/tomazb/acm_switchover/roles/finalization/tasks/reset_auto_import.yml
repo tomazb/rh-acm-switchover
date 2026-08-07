@@ -46,7 +46,9 @@
     state: absent
   register: acm_switchover_reset_auto_import_result
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    # Strict execute gate: validate mode is documented as read-only, so the
+    # delete must not fire there (reads above stay on the != dry_run gate).
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - >-
       (_auto_import_marker_present | default(false) | bool)
       or (_auto_import_strategy_changed | default(false) | bool)
