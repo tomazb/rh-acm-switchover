@@ -91,6 +91,11 @@
       metadata:
         name: import-controller-config
         namespace: multicluster-engine
+        annotations:
+          # Ownership marker: written atomically with the mutation so the reset
+          # obligation survives any interruption (issue #214, audit C3). Must
+          # match AUTO_IMPORT_MARKER_ANNOTATION/VALUE in module_utils/constants.py.
+          acm-switchover.open-cluster-management.io/import-strategy-set-by: acm-switchover
       data:
         autoImportStrategy: ImportAndSync
   register: _auto_import_patched

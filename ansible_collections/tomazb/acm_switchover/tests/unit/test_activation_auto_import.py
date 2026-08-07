@@ -106,9 +106,9 @@ def test_activation_result_defaults_unknown_changed_to_false():
 def test_finalization_restores_auto_import_reset_flag_from_checkpoint():
     """finalization/main.yml must rehydrate auto-import reset intent before reset runs."""
     text = (FINALIZATION_TASKS / "main.yml").read_text()
-    assert "_checkpoint_enter.checkpoint" in text
+    assert "(_checkpoint_enter | default({})).get('facts', {})" in text
     assert "auto_import_strategy_changed" in text, (
-        "finalization/main.yml must restore auto_import_strategy_changed from checkpoint operational_data "
+        "finalization/main.yml must restore auto_import_strategy_changed from checkpoint facts "
         "before including reset_auto_import.yml"
     )
 
@@ -246,3 +246,101 @@ def test_constants_include_auto_import():
     assert "AUTO_IMPORT_STRATEGY_SYNC" in content
     assert "IMMEDIATE_IMPORT_ANNOTATION" in content
     assert "LOCAL_CLUSTER_NAME" in content
+
+
+def test_import_and_sync_patch_carries_ownership_marker():
+    """Issue #214 / audit C3: the obligation marker must ride the mutation itself,
+    so an interruption can never separate the change from its evidence."""
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+        AUTO_IMPORT_MARKER_ANNOTATION,
+        AUTO_IMPORT_MARKER_VALUE,
+    )
+
+    tasks = yaml.safe_load((ACTIVATION_TASKS / "manage_auto_import.yml").read_text())
+    patch_task = next(t for t in tasks if t.get("name") == "Set autoImportStrategy to ImportAndSync")
+    definition = patch_task["kubernetes.core.k8s"]["definition"]
+    annotations = definition["metadata"].get("annotations", {})
+    assert annotations.get(AUTO_IMPORT_MARKER_ANNOTATION) == AUTO_IMPORT_MARKER_VALUE
+    assert definition["data"]["autoImportStrategy"] == "ImportAndSync"
+
+
+def _load_reset_tasks():
+    return yaml.safe_load((FINALIZATION_TASKS / "reset_auto_import.yml").read_text())
+
+
+def _when_text(task):
+    when = task.get("when", "")
+    if isinstance(when, list):
+        return " ".join(str(w) for w in when)
+    return str(when)
+
+
+def test_reset_auto_import_reads_marker_via_constants():
+    """Issue #214 / audit C3: the discharge reader in reset_auto_import.yml must
+    observe the same marker annotation/value that activation's ImportAndSync patch
+    pins (see test_import_and_sync_patch_carries_ownership_marker above). A rename
+    of either constant must fail this test rather than silently degrading discharge
+    to the legacy-only fallback with no red signal."""
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+        AUTO_IMPORT_MARKER_ANNOTATION,
+        AUTO_IMPORT_MARKER_VALUE,
+    )
+
+    text = (FINALIZATION_TASKS / "reset_auto_import.yml").read_text()
+    assert AUTO_IMPORT_MARKER_ANNOTATION in text
+    assert AUTO_IMPORT_MARKER_VALUE in text
+
+
+def test_reset_read_is_not_gated_on_legacy_flag():
+    """The CM read must always run in execute mode: marker observation is the
+    primary discharge signal and cannot depend on in-memory state (audit C3)."""
+    tasks = _load_reset_tasks()
+    read_task = next(t for t in tasks if t.get("name") == "Read import-controller-config before reset")
+    when = _when_text(read_task)
+    assert "_auto_import_strategy_changed" not in when
+    assert "!= 'dry_run'" in when
+
+
+def test_reset_delete_discharges_on_marker_or_legacy_signal():
+    tasks = _load_reset_tasks()
+    delete_task = next(
+        t for t in tasks if t.get("name") == "Delete import-controller-config to restore default autoImportStrategy"
+    )
+    when = _when_text(delete_task)
+    assert "_auto_import_marker_present" in when
+    assert "_auto_import_strategy_changed" in when
+    assert "ImportAndSync" in when
+
+
+def test_finalization_always_includes_reset_auto_import():
+    """The include must not be fenced by feature flag or legacy fact — the
+    observation inside reset_auto_import.yml decides (audit C3 orphan discharge)."""
+    main = yaml.safe_load((FINALIZATION_TASKS / "main.yml").read_text())
+
+    def _find_include(tasks):
+        for task in tasks or []:
+            if task.get("ansible.builtin.include_tasks") == "reset_auto_import.yml":
+                return task
+            for key in ("block", "rescue", "always"):
+                if key in task:
+                    found = _find_include(task[key])
+                    if found:
+                        return found
+        return None
+
+    include_task = _find_include(main)
+    assert include_task is not None
+    assert "when" not in include_task, "reset_auto_import include must be unconditional; inner tasks gate on mode"
+
+
+def test_reset_delete_requires_execute_mode():
+    """validate mode is documented read-only: the discharge delete must be
+    gated on mode == 'execute', not merely != 'dry_run' (external review,
+    PR #224)."""
+    tasks = _load_reset_tasks()
+    delete_task = next(
+        t for t in tasks if t.get("name") == "Delete import-controller-config to restore default autoImportStrategy"
+    )
+    when = _when_text(delete_task)
+    assert "== 'execute'" in when
+    assert "!= 'dry_run'" not in when

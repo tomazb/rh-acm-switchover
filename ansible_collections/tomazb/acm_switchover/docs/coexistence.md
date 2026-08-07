@@ -38,6 +38,10 @@ The Python tool and the collection use separate checkpoint file formats.  They a
 
 When a collection checkpoint exists at `acm_switchover_execution.checkpoint.path`, the
 `checkpoint_phase` action plugin skips any phase listed in `completed_phases` on resume.
+Checkpoints written under ansible-core 2.15–2.18 (classic Jinja) may carry
+stringified scalars (for example `"2"` or `"True"` where 2.19+ writes native
+types); the facts layer coerces digit strings and Ansible's boolean vocabulary
+back to native types on read, so those checkpoints resume identically.
 A fresh run (or `checkpoint.reset: true`) starts from the beginning regardless of any
 pre-existing checkpoint file.
 Dry-run, validate, and native Ansible check-mode collection runs do not write
@@ -68,6 +72,47 @@ match the checkpoint. After both role invocations, it publishes
 `acm_switchover_argocd_resume_result` with `restored_by_hub.primary`,
 `restored_by_hub.secondary`, their once-derived `restored` total, and a Boolean
 `changed` value.
+
+## Auto-import reset obligation (issue #214, audit C3/C4)
+
+**The cluster is the collection's register** for the auto-import reset
+obligation, exactly as it is for the Argo CD pause register: activation's
+`ImportAndSync` patch writes the ownership annotation
+`acm-switchover.open-cluster-management.io/import-strategy-set-by: acm-switchover`
+in the same API call as the mutation. Finalization discharges by observation —
+it deletes `multicluster-engine/import-controller-config` when the marker is
+present (or the legacy `auto_import_strategy_changed` signal fires) and the
+strategy is still `ImportAndSync`. The delete itself runs only in `execute`
+mode — `dry_run` and `validate` stay read-only. Preflight reports a
+non-blocking warning (`preflight-auto-import-orphan`) when either hub carries
+a marked `ImportAndSync` ConfigMap left by an interrupted run (in
+`restore_only` mode only the secondary hub is probed, since the primary hub
+may not be configured at all in that flow).
+
+Equivalence with the Python CLI: Python's state file is always on, so its
+`auto_import_strategy_set` obligation survives interruption by construction.
+The collection reaches the same invariant — an obligation is discharged only
+when the reset is proven — via the cluster marker, without requiring
+checkpointing to be enabled.
+
+**Intentional divergence on read failure:** the collection fails finalization
+closed when `import-controller-config` cannot be read, because the cluster is
+its only register and it has nothing else to consult; the Python CLI, by
+contrast, warns and continues when its state file records no pending
+`auto_import_strategy_set` obligation (`modules/finalization.py`
+`_ensure_auto_import_default`), since an unreadable ConfigMap without a
+recorded obligation cannot represent an undischarged reset.
+
+**Default posture (audit C4):** `checkpoint.enabled` remains `false` by
+default. Without checkpointing the collection has no resume and no
+hub-identity binding for resumed runs; enabling it is the operator's opt-in
+for resumable executions. The safety obligations that must survive
+interruption (Argo CD pause register, auto-import reset) live on the cluster
+and do not depend on this setting.
+
+**resume_summary:** both runtimes now use replace semantics — each resumed
+process records the phase it started at (`resume_start_phase`), last resume
+wins. Shared key names are pinned by `tests/test_checkpoint_state_parity.py`.
 
 ## GitOps Integration Boundary
 

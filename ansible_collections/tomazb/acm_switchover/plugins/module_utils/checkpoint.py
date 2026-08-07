@@ -103,3 +103,110 @@ def is_unsafe_legacy_checkpoint(checkpoint: dict) -> bool:
 def should_resume_phase(checkpoint: dict, phase: str) -> bool:
     """Return True if the phase still needs to run, False if already completed."""
     return phase not in checkpoint.get("completed_phases", [])
+
+
+# Named-operation vocabulary over checkpoint operational_data (issue #214).
+# This module owns the key literals: roles and playbooks read the flattened
+# `facts` returned by checkpoint_phase, never raw operational_data keys
+# (guardrail: tests/unit/test_checkpoint_vocabulary_guardrail.py). The KEY_*
+# constants are stable surface for plugins and for the cross-runtime parity
+# tests; the raw string literals must not be duplicated outside this module.
+KEY_ARGOCD_RUN_ID = "argocd_run_id"
+KEY_ARGOCD_DISCOVERY_NAMESPACES = "argocd_discovery_namespaces"
+KEY_AUTO_IMPORT_STRATEGY_CHANGED = "auto_import_strategy_changed"
+KEY_EXPECTED_MANAGED_CLUSTER_NAMES = "expected_managed_cluster_names"
+KEY_EXPECTED_MANAGED_CLUSTER_COUNT = "expected_managed_cluster_count"
+KEY_PRIMARY_HAS_OBSERVABILITY = "primary_has_observability"
+KEY_SECONDARY_HAS_OBSERVABILITY = "secondary_has_observability"
+KEY_SAVED_BACKUP_SCHEDULE = "saved_backup_schedule"
+KEY_BACKUP_SCHEDULE_ENABLED_AT = "backup_schedule_enabled_at"
+KEY_RESUME_SUMMARY = "resume_summary"
+KEY_RESUME_START_PHASE = "resume_start_phase"
+
+
+def _operational_data(checkpoint) -> dict:
+    if not isinstance(checkpoint, dict):
+        return {}
+    data = checkpoint.get("operational_data")
+    return data if isinstance(data, dict) else {}
+
+
+# On the collection's ansible-core floor (2.15-2.18, jinja2_native off) folded
+# set_fact scalars are stringified before they reach checkpoint_phase, so a
+# checkpoint written there can carry "2" or "True" where 2.19+ writes native
+# types. The coercions below accept exactly Ansible's own boolean vocabulary
+# and digit strings; anything else degrades to the never-recorded default.
+_BOOL_TRUE_STRINGS = frozenset({"true", "yes", "on", "1"})
+_BOOL_FALSE_STRINGS = frozenset({"false", "no", "off", "0"})
+
+
+def _coerce_bool(value):
+    """Return a real bool for bools and Ansible-stringified bools, else None."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in _BOOL_TRUE_STRINGS:
+            return True
+        if lowered in _BOOL_FALSE_STRINGS:
+            return False
+    return None
+
+
+def _coerce_count(value):
+    """Return a non-negative int for ints and digit strings, else None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def checkpoint_facts(checkpoint) -> dict:
+    """Flattened named view of a checkpoint's cross-phase facts.
+
+    Malformed or missing shapes degrade to defaults (same tolerance model as
+    the Python CLI's RunSummary.from_snapshot). Values that roles must be able
+    to distinguish as never-recorded stay None.
+    """
+    data = _operational_data(checkpoint)
+    namespaces = data.get(KEY_ARGOCD_DISCOVERY_NAMESPACES)
+    saved_schedule = data.get(KEY_SAVED_BACKUP_SCHEDULE)
+    resume_summary = data.get(KEY_RESUME_SUMMARY)
+    if not isinstance(resume_summary, dict):
+        resume_summary = {}
+    names = data.get(KEY_EXPECTED_MANAGED_CLUSTER_NAMES)
+    count = data.get(KEY_EXPECTED_MANAGED_CLUSTER_COUNT)
+    primary_obs = data.get(KEY_PRIMARY_HAS_OBSERVABILITY)
+    secondary_obs = data.get(KEY_SECONDARY_HAS_OBSERVABILITY)
+    return {
+        KEY_ARGOCD_RUN_ID: data.get(KEY_ARGOCD_RUN_ID) or "",
+        KEY_ARGOCD_DISCOVERY_NAMESPACES: namespaces if isinstance(namespaces, dict) else {},
+        # Ansible's own boolean vocabulary coerces; anything else — e.g. a
+        # hand-edited "banana" — degrades to False, never truthy: this flag
+        # feeds finalization's legacy discharge branch, which deletes the
+        # auto-import ConfigMap. The string forms exist because the ansible-core
+        # floor stringifies folded scalars (see _coerce_bool).
+        KEY_AUTO_IMPORT_STRATEGY_CHANGED: _coerce_bool(data.get(KEY_AUTO_IMPORT_STRATEGY_CHANGED, False)) is True,
+        # None means never recorded; wrong-typed values degrade to None so the
+        # roles' `is not none` guards treat them as never recorded.
+        KEY_EXPECTED_MANAGED_CLUSTER_NAMES: names if isinstance(names, list) else None,
+        KEY_EXPECTED_MANAGED_CLUSTER_COUNT: _coerce_count(count),
+        KEY_PRIMARY_HAS_OBSERVABILITY: _coerce_bool(primary_obs),
+        KEY_SECONDARY_HAS_OBSERVABILITY: _coerce_bool(secondary_obs),
+        KEY_SAVED_BACKUP_SCHEDULE: saved_schedule if isinstance(saved_schedule, dict) else None,
+        KEY_BACKUP_SCHEDULE_ENABLED_AT: data.get(KEY_BACKUP_SCHEDULE_ENABLED_AT) or "",
+        KEY_RESUME_START_PHASE: resume_summary.get(KEY_RESUME_START_PHASE) or "",
+    }
+
+
+def record_resume_start_phase(checkpoint: dict, phase: str) -> None:
+    """Record where this resumed run starts. Replace semantics — parity with
+    Python RunRecord.record_resume_start_phase (last resume wins)."""
+    data = checkpoint.get("operational_data")
+    if not isinstance(data, dict):
+        data = {}
+        checkpoint["operational_data"] = data
+    data[KEY_RESUME_SUMMARY] = {KEY_RESUME_START_PHASE: phase}

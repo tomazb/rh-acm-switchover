@@ -20,6 +20,10 @@ acm_switchover_execution:
     klusterlet_worker_seconds: 180
     klusterlet_recheck_seconds: 300
     klusterlet_recheck_interval_seconds: 10
+  # Opt-in resume: enabling checkpointing adds resumable execution with
+  # hub-identity binding. Safety obligations that must survive interruption
+  # (Argo CD pause register, auto-import reset marker) live on the cluster
+  # and do NOT depend on this setting — see docs/coexistence.md.
   checkpoint:
     enabled: false
     backend: file
