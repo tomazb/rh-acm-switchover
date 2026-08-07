@@ -1,10 +1,10 @@
 # TST-00 — Advanced Safety Testing Foundation
 
-**Status:** Approved design; publication slice only  
-**Type:** Design/specification only  
-**Repository:** `tomazb/rh-acm-switchover`  
-**Primary development branch:** `ansible`  
-**Audited revision:** `1e0486eb9edde99b10d37d13a051523c57901ba7`  
+**Status:** Approved design; publication slice only
+**Type:** Design/specification only
+**Repository:** `tomazb/rh-acm-switchover`
+**Primary development branch:** `ansible`
+**Audited revision:** `98a228212d56418b50d09a4089dab18f53c26cf0`
 **Date:** 2026-08-07
 
 ## 1. Purpose
@@ -35,7 +35,7 @@ The foundation is test architecture only. Python CLI and Ansible Collection prod
 The audited `ansible` revision is:
 
 ```text
-1e0486eb9edde99b10d37d13a051523c57901ba7
+98a228212d56418b50d09a4089dab18f53c26cf0
 ```
 
 The current branch already has a substantial testing architecture.
@@ -223,7 +223,9 @@ TST-03 compares observable safety semantics, not internal variables, number of t
 
 ### 4.3 Fail closed on comparator uncertainty
 
-A differential normalizer must never discard a difference simply because it is inconvenient. Unknown events classify as `UNCLASSIFIED` and block a parity PASS until explicitly classified.
+A differential normalizer must never discard a difference simply because it is inconvenient. Unknown events classify as `UNCLASSIFIED_EVENT`.
+
+The comparator maps either an `UNCLASSIFIED_EVENT` or any otherwise-unclassified comparison result to blocking `UNCLASSIFIED_DIFFERENCE` until explicitly classified.
 
 ### 4.4 Reproducibility over randomness
 
@@ -519,25 +521,38 @@ method
 scenario_id
 invariant_ids
 implementation
-seed/corpus/schedule identifier
-live=false|true
-mutation_attempted=false|true
-certification_eligible=false|true
+seed/corpus/schedule
+live
+mutation_attempted
+certification_eligible
 redaction_status
+controller_run_id (required for controller-owned live evidence)
+controller_segment_id (required for controller-owned live evidence)
+authorization_or_approval_reference (required for controller-owned live evidence)
+eligibility_gate_result (required for controller-owned live evidence; also required when certification_eligible=true)
 ```
 
 Defaults:
 
 ```text
+All TST-generated results:
+    live = false
+    certification_eligible = false
+
 TST-01 ... TST-08:
     live = false
     certification_eligible = false
 
 TST-09 ... TST-10:
+    live = false
     certification_eligible = false
 ```
 
-TST-09/TST-10 may become certification-relevant only through a separately approved release-controller contract. The testing method itself never decides certification eligibility.
+`live=true` is permitted only when evidence is produced through an approved controller-owned live entrypoint.
+
+`certification_eligible=true` is never chosen by a test method or harness; it must come from a traceable approved controller/release eligibility decision and the recorded `eligibility_gate_result`.
+
+TST-09/TST-10 may become certification-relevant only through a future approved release-controller contract. The testing method itself never decides certification eligibility.
 
 ## 10. TST program dependency model
 
@@ -647,15 +662,17 @@ inject failure at each meaningful boundary.
 Required outcome classes:
 
 ```text
-NO_MUTATION
-MUTATION_CONFIRMED
-MUTATION_NOT_APPLIED
-MUTATION_OUTCOME_AMBIGUOUS
-RECOVERED_BY_RECONCILIATION
-FAIL_CLOSED
+NO_MUTATION                  — no mutating request was attempted.
+MUTATION_NOT_APPLIED         — a mutating request was attempted, and external non-commit was positively established.
+MUTATION_CONFIRMED           — the required mutation/post-state was positively verified.
+MUTATION_OUTCOME_AMBIGUOUS   — a mutating request may have committed, but available evidence cannot determine the external result.
+RECOVERED_BY_RECONCILIATION  — an initially ambiguous or incomplete outcome was resolved by explicit reconciliation of authoritative external state.
+FAIL_CLOSED                  — execution stopped without claiming success because the required safety state or mutation outcome could not be established.
 ```
 
-The suite must not convert ambiguous state to success merely to simplify assertions.
+`MUTATION_OUTCOME_AMBIGUOUS` is not success and must never be normalized directly to `MUTATION_CONFIRMED`.
+
+For NET-BEFORE-SEND and NET-AFTER-SEND-BEFORE-COMMIT fault classes, outcomes must remain non-success unless non-commit or required post-state is proven. For NET-AFTER-COMMIT-BEFORE-RESPONSE and NET-PARTIAL-RESPONSE classes, ambiguity is expected until reconciliation establishes a safe authoritative outcome.
 
 The current Collection Argo CD crash-before-checkpoint residual divergence should become one of the first characterized cases.
 
