@@ -2163,7 +2163,9 @@ def test_resumed_enter_replaces_resume_summary_and_flags_process(tmp_path):
     )
     result = action.run(task_vars=task_vars)
     assert result.get("failed") is not True
-    assert result["ansible_facts"] == {"_acm_switchover_resume_recorded": True}
+    assert result["ansible_facts"] == {
+        "_acm_switchover_resume_recorded": str(os.getpid())
+    }, "sentinel must carry the controller PID so a stale cached fact cannot fence a later process"
     with open(path, encoding="utf-8") as fh:
         persisted = json.load(fh)
     assert persisted["operational_data"]["resume_summary"] == {"resume_start_phase": "activation"}
@@ -2171,7 +2173,7 @@ def test_resumed_enter_replaces_resume_summary_and_flags_process(tmp_path):
 
 def test_same_process_later_enter_does_not_overwrite_resume_summary(tmp_path):
     task_vars = _task_vars_with_operation_identity()
-    task_vars["_acm_switchover_resume_recorded"] = True
+    task_vars["_acm_switchover_resume_recorded"] = str(os.getpid())
     path = _write_resumable_checkpoint(tmp_path, task_vars)
     with open(path, encoding="utf-8") as fh:
         record = json.load(fh)
@@ -2201,3 +2203,21 @@ def test_fresh_run_records_no_resume_summary(tmp_path):
     assert result.get("failed") is not True
     assert "ansible_facts" not in result
     assert result["facts"]["resume_start_phase"] == ""
+
+
+def test_stale_cached_sentinel_from_other_process_does_not_fence(tmp_path):
+    """A sentinel persisted by fact caching from a previous ansible-playbook
+    process carries that process's PID; the current process must still replace
+    resume_summary (external review, PR #224)."""
+    task_vars = _task_vars_with_operation_identity()
+    task_vars["_acm_switchover_resume_recorded"] = "99999999-stale"
+    path = _write_resumable_checkpoint(tmp_path, task_vars)
+    action = _make_checkpoint_action(
+        {"phase": "activation", "status": "enter", "checkpoint": {"enabled": True, "path": path}}
+    )
+    result = action.run(task_vars=task_vars)
+    assert result.get("failed") is not True
+    assert result["ansible_facts"] == {"_acm_switchover_resume_recorded": str(os.getpid())}
+    with open(path, encoding="utf-8") as fh:
+        persisted = json.load(fh)
+    assert persisted["operational_data"]["resume_summary"] == {"resume_start_phase": "activation"}

@@ -27,16 +27,16 @@
   ansible.builtin.assert:
     that:
       - >-
-        ((_checkpoint_enter.facts | default({})).get('expected_managed_cluster_names', none))
+        (((_checkpoint_enter | default({})).get('facts', {})).get('expected_managed_cluster_names', none))
         is not none
       - >-
-        ((_checkpoint_enter.facts | default({})).get('expected_managed_cluster_count', none))
+        (((_checkpoint_enter | default({})).get('facts', {})).get('expected_managed_cluster_count', none))
         is not none
       - >-
-        ((_checkpoint_enter.facts | default({})).get('primary_has_observability', none))
+        (((_checkpoint_enter | default({})).get('facts', {})).get('primary_has_observability', none))
         is not none
       - >-
-        ((_checkpoint_enter.facts | default({})).get('secondary_has_observability', none))
+        (((_checkpoint_enter | default({})).get('facts', {})).get('secondary_has_observability', none))
         is not none
     fail_msg: >-
       Skipped preflight checkpoint is missing required operational metadata
@@ -53,26 +53,26 @@
 - name: Restore operational facts from checkpoint when preflight is skipped
   ansible.builtin.set_fact:
     acm_switchover_expected_managed_cluster_names: >-
-      {{ (_checkpoint_enter.facts | default({})).get('expected_managed_cluster_names') }}
+      {{ ((_checkpoint_enter | default({})).get('facts', {})).get('expected_managed_cluster_names') }}
     acm_switchover_expected_managed_cluster_count: >-
-      {{ (_checkpoint_enter.facts | default({})).get('expected_managed_cluster_count') }}
+      {{ ((_checkpoint_enter | default({})).get('facts', {})).get('expected_managed_cluster_count') }}
     acm_switchover_primary_has_observability: >-
-      {{ (_checkpoint_enter.facts | default({})).get('primary_has_observability') }}
+      {{ ((_checkpoint_enter | default({})).get('facts', {})).get('primary_has_observability') }}
     acm_switchover_secondary_has_observability: >-
-      {{ (_checkpoint_enter.facts | default({})).get('secondary_has_observability') }}
+      {{ ((_checkpoint_enter | default({})).get('facts', {})).get('secondary_has_observability') }}
   when:
     - (_checkpoint_enter | default({})).skipped_phase | default(false)
     - >-
-      ((_checkpoint_enter.facts | default({})).get('expected_managed_cluster_names', none))
+      (((_checkpoint_enter | default({})).get('facts', {})).get('expected_managed_cluster_names', none))
       is not none
     - >-
-      ((_checkpoint_enter.facts | default({})).get('expected_managed_cluster_count', none))
+      (((_checkpoint_enter | default({})).get('facts', {})).get('expected_managed_cluster_count', none))
       is not none
     - >-
-      ((_checkpoint_enter.facts | default({})).get('primary_has_observability', none))
+      (((_checkpoint_enter | default({})).get('facts', {})).get('primary_has_observability', none))
       is not none
     - >-
-      ((_checkpoint_enter.facts | default({})).get('secondary_has_observability', none))
+      (((_checkpoint_enter | default({})).get('facts', {})).get('secondary_has_observability', none))
       is not none
 
 - name: Record whether full preflight validation should run

@@ -82,3 +82,43 @@ def test_auto_import_marker_constants():
 
     assert AUTO_IMPORT_MARKER_ANNOTATION == "acm-switchover.open-cluster-management.io/import-strategy-set-by"
     assert AUTO_IMPORT_MARKER_VALUE == "acm-switchover"
+
+
+def test_wrong_typed_expectation_and_observability_values_degrade_to_none():
+    """The docstring's degradation contract covers every key: wrong-typed
+    values must read as never-recorded (None) so the roles' `is not none`
+    guards skip them (external review, PR #224)."""
+    facts = checkpoint_facts(
+        {
+            "operational_data": {
+                "expected_managed_cluster_names": "not-a-list",
+                "expected_managed_cluster_count": "3",
+                "primary_has_observability": "yes",
+                "secondary_has_observability": 1,
+            }
+        }
+    )
+    assert facts["expected_managed_cluster_names"] is None
+    assert facts["expected_managed_cluster_count"] is None
+    assert facts["primary_has_observability"] is None
+    assert facts["secondary_has_observability"] is None
+    facts = checkpoint_facts(
+        {
+            "operational_data": {
+                "expected_managed_cluster_names": ["c1"],
+                "expected_managed_cluster_count": 1,
+                "primary_has_observability": True,
+                "secondary_has_observability": False,
+            }
+        }
+    )
+    assert facts["expected_managed_cluster_names"] == ["c1"]
+    assert facts["expected_managed_cluster_count"] == 1
+    assert facts["primary_has_observability"] is True
+    assert facts["secondary_has_observability"] is False
+    assert (
+        checkpoint_facts({"operational_data": {"expected_managed_cluster_count": True}})[
+            "expected_managed_cluster_count"
+        ]
+        is None
+    )

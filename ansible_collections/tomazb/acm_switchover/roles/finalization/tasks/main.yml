@@ -13,26 +13,26 @@
     - name: Restore backup verification baseline from checkpoint
       ansible.builtin.set_fact:
         acm_switchover_backup_schedule_enabled_at: >-
-          {{ (_checkpoint_enter.facts | default({})).get('backup_schedule_enabled_at') }}
+          {{ ((_checkpoint_enter | default({})).get('facts', {})).get('backup_schedule_enabled_at') }}
       when:
         - acm_switchover_execution.checkpoint.enabled | default(false)
-        - ((_checkpoint_enter.facts | default({})).get('backup_schedule_enabled_at', '')) | length > 0
+        - (((_checkpoint_enter | default({})).get('facts', {})).get('backup_schedule_enabled_at', '')) | length > 0
 
     - name: Restore saved BackupSchedule from checkpoint
       ansible.builtin.set_fact:
         acm_switchover_saved_backup_schedule: >-
-          {{ (_checkpoint_enter.facts | default({})).get('saved_backup_schedule') }}
+          {{ ((_checkpoint_enter | default({})).get('facts', {})).get('saved_backup_schedule') }}
       when:
         - acm_switchover_execution.checkpoint.enabled | default(false)
-        - (_checkpoint_enter.facts | default({})).get('saved_backup_schedule') is mapping
+        - ((_checkpoint_enter | default({})).get('facts', {})).get('saved_backup_schedule') is mapping
 
     - name: Restore deferred auto-import reset flag from checkpoint
       ansible.builtin.set_fact:
         _auto_import_strategy_changed: >-
-          {{ (_checkpoint_enter.facts | default({})).get('auto_import_strategy_changed', false) | bool }}
+          {{ ((_checkpoint_enter | default({})).get('facts', {})).get('auto_import_strategy_changed', false) | bool }}
       when:
         - acm_switchover_execution.checkpoint.enabled | default(false)
-        - ((_checkpoint_enter.facts | default({})).get('auto_import_strategy_changed', false) | bool)
+        - (((_checkpoint_enter | default({})).get('facts', {})).get('auto_import_strategy_changed', false) | bool)
 
     - name: Discover secondary hub resources
       ansible.builtin.include_tasks: discover_resources.yml

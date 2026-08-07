@@ -180,12 +180,16 @@ class ActionModule(ActionBase):
                 not is_non_mutating
                 and checkpoint_data.get("completed_phases")
                 and not already_done
-                and not task_vars.get("_acm_switchover_resume_recorded")
+                and task_vars.get("_acm_switchover_resume_recorded") != str(os.getpid())
             ):
                 # First executing phase of this process on a resumed checkpoint:
                 # replace resume_summary wholesale (parity with Python RunRecord —
                 # last resume wins). Later enters in the same process are fenced
-                # by the _acm_switchover_resume_recorded fact returned below.
+                # by the _acm_switchover_resume_recorded fact returned below. The
+                # sentinel carries the controller PID so a stale value surviving
+                # in a persistent fact cache cannot fence a later process (action
+                # plugins run on the controller, so the PID identifies this
+                # ansible-playbook invocation).
                 record_resume_start_phase(checkpoint_data, phase)
                 resume_summary_changed = True
             if (
@@ -205,7 +209,7 @@ class ActionModule(ActionBase):
                 "facts": checkpoint_facts(checkpoint_data),
             }
             if resume_summary_changed:
-                result["ansible_facts"] = {"_acm_switchover_resume_recorded": True}
+                result["ansible_facts"] = {"_acm_switchover_resume_recorded": str(os.getpid())}
             return result
 
         if is_non_mutating:

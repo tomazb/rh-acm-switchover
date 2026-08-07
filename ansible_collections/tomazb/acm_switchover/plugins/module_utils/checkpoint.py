@@ -106,9 +106,11 @@ def should_resume_phase(checkpoint: dict, phase: str) -> bool:
 
 
 # Named-operation vocabulary over checkpoint operational_data (issue #214).
-# These literals are private to this module: roles read the flattened `facts`
-# returned by checkpoint_phase, never raw operational_data keys (guardrail:
-# tests/unit/test_checkpoint_vocabulary_guardrail.py).
+# This module owns the key literals: roles and playbooks read the flattened
+# `facts` returned by checkpoint_phase, never raw operational_data keys
+# (guardrail: tests/unit/test_checkpoint_vocabulary_guardrail.py). The KEY_*
+# constants are stable surface for plugins and for the cross-runtime parity
+# tests; the raw string literals must not be duplicated outside this module.
 KEY_ARGOCD_RUN_ID = "argocd_run_id"
 KEY_ARGOCD_DISCOVERY_NAMESPACES = "argocd_discovery_namespaces"
 KEY_AUTO_IMPORT_STRATEGY_CHANGED = "auto_import_strategy_changed"
@@ -142,6 +144,10 @@ def checkpoint_facts(checkpoint) -> dict:
     resume_summary = data.get(KEY_RESUME_SUMMARY)
     if not isinstance(resume_summary, dict):
         resume_summary = {}
+    names = data.get(KEY_EXPECTED_MANAGED_CLUSTER_NAMES)
+    count = data.get(KEY_EXPECTED_MANAGED_CLUSTER_COUNT)
+    primary_obs = data.get(KEY_PRIMARY_HAS_OBSERVABILITY)
+    secondary_obs = data.get(KEY_SECONDARY_HAS_OBSERVABILITY)
     return {
         KEY_ARGOCD_RUN_ID: data.get(KEY_ARGOCD_RUN_ID) or "",
         KEY_ARGOCD_DISCOVERY_NAMESPACES: namespaces if isinstance(namespaces, dict) else {},
@@ -149,10 +155,12 @@ def checkpoint_facts(checkpoint) -> dict:
         # to False, never coerce truthy — this flag feeds finalization's legacy
         # discharge branch, which deletes the auto-import ConfigMap.
         KEY_AUTO_IMPORT_STRATEGY_CHANGED: data.get(KEY_AUTO_IMPORT_STRATEGY_CHANGED, False) is True,
-        KEY_EXPECTED_MANAGED_CLUSTER_NAMES: data.get(KEY_EXPECTED_MANAGED_CLUSTER_NAMES),
-        KEY_EXPECTED_MANAGED_CLUSTER_COUNT: data.get(KEY_EXPECTED_MANAGED_CLUSTER_COUNT),
-        KEY_PRIMARY_HAS_OBSERVABILITY: data.get(KEY_PRIMARY_HAS_OBSERVABILITY),
-        KEY_SECONDARY_HAS_OBSERVABILITY: data.get(KEY_SECONDARY_HAS_OBSERVABILITY),
+        # None means never recorded; wrong-typed values degrade to None so the
+        # roles' `is not none` guards treat them as never recorded.
+        KEY_EXPECTED_MANAGED_CLUSTER_NAMES: names if isinstance(names, list) else None,
+        KEY_EXPECTED_MANAGED_CLUSTER_COUNT: count if isinstance(count, int) and not isinstance(count, bool) else None,
+        KEY_PRIMARY_HAS_OBSERVABILITY: primary_obs if isinstance(primary_obs, bool) else None,
+        KEY_SECONDARY_HAS_OBSERVABILITY: secondary_obs if isinstance(secondary_obs, bool) else None,
         KEY_SAVED_BACKUP_SCHEDULE: saved_schedule if isinstance(saved_schedule, dict) else None,
         KEY_BACKUP_SCHEDULE_ENABLED_AT: data.get(KEY_BACKUP_SCHEDULE_ENABLED_AT) or "",
         KEY_RESUME_START_PHASE: resume_summary.get(KEY_RESUME_START_PHASE) or "",
