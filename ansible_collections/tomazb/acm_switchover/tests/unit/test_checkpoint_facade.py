@@ -149,3 +149,12 @@ def test_wrong_typed_expectation_and_observability_values_degrade_to_none():
         ]
         is None
     )
+
+
+def test_negative_count_degrades_to_none():
+    """The count helper promises non-negative: a malformed -1 must read as
+    never recorded, not as a recorded expectation (CodeRabbit, PR #224)."""
+    facts = checkpoint_facts({"operational_data": {"expected_managed_cluster_count": -1}})
+    assert facts["expected_managed_cluster_count"] is None
+    facts = checkpoint_facts({"operational_data": {"expected_managed_cluster_count": 0}})
+    assert facts["expected_managed_cluster_count"] == 0

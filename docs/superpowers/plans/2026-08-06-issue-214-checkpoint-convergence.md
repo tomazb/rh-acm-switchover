@@ -8,6 +8,23 @@
 
 **Tech Stack:** Python 3 (Ansible action plugin + module_utils), Ansible role YAML, pytest (root suite + collection unit suite), yaml-contract tests.
 
+> **Post-plan amendments (2026-08-07).** This plan is a dated design record;
+> review fixes changed three contracts after execution, and the shipped tests —
+> not the snippets below — are authoritative:
+> 1. The resume sentinel `_acm_switchover_resume_recorded` carries the
+>    controller PID (`str(os.getpid())`), not `True`, so a stale value from a
+>    persistent fact cache cannot fence a later process
+>    (`test_checkpoint_phase_runtime.py`).
+> 2. The orphan-check read uses `ignore_errors: true`, never
+>    `failed_when: false`, so the registered result keeps its real `failed`
+>    state and the read-failure warning stays reachable
+>    (`test_preflight_auto_import_orphan.py`); the primary hub is probed only
+>    outside `restore_only` mode.
+> 3. `checkpoint_facts` coerces floor-stringified scalars (digit strings,
+>    Ansible bool vocabulary) instead of strict isinstance typing, and the
+>    finalization discharge delete is gated on `mode == 'execute'`
+>    (`test_checkpoint_facade.py`, `test_activation_auto_import.py`).
+
 ## Global Constraints
 
 - Formatting: `black --line-length 120` (project has no black config; 120 is CI's).
