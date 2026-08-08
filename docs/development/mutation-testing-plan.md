@@ -514,6 +514,52 @@ scope. The largest remaining groups are `_verify_old_hub_state`,
 3. Review `_check_velero_logs_for_backup` and `_archive_restore_details` as
    diagnostic/helper survivors before spending more mutation budget on them.
 
+## Phase 1 Baseline Record: `lib/rbac_validator.py`
+
+- **Source target:** `lib/rbac_validator.py`
+- **Baseline commit (before triage):** `98a22821` (`ansible` branch)
+- **Python baseline command/result:** `python -m pytest tests/test_rbac_validator.py tests/test_rbac_collection_parity.py -q` → `105 passed`
+- **Mutation tool/version:** `mutmut 3.6.0`
+- **Mutation command:** `mutmut run` (using a temporary `[mutmut]` config: `source_paths = lib/rbac_validator.py`, `pytest_add_cli_args_test_selection = tests/test_rbac_validator.py`, `also_copy = lib/`, `do_not_mutate_patterns = raise .*Error\(` and `logger\.(info|debug|warning|error|exception)\(`; `tests/test_rbac_collection_parity.py` is excluded from the mutant workspace because it fails to collect there with `ModuleNotFoundError: ansible_collections`, so it only runs in the plain Python baseline above, not under mutation)
+- **Counts before triage:** `total 657 / killed 453 / survived 204 / not_checked 0`
+- **Counts after triage (this record):** `total 657 / killed 477 / survived 180 / not_checked 0`
+- `setup.cfg` was restored to its `lib/validation.py` scope after this baseline; reruns must reconstruct the config above.
+
+### Triaged and killed (24 mutants, 9 new tests in `tests/test_rbac_validator.py`)
+
+| Survivor | Class | Fix |
+| --- | --- | --- |
+| `check_permission__mutmut_1` (`cache_key = (api_group, resource, verb, namespace)` → `None`) | missing assertion | `test_check_permission_cache_is_keyed_by_full_permission_tuple` — two distinct permission checks on one validator instance must each hit the API and return their own result; a collapsed cache key would leak the first result onto the second. |
+| `check_permission__mutmut_13`/`_38` (`resource_name = resource` → `None`; `resource_attributes=resource_attrs` → `None`) | missing assertion | `test_check_permission_builds_resource_attributes_for_plain_resource` — asserts the exact `V1ResourceAttributes`/`V1SelfSubjectAccessReviewSpec` call args for the common non-subresource path (only the subresource-splitting path had this assertion before). |
+| `validate_cluster_permissions__mutmut_60` (`skip_observability and "observability" in api_group` → `or`) | missing scenario | `test_validate_cluster_permissions_decommission_checks_mco_delete_when_observability_present` — isolates `include_decommission=True` from `include_old_hub_finalization`, which previously masked this mutant by checking the same permission through a different code path. |
+| `validate_cluster_permissions__mutmut_78`/`_77`/`_103`/`_102` (`all_valid = False` → `True`/`None` in the decommission and old-hub-finalization blocks) | missing assertion | `test_validate_cluster_permissions_decommission_failure_sets_all_valid_false` and the old-hub-finalization counterpart — each denies exactly one permission in its own block only, so the base cluster-permission loop's own `all_valid = False` can't mask an inversion deeper in the function. |
+| `validate_cluster_permissions__mutmut_92`/`_67` (dedupe `continue` → `break`) and `_93` (`checked_extra_permissions.add(permission_key)` → `add(None)`) | missing scenario | `test_validate_cluster_permissions_decommission_dedupe_does_not_skip_later_verbs` and the old-hub-finalization counterpart — monkeypatch `DECOMMISSION_PERMISSIONS`/`OLD_HUB_FINALIZATION_PERMISSIONS` with an artificial duplicate verb followed by a distinct verb, since the real permission tables have no in-list duplicates today. `break` would silently stop checking remaining verbs after a duplicate; `add(None)` would break the dedupe match on a real repeat. |
+| `x_validate_decommission_permissions__mutmut_3` (`RBACValidator(primary_client)` → `RBACValidator(None)`) | missing assertion | Added `mock_validator_class.assert_called_once_with(mock_primary_client)` to `test_validate_decommission_permissions_uses_dedicated_validation_path` — the constructor arg was never asserted even though the test already patches `RBACValidator`. |
+| `xǁRBACValidatorǁvalidate_decommission_permissions__mutmut_1` (method `skip_observability: bool = False` → `True`) | missing assertion, safety-relevant | `test_validate_decommission_permissions_default_checks_observability_when_present` — the pre-existing `test_validate_decommission_rbac_succeeds_when_acm_namespace_missing` calls this method bare (no `skip_observability` arg) but never asserted observability permissions were actually checked, so a flipped default would have silently disabled observability RBAC checks. This is distinct from the module-level wrapper's default (`x_validate_decommission_permissions__mutmut_1`, still classified equivalent below) — the wrapper always forwards an explicit value, the method does not always receive one. |
+
+### Residual survivors (180), sampled by cluster
+
+| Survivor group | Representative survivors | Class | Why it survived |
+| --- | --- | --- | --- |
+| `generate_permission_report` banner/section text | 49 survivors: string-literal case/spacing/`"="`-count mutants | equivalent/incidental | Report text is a human-readable log/CLI artifact, not a pinned operator-facing contract (no schema in `docs/ansible-collection/parity-matrix.md` requires exact wording). Sampled several representative mutants directly; all were cosmetic. |
+| `validate_decommission_permissions` report/banner text | `RBACValidator` method (37 remaining) and module-level wrapper (~35) | equivalent/incidental | Same pattern as above — banner strings, blank-line separators, section headers. Sampled the module-level wrapper's mutants directly (ids 1, 9, 10, 12, 13, 16, 17, 19, 21, 22, 24, 26–30); all confirmed cosmetic. |
+| `validate_decommission_permissions` module-level wrapper default | `skip_observability: bool = False` → `True` (`x_validate_decommission_permissions__mutmut_1`) | equivalent | The only caller, `acm_switchover.py`'s primary-hub decommission flow, always forwards an explicit `skip_observability` value, and every test that calls the wrapper passes it explicitly too — the default is unreachable in practice. This does not extend to the `RBACValidator` method's own default; see the killed mutant above. |
+| `validate_all_permissions`, `check_permission` remaining | 13 and 11 survivors, mostly `split`/`rsplit`/maxsplit and default-message-string variants | equivalent/incidental | `resource.split("/", 1)` vs `rsplit`/no-maxsplit/`maxsplit=2` only diverge on resources with 2+ slashes, which never occurs (Kubernetes subresources are always exactly one slash). Default-string mutants (`"Permission denied"` casing, `scope` fallback text) only affect text inside an already-matched exception message prefix. |
+| `_validate_hub` | 10 survivors | deferred | Not sampled this pass — smaller cluster, lower apparent risk from the `generate_permission_report`/`validate_decommission_permissions` sampling pattern; revisit before closing this target out entirely. |
+
+### Next action recommendation
+
+1. Treat this baseline as triaged for its highest-value survivors, not exhausted.
+   The killed set above covers every RBAC-safety-relevant mutant found during
+   review (cache collisions, silently-None resource attributes, an `and`/`or`
+   skip-logic inversion, `all_valid` sign flips, and two dedupe-guard
+   `continue`/`break` swaps).
+2. `_validate_hub` (10 survivors) was not sampled — do that before treating
+   `lib/rbac_validator.py` as fully triaged.
+3. Do not chase the `generate_permission_report`/`validate_decommission_permissions`
+   banner-text clusters (≈120 combined survivors) without an explicit decision to
+   pin exact report wording as an operator-facing contract; today it is not one.
+
 ## Survivor Triage Policy
 
 Classify each surviving mutant before changing tests:
