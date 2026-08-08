@@ -966,7 +966,41 @@ repeat.
 Each forward or reverse mutation is a separate known-state segment. A role transition invalidates the prior profile
 and authorization; neither can be reused after rediscovery or for the reverse leg.
 
-Per-cycle metrics should include cycle number, physical/logical role mapping, duration, API retries, timeouts, mutation count, checkpoint/state size, unresolved obligations, BackupSchedule state, restore state, managed-cluster connectivity, Argo pause/resume state, and final decision.
+Per-cycle evidence must aggregate two separate immutable records: one for the forward known-state segment and one for
+the reverse known-state segment. Each segment record must include:
+
+- the cycle number and leg (`forward` or `reverse`), controller-run and segment identity, and exact source revision;
+- a safe `profile_binding_id`, the segment and controller identity to which the binding was issued, its
+  creation/issuance result, its one-use consumption result, and evidence that no other segment or leg reused it;
+- a safe controller-authorization reference and its result;
+- proof records for physical identity, physical-to-logical role mapping, known state, current authorization, and final
+  post-state, each with a safe proof reference or identifier, proof result, segment binding, observed/captured time or
+  equivalent source-controlled freshness marker, applicable freshness boundary, and `freshness_evidence` evaluation
+  result;
+- pre-mutation obligation-state proof, the obligations created or carried by the segment,
+  `resolved_obligation_proof` with safe proof references and results for every obligation positively discharged, and
+  residual unresolved obligations and any unknown obligation state; and
+- duration, API retry and timeout counts, mutation count, checkpoint/state size, BackupSchedule state, Restore state,
+  managed-cluster connectivity, Argo CD pause/resume state, cooldown evidence where applicable, and the final
+  controller decision.
+
+Every profile binding must be unique within the controller run. The forward and reverse records cannot share a
+profile binding, authorization, or freshness proof. Reuse after consumption or role transition invalidates
+authorization, blocks mutation, and prevents continuation. A missing or failed one-use consumption result has the
+same effect.
+
+Each required proof record must be newly produced and evaluated within its own segment. The reverse-leg proof records
+must therefore be new records; forward-leg evidence cannot satisfy reverse-leg freshness. Rediscovery alone does not
+satisfy physical-identity, role-mapping, known-state, authorization, or post-state proof. Missing, stale, conflicting,
+or prior-leg proof evidence blocks mutation or handoff.
+
+The obligation evidence must distinguish positively resolved obligations, unresolved obligations, and unknown or
+unproven obligation state. Absence from the unresolved-obligations list is not proof that an obligation was resolved.
+Unknown, incomplete, or contradictory obligation evidence blocks handoff or continuation and results in
+controller-owned `NO-GO` or `RECOVERY_REQUIRED`.
+
+All identifiers and proof references must be safe evidence references. Evidence must not expose raw kubeconfigs,
+bearer tokens, credentials, certificates, private controller enrollment identifiers, or sensitive filesystem paths.
 
 TST-10 must use the #121 release framework's eventual bounded failure-budget semantics rather than establishing an independent budget engine.
 
