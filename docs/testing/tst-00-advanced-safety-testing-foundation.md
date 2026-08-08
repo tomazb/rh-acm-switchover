@@ -4,8 +4,8 @@
 **Type:** Design/specification only
 **Repository:** `tomazb/rh-acm-switchover`
 **Primary development branch:** `ansible`
-**Audited revision:** `98a228212d56418b50d09a4089dab18f53c26cf0`
-**Date:** 2026-08-07
+**Audited revision:** `c89de7ecd0bfbd31dc88971929f32fb00ea7e20b`
+**Date:** 2026-08-08
 
 ## 1. Purpose
 
@@ -35,10 +35,10 @@ The foundation is test architecture only. Python CLI and Ansible Collection prod
 The audited `ansible` revision is:
 
 ```text
-98a228212d56418b50d09a4089dab18f53c26cf0
+c89de7ecd0bfbd31dc88971929f32fb00ea7e20b
 ```
 
-The PR's original recorded base was `1e0486eb9edde99b10d37d13a051523c57901ba7`; this publication baseline was re-audited against current `origin/ansible` before update.
+The PR's original approved publication base was `1e0486eb9edde99b10d37d13a051523c57901ba7`. The previously re-audited baseline was `98a228212d56418b50d09a4089dab18f53c26cf0`. The current re-audited integration base is `c89de7ecd0bfbd31dc88971929f32fb00ea7e20b`; only this last SHA is the current audited revision.
 
 The current branch already has a substantial testing architecture.
 
@@ -69,6 +69,8 @@ Mutation testing is already operational and should **not** be reinvented inside 
 The mutation-testing design treats mutation analysis as an on-demand diagnostic for assertion quality rather than a normal required PR gate. It specifically targets wrong-hub/resource mutation, RBAC, checkpoint/resume, dry-run, Argo CD, waits, and parity.
 
 Existing mutation baselines have already exposed meaningful categories such as missing assertions, Python/Collection parity gaps, wrong argument/payload assertions, and timeout/runtime noise.
+
+The current `98a2282..c89de7e` re-audit delta adds a documented RBAC mutation baseline and focused survivor-killing tests only. It changes no production behavior or TST implementation boundary.
 
 TST-01…10 therefore consume mutation findings as inputs; they do not replace `mutmut` or establish a second mutation-testing framework.
 
@@ -115,7 +117,7 @@ That historical harness remains useful, but it must not become the authority for
 
 Issue #121 remains the active RC-hardening umbrella and already owns cycles and cooldowns, soak, failure budgets, recovery/hard stops, scenario-aware runtime parity, live discovery, and artifact/redaction evidence.
 
-Phase 9A established the controller authority model and known-state segment architecture. Phase 9B implemented controller-owned live **read-only** physical-identity proof and is complete.
+Phase 9A established the controller authority model and known-state segment architecture. Phase 9B implemented controller-owned live **read-only** physical-identity proof; its corrected two-hub read-only exit evidence and implementation are merged, and its tracker is closed. Its evidence remains explicitly non-certification and non-mutation.
 
 At the audited date:
 
@@ -680,7 +682,12 @@ Outcome normalization rules:
 - proven required post-state maps to `MUTATION_CONFIRMED`;
 - neither proven maps to `MUTATION_OUTCOME_AMBIGUOUS` until reconciliation.
 
-`RECOVERED_BY_RECONCILIATION` and `FAIL_CLOSED` are terminal, mutually exclusive outcome classes for a mutation attempt.
+Initial normalization produces exactly one of `NO_MUTATION`, `MUTATION_NOT_APPLIED`, `MUTATION_CONFIRMED`, or `MUTATION_OUTCOME_AMBIGUOUS`. If explicit reconciliation is required, the trace retains that initial class and the authoritative state it later establishes, while the final outcome becomes exactly one of:
+
+- `RECOVERED_BY_RECONCILIATION` only when authoritative external-state reconciliation positively establishes a safe resolved result; or
+- `FAIL_CLOSED` when reconciliation is not performed, fails, remains ambiguous, or cannot prove every required safety condition.
+
+`RECOVERED_BY_RECONCILIATION` and `FAIL_CLOSED` are terminal and mutually exclusive. `FAIL_CLOSED` takes precedence whenever the proof required for recovery is incomplete; an attempt cannot emit both classes or retain `MUTATION_OUTCOME_AMBIGUOUS` as a successful terminal result.
 
 For NET-BEFORE-SEND and NET-AFTER-SEND-BEFORE-COMMIT fault classes, apply the normalization rules above. For NET-AFTER-COMMIT-BEFORE-RESPONSE and NET-PARTIAL-RESPONSE classes, ambiguity is expected until reconciliation establishes a safe authoritative outcome.
 
@@ -1021,7 +1028,7 @@ After Phase 9C–9F prerequisites
   TST-10  Controller-owned soak/endurance
 ```
 
-Only TST-01 should be prepared for implementation immediately after TST-00 publication unless a later dependency review shows a smaller TST-07 slice should precede it.
+This sequence does not authorize TST-01 implementation. TST-01 may be prepared only under its own separately approved issue after TST-00 publication, unless a later dependency review shows that a smaller TST-07 slice should precede it.
 
 ## 19. Governance for TST-01…TST-10
 
