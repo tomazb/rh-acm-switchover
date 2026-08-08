@@ -353,7 +353,12 @@ SafetyScenario
 │   ├── method
 │   ├── execution_mode
 │   ├── old_hub_action
-│   └── feature_flags
+│   ├── feature_flags
+│   └── target_selector
+│       ├── selected_hub
+│       ├── safe_context_id
+│       ├── logical_role
+│       └── safe_resource_identity
 ├── external_actor_schedule
 ├── fault_schedule
 └── expected_invariants
@@ -366,6 +371,12 @@ Rules:
 3. Test adapters translate the same scenario into each implementation's native inputs.
 4. A scenario may be executable by only one test method; unsupported projections are explicit.
 5. Random/generative builders construct this model from bounded semantic strategies.
+6. External-actor and fault schedules share one monotonic boundary/ordinal namespace. Every entry records whether it
+   occurs before or after the named boundary; equal ordinals are invalid rather than resolved by adapter-specific
+   ordering.
+7. Adapters and expected invariants consume the same `target_selector`; adapters may translate it but may not infer
+   independent targets. A missing or ambiguous selector for an operation that may mutate is a blocking scenario and
+   no mutation may be attempted.
 
 TST-01, TST-03, TST-04, TST-06, and TST-07 should eventually share this model.
 
@@ -398,10 +409,20 @@ SemanticEvent
 ├── changed
 ├── obligation_delta
 ├── checkpoint_delta
+│   ├── phase
+│   ├── contract_status
+│   ├── attempted
+│   ├── completed
+│   └── durably_reloaded
 └── evidence_tags
 ```
 
 The trace must not include kubeconfig contents, bearer tokens, raw certificates, private controller enrollment IDs, or arbitrary exception object representations.
+
+Internal diagnostic traces and publishable evidence are distinct projections. A publishable trace uses controlled
+operation/result/evidence-tag vocabularies and recursively validates every identifier and free-form field against the
+redaction policy. Unknown fields, unsafe identifiers, or incomplete recursive validation fail closed and block
+publication rather than being silently dropped.
 
 ### 7.1 Comparator policy
 
@@ -416,6 +437,10 @@ Different scenario classes require different comparison strength.
 **EXPLICIT_DIVERGENCE** is permitted only when existing parity documentation and operator approval authorize the difference.
 
 Anything not covered by the selected policy becomes `UNCLASSIFIED_DIFFERENCE` rather than being automatically ignored.
+
+Every scenario that permits or attempts a safety-relevant mutation, or creates or clears a safety obligation, uses
+`STRICT_MUTATION`; this mechanically enforces PAR-002 target equivalence. `SAFETY_OUTCOME` is limited to mutation-free
+allow/block comparisons. A policy cannot be weakened merely because one adapter omits target evidence.
 
 ## 8. Fault taxonomy
 
@@ -499,7 +524,7 @@ Combination faults can be introduced only after single-fault semantics are stabl
 
 ## 9. Evidence classification
 
-Every TST result is assigned one immutable evidence class.
+Every TST result is assigned one immutable `method_class` describing how the result was produced.
 
 ```text
 UNIT
@@ -514,18 +539,55 @@ METAMORPHIC
 FORMAL_MODEL
 LIVE_RESILIENCE
 SOAK
-LIVE_CERTIFICATION
 ```
+
+`method_class` is independent of the controller-owned artifact `evidence_class`. The latter uses the current Phase-9
+allowlist:
+
+```text
+non_live_fake
+non_live_dry_run
+non_live_local_harness
+static_fixture
+live_read_only
+live_mutating_segment
+LAB_PREPARATION_ONLY
+diagnostic_live
+```
+
+Certification is an eligibility decision, not a method or evidence class. `LIVE_CERTIFICATION` is therefore not a
+harness-assignable class. Only the approved controller/release path may assign a `live_*` artifact class, and every
+writer must reject unknown classes, false relabeling, or a class inconsistent with the recorded execution path.
+
+Evidence-class authority is fail closed:
+
+- `non_live_fake`, `non_live_dry_run`, `non_live_local_harness`, and `static_fixture` require `live=false`;
+- `live_read_only`, `live_mutating_segment`, and `diagnostic_live` require `live=true` and all controller provenance
+  fields below;
+- `LAB_PREPARATION_ONLY` remains governed by the separate Phase-9 preparation contract, requires controller
+  provenance, and can never be certification eligible or relabeled as scenario evidence; and
+- `certification_eligible=true` requires the approved eligibility decision, `eligibility_gate_result`, and every
+  controller reference below.
+
+Writers reject a missing authority field, a class/`live` mismatch, an eligibility claim without complete authority,
+or any attempt to infer live or certification status from `method_class`.
 
 Minimum provenance for generated advanced-test evidence:
 
 ```text
 source_revision
 method
+method_class
+evidence_class
 scenario_id
 invariant_ids
 implementation
-seed/corpus/schedule
+reproduction
+    kind (seed | corpus | schedule | model_trace | none)
+    value_or_safe_reference
+    schema_version
+    tool_version
+    relevant_configuration_hash
 live
 mutation_attempted
 certification_eligible
@@ -654,14 +716,41 @@ state before
    ↓
 precondition read
    ↓
-mutation
+pre-mutation obligation / mutation-start checkpoint, when required by the source contract
    ↓
-verification
+durability barrier and reload through a newly constructed state reader
    ↓
-checkpoint
+mutation handoff / attempt
+   ↓
+authoritative verification or reconciliation
+   ↓
+post-verification completion checkpoint
+   ↓
+durability barrier and reload through a newly constructed state reader
 ```
 
-inject failure at each meaningful boundary.
+Inject failure at each meaningful boundary. A stage may be marked not applicable only when the audited source contract
+does not define it; TST-02 records that absence instead of inventing a common Python/Collection storage format or
+silently treating in-memory state as durable evidence.
+
+Each checkpoint observation records its phase, a `contract_status` of `required`, `absent_in_current_contract`, or
+`not_applicable`, plus `attempted`, `completed`, and `durably_reloaded` state. The pre-mutation observation covers
+durable obligations or mutation-start journals that must exist before adapter/API handoff. The post-verification
+observation covers durable completion and residual obligations. After a simulated
+process failure, the original process and in-memory objects are discarded; recovery claims require a fresh SUT/state
+reader to reconstruct the recorded state. TST-02 characterizes current checkpoint guarantees and, independently,
+ambiguous-outcome reconciliation before CORE-011 can become a shared enforced contract.
+
+`required` means the audited source contract requires that checkpoint and the test must prove it through durable
+reload. `absent_in_current_contract` identifies a checkpoint guarantee under examination that the audited current
+implementation does not provide and remains an explicit characterization result. `not_applicable` means the audited
+operation contract has no such stage; an adapter cannot use it to hide a missing or incomplete required checkpoint.
+Neither non-required status satisfies a separately asserted checkpoint-durability requirement, but neither determines
+CORE-011 conformance. Checkpoint-contract status and the authoritative external mutation outcome remain separate trace
+dimensions: a positively verified external post-state is not rewritten as ambiguous solely because its durability
+contract is absent. A missing required checkpoint fails the checkpoint assertion closed; CORE-011 is evaluated only
+from authoritative reconciliation of an ambiguous external outcome. No checkpoint status can promote an ambiguous
+external outcome to `MUTATION_CONFIRMED`.
 
 Required outcome classes:
 
@@ -819,6 +908,11 @@ UnknownState
     => ~MayMutate
 ```
 
+These predicates are shorthand for current-segment, fresh, identity-bound evidence under the stable invariant
+catalogue. `RoleProven` includes the LAB-002 physical/logical-role binding, and a final `Handoff` claim includes the
+LAB-005 through LAB-007 final physical-identity, logical-role, and known-state proof. A pre-mutation adapter handoff is
+modeled separately and never satisfies the final `Handoff` predicate.
+
 The formal model must remain traceable to Phase-9 source contracts and issues. A model-checker PASS is design evidence, not proof that Python implementation conforms. Separate refinement/implementation tests provide that link.
 
 ### TST-09 — Controller-owned live resilience
@@ -838,24 +932,39 @@ TST-10 should supersede the *authority model* of the legacy direct-kubectl E2E s
 Target lifecycle:
 
 ```text
-fresh identity proof
+fresh physical-identity proof
   ↓
-fresh known-state proof
+fresh logical-role and known-state proof
+  ↓
+new one-use profile binding
+  ↓
+new controller authorization
   ↓
 one switchover
   ↓
-final state proof
+fresh final physical-identity, logical-role, and known-state proof
   ↓
 cooldown
   ↓
 fresh rediscovery
   ↓
+fresh physical-identity proof
+  ↓
+fresh logical-role and known-state proof
+  ↓
+new reverse-leg one-use profile binding
+  ↓
+new controller authorization
+  ↓
 reverse switchover
   ↓
-final state proof
+fresh final physical-identity, logical-role, and known-state proof
 ```
 
 repeat.
+
+Each forward or reverse mutation is a separate known-state segment. A role transition invalidates the prior profile
+and authorization; neither can be reused after rediscovery or for the reverse leg.
 
 Per-cycle metrics should include cycle number, physical/logical role mapping, duration, API retries, timeouts, mutation count, checkpoint/state size, unresolved obligations, BackupSchedule state, restore state, managed-cluster connectivity, Argo pause/resume state, and final decision.
 
