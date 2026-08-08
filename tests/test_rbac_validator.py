@@ -94,6 +94,34 @@ class TestRBACValidator:
         )
 
     @patch("kubernetes.client")
+    def test_check_permission_builds_resource_attributes_for_plain_resource(self, mock_k8s_client, validator):
+        """Non-subresource checks must pass the real resource (not None) into the SSAR spec.
+
+        Kills mutants that null out resource_name or resource_attributes: those would send a
+        SelfSubjectAccessReview for an undefined resource, silently checking the wrong permission.
+        """
+        mock_response = MagicMock()
+        mock_response.status.allowed = True
+        mock_response.status.reason = None
+
+        mock_api = MagicMock()
+        mock_api.create_self_subject_access_review.return_value = mock_response
+        mock_k8s_client.AuthorizationV1Api.return_value = mock_api
+
+        validator.check_permission("", "pods", "get", "default")
+
+        mock_k8s_client.V1ResourceAttributes.assert_called_once_with(
+            verb="get",
+            resource="pods",
+            subresource=None,
+            group=None,
+            namespace="default",
+        )
+        mock_k8s_client.V1SelfSubjectAccessReviewSpec.assert_called_once_with(
+            resource_attributes=mock_k8s_client.V1ResourceAttributes.return_value
+        )
+
+    @patch("kubernetes.client")
     def test_check_permission_raises_validation_error_on_api_failure(self, mock_k8s_client, validator):
         """Infrastructure failures should not be reported as missing permissions."""
         mock_api = MagicMock()
@@ -139,6 +167,32 @@ class TestRBACValidator:
         assert validator.check_permission("", "pods", "get", "default") == (True, "")
 
         assert mock_api.create_self_subject_access_review.call_count == 1
+
+    @patch("kubernetes.client")
+    def test_check_permission_cache_is_keyed_by_full_permission_tuple(self, mock_k8s_client, validator):
+        """Different permission tuples must not share a cache slot.
+
+        Kills the cache_key = None mutant: a collapsed cache key would return the first-ever
+        result for every subsequent, unrelated permission check on the same validator instance.
+        """
+        allowed_response = MagicMock()
+        allowed_response.status.allowed = True
+        allowed_response.status.reason = None
+
+        denied_response = MagicMock()
+        denied_response.status.allowed = False
+        denied_response.status.reason = "Forbidden"
+
+        mock_api = MagicMock()
+        mock_api.create_self_subject_access_review.side_effect = [allowed_response, denied_response]
+        mock_k8s_client.AuthorizationV1Api.return_value = mock_api
+
+        first = validator.check_permission("", "pods", "get", "default")
+        second = validator.check_permission("", "secrets", "delete", "default")
+
+        assert first == (True, "")
+        assert second == (False, "Forbidden")
+        assert mock_api.create_self_subject_access_review.call_count == 2
 
     def test_validate_cluster_permissions_success(self, validator):
         """validate_cluster_permissions must check the exact OPERATOR_CLUSTER_PERMISSIONS set."""
@@ -349,6 +403,99 @@ class TestRBACValidator:
             )
             not in validator.check_permission.call_args_list
         )
+
+    def test_validate_cluster_permissions_decommission_checks_mco_delete_when_observability_present(self, validator):
+        """Decommission-only path (no old-hub finalization) must still check MCO delete by default.
+
+        Isolates the decommission loop's skip_observability/api-group guard from the old-hub
+        finalization loop, which also happens to check the same permission and would otherwise
+        mask an `and` -> `or` mutation that makes the decommission loop over-skip.
+        """
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        all_valid, errors = validator.validate_cluster_permissions(include_decommission=True)
+
+        assert all_valid is True
+        assert errors == []
+        assert (
+            call(
+                "observability.open-cluster-management.io",
+                "multiclusterobservabilities",
+                "delete",
+            )
+            in validator.check_permission.call_args_list
+        )
+
+    def test_validate_cluster_permissions_decommission_failure_sets_all_valid_false(self, validator):
+        """A missing decommission permission must flip all_valid, isolated from other permission paths.
+
+        Kills all_valid inversion mutants inside the decommission block that survive when the
+        base cluster-permission loop already set all_valid=False for an unrelated reason.
+        """
+
+        def mock_check(api_group, resource, verb, namespace=None):
+            if resource == "multiclusterobservabilities" and verb == "delete":
+                return (False, "Permission denied")
+            return (True, "")
+
+        validator.check_permission = MagicMock(side_effect=mock_check)
+
+        all_valid, errors = validator.validate_cluster_permissions(include_decommission=True)
+
+        assert all_valid is False
+        assert errors == [
+            "Missing decommission permission: delete "
+            "observability.open-cluster-management.io/multiclusterobservabilities - Permission denied"
+        ]
+
+    def test_validate_cluster_permissions_old_hub_finalization_failure_sets_all_valid_false(self, validator):
+        """A missing old-hub finalization permission must flip all_valid, isolated from other paths."""
+
+        def mock_check(api_group, resource, verb, namespace=None):
+            if resource == "multiclusterobservabilities" and verb == "delete":
+                return (False, "Permission denied")
+            return (True, "")
+
+        validator.check_permission = MagicMock(side_effect=mock_check)
+
+        all_valid, errors = validator.validate_cluster_permissions(include_old_hub_finalization=True)
+
+        assert all_valid is False
+        assert errors == [
+            "Missing old-hub finalization permission: delete "
+            "observability.open-cluster-management.io/multiclusterobservabilities - Permission denied"
+        ]
+
+    def test_validate_cluster_permissions_decommission_dedupe_does_not_skip_later_verbs(self, validator):
+        """Deduplicating an already-checked permission must skip only that verb, not the rest of the list.
+
+        Kills the `continue` -> `break` mutant in the decommission dedupe guard and the
+        `checked_extra_permissions.add(permission_key)` -> `add(None)` mutant (which would make
+        the dedup check never match a real repeat, causing the duplicate to be re-checked).
+        """
+        validator.DECOMMISSION_PERMISSIONS = [
+            ("test.io", "widgets", ["get", "get", "list"]),
+        ]
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        validator.validate_cluster_permissions(include_decommission=True)
+
+        calls = validator.check_permission.call_args_list
+        assert calls.count(call("test.io", "widgets", "get")) == 1
+        assert call("test.io", "widgets", "list") in calls
+
+    def test_validate_cluster_permissions_old_hub_dedupe_does_not_skip_later_verbs(self, validator):
+        """Same dedupe guarantee as the decommission loop, for the old-hub finalization loop."""
+        validator.OLD_HUB_FINALIZATION_PERMISSIONS = [
+            ("test.io", "widgets", ["get", "get", "list"]),
+        ]
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        validator.validate_cluster_permissions(include_old_hub_finalization=True)
+
+        calls = validator.check_permission.call_args_list
+        assert calls.count(call("test.io", "widgets", "get")) == 1
+        assert call("test.io", "widgets", "list") in calls
 
     def test_validate_cluster_permissions_skips_base_observability_permissions(self, validator):
         """skip_observability=True must filter out observability-tagged entries in the base cluster loop.
@@ -1246,6 +1393,7 @@ class TestValidateDecommissionPermissions:
 
         validate_decommission_permissions(mock_primary_client, skip_observability=True)
 
+        mock_validator_class.assert_called_once_with(mock_primary_client)
         validator.validate_decommission_permissions.assert_called_once_with(
             skip_observability=True,
         )
