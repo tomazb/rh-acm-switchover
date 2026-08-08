@@ -1445,6 +1445,24 @@ class TestValidateDecommissionPermissions:
         )
         assert call("", "pods", "get", OBSERVABILITY_NAMESPACE) in validator.check_permission.call_args_list
 
+    def test_validate_decommission_permissions_default_checks_observability_when_present(self, mock_primary_client):
+        """RBACValidator.validate_decommission_permissions() must check observability permissions by
+        default (skip_observability defaults to False) when the observability namespace exists.
+
+        Without this assertion, flipping that default to True silently drops the observability
+        cluster and namespace permission checks with no test catching it.
+        """
+        validator = RBACValidator(mock_primary_client)
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        all_valid, errors = validator.validate_decommission_permissions()
+
+        assert all_valid is True
+        calls = validator.check_permission.call_args_list
+        assert call("observability.open-cluster-management.io", "multiclusterobservabilities", "list", None) in calls
+        assert call("observability.open-cluster-management.io", "multiclusterobservabilities", "delete", None) in calls
+        assert call("", "pods", "get", OBSERVABILITY_NAMESPACE) in calls
+
     def test_validate_decommission_rbac_succeeds_when_acm_namespace_missing(self, mock_primary_client):
         """Missing ACM namespace on rerun should NOT fail validation (idempotent)."""
         mock_primary_client.namespace_exists.side_effect = lambda ns: {
