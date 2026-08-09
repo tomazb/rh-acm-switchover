@@ -996,8 +996,12 @@ or prior-leg proof evidence blocks mutation or handoff.
 
 The obligation evidence must distinguish positively resolved obligations, unresolved obligations, and unknown or
 unproven obligation state. Absence from the unresolved-obligations list is not proof that an obligation was resolved.
-Unknown, incomplete, or contradictory obligation evidence blocks handoff or continuation and results in
-controller-owned `NO-GO` or `RECOVERY_REQUIRED`.
+Unknown, incomplete, or contradictory obligation evidence blocks handoff or continuation. The controller applies the
+Phase-9 decision semantics: before mutation handoff, absent or invalid evidence is `BLOCKED` and a definitive
+obligation-safety assertion failure is `NO-GO`; after mutation handoff, or when readable evidence shows an ambiguous,
+partial, or unknown lab state requiring controlled repair, the result is `RECOVERY_REQUIRED`. `RECOVERY_REQUIRED`
+takes precedence whenever mutation may have begun or the lab may have changed. Every such decision stops continuation;
+recovery requires fresh rediscovery and a separately authorized recovery segment.
 
 All identifiers and proof references must be safe evidence references. Evidence must not expose raw kubeconfigs,
 bearer tokens, credentials, certificates, private controller enrollment identifiers, or sensitive filesystem paths.
