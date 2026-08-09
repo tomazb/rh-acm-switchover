@@ -306,9 +306,12 @@ The internal representation is allowed to differ between Python and Ansible.
 | LAB-005 | A mutation authorization is bound to the current source revision, identities, roles, profile/scenario, and freshness boundary. |
 | LAB-006 | Authorization is invalidated by intervening mutations, stale evidence, or role transition. |
 | LAB-007 | A mutating segment does not hand off to the next segment until final physical/role/state proof succeeds. |
-| LAB-008 | Agent/Codex/assistant orchestration cannot override a controller NO-GO/RECOVERY_REQUIRED decision. |
+| LAB-008 | Agent/Codex/assistant orchestration cannot override, reinterpret, or independently retry a controller `BLOCKED`, `NO-GO`, `RECOVERY_REQUIRED`, or `INFRA_RETRYABLE` disposition. `INFRA_RETRYABLE` permits only the controller-defined bounded, operator-authorized fresh attempt after invalidating prior evidence, profile, nonce, and authorization; it does not grant Agent retry authority or preserve mutation authority. |
 | LAB-009 | Recovery is a separately authorized known-state segment rather than an improvised automatic continuation. |
 | LAB-010 | Live fault injection cannot independently select its mutation target; the lab controller remains the sole mutation authority. |
+
+The authoritative Phase-9 failure dispositions are `BLOCKED`, `NO-GO`, `RECOVERY_REQUIRED`, and
+`INFRA_RETRYABLE`. Every one terminates the current known-state segment.
 
 ### 5.5 EVD — evidence invariants
 
@@ -892,9 +895,21 @@ AUTHORIZED
 MUTATION_STARTED
 POST_STATE_PROVEN
 HANDOFF
+BLOCKED
 NO_GO
 RECOVERY_REQUIRED
+INFRA_RETRYABLE
 ```
+
+`NO_GO` is the formal-model identifier for the authoritative external controller decision `NO-GO`.
+`BLOCKED`, `RECOVERY_REQUIRED`, and `INFRA_RETRYABLE` map to the controller decisions of the same names. The model
+must keep all four failure dispositions distinct, and none permits continuation in the current segment. `BLOCKED`
+terminates the segment without mutation authority. `INFRA_RETRYABLE` is available only for a typed pre-mutation
+transport/infrastructure failure, terminates the segment, and invalidates the prior evidence, profile, nonce, and
+authorization. It can lead only to a controller-offered bounded, operator-authorized attempt that restarts from fresh
+discovery; it grants no retry authority to Agent/Codex/assistant and preserves no mutation authority. A failure after
+`MUTATION_STARTED`, or whenever mutation may have begun or the lab may have changed, must be
+`RECOVERY_REQUIRED`, never `INFRA_RETRYABLE`.
 
 Candidate actions include discovery, identity/role proof, authorization, mutation, verification, evidence invalidation, transport failure, recovery requirement, and handoff.
 
@@ -977,17 +992,44 @@ repeat.
 Each forward or reverse mutation is a separate known-state segment. A role transition invalidates the prior profile
 and authorization; neither can be reused after rediscovery or for the reverse leg.
 
-Per-cycle evidence must aggregate two separate immutable records: one for the forward known-state segment and one for
-the reverse known-state segment. Each segment record must include:
+Per-cycle evidence aggregates one immutable record for every known-state segment actually instantiated. A
+successfully completed cycle must contain exactly one forward record and exactly one reverse record; the two segments
+are independently authorized and proven, and both records contain their required terminal success and final-state
+evidence.
+
+If the controller correctly stops after the forward leg and before any reverse known-state segment is instantiated,
+the evidence retains the immutable forward record plus an immutable cycle-level termination record and must not
+fabricate a reverse segment record. A missing reverse record is lawful only when that termination evidence positively
+proves that the reverse segment was never instantiated; absence of a record alone is never evidence that the leg did
+not start. The cycle-level termination record identifies:
+
+- the cycle number and identity;
+- the last instantiated and last completed leg;
+- the authoritative controller disposition and a safe stop-reason reference or classification;
+- positive proof that the reverse segment did not start, including whether reverse discovery, profile binding, and
+  authorization were absent;
+- proof that no reverse mutation authority was consumed and no reverse mutation was attempted;
+- the final known lab state and available proof at the stop boundary; and
+- whether fresh rediscovery or a separately authorized recovery segment is required before any later action.
+
+If reverse segment creation, discovery, profile binding, or authorization begins, the reverse segment is instantiated
+and its immutable record must be preserved even when no mutation occurs. A reverse segment stopped before mutation
+records its actual `BLOCKED`, `NO-GO`, or `INFRA_RETRYABLE` disposition, profile/authorization issuance and
+invalidation state where applicable, mutation count `0`, and proof that mutation handoff did not occur. If reverse
+mutation handoff occurred or may have occurred, the reverse record uses `RECOVERY_REQUIRED`; the cycle cannot
+continue, and recovery requires fresh rediscovery and separate authorization.
+
+Each instantiated segment record must include:
 
 - the cycle number and leg (`forward` or `reverse`), controller-run and segment identity, and exact source revision;
-- a safe `profile_binding_id`, the segment and controller identity to which the binding was issued, its
-  creation/issuance result, its one-use consumption result, and evidence that no other segment or leg reused it;
-- a safe controller-authorization reference and its result;
-- proof records for physical identity, physical-to-logical role mapping, known state, current authorization, and final
-  post-state, each with a safe proof reference or identifier, proof result, segment binding, observed/captured time or
-  equivalent source-controlled freshness marker, applicable freshness boundary, and `freshness_evidence` evaluation
-  result;
+- profile-binding issuance state and, when issued, a safe `profile_binding_id`, the segment and controller identity to
+  which the binding was issued, its one-use consumption or non-consumption result, invalidation state, and evidence
+  that no other segment or leg reused it;
+- controller-authorization issuance state and result, plus a safe authorization reference when issued;
+- proof records or an explicit not-produced/not-reached status for physical identity, physical-to-logical role
+  mapping, known state, current authorization, and final post-state; each produced proof has a safe proof reference or
+  identifier, proof result, segment binding, observed/captured time or equivalent source-controlled freshness marker,
+  applicable freshness boundary, and `freshness_evidence` evaluation result;
 - pre-mutation obligation-state proof, the obligations created or carried by the segment,
   `resolved_obligation_proof` with safe proof references and results for every obligation positively discharged, and
   residual unresolved obligations and any unknown obligation state; and
@@ -1008,11 +1050,15 @@ or prior-leg proof evidence blocks mutation or handoff.
 The obligation evidence must distinguish positively resolved obligations, unresolved obligations, and unknown or
 unproven obligation state. Absence from the unresolved-obligations list is not proof that an obligation was resolved.
 Unknown, incomplete, or contradictory obligation evidence blocks handoff or continuation. The controller applies the
-Phase-9 decision semantics: before mutation handoff, absent or invalid evidence is `BLOCKED` and a definitive
-obligation-safety assertion failure is `NO-GO`; after mutation handoff, or when readable evidence shows an ambiguous,
-partial, or unknown lab state requiring controlled repair, the result is `RECOVERY_REQUIRED`. `RECOVERY_REQUIRED`
-takes precedence whenever mutation may have begun or the lab may have changed. Every such decision stops continuation;
-recovery requires fresh rediscovery and a separately authorized recovery segment.
+Phase-9 decision semantics: before mutation handoff, absent or invalid evidence is `BLOCKED`, and any definitive safety
+or certification assertion failure—including a definitive obligation-safety failure—is `NO-GO`. A typed
+transport/infrastructure failure may be `INFRA_RETRYABLE` only under the Phase-9 pre-mutation retry state machine; it
+terminates the segment, invalidates all prior evidence, profile, nonce, and authorization, and permits only a
+controller-offered bounded, operator-authorized attempt from fresh discovery. After mutation handoff, or when mutation
+may have begun, the lab may have changed, or readable evidence shows an ambiguous, partial, or unknown state requiring
+controlled repair, the result is `RECOVERY_REQUIRED`, never `INFRA_RETRYABLE`. `RECOVERY_REQUIRED` takes precedence
+whenever mutation may have begun or the lab may have changed. Every failure disposition stops continuation; recovery
+requires fresh rediscovery and a separately authorized recovery segment.
 
 All identifiers and proof references must be safe evidence references. Evidence must not expose raw kubeconfigs,
 bearer tokens, credentials, certificates, private controller enrollment identifiers, or sensitive filesystem paths.
