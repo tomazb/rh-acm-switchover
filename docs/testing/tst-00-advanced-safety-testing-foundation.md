@@ -301,7 +301,7 @@ The internal representation is allowed to differ between Python and Ansible.
 | --- | --- |
 | LAB-001 | Physical identity is proven before any controller-authorized live mutation. |
 | LAB-002 | Logical primary/secondary role mapping is freshly proven before a role-dependent mutation. |
-| LAB-003 | Unknown, stale, incomplete, or conflicting identity/role evidence yields NO-GO or RECOVERY_REQUIRED rather than mutation. |
+| LAB-003 | Unknown, stale, incomplete, or conflicting identity/role evidence blocks mutation. The controller applies Phase-9 decision semantics: `BLOCKED` for absent or invalid evidence before mutation handoff, `NO-GO` for a definitive pre-handoff safety assertion failure, and `RECOVERY_REQUIRED` when mutation handoff occurred or may have occurred, the lab may have changed, or controlled repair is required. `RECOVERY_REQUIRED` takes precedence after possible mutation or lab change. |
 | LAB-004 | Each known-state segment contains at most one lab-mutating scenario. |
 | LAB-005 | A mutation authorization is bound to the current source revision, identities, roles, profile/scenario, and freshness boundary. |
 | LAB-006 | Authorization is invalidated by intervening mutations, stale evidence, or role transition. |
@@ -583,7 +583,7 @@ scenario_id
 invariant_ids
 implementation
 reproduction
-    kind (seed | corpus | schedule | model_trace | none)
+    kind (seed | scenario | corpus | schedule | combinatorial_row | model_trace | none)
     value_or_safe_reference
     schema_version
     tool_version
@@ -597,6 +597,17 @@ controller_segment_id (required for controller-owned live evidence)
 authorization_or_approval_reference (required for controller-owned live evidence)
 eligibility_gate_result (required for controller-owned live evidence; also required when certification_eligible=true)
 ```
+
+For `reproduction.kind=scenario`, the top-level `scenario_id` is the counterexample replay token and
+`value_or_safe_reference` identifies the immutable scenario definition or input. For
+`reproduction.kind=combinatorial_row`, `value_or_safe_reference` identifies the executed row or an immutable safe
+reference to it, and `relevant_configuration_hash` binds the factor model, constraints/configuration, or equivalent
+reproducibility configuration.
+
+`reproduction.kind=none` is permitted only for a non-failure result with no counterexample-specific replay token. A
+failure must use a non-`none` kind and carry enough reproduction information, together with the top-level provenance,
+to reproduce or retrieve its counterexample. Evidence validation fails closed when a failure reproduction record is
+missing or invalid.
 
 Defaults:
 
