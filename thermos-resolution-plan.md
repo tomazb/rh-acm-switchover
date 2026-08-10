@@ -44,7 +44,7 @@ that the builder and review-comment resolver passes are complete. GitHub
 readiness is separate, and every branch-head change requires fresh exact-head
 independent validation before a merge-readiness assessment.
 
-**Last Updated:** 2026-08-02
+**Last Updated:** 2026-08-10
 
 ## Post-Merge Revalidation (2026-06-03)
 
@@ -929,7 +929,7 @@ This is the delivery sequence. Placing two bounded regressions ahead of
 | R3-04b | planned | R3-A9 | Sanitize collection report/path data in both success and failure records. | report schema, filesystem-path exposure, success/failure parity |
 | R3-05a | planned | R3-T1, R3-T2 | Add direct dry-run client/decorator contract tests, including controlled rejection of non-boolean `dry_run` values before mutation. | dry-run mutation safety |
 | R3-05b | planned | R3-T3, R3-T4 | Make Argo CD Jinja/filter parity tests load their real artifacts and cover dangerous over-match/absent-automation cases. | mutation-resistance of parity guardrails |
-| R3-06 | planned | R3-A6 | Scope the `reset_from` identity bypass to the pruned phase and revalidate identity after pruning instead of overwriting it. | checkpoint identity binding; interaction with `SSA-01` |
+| R3-06 | planned | R3-A6, LER-03 | Scope the `reset_from` identity bypass to the pruned phase, revalidate identity after pruning instead of overwriting it, and require every accepted unsafe-legacy transition to rebuild safely or fail closed. | checkpoint identity binding; legacy transition convergence; interaction with `SSA-01` |
 | R3-07 | planned | R3-P3, R3-P5 | Separate control signals and refusal messages from the durable `errors[]` log so the last error always names the real failure. | report-artifact accuracy; resume banner correctness |
 | R3-08a | planned | R3-A7 | Correct klusterlet module/role failure ownership so the role can render diagnostics. | module failure contract and operator diagnostics |
 | R3-08b | planned | R3-A8 | Declare and enforce collection minimum-Python compatibility. | EE portability and supported-version policy |
@@ -942,7 +942,7 @@ This is the delivery sequence. Placing two bounded regressions ahead of
 | R3-09e | planned | R3-T10 | Verify checkpoint reset persistence, including stale-field removal after re-read. | checkpoint persistence safety |
 | R3-09f | planned | R3-T12, R2-H2 residual | Expand the literal guardrail to the `lib/rbac_validator.py` residual and resolve the remaining overall H2 scope. | RBAC parity and guardrail scan-root completeness |
 | R3-10a | planned | R3-P4 | Argo CD blocker blast-radius correction. | fail-closed scope and unrelated-workload impact |
-| R3-10b | planned | R3-P6 | Request-timeout correction including the folded misleading-doc evidence formerly labelled `R3-P6b`. | API timeout and failure semantics |
+| R3-10b | planned | R3-P6, LER-02 | Bound owner-scoped blocking operations: correct the missing `KubeClient` request timeout and bound Python/collection RBAC setup subprocess and Kubernetes-helper execution, including the folded misleading-doc evidence formerly labelled `R3-P6b`. | API/subprocess timeout and failure semantics; RBAC bootstrap parity |
 | R3-10c | planned | R3-P7, R3-P9 | Report-artifact behavior and security. | dry-run truthfulness, file mode, exception redaction, safe path |
 | R3-10d | planned + optional | R3-P12; optional R3-P13 | Kubeconfig file-mode correction; keep standalone-script packaging/error-message hardening explicitly optional. | local credential-file safety and supported packaging contract |
 | R3-10e | planned | R3-T11 | Independently review and deliver the surviving test-cleanup sub-items without a catch-all runtime diff. | test validity and root-lane compatibility |
@@ -1169,6 +1169,12 @@ rollback boundary, and verification plan.
 - Existing legitimate phase-reset workflows continue to work.
 - Tests cover run-wide bypass, cross-run persistence, and post-prune identity
   mismatch.
+- `LER-03`: An unsafe schema-1.0 checkpoint with completed phases and explicit `reset` or
+  `reset_from` is rebuilt as current-schema state before any accepted `enter`,
+  `pass`, or `fail` transition, or the action fails before persistence.
+- Direct action-plugin `enter`, `pass`, and `fail` calls cannot preserve unsafe
+  schema-1.0 state; tests exercise all three statuses independently from roles,
+  cover both `reset` and `reset_from`, and prove unsafe input is never persisted.
 
 #### R3-07: Error Channel Hygiene
 
@@ -1234,8 +1240,15 @@ until then they are cross-references, not duplicate PRs.
 
 - `R3-10a` / `R3-P4`: Argo CD blocker blast radius. Preserve intentional
   fail-closed behavior and review only the non-ACM-scoped breadth.
-- `R3-10b` / `R3-P6`: bounded request timeout and corrected documentation,
-  including folded `R3-P6b` evidence.
+- `R3-10b` / `R3-P6` + `LER-02`: bound owner-scoped blocking operations and
+  correct timeout documentation. `delete_custom_resource` uses the client
+  request-timeout contract; Python setup mode has a positive finite whole-operation
+  deadline, terminates its entire process tree on expiry, and independently bounds
+  every Kubernetes helper call. The collection command/helper uses parity-equivalent
+  positive deadlines, waits for completion, terminates descendants on expiry, and
+  reports sanitized timeout details; constants remain local to each form factor.
+  Focused tests spawn a child plus descendant for each form factor and prove no
+  survivor remains and no raw path, configuration, or input leaks in timeout output.
 - `R3-10c` / `R3-P7` + `R3-P9`: truthful dry-run report state, secure report
   mode/content, sanitized exception data, and preservation of the existing
   validate → `mkdir` → revalidate path-safety sequence.
@@ -1608,7 +1621,7 @@ designs exist; implementation plans are still required).
 | R4-02 | planned | R4-B1, R4-B2, R4-B3, R4-B4 | `docs/plans/2026-07-29-auto-import-transaction-design.md` | Prior-state capture with durable intent before mutation, `created_uid` required/forbidden by transaction state and create-response provenance, explicit outcome precedence in which an unresolved `ownership_conflict` dominates live-state restore/no-op evaluation, key-level restore, `data: null` normalization, decommission gate. |
 | R4-03 | planned | R4-C1, R4-C2, R4-C3, R4-C4, R4-C5, R4-C6 | `docs/plans/2026-07-29-decommission-completion-design.md` | Server-side UID-preconditioned DELETE with CR-absence proof, refusal-aborts semantics, one shared strict Kubernetes inventory primitive (contract owned here, consumed by `R4-04` — not decommission-private), destination-observability gate, and identity-bound MCH Pod classification through the exact recorded operator Deployment UID rather than a name prefix. |
 | R4-04 | planned | R4-D1, R4-D2, R4-D3, R4-D4 | `docs/plans/2026-07-29-migration-evidence-design.md` | Freeze `latest` to journaled concrete backup names at activation entry, additive name+count expectations with explicit waiver, strict inventory reads through the shared primitive whose contract `R4-03` owns (error is never absence; absence is fatal for migration consumers), evidence bound to Restore identity/spec, atomic UID+resourceVersion passive patch, durable cleanup state machine with fail-closed ambiguous recovery, final validated UID+resourceVersion DELETE, evidence/cleanup gate before teardown. |
-| R4-05 | planned | R4-E1, R4-E2, R4-E3, R4-E4, R4-E5, R4-E6 | `docs/plans/2026-07-29-state-integrity-residuals-design.md` | Full-fidelity simulation snapshot with crash marker, parent-dir fsync on both the rename and the absent-file unlink path, per-hub `coordination.k8s.io/v1` Lease locks with a post-acquisition UID revalidation barrier (requires a coordinated RBAC update — see `R4-E4`), reset-under-lock with narrowed `--force`, run contract with atomic committed contract transitions. |
+| R4-05 | planned | R4-E1, R4-E2, R4-E3, R4-E4, R4-E5, R4-E6, LER-01 | `docs/plans/2026-07-29-state-integrity-residuals-design.md` | Full-fidelity simulation snapshot with crash marker, parent-dir fsync on both the rename and the absent-file unlink path, per-hub `coordination.k8s.io/v1` Lease locks with a post-acquisition UID revalidation barrier (requires a coordinated RBAC update — see `R4-E4`), reset-under-lock with narrowed `--force`, run contract with atomic committed contract transitions, and restore-write failure semantics that retain an in-memory retry obligation and never report successful restoration. |
 | R4-06 | planned | R4-F1, R4-F2, R4-F3 (+ SSA-PY2, SSA-A6) | `docs/plans/2026-07-29-kubeconfig-ambiguity-guard-design.md` | Extends `SSA-03`: fail-closed merge, duplicate-name rule, full-URL endpoint normalization with an enumerated fail-closed rejection set for malformed server URLs, snapshot-built client whose file-backed credential **contents** (CA/cert/key/`tokenFile`) are captured at snapshot time rather than re-read at client construction, mutation barrier. `SSA-03` implementation should use this design. |
 
 Cross-references (adjacent, not superseded): `SSA-01` (hub distinctness — excluded,
@@ -1624,6 +1637,22 @@ already-tracked `SSA-01` overlap was excluded, yielding 26 original R4 rows. `R4
 one additional PR-review-discovered row, so the tracker now contains **27 R4 rows**. It
 does not change the historical 20-confirmed/7-partially-amended external-hypothesis
 accounting.
+
+## Logic Error Analysis Revalidation (2026-08-10)
+
+The operator-supplied report had no stable issue, URL, or artifact identifier;
+this provenance limitation is recorded here. It was treated as a hypothesis
+source and revalidated against `ansible` revision
+`9906101f4a6f6652c31d03fc4cb4cde7a04159da`, focused tests, and direct fault injection.
+Three actionable findings remain. `LER-*` identifiers are excluded from historical
+Thermos Review #1-#4 counts and dispositions; each finding is assigned to an
+existing resolution slice instead of creating duplicate implementation work.
+
+| Finding | Severity | Surface | Existing owner | Validated evidence |
+| --- | --- | --- | --- | --- |
+| LER-01 | High | Python | R4-05 | `lib/utils.py:490-514`: `StateManager.restore_runtime_checkpoint()` and `restore_state_snapshot()` clear `_dirty` before `_write_state`; an injected write failure propagates while leaving `_dirty == False`, so later flushing has no retry obligation. |
+| LER-02 | Medium | Python + collection | R3-10b | `acm_switchover.py:1060-1066`, `scripts/setup-rbac.sh:247-374`, `ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/tasks/generate_kubeconfigs.yml:55-76`, and its `files/scripts/generate-sa-kubeconfig.sh:98-132`: Python setup mode invokes the helper through an unbounded `subprocess.run`, and the Python and collection helper Kubernetes calls likewise lack a complete timeout contract, permitting an indefinitely hung RBAC bootstrap. |
+| LER-03 | Medium | Collection | R3-06 | `ansible_collections/tomazb/acm_switchover/plugins/action/checkpoint_phase.py:275-306`: unsafe schema-1.0 state with completed phases is rebuilt only for `status: enter`; a direct `pass` or `fail` with explicit `reset`/`reset_from` can retain unsafe legacy state instead of rebuilding or failing closed. Bundled roles enter first, but the reusable action boundary does not enforce that sequence. |
 
 ### Design-hardening ledger — PR #204 review rounds (2026-07-29 → 2026-08-02)
 
@@ -1777,6 +1806,11 @@ these as acceptance criteria):
   as an indeterminate transition (with `transition_id`) and reconciled before retry; the
   absent-file unlink restore path fsyncs its containing directory; the §2 durability
   protocol also governs `--reset-state`.
+- `LER-01`: Checkpoint and snapshot restoration preserve `_dirty == True` whenever the
+  durable write raises, propagate the original write exception, and allow the
+  next flush to retry the restored state. Fault injection covers both
+  `restore_runtime_checkpoint()` and `restore_state_snapshot()` and proves no
+  failed write is reported as a successful restoration.
 - Per-hub `coordination.k8s.io/v1` Lease locks keyed on hub cluster UID: deterministic
   sorted-UID acquisition, bounded duration with crash expiry,
   `resourceVersion`-conditional takeover of expired Leases only, guarded release,
@@ -1917,7 +1951,7 @@ excluded from re-validation (validated twice on 2026-07-28/29) but are ranked.
 (SSA-A6 remains the only partial, as already recorded). **All ten spot-checked resolved
 claims hold** (F1, F2, F5, F31, F34, F35, F37, F39, R3-01/TR2D-01, B1) — no regressions.
 
-### Priority ranking
+### Priority ranking (2026-07-29; LER amendment 2026-08-10)
 
 P1 = fix before the next switchover on that form factor; P2 = fix soon; P3 = hardening;
 P4 = hygiene/docs. Conditional P1s bind to the named operation, not the switchover.
@@ -1932,7 +1966,7 @@ P4 = hygiene/docs. Conditional P1s bind to the named operation, not the switchov
 | P1 (conditional: any recovery run using persistent `reset_from`) | R3-A6 (`R3-06`) | Truthy `reset_from` disables checkpoint identity validation for the whole run; empty shipped default is inert. |
 | P1 (conditional: auto-import management enabled) | R4-B1 (`R4-02`) | Restore deletes the entire operator-owned import-controller ConfigMap. |
 | P1 (release/test boundary) | R3-T8 | Ambient `ACM_RELEASE_PROFILE` env var unskips live certification tests that invoke the release orchestrator. |
-| P2 | SSA-PY4, SSA-PY2, SSA-R1, SSA-R2, SSA-S1, SSA-PY5, R3-A2, R3-A5, R3-A8, R3-P2, R3-P4, R3-T1, TR2D-02, R2-L7a, R2-L7c; R4-A1, R4-C1, R4-C2, R4-E1 | Real correctness/safety defects with a mitigating precondition: interactive-only paths, deprecated-but-shipped script, reporting-only impact (R3-A5 — unsuppressed identity reads fail first), fleet-scale or shared-hub topology required, or spec'd R4 High rows on non-switchover paths. |
+| P2 | SSA-PY4, SSA-PY2, SSA-R1, SSA-R2, SSA-S1, SSA-PY5, R3-A2, R3-A5, R3-A8, R3-P2, R3-P4, R3-T1, TR2D-02, R2-L7a, R2-L7c; R4-A1, R4-C1, R4-C2, R4-E1, LER-01, LER-02, LER-03 | Real correctness/safety defects with a mitigating precondition: interactive-only paths, deprecated-but-shipped script, reporting-only impact (R3-A5 — unsuppressed identity reads fail first), fleet-scale or shared-hub topology required, spec'd R4 High rows on non-switchover paths, storage-write failure, hung RBAC helper/API call, or direct action-plugin sequencing outside the bundled enter-first role flow. |
 | P3 | SSA-A6, SSA-S3, SSA-C1, SSA-C2, SSA-C3, SSA-S2, SSA-PY3, R3-A3, R3-A7, R3-A9, R3-A10, R3-P3, R3-P5, R3-P6, R3-P7, R3-P9, R3-P12, R3-T2, R3-T3, R3-T4, R3-T7, R3-T10, R3-T12, R2-L6, R2-L7b, R2-L8, H3; R4 Medium rows (including review-discovered R4-C6) | Hardening: fail-open windows needing an adversary/misconfiguration, guardrail blind spots, duplication with drift risk. |
 | P4 | SSA-A5, R3-A11, R3-P8, R3-P13, R3-X1, R3-T5, R3-T6, R3-T9, R3-T11, R3-Q1..Q4, TR2D-03, TR2D-04, R2-L1, `/tmp/run` residual; R4-E6, R4-F3 | Hygiene, docs, conventions, design-gated refactors. |
 
@@ -2066,6 +2100,9 @@ the run-id marker (`roles/argocd_manage/tasks/resume.yml:5-21`). Fold into `TR2D
 | R3-P4 | confirmed with scope nuance, Medium | R3-10a (planned) | Argo CD stale-status blocker is not ACM-scoped, unlike the adjacent ApplicationSet branch; one unrelated Application can hard-fail `PRIMARY_PREP`. Fail-closed direction is intentional; breadth is the finding. |
 | R3-P5 | confirmed, Medium | R3-07 (planned) | State-refusal messages are now recorded via `add_error`, growing `errors[]` across reruns and pinning `get_last_error_phase()` to `FAILED`. |
 | R3-P6 | confirmed, Low | R3-10b (planned) | Residual of `R2-H1`/`PR 36`: `delete_custom_resource` is the only mutating `KubeClient` method without a default request timeout. Former `R3-P6b` is folded supporting evidence that its docstring also misstates the behavior. |
+| LER-01 | confirmed, High | R4-05 (planned) | A restore write failure propagates after `_dirty` was cleared, suppressing the later flush retry obligation. |
+| LER-02 | confirmed, Medium | R3-10b (planned) | Python and collection RBAC setup/helper paths have no complete bounded-execution contract; a hung subprocess or Kubernetes request can block indefinitely. |
+| LER-03 | confirmed, Medium | R3-06 (planned) | An explicit `reset` or `reset_from` permits unsafe legacy state, but only `enter` rebuilds it; direct `pass`/`fail` can retain schema 1.0. |
 | R3-P7 | confirmed, Low | R3-10c (planned) | `--dry-run --report-dir` writes an empty artifact because the state snapshot is restored before the report is written. |
 | R3-P8 | confirmed with corrected count, Low | R3-10f (planned) | Two constants, not four, are unreferenced; six operational sites inline the corresponding Secret names. Route with the constants/quality design boundary. |
 | R3-P9 | confirmed, Low | R3-10c (planned) | Report artifacts are `0644` and embed raw exception text. The existing validate → `mkdir` → revalidate sequence intentionally checks the created parent before the no-follow open and must remain unchanged. |
