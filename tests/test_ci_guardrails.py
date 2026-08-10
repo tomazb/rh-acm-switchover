@@ -38,10 +38,31 @@ def test_root_ci_excludes_e2e_tests_by_marker():
     assert "python -m pytest tests/release -q" in text
 
 
-def test_collection_ci_covers_restore_only_syntax_and_runtime_tests():
-    text = COLLECTION_WORKFLOW.read_text()
+def test_collection_ci_covers_every_shipped_playbook_and_runtime_tests():
+    """Collection CI must syntax-check every shipped playbook, not a hand-listed subset.
 
-    assert "playbooks/restore_only.yml --syntax-check" in text
+    The workflow may enumerate playbooks individually or iterate them with a glob.
+    Asserting the coverage property rather than one literal command keeps the
+    guardrail honest when a playbook is added: a hand-maintained list can fall
+    behind the shipped set, and this check is what would notice.
+    """
+    text = COLLECTION_WORKFLOW.read_text()
+    playbooks = sorted((REPO_ROOT / "ansible_collections" / "tomazb" / "acm_switchover" / "playbooks").glob("*.yml"))
+
+    assert playbooks, "the collection should ship playbooks"
+    globs_every_playbook = "playbooks/*.yml" in text
+
+    uncovered = [
+        playbook.name
+        for playbook in playbooks
+        if not globs_every_playbook and f"playbooks/{playbook.name} --syntax-check" not in text
+    ]
+    assert not uncovered, f"collection CI does not syntax-check: {', '.join(uncovered)}"
+    assert "--syntax-check" in text
+    # restore_only.yml regressed out of CI coverage once; keep it named explicitly
+    # so the glob above cannot pass vacuously if the playbook is ever dropped.
+    assert "restore_only.yml" in {playbook.name for playbook in playbooks}
+
     assert "tests/integration/" in text
     assert "tests/scenario/" in text
 

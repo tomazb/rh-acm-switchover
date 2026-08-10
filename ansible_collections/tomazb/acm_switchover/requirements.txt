@@ -1,2 +1,4 @@
 PyYAML>=6.0
-kubernetes>=24.2.0
+# Unified with the repository-root requirements.txt and the collection CI lanes.
+# kubernetes.core itself requires only >=24.2.0; this is a deliberate tightening.
+kubernetes>=28.0.0

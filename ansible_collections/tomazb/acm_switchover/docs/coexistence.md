@@ -38,7 +38,7 @@ The Python tool and the collection use separate checkpoint file formats.  They a
 
 When a collection checkpoint exists at `acm_switchover_execution.checkpoint.path`, the
 `checkpoint_phase` action plugin skips any phase listed in `completed_phases` on resume.
-Checkpoints written under ansible-core 2.15–2.18 (classic Jinja) may carry
+Checkpoints written under pre-2.19 ansible-core (classic Jinja) may carry
 stringified scalars (for example `"2"` or `"True"` where 2.19+ writes native
 types); the facts layer coerces digit strings and Ansible's boolean vocabulary
 back to native types on read, so those checkpoints resume identically.

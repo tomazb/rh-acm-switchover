@@ -15,5 +15,5 @@ tags:
   - openshift
   - switchover
 dependencies:
-  kubernetes.core: ">=3.0.0"
+  kubernetes.core: ">=6.0.0,<7.0.0"
 repository: https://github.com/tomazb/rh-acm-switchover

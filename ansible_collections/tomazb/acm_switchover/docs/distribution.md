@@ -1,10 +1,14 @@
 # Distribution and Packaging Strategy
 
+Supported `ansible-core`, `kubernetes.core`, Python, and AAP versions are
+governed by [`compatibility.md`](compatibility.md), which is the authority for
+every support claim below.
+
 ## Targets
 
 - Ansible Galaxy-compatible packaging
 - Automation Hub-compatible packaging
-- execution environment for AAP
+- execution environment for AAP (build input only — see below)
 
 ## Collection Primary Distribution
 
@@ -13,7 +17,7 @@ The collection is the canonical operator artifact. Distribution hierarchy:
 | Artifact | Role |
 | --- | --- |
 | Galaxy / Automation Hub package | Canonical operator-facing distribution unit |
-| Execution environment (ansible-builder) | Canonical AAP runtime; built from `execution-environment.yml` |
+| Execution environment (ansible-builder) | Intended AAP runtime, built from `execution-environment.yml`. **Build input only: not repository-tested, not published, and carrying no certification claim.** No CI lane builds it. |
 | Helm chart (`deploy/helm/acm-switchover-rbac/`) | Implementation asset consumed by the `rbac_bootstrap` role — not a parallel operator UX |
 | Raw RBAC YAML (`deploy/rbac/`) | Implementation asset consumed by the `rbac_bootstrap` role — not a parallel operator UX |
 
@@ -32,6 +36,10 @@ safety validation and `ManagedCluster`/`MultiClusterHub` teardown permissions.
 - same playbooks as local CLI usage
 - same variable model as local CLI usage
 - survey and `extra_vars` values treated as untrusted input
+
+No AAP combination is repository-tested, and no formal certification claim is
+made. See [Ansible Automation Platform](compatibility.md#ansible-automation-platform)
+for which AAP versions are upstream-compatible and on what basis.
 
 ## Lock Model
 

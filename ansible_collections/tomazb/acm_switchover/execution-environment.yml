@@ -1,11 +1,26 @@
 ---
+# Execution-environment BUILD INPUT. This definition is NOT repository-tested:
+# no CI lane builds it, and no AAP or certification claim is made for it.
+# See docs/compatibility.md for the support tiers and the tested lanes.
+#
+# The base image below is the subscription-free base used by the upstream
+# ansible-builder v3 minimal example. AAP operators should substitute their
+# entitled ee-minimal-rhel9 base for their AAP version, which already ships a
+# supported ansible-core.
+#
+# The ansible_core pin must stay consistent with meta/runtime.yml; enforced by
+# tests/unit/test_compatibility_contract.py.
 version: 3
 
 images:
   base_image:
-    name: quay.io/ansible/ansible-runner:stable-2.15-latest
+    name: docker.io/redhat/ubi9:latest
 
 dependencies:
+  ansible_core:
+    package_pip: "ansible-core>=2.16,<2.22"
+  ansible_runner:
+    package_pip: ansible-runner
   galaxy: requirements.yml
   python: requirements.txt
   system: bindep.txt
