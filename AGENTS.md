@@ -586,9 +586,8 @@ and the slice cannot ship. The rules below define the termination condition.
   `PASS` and `PASS WITH NON-BLOCKING COMMENTS` are merge-ready; non-blocking
   comments are dispositioned, not re-reviewed. `BLOCKED` and `HARD FAIL` are not
   terminal.
-- Once every required terminal-validation participant has returned a merge-ready
-  verdict for the frozen head, stop. Do not solicit additional reviewers, do not
-  start another unscoped adversarial pass, and do not make cosmetic cleanup
+- Once terminal PASS is reached, stop. Do not solicit additional reviewers, do
+  not start another unscoped adversarial pass, and do not make cosmetic cleanup
   edits that invalidate the terminal evidence.
 - PASS does not authorize merge. Merge remains an operator decision under the
   [Pull Request Merge Gate](#pull-request-merge-gate) rules above.
