@@ -1,4 +1,6 @@
 ---
+# Must stay identical to galaxy.yml `dependencies`; enforced by
+# tests/unit/test_compatibility_contract.py. Authority: docs/compatibility.md.
 collections:
   - name: kubernetes.core
-    version: ">=3.0.0"
+    version: ">=6.0.0,<7.0.0"

@@ -2,6 +2,17 @@
 
 Production-ready Ansible Collection for ACM hub switchover automation.
 
+## Compatibility
+
+Requires `ansible-core` `>=2.16.0,<2.22` and `kubernetes.core` `>=6.0.0,<7.0.0`.
+Repository-tested lanes are `ansible-core` 2.16 on Python 3.11 and 2.21 on
+Python 3.12. No AAP combination is repository-tested and no certification claim
+is made.
+
+[`docs/compatibility.md`](docs/compatibility.md) is the authority: it states the
+full matrix, what "supported" means for each combination, the AAP and
+execution-environment posture, and the local validation commands.
+
 ## Current Scope
 
 - collection metadata and layout

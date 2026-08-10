@@ -1,2 +1,5 @@
 ---
-requires_ansible: ">=2.15.0"
+# Supported ansible-core range. Authority: docs/compatibility.md.
+# Floor 2.16 is the default core of AAP 2.5/2.6/2.7 and the floor declared by
+# kubernetes.core 6.x. Ceiling excludes 2.22, which is still in development.
+requires_ansible: ">=2.16.0,<2.22"

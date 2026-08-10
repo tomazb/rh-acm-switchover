@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci-cd.yml"
@@ -38,12 +39,166 @@ def test_root_ci_excludes_e2e_tests_by_marker():
     assert "python -m pytest tests/release -q" in text
 
 
-def test_collection_ci_covers_restore_only_syntax_and_runtime_tests():
-    text = COLLECTION_WORKFLOW.read_text()
+COLLECTION_PLAYBOOK_DIR = "ansible_collections/tomazb/acm_switchover/playbooks"
 
-    assert "playbooks/restore_only.yml --syntax-check" in text
-    assert "tests/integration/" in text
-    assert "tests/scenario/" in text
+
+def _strip_shell_comments(script: str) -> str:
+    """Drop shell comments, whole-line and inline.
+
+    Removing only whole-line comments leaves `ansible-playbook "$p" # --syntax-check`
+    looking like a syntax check, because a line-scanning pattern reaches the flag
+    inside the comment. Stripping from the `#` token onwards fails closed: text
+    that is not executed cannot satisfy any assertion below.
+    """
+    return "\n".join(re.sub(r"(?<!\S)#.*$", "", line) for line in script.splitlines())
+
+
+def _foundation_run_scripts() -> list:
+    """Return the foundation job's executable shell, with comments removed.
+
+    Reading the workflow as raw text would accept a command that has been
+    commented out or moved into an `echo`, so coverage is judged only from what
+    the runner would actually execute.
+    """
+    workflow = yaml.safe_load(COLLECTION_WORKFLOW.read_text())
+    return [_strip_shell_comments(step["run"]) for step in workflow["jobs"]["foundation"]["steps"] if step.get("run")]
+
+
+# A command must be the thing being run, not a word inside an `echo`, a comment,
+# or another command's arguments. Anchoring to the start of a line, after any
+# environment assignments, is what separates "CI runs this" from "this text
+# appears in the file".
+_ENV_PREFIX = r"(?:[A-Za-z_][A-Za-z0-9_]*=\S*[ \t]+)*"
+_PLAYBOOK_COMMAND = rf"(?m)^[ \t]*{_ENV_PREFIX}(?:sudo[ \t]+|time[ \t]+)?ansible-playbook[ \t]+"
+_PYTEST_COMMAND = rf"(?m)^[ \t]*{_ENV_PREFIX}(?:python[0-9.]*[ \t]+-m[ \t]+)?pytest[ \t]+"
+
+# The loop body is what runs per playbook; a command after `done` runs once, with
+# the loop variable holding only its final value.
+_PLAYBOOK_LOOP = re.compile(
+    r"for[ \t]+(?P<var>\w+)[ \t]+in[ \t]+[^\n;]*" + re.escape(COLLECTION_PLAYBOOK_DIR) + r"/\*\.yml[ \t]*;?[ \t]*\n?"
+    r"[ \t]*do\b(?P<body>.*?)\bdone\b",
+    re.DOTALL,
+)
+
+
+def _syntax_checked_playbooks(scripts: list, playbook_names: set) -> set:
+    """Names of playbooks an executed `ansible-playbook --syntax-check` would reach."""
+    covered = set()
+    for script in scripts:
+        # Glob form: the check must run *inside* a loop over the collection's own
+        # playbook directory, driven by that loop's variable.
+        for match in _PLAYBOOK_LOOP.finditer(script):
+            variable = match.group("var")
+            fed_to_check = _PLAYBOOK_COMMAND + rf"\"?\$\{{?{variable}\}}?\"?[^\n]*--syntax-check"
+            if re.search(fed_to_check, match.group("body")):
+                covered |= playbook_names
+        # Explicit form: an executed invocation naming the playbook by its full path.
+        for name in playbook_names:
+            named = rf"[^\n]*{re.escape(COLLECTION_PLAYBOOK_DIR)}/{re.escape(name)}[^\n]*--syntax-check"
+            if re.search(_PLAYBOOK_COMMAND + named, script):
+                covered.add(name)
+    return covered
+
+
+def _runs_pytest_for(scripts: list, path_fragment: str) -> bool:
+    """Whether an executed pytest command targets the given path."""
+    pattern = _PYTEST_COMMAND + rf"[^\n]*{re.escape(path_fragment)}"
+    return any(re.search(pattern, script) for script in scripts)
+
+
+def test_syntax_check_detection_ignores_non_executed_text():
+    """Regression cases for the guardrail's own detection logic.
+
+    Each script below mentions a syntax check without running one. If any is
+    reported as covered, the guardrail would pass after CI stopped checking
+    playbooks, which is the failure mode it exists to prevent.
+    """
+    names = {"restore_only.yml"}
+    glob_path = COLLECTION_PLAYBOOK_DIR
+    not_executed = {
+        "echoed": f"echo ansible-playbook {glob_path}/restore_only.yml --syntax-check",
+        "whole-line comment": f"# ansible-playbook {glob_path}/restore_only.yml --syntax-check",
+        "trailing comment": f'echo "skipped"  # ansible-playbook {glob_path}/restore_only.yml --syntax-check',
+        "flag only inside an inline comment": (
+            f"for playbook in {glob_path}/*.yml; do\n" '  ansible-playbook "${playbook}" # --syntax-check\n' "done"
+        ),
+        "loop echoed only": (
+            f"for playbook in {glob_path}/*.yml; do\n" '  echo ansible-playbook "${playbook}" --syntax-check\n' "done"
+        ),
+        "check runs after the loop, not inside it": (
+            f"for playbook in {glob_path}/*.yml; do\n"
+            '  echo "${playbook}"\n'
+            "done\n"
+            'ansible-playbook "${playbook}" --syntax-check'
+        ),
+        "loop over a different playbook directory": (
+            "for playbook in some/other/playbooks/*.yml; do\n"
+            '  ansible-playbook "${playbook}" --syntax-check\n'
+            "done"
+        ),
+        "explicit invocation from a different directory": (
+            f"ansible-playbook some/other/playbooks/restore_only.yml --syntax-check"
+        ),
+        "argument of another command": f"grep ansible-playbook {glob_path}/restore_only.yml --syntax-check",
+    }
+
+    for label, script in not_executed.items():
+        assert (
+            _syntax_checked_playbooks([_strip_shell_comments(script)], names) == set()
+        ), f"{label} should not count as a syntax check"
+
+    executed = {
+        "explicit": f"ansible-playbook {glob_path}/restore_only.yml --syntax-check",
+        "loop": (f"for playbook in {glob_path}/*.yml; do\n" '  ansible-playbook "${playbook}" --syntax-check\n' "done"),
+        "loop with piped output": (
+            f"for playbook in {glob_path}/*.yml; do\n"
+            '  ansible-playbook "${playbook}" --syntax-check 2>&1 | tee -a "${log}" || status=1\n'
+            "done"
+        ),
+    }
+
+    for label, script in executed.items():
+        assert (
+            _syntax_checked_playbooks([_strip_shell_comments(script)], names) == names
+        ), f"{label} should count as a syntax check"
+
+
+def test_pytest_detection_requires_an_executed_command():
+    """`tests/integration/` appearing in an echo or comment is not a test run."""
+    path = "ansible_collections/tomazb/acm_switchover/tests/integration/"
+
+    assert not _runs_pytest_for([_strip_shell_comments(f"echo pytest {path}")], path)
+    assert not _runs_pytest_for([_strip_shell_comments(f"# pytest {path} -q")], path)
+    assert not _runs_pytest_for([_strip_shell_comments(f'echo "would run {path}"')], path)
+
+    assert _runs_pytest_for([f"pytest {path} -q"], path)
+    assert _runs_pytest_for([f"PYTHONPATH=. pytest {path} -q"], path)
+    assert _runs_pytest_for([f"PYTHONPATH=. python -m pytest {path} -q"], path)
+
+
+def test_collection_ci_covers_every_shipped_playbook_and_runtime_tests():
+    """Collection CI must actually execute a syntax check for every shipped playbook.
+
+    The workflow may enumerate playbooks individually or iterate them with a
+    glob, so this asserts the coverage property rather than any one literal
+    command: a hand-maintained list can fall behind the shipped set, and a glob
+    that has been commented out still leaves its text in the file.
+    """
+    playbook_dir = REPO_ROOT / "ansible_collections" / "tomazb" / "acm_switchover" / "playbooks"
+    playbook_names = {playbook.name for playbook in playbook_dir.glob("*.yml")}
+
+    assert playbook_names, "the collection should ship playbooks"
+    # restore_only.yml regressed out of CI coverage once; name it so the
+    # set-based assertion below cannot pass vacuously if the playbook is dropped.
+    assert "restore_only.yml" in playbook_names
+
+    scripts = _foundation_run_scripts()
+    uncovered = playbook_names - _syntax_checked_playbooks(scripts, playbook_names)
+    assert not uncovered, f"collection CI does not syntax-check: {', '.join(sorted(uncovered))}"
+
+    for suite in ("tests/integration/", "tests/scenario/"):
+        path = f"ansible_collections/tomazb/acm_switchover/{suite}"
+        assert _runs_pytest_for(scripts, path), f"collection CI does not run pytest against {path}"
 
 
 def test_collection_ci_installs_kubernetes_runtime_for_live_module_boundary():

@@ -1,11 +1,34 @@
 ---
+# Execution-environment BUILD INPUT. This definition is NOT repository-tested:
+# no CI lane builds it, and no AAP or certification claim is made for it.
+# See docs/compatibility.md for the support tiers and the tested lanes.
+#
+# The base image below is the subscription-free base used by the upstream
+# ansible-builder v3 minimal example. AAP operators should substitute their
+# entitled ee-minimal-rhel9 base for their AAP version, which already ships a
+# supported ansible-core.
+#
+# The ansible_core pin must stay consistent with meta/runtime.yml; enforced by
+# tests/unit/test_compatibility_contract.py.
 version: 3
 
 images:
   base_image:
-    name: quay.io/ansible/ansible-runner:stable-2.15-latest
+    name: docker.io/redhat/ubi9:latest
 
 dependencies:
+  # UBI 9 provides Python 3.9 as the default `python3`, but every ansible-core
+  # release in the range below requires Python 3.10 or newer, so the pip stage
+  # must run on an explicitly installed interpreter. Python 3.12 is the only
+  # version supported by every core in the range (2.16 accepts 3.10-3.12 and
+  # 2.21 requires 3.12-3.14).
+  python_interpreter:
+    package_system: python3.12
+    python_path: /usr/bin/python3.12
+  ansible_core:
+    package_pip: "ansible-core>=2.16,<2.22"
+  ansible_runner:
+    package_pip: ansible-runner
   galaxy: requirements.yml
   python: requirements.txt
   system: bindep.txt

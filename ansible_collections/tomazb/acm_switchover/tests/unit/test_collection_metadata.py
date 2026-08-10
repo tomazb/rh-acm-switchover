@@ -71,7 +71,14 @@ def test_collection_license_metadata_matches_repo_license():
 
 def test_runtime_yml_parses():
     data = yaml.safe_load((COLLECTION_ROOT / "meta" / "runtime.yml").read_text())
-    assert data["requires_ansible"].startswith(">=")
+    requires_ansible = data["requires_ansible"]
+
+    # The exact supported range lives in test_compatibility_contract.py. This
+    # only requires the constraint to be bounded on both sides; the previous
+    # `.startswith(">=")` check asserted the constraint's shape rather than its
+    # value, which is how an unbounded, unsupported floor went unnoticed.
+    assert ">=" in requires_ansible, "requires_ansible must declare a floor"
+    assert "<" in requires_ansible, "requires_ansible must declare a tested ceiling"
 
 
 def test_example_group_vars_parse():
