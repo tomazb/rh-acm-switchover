@@ -74,9 +74,9 @@ creating duplicate implementation work.
 
 | Finding | Severity | Surface | Existing owner | Validated evidence |
 | --- | --- | --- | --- | --- |
-| LER-01 | High | Python | R4-05 | `StateManager.restore_runtime_checkpoint()` and `restore_state_snapshot()` clear `_dirty` before `_write_state`; an injected write failure propagates while leaving `_dirty == False`, so later flushing has no retry obligation. |
-| LER-02 | Medium | Python + collection | R3-10b | Python setup mode invokes `setup-rbac.sh` with an unbounded `subprocess.run`; both the Python helper path and collection kubeconfig helper contain Kubernetes calls without an explicit request timeout, permitting an indefinitely hung RBAC bootstrap. |
-| LER-03 | Medium | Collection | R3-06 | Unsafe schema-1.0 state with completed phases is rebuilt only for `status: enter`; a direct `pass` or `fail` with explicit `reset`/`reset_from` can retain unsafe legacy state instead of rebuilding or failing closed. Bundled roles enter first, but the reusable action boundary does not enforce that sequence. |
+| LER-01 | High | Python | R4-05 | `lib/utils.py:490-514`: `StateManager.restore_runtime_checkpoint()` and `restore_state_snapshot()` clear `_dirty` before `_write_state`; an injected write failure propagates while leaving `_dirty == False`, so later flushing has no retry obligation. |
+| LER-02 | Medium | Python + collection | R3-10b | `acm_switchover.py:1060-1066`, `scripts/setup-rbac.sh:247-373`, `ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/tasks/generate_kubeconfigs.yml:55-76`, and its `files/scripts/generate-sa-kubeconfig.sh:98-132`: Python setup mode invokes the helper through an unbounded `subprocess.run`, and the Python and collection helper Kubernetes calls likewise lack a complete timeout contract, permitting an indefinitely hung RBAC bootstrap. |
+| LER-03 | Medium | Collection | R3-06 | `ansible_collections/tomazb/acm_switchover/plugins/action/checkpoint_phase.py:275-306`: unsafe schema-1.0 state with completed phases is rebuilt only for `status: enter`; a direct `pass` or `fail` with explicit `reset`/`reset_from` can retain unsafe legacy state instead of rebuilding or failing closed. Bundled roles enter first, but the reusable action boundary does not enforce that sequence. |
 ```
 
 Keep the existing R4 count paragraph byte-for-byte unchanged. The new paragraph
@@ -156,39 +156,138 @@ finding:
 Run:
 
 ```bash
-awk '/^#### R3-06:/{in_section=1; next} /^#### /{in_section=0} in_section && /LER-03/{found=1} END {exit !found}' thermos-resolution-plan.md
-awk '/^- `R3-10b`/{in_boundary=1; next} in_boundary && /^- `R3-10[a-z]`/{in_boundary=0} in_boundary && /LER-02/{found=1} END {exit !found}' thermos-resolution-plan.md
-awk '/^\*Area E — state integrity \(`R4-05`\):\*/{in_section=1; next} /^\*Area F —/{in_section=0} in_section && /LER-01/{found=1} END {exit !found}' thermos-resolution-plan.md
+python - <<'PY'
+from pathlib import Path
+import re
+
+text = Path("thermos-resolution-plan.md").read_text(encoding="utf-8")
+
+
+def between(start: str, end: str) -> str:
+    return text.split(start, 1)[1].split(end, 1)[0]
+
+
+def finding_count(value: str, finding: str) -> int:
+    pattern = rf"(?<![A-Za-z0-9_-]){re.escape(finding)}(?![A-Za-z0-9_-])"
+    return len(re.findall(pattern, value))
+
+
+r3_10b = "- `R3-10b`" + text.split("- `R3-10b`", 1)[1].split("- `R3-10c`", 1)[0]
+sections = {
+    "source": between("## Logic Error Analysis Revalidation (2026-08-10)", "### Design-hardening ledger"),
+    "R3-06 owner": "\n".join(line for line in text.splitlines() if line.startswith("| R3-06 |")),
+    "R3-10b owner": "\n".join(line for line in text.splitlines() if line.startswith("| R3-10b |")),
+    "R4-05 owner": "\n".join(line for line in text.splitlines() if line.startswith("| R4-05 |")),
+    "R3-06 detail": between("#### R3-06:", "#### R3-07:"),
+    "R3-10b detail": r3_10b,
+    "R4-05 detail": between("*Area E — state integrity (`R4-05`):*", "*Area F —"),
+    "priority": next(line for line in text.splitlines() if line.startswith("| P2 |")),
+    "matrix": between("\n## Finding Validation Matrix\n", "\n## PR Sequence"),
+}
+expected = {
+    "LER-01": ("source", "R4-05 owner", "R4-05 detail", "priority", "matrix"),
+    "LER-02": ("source", "R3-10b owner", "R3-10b detail", "priority", "matrix"),
+    "LER-03": ("source", "R3-06 owner", "R3-06 detail", "priority", "matrix"),
+}
+for finding, placements in expected.items():
+    for placement in placements:
+        count = finding_count(sections[placement], finding)
+        assert count == 1, f"{finding}: expected once in {placement}, found {count}"
+    assert finding_count(text, finding) == 5, f"{finding}: unexpected occurrence outside required placements"
+PY
 ```
 
-Expected: all three commands exit 0, proving `LER-03` occurs in the `R3-06`
-detailed section, `LER-02` occurs in the `R3-10b` detailed boundary, and
-`LER-01` occurs in the `R4-05` Area E detailed section.
+Expected: exit status 0. Each identifier occurs exactly once in the dated source
+table, its existing owner row, its detailed requirements, the P2 priority row,
+and the validation matrix, with no extra tracker occurrences.
 
-Run the global source/owner/priority/matrix audit as supplementary evidence:
+Run the historical-line preservation audit against the branch's `ansible` merge
+base:
 
 ```bash
-rg -n "LER-01|LER-02|LER-03" thermos-resolution-plan.md
+python - <<'PY'
+from collections import Counter
+from pathlib import Path
+import re
+import subprocess
+
+merge_base = subprocess.run(
+    ["git", "merge-base", "HEAD", "ansible"], check=True, capture_output=True, text=True
+).stdout.strip()
+baseline = subprocess.run(
+    ["git", "show", f"{merge_base}:thermos-resolution-plan.md"],
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout.splitlines()
+current = Path("thermos-resolution-plan.md").read_text(encoding="utf-8").splitlines()
+protected = re.compile(
+    r"Review #[1-4]|count reconciliation|unique IDs|raw claims?|original claims?|"
+    r"validated hypotheses|R4 rows|external-hypothesis accounting|exclusive dispositions?|"
+    r"confirmed|partially[- ]amended|rejected/non-actionable|optional hardening|routed"
+)
+before = Counter(line for line in baseline if protected.search(line))
+after = Counter(line for line in current if protected.search(line))
+allowed_additions = Counter(
+    {
+        "`LER-*` identifiers so the historical Thermos Review #1-#4 counts remain": 1,
+        (
+            "| LER-01 | confirmed, High | R4-05 (planned) | A restore write failure propagates after "
+            "`_dirty` was cleared, suppressing the later flush retry obligation. |"
+        ): 1,
+        (
+            "| LER-02 | confirmed, Medium | R3-10b (planned) | Python and collection RBAC setup/helper "
+            "paths have no complete bounded-execution contract; a hung subprocess or Kubernetes request "
+            "can block indefinitely. |"
+        ): 1,
+        (
+            "| LER-03 | confirmed, Medium | R3-06 (planned) | Explicit reset permits unsafe legacy state, "
+            "but only `enter` rebuilds it; direct `pass`/`fail` can retain schema 1.0. |"
+        ): 1,
+    }
+)
+assert after == before + allowed_additions, "historical count/disposition lines differ from the approved delta"
+
+diff = subprocess.run(
+    ["git", "diff", "--unified=0", merge_base, "--", "thermos-resolution-plan.md"],
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout
+hunk_pattern = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
+hunks = [
+    (int(old), int(old_count or 1), int(new), int(new_count or 1))
+    for old, old_count, new, new_count in hunk_pattern.findall(diff)
+]
+expected_hunks = [
+    (47, 1, 47, 1),
+    (932, 1, 932, 1),
+    (945, 1, 945, 1),
+    (1171, 0, 1172, 6),
+    (1237, 2, 1243, 7),
+    (1611, 1, 1622, 1),
+    (1627, 0, 1639, 15),
+    (1779, 0, 1806, 5),
+    (1935, 1, 1966, 1),
+    (2068, 0, 2100, 3),
+]
+assert hunks == expected_hunks, f"tracker changes escaped approved ranges: {hunks!r}"
+PY
 ```
 
-Expected: each identifier appears in the dated source table, its existing owner
-row, detailed requirements, the P2 priority row, and the validation matrix.
-
-Run:
-
-```bash
-git diff --unified=0 -- thermos-resolution-plan.md | rg "^[+-].*(41 unique IDs|27 R4 rows|20-confirmed/7-partially-amended)"
-```
-
-Expected: exit status 1 and no output; historical Review #3 and R4 count claims
-are unchanged.
+Expected: exit status 0. Every pre-edit line carrying a Review #1-#4 or R4
+count/disposition statement remains present byte-for-byte, and the only new
+matching lines are the four explicitly approved independent `LER-*` records.
+The exact-hunk allowlist also fails if any change escapes the ten approved
+tracker edit ranges, including multiline historical claims not matched by the
+line filter.
 
 - [ ] **Step 7: Run documentation verification**
 
 Run:
 
 ```bash
-/home/tomaz/sources/rh-acm-switchover/.venv/bin/python -m pytest tests/test_documentation_guardrails.py -q
+python -m pytest tests/test_documentation_guardrails.py -q
 git diff --check
 ```
 
