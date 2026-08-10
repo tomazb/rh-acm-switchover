@@ -65,12 +65,144 @@ that sequencing. The defect is Medium severity and is folded into `R3-06`, which
 already owns the overly broad `reset_from` bypass in the same checkpoint-policy
 path.
 
+### Auditable source and red reproductions
+
+The following read-only commands are the executable evidence recorded for
+`ansible` revision `9906101f4a6f6652c31d03fc4cb4cde7a04159da`. Each command
+intentionally exits nonzero on that revision with the named assertion; a future
+owner implementation must replace these ad hoc reproductions with focused tests.
+
+`LER-01` targets `StateManager.restore_runtime_checkpoint()` and
+`StateManager.restore_state_snapshot()` at `lib/utils.py:490-514`. This fault
+injection fails with both restore symbols in `violations`:
+
+```bash
+python - <<'PY'
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from lib.utils import StateManager
+
+
+def fail(_state):
+    raise OSError("injected write failure")
+
+
+violations = []
+with TemporaryDirectory() as root:
+    for capture, restore in (
+        ("capture_runtime_checkpoint", "restore_runtime_checkpoint"),
+        ("capture_state_snapshot", "restore_state_snapshot"),
+    ):
+        manager = StateManager(str(Path(root) / f"{restore}.json"))
+        snapshot = getattr(manager, capture)()
+        manager._dirty = True
+        manager._write_state = fail
+        try:
+            getattr(manager, restore)(snapshot)
+        except OSError:
+            pass
+        if manager._dirty is not True:
+            violations.append(restore)
+
+assert not violations, f"failed writes cleared dirty retry obligation: {violations}"
+PY
+```
+
+`LER-02` targets `run_setup()` at `acm_switchover.py:1002-1072`, its invoked
+`scripts/setup-rbac.sh:247-373` Kubernetes calls, the collection invocation at
+`ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/tasks/generate_kubeconfigs.yml:55-76`,
+and the complete helper path
+`ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/files/scripts/generate-sa-kubeconfig.sh:98-132`.
+This snapshot probe fails with all four unbounded surfaces in `failures`:
+
+```bash
+python - <<'PY'
+import ast
+from pathlib import Path
+
+failures = []
+tree = ast.parse(Path("acm_switchover.py").read_text(encoding="utf-8"))
+run_setup = next(
+    node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "run_setup"
+)
+run_calls = [
+    node
+    for node in ast.walk(run_setup)
+    if isinstance(node, ast.Call)
+    and isinstance(node.func, ast.Attribute)
+    and isinstance(node.func.value, ast.Name)
+    and node.func.value.id == "subprocess"
+    and node.func.attr == "run"
+]
+if not run_calls or any(
+    not any(keyword.arg == "timeout" for keyword in call.keywords) for call in run_calls
+):
+    failures.append("acm_switchover.py:run_setup subprocess deadline")
+
+for path, markers in {
+    "scripts/setup-rbac.sh": ("--request-timeout",),
+    (
+        "ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/"
+        "tasks/generate_kubeconfigs.yml"
+    ): ("async:", "timeout:"),
+    (
+        "ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/"
+        "files/scripts/generate-sa-kubeconfig.sh"
+    ): ("--request-timeout",),
+}.items():
+    source = Path(path).read_text(encoding="utf-8")
+    if not any(marker in source for marker in markers):
+        failures.append(path)
+
+assert not failures, f"unbounded RBAC setup surfaces: {failures}"
+PY
+```
+
+`LER-03` targets `ActionModule._normalize_checkpoint_data()` at
+`ansible_collections/tomazb/acm_switchover/plugins/action/checkpoint_phase.py:265-325`.
+This direct action-boundary probe fails with all four `pass`/`fail` and
+`reset`/`reset_from` combinations in `violations`:
+
+```bash
+ANSIBLE_LOCAL_TEMP=/tmp python - <<'PY'
+from tests.properties.test_checkpoint_properties import ActionModule
+
+violations = []
+action = ActionModule.__new__(ActionModule)
+for status in ("pass", "fail"):
+    for reset_from in (None, "preflight"):
+        checkpoint = {
+            "schema_version": "1.0",
+            "phase": "finalization",
+            "completed_phases": ["preflight"],
+            "operational_data": {"legacy": True},
+        }
+        result, _changed = action._normalize_checkpoint_data(
+            checkpoint_data=checkpoint,
+            phase="preflight",
+            status=status,
+            reset_from=reset_from,
+            has_explicit_reset=True,
+            expected_operation_identity={},
+        )
+        if result.get("failed") is not True and result.get("schema_version") == "1.0":
+            violations.append((status, "reset_from" if reset_from else "reset"))
+
+assert not violations, f"unsafe legacy transitions accepted: {violations}"
+PY
+```
+
 ## Tracker Changes
 
 Add a dated **Logic Error Analysis Revalidation** section containing the three
 `LER-*` rows, their evidence, severity, and existing owner. This section is a new
 hypothesis-source record and does not alter the historical finding counts of
 earlier Thermos reviews.
+
+Add one corresponding row per `LER-*` identifier to the Finding Validation
+Matrix so status, severity, owner, and failure behavior remain independently
+traceable from the source record.
 
 Extend the existing owner rows and detailed acceptance criteria as follows.
 
@@ -136,7 +268,8 @@ their existing design and implementation gates are satisfied.
 The tracker update must pass:
 
 1. A focused text audit proving every `LER-*` identifier appears in its source
-   row, owner row, detailed acceptance criteria, and priority record.
+   row, owner row, detailed acceptance criteria, priority record, and validation
+   matrix row.
 2. A text audit proving historical Thermos review count statements are unchanged.
 3. `python -m pytest tests/test_documentation_guardrails.py -q`.
 4. `git diff --check`.

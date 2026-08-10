@@ -169,8 +169,22 @@ import re
 text = Path("thermos-resolution-plan.md").read_text(encoding="utf-8")
 
 
-def between(start: str, end: str) -> str:
-    return text.split(start, 1)[1].split(end, 1)[0]
+def between_unique(value: str, start: str, end: str, label: str) -> str:
+    assert value.count(start) == 1, f"{label}: expected one start boundary"
+    remainder = value.split(start, 1)[1]
+    assert remainder.count(end) == 1, f"{label}: expected one end boundary"
+    return remainder.split(end, 1)[0]
+
+
+def after_unique(value: str, start: str, label: str) -> str:
+    assert value.count(start) == 1, f"{label}: expected one start boundary"
+    return value.split(start, 1)[1]
+
+
+def unique_row(value: str, prefix: str, label: str) -> str:
+    matches = [line for line in value.splitlines() if line.startswith(prefix)]
+    assert len(matches) == 1, f"{label}: expected one row, found {len(matches)}"
+    return matches[0]
 
 
 def finding_count(value: str, finding: str) -> int:
@@ -178,22 +192,83 @@ def finding_count(value: str, finding: str) -> int:
     return len(re.findall(pattern, value))
 
 
-r3_10b = "- `R3-10b`" + text.split("- `R3-10b`", 1)[1].split("- `R3-10c`", 1)[0]
+source = between_unique(
+    text,
+    "\n## Logic Error Analysis Revalidation (2026-08-10)\n",
+    "\n### Design-hardening ledger",
+    "source section",
+)
+review3 = between_unique(
+    text,
+    "\n## Thermos Review #3 (2026-07-25)\n",
+    "\n## Revalidation (2026-07-26)\n",
+    "Review #3 section",
+)
+r3_owners = between_unique(
+    review3,
+    "\n### Planned Resolution Slices\n",
+    "\n`R3-P10` and",
+    "Review #3 owner table",
+)
+r3_10_inventory = after_unique(
+    review3,
+    "\n#### R3-10a-g: Residual Inventory Boundaries\n",
+    "R3-10 inventory",
+)
+assert r3_10_inventory.count("- `R3-10b`") == 1
+assert r3_10_inventory.count("- `R3-10c`") == 1
+r3_10b = "- `R3-10b`" + r3_10_inventory.split("- `R3-10b`", 1)[1].split("- `R3-10c`", 1)[0]
+r4 = between_unique(
+    text,
+    "\n## Spec-Sourced Safety Review (2026-07-29)\n",
+    "\n## Open-Findings Assessment And Ranking (2026-07-29)\n",
+    "Review #4 section",
+)
+r4_owners = between_unique(
+    r4,
+    "\n### Planned resolution slices\n",
+    "\nCross-references",
+    "Review #4 owner table",
+)
+ranking = between_unique(
+    text,
+    "\n## Open-Findings Assessment And Ranking (2026-07-29)\n",
+    "\n## Finding Validation Matrix\n",
+    "priority section",
+)
+priority_table = between_unique(
+    ranking,
+    "\n| Rank | Findings | Rationale |\n",
+    "\n### Corrections applied in this pass",
+    "priority table",
+)
+matrix = between_unique(
+    text,
+    "\n## Finding Validation Matrix\n",
+    "\n## PR Sequence\n",
+    "validation matrix",
+)
 sections = {
-    "source": between("## Logic Error Analysis Revalidation (2026-08-10)", "### Design-hardening ledger"),
-    "R3-06 owner": "\n".join(line for line in text.splitlines() if line.startswith("| R3-06 |")),
-    "R3-10b owner": "\n".join(line for line in text.splitlines() if line.startswith("| R3-10b |")),
-    "R4-05 owner": "\n".join(line for line in text.splitlines() if line.startswith("| R4-05 |")),
-    "R3-06 detail": between("#### R3-06:", "#### R3-07:"),
+    "LER-01 source row": unique_row(source, "| LER-01 |", "LER-01 source"),
+    "LER-02 source row": unique_row(source, "| LER-02 |", "LER-02 source"),
+    "LER-03 source row": unique_row(source, "| LER-03 |", "LER-03 source"),
+    "R3-06 owner": unique_row(r3_owners, "| R3-06 |", "R3-06 owner"),
+    "R3-10b owner": unique_row(r3_owners, "| R3-10b |", "R3-10b owner"),
+    "R4-05 owner": unique_row(r4_owners, "| R4-05 |", "R4-05 owner"),
+    "R3-06 detail": between_unique(review3, "\n#### R3-06:", "\n#### R3-07:", "R3-06 detail"),
     "R3-10b detail": r3_10b,
-    "R4-05 detail": between("*Area E — state integrity (`R4-05`):*", "*Area F —"),
-    "priority": next(line for line in text.splitlines() if line.startswith("| P2 |")),
-    "matrix": between("\n## Finding Validation Matrix\n", "\n## PR Sequence"),
+    "R4-05 detail": between_unique(
+        r4, "\n*Area E — state integrity (`R4-05`):*", "\n*Area F —", "R4-05 detail"
+    ),
+    "priority": unique_row(priority_table, "| P2 |", "P2 priority"),
+    "LER-01 matrix row": unique_row(matrix, "| LER-01 |", "LER-01 matrix"),
+    "LER-02 matrix row": unique_row(matrix, "| LER-02 |", "LER-02 matrix"),
+    "LER-03 matrix row": unique_row(matrix, "| LER-03 |", "LER-03 matrix"),
 }
 expected = {
-    "LER-01": ("source", "R4-05 owner", "R4-05 detail", "priority", "matrix"),
-    "LER-02": ("source", "R3-10b owner", "R3-10b detail", "priority", "matrix"),
-    "LER-03": ("source", "R3-06 owner", "R3-06 detail", "priority", "matrix"),
+    "LER-01": ("LER-01 source row", "R4-05 owner", "R4-05 detail", "priority", "LER-01 matrix row"),
+    "LER-02": ("LER-02 source row", "R3-10b owner", "R3-10b detail", "priority", "LER-02 matrix row"),
+    "LER-03": ("LER-03 source row", "R3-06 owner", "R3-06 detail", "priority", "LER-03 matrix row"),
 }
 for finding, placements in expected.items():
     for placement in placements:
@@ -214,6 +289,7 @@ base:
 python - <<'PY'
 from collections import Counter
 from pathlib import Path
+import hashlib
 import re
 import subprocess
 
@@ -254,12 +330,26 @@ allowed_additions = Counter(
 )
 assert after == before + allowed_additions, "historical count/disposition lines differ from the approved delta"
 
-diff = subprocess.run(
-    ["git", "diff", "--unified=0", merge_base, "--", "thermos-resolution-plan.md"],
+diff_bytes = subprocess.run(
+    [
+        "git",
+        "diff",
+        "--no-ext-diff",
+        "--no-color",
+        "--unified=0",
+        merge_base,
+        "--",
+        "thermos-resolution-plan.md",
+    ],
     check=True,
     capture_output=True,
-    text=True,
 ).stdout
+expected_diff_sha256 = "6fda95bf445b2bc72f440ca443952237e01558247a2692953800a1cba64f0d40"
+actual_diff_sha256 = hashlib.sha256(diff_bytes).hexdigest()
+assert actual_diff_sha256 == expected_diff_sha256, (
+    f"tracker diff differs from approved patch: {actual_diff_sha256}"
+)
+diff = diff_bytes.decode("utf-8")
 hunk_pattern = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
 hunks = [
     (int(old), int(old_count or 1), int(new), int(new_count or 1))
@@ -287,7 +377,9 @@ count/disposition statement remains present byte-for-byte, and the only new
 matching lines are the four explicitly approved independent `LER-*` records.
 The exact-hunk allowlist also fails if any change escapes the eleven approved
 tracker edit ranges, including multiline historical claims not matched by the
-line filter.
+line filter. The SHA-256 assertion compares the complete canonical merge-base
+diff byte-for-byte with the approved tracker patch, so altered evidence,
+acceptance criteria, owner descriptions, or priority rationale also fail.
 
 - [ ] **Step 7: Run documentation verification**
 
@@ -300,7 +392,7 @@ git diff --check
 
 Expected:
 
-- `tests/test_documentation_guardrails.py`: 61 passed, 0 failed.
+- `tests/test_documentation_guardrails.py`: exit status 0 with no failures.
 - `git diff --check`: exit status 0 with no output.
 
 - [ ] **Step 8: Review the final tracker diff**
@@ -319,7 +411,12 @@ spec/plan baseline; no production, protected, or unrelated file is changed.
 
 ```bash
 git add thermos-resolution-plan.md
+git diff --cached --check
+git diff --cached --stat
+git diff --cached -- thermos-resolution-plan.md
 git commit -m "docs: extend Thermos owners for validated logic errors"
 ```
 
-Expected: one documentation-only commit containing the tracker update.
+Expected: the staged diff is the reviewed tracker-only patch, its whitespace
+check passes, and the resulting documentation-only commit contains no other
+file.
