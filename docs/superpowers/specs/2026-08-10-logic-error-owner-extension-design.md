@@ -110,16 +110,19 @@ PY
 ```
 
 `LER-02` targets `run_setup()` at `acm_switchover.py:1002-1072`, its invoked
-`scripts/setup-rbac.sh:247-373` Kubernetes calls, the collection invocation at
+`scripts/setup-rbac.sh:247-374` Kubernetes calls, the collection invocation at
 `ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/tasks/generate_kubeconfigs.yml:55-76`,
 and the complete helper path
 `ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/files/scripts/generate-sa-kubeconfig.sh:98-132`.
-This snapshot probe fails with all four unbounded surfaces in `failures`:
+This snapshot probe enumerates every network-capable `kubectl` call in the cited
+shell ranges and checks the collection command task as one bounded unit. It fails
+with every unbounded call/task entry in `failures`:
 
 ```bash
 python - <<'PY'
 import ast
 from pathlib import Path
+import re
 
 failures = []
 tree = ast.parse(Path("acm_switchover.py").read_text(encoding="utf-8"))
@@ -140,20 +143,37 @@ if not run_calls or any(
 ):
     failures.append("acm_switchover.py:run_setup subprocess deadline")
 
-for path, markers in {
-    "scripts/setup-rbac.sh": ("--request-timeout",),
+for path, first_line, last_line in (
+    ("scripts/setup-rbac.sh", 247, 374),
     (
         "ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/"
-        "tasks/generate_kubeconfigs.yml"
-    ): ("async:", "timeout:"),
-    (
-        "ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/"
-        "files/scripts/generate-sa-kubeconfig.sh"
-    ): ("--request-timeout",),
-}.items():
-    source = Path(path).read_text(encoding="utf-8")
-    if not any(marker in source for marker in markers):
-        failures.append(path)
+        "files/scripts/generate-sa-kubeconfig.sh",
+        98,
+        132,
+    ),
+):
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+    # first_line and last_line are one-based and inclusive.
+    for line_number, line in enumerate(lines[first_line - 1 : last_line], start=first_line):
+        is_kubectl_call = (
+            re.search(r"\bkubectl\b", line) is not None and not line.lstrip().startswith("#")
+        )
+        is_local_only = "--dry-run=client" in line or " config view " in line
+        if is_kubectl_call and not is_local_only and "--request-timeout" not in line:
+            failures.append(f"{path}:{line_number}")
+
+task_path = (
+    "ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/"
+    "tasks/generate_kubeconfigs.yml"
+)
+task_source = Path(task_path).read_text(encoding="utf-8")
+task_start = "- name: Generate kubeconfig from service account\n"
+task_end = "\n- name: Write generated service account kubeconfig\n"
+assert task_source.count(task_start) == 1 and task_source.count(task_end) == 1
+task = task_source.split(task_start, 1)[1].split(task_end, 1)[0]
+for marker in ("ansible.builtin.command:", "\n  async:", "\n  poll:"):
+    if marker not in task:
+        failures.append(f"{task_path}:Generate kubeconfig missing {marker.strip()}")
 
 assert not failures, f"unbounded RBAC setup surfaces: {failures}"
 PY

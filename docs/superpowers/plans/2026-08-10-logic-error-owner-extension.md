@@ -76,7 +76,7 @@ existing resolution slice instead of creating duplicate implementation work.
 | Finding | Severity | Surface | Existing owner | Validated evidence |
 | --- | --- | --- | --- | --- |
 | LER-01 | High | Python | R4-05 | `lib/utils.py:490-514`: `StateManager.restore_runtime_checkpoint()` and `restore_state_snapshot()` clear `_dirty` before `_write_state`; an injected write failure propagates while leaving `_dirty == False`, so later flushing has no retry obligation. |
-| LER-02 | Medium | Python + collection | R3-10b | `acm_switchover.py:1060-1066`, `scripts/setup-rbac.sh:247-373`, `ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/tasks/generate_kubeconfigs.yml:55-76`, and its `files/scripts/generate-sa-kubeconfig.sh:98-132`: Python setup mode invokes the helper through an unbounded `subprocess.run`, and the Python and collection helper Kubernetes calls likewise lack a complete timeout contract, permitting an indefinitely hung RBAC bootstrap. |
+| LER-02 | Medium | Python + collection | R3-10b | `acm_switchover.py:1060-1066`, `scripts/setup-rbac.sh:247-374`, `ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/tasks/generate_kubeconfigs.yml:55-76`, and its `files/scripts/generate-sa-kubeconfig.sh:98-132`: Python setup mode invokes the helper through an unbounded `subprocess.run`, and the Python and collection helper Kubernetes calls likewise lack a complete timeout contract, permitting an indefinitely hung RBAC bootstrap. |
 | LER-03 | Medium | Collection | R3-06 | `ansible_collections/tomazb/acm_switchover/plugins/action/checkpoint_phase.py:275-306`: unsafe schema-1.0 state with completed phases is rebuilt only for `status: enter`; a direct `pass` or `fail` with explicit `reset`/`reset_from` can retain unsafe legacy state instead of rebuilding or failing closed. Bundled roles enter first, but the reusable action boundary does not enforce that sequence. |
 ```
 
@@ -344,7 +344,7 @@ diff_bytes = subprocess.run(
     check=True,
     capture_output=True,
 ).stdout
-expected_diff_sha256 = "6fda95bf445b2bc72f440ca443952237e01558247a2692953800a1cba64f0d40"
+expected_diff_sha256 = "349fe61e2e66b326d784660c1c48fb83cf064fdbeb7ef84ac33ea0a4835c3f34"
 actual_diff_sha256 = hashlib.sha256(diff_bytes).hexdigest()
 assert actual_diff_sha256 == expected_diff_sha256, (
     f"tracker diff differs from approved patch: {actual_diff_sha256}"
