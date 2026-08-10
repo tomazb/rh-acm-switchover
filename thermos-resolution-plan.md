@@ -1638,12 +1638,13 @@ accounting.
 
 ## Logic Error Analysis Revalidation (2026-08-10)
 
-An operator-supplied logic-error report was treated as a hypothesis source and
-revalidated against the current `ansible` source, focused tests, and direct
-fault injection. Three actionable findings remain. They receive independent
-`LER-*` identifiers so the historical Thermos Review #1-#4 counts remain
-unchanged, and each is assigned to an existing resolution slice rather than
-creating duplicate implementation work.
+The operator-supplied report had no stable issue, URL, or artifact identifier;
+this provenance limitation is recorded here. It was treated as a hypothesis
+source and revalidated against `ansible` revision
+`9906101f4a6f6652c31d03fc4cb4cde7a04159da`, focused tests, and direct fault injection.
+Three actionable findings remain. `LER-*` identifiers are excluded from historical
+Thermos Review #1-#4 counts and dispositions; each finding is assigned to an
+existing resolution slice instead of creating duplicate implementation work.
 
 | Finding | Severity | Surface | Existing owner | Validated evidence |
 | --- | --- | --- | --- | --- |
@@ -2099,7 +2100,7 @@ the run-id marker (`roles/argocd_manage/tasks/resume.yml:5-21`). Fold into `TR2D
 | R3-P6 | confirmed, Low | R3-10b (planned) | Residual of `R2-H1`/`PR 36`: `delete_custom_resource` is the only mutating `KubeClient` method without a default request timeout. Former `R3-P6b` is folded supporting evidence that its docstring also misstates the behavior. |
 | LER-01 | confirmed, High | R4-05 (planned) | A restore write failure propagates after `_dirty` was cleared, suppressing the later flush retry obligation. |
 | LER-02 | confirmed, Medium | R3-10b (planned) | Python and collection RBAC setup/helper paths have no complete bounded-execution contract; a hung subprocess or Kubernetes request can block indefinitely. |
-| LER-03 | confirmed, Medium | R3-06 (planned) | Explicit reset permits unsafe legacy state, but only `enter` rebuilds it; direct `pass`/`fail` can retain schema 1.0. |
+| LER-03 | confirmed, Medium | R3-06 (planned) | An explicit `reset` or `reset_from` permits unsafe legacy state, but only `enter` rebuilds it; direct `pass`/`fail` can retain schema 1.0. |
 | R3-P7 | confirmed, Low | R3-10c (planned) | `--dry-run --report-dir` writes an empty artifact because the state snapshot is restored before the report is written. |
 | R3-P8 | confirmed with corrected count, Low | R3-10f (planned) | Two constants, not four, are unreferenced; six operational sites inline the corresponding Secret names. Route with the constants/quality design boundary. |
 | R3-P9 | confirmed, Low | R3-10c (planned) | Report artifacts are `0644` and embed raw exception text. The existing validate → `mkdir` → revalidate sequence intentionally checks the created parent before the no-follow open and must remain unchanged. |

@@ -65,12 +65,13 @@ Immediately after the existing R4 count-reconciliation paragraph and before the
 ```markdown
 ## Logic Error Analysis Revalidation (2026-08-10)
 
-An operator-supplied logic-error report was treated as a hypothesis source and
-revalidated against the current `ansible` source, focused tests, and direct
-fault injection. Three actionable findings remain. They receive independent
-`LER-*` identifiers so the historical Thermos Review #1-#4 counts remain
-unchanged, and each is assigned to an existing resolution slice rather than
-creating duplicate implementation work.
+The operator-supplied report had no stable issue, URL, or artifact identifier;
+this provenance limitation is recorded here. It was treated as a hypothesis
+source and revalidated against `ansible` revision
+`9906101f4a6f6652c31d03fc4cb4cde7a04159da`, focused tests, and direct fault injection.
+Three actionable findings remain. `LER-*` identifiers are excluded from historical
+Thermos Review #1-#4 counts and dispositions; each finding is assigned to an
+existing resolution slice instead of creating duplicate implementation work.
 
 | Finding | Severity | Surface | Existing owner | Validated evidence |
 | --- | --- | --- | --- | --- |
@@ -80,8 +81,9 @@ creating duplicate implementation work.
 ```
 
 Keep the existing R4 count paragraph byte-for-byte unchanged. The new paragraph
-must say explicitly that `LER-*` identifiers are outside historical Review #1-#4
-counts.
+must record the validated `ansible` revision and the source-provenance limitation,
+and say explicitly that `LER-*` identifiers are outside historical Review #1-#4
+counts and dispositions.
 
 - [ ] **Step 3: Extend the planned-slice owner rows**
 
@@ -148,7 +150,7 @@ finding:
 ```markdown
 | LER-01 | confirmed, High | R4-05 (planned) | A restore write failure propagates after `_dirty` was cleared, suppressing the later flush retry obligation. |
 | LER-02 | confirmed, Medium | R3-10b (planned) | Python and collection RBAC setup/helper paths have no complete bounded-execution contract; a hung subprocess or Kubernetes request can block indefinitely. |
-| LER-03 | confirmed, Medium | R3-06 (planned) | Explicit reset permits unsafe legacy state, but only `enter` rebuilds it; direct `pass`/`fail` can retain schema 1.0. |
+| LER-03 | confirmed, Medium | R3-06 (planned) | An explicit `reset` or `reset_from` permits unsafe legacy state, but only `enter` rebuilds it; direct `pass`/`fail` can retain schema 1.0. |
 ```
 
 - [ ] **Step 6: Run the section-aware placement and historical-count audits**
@@ -230,7 +232,7 @@ before = Counter(line for line in baseline if protected.search(line))
 after = Counter(line for line in current if protected.search(line))
 allowed_additions = Counter(
     {
-        "`LER-*` identifiers so the historical Thermos Review #1-#4 counts remain": 1,
+        "Thermos Review #1-#4 counts and dispositions; each finding is assigned to an": 1,
         (
             "| LER-01 | confirmed, High | R4-05 (planned) | A restore write failure propagates after "
             "`_dirty` was cleared, suppressing the later flush retry obligation. |"
@@ -241,8 +243,8 @@ allowed_additions = Counter(
             "can block indefinitely. |"
         ): 1,
         (
-            "| LER-03 | confirmed, Medium | R3-06 (planned) | Explicit reset permits unsafe legacy state, "
-            "but only `enter` rebuilds it; direct `pass`/`fail` can retain schema 1.0. |"
+            "| LER-03 | confirmed, Medium | R3-06 (planned) | An explicit `reset` or `reset_from` permits "
+            "unsafe legacy state, but only `enter` rebuilds it; direct `pass`/`fail` can retain schema 1.0. |"
         ): 1,
     }
 )
@@ -266,10 +268,10 @@ expected_hunks = [
     (1171, 0, 1172, 6),
     (1237, 2, 1243, 7),
     (1611, 1, 1622, 1),
-    (1627, 0, 1639, 15),
-    (1779, 0, 1806, 5),
-    (1935, 1, 1966, 1),
-    (2068, 0, 2100, 3),
+    (1627, 0, 1639, 16),
+    (1779, 0, 1807, 5),
+    (1935, 1, 1967, 1),
+    (2068, 0, 2101, 3),
 ]
 assert hunks == expected_hunks, f"tracker changes escaped approved ranges: {hunks!r}"
 PY
