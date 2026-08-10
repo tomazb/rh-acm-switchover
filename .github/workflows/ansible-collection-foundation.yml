@@ -14,6 +14,11 @@ jobs:
   foundation:
     name: foundation (${{ matrix.lane }} / ansible-core ${{ matrix.ansible_core }} / py${{ matrix.python }})
     runs-on: ubuntu-latest
+    # This job runs pull-request-controlled commands (pip, ansible-galaxy,
+    # pytest, ansible-playbook) after checkout, so it takes no more than read
+    # access and does not leave a usable token in the checkout.
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -28,6 +33,8 @@ jobs:
             python: "3.12"
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}

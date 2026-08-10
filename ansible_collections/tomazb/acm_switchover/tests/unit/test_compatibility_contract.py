@@ -44,6 +44,11 @@ REQUIRED_PUSH_BRANCHES = {"main", "ansible"}
 # Unmaintained since 2022; its stable-2.15-latest tag never existed.
 ABANDONED_EE_BASE_IMAGE = "ansible/ansible-runner"
 
+# The EE base (UBI 9) defaults to Python 3.9, which is below every supported
+# core's floor, so the definition must select an interpreter explicitly. 3.12 is
+# the only version supported by every core in REQUIRES_ANSIBLE.
+EE_PYTHON_VERSION = "3.12"
+
 
 def _load_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text())
@@ -118,6 +123,27 @@ def test_execution_environment_is_buildable_and_matches_the_core_policy():
     for key in ("galaxy", "python", "system"):
         referenced = COLLECTION_ROOT / dependencies[key]
         assert referenced.is_file(), f"execution-environment.yml references missing {key} input {dependencies[key]}"
+
+
+def test_execution_environment_selects_an_interpreter_the_core_range_can_run():
+    """The base image's default Python is too old for every supported core.
+
+    UBI 9 ships Python 3.9 as `python3`, while the supported ansible-core range
+    starts at 2.16, which requires 3.10 or newer. Without an explicit
+    python_interpreter the pip stage cannot resolve ansible-core and the build
+    fails, so the absence of this key is a broken EE rather than a style issue.
+    """
+    dependencies = _load_yaml(COLLECTION_ROOT / "execution-environment.yml")["dependencies"]
+
+    interpreter = dependencies.get("python_interpreter")
+    assert interpreter, "execution-environment.yml must select a Python new enough for the supported cores"
+
+    assert (
+        EE_PYTHON_VERSION in interpreter["package_system"]
+    ), f"EE installs {interpreter['package_system']}, but the supported core range needs Python {EE_PYTHON_VERSION}"
+    assert interpreter["python_path"].endswith(
+        EE_PYTHON_VERSION
+    ), f"EE runs {interpreter['python_path']}, which is not the interpreter it installs"
 
 
 def test_ci_matrix_lanes_match_the_policy():

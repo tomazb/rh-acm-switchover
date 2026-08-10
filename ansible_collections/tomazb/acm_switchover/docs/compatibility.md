@@ -62,8 +62,21 @@ no Python requirement of its own.
 | `min` | `2.16.*` | 3.10 – 3.12 | **Python 3.11** |
 | `current` | `2.21.*` | 3.12 – 3.14 | **Python 3.12** |
 
-The two upstream ranges intersect only at 3.12, so no single Python version can
-cover both lanes.
+The two upstream ranges intersect only at 3.12, so **3.12 is the only Python
+version that could run both lanes**. The lanes deliberately do not both use it:
+running `min` on 3.11 and `current` on 3.12 means the matrix covers two
+interpreters instead of one, and 3.11 is the Python that AAP's `ansible-core`
+2.16 execution environments ship. Consolidating both lanes on 3.12 would be a
+valid choice; it would trade interpreter coverage for a smaller matrix.
+
+Note that 3.11 is a valid Python for the `min` lane only. It is below the floor
+of `ansible-core` 2.21, so it cannot serve the `current` lane — which is why the
+workflow's previous hard-coded `python-version: "3.11"` could not have been
+carried forward unchanged.
+
+The execution environment is a separate case: it must satisfy the *whole*
+declared range from a single interpreter, so it pins 3.12 (see
+[Execution environment](#execution-environment)).
 
 The repository's Python CLI targets 3.10 – 3.12 (`setup.cfg`, `.github/workflows/ci-cd.yml`).
 That is a separate surface and is unaffected by this policy.
@@ -99,6 +112,17 @@ Its base image is `docker.io/redhat/ubi9:latest`, the subscription-free base use
 by the upstream ansible-builder v3 minimal example, with `ansible-core` pinned
 explicitly through `dependencies.ansible_core.package_pip` so the EE cannot drift
 from the range above.
+
+UBI 9 provides Python **3.9** as the default `python3`, which is below the floor
+of every `ansible-core` in the supported range, so the definition also declares
+`dependencies.python_interpreter` (`package_system: python3.12`,
+`python_path: /usr/bin/python3.12`). Without it the pip stage cannot resolve
+`ansible-core` at all and the build fails. Python 3.12 is used because it is the
+only version supported by every core in the range. Verified on
+`docker.io/redhat/ubi9:latest` (2026-08-10): the default interpreter reports
+Python 3.9.25, `python3.12`/`python3.12-pip` are available from
+`ubi-9-appstream-rpms`, and `python3.12 -m pip install "ansible-core>=2.16,<2.22"`
+resolves 2.21.2.
 
 AAP operators should substitute their entitled `ee-minimal-rhel9` base for their
 AAP version, which already ships a supported `ansible-core`.
@@ -184,12 +208,27 @@ done
 
 ```bash
 python3.11 -m venv .venv-lane-min
-./.venv-lane-min/bin/pip install "ansible-core==2.16.*" pytest PyYAML "kubernetes>=28.0.0"
+source .venv-lane-min/bin/activate
+pip install "ansible-core==2.16.*" pytest PyYAML "kubernetes>=28.0.0"
+
+# The collection dependencies must be resolved again inside this environment:
+# a lane is defined by its ansible-core *and* what that core resolves.
+ansible-galaxy collection install -r ansible_collections/tomazb/acm_switchover/requirements.yml
+export ANSIBLE_COLLECTIONS_PATH="$PWD:$HOME/.ansible/collections"
 ```
+
+Then run steps 2 – 6 above unchanged; that is the full `min` lane.
 
 `requirements-dev.txt` pins `ansible-core>=2.18.1` on Python 3.11 and newer. That
 sits inside the supported range but does not reach the `min` lane floor, which is
 why the separate environment above is required to reproduce it.
+
+**Scope of this section.** The commands above reproduce the *collection* lanes in
+`ansible-collection-foundation.yml`. They are not the repository's whole test
+surface: the root suite (`python -m pytest tests/ -q`) runs in `ci-cd.yml` on its
+own Python matrix, and it includes `tests/test_ci_guardrails.py`, which asserts
+properties of the collection workflow itself. Run the root suite as well when
+changing this workflow or the policy constants.
 
 ## Collection version lifecycle
 

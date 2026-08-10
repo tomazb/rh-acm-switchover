@@ -97,9 +97,11 @@ Control-node Python is determined by the `ansible-core` lane, not chosen freely:
 | min | 2.16.x | 3.10 – 3.12 | **3.11** |
 | current | 2.21.x | 3.12 – 3.14 | **3.12** |
 
-The two ranges intersect only at 3.12, so a single-Python matrix cannot cover
-both lanes; the workflow's present hard-coded `python-version: "3.11"` is
-incompatible with any current core. The collection declares no `python_requires`
+The two ranges intersect only at 3.12, so 3.12 is the only version that could run
+both lanes. The lanes deliberately differ anyway, so that the matrix covers two
+interpreters rather than one. The workflow's present hard-coded
+`python-version: "3.11"` is valid for the `min` lane but incompatible with the
+`current` 2.21 lane, so it cannot be carried forward unchanged. The collection declares no `python_requires`
 of its own and does not introduce one: its supported Python surface is whatever
 the selected core supports, and the tested surface is the two lane values above.
 
