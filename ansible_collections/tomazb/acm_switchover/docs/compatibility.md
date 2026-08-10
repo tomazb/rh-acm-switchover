@@ -131,6 +131,14 @@ The previous base image, `quay.io/ansible/ansible-runner:stable-2.15-latest`, di
 not exist: that quay repository has been unmaintained since 2022, its newest tag
 is `stable-2.12-latest`, and it now directs users to `ansible-builder >= 3.0`.
 
+**Build status.** The definition was built once out-of-band on 2026-08-10 with
+`ansible-builder` 3.1.1 and podman, and the resulting image runs `ansible-core`
+2.21.3 with `kubernetes.core` 6.5.0 and python `kubernetes` 36.0.3 — all inside
+the ranges declared above. That was a one-off local check, **not** a CI lane, so
+the EE stays in the *upstream-compatible, not repository-tested* tier: nothing
+re-verifies it when the base image, its packages, or the declared ranges change.
+Treat the tier, not this note, as the support claim.
+
 ### Certification
 
 **No formal certification claim is made for this collection.** Red Hat Certified
