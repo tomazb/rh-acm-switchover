@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci-cd.yml"
@@ -38,33 +39,63 @@ def test_root_ci_excludes_e2e_tests_by_marker():
     assert "python -m pytest tests/release -q" in text
 
 
-def test_collection_ci_covers_every_shipped_playbook_and_runtime_tests():
-    """Collection CI must syntax-check every shipped playbook, not a hand-listed subset.
+def _foundation_run_scripts() -> list:
+    """Return the foundation job's executable shell, with comment lines removed.
 
-    The workflow may enumerate playbooks individually or iterate them with a glob.
-    Asserting the coverage property rather than one literal command keeps the
-    guardrail honest when a playbook is added: a hand-maintained list can fall
-    behind the shipped set, and this check is what would notice.
+    Reading the workflow as raw text would accept a command that has been
+    commented out or moved into an `echo`, so coverage is judged only from lines
+    the runner would actually execute.
     """
-    text = COLLECTION_WORKFLOW.read_text()
-    playbooks = sorted((REPO_ROOT / "ansible_collections" / "tomazb" / "acm_switchover" / "playbooks").glob("*.yml"))
+    workflow = yaml.safe_load(COLLECTION_WORKFLOW.read_text())
+    scripts = []
+    for step in workflow["jobs"]["foundation"]["steps"]:
+        script = step.get("run")
+        if not script:
+            continue
+        scripts.append("\n".join(line for line in script.splitlines() if not line.strip().startswith("#")))
+    return scripts
 
-    assert playbooks, "the collection should ship playbooks"
-    globs_every_playbook = "playbooks/*.yml" in text
 
-    uncovered = [
-        playbook.name
-        for playbook in playbooks
-        if not globs_every_playbook and f"playbooks/{playbook.name} --syntax-check" not in text
-    ]
-    assert not uncovered, f"collection CI does not syntax-check: {', '.join(uncovered)}"
-    assert "--syntax-check" in text
-    # restore_only.yml regressed out of CI coverage once; keep it named explicitly
-    # so the glob above cannot pass vacuously if the playbook is ever dropped.
-    assert "restore_only.yml" in {playbook.name for playbook in playbooks}
+def _syntax_checked_playbooks(scripts: list, playbook_names: set) -> set:
+    """Names of playbooks an executed `ansible-playbook --syntax-check` would reach."""
+    covered = set()
+    for script in scripts:
+        # Glob form: the loop variable must actually feed the syntax check.
+        for match in re.finditer(r"for\s+(\w+)\s+in\s+[^\n;]*playbooks/\*\.yml", script):
+            variable = match.group(1)
+            fed_to_check = rf"ansible-playbook\s+\"?\$\{{?{variable}\}}?\"?[^\n]*--syntax-check"
+            if re.search(fed_to_check, script):
+                covered |= playbook_names
+        # Explicit form: one invocation naming the playbook directly.
+        for name in playbook_names:
+            if re.search(rf"ansible-playbook[^\n]*playbooks/{re.escape(name)}[^\n]*--syntax-check", script):
+                covered.add(name)
+    return covered
 
-    assert "tests/integration/" in text
-    assert "tests/scenario/" in text
+
+def test_collection_ci_covers_every_shipped_playbook_and_runtime_tests():
+    """Collection CI must actually execute a syntax check for every shipped playbook.
+
+    The workflow may enumerate playbooks individually or iterate them with a
+    glob, so this asserts the coverage property rather than any one literal
+    command: a hand-maintained list can fall behind the shipped set, and a glob
+    that has been commented out still leaves its text in the file.
+    """
+    playbook_dir = REPO_ROOT / "ansible_collections" / "tomazb" / "acm_switchover" / "playbooks"
+    playbook_names = {playbook.name for playbook in playbook_dir.glob("*.yml")}
+
+    assert playbook_names, "the collection should ship playbooks"
+    # restore_only.yml regressed out of CI coverage once; name it so the
+    # set-based assertion below cannot pass vacuously if the playbook is dropped.
+    assert "restore_only.yml" in playbook_names
+
+    scripts = _foundation_run_scripts()
+    uncovered = playbook_names - _syntax_checked_playbooks(scripts, playbook_names)
+    assert not uncovered, f"collection CI does not syntax-check: {', '.join(sorted(uncovered))}"
+
+    executed = "\n".join(scripts)
+    assert "tests/integration/" in executed
+    assert "tests/scenario/" in executed
 
 
 def test_collection_ci_installs_kubernetes_runtime_for_live_module_boundary():

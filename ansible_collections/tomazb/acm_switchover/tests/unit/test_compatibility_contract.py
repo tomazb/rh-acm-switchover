@@ -172,20 +172,55 @@ def test_ci_runs_on_pull_requests_and_on_the_integration_branch():
     )
 
 
-def test_compatibility_document_states_the_same_matrix():
-    """The document is the authority, so it must carry the values verbatim."""
+def _markdown_table_rows(text: str) -> list:
+    """Return each markdown table row as a list of normalized cell values.
+
+    Cells are stripped of emphasis, code ticks, and a leading ``Python`` label so
+    that ``**Python 3.11**`` and ``3.11`` compare equal.
+    """
+    rows = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not (stripped.startswith("|") and stripped.endswith("|")):
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        rows.append([cell.replace("**", "").replace("`", "").removeprefix("Python ").strip() for cell in cells])
+    return rows
+
+
+def test_compatibility_document_states_the_policy_constraints():
+    """The document is the authority, so it must carry the constraints verbatim."""
     text = COMPATIBILITY_DOC.read_text()
 
     missing = [value for value in (REQUIRES_ANSIBLE, KUBERNETES_CORE_CONSTRAINT) if value not in text]
-    for lane, (pip_specifier, _representative, python) in LANES.items():
-        if not re.search(rf"\b{re.escape(lane)}\b", text):
-            missing.append(f"lane name {lane}")
-        if pip_specifier not in text:
-            missing.append(f"lane specifier {pip_specifier}")
-        if f"Python {python}" not in text and f"py{python}" not in text:
-            missing.append(f"lane Python {python}")
 
     assert not missing, f"{COMPATIBILITY_DOC.name} does not state: {', '.join(missing)}"
+
+
+def test_compatibility_document_binds_each_lane_to_its_whole_version_tuple():
+    """Each documented lane row must carry that lane's own core and Python.
+
+    Checking the lane names, specifiers, and Python versions independently would
+    pass even if the `min` and `current` rows were swapped, because every value
+    would still appear somewhere in the file. The binding between a lane and its
+    versions is the thing worth protecting, so assert it row by row.
+    """
+    rows = _markdown_table_rows(COMPATIBILITY_DOC.read_text())
+
+    problems = []
+    for lane, (pip_specifier, _representative, python) in LANES.items():
+        lane_rows = [row for row in rows if row and row[0] == lane]
+        if not lane_rows:
+            problems.append(f"{lane}: no table row describes this lane")
+            continue
+        for row in lane_rows:
+            values = set(row[1:])
+            if pip_specifier not in values:
+                problems.append(f"{lane}: row {row} does not bind ansible-core {pip_specifier}")
+            if python not in values:
+                problems.append(f"{lane}: row {row} does not bind Python {python}")
+
+    assert not problems, "; ".join(problems)
 
 
 def _installed_kubernetes_core_runtime() -> Path | None:
