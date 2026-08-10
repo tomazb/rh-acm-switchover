@@ -131,6 +131,20 @@ The previous base image, `quay.io/ansible/ansible-runner:stable-2.15-latest`, di
 not exist: that quay repository has been unmaintained since 2022, its newest tag
 is `stable-2.12-latest`, and it now directs users to `ansible-builder >= 3.0`.
 
+**Why UBI 9 and not UBI 10.** UBI 10 would be simpler: its default `python3` is
+already 3.12.13, so the `python_interpreter` override and the `python3.12-pip`
+system dependency would both be unnecessary. It was rejected deliberately. Every
+currently supported AAP version ships a **RHEL 9**-based `ee-minimal` on
+`ansible-core` 2.16, which is exactly the base this document tells operators to
+substitute; a RHEL 10 reference base would correspond to no supported AAP
+execution environment. The two are also mutually exclusive rather than a
+preference: UBI 10 publishes no `python3.12` or `python3.12-pip` package, so this
+definition would fail there, and the UBI 10 form would fail on UBI 9. Verified
+2026-08-10 on `docker.io/redhat/ubi10:latest` (RHEL 10.2): `python3` is 3.12.13,
+`python3-pip` serves it, `ansible-core` resolves to 2.21.3, and
+`dnf list available python3.12` returns no matching packages. Revisit this when
+AAP ships a RHEL 10 execution environment.
+
 **Build status.** The definition was built once out-of-band on 2026-08-10 with
 `ansible-builder` 3.1.1 and podman, and the resulting image runs `ansible-core`
 2.21.3 with `kubernetes.core` 6.5.0 and python `kubernetes` 36.0.3 — all inside
