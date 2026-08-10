@@ -139,6 +139,10 @@ Under `Area E — state integrity (R4-05)`, add:
 
 - [ ] **Step 5: Extend prioritization and the validation matrix**
 
+Rename the priority subsection to
+`Priority ranking (2026-07-29; LER amendment 2026-08-10)` so the new findings
+are not attributed to the July snapshot.
+
 Add `LER-01`, `LER-02`, and `LER-03` to the P2 row. Extend its rationale with
 the three mitigating preconditions: storage-write failure, hung RBAC helper/API
 call, and direct action-plugin sequencing outside the bundled enter-first role
@@ -270,6 +274,7 @@ expected_hunks = [
     (1611, 1, 1622, 1),
     (1627, 0, 1639, 16),
     (1779, 0, 1807, 5),
+    (1920, 1, 1952, 1),
     (1935, 1, 1967, 1),
     (2068, 0, 2101, 3),
 ]
@@ -280,7 +285,7 @@ PY
 Expected: exit status 0. Every pre-edit line carrying a Review #1-#4 or R4
 count/disposition statement remains present byte-for-byte, and the only new
 matching lines are the four explicitly approved independent `LER-*` records.
-The exact-hunk allowlist also fails if any change escapes the ten approved
+The exact-hunk allowlist also fails if any change escapes the eleven approved
 tracker edit ranges, including multiline historical claims not matched by the
 line filter.
 

@@ -1949,7 +1949,7 @@ excluded from re-validation (validated twice on 2026-07-28/29) but are ranked.
 (SSA-A6 remains the only partial, as already recorded). **All ten spot-checked resolved
 claims hold** (F1, F2, F5, F31, F34, F35, F37, F39, R3-01/TR2D-01, B1) — no regressions.
 
-### Priority ranking
+### Priority ranking (2026-07-29; LER amendment 2026-08-10)
 
 P1 = fix before the next switchover on that form factor; P2 = fix soon; P3 = hardening;
 P4 = hygiene/docs. Conditional P1s bind to the named operation, not the switchover.
