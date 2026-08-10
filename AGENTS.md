@@ -383,8 +383,8 @@ is the authoritative Phase 9 sequencing and live trust-boundary design. Phase
 - Fake, dry-run, static-fixture, injected-fake, and local-harness evidence is
   not live certification evidence.
 - Phases 9B-9F each require a separate issue and the builder, independent
-  validator, and PR-comment-resolver/final-validator three-prompt workflow. That
-  workflow terminates under
+  validator, and PR-comment-resolver/final-validator three-prompt workflow,
+  which terminates under
   [Terminal Validation and Review Convergence](#terminal-validation-and-review-convergence).
 - The protected-file rules above remain fully applicable to every Phase 9
   slice.
@@ -576,13 +576,25 @@ and the slice cannot ship. The rules below define the termination condition.
   issue or specification. Do not silently add new merge criteria during review.
 - Record valid findings that fall outside the current slice in their owning
   tracker, and disposition them as non-blocking when the governing gate says so.
+  When no tracker owns the finding, file an issue before dispositioning it.
   Deferred is not lost.
-- Once every required terminal-validation participant has returned PASS for the
-  frozen head, stop. Do not solicit additional reviewers, do not start another
-  unscoped adversarial pass, and do not make cosmetic cleanup edits that
-  invalidate the terminal evidence.
+- A non-blocking comment that is a preference, a nit, or already correct as
+  written needs a reply and nothing else. Do not file it; a backlog of
+  non-findings becomes pressure to reopen validation later.
+- Terminal PASS means every required participant has returned a merge-ready
+  verdict for the frozen head. Where a workflow defines graded verdicts, both
+  `PASS` and `PASS WITH NON-BLOCKING COMMENTS` are merge-ready; non-blocking
+  comments are dispositioned, not re-reviewed. `BLOCKED` and `HARD FAIL` are not
+  terminal.
+- Once every required terminal-validation participant has returned a merge-ready
+  verdict for the frozen head, stop. Do not solicit additional reviewers, do not
+  start another unscoped adversarial pass, and do not make cosmetic cleanup
+  edits that invalidate the terminal evidence.
 - PASS does not authorize merge. Merge remains an operator decision under the
   [Pull Request Merge Gate](#pull-request-merge-gate) rules above.
+- For a governed slice, terminal PASS on the frozen head satisfies that gate's
+  `code-review` invocation for the same head. Comment disposition, review-thread
+  resolution, and required CI checks remain mandatory before merge.
 
 ### Reopening Validation
 

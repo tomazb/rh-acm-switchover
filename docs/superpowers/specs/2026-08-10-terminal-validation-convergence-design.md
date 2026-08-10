@@ -44,13 +44,21 @@ behavior.
 - Validators evaluate only the acceptance criteria defined by the governing
   issue or specification, and do not silently add new merge criteria.
 - Valid findings outside the current slice are recorded in their owning tracker
-  and dispositioned as non-blocking when the governing gate says so. Deferred
-  is not lost.
-- Once every required participant has returned PASS for the frozen head, stop:
-  no additional reviewers, no further unscoped adversarial pass, no cosmetic
-  cleanup edits that invalidate the terminal evidence.
+  and dispositioned as non-blocking when the governing gate says so; when no
+  tracker owns the finding, an issue is filed before it is dispositioned.
+  Deferred is not lost. A non-blocking comment that is only a preference or a
+  nit gets a reply and nothing else — filing non-findings becomes pressure to
+  reopen validation later.
+- Terminal PASS means every required participant returned a merge-ready verdict
+  for the frozen head. Where a workflow grades verdicts, `PASS` and `PASS WITH
+  NON-BLOCKING COMMENTS` both count; `BLOCKED` and `HARD FAIL` do not.
+- Once every required participant has returned a merge-ready verdict for the
+  frozen head, stop: no additional reviewers, no further unscoped adversarial
+  pass, no cosmetic cleanup edits that invalidate the terminal evidence.
 - PASS does not authorize merge. Merge stays an operator decision under the
-  normal merge gate.
+  normal merge gate, and terminal PASS on the frozen head satisfies that gate's
+  `code-review` invocation for the same head. Comment disposition, thread
+  resolution, and required CI remain mandatory.
 
 **Reopen conditions.** Validation reopens only when the candidate head changes,
 the target/base relationship materially changes, required CI becomes invalid or
@@ -139,28 +147,51 @@ corrects.
 
 | File | Change |
 | --- | --- |
-| `AGENTS.md` | New `## Terminal Validation and Review Convergence` section; three appended cross-reference bullets. 86 insertions, 1 deletion — the single deletion is the Phase 9 bullet's continuation line, replaced by an extended version carrying the cross-reference. |
+| `AGENTS.md` | New `## Terminal Validation and Review Convergence` section; three appended cross-reference bullets. Additions plus one deletion — the single deletion is the Phase 9 bullet's continuation line, replaced by an extended version carrying the cross-reference. Exact counts move with each review-driven commit; read them from `git diff --numstat 16c247c5 -- AGENTS.md` at the frozen head rather than from this table. |
 | `docs/superpowers/specs/2026-08-10-terminal-validation-convergence-design.md` | This design (operator-approved). |
+
+`CHANGELOG.md` is deliberately not updated. `CONTRIBUTING.md` lists "Update
+CHANGELOG.md" in the pull-request process, and `AGENTS.md` qualifies it as
+recording *changelog-worthy* development changes. This slice changes agent
+process instructions only: no user-facing behavior, CLI surface, module
+behavior, or packaging changes. Repository precedent matches — of the twenty
+most recent documentation-only merges to `ansible`, eighteen touched no
+`CHANGELOG.md`, and the two that did also carried code changes. Adding a third
+file would also exceed the file surface #242 authorizes.
 
 ## Verification
 
-No blocking documentation CI exists — `.github/workflows/ci-cd.yml` omits
-`AGENTS.md` from its `required_docs` list and its markdown-link-check step is
-`continue-on-error: true`. Local verification is therefore the entire gate:
+Documentation CI exists but does not gate this change: the "Documentation
+Check" job in `.github/workflows/ci-cd.yml` omits `AGENTS.md` from its
+`required_docs` existence list, and its markdown-link-check step runs
+`continue-on-error: true`. Nothing in CI validates `AGENTS.md` content,
+structure, or links as a blocking gate, so local verification carries the
+weight:
 
-- `AGENTS.md` confirmed byte-identical to `origin/ansible` before editing.
+- Baseline: branch cut from `origin/ansible` at the immutable commit
+  `16c247c5`, and `AGENTS.md` confirmed byte-identical to
+  `git show 16c247c5:AGENTS.md` before any edit.
 - `git diff --check` clean.
-- `git diff origin/ansible -- AGENTS.md` is 86 insertions and 1 deletion; every
-  existing Creation Gate and Merge Gate bullet is byte-identical.
+- `git diff 16c247c5 -- AGENTS.md` adds the new section and the three pointer
+  bullets; every existing Creation Gate and Merge Gate bullet is byte-identical.
 - All four in-document anchors resolve to existing headings.
 - No production, runtime, or parity-sensitive path in `git diff --name-only`.
 - #242's acceptance checklist walked item by item against the actual diff.
-- The PR Creation Gate's `code-review` step was satisfied by the bounded
-  acceptance-checklist walk plus a direct read of the rendered section. The
-  generic multi-agent review was declined: this slice is governed by an explicit
-  falsifiable gate and the diff is prose-only, which is the pattern the
-  "Prohibited Patterns" list rules out. The judgment call is flagged to the
-  operator in the PR body rather than resolved silently.
+
+This document records the immutable *baseline* SHA, not the candidate head: a
+file cannot contain the SHA of the commit that introduces it. The frozen
+candidate head, and each required validator's verdict against that head, are
+recorded on the pull request at terminal validation time, which is where the
+rule places them.
+
+Gate deviation, recorded rather than resolved silently: the PR Creation Gate's
+`code-review` skill was not invoked before opening the PR. The
+"Prohibited Patterns" rule added here bars *repeated* full-suite reruns after
+each prose-only observation; it does not waive the initial review, so this is a
+deviation and not an exemption. The branch was reviewed at head `ec5a0cff` by
+the repository's automated reviewers (CodeRabbit, GitHub Copilot, and Codex),
+and their findings were dispositioned in a resolver pass. Whether that
+substitutes for the named skill is an operator decision, flagged on the PR.
 
 ## This change under its own rule
 
