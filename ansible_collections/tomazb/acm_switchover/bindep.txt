@@ -1,2 +1,10 @@
+# System packages for the execution-environment build. Authority: docs/compatibility.md.
+#
+# The EE installs its Python dependencies with /usr/bin/python3.12, which needs
+# its own pip: UBI 9's python3-pip serves Python 3.9 only, and the python3.12
+# package does not ship a pip module. Without python3.12-pip the ansible-builder
+# pip stage fails with "No module named pip".
 python3 [platform:rpm]
 python3-pip [platform:rpm]
+python3.12 [platform:rpm]
+python3.12-pip [platform:rpm]

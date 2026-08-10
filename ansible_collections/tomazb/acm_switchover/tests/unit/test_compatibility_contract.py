@@ -145,6 +145,17 @@ def test_execution_environment_selects_an_interpreter_the_core_range_can_run():
         EE_PYTHON_VERSION
     ), f"EE runs {interpreter['python_path']}, which is not the interpreter it installs"
 
+    # The interpreter package does not ship a pip module, and UBI 9's python3-pip
+    # serves 3.9, so the pip stage fails with "No module named pip" unless the
+    # matching pip is installed as a system dependency.
+    bindep = (COLLECTION_ROOT / "bindep.txt").read_text()
+    declared_packages = {line.split()[0] for line in bindep.splitlines() if line.strip() and not line.startswith("#")}
+
+    assert f"python{EE_PYTHON_VERSION}-pip" in declared_packages, (
+        f"bindep.txt must install python{EE_PYTHON_VERSION}-pip; "
+        f"{interpreter['python_path']} has no pip module without it"
+    )
+
 
 def test_ci_matrix_lanes_match_the_policy():
     lanes = _workflow_lanes(_load_yaml(WORKFLOW_PATH))

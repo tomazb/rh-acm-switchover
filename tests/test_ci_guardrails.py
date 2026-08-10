@@ -56,21 +56,57 @@ def _foundation_run_scripts() -> list:
     return scripts
 
 
+# `ansible-playbook` must be the command being run, not a word inside an `echo`,
+# a trailing comment, or another command's arguments. Anchoring to the start of a
+# line is what separates "CI runs this" from "this text appears in the file".
+_COMMAND_POSITION = r"(?m)^[ \t]*(?:sudo[ \t]+|time[ \t]+)?ansible-playbook[ \t]+"
+
+
 def _syntax_checked_playbooks(scripts: list, playbook_names: set) -> set:
     """Names of playbooks an executed `ansible-playbook --syntax-check` would reach."""
     covered = set()
     for script in scripts:
-        # Glob form: the loop variable must actually feed the syntax check.
+        # Glob form: the loop variable must actually feed an executed syntax check.
         for match in re.finditer(r"for\s+(\w+)\s+in\s+[^\n;]*playbooks/\*\.yml", script):
             variable = match.group(1)
-            fed_to_check = rf"ansible-playbook\s+\"?\$\{{?{variable}\}}?\"?[^\n]*--syntax-check"
+            fed_to_check = _COMMAND_POSITION + rf"\"?\$\{{?{variable}\}}?\"?[^\n]*--syntax-check"
             if re.search(fed_to_check, script):
                 covered |= playbook_names
-        # Explicit form: one invocation naming the playbook directly.
+        # Explicit form: one executed invocation naming the playbook directly.
         for name in playbook_names:
-            if re.search(rf"ansible-playbook[^\n]*playbooks/{re.escape(name)}[^\n]*--syntax-check", script):
+            if re.search(_COMMAND_POSITION + rf"[^\n]*playbooks/{re.escape(name)}[^\n]*--syntax-check", script):
                 covered.add(name)
     return covered
+
+
+def test_syntax_check_detection_ignores_non_executed_text():
+    """Regression cases for the guardrail's own detection logic.
+
+    Each script below mentions a syntax check without running one. If any is
+    reported as covered, the guardrail would pass after CI stopped checking
+    playbooks, which is the failure mode it exists to prevent.
+    """
+    names = {"restore_only.yml"}
+    glob_path = "ansible_collections/tomazb/acm_switchover/playbooks"
+    not_executed = {
+        "echoed": f"echo ansible-playbook {glob_path}/restore_only.yml --syntax-check",
+        "trailing comment": f'echo "skipped"  # ansible-playbook {glob_path}/restore_only.yml --syntax-check',
+        "loop echoed only": (
+            f"for playbook in {glob_path}/*.yml; do\n" '  echo ansible-playbook "${playbook}" --syntax-check\n' "done"
+        ),
+        "argument of another command": f"grep ansible-playbook {glob_path}/restore_only.yml --syntax-check",
+    }
+
+    for label, script in not_executed.items():
+        assert _syntax_checked_playbooks([script], names) == set(), f"{label} should not count as a syntax check"
+
+    executed = {
+        "explicit": f"ansible-playbook {glob_path}/restore_only.yml --syntax-check",
+        "loop": (f"for playbook in {glob_path}/*.yml; do\n" '  ansible-playbook "${playbook}" --syntax-check\n' "done"),
+    }
+
+    for label, script in executed.items():
+        assert _syntax_checked_playbooks([script], names) == names, f"{label} should count as a syntax check"
 
 
 def test_collection_ci_covers_every_shipped_playbook_and_runtime_tests():
