@@ -383,7 +383,9 @@ is the authoritative Phase 9 sequencing and live trust-boundary design. Phase
 - Fake, dry-run, static-fixture, injected-fake, and local-harness evidence is
   not live certification evidence.
 - Phases 9B-9F each require a separate issue and the builder, independent
-  validator, and PR-comment-resolver/final-validator three-prompt workflow.
+  validator, and PR-comment-resolver/final-validator three-prompt workflow. That
+  workflow terminates under
+  [Terminal Validation and Review Convergence](#terminal-validation-and-review-convergence).
 - The protected-file rules above remain fully applicable to every Phase 9
   slice.
 
@@ -522,6 +524,8 @@ Before creating any PR:
 - Re-run the `code-review` skill after any review-driven changes before opening
   the PR.
 - Keep local verification evidence ready for the PR body.
+- For a governed slice with an explicit acceptance gate, see
+  [Terminal Validation and Review Convergence](#terminal-validation-and-review-convergence).
 
 ## Branch Policy
 
@@ -548,6 +552,87 @@ Before merging any PR:
   merge while any actionable thread remains unresolved.
 - Check CI immediately before merge. Do not merge with failing, cancelled, or
   pending required checks.
+- For a governed slice with an explicit acceptance gate, see
+  [Terminal Validation and Review Convergence](#terminal-validation-and-review-convergence).
+
+## Terminal Validation and Review Convergence
+
+This section applies only to a **governed slice**: work whose governing issue
+or specification defines an explicit, falsifiable acceptance gate. Work without
+such a gate follows the Pull Request Creation Gate and Pull Request Merge Gate
+above unchanged.
+
+Governed review must terminate. When every valid-but-non-blocking observation
+triggers a repair, and every repair invalidates exact-head validation, review
+never converges: earned PASS verdicts are voided, the diff or document grows,
+and the slice cannot ship. The rules below define the termination condition.
+
+### Terminal Validation
+
+- Freeze the candidate head before terminal validation begins, and record that
+  exact SHA.
+- Run every required validator and reviewer against that same exact head.
+- Validators evaluate only the acceptance criteria defined by the governing
+  issue or specification. Do not silently add new merge criteria during review.
+- Record valid findings that fall outside the current slice in their owning
+  tracker, and disposition them as non-blocking when the governing gate says so.
+  Deferred is not lost.
+- Once every required terminal-validation participant has returned PASS for the
+  frozen head, stop. Do not solicit additional reviewers, do not start another
+  unscoped adversarial pass, and do not make cosmetic cleanup edits that
+  invalidate the terminal evidence.
+- PASS does not authorize merge. Merge remains an operator decision under the
+  [Pull Request Merge Gate](#pull-request-merge-gate) rules above.
+
+### Reopening Validation
+
+Reopen validation only when one of the following occurs:
+
+1. The candidate head changes.
+2. The target/base relationship materially changes.
+3. Required CI becomes invalid or failing.
+4. A previously unresolved actionable thread is discovered.
+5. Genuinely new blocking evidence arrives before merge.
+6. The operator explicitly reopens validation.
+
+### Safety Boundary
+
+This rule is not "ignore comments after PASS". It does not suppress findings
+discovered before terminal validation finishes, does not permit merging while an
+actionable thread remains unresolved, and does not relax the CI requirements in
+the merge gate above.
+
+If new evidence appears before merge and demonstrates a real violation of the
+governing acceptance criteria, a safety boundary, a correctness contract, an
+unresolved actionable thread, or required CI state, disposition it, and reopen
+validation when it meets a condition listed above. This rule stops actively
+generated serial review after terminal PASS. It never permits knowingly ignoring
+a defect.
+
+### Prohibited Patterns
+
+- Serially inviting a new reviewer after each PASS.
+- Treating "zero possible observations" as an acceptance criterion.
+- Converting downstream or out-of-scope findings into blockers when the
+  governing slice defines them as deferred.
+- Making cosmetic post-PASS edits that force exact-head revalidation.
+- Silently expanding a falsifiable acceptance gate during review.
+- Running generic full-suite or toolchain reruns after every prose-only review
+  observation when the governed process already defines a bounded
+  terminal-validation gate.
+
+### Three-Prompt Workflow Convergence
+
+The builder, independent validator, and PR-comment-resolver/final-validator
+three-prompt workflow follows the same convergence rule. After a governed
+terminal PASS on the frozen head, the independent validator and the PR-comment
+resolver stop and hand control back to the operator. Neither invokes another
+reviewer nor runs an unscoped "one more review" pass.
+
+[`docs/testing/property-based-testing-pr-workflow.md`](docs/testing/property-based-testing-pr-workflow.md)
+specifies that workflow in detail for the property-based-testing initiative. Its
+exact-head verdict discipline is the model for this section; its PBT scoping
+stands, and it is not by itself a repository-wide authority.
 
 ## Code Review Guidelines
 
