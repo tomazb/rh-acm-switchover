@@ -147,7 +147,9 @@ change does not claim those runtime defects are fixed.
 
 ## Rollback
 
-The change is documentation-only and can be reverted as one tracker/spec commit.
-Reversion must remove the `LER-*` cross-references from the source section,
-owner rows, acceptance criteria, and priority table together so the tracker does
-not retain dangling ownership claims.
+The change is documentation-only and must be reverted by reverting the complete
+branch commit range atomically, including any final-review fix commit, unless
+that range is intentionally squashed before integration. Reversion must remove
+the spec, plan, tracker, and every `LER-*` cross-reference from the source
+section, owner rows, acceptance criteria, priority table, and validation matrix
+together so no dangling ownership claims remain.

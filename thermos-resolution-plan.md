@@ -1169,7 +1169,7 @@ rollback boundary, and verification plan.
 - Existing legitimate phase-reset workflows continue to work.
 - Tests cover run-wide bypass, cross-run persistence, and post-prune identity
   mismatch.
-- An unsafe schema-1.0 checkpoint with completed phases and explicit `reset` or
+- `LER-03`: An unsafe schema-1.0 checkpoint with completed phases and explicit `reset` or
   `reset_from` is rebuilt as current-schema state before any accepted `enter`,
   `pass`, or `fail` transition, or the action fails before persistence.
 - Direct action-plugin `pass` and `fail` calls cannot preserve unsafe schema-1.0
@@ -1803,7 +1803,7 @@ these as acceptance criteria):
   as an indeterminate transition (with `transition_id`) and reconciled before retry; the
   absent-file unlink restore path fsyncs its containing directory; the §2 durability
   protocol also governs `--reset-state`.
-- Checkpoint and snapshot restoration preserve `_dirty == True` whenever the
+- `LER-01`: Checkpoint and snapshot restoration preserve `_dirty == True` whenever the
   durable write raises, propagate the original write exception, and allow the
   next flush to retry the restored state. Fault injection covers both
   `restore_runtime_checkpoint()` and `restore_state_snapshot()` and proves no

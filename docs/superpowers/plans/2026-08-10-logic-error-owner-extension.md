@@ -43,7 +43,7 @@ Run:
 
 ```bash
 rg -n "LER-01|LER-02|LER-03" thermos-resolution-plan.md
-rg -n "^\| R3-06 |^\| R3-10b |^\| R4-05 |" thermos-resolution-plan.md
+rg -n '^\| (R3-06|R3-10b|R4-05) \|' thermos-resolution-plan.md
 ```
 
 Expected:
@@ -105,7 +105,7 @@ Under `R3-06: Scoped reset_from Identity Validation`, add these acceptance
 criteria:
 
 ```markdown
-- An unsafe schema-1.0 checkpoint with completed phases and explicit `reset` or
+- `LER-03`: An unsafe schema-1.0 checkpoint with completed phases and explicit `reset` or
   `reset_from` is rebuilt as current-schema state before any accepted `enter`,
   `pass`, or `fail` transition, or the action fails before persistence.
 - Direct action-plugin `pass` and `fail` calls cannot preserve unsafe schema-1.0
@@ -128,7 +128,7 @@ Replace the `R3-10b` residual-inventory bullet with:
 Under `Area E — state integrity (R4-05)`, add:
 
 ```markdown
-- Checkpoint and snapshot restoration preserve `_dirty == True` whenever the
+- `LER-01`: Checkpoint and snapshot restoration preserve `_dirty == True` whenever the
   durable write raises, propagate the original write exception, and allow the
   next flush to retry the restored state. Fault injection covers both
   `restore_runtime_checkpoint()` and `restore_state_snapshot()` and proves no
@@ -151,9 +151,21 @@ finding:
 | LER-03 | confirmed, Medium | R3-06 (planned) | Explicit reset permits unsafe legacy state, but only `enter` rebuilds it; direct `pass`/`fail` can retain schema 1.0. |
 ```
 
-- [ ] **Step 6: Run the focused ownership and historical-count audits**
+- [ ] **Step 6: Run the section-aware placement and historical-count audits**
 
 Run:
+
+```bash
+awk '/^#### R3-06:/{in_section=1; next} /^#### /{in_section=0} in_section && /LER-03/{found=1} END {exit !found}' thermos-resolution-plan.md
+awk '/^- `R3-10b`/{in_boundary=1; next} in_boundary && /^- `R3-10[a-z]`/{in_boundary=0} in_boundary && /LER-02/{found=1} END {exit !found}' thermos-resolution-plan.md
+awk '/^\*Area E — state integrity \(`R4-05`\):\*/{in_section=1; next} /^\*Area F —/{in_section=0} in_section && /LER-01/{found=1} END {exit !found}' thermos-resolution-plan.md
+```
+
+Expected: all three commands exit 0, proving `LER-03` occurs in the `R3-06`
+detailed section, `LER-02` occurs in the `R3-10b` detailed boundary, and
+`LER-01` occurs in the `R4-05` Area E detailed section.
+
+Run the global source/owner/priority/matrix audit as supplementary evidence:
 
 ```bash
 rg -n "LER-01|LER-02|LER-03" thermos-resolution-plan.md
