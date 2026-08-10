@@ -110,9 +110,9 @@ criteria:
 - `LER-03`: An unsafe schema-1.0 checkpoint with completed phases and explicit `reset` or
   `reset_from` is rebuilt as current-schema state before any accepted `enter`,
   `pass`, or `fail` transition, or the action fails before persistence.
-- Direct action-plugin `pass` and `fail` calls cannot preserve unsafe schema-1.0
-  state; tests cover both statuses as well as the normal role-driven `enter`
-  sequence.
+- Direct action-plugin `enter`, `pass`, and `fail` calls cannot preserve unsafe
+  schema-1.0 state; tests exercise all three statuses independently from roles,
+  cover both `reset` and `reset_from`, and prove unsafe input is never persisted.
 ```
 
 Replace the `R3-10b` residual-inventory bullet with:
@@ -120,11 +120,13 @@ Replace the `R3-10b` residual-inventory bullet with:
 ```markdown
 - `R3-10b` / `R3-P6` + `LER-02`: bound owner-scoped blocking operations and
   correct timeout documentation. `delete_custom_resource` uses the client
-  request-timeout contract; Python setup mode has an explicit whole-operation
-  deadline and terminates its process tree on expiry; every invoked Kubernetes
-  helper call is independently bounded. The collection RBAC bootstrap command
-  and helper path receives parity-equivalent bounds and sanitized timeout
-  reporting, with constants kept local to each form factor.
+  request-timeout contract; Python setup mode has a positive finite whole-operation
+  deadline, terminates its entire process tree on expiry, and independently bounds
+  every Kubernetes helper call. The collection command/helper uses parity-equivalent
+  positive deadlines, waits for completion, terminates descendants on expiry, and
+  reports sanitized timeout details; constants remain local to each form factor.
+  Focused tests spawn a child plus descendant for each form factor and prove no
+  survivor remains and no raw path, configuration, or input leaks in timeout output.
 ```
 
 Under `Area E — state integrity (R4-05)`, add:
@@ -344,7 +346,7 @@ diff_bytes = subprocess.run(
     check=True,
     capture_output=True,
 ).stdout
-expected_diff_sha256 = "349fe61e2e66b326d784660c1c48fb83cf064fdbeb7ef84ac33ea0a4835c3f34"
+expected_diff_sha256 = "33d3e35ae2505d5ab90b98b3f4b7dee290b432c90574dac1cbaf2d367f979edd"
 actual_diff_sha256 = hashlib.sha256(diff_bytes).hexdigest()
 assert actual_diff_sha256 == expected_diff_sha256, (
     f"tracker diff differs from approved patch: {actual_diff_sha256}"
@@ -360,13 +362,13 @@ expected_hunks = [
     (932, 1, 932, 1),
     (945, 1, 945, 1),
     (1171, 0, 1172, 6),
-    (1237, 2, 1243, 7),
-    (1611, 1, 1622, 1),
-    (1627, 0, 1639, 16),
-    (1779, 0, 1807, 5),
-    (1920, 1, 1952, 1),
-    (1935, 1, 1967, 1),
-    (2068, 0, 2101, 3),
+    (1237, 2, 1243, 9),
+    (1611, 1, 1624, 1),
+    (1627, 0, 1641, 16),
+    (1779, 0, 1809, 5),
+    (1920, 1, 1954, 1),
+    (1935, 1, 1969, 1),
+    (2068, 0, 2103, 3),
 ]
 assert hunks == expected_hunks, f"tracker changes escaped approved ranges: {hunks!r}"
 PY

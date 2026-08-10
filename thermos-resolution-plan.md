@@ -1172,9 +1172,9 @@ rollback boundary, and verification plan.
 - `LER-03`: An unsafe schema-1.0 checkpoint with completed phases and explicit `reset` or
   `reset_from` is rebuilt as current-schema state before any accepted `enter`,
   `pass`, or `fail` transition, or the action fails before persistence.
-- Direct action-plugin `pass` and `fail` calls cannot preserve unsafe schema-1.0
-  state; tests cover both statuses as well as the normal role-driven `enter`
-  sequence.
+- Direct action-plugin `enter`, `pass`, and `fail` calls cannot preserve unsafe
+  schema-1.0 state; tests exercise all three statuses independently from roles,
+  cover both `reset` and `reset_from`, and prove unsafe input is never persisted.
 
 #### R3-07: Error Channel Hygiene
 
@@ -1242,11 +1242,13 @@ until then they are cross-references, not duplicate PRs.
   fail-closed behavior and review only the non-ACM-scoped breadth.
 - `R3-10b` / `R3-P6` + `LER-02`: bound owner-scoped blocking operations and
   correct timeout documentation. `delete_custom_resource` uses the client
-  request-timeout contract; Python setup mode has an explicit whole-operation
-  deadline and terminates its process tree on expiry; every invoked Kubernetes
-  helper call is independently bounded. The collection RBAC bootstrap command
-  and helper path receives parity-equivalent bounds and sanitized timeout
-  reporting, with constants kept local to each form factor.
+  request-timeout contract; Python setup mode has a positive finite whole-operation
+  deadline, terminates its entire process tree on expiry, and independently bounds
+  every Kubernetes helper call. The collection command/helper uses parity-equivalent
+  positive deadlines, waits for completion, terminates descendants on expiry, and
+  reports sanitized timeout details; constants remain local to each form factor.
+  Focused tests spawn a child plus descendant for each form factor and prove no
+  survivor remains and no raw path, configuration, or input leaks in timeout output.
 - `R3-10c` / `R3-P7` + `R3-P9`: truthful dry-run report state, secure report
   mode/content, sanitized exception data, and preservation of the existing
   validate → `mkdir` → revalidate path-safety sequence.

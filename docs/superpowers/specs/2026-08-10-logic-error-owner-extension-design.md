@@ -84,10 +84,6 @@ from tempfile import TemporaryDirectory
 from lib.utils import StateManager
 
 
-def fail(_state):
-    raise OSError("injected write failure")
-
-
 violations = []
 with TemporaryDirectory() as root:
     for capture, restore in (
@@ -97,15 +93,32 @@ with TemporaryDirectory() as root:
         manager = StateManager(str(Path(root) / f"{restore}.json"))
         snapshot = getattr(manager, capture)()
         manager._dirty = True
-        manager._write_state = fail
+        attempts = []
+        original_error = OSError(f"injected {restore} write failure")
+
+        def fail_once(state):
+            attempts.append(dict(state))
+            if len(attempts) == 1:
+                raise original_error
+
+        manager._write_state = fail_once
+        propagated_original = False
         try:
             getattr(manager, restore)(snapshot)
-        except OSError:
-            pass
-        if manager._dirty is not True:
-            violations.append(restore)
+        except OSError as error:
+            propagated_original = error is original_error
 
-assert not violations, f"failed writes cleared dirty retry obligation: {violations}"
+        if not propagated_original:
+            violations.append(f"{restore}: original OSError not propagated")
+        if manager._dirty is not True:
+            violations.append(f"{restore}: dirty retry obligation cleared")
+        manager.save_state()
+        if len(attempts) != 2:
+            violations.append(f"{restore}: next save did not retry")
+        if manager._dirty is not False:
+            violations.append(f"{restore}: successful retry did not finish clean")
+
+assert not violations, f"restore write-failure contract violations: {violations}"
 PY
 ```
 
@@ -181,16 +194,20 @@ PY
 
 `LER-03` targets `ActionModule._normalize_checkpoint_data()` at
 `ansible_collections/tomazb/acm_switchover/plugins/action/checkpoint_phase.py:265-325`.
-This direct action-boundary probe fails with all four `pass`/`fail` and
-`reset`/`reset_from` combinations in `violations`:
+This direct action-boundary probe exercises `enter`, `pass`, and `fail` with
+both `reset` and `reset_from`. The two direct `enter` cases rebuild safely;
+the command fails with all four unsafe `pass`/`fail` combinations in
+`violations`:
 
 ```bash
 ANSIBLE_LOCAL_TEMP=/tmp python - <<'PY'
 from tests.properties.test_checkpoint_properties import ActionModule
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import SCHEMA_VERSION
 
 violations = []
 action = ActionModule.__new__(ActionModule)
-for status in ("pass", "fail"):
+expected_identity = {}
+for status in ("enter", "pass", "fail"):
     for reset_from in (None, "preflight"):
         checkpoint = {
             "schema_version": "1.0",
@@ -204,9 +221,16 @@ for status in ("pass", "fail"):
             status=status,
             reset_from=reset_from,
             has_explicit_reset=True,
-            expected_operation_identity={},
+            expected_operation_identity=expected_identity,
         )
-        if result.get("failed") is not True and result.get("schema_version") == "1.0":
+        expected_operational_data = {"legacy": True} if reset_from else {}
+        rebuilt_safely = (
+            result.get("schema_version") == SCHEMA_VERSION
+            and result.get("completed_phases") == []
+            and result.get("operation_identity") == expected_identity
+            and result.get("operational_data") == expected_operational_data
+        )
+        if result.get("failed") is not True and not rebuilt_safely:
             violations.append((status, "reset_from" if reset_from else "reset"))
 
 assert not violations, f"unsafe legacy transitions accepted: {violations}"
@@ -242,13 +266,17 @@ Extend the existing owner rows and detailed acceptance criteria as follows.
 - Add `LER-02` to the owned-finding list.
 - Rename the boundary description from request-timeout-only language to bounded
   blocking-operation timeout semantics.
-- Require an explicit whole-operation deadline for Python setup mode.
+- Require positive finite whole-operation deadlines for Python setup mode and
+  the collection command path.
 - Require bounded Kubernetes calls in the invoked helper path, so an outer
   timeout is not the only protection.
 - Review and preserve parity for the collection RBAC bootstrap command/helper
-  path, including sanitized timeout reporting and child-process cleanup.
+  path, including wait-for-completion semantics, sanitized timeout reporting,
+  and entire descendant-process-tree cleanup.
 - Keep timeout values centralized within each independent form factor; do not
   introduce cross-imports.
+- Require focused behavioral tests whose helper spawns a child and descendant;
+  expiry leaves no survivor and reports no raw path, configuration, or input.
 
 ### R3-06 extension
 
@@ -256,6 +284,8 @@ Extend the existing owner rows and detailed acceptance criteria as follows.
 - Require unsafe legacy state with explicit reset to be rebuilt before any
   accepted transition, or rejected before persistence.
 - Cover direct `enter`, `pass`, and `fail` action-plugin calls.
+- Spy on persistence in those tests so unsafe legacy input is never written or
+  retained for either `reset` or `reset_from`.
 - Preserve legitimate role-driven reset workflows.
 - Keep the existing requirement to scope `reset_from` identity bypass to the
   pruned phase and revalidate identity after pruning.
