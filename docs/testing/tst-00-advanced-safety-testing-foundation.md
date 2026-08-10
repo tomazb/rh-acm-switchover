@@ -428,6 +428,9 @@ SemanticEvent
 └── evidence_tags
 ```
 
+`checkpoint_delta.contract_status` is a trace field of this foundation; its value vocabulary and the obligations
+attached to each value are specified in tracker #228 (§11, TST-02).
+
 The trace must not include kubeconfig contents, bearer tokens, raw certificates, private controller enrollment IDs, or arbitrary exception object representations.
 
 Internal diagnostic traces and publishable evidence are distinct projections. A publishable trace uses controlled
