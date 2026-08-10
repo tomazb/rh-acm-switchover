@@ -139,7 +139,7 @@ corrects.
 
 | File | Change |
 | --- | --- |
-| `AGENTS.md` | New `## Terminal Validation and Review Convergence` section; three appended cross-reference bullets. No deletions. |
+| `AGENTS.md` | New `## Terminal Validation and Review Convergence` section; three appended cross-reference bullets. 86 insertions, 1 deletion — the single deletion is the Phase 9 bullet's continuation line, replaced by an extended version carrying the cross-reference. |
 | `docs/superpowers/specs/2026-08-10-terminal-validation-convergence-design.md` | This design (operator-approved). |
 
 ## Verification
@@ -150,12 +150,17 @@ No blocking documentation CI exists — `.github/workflows/ci-cd.yml` omits
 
 - `AGENTS.md` confirmed byte-identical to `origin/ansible` before editing.
 - `git diff --check` clean.
-- `git diff origin/ansible -- AGENTS.md` shows additions only; existing gate
-  bullets unchanged.
-- All three in-document anchors resolve to the new section.
+- `git diff origin/ansible -- AGENTS.md` is 86 insertions and 1 deletion; every
+  existing Creation Gate and Merge Gate bullet is byte-identical.
+- All four in-document anchors resolve to existing headings.
 - No production, runtime, or parity-sensitive path in `git diff --name-only`.
 - #242's acceptance checklist walked item by item against the actual diff.
-- `code-review` skill run against the branch per the PR Creation Gate.
+- The PR Creation Gate's `code-review` step was satisfied by the bounded
+  acceptance-checklist walk plus a direct read of the rendered section. The
+  generic multi-agent review was declined: this slice is governed by an explicit
+  falsifiable gate and the diff is prose-only, which is the pattern the
+  "Prohibited Patterns" list rules out. The judgment call is flagged to the
+  operator in the PR body rather than resolved silently.
 
 ## This change under its own rule
 
