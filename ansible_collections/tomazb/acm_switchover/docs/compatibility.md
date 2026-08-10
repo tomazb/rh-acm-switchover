@@ -14,7 +14,7 @@ Support claims in this repository mean one of exactly three things.
 
 | Tier | Meaning |
 | --- | --- |
-| **Repository-tested** | A CI lane in `.github/workflows/ansible-collection-foundation.yml` runs the collection's unit, integration, scenario, playbook-syntax, and build checks against this exact combination on every pull request and on every push to `ansible`. |
+| **Repository-tested** | A CI lane in `.github/workflows/ansible-collection-foundation.yml` runs the collection's unit, integration, scenario, playbook-syntax, and build checks against this exact combination on every pull request and on every push to `main` and `ansible`. |
 | **Upstream-compatible, not repository-tested** | Permitted by the collection's declared metadata and by upstream support statements, but not exercised by any lane here. Expected to work; not evidence. |
 | **Formally certified** | **Nothing. No certification claim is made.** See [Certification](#certification). |
 

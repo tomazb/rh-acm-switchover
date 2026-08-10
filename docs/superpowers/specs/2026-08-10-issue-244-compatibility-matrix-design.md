@@ -135,7 +135,7 @@ control-node range.
 
 ### D5 — CI matrix and branch triggers
 
-Two lanes, both running on pull requests and on push to `ansible`:
+Two lanes, both running on pull requests and on push to `main` and `ansible`:
 
 | Lane | `ansible-core` | Python | Purpose |
 |---|---|---|---|

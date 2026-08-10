@@ -208,6 +208,26 @@ def test_compatibility_document_states_the_policy_constraints():
     assert not missing, f"{COMPATIBILITY_DOC.name} does not state: {', '.join(missing)}"
 
 
+def test_compatibility_document_states_every_push_trigger_branch():
+    """A push-trigger sentence naming only some branches misstates the contract.
+
+    Contributors read these sentences to know what runs post-merge, so a sentence
+    that omits a branch the workflow actually triggers on gives a different answer
+    from the workflow itself.
+    """
+    text = COMPATIBILITY_DOC.read_text()
+
+    incomplete = []
+    for fragment in re.split(r"[.|]", text):
+        if "push to" not in fragment and "pushes to" not in fragment:
+            continue
+        missing = sorted(branch for branch in REQUIRED_PUSH_BRANCHES if f"`{branch}`" not in fragment)
+        if missing:
+            incomplete.append(f"{' '.join(fragment.split())[:80]!r} omits {', '.join(missing)}")
+
+    assert not incomplete, "; ".join(incomplete)
+
+
 def test_compatibility_document_binds_each_lane_to_its_whole_version_tuple():
     """Each documented lane row must carry that lane's own core and Python.
 
