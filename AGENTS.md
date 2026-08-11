@@ -136,7 +136,7 @@ without explicit operator approval:
 | Protected File | Reason |
 | --- | --- |
 | [`docs/ACM_SWITCHOVER_RUNBOOK.md`](docs/ACM_SWITCHOVER_RUNBOOK.md) | Authoritative blueprint for manual ACM hub switchovers. Contains critical safety warnings, step-by-step procedures, and rollback instructions. Incorrect changes can lead to cluster destruction. |
-| `.claude/skills/**/*.skill.md` | Operational and troubleshooting SKILLS derived from the runbook. Must stay in sync with the runbook at all times. |
+| `.claude/skills/**` — both the `*.skill.md` guides and the `SKILL.md` skill definitions | Operational and troubleshooting SKILLS derived from the runbook, and the automation skills that act on release and refactoring surfaces. Must stay in sync with the runbook at all times. The `.claude/settings.json` hook matches only `*.skill.md`, so `SKILL.md` files are covered by this policy and not by the hook — see rule 1. |
 
 ### Protection rules
 
@@ -209,11 +209,13 @@ RBAC changes are parity-sensitive even when the code edit is indirect. If RBAC b
 permissions, or resources change, review and realign every affected surface:
 
 - Python RBAC validation ([`lib/rbac_validator.py`](lib/rbac_validator.py)) and collection
-  RBAC validation (`plugins/modules/acm_rbac_validate.py`).
+  RBAC validation
+  ([`plugins/modules/acm_rbac_validate.py`](ansible_collections/tomazb/acm_switchover/plugins/modules/acm_rbac_validate.py)).
 - Collection task wiring that consumes the RBAC matrix (`preflight`, `decommission`,
   `rbac_bootstrap`).
 - Root RBAC manifests in [`deploy/rbac/`](deploy/rbac/), the collection-bundled copies under
-  `roles/rbac_bootstrap/files/deploy/rbac/`, and the Helm chart in
+  [`roles/rbac_bootstrap/files/deploy/rbac/`](ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/files/deploy/rbac/),
+  and the Helm chart in
   [`deploy/helm/acm-switchover-rbac/`](deploy/helm/acm-switchover-rbac/).
 - RBAC documentation: [requirements](docs/deployment/rbac-requirements.md),
   [deployment](docs/deployment/rbac-deployment.md),

@@ -207,8 +207,8 @@ isort --check-only --profile black --line-length 120 tests/test_documentation_gu
 # Root lane, CI-equivalent
 python -m pytest tests/ --ignore=tests/release -m "not e2e" -q
 
-# Every relative link and internal anchor in AGENTS.md resolves (fail-closed; the shell
-# loop below is illustrative only — these two tests are the authority)
+# Every relative link and internal anchor in AGENTS.md resolves (fail-closed; these two
+# tests are the authority for link and anchor integrity)
 python -m pytest tests/test_documentation_guardrails.py -k "agents_document_links or agents_internal_anchors" -q
 
 # Anchors other documents and the settings hook depend on

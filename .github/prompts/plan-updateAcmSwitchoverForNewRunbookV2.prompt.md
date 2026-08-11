@@ -93,8 +93,8 @@
 
 ### 10. Versioning and Changelog
 
-- Bump versions across every enforced version surface listed in the `AGENTS.md` release-governance section.
-- Update CHANGELOG with runbook-alignment changes.
+- Record runbook-alignment changes in `CHANGELOG.md` under `## [Unreleased]`. Ordinary development work does not change released version identifiers or create release tags.
+- Only when the work is explicitly scoped as a release/version bump, bump every enforced version surface listed in the `AGENTS.md` release-governance section and tag the exact release commit.
 
 ## Todos Summary
 
