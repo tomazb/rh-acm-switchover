@@ -679,7 +679,12 @@ def test_agents_sections_are_unique_and_ordered():
 
 
 def test_agents_policy_is_not_relaxed_by_escape_hatches():
-    """A rule plus a sentence retracting it is not policy. Reject the known retraction shapes."""
+    """A rule plus a sentence retracting it is not policy. Reject the known retraction shapes.
+
+    This is a blocklist and cannot be exhaustive: no text guardrail can prove that arbitrary
+    prose does not negate a rule somewhere else in the document. It raises the cost of an
+    accidental relaxation; review and the authority hierarchy remain the real control.
+    """
     content = _flatten(_read("AGENTS.md")).lower()
 
     for retraction in (
@@ -690,8 +695,36 @@ def test_agents_policy_is_not_relaxed_by_escape_hatches():
         "may be skipped",
         "no longer applies",
         "for reference only",
+        "is discretionary",
+        "at your discretion",
+        "continue after any failure",
+        "continue working anyway",
     ):
         assert retraction not in content, f"AGENTS.md contains a policy retraction: {retraction!r}"
+
+
+def test_agents_hard_fail_conditions_are_not_softened():
+    """A hard-fail condition that also permits continuing is not a hard fail."""
+    gate = _agents_section(r"start gate")
+
+    conditions = (
+        r"^authorization .{0,30}missing",
+        r"^the scope is ambiguous",
+        r"^the base is stale",
+        r"^an independent-validation checkout is dirty",
+        r"^mandatory evidence is unavailable",
+    )
+    softeners = ("continue", "proceed", "anyway", "assume", "ignore", "skip", "discretion", "optional")
+
+    matched = 0
+    for statement in _statements(gate):
+        if not any(re.search(condition, statement, re.IGNORECASE) for condition in conditions):
+            continue
+        matched += 1
+        for softener in softeners:
+            assert softener not in statement.lower(), f"Hard-fail condition is softened by {softener!r}: {statement}"
+
+    assert matched == len(conditions), f"Expected {len(conditions)} hard-fail conditions, matched {matched}"
 
 
 def test_agents_document_links_resolve():
