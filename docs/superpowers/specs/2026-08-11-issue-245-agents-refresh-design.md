@@ -179,6 +179,7 @@ sentence is preserved because `setup.cfg`'s flake8 excludes are coupled to it.
 | `AGENTS.md` | Restructured to the fifteen sections; 867 → 574 lines |
 | `tests/test_documentation_guardrails.py` | Version-policy test rewritten to semantics; new durable-policy guardrails added |
 | `CLAUDE.md` | Receives Claude Code hook and graphify invocation mechanics |
+| `.github/prompts/plan-claudeSkillsFromRunbook.prompt.md`, `.github/prompts/plan-updateAcmSwitchoverForNewRunbookV2.prompt.md` | Three lines re-routed: these active templates instructed agents to re-add the SKILLS section, the phase-flow mapping, and the version checklist to `AGENTS.md`. Cross-agent routing consistency only |
 | `CHANGELOG.md` | `[Unreleased]` entry |
 | `docs/superpowers/specs/2026-08-11-issue-245-agents-refresh-design.md` | This document |
 
