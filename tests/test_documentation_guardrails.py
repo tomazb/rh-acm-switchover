@@ -1,5 +1,6 @@
 """Regression checks for maintained support documentation."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -326,32 +327,280 @@ def test_changelog_unreleased_keeps_standard_groups():
         assert heading in unreleased
 
 
-def test_agents_version_policy_separates_development_from_release_work():
-    """Version policy must not turn every development PR into a release."""
-    content = _read("AGENTS.md")
-    policy = content.split("## Version Management", 1)[1].split("\n## Claude SKILLS", 1)[0]
+def _agents_section(heading_pattern: str) -> str:
+    """Return the body of the first AGENTS.md `##` section whose heading matches.
 
-    required = (
-        "### Ordinary Development Work",
-        "may modify code, tests, documentation, and tooling",
-        "## [Unreleased]",
-        "Do not change released version identifiers or create release tags",
-        "next explicit release version from accumulated changes",
-        "does not require every individual development PR to bump a version",
-        "### Explicit Release Work",
-        "Python and Bash released versions must match whenever a version bump is performed",
-        "changelog release heading",
-        "changelog comparison links",
-        "matching `vX.Y.Z` tag for the exact release commit",
-        "A partial metadata bump",
-        "without the matching release tag",
-        "issue #165 is not a release",
+    Sections are located by regex rather than by an exact heading literal so that policy
+    semantics, not one historical phrasing, are what these guardrails pin.
+    """
+    content = _read("AGENTS.md")
+    sections = re.split(r"^## ", content, flags=re.MULTILINE)[1:]
+
+    for section in sections:
+        heading = section.splitlines()[0]
+        if re.search(heading_pattern, heading, re.IGNORECASE):
+            return section
+
+    raise AssertionError(f"AGENTS.md has no `##` section matching {heading_pattern!r}")
+
+
+def _flatten(text: str) -> str:
+    """Collapse whitespace so policy guardrails do not depend on where lines wrap."""
+    return re.sub(r"\s+", " ", text)
+
+
+def _assert_states(section: str, label: str, *patterns: str) -> None:
+    flattened = _flatten(section)
+    for pattern in patterns:
+        assert re.search(pattern, flattened, re.IGNORECASE), f"{label} should state: {pattern}"
+
+
+def _enforced_version_surfaces() -> tuple:
+    """Version surfaces the collection metadata guardrail actually enforces.
+
+    Read from that test's source rather than restated here, so this guardrail cannot drift
+    away from the check it is describing. The file is read as text, not imported: root
+    `tests/` jobs do not install `ansible-core`.
+    """
+    source = _read("ansible_collections/tomazb/acm_switchover/tests/unit/test_collection_metadata.py")
+    body = source.split("def test_all_release_version_surfaces_match_repo_release_version", 1)[1]
+    body = body.split("\ndef ", 1)[0]
+    surfaces = tuple(re.findall(r'^\s+"([^"]+)":\s', body, re.MULTILINE))
+
+    assert len(surfaces) >= 8, "Expected the enforcing test to declare the full version-surface set"
+    return surfaces
+
+
+def test_agents_release_governance_separates_development_from_release_work():
+    """Version policy must not turn every development PR into a release."""
+    policy = _agents_section(r"(version|release).*(governance|management)")
+
+    _assert_states(
+        policy,
+        "Ordinary development policy",
+        r"ordinary development",
+        r"may modify code, tests, documentation, and tooling",
+        r"\[Unreleased\]",
+        r"not change released version identifiers or create release tags",
+        r"next explicit release version from accumulated changes",
+        r"not require every individual development PR to bump a version",
     )
-    for statement in required:
-        assert statement in policy
+    _assert_states(
+        policy,
+        "Explicit release policy",
+        r"explicit release",
+        r"Python and Bash released versions must match",
+        r"changelog release heading",
+        r"changelog comparison links",
+        r"tag for the exact release commit",
+        r"partial metadata bump",
+        r"incomplete release",
+    )
+
+    # A governance or process correction is not a release. The durable rule is what matters;
+    # naming the issue that once prompted it is not a policy requirement.
+    _assert_states(
+        policy,
+        "Non-release correction policy",
+        r"(governance|process|documentation)[^.]{0,80}correction is not a release",
+    )
+    assert "#165" not in policy, "Release policy must state the durable rule, not cite a historical issue"
 
     contradictory = "When making changes to either Python or Bash code, update BOTH version files"
     assert contradictory not in policy
+
+
+def test_agents_release_governance_names_every_enforced_version_surface():
+    """A release bump that misses an enforced surface leaves the suite red; policy must list them all."""
+    policy = _agents_section(r"(version|release).*(governance|management)")
+
+    for surface in _enforced_version_surfaces():
+        assert surface in policy, f"Release governance omits enforced version surface {surface}"
+
+    _assert_states(
+        policy,
+        "Collection version lifecycle",
+        r"galaxy\.yml",
+        r"no independent\s+release lifecycle|follows the repository release version",
+    )
+
+
+def test_agents_defines_a_mandatory_start_gate():
+    """Agents must have a deterministic, fail-closed way to start work."""
+    gate = _agents_section(r"start gate")
+
+    _assert_states(
+        gate,
+        "Start gate",
+        r"origin/ansible",
+        r"governing issue",
+        r"isolated",
+        r"base SHA",
+        r"head SHA",
+        r"merge base",
+        r"protected-file boundary",
+    )
+    _assert_states(
+        gate,
+        "Start gate hard-fail conditions",
+        r"authorization",
+        r"scope is ambiguous|ambiguous scope",
+        r"stale",
+        r"dirty",
+        r"evidence is unavailable|unavailable",
+    )
+
+
+def test_agents_defines_an_ordered_authority_hierarchy():
+    """Conflicts between sources must resolve deterministically, not by preference."""
+    hierarchy = _flatten(_agents_section(r"authority hierarchy"))
+
+    tiers = (
+        r"`AGENTS\.md`",
+        r"governing issue",
+        r"domain authority",
+        r"current source, tests",
+        r"hypothes[ei]s",
+    )
+    positions = []
+    for tier in tiers:
+        match = re.search(tier, hierarchy, re.IGNORECASE)
+        assert match, f"Authority hierarchy is missing tier: {tier}"
+        positions.append(match.start())
+
+    assert positions == sorted(positions), "Authority tiers must appear in precedence order"
+
+    _assert_states(
+        hierarchy,
+        "Conflict handling",
+        r"stop",
+        r"surface",
+        r"not silently",
+    )
+
+
+def test_agents_protected_file_policy_scopes_hook_enforcement_honestly():
+    """The hook is defense-in-depth; the policy is the control."""
+    content = _read("AGENTS.md")
+    assert "\n## Protected Critical Files\n" in content, "`.claude/settings.json` cites this heading by name"
+
+    policy = _agents_section(r"protected critical files")
+
+    _assert_states(
+        policy,
+        "Protected-file policy",
+        r"ACM_SWITCHOVER_RUNBOOK\.md",
+        r"\*\.skill\.md",
+        r"explicit operator approval",
+        r"diff",
+        r"sync",
+        r"no speculative or cosmetic",
+    )
+    _assert_states(
+        policy,
+        "Hook enforcement scope",
+        r"defense-in-depth",
+        r"not universal enforcement",
+        r"regardless of tool",
+    )
+    _assert_states(
+        policy,
+        "Independent protected-file verification",
+        r"builder.{0,80}validator.{0,80}resolver",
+    )
+
+
+def test_agents_verification_matrix_covers_every_changed_surface():
+    """Generic full-suite wording is replaced by a matrix keyed to the change."""
+    matrix = _flatten(_agents_section(r"verification matrix"))
+
+    for surface in (
+        r"documentation",
+        r"Python CLI",
+        r"Ansible Collection",
+        r"parity",
+        r"RBAC",
+        r"release-validation",
+        r"lab-controller",
+        r"release / version|release and version|version work",
+    ):
+        assert re.search(surface, matrix, re.IGNORECASE), f"Verification matrix omits surface: {surface}"
+
+    _assert_states(
+        matrix,
+        "Verification rules",
+        r"targeted tests first",
+        r"every gate the actual edit invalidates",
+        r"before terminal validation",
+        r"not rerun unrelated full suites",
+        r"exact-head CI",
+    )
+    _assert_states(
+        matrix,
+        "Collection gate surfaces",
+        r"integration",
+        r"scenario",
+        r"syntax",
+        r"build",
+    )
+
+
+def test_agents_defines_governed_finding_disposition():
+    """Findings are dispositioned against the governing gate, and deferrals are tracked."""
+    review = _agents_section(r"review priorities")
+
+    _assert_states(
+        review,
+        "Finding disposition model",
+        r"blocking",
+        r"deferred",
+        r"non-blocking observation",
+        r"invalid",
+        r"deferral is complete only when it is filed",
+    )
+
+
+def test_agents_does_not_restate_status_owned_by_another_authority():
+    """Volatile status and stale implementation snapshots must not live in policy."""
+    content = _read("AGENTS.md")
+
+    forbidden = {
+        "Phase 9B remains blocked": "phase status is owned by the GitHub issues",
+        "monolithic orchestrator": "the Python CLI is a layered entrypoint",
+        "Each phase handler checks": "phase eligibility is owned by the workflow layer",
+        "lab-phase9-readiness-checklist": "that document does not exist",
+    }
+    for literal, reason in forbidden.items():
+        assert literal not in content, f"AGENTS.md still states {literal!r}; {reason}"
+
+    for absent_gate in ("molecule", "ansible-lint", "ansible-test"):
+        assert absent_gate not in content, f"AGENTS.md claims a {absent_gate} gate that this repository does not run"
+
+
+def test_agents_document_links_resolve():
+    """Delegation only works when every named authority actually exists."""
+    content = _read("AGENTS.md")
+
+    for target in re.findall(r"\]\(([^)]+)\)", content):
+        if target.startswith(("#", "http://", "https://", "mailto:")):
+            continue
+        path = target.split("#", 1)[0]
+        assert (REPO_ROOT / path).exists(), f"AGENTS.md links to missing path: {path}"
+
+
+def test_agents_internal_anchors_resolve():
+    """Cross-references inside the policy must not rot when sections move."""
+    content = _read("AGENTS.md")
+
+    slugs = set()
+    for heading in re.findall(r"^#{2,3} (.+)$", content, re.MULTILINE):
+        slug = re.sub(r"[^a-z0-9\s-]", "", heading.lower())
+        slugs.add(re.sub(r"\s+", "-", slug.strip()))
+
+    for target in re.findall(r"\]\(#([^)]+)\)", content):
+        assert target in slugs, f"AGENTS.md has a dangling internal anchor: #{target}"
+
+    assert "terminal-validation-and-review-convergence" in slugs, "Other documents anchor to this section"
 
 
 def test_lab_role_controller_agent_instructions_document_non_live_authority_boundary():
