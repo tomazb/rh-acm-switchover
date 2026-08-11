@@ -138,22 +138,24 @@ def test_execution_environment_selects_an_interpreter_the_core_range_can_run():
     interpreter = dependencies.get("python_interpreter")
     assert interpreter, "execution-environment.yml must select a Python new enough for the supported cores"
 
-    assert (
-        EE_PYTHON_VERSION in interpreter["package_system"]
-    ), f"EE installs {interpreter['package_system']}, but the supported core range needs Python {EE_PYTHON_VERSION}"
+    interpreter_packages = set(interpreter["package_system"].split())
+    expected_packages = {f"python{EE_PYTHON_VERSION}", f"python{EE_PYTHON_VERSION}-pip"}
+    assert expected_packages.issubset(interpreter_packages), (
+        "EE base interpreter setup must install "
+        f"{', '.join(sorted(expected_packages))}; found {sorted(interpreter_packages)}"
+    )
     assert interpreter["python_path"].endswith(
         EE_PYTHON_VERSION
     ), f"EE runs {interpreter['python_path']}, which is not the interpreter it installs"
 
-    # The interpreter package does not ship a pip module, and UBI 9's python3-pip
-    # serves 3.9, so the pip stage fails with "No module named pip" unless the
-    # matching pip is installed as a system dependency.
+    # Bindep packages are installed in the final stage, after the base and builder
+    # stages have already used pip. Declaring the matching pip package here would
+    # restore the build-order defect while satisfying a package-presence check.
     bindep = (COLLECTION_ROOT / "bindep.txt").read_text()
-    declared_packages = {line.split()[0] for line in bindep.splitlines() if line.strip() and not line.startswith("#")}
-
-    assert f"python{EE_PYTHON_VERSION}-pip" in declared_packages, (
-        f"bindep.txt must install python{EE_PYTHON_VERSION}-pip; "
-        f"{interpreter['python_path']} has no pip module without it"
+    bindep_packages = {line.split()[0] for line in bindep.splitlines() if line.strip() and not line.startswith("#")}
+    assert f"python{EE_PYTHON_VERSION}-pip" not in bindep_packages, (
+        f"python{EE_PYTHON_VERSION}-pip must be installed with the base interpreter; "
+        "bindep packages are installed too late"
     )
 
 
