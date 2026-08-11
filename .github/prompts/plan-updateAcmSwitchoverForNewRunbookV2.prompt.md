@@ -20,7 +20,7 @@
   **Caveat**: Primary hub must be reachable; the tool does not currently support "primary unreachable" full-restore-only execution.
 
 - **Add inline comments**: In each module (`primary_prep.py`, `activation.py`, etc.), add header comments referencing the corresponding runbook steps.
-- **Update AGENTS.md**: Extend the "Phase Flow" section with this mapping.
+- **Update the architecture authority**: extend the phase mapping in `docs/development/architecture.md` (and `docs/operations/usage.md` where operator-facing). `AGENTS.md` delegates phase tables to those documents and must not carry the mapping itself.
 
 ### 2. Add Missing Constants to lib/constants.py (NEW)
 
@@ -93,8 +93,8 @@
 
 ### 10. Versioning and Changelog
 
-- Bump versions in all locations per AGENTS.md checklist.
-- Update CHANGELOG with runbook-alignment changes.
+- Record runbook-alignment changes in `CHANGELOG.md` under `## [Unreleased]`. Ordinary development work does not change released version identifiers or create release tags.
+- Only when the work is explicitly scoped as a release/version bump, bump every enforced version surface listed in the `AGENTS.md` release-governance section and tag the exact release commit.
 
 ## Todos Summary
 
