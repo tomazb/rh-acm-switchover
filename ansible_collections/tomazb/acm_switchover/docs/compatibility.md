@@ -115,10 +115,13 @@ from the range above.
 
 UBI 9 provides Python **3.9** as the default `python3`, which is below the floor
 of every `ansible-core` in the supported range, so the definition also declares
-`dependencies.python_interpreter` (`package_system: python3.12`,
-`python_path: /usr/bin/python3.12`). Without it the pip stage cannot resolve
-`ansible-core` at all and the build fails. Python 3.12 is used because it is the
-only version supported by every core in the range. Verified on
+`dependencies.python_interpreter` (`package_system: "python3.12 python3.12-pip"`,
+`python_path: /usr/bin/python3.12`). Ansible Builder installs
+both RPMs through its generated base-stage interpreter package command before it
+bootstraps pip or constructs the builder stage. Declaring `python3.12-pip` only
+in `bindep.txt` is too late because bindep packages are processed in the final
+stage. Python 3.12 is used because it is the only version supported by every core
+in the range. Verified on
 `docker.io/redhat/ubi9:latest` (2026-08-10): the default interpreter reports
 Python 3.9.25, `python3.12`/`python3.12-pip` are available from
 `ubi-9-appstream-rpms`, and `python3.12 -m pip install "ansible-core>=2.16,<2.22"`
