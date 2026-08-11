@@ -557,6 +557,13 @@ def test_agents_protected_file_policy_scopes_hook_enforcement_honestly():
         r"sync",
         r"no speculative or cosmetic",
     )
+    # Case-sensitive and literal: `.claude/skills/**/*.skill.md` does not match a file named
+    # `SKILL.md`, which left the release, refactor-simplify, and mutation-testing skills
+    # outside the protected set. Pin both the recursive scope and the uppercase form so that
+    # gap cannot reopen.
+    assert ".claude/skills/**" in policy, "Protected-file policy must cover the whole .claude/skills tree"
+    assert "SKILL.md" in policy, "Protected-file policy must name the uppercase SKILL.md definitions"
+
     _assert_states(
         policy,
         "Hook enforcement scope",
