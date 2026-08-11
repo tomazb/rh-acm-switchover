@@ -21,9 +21,10 @@ dependencies:
   # release in the range below requires Python 3.10 or newer, so the pip stage
   # must run on an explicitly installed interpreter. Python 3.12 is the only
   # version supported by every core in the range (2.16 accepts 3.10-3.12 and
-  # 2.21 requires 3.12-3.14).
+  # 2.21 requires 3.12-3.14). Its matching pip RPM must be installed in the same
+  # base-stage package step, before Ansible Builder bootstraps and uses pip.
   python_interpreter:
-    package_system: python3.12
+    package_system: "python3.12 python3.12-pip"
     python_path: /usr/bin/python3.12
   ansible_core:
     package_pip: "ansible-core>=2.16,<2.22"
