@@ -21,8 +21,8 @@ Extract procedural knowledge from the runbook into conversational Claude SKILLS 
    - `grafana-no-data.skill.md` — "Are observatorium pods healthy?" → "Check metrics-collector" → resolution branches
    - `restore-stuck.skill.md` — Velero diagnostics flow with common resolution paths
 
-4. **Add SKILLS section to [AGENTS.md](AGENTS.md)** with:
+4. **Add SKILLS section to [CLAUDE.md](CLAUDE.md)** — tool-specific SKILLS mechanics live there, not in `AGENTS.md`, which holds only tool-neutral policy. Include:
    - Description of `.claude/skills/` directory and purpose
    - List of available SKILLS by category
    - **Maintenance rule**: "When updating [docs/ACM_SWITCHOVER_RUNBOOK.md](docs/ACM_SWITCHOVER_RUNBOOK.md), also update the corresponding SKILLS in `.claude/skills/` to keep procedures synchronized"
-   - Add to "Files to Know" table: `.claude/skills/` entry noting runbook dependency
+   - The runbook ↔ SKILLS sync obligation itself is policy and is already stated in the `AGENTS.md` protected-file section; do not duplicate it there

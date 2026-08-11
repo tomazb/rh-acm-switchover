@@ -93,9 +93,10 @@ into this file to make the conflict disappear.
 
 ### Architecture ownership invariants
 
-- Orchestration is layered. The CLI entrypoint owns argument parsing and wiring; the
-  operation-runner layer declares the phase flow; the workflow layer executes it; the
-  outcome layer owns exit paths and reports; `modules/` owns phase work.
+- Orchestration is layered. The CLI entrypoint owns argument parsing, cross-mode wiring,
+  and the phase adapters that glue the flow to the implementation; the operation-runner
+  layer declares the phase flow; the workflow layer executes it; the outcome layer owns
+  exit paths and reports; `modules/` owns most resource-specific phase behavior.
 - **Phase eligibility and durable transition verification are owned by the workflow and
   runner layers, not by phase handlers.** Handlers do not self-gate on the current phase. A
   handler that returns success but leaves an impossible resume state is a failure, and the
@@ -519,8 +520,11 @@ Design and sequencing authority:
 and [`docs/development/lab-role-controller-spec.md`](docs/development/lab-role-controller-spec.md).
 Non-live orchestration guidance:
 [`docs/development/lab-role-controller-agent-instructions.md`](docs/development/lab-role-controller-agent-instructions.md).
-**Current phase status is owned by the GitHub issues, not by this file** — read the umbrella
-issue and the open phase slice issue rather than any status sentence written here.
+**Current phase status is owned by the GitHub issues, not by this file.** Read the RC
+hardening umbrella issue [#121](https://github.com/tomazb/rh-acm-switchover/issues/121) and
+the open Phase 9 slice issue — [#192](https://github.com/tomazb/rh-acm-switchover/issues/192)
+at the time of writing. If the tracker and that number disagree, the tracker is correct:
+list the open `Phase 9` issues rather than trusting any status sentence written here.
 
 ## Evidence Rules for Generated and External Review
 

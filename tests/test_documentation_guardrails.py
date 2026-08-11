@@ -1,5 +1,6 @@
 """Regression checks for maintained support documentation."""
 
+import ast
 import re
 from pathlib import Path
 
@@ -327,21 +328,63 @@ def test_changelog_unreleased_keeps_standard_groups():
         assert heading in unreleased
 
 
+def _agents_headings() -> list:
+    return re.findall(r"^## (.+)$", _read("AGENTS.md"), re.MULTILINE)
+
+
 def _agents_section(heading_pattern: str) -> str:
-    """Return the body of the first AGENTS.md `##` section whose heading matches.
+    """Return the body of the AGENTS.md `##` section whose heading matches.
 
     Sections are located by regex rather than by an exact heading literal so that policy
-    semantics, not one historical phrasing, are what these guardrails pin.
+    semantics, not one historical phrasing, are what these guardrails pin. Exactly one
+    section may match: a decoy section that satisfies a guardrail while a later duplicate
+    contradicts it is the failure mode this rejects.
     """
     content = _read("AGENTS.md")
     sections = re.split(r"^## ", content, flags=re.MULTILINE)[1:]
+    matches = [s for s in sections if re.search(heading_pattern, s.splitlines()[0], re.IGNORECASE)]
 
-    for section in sections:
-        heading = section.splitlines()[0]
-        if re.search(heading_pattern, heading, re.IGNORECASE):
-            return section
+    assert matches, f"AGENTS.md has no `##` section matching {heading_pattern!r}"
+    assert len(matches) == 1, f"AGENTS.md has {len(matches)} sections matching {heading_pattern!r}; expected one"
+    return matches[0]
 
-    raise AssertionError(f"AGENTS.md has no `##` section matching {heading_pattern!r}")
+
+_LIST_ITEM = re.compile(r"^\s*(?:[-*]\s+|\d+\.\s+|\|\s*)")
+
+
+def _statements(section: str) -> list:
+    """Flattened list items and table rows — the units policy rules are written in.
+
+    Anchoring an assertion to the start of a statement is what distinguishes a stated rule
+    from the same words appearing anywhere in the section, including inside a sentence that
+    negates them.
+    """
+    items: list = []
+    current = None
+
+    for line in section.splitlines():
+        if _LIST_ITEM.match(line):
+            if current is not None:
+                items.append(_flatten(current).strip())
+            current = _LIST_ITEM.sub("", line, count=1)
+        elif current is not None and line.startswith((" ", "\t")) and line.strip():
+            current += " " + line.strip()
+        elif current is not None:
+            items.append(_flatten(current).strip())
+            current = None
+
+    if current is not None:
+        items.append(_flatten(current).strip())
+    return items
+
+
+def _assert_rules(section: str, label: str, *patterns: str) -> None:
+    """Each pattern must match the start of a statement, i.e. be stated as its own rule."""
+    statements = _statements(section)
+    for pattern in patterns:
+        assert any(
+            re.search(pattern, statement, re.IGNORECASE) for statement in statements
+        ), f"{label} should state, as its own rule: {pattern}"
 
 
 def _flatten(text: str) -> str:
@@ -363,12 +406,27 @@ def _enforced_version_surfaces() -> tuple:
     `tests/` jobs do not install `ansible-core`.
     """
     source = _read("ansible_collections/tomazb/acm_switchover/tests/unit/test_collection_metadata.py")
-    body = source.split("def test_all_release_version_surfaces_match_repo_release_version", 1)[1]
-    body = body.split("\ndef ", 1)[0]
-    surfaces = tuple(re.findall(r'^\s+"([^"]+)":\s', body, re.MULTILINE))
+    enforcing = "test_all_release_version_surfaces_match_repo_release_version"
+
+    functions = [
+        node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.FunctionDef) and node.name == enforcing
+    ]
+    assert len(functions) == 1, f"Expected exactly one {enforcing}"
+
+    mappings = [node for node in ast.walk(functions[0]) if isinstance(node, ast.Dict)]
+    assert len(mappings) == 1, f"Expected exactly one version-surface mapping in {enforcing}"
+
+    surfaces = []
+    for key in mappings[0].keys:
+        # Fail loudly rather than silently dropping a surface declared via a constant or an
+        # f-string: a missed surface is exactly the drift this guardrail exists to catch.
+        assert isinstance(key, ast.Constant) and isinstance(
+            key.value, str
+        ), f"{enforcing} declares a version surface this guardrail cannot read: {ast.dump(key)}"
+        surfaces.append(key.value)
 
     assert len(surfaces) >= 8, "Expected the enforcing test to declare the full version-surface set"
-    return surfaces
+    return tuple(surfaces)
 
 
 def test_agents_release_governance_separates_development_from_release_work():
@@ -429,25 +487,28 @@ def test_agents_defines_a_mandatory_start_gate():
     """Agents must have a deterministic, fail-closed way to start work."""
     gate = _agents_section(r"start gate")
 
-    _assert_states(
+    # Each step must be stated as an instruction, not merely mentioned. Vocabulary that
+    # appears only inside a sentence relaxing the gate must not satisfy these.
+    _assert_rules(
         gate,
         "Start gate",
-        r"origin/ansible",
-        r"governing issue",
-        r"isolated",
-        r"base SHA",
-        r"head SHA",
-        r"merge base",
-        r"protected-file boundary",
+        r"^fetch current .{0,4}origin/ansible",
+        r"^confirm repository identity",
+        r"^read the current .{0,4}AGENTS\.md",
+        r"^read the governing issue",
+        r"^when the work will mutate",
+        r"^record, before the first edit",
     )
-    _assert_states(
+    _assert_states(gate, "Start gate", r"isolated .{0,40}/worktrees/", r"base SHA", r"head SHA", r"merge base")
+    _assert_states(gate, "Start gate hard-fail rule", r"hard-fail", r"stop and return to the operator")
+    _assert_rules(
         gate,
         "Start gate hard-fail conditions",
-        r"authorization",
-        r"scope is ambiguous|ambiguous scope",
-        r"stale",
-        r"dirty",
-        r"evidence is unavailable|unavailable",
+        r"^authorization .{0,30}missing",
+        r"^the scope is ambiguous",
+        r"^the base is stale",
+        r"^an independent-validation checkout is dirty",
+        r"^mandatory evidence is unavailable",
     )
 
 
@@ -549,14 +610,20 @@ def test_agents_defines_governed_finding_disposition():
     """Findings are dispositioned against the governing gate, and deferrals are tracked."""
     review = _agents_section(r"review priorities")
 
-    _assert_states(
+    # Each disposition must head its own row of the classification table.
+    _assert_rules(
         review,
         "Finding disposition model",
-        r"blocking",
-        r"deferred",
-        r"non-blocking observation",
-        r"invalid",
+        r"^\*\*blocking, in scope\*\*",
+        r"^\*\*valid, deferred\*\*",
+        r"^\*\*non-blocking observation\*\*",
+        r"^\*\*invalid",
+    )
+    _assert_states(
+        review,
+        "Deferral tracking rule",
         r"deferral is complete only when it is filed",
+        r"reply alone is not durable tracking",
     )
 
 
@@ -575,6 +642,56 @@ def test_agents_does_not_restate_status_owned_by_another_authority():
 
     for absent_gate in ("molecule", "ansible-lint", "ansible-test"):
         assert absent_gate not in content, f"AGENTS.md claims a {absent_gate} gate that this repository does not run"
+
+
+def test_agents_sections_are_unique_and_ordered():
+    """Policy is navigable only when each concern has exactly one home, in a stable order."""
+    headings = _agents_headings()
+
+    duplicates = [h for h in headings if headings.count(h) > 1]
+    assert not duplicates, f"AGENTS.md has duplicate `##` headings: {sorted(set(duplicates))}"
+
+    required_order = (
+        r"repository identity",
+        r"start gate",
+        r"authority hierarchy",
+        r"invariants",
+        r"protected critical files",
+        r"parity contract",
+        r"rbac",
+        r"builder",
+        r"terminal validation and review convergence",
+        r"verification matrix",
+        r"review priorities",
+        r"version governance",
+        r"lab-controller",
+        r"evidence rules",
+        r"authoritative document index",
+    )
+
+    positions = []
+    for pattern in required_order:
+        matched = [i for i, h in enumerate(headings) if re.search(pattern, h, re.IGNORECASE)]
+        assert len(matched) == 1, f"Expected exactly one AGENTS.md section matching {pattern!r}, found {len(matched)}"
+        positions.append(matched[0])
+
+    assert positions == sorted(positions), "AGENTS.md sections must follow the documented policy order"
+
+
+def test_agents_policy_is_not_relaxed_by_escape_hatches():
+    """A rule plus a sentence retracting it is not policy. Reject the known retraction shapes."""
+    content = _flatten(_read("AGENTS.md")).lower()
+
+    for retraction in (
+        "may proceed without authorization",
+        "do not classify findings",
+        "historical vocabulary only",
+        "is obsolete",
+        "may be skipped",
+        "no longer applies",
+        "for reference only",
+    ):
+        assert retraction not in content, f"AGENTS.md contains a policy retraction: {retraction!r}"
 
 
 def test_agents_document_links_resolve():

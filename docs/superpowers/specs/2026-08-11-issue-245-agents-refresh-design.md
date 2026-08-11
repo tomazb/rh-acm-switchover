@@ -25,7 +25,7 @@ issue text.
 | P2 | `AGENTS.md:186` — "Each phase handler checks `state.get_current_phase()` before executing" | False | Zero occurrences of `get_current_phase` in `modules/`. Handlers call `set_phase()` unconditionally (`acm_switchover.py:625,781,809`). Eligibility (`lib/workflow.py:225,240`) and durable transition verification (`:246`) are centrally owned. |
 | P3 | `AGENTS.md:374-375` — "Phase 9B remains blocked until Phase 9A is merged" | Stale | #180 (9A) and #188 (9B) are both closed as completed; #192 (9C) is the open slice. |
 | P4 | `AGENTS.md:305-307` — labelled "Full suite (collection + Python CLI tests together)" | Misleading | Omits collection integration, scenario, playbook syntax, and galaxy build (`.github/workflows/ansible-collection-foundation.yml:55,60,61-84`). It is not even the root CI lane: `setup.cfg` sets no `addopts`, so the command also collects `tests/release/` and `tests/e2e/`, which CI runs separately or not at all. |
-| P5 | `AGENTS.md:118` — "Edits are technically blocked by a `.claude/settings.json` PreToolUse hook" | Overstated | The hook matcher is `Edit|Write`. Bash write paths (`sed -i`, redirects, `git checkout`, `patch`) are not intercepted. The hook is defense-in-depth, not enforcement. |
+| P5 | `AGENTS.md:118` — "Edits are technically blocked by a `.claude/settings.json` PreToolUse hook" | Overstated | The hook matcher is `Edit\|Write`. Bash write paths (`sed -i`, redirects, `git checkout`, `patch`) are not intercepted. The hook is defense-in-depth, not enforcement. |
 | P6 | `AGENTS.md:726-734,781-794` — release governance | Incomplete | `test_all_release_version_surfaces_match_repo_release_version` (`ansible_collections/tomazb/acm_switchover/tests/unit/test_collection_metadata.py:38-53`) enforces eight version surfaces. `AGENTS.md` lists five and never mentions `galaxy.yml`. |
 | P7 | `AGENTS.md:34-49`, `:371-390` | Duplicated | The dual-supported capability list duplicates `docs/ansible-collection/parity-matrix.md`; the Phase 9 block duplicates status owned by GitHub issues and the Phase 9A design. Both can drift from their authorities and P3 shows one already has. |
 | P8 | Missing | Gap | No repository-wide mandatory start gate, no authority hierarchy for conflict resolution, no finding-disposition model, no verification matrix keyed to the changed surface. |
@@ -49,7 +49,9 @@ Turn `AGENTS.md` into a concise, policy-first, durable authority that:
 - preserves every existing safety boundary without preserving stale implementation
   snapshots.
 
-Target: approximately 350 lines, no inventories, every changing fact behind a link.
+Target: policy only — no inventories, every changing fact behind a link. The result is
+574 lines; the floor is set by the mandated fifteen sections plus the 90-line #242 section
+transplanted verbatim.
 
 ## Decisions
 
@@ -174,7 +176,7 @@ sentence is preserved because `setup.cfg`'s flake8 excludes are coupled to it.
 
 | File | Change |
 | --- | --- |
-| `AGENTS.md` | Restructured to the fifteen sections; ~867 → ~350 lines |
+| `AGENTS.md` | Restructured to the fifteen sections; 867 → 574 lines |
 | `tests/test_documentation_guardrails.py` | Version-policy test rewritten to semantics; new durable-policy guardrails added |
 | `CLAUDE.md` | Receives Claude Code hook and graphify invocation mechanics |
 | `CHANGELOG.md` | `[Unreleased]` entry |
@@ -204,10 +206,9 @@ isort --check-only --profile black --line-length 120 tests/test_documentation_gu
 # Root lane, CI-equivalent
 python -m pytest tests/ --ignore=tests/release -m "not e2e" -q
 
-# Every relative document link in AGENTS.md resolves
-grep -oE '\]\(([^):#]+\.md)' AGENTS.md | sed 's/](//' | sort -u | while read -r f; do
-  [ -e "$f" ] || echo "MISSING: $f"
-done
+# Every relative link and internal anchor in AGENTS.md resolves (fail-closed; the shell
+# loop below is illustrative only — these two tests are the authority)
+python -m pytest tests/test_documentation_guardrails.py -k "agents_document_links or agents_internal_anchors" -q
 
 # Anchors other documents and the settings hook depend on
 grep -n '^## Terminal Validation and Review Convergence$' AGENTS.md
