@@ -240,7 +240,8 @@ Requirements:
   are never published. Artifacts retain only safe public hub IDs, fingerprints, and the registry digest.
 
 This should reuse existing identity ideas where possible. The Python CLI already records hub identities by
-cluster UID in state, as described in `AGENTS.md` and `docs/operations/usage.md`. The release framework
+cluster UID in state, as described in `docs/operations/usage.md` ("Hub identity binding on resume") and the
+State Model in `docs/development/architecture.md`. The release framework
 already builds environment fingerprints in `tests/release/baseline/fingerprint.py`. The controller should
 define required properties first, then choose the smallest implementation that satisfies those properties.
 

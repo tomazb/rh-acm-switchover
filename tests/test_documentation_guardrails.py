@@ -1873,3 +1873,16 @@ def test_contributor_docs_avoid_run_record_config_vocabulary():
                 "(CONTEXT.md:21, under _Avoid_) forbids outside the RunRecord facade; "
                 "reword to RunRecord/persisted-key vocabulary instead"
             )
+
+
+def test_lab_role_controller_spec_attributes_uid_binding_to_owning_authority():
+    """Cluster-UID binding must be attributed to its owning authorities, not to AGENTS.md."""
+    content = _read(LAB_CONTROLLER_SPEC_DOC)
+
+    assert (
+        "records hub identities by" in content
+    ), "lab-role-controller-spec.md must still describe cluster-UID identity recording"
+    assert not re.search(
+        r"records hub identities by[^.]*`AGENTS\.md`", content
+    ), "cluster-UID binding must cite docs/operations/usage.md and architecture.md, not AGENTS.md"
+    assert "docs/operations/usage.md" in content
