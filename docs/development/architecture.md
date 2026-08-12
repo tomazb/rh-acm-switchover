@@ -180,7 +180,8 @@ The entrypoint owns:
   `run_restore_only`, `acm_switchover.py:424`)
 - the concrete phase adapters the hooks point at — `_run_phase_preflight`,
   `_run_phase_primary_prep`, `_run_phase_activation`, `_run_phase_post_activation`,
-  `_run_phase_finalization` (`acm_switchover.py:616,773`)
+  `_run_phase_finalization` — all five defined in `acm_switchover.py`, at lines 616, 773, 801,
+  831, and 886 respectively
 - the setup-mode branch, which is taken before state and clients are created
   (`acm_switchover.py:1231`)
 - dispatch into the operation runners
@@ -190,7 +191,7 @@ decisions, now in `lib/workflow.py`, and operation dispatch, now in `lib/operati
 The three hook dataclasses are a real seam: the runners can be exercised without a live client.
 The entrypoint is not, however, reduced to parsing and dispatch — it still supplies every phase
 adapter behind those hooks and owns dry-run state rollback. Resume-only branching is not in the
-entrypoint either; `lib/cli_outcomes.py:194` chooses between the Argo CD resume-only path and
+entrypoint either; `lib/cli_outcomes.py:196` chooses between the Argo CD resume-only path and
 `execute_operation`. Phase modules own resource-specific behaviour.
 
 ### `lib/operation_runners.py`
@@ -364,8 +365,9 @@ Important activation-related flags:
 
 The old-hub dispositions are not equivalent in blast radius. `secondary` sets up passive sync
 for failback. `none` leaves the hub untouched. `decommission` is **destructive**: finalization
-calls `_decommission_old_hub` (`modules/finalization.py:1090`), which runs the full
-`Decommission.decommission(interactive=False)` teardown (`modules/finalization.py:1122`) and
+calls `_decommission_old_hub` (`modules/finalization.py:1115`, inside `_handle_old_hub` at
+`modules/finalization.py:1090`), which runs the full
+`Decommission.decommission(interactive=False)` teardown (`modules/finalization.py:1141`) and
 removes ACM components — Observability resources, non-local `ManagedCluster` resources, and the
 `MultiClusterHub` — from the old primary. It is a real teardown performed inside the switchover
 run without a further prompt, not a preparation step.
@@ -536,7 +538,7 @@ The collection uses a fundamentally different architecture from the Python CLI:
 
 - **Roles** replace Python phase modules: `preflight`, `primary_prep`, `activation`, `post_activation`, `finalization`, `decommission`, `argocd_manage`, `discovery`, `rbac_bootstrap`
 - **Thin custom plugins** (`modules/`, `action/`, `module_utils/`) handle operations that need retry semantics, structured polling, or checkpoint persistence beyond what stock `kubernetes.core` modules provide
-- **Playbooks** (`switchover.yml`, `restore_only.yml`, `preflight.yml`, `decommission.yml`, `rbac_bootstrap.yml`, `discovery.yml`, `argocd_resume.yml`) are the operator entrypoints
+- **Playbooks** (`switchover.yml`, `restore_only.yml`, `preflight.yml`, `decommission.yml`, `rbac_bootstrap.yml`, `discovery.yml`, `argocd_resume.yml`) are the operator entrypoints. `playbooks/` holds one further file, `argocd_manage_test.yml`, which is deliberately not listed here: it is an integration-test playbook that drives the `argocd_manage` role through a pause/resume cycle against mock applications, not an operator entrypoint. It is still syntax-checked, because verification surface 6 globs `playbooks/*.yml` — see [Testing guide](testing.md#the-nine-verification-surfaces)
 - **Grouped variables** (`acm_switchover_hubs`, `acm_switchover_operation`, `acm_switchover_features`) replace CLI flags as the primary operator interface
 - **Optional checkpoint backend** replaces `StateManager` for long-running or interrupted runs; Ansible-native idempotency handles the default case
 - **Report artifacts** carry schema version `1.0` on the preflight, switchover, and restore-only paths. The decommission result does not: its role publishes no `schema_version` field, and `acm_report_artifact` writes the report it is given unchanged. Python and collection reports preserve aligned status/report contracts without requiring identical top-level fields for every report type
