@@ -17,7 +17,7 @@
 - Never document a formatter command with a bare `.` target — `AGENTS.md:375-376` forbids repo-wide formatting that can walk `.venv/`.
 - Never restate compatibility versions. Link `ansible_collections/tomazb/acm_switchover/docs/compatibility.md` (#244's authority).
 - Never restate Phase 9 status. `AGENTS.md:525` assigns it to the GitHub issue tracker.
-- Every CLI example must use the flag-only form. There is no `switchover` subcommand. `--method` accepts only `passive` and `full`, and is required unless `--setup`, `--restore-only`, or `--argocd-resume-only` is used.
+- Every CLI example must use the flag-only form. There is no `switchover` subcommand. `--method` (values `passive` or `full`) **and** `--old-hub-action` (values `secondary`, `decommission`, or `none`) are both required unless `--setup`, `--restore-only`, or `--argocd-resume-only` is used — see `acm_switchover.py:85-89`. An example missing either one fails argument validation and is a defect, not a style issue. Verify examples by running them, not by checking flags against `--help`.
 - No real credentials, kubeconfigs, cluster identifiers, or private paths in any example. `_assert_no_real_live_config_literals` (`tests/test_documentation_guardrails.py:52`) already forbids `https://`, `/home/`, `/tmp/`, and `cluster-id` in the lab-controller docs; do not introduce them elsewhere.
 - Do **not** modify `AGENTS.md` or `docs/development/ci.md`. Both are explicitly out of scope.
 - Do **not** modify any file under `ansible_collections/` in this branch. The two collection attribution fixes ship in a separate pull request (Task 7) so the full collection gate set is paid once, in isolation.
@@ -89,7 +89,9 @@ def test_contributing_routes_validation_to_modular_owners():
     ):
         assert token in content, f"CONTRIBUTING.md must route work to {token}"
 
-    assert "PreflightValidator" not in content, "CONTRIBUTING.md still references the retired PreflightValidator class"
+    assert not re.search(
+        r"[Aa]dd (?:a )?method to\s+`?PreflightValidator", content
+    ), "CONTRIBUTING.md still teaches the obsolete 'add a method to PreflightValidator' recipe"
 
 
 def test_contributing_names_primary_branch_and_start_gate():
@@ -223,13 +225,14 @@ evidence.
 In `CONTRIBUTING.md`, replace steps 3 and 4 of the `### Testing` section (lines 221-233) with:
 
 ````markdown
-3. **Test dry-run mode** (`--method` is required unless using `--setup`, `--restore-only`, or
-   `--argocd-resume-only`):
+3. **Test dry-run mode.** Both `--method` and `--old-hub-action` are required unless using
+   `--setup`, `--restore-only`, or `--argocd-resume-only` (`acm_switchover.py:85-89`):
    ```bash
    python acm_switchover.py --dry-run \
      --primary-context test-primary \
      --secondary-context test-secondary \
-     --method passive
+     --method passive \
+     --old-hub-action secondary
    ```
 
 4. **Test validate-only:**
@@ -237,7 +240,8 @@ In `CONTRIBUTING.md`, replace steps 3 and 4 of the `### Testing` section (lines 
    python acm_switchover.py --validate-only \
      --primary-context test-primary \
      --secondary-context test-secondary \
-     --method passive
+     --method passive \
+     --old-hub-action secondary
    ```
 ````
 
@@ -269,24 +273,42 @@ wishlist. Open an issue first if what you want to build does not have one.
 
 - [ ] **Step 11: Verify the CLI examples against real argument validation**
 
-`--help` exits before argparse validates argument combinations, so it cannot prove an example
-is accepted. Check the parser directly instead:
+Checking that each flag *appears* in `--help` is not enough: it cannot detect a missing
+required argument, which is exactly how the first draft of this plan shipped two broken
+examples. `--help` also exits before argparse validates anything. The only check that works is
+to actually run each documented example and confirm it gets **past** argument parsing.
+
+Extract every `acm_switchover.py` example from the document and run it:
 
 ```bash
-python acm_switchover.py --help | grep -E -- "--method|--dry-run|--validate-only"
 python - <<'PY'
-import re, pathlib
-help_text = __import__("subprocess").run(
-    ["python", "acm_switchover.py", "--help"], capture_output=True, text=True).stdout
+import pathlib, re, shlex, subprocess
+
 doc = pathlib.Path("CONTRIBUTING.md").read_text(encoding="utf-8")
-flags = set(re.findall(r"(?<![\w-])--[a-z][a-z0-9-]+", doc))
-unknown = sorted(f for f in flags if f not in help_text)
-print("flags in CONTRIBUTING.md not accepted by the CLI:", unknown or "none")
+examples = re.findall(r"^(python acm_switchover\.py(?:[^\n`]*\\\n)*[^\n`]*)$", doc, re.MULTILINE)
+failures = []
+for ex in examples:
+    argv = shlex.split(ex.replace("\\\n", " "))
+    proc = subprocess.run(argv, capture_output=True, text=True)
+    combined = proc.stdout + proc.stderr
+    # argparse rejects usage errors with exit code 2 and an "error:" usage banner.
+    if proc.returncode == 2 and "error:" in combined:
+        failures.append((ex, combined.strip().splitlines()[-1]))
+print(f"checked {len(examples)} example(s)")
+for ex, err in failures:
+    print("BROKEN:", " ".join(ex.split()), "->", err)
+print("result:", "all examples pass argument validation" if not failures else "FAILURES ABOVE")
 PY
 ```
 
-Expected: `--method` shows `{passive,full}`, and the flag audit prints `none`. Examples are
-never executed against a cluster.
+Expected: `all examples pass argument validation`. Examples are never run against a real
+cluster — an example that reaches a kubeconfig or connection error has already proven that
+argparse accepted it, which is all this check asserts.
+
+If an example is reported BROKEN, add the missing required argument rather than deleting the
+example. `--method` and `--old-hub-action` are both required unless `--setup`,
+`--restore-only`, or `--argocd-resume-only` is used; the CLI's own epilog
+(`acm_switchover.py:100-110`) shows the canonical forms.
 
 - [ ] **Step 12: Run the full guardrail suite**
 
@@ -579,6 +601,7 @@ python acm_switchover.py \
   --primary-context prod-hub \
   --secondary-context dr-hub \
   --method passive \
+  --old-hub-action secondary \
   --dry-run
 ```
 
@@ -591,6 +614,7 @@ python acm_switchover.py \
   --primary-context prod-hub \
   --secondary-context dr-hub \
   --method passive \
+  --old-hub-action secondary \
   --validate-only
 ```
 

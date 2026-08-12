@@ -19,8 +19,8 @@ Every drift item below was verified against source at `9cd55ac1`, not inferred.
 | Document | Location | Drift | Ground truth |
 | --- | --- | --- | --- |
 | `CONTRIBUTING.md` | `:27` | "Maximum line length: 100 characters" | CI runs `black --line-length 120`; `setup.cfg` sets flake8 max 120 |
-| `CONTRIBUTING.md` | `:70-110` | "Add method to `PreflightValidator` class" | No such class. `modules/preflight/` package + `modules/preflight_coordinator.py` |
-| `CONTRIBUTING.md` | `:223-233` | `--dry-run` / `--validate-only` examples omit `--method` | `--method` is required unless `--setup` / `--restore-only` / `--argocd-resume-only`; examples as written fail argument validation |
+| `CONTRIBUTING.md` | `:70-110` | "Add method to `PreflightValidator` class" as the way to add a check | The class still exists (`modules/preflight_coordinator.py:53`, imported at `acm_switchover.py:69`), but checks now live in the `modules/preflight/` package — `backup_validators.py`, `cluster_validators.py`, `namespace_validators.py`, `version_validators.py`. The obsolete part is the recipe, not the name |
+| `CONTRIBUTING.md` | `:223-233` | `--dry-run` / `--validate-only` examples omit required arguments | `--method` **and** `--old-hub-action` are both required unless `--setup` / `--restore-only` / `--argocd-resume-only` (`acm_switchover.py:85-89`); examples as written exit 2 on argument validation |
 | `CONTRIBUTING.md` | `:166-188` | Teaches hand-rolled `if self.dry_run: return {}` in new call sites | Dry-run is centralised in `lib/kube_client.py` with state-snapshot and fail-closed behaviour |
 | `CONTRIBUTING.md` | `:321-333` | Unmaintained feature-idea list, partly delivered | "Enhanced logging — structured JSON output" is delivered as `--log-format json`; the rest is untracked wishlist with no governing issue |
 | `docs/development/testing.md` | `:236-254` | `black --line-length 120 .` and `isort … .` | `AGENTS.md:375-376` forbids repo-wide formatting that can walk `.venv/` |
@@ -223,7 +223,7 @@ tokens and forbidden command shapes, not frozen prose.
 | Test | Assertion |
 | --- | --- |
 | `test_contributing_line_length_matches_ci` | `120` present; `100 characters` absent |
-| `test_contributing_routes_validation_to_modular_owners` | `modules/preflight/`, `lib/validation.py`, `preflight_coordinator` present; `PreflightValidator` absent |
+| `test_contributing_routes_validation_to_modular_owners` | `modules/preflight/`, `lib/validation.py`, `preflight_coordinator` present; the obsolete "add a method to `PreflightValidator`" recipe absent (the class itself is still live, so the bare name must not be banned) |
 | `test_active_docs_avoid_obsolete_cli_shapes` | `acm_switchover\.py\s+switchover` and `passive-sync` absent from all three documents |
 | `test_testing_guide_covers_every_collection_surface` | `tests/unit/`, `tests/integration/`, `tests/scenario/`, `--syntax-check`, `collection build`, `tests/e2e`, `tests/release`, `certification` present |
 | `test_formatter_guidance_avoids_repo_wide_traversal` | No `black` or `isort` line ending in a bare `.` target |
