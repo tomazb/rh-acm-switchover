@@ -467,9 +467,13 @@ python -m pytest tests/release -q
 PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q
 
 # 4. Collection integration tests
+# CI exports ANSIBLE_COLLECTIONS_PATH before this step; `$(pwd)` is the local equivalent of
+# ${GITHUB_WORKSPACE}. Surface 3 above deliberately has no export, matching CI.
+export ANSIBLE_COLLECTIONS_PATH="$(pwd):${HOME}/.ansible/collections"
 PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/ -q
 
 # 5. Collection scenario tests
+export ANSIBLE_COLLECTIONS_PATH="$(pwd):${HOME}/.ansible/collections"
 PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/scenario/ -q
 
 # 6. Playbook syntax check
