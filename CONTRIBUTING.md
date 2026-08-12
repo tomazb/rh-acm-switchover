@@ -176,7 +176,10 @@ except Exception as e:
 
 ### Dry-Run and Check-Mode Behaviour
 
-Dry-run is a property of the client layer, not something each call site re-implements.
+Dry-run is a property of the client layer *for mutations*. Call sites do still make their own
+dry-run decisions, legitimately — the rule below is about which decisions, not about forbidding
+them outright.
+
 `KubeClient` mutation methods check `self.dry_run` themselves and return deliberately synthetic
 values instead of calling the API — for example `patch_custom_resource` returns `{}`
 (`lib/kube_client.py:819-821`), `create_custom_resource` returns the supplied body unpersisted
@@ -195,14 +198,30 @@ self.client.patch_custom_resource(...)
 self.custom_api.patch_namespaced_custom_object(...)
 ```
 
-Do not add local `if self.dry_run: return {}` guards to new call sites — that reinvents, per
-call site, the same synthetic-return behaviour `KubeClient` already provides centrally. If a
-genuinely new operation needs dry-run support, add it to `KubeClient` alongside the existing
-operations so every caller gets the same synthetic-value shape instead of a one-off guess.
-Callers still must not treat a dry-run return value as a real observation — some call sites
-legitimately use the `dry_run_skip` decorator (`lib/utils.py:44`) to skip a live check entirely
-rather than act on a synthetic result, for example `_verify_managed_clusters_connected` in
-`modules/post_activation.py:212`.
+The line a call site must not cross is **fabrication**: do not add local
+`if self.dry_run: return {}` guards that manufacture a plausible-looking value which later
+phases then treat as a real observation. That reinvents, per call site, the synthetic-return
+behaviour `KubeClient` already provides centrally, and it does so in a shape nobody else knows
+about. If a genuinely new operation needs dry-run support, add it to `KubeClient` alongside the
+existing operations so every caller gets the same synthetic-value shape instead of a one-off
+guess.
+
+What a call site *may* do under `if self.dry_run:` is decline to act and say so:
+
+- **Skip a live verification** it has no business performing when nothing was mutated.
+  `_scale_down_thanos_compactor` returns before its pod-termination wait loop
+  (`modules/primary_prep.py:262-264`) — it produces no value at all, it just does not poll for
+  a termination that was never requested.
+- **Decline to issue a mutation, and log the action it would have taken.**
+  `_disable_observability_on_old_hub` logs `[DRY-RUN] Would delete MultiClusterObservability`
+  and `continue`s to the next object (`modules/finalization.py:1044-1046`), so the deletion is
+  not attempted and no fake deletion result is invented.
+
+Neither of those hands a downstream phase a manufactured fact, which is what makes them
+legitimate. The same principle covers the `dry_run_skip` decorator (`lib/utils.py:44`), which
+some call sites use to skip a live check entirely rather than act on a synthetic result — for
+example `_verify_managed_clusters_connected` in `modules/post_activation.py:212`. And it is why
+callers must never treat a dry-run return value as a real observation.
 
 State capture and restore around a dry-run is orchestration, not a `KubeClient` behaviour:
 `acm_switchover.py` calls `state.capture_state_snapshot()` before a dry-run and
