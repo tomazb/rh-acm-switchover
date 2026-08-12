@@ -112,7 +112,7 @@ Expected: 3 FAILED. `test_contributing_line_length_matches_ci` fails on the miss
 
 In `CONTRIBUTING.md`, replace lines 5-17 (the `## Getting Started` block through the `.venv` sentence) with:
 
-```markdown
+````markdown
 ## Getting Started
 
 Before writing anything, read [`AGENTS.md`](AGENTS.md) and the governing issue or spec for
@@ -136,13 +136,13 @@ policy, and the verification matrix; this guide only covers contributor mechanic
    ```
 
 The repository defaults to `.venv`, and `./run_tests.sh` will reuse an active virtualenv when possible.
-```
+````
 
 - [ ] **Step 5: Correct the line-length policy**
 
 In `CONTRIBUTING.md`, replace line 27:
 
-```markdown
+````markdown
 - Maximum line length: 100 characters
 ```
 
@@ -151,7 +151,7 @@ with:
 ```markdown
 - Maximum line length: 120 characters — this matches CI. See `setup.cfg` and the `black`
   invocation in `.github/workflows/ci-cd.yml`.
-```
+````
 
 - [ ] **Step 6: Replace the validation recipe with an ownership routing table**
 
@@ -191,7 +191,7 @@ Expected: 3 PASSED.
 
 In `CONTRIBUTING.md`, replace the whole `### Dry-Run Support` section (lines 166-188) with:
 
-```markdown
+````markdown
 ### Dry-Run and Check-Mode Behaviour
 
 Dry-run is a property of the client layer, not something each call site re-implements.
@@ -216,13 +216,13 @@ add it to `KubeClient` alongside the existing operations so every caller inherit
 A dry-run or check-mode pass proves that the planned actions parse and that validation accepts
 the inputs. It is not evidence of live behaviour and never substitutes for certification
 evidence.
-```
+````
 
 - [ ] **Step 9: Correct the testing section's CLI examples**
 
 In `CONTRIBUTING.md`, replace steps 3 and 4 of the `### Testing` section (lines 221-233) with:
 
-```markdown
+````markdown
 3. **Test dry-run mode** (`--method` is required unless using `--setup`, `--restore-only`, or
    `--argocd-resume-only`):
    ```bash
@@ -239,11 +239,11 @@ In `CONTRIBUTING.md`, replace steps 3 and 4 of the `### Testing` section (lines 
      --secondary-context test-secondary \
      --method passive
    ```
-```
+````
 
 Then replace step 5 (lines 235-238) with:
 
-```markdown
+````markdown
 5. **Run collection tests when touching the collection.** `PYTHONPATH=.` is part of the
    command — without it the collection imports fail before any test runs:
    ```bash
@@ -253,7 +253,7 @@ Then replace step 5 (lines 235-238) with:
    Collection unit tests are one surface of several. See
    [the testing guide](docs/development/testing.md) for the full gate inventory and for which
    surfaces your change requires.
-```
+````
 
 - [ ] **Step 10: Remove the feature-ideas list**
 
@@ -381,7 +381,7 @@ Expected: 3 FAILED. The first fails on `ansible_collections/tomazb/acm_switchove
 
 In `docs/development/testing.md`, replace lines 7-12 (the "four distinct verification surfaces" list) with:
 
-```markdown
+````markdown
 This document is the gate inventory for the repository. It defines every maintained
 verification surface, the exact command that runs it, and — as importantly — what each surface
 does not prove.
@@ -459,7 +459,7 @@ and are deliberately not restated here.
    verification matrix. Complete this before terminal validation, so the frozen head is
    validated once.
 3. **Exact-head hosted CI** — mandatory for merge readiness regardless of local results.
-```
+````
 
 - [ ] **Step 4: Correct the test-structure tree**
 
@@ -490,7 +490,7 @@ that touches `ansible_collections/`.
 
 In `docs/development/testing.md`, replace lines 182-194 (the `### Real-Cluster Validation (Example)` block) with:
 
-```markdown
+````markdown
 ### Historical observations
 
 The following is a recorded observation from a specific lab on a specific date. It is
@@ -509,7 +509,7 @@ Observed on 2026-01-28:
 - ACM: 2.14.1 on both hubs
 - OCP: 4.19.21 on both hubs
 - Preflight: **38 checks passed, 0 warnings**
-```
+````
 
 - [ ] **Step 7: Run the three tests to verify they pass**
 
@@ -521,7 +521,7 @@ Expected: 3 PASSED.
 
 In `docs/development/testing.md`, replace the `### Black (Formatting)` and `### isort (Import Sorting)` sections (lines 232-254) with:
 
-```markdown
+````markdown
 ### Black (Formatting)
 
 Reproduce CI exactly. The path list below is copied from the `lint` job in
@@ -562,13 +562,13 @@ isort --profile black --line-length 120 acm_switchover.py lib modules \
 CI does not currently format `check_rbac.py` or `show_state.py`. This documents what CI does,
 not an idealised superset: a scoped command that merely looks plausible fails differently from
 CI, which is worse than no command at all.
-```
+````
 
 - [ ] **Step 9: Correct the manual integration testing examples**
 
 In `docs/development/testing.md`, replace the `### Dry-Run Testing` and `### Validate-Only Mode` command blocks (lines 388-406) with:
 
-```markdown
+````markdown
 ### Dry-Run Testing
 
 Test against real clusters without making changes. The CLI is flag-only — there is no
@@ -596,13 +596,13 @@ python acm_switchover.py \
 
 Both modes prove that inputs validate and that the planned actions resolve. Neither is live
 evidence, and neither is certification evidence.
-```
+````
 
 - [ ] **Step 10: Refresh the footer date**
 
 In `docs/development/testing.md`, replace line 480:
 
-```markdown
+````markdown
 **Last Updated**: November 18, 2025
 ```
 
@@ -610,7 +610,7 @@ with:
 
 ```markdown
 **Last Updated**: 2026-08-12
-```
+````
 
 - [ ] **Step 11: Run the full guardrail suite and check whitespace**
 
@@ -710,7 +710,7 @@ Expected: 3 FAILED. The first fails on `run_phase_flow`; the second on the `conf
 
 In `docs/development/architecture.md`, replace lines 3-4:
 
-```markdown
+````markdown
 **Version**: 1.6.3  
 **Last Updated**: 2026-04-10
 ```
@@ -719,7 +719,7 @@ with:
 
 ```markdown
 **Last Updated**: 2026-08-12
-```
+````
 
 - [ ] **Step 4: Correct the entrypoint description and add the extracted layers**
 
@@ -792,7 +792,7 @@ facade is a contract violation — see the Run record entry in
 
 In `docs/development/architecture.md`, replace the State Model bullet at line 378:
 
-```markdown
+````markdown
 - detected config such as ACM version and observability presence
 ```
 
@@ -801,7 +801,7 @@ with:
 ```markdown
 - detected run facts such as ACM version and observability presence, read and written through
   the `RunRecord` facade (`lib/run_record.py`) rather than as raw config keys
-```
+````
 
 - [ ] **Step 7: Add the authority boundary section**
 
@@ -908,7 +908,7 @@ Expected: FAILED on the `AGENTS.md` citation.
 
 In `docs/development/lab-role-controller-spec.md`, replace:
 
-```markdown
+````markdown
 This should reuse existing identity ideas where possible. The Python CLI already records hub identities by
 cluster UID in state, as described in `AGENTS.md` and `docs/operations/usage.md`. The release framework
 ```
@@ -919,7 +919,7 @@ with:
 This should reuse existing identity ideas where possible. The Python CLI already records hub identities by
 cluster UID in state, as described in `docs/operations/usage.md` ("Hub identity binding on resume") and the
 State Model in `docs/development/architecture.md`. The release framework
-```
+````
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -1184,9 +1184,14 @@ This task must **not** be performed on the documentation branch. It exists as a 
 
 - [ ] **Step 1: Create a branch from `origin/ansible`**
 
+Do this in a **separate** worktree or in the main checkout. Running `git checkout -b` inside the
+documentation worktree would switch that worktree off the documentation branch and strand the
+work from Tasks 1 through 6.
+
 ```bash
 git fetch origin ansible
-git checkout -b docs/issue-246-collection-attribution origin/ansible
+git worktree add ../acm-collection-attribution -b docs/issue-246-collection-attribution origin/ansible
+cd ../acm-collection-attribution
 ```
 
 - [ ] **Step 2: Inspect both current claims**
