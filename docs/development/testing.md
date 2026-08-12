@@ -180,9 +180,10 @@ tests/
 
 By default, this runs the root test lane, then the release-framework helper tests under `tests/release/`, and excludes long-running E2E tests (marked `@pytest.mark.e2e`). The runner passes no release profile, so that second lane is non-live — unless `ACM_RELEASE_PROFILE` is already exported in your environment, which the runner neither unsets nor warns about.
 
-`./run_tests.sh` covers surfaces 1 and 2 only. It never runs collection unit, integration,
-scenario, syntax, or build gates, so it is not a complete verification surface for any change
-that touches `ansible_collections/`.
+`./run_tests.sh` covers surfaces 1 and 2, and adds surface 8 only when you export `RUN_E2E=1`
+(`run_tests.sh:106-112`). No invocation of it runs the collection unit, integration, scenario,
+syntax, or build gates — surfaces 3 through 7 have no code path in the runner at all.
+It is not a complete verification surface for any change that touches `ansible_collections/`.
 
 CI-equivalent quality gates (`black`, `isort`, `mypy`, and `bandit`) fail by default.
 For a local advisory-only quality pass, run `STRICT_QUALITY=0 ./run_tests.sh`.
