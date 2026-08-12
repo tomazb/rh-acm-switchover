@@ -1944,22 +1944,47 @@ OBSOLETE_CLI_PATTERNS = (
 
 BARE_DOT_FORMATTER = re.compile(r"^\s*(?:\$\s*)?(?:black|isort)\b[^\n]*\s\.\s*$", re.MULTILINE)
 
+FORMATTER_GUIDANCE_DOCS = (CONTRIBUTING_DOC, TESTING_DOC)
+
 
 def test_active_docs_avoid_obsolete_cli_shapes():
-    """Contributor-facing docs must not show CLI shapes the parser rejects."""
+    """Contributor-facing docs must not show CLI shapes the parser rejects.
+
+    The non-empty guard is deliberate. This assertion is purely negative, so an emptied
+    ``CONTRIBUTOR_DOCS`` or ``OBSOLETE_CLI_PATTERNS`` would make it pass while inspecting
+    nothing — which is how the drift it guards against comes back unnoticed.
+    """
+    inspected = 0
     for doc in CONTRIBUTOR_DOCS:
         content = _read(doc)
         for pattern, label in OBSOLETE_CLI_PATTERNS:
+            inspected += 1
             match = pattern.search(content)
             assert match is None, f"{doc} still documents {label}: {match.group(0)!r}"
 
+    assert inspected, (
+        "no document/pattern pair was inspected; this guardrail must fail loudly rather than "
+        "pass vacuously when CONTRIBUTOR_DOCS or OBSOLETE_CLI_PATTERNS is empty"
+    )
+
 
 def test_formatter_guidance_avoids_repo_wide_traversal():
-    """Documented formatter commands must not target the repository root."""
-    for doc in (CONTRIBUTING_DOC, TESTING_DOC):
+    """Documented formatter commands must not target the repository root.
+
+    As above, the counter exists so that emptying ``FORMATTER_GUIDANCE_DOCS`` fails this test
+    instead of silently retiring it.
+    """
+    inspected = 0
+    for doc in FORMATTER_GUIDANCE_DOCS:
         content = _read(doc)
+        inspected += 1
         match = BARE_DOT_FORMATTER.search(content)
         assert match is None, f"{doc} documents repo-wide formatting that can walk .venv/: {match.group(0).strip()!r}"
+
+    assert inspected, (
+        "no document was inspected; this guardrail must fail loudly rather than pass vacuously "
+        "when FORMATTER_GUIDANCE_DOCS is empty"
+    )
 
 
 _BASH_FENCE = re.compile(r"^```bash\n(.*?)^```", re.MULTILINE | re.DOTALL)
