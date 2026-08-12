@@ -387,13 +387,24 @@ So flake8 proves only that the tree has no syntax errors and no undefined names.
 120-character maximum and the complexity ceiling of 15 are reported, never enforced.
 
 `setup.cfg` also declares `max-line-length = 120` and `max-complexity = 15`, but it is **not**
-the governing authority and must not be cited as one. CI passes both numbers on the command
-line, and passes them to a `--exit-zero` invocation that cannot fail. The value that can break a
-build is the one handed to `black --line-length` and `isort --line-length` below — the same
-authority [`CONTRIBUTING.md`](../../CONTRIBUTING.md) names.
+the governing authority for those numbers and must not be cited as one. CI passes both on the
+command line, to the `--exit-zero` invocation, so neither can fail a build via flake8. The value
+that can break a build over line length is the one handed to `black --line-length` and
+`isort --line-length` below — the same authority [`CONTRIBUTING.md`](../../CONTRIBUTING.md)
+names.
 
-Unlike the black and isort commands below, CI's flake8 does target the repository root, so a
-local run walks `.venv/` and any other generated tree in your checkout.
+That is a statement about those two numbers, not about the file. CI does read `setup.cfg`:
+flake8 runs from the repository root and discovers it there, so the `[flake8]` section's
+`ignore = E203,E501,W503` and its `exclude` list are both in force. An explicit flag overrides
+the one value it names for that invocation; it does not disable config discovery.
+
+Because `setup.cfg:13-29` already excludes `.git`, `__pycache__`, `.venv`, `venv`,
+`.worktrees`, `.claude/worktrees`, the `*_cache` directories, `build`, `dist`, `completions`,
+`.eggs`, `graphify-out`, `htmlcov`, and `review`, the repository-root `flake8 .` above does not
+walk your virtualenv or the other generated trees. That exclusion is flake8's alone: black and
+isort get no such list, which is why the commands below name paths explicitly instead of
+targeting the root — and why repo-wide formatting stays prohibited on the authority of
+[`AGENTS.md`](../../AGENTS.md), independently of what any exclude list happens to cover.
 
 ### Pylint (Analysis)
 

@@ -112,10 +112,14 @@ _FORMATTER_LINE_LENGTH = re.compile(r"^\s*(?:black|isort)\b[^\n]*?--line-length[
 def _ci_governing_line_length() -> str:
     """Read the line length CI actually enforces, from its black/isort invocations.
 
-    `setup.cfg` is deliberately NOT the source of truth. CI never consults it: it passes
-    `--max-line-length` to flake8 explicitly, and runs that flake8 pass with `--exit-zero`, so
-    flake8 cannot fail the build at all. The value that can break a build is the one handed to
-    `black --check` and `isort --check-only`.
+    `setup.cfg` is deliberately NOT the source of truth for this number. CI does consult
+    `setup.cfg` — flake8 discovers it from the repository root, so its `[flake8]` `exclude` and
+    `ignore` settings apply — but the explicit command-line flags override the individual values
+    they name. flake8 itself gets `--max-line-length` only on its second, `--exit-zero` pass, so
+    that pass reports a long line and cannot fail the build; the first flake8 pass
+    (`--select=E9,F63,F7,F82`, no `--exit-zero`) does block, but only on syntax errors and
+    undefined names, never on line length. The value that can break a build over line length is
+    the one handed to `black --check` and `isort --check-only`.
 
     A parse failure raises instead of falling back to a default. A silent fallback would
     reproduce precisely the defect class this guardrail exists to catch: a documented number

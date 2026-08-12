@@ -35,10 +35,24 @@ The repository defaults to `.venv`, and `./run_tests.sh` will reuse an active vi
 - Add docstrings to all functions and classes
 - Keep functions focused and single-purpose
 - Maximum line length: 120 characters — this is the value CI actually enforces. The authority is
-  the `black --line-length` and `isort --line-length` invocations in
-  `.github/workflows/ci-cd.yml`, which pass the number explicitly. `setup.cfg` is not the
-  authority: CI also passes `--max-line-length` to flake8 explicitly, and runs that flake8 pass
-  with `--exit-zero`, so flake8 cannot fail the build regardless of what `setup.cfg` says.
+  the `black --check --line-length 120` and `isort --check-only --line-length 120` invocations in
+  `.github/workflows/ci-cd.yml:104,108`. They pass the number explicitly, they run in the `lint`
+  job with no `continue-on-error`, and they fail the job when a file does not match.
+- `setup.cfg` is not the line-length authority, but CI does read it. flake8 runs from the
+  repository root and discovers `setup.cfg` there, so its `[flake8]` settings — notably the
+  `exclude` list and the `ignore = E203,E501,W503` codes — do apply to CI's runs. What the
+  explicit command-line flags do is override the individual values they name for that
+  invocation; they do not switch config discovery off. Today `setup.cfg` and the flags happen to
+  agree on 120, which is exactly why the flags, not the file, are the value to track.
+- flake8 runs twice in the `lint` job, and only one of the two passes can fail the build
+  (`.github/workflows/ci-cd.yml:94,96`). The first —
+  `flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics`, under the comment "Stop
+  the build if there are Python syntax errors or undefined names" — carries no `--exit-zero`, so
+  it **is** blocking for that narrow selection. The second —
+  `flake8 . --count --exit-zero --max-complexity=15 --max-line-length=120 --statistics` — is
+  advisory: `--exit-zero` means the 120-character maximum and the complexity ceiling of 15 are
+  reported and never enforced by flake8. Line length is enforced by black and isort; syntax
+  errors and undefined names are enforced by flake8.
 
 **Example:**
 ```python
