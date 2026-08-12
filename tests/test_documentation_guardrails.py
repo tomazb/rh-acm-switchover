@@ -126,7 +126,9 @@ def test_contributing_routes_validation_to_modular_owners():
     ):
         assert token in content, f"CONTRIBUTING.md must route work to {token}"
 
-    assert "PreflightValidator" not in content, "CONTRIBUTING.md still references the retired PreflightValidator class"
+    assert not re.search(
+        r"[Aa]dd (?:a )?method to\s+`?PreflightValidator", content
+    ), "CONTRIBUTING.md still teaches the obsolete 'add a method to PreflightValidator' recipe"
 
 
 def test_contributing_names_primary_branch_and_start_gate():

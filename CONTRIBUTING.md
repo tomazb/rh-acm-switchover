@@ -210,13 +210,14 @@ Before submitting a PR:
    python -m py_compile acm_switchover.py lib/*.py modules/*.py
    ```
 
-3. **Test dry-run mode** (`--method` is required unless using `--setup`, `--restore-only`, or
-   `--argocd-resume-only`):
+3. **Test dry-run mode.** Both `--method` and `--old-hub-action` are required unless using
+   `--setup`, `--restore-only`, or `--argocd-resume-only` (`acm_switchover.py:85-89`):
    ```bash
    python acm_switchover.py --dry-run \
      --primary-context test-primary \
      --secondary-context test-secondary \
-     --method passive
+     --method passive \
+     --old-hub-action secondary
    ```
 
 4. **Test validate-only:**
@@ -224,7 +225,8 @@ Before submitting a PR:
    python acm_switchover.py --validate-only \
      --primary-context test-primary \
      --secondary-context test-secondary \
-     --method passive
+     --method passive \
+     --old-hub-action secondary
    ```
 
 5. **Run collection tests when touching the collection.** `PYTHONPATH=.` is part of the
