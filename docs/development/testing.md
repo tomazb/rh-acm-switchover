@@ -16,7 +16,7 @@ This document owns the commands.
 
 | # | Surface | Nature | What it does not prove |
 | --- | --- | --- | --- |
-| 1 | Root Python and Bash tests | Local, fake-backed | Nothing about live clusters. Of the collection it proves only the shared-constants parity contract (`tests/test_constants_parity.py`) — no collection role, plugin, or playbook behaviour |
+| 1 | Root Python and Bash tests | Local, fake-backed | Nothing about live clusters. Of the collection it proves only the four parity contracts — shared constants (`tests/test_constants_parity.py`), Argo CD `ACM_KINDS`/`ACM_NAMESPACES` (`tests/test_argocd_constants_parity.py`), cross-phase state key names (`tests/test_checkpoint_state_parity.py`), and RBAC expansion (`tests/test_rbac_collection_parity.py`). Those compare declared values across the two runtimes; no collection role, playbook, or module is executed |
 | 2 | Release-framework helpers | Local and fake-backed **only when no release profile is supplied** | Not certification evidence. Non-live only while neither `--release-profile` nor `ACM_RELEASE_PROFILE` resolves a profile |
 | 3 | Collection unit tests | Local, static and fake-backed | Nothing about live cluster behaviour. Playbook and cross-role wiring is checked statically against the YAML, not by executing it |
 | 4 | Collection integration tests | Local, fake-backed | Nothing about real cluster responses |
