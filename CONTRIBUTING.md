@@ -85,7 +85,9 @@ review churn.
 
 | Change | Owner |
 | --- | --- |
-| CLI, input, and path validation | `lib/validation.py` |
+| CLI grammar, required arguments, and mode combinations | `acm_switchover.py` argument parsing (`parse_args`) and its conditionally-required-argument checks (`_missing_parse_required_args`, `acm_switchover.py:72,85-89`) |
+| Input value validation | `lib/validation.py` |
+| Filesystem path safety and artifact-path policy | `lib/path_safety.py` (`lib/validation.py:253` delegates to it; it owns path syntax, allowed-root enforcement, and symlink-escape rejection) |
 | Python preflight checks | `modules/preflight/` plus `modules/preflight_coordinator.py` and `modules/preflight/reporter.py` |
 | Python phase behaviour | The owning phase module under `modules/` |
 | Python flow, dispatch, and completed/failed-state behaviour | `lib/workflow.py` and `lib/operation_runners.py` |
@@ -157,27 +159,43 @@ except Exception as e:
 ### Dry-Run and Check-Mode Behaviour
 
 Dry-run is a property of the client layer, not something each call site re-implements.
-`lib/kube_client.py` honours dry-run centrally, dry-run orchestration captures and restores a
-full `StateManager` snapshot after the run, and paths that cannot prove safety fail closed.
+`KubeClient` mutation methods check `self.dry_run` themselves and return deliberately synthetic
+values instead of calling the API — for example `patch_custom_resource` returns `{}`
+(`lib/kube_client.py:819-821`), `create_custom_resource` returns the supplied body unpersisted
+(`lib/kube_client.py:908-914`), and `delete_custom_resource` returns `True`
+(`lib/kube_client.py:1023-1025`). Routing mutations through `KubeClient` does not make dry-run
+fabrication go away; it centralizes that fabrication in one place instead of letting every call
+site invent its own shape of fake result.
 
-Route mutations through `KubeClient` so this behaviour applies:
+Route mutations through `KubeClient` so this behaviour is centralized and consistent:
 
 ```python
-# Good - dry-run, retry, and state-snapshot behaviour all apply
+# Good - dry-run handling is centralized and consistent
 self.client.patch_custom_resource(...)
 
 # Bad - bypasses the client contract entirely
 self.custom_api.patch_namespaced_custom_object(...)
 ```
 
-Do not add local `if self.dry_run: return {}` guards to new call sites. A hand-rolled guard
-returns a fabricated result that later phases may treat as a real observation, which is exactly
-the failure the central contract prevents. If a genuinely new operation needs dry-run support,
-add it to `KubeClient` alongside the existing operations so every caller inherits it.
+Do not add local `if self.dry_run: return {}` guards to new call sites — that reinvents, per
+call site, the same synthetic-return behaviour `KubeClient` already provides centrally. If a
+genuinely new operation needs dry-run support, add it to `KubeClient` alongside the existing
+operations so every caller gets the same synthetic-value shape instead of a one-off guess.
+Callers still must not treat a dry-run return value as a real observation — some call sites
+legitimately use the `dry_run_skip` decorator (`lib/utils.py:44`) to skip a live check entirely
+rather than act on a synthetic result, for example `_verify_managed_clusters_connected` in
+`modules/post_activation.py:212`.
+
+State capture and restore around a dry-run is orchestration, not a `KubeClient` behaviour:
+`acm_switchover.py` calls `state.capture_state_snapshot()` before a dry-run and
+`state.restore_state_snapshot(...)` after it (`acm_switchover.py:434,439`), and both methods are
+owned by `StateManager` (`lib/utils.py:506`).
 
 A dry-run or check-mode pass proves that the planned actions parse and that validation accepts
-the inputs. It is not evidence of live behaviour and never substitutes for certification
-evidence.
+the inputs. It skips live proofs — a dry-run switchover can still log a simulated completion
+message and report success without ever exercising live behaviour
+(`lib/operation_runners.py:182`). It is not evidence of live behaviour and never substitutes for
+certification evidence.
 
 ### Logging
 
@@ -229,8 +247,10 @@ Before submitting a PR:
      --old-hub-action secondary
    ```
 
-5. **Run collection tests when touching the collection.** `PYTHONPATH=.` is part of the
-   command — without it the collection imports fail before any test runs:
+5. **Run collection tests when touching the collection.** The command keeps the `PYTHONPATH=.`
+   prefix to match CI's invocation exactly (see `.github/workflows/ansible-collection-foundation.yml`).
+   Running from the repository root also works without it, because `setup.cfg` sets
+   `pythonpath = .` for pytest, but the documented form is CI's:
    ```bash
    PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q
    ```

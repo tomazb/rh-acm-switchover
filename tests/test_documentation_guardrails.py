@@ -1,6 +1,7 @@
 """Regression checks for maintained support documentation."""
 
 import ast
+import configparser
 import re
 from pathlib import Path
 
@@ -101,14 +102,32 @@ def test_contributing_matches_current_dev_workflow():
         assert token in content, f"Missing {token} from CONTRIBUTING.md"
 
 
-def test_contributing_line_length_matches_ci():
-    """Contributor line-length guidance must match the 120-character CI policy."""
-    content = _read(CONTRIBUTING_DOC)
+def _flake8_max_line_length() -> str:
+    """Read the flake8 `max-line-length` from setup.cfg — the CI-enforced source of truth."""
+    config = configparser.ConfigParser()
+    config.read(REPO_ROOT / "setup.cfg")
+    return config.get("flake8", "max-line-length").strip()
 
-    assert re.search(
-        r"[Mm]aximum line length:\s*120", content
-    ), "CONTRIBUTING.md must state a 120-character maximum line length"
-    assert "100 characters" not in content, "CONTRIBUTING.md still states the obsolete 100-character limit"
+
+def test_contributing_line_length_matches_ci():
+    """Contributor line-length guidance must match the configured flake8 CI policy.
+
+    The maximum is read from `setup.cfg` rather than hard-coded, so this test actually breaks
+    if CI's configured line length ever moves and CONTRIBUTING.md is not updated to match.
+    """
+    content = _read(CONTRIBUTING_DOC)
+    max_line_length = _flake8_max_line_length()
+
+    assert re.search(rf"[Mm]aximum line length:\s*{re.escape(max_line_length)}\b", content), (
+        f"CONTRIBUTING.md must state the configured {max_line_length}-character maximum line "
+        "length (setup.cfg [flake8] max-line-length)"
+    )
+
+    # "100 characters" is the specific obsolete phrasing this guardrail was written to catch.
+    # Skip it only if the configured value is itself 100: the dynamic assertion above already
+    # covers correctness then, and this literal would otherwise reject the true value.
+    if max_line_length != "100":
+        assert "100 characters" not in content, "CONTRIBUTING.md still states the obsolete 100-character limit"
 
 
 def test_contributing_routes_validation_to_modular_owners():

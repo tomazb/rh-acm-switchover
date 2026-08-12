@@ -34,9 +34,10 @@ certification evidence — see the
 ### Commands by surface
 
 Surfaces 3 through 7 take their commands from
-`.github/workflows/ansible-collection-foundation.yml`, which is ground truth. `PYTHONPATH=.` is
-part of each collection pytest command — without it, collection imports fail before any test
-runs.
+`.github/workflows/ansible-collection-foundation.yml`, which is ground truth. Each collection
+pytest command keeps the `PYTHONPATH=.` prefix to match that CI invocation exactly. Running from
+the repository root also works without it, because `setup.cfg` sets `pythonpath = .` for pytest,
+but the documented form is CI's.
 
 ```bash
 # 1. Root Python and Bash tests
