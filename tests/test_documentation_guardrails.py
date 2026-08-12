@@ -1886,3 +1886,50 @@ def test_lab_role_controller_spec_attributes_uid_binding_to_owning_authority():
         r"records hub identities by[^.]*`AGENTS\.md`", content
     ), "cluster-UID binding must cite docs/operations/usage.md and architecture.md, not AGENTS.md"
     assert "docs/operations/usage.md" in content
+
+    sentence_match = re.search(
+        r"The Python CLI already records hub identities by.*?(?=The release framework\s+already builds)",
+        content,
+        re.DOTALL,
+    )
+    assert sentence_match, (
+        "lab-role-controller-spec.md must contain the cluster-UID attribution sentence "
+        "immediately preceding the sentence about the release framework's environment "
+        "fingerprints; if that neighbouring sentence moved, update this anchor"
+    )
+    sentence = sentence_match.group(0)
+
+    assert "AGENTS.md" not in sentence, "the cluster-UID attribution sentence must not cite AGENTS.md"
+    assert "docs/operations/usage.md" in sentence, (
+        "the cluster-UID attribution sentence must cite docs/operations/usage.md, not merely "
+        "mention it elsewhere in the file"
+    )
+    assert "docs/development/architecture.md" in sentence, (
+        "the cluster-UID attribution sentence must cite docs/development/architecture.md, not "
+        "merely mention it elsewhere in the file"
+    )
+
+
+OBSOLETE_CLI_PATTERNS = (
+    (re.compile(r"acm_switchover\.py\s+switchover"), "the obsolete `switchover` subcommand"),
+    (re.compile(r"passive-sync"), "the obsolete `passive-sync` method value"),
+)
+
+BARE_DOT_FORMATTER = re.compile(r"^\s*(?:\$\s*)?(?:black|isort)\b[^\n]*\s\.\s*$", re.MULTILINE)
+
+
+def test_active_docs_avoid_obsolete_cli_shapes():
+    """Contributor-facing docs must not show CLI shapes the parser rejects."""
+    for doc in CONTRIBUTOR_DOCS:
+        content = _read(doc)
+        for pattern, label in OBSOLETE_CLI_PATTERNS:
+            match = pattern.search(content)
+            assert match is None, f"{doc} still documents {label}: {match.group(0)!r}"
+
+
+def test_formatter_guidance_avoids_repo_wide_traversal():
+    """Documented formatter commands must not target the repository root."""
+    for doc in (CONTRIBUTING_DOC, TESTING_DOC):
+        content = _read(doc)
+        match = BARE_DOT_FORMATTER.search(content)
+        assert match is None, f"{doc} documents repo-wide formatting that can walk .venv/: {match.group(0).strip()!r}"
