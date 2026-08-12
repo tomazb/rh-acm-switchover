@@ -1729,3 +1729,45 @@ def test_lab_role_controller_phase8l_preflight_pilot_rehearsal_status_is_non_con
         "This is not broad live rollout and is not authorization for live contact.",
     ):
         assert token in content
+
+
+COLLECTION_VERIFICATION_TOKENS = (
+    "ansible_collections/tomazb/acm_switchover/tests/unit/",
+    "ansible_collections/tomazb/acm_switchover/tests/integration/",
+    "ansible_collections/tomazb/acm_switchover/tests/scenario/",
+    "--syntax-check",
+    "ansible-galaxy collection build",
+    "tests/e2e",
+    "tests/release",
+    "certification",
+)
+
+
+def test_testing_guide_covers_every_collection_verification_surface():
+    """The gate inventory must name every maintained verification surface separately."""
+    content = _read(TESTING_DOC)
+
+    for token in COLLECTION_VERIFICATION_TOKENS:
+        assert token in content, f"testing.md must document the verification surface using {token}"
+
+
+def test_testing_guide_states_run_tests_is_not_complete():
+    """The runner must not be presented as the complete verification surface."""
+    content = _read(TESTING_DOC)
+
+    assert "./run_tests.sh" in content
+    assert (
+        "is not a complete verification surface" in content
+    ), "testing.md must state that ./run_tests.sh is not a complete verification surface"
+
+
+def test_testing_guide_links_compatibility_authority():
+    """Compatibility facts must be linked to their authority, never restated."""
+    content = _read(TESTING_DOC)
+
+    assert (
+        "ansible_collections/tomazb/acm_switchover/docs/compatibility.md" in content
+    ), "testing.md must link the compatibility authority"
+    assert not re.search(
+        r"ansible-core\s*==", content
+    ), "testing.md must not pin ansible-core versions; link the compatibility authority instead"

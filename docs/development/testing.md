@@ -4,12 +4,83 @@
 
 This document describes the testing strategy, test structure, and how to run tests for the ACM Switchover Automation project.
 
-The repository has four distinct verification surfaces:
+This document is the gate inventory for the repository. It defines every maintained
+verification surface, the exact command that runs it, and — as importantly — what each surface
+does not prove.
 
-- Root tests under `tests/`
-- Collection tests under `ansible_collections/tomazb/acm_switchover/tests/`
-- Release validation framework tests under `tests/release/`
-- On-demand real-cluster E2E tests under `tests/e2e/`
+`AGENTS.md` owns the policy for which gates a change must run; see its
+[Verification Matrix by Changed Surface](../../AGENTS.md#verification-matrix-by-changed-surface).
+This document owns the commands.
+
+### The nine verification surfaces
+
+| # | Surface | Nature | What it does not prove |
+| --- | --- | --- | --- |
+| 1 | Root Python and Bash tests | Local, fake-backed | Nothing about the collection, and nothing about live clusters |
+| 2 | Release-framework helpers (non-live) | Local, fake-backed | Not certification evidence |
+| 3 | Collection unit tests | Local | Nothing about playbook wiring or cross-role behaviour |
+| 4 | Collection integration tests | Local, fake-backed | Nothing about real cluster responses |
+| 5 | Collection scenario tests | Local, fake-backed | Nothing about live timing or partial failure |
+| 6 | Playbook syntax check | Local | Only that playbooks parse and resolve — no behaviour at all |
+| 7 | Collection archive build | Local | Only that the archive builds — not that it works |
+| 8 | On-demand E2E | Live, real hubs | Not certification evidence unless run under a release profile |
+| 9 | Controller-gated live release evidence | Live, certification-eligible | Bounded by the profile and controller decisions |
+
+Surfaces 1 through 7 are entirely local and fake-backed or static. None of them is live
+evidence. Fake, dry-run, static-fixture, and local-harness results never substitute for live
+certification evidence — see the
+[Release-Validation and Lab-Controller Authority Boundary](../../AGENTS.md#release-validation-and-lab-controller-authority-boundary).
+
+### Commands by surface
+
+Surfaces 3 through 7 take their commands from
+`.github/workflows/ansible-collection-foundation.yml`, which is ground truth. `PYTHONPATH=.` is
+part of each collection pytest command — without it, collection imports fail before any test
+runs.
+
+```bash
+# 1. Root Python and Bash tests
+python -m pytest tests/ --ignore=tests/release -v -m "not e2e"
+
+# 2. Release-framework helper tests (non-live)
+python -m pytest tests/release -q
+
+# 3. Collection unit tests
+PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q
+
+# 4. Collection integration tests
+PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/ -q
+
+# 5. Collection scenario tests
+PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/scenario/ -q
+
+# 6. Playbook syntax check
+export ANSIBLE_COLLECTIONS_PATH="$(pwd):${HOME}/.ansible/collections"
+for playbook in ansible_collections/tomazb/acm_switchover/playbooks/*.yml; do
+  ansible-playbook "${playbook}" --syntax-check
+done
+
+# 7. Collection archive build
+ansible-galaxy collection build --output-path /tmp/dist \
+  ansible_collections/tomazb/acm_switchover
+```
+
+Surfaces 8 and 9 are covered under [E2E Tests](#e2e-tests-on-demand) and
+[Release Validation Framework](#release-validation-framework) below.
+
+CI runs surfaces 3 through 7 across two `ansible-core` lanes: the declared floor and the newest
+tested series. The supported versions are defined by
+[the compatibility authority](../../ansible_collections/tomazb/acm_switchover/docs/compatibility.md)
+and are deliberately not restated here.
+
+### Three levels of confidence
+
+1. **Targeted development loop** — the single test or module you are changing. Fast, and proves
+   only what it covers.
+2. **Complete relevant gate set** — every surface your change invalidates, per the `AGENTS.md`
+   verification matrix. Complete this before terminal validation, so the frozen head is
+   validated once.
+3. **Exact-head hosted CI** — mandatory for merge readiness regardless of local results.
 
 ## Test Structure
 
@@ -18,7 +89,7 @@ tests/
 ├── __init__.py
 ├── test_utils.py             # Tests for lib/utils.py
 ├── test_kube_client.py       # Tests for lib/kube_client.py
-├── test_preflight.py         # Tests for modules/preflight.py
+├── test_preflight.py         # Tests for the modules/preflight/ package
 ├── test_backup_schedule.py   # Tests for modules/backup_schedule.py
 ├── test_primary_prep.py      # Tests for modules/primary_prep.py
 ├── test_decommission.py      # Tests for modules/decommission.py
@@ -42,6 +113,10 @@ tests/
 ```
 
 By default, this runs the root test lane, then the non-live release-framework helper tests under `tests/release/`, and excludes long-running E2E tests (marked `@pytest.mark.e2e`).
+
+`./run_tests.sh` covers surfaces 1 and 2 only. It never runs collection unit, integration,
+scenario, syntax, or build gates, so it is not a complete verification surface for any change
+that touches `ansible_collections/`.
 CI-equivalent quality gates (`black`, `isort`, `mypy`, and `bandit`) fail by default.
 For a local advisory-only quality pass, run `STRICT_QUALITY=0 ./run_tests.sh`.
 To include E2E tests on demand:
@@ -179,9 +254,14 @@ python -m pytest tests/e2e/test_e2e_switchover.py -v -m e2e \
   --e2e-output-dir ./e2e-results
 ```
 
-### Real-Cluster Validation (Example)
+### Historical observations
 
-Example real-cluster validation using the discovery + preflight scripts:
+The following is a recorded observation from a specific lab on a specific date. It is
+**not** current support evidence, not a compatibility claim, and not a guarantee about any
+other environment. Current supported versions are defined by
+[the compatibility authority](../../ansible_collections/tomazb/acm_switchover/docs/compatibility.md).
+
+Example real-cluster validation using the discovery and preflight scripts:
 
 ```bash
 ./scripts/discover-hub.sh --auto --run
@@ -231,27 +311,44 @@ pylint acm_switchover.py lib/ modules/
 
 ### Black (Formatting)
 
+Reproduce CI exactly. The path list below is copied from the `lint` job in
+`.github/workflows/ci-cd.yml` — do not substitute `.`, which walks `.venv/` and generated
+trees, and do not rely on an editor auto-format hook, which only touches files edited in your
+session.
+
 Check formatting:
 ```bash
-black --check --line-length 120 .
+black --check --line-length 120 --diff acm_switchover.py lib modules \
+  ansible_collections/tomazb/acm_switchover/plugins \
+  ansible_collections/tomazb/acm_switchover/tests tests
 ```
 
-Auto-format:
+Auto-format (same paths, without `--check --diff`):
 ```bash
-black --line-length 120 .
+black --line-length 120 acm_switchover.py lib modules \
+  ansible_collections/tomazb/acm_switchover/plugins \
+  ansible_collections/tomazb/acm_switchover/tests tests
 ```
 
 ### isort (Import Sorting)
 
 Check imports:
 ```bash
-isort --check-only --profile black --line-length 120 .
+isort --check-only --profile black --line-length 120 acm_switchover.py lib modules \
+  ansible_collections/tomazb/acm_switchover/plugins \
+  ansible_collections/tomazb/acm_switchover/tests tests
 ```
 
-Auto-sort:
+Auto-sort (same paths, without `--check-only`):
 ```bash
-isort --profile black --line-length 120 .
+isort --profile black --line-length 120 acm_switchover.py lib modules \
+  ansible_collections/tomazb/acm_switchover/plugins \
+  ansible_collections/tomazb/acm_switchover/tests tests
 ```
+
+CI does not currently format `check_rbac.py` or `show_state.py`. This documents what CI does,
+not an idealised superset: a scoped command that merely looks plausible fails differently from
+CI, which is worse than no command at all.
 
 ### MyPy (Type Checking)
 
@@ -383,13 +480,15 @@ def setUp(self):
 
 ### Dry-Run Testing
 
-Test against real clusters without making changes:
+Test against real clusters without making changes. The CLI is flag-only — there is no
+`switchover` subcommand:
 
 ```bash
-python acm_switchover.py switchover \
+python acm_switchover.py \
   --primary-context prod-hub \
   --secondary-context dr-hub \
-  --method passive-sync \
+  --method passive \
+  --old-hub-action secondary \
   --dry-run
 ```
 
@@ -398,12 +497,16 @@ python acm_switchover.py switchover \
 Run pre-flight checks only:
 
 ```bash
-python acm_switchover.py switchover \
+python acm_switchover.py \
   --primary-context prod-hub \
   --secondary-context dr-hub \
-  --method passive-sync \
+  --method passive \
+  --old-hub-action secondary \
   --validate-only
 ```
+
+Both modes prove that inputs validate and that the planned actions resolve. Neither is live
+evidence, and neither is certification evidence.
 
 ### Test Clusters
 
@@ -477,4 +580,4 @@ See [CONTRIBUTING.md](../../CONTRIBUTING.md) for details.
 
 ---
 
-**Last Updated**: November 18, 2025
+**Last Updated**: 2026-08-12
