@@ -1792,13 +1792,101 @@ COLLECTION_VERIFICATION_TOKENS = (
     "certification",
 )
 
+COMMANDS_BY_SURFACE_HEADING = "### Commands by surface"
+
+# Each numbered surface must carry its own runnable command inside its own segment of the
+# "Commands by surface" block. Whole-file substring checks cannot enforce that: the
+# "Folded into surface 3" subsection repeats the `.../tests/unit/` path, so deleting surface 3's
+# command outright still satisfies a file-wide search for that prefix. Likewise "certification"
+# occurs in prose throughout the document, so a file-wide search for it says nothing about
+# surface 9. Each value below is therefore the invocation itself, matched per segment.
+SURFACE_COMMANDS = {
+    "1": "python -m pytest tests/ --ignore=tests/release",
+    "2": "python -m pytest tests/release",
+    "3": "python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/",
+    "4": "python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/",
+    "5": "python -m pytest ansible_collections/tomazb/acm_switchover/tests/scenario/",
+    "6": "--syntax-check",
+    "7": "ansible-galaxy collection build",
+}
+
+# Surfaces 8 and 9 are documented in their own sections rather than in that block, so they are
+# scoped to those sections by heading. Surface 9's marker is the certification-mode invocation,
+# not the bare word "certification".
+SECTIONED_SURFACE_COMMANDS = {
+    "8": ("### E2E Tests (On Demand)", "python -m pytest tests/e2e/"),
+    "9": ("### Release Validation Framework", "--release-mode certification"),
+}
+
+_SURFACE_MARKER = re.compile(r"^# (\d+)\.\s", re.MULTILINE)
+_ANY_HEADING = re.compile(r"^#{2,4} ", re.MULTILINE)
+
+
+def _doc_section(content: str, heading: str) -> str:
+    """Return the text of `heading`'s section, up to the next heading of any level."""
+    start = content.find(heading)
+    assert start != -1, f"{TESTING_DOC} no longer contains the heading {heading!r}"
+
+    rest = content[start + len(heading) :]
+    following = _ANY_HEADING.search(rest)
+    return rest[: following.start()] if following else rest
+
+
+def _commands_by_surface_segments(content: str) -> dict:
+    """Split the "Commands by surface" bash block into one segment per numbered surface."""
+    section = _doc_section(content, COMMANDS_BY_SURFACE_HEADING)
+
+    fence = _BASH_FENCE.search(section)
+    assert fence, (
+        f"{TESTING_DOC} has no ```bash block under {COMMANDS_BY_SURFACE_HEADING!r}. This "
+        "guardrail must fail loudly rather than fall back to inspecting the whole file, which "
+        "is precisely the weakness it was written to remove."
+    )
+    block = fence.group(1)
+
+    markers = list(_SURFACE_MARKER.finditer(block))
+    assert markers, f"{TESTING_DOC}'s commands block carries no `# <n>.` surface markers"
+
+    segments = {}
+    for index, marker in enumerate(markers):
+        end = markers[index + 1].start() if index + 1 < len(markers) else len(block)
+        segments[marker.group(1)] = block[marker.start() : end]
+    return segments
+
 
 def test_testing_guide_covers_every_collection_verification_surface():
-    """The gate inventory must name every maintained verification surface separately."""
+    """The gate inventory must name every maintained verification surface separately.
+
+    Two assertions, deliberately: the file-wide tokens below stay as a coarse net, and each
+    surface is then checked inside its own command segment. Only the second can catch an entire
+    documented gate being deleted while some other part of the file keeps its vocabulary alive.
+    """
     content = _read(TESTING_DOC)
 
     for token in COLLECTION_VERIFICATION_TOKENS:
         assert token in content, f"testing.md must document the verification surface using {token}"
+
+    segments = _commands_by_surface_segments(content)
+
+    assert set(segments) == set(SURFACE_COMMANDS), (
+        f"{TESTING_DOC}'s commands block documents surfaces {sorted(segments)}, but this "
+        f"guardrail expects {sorted(SURFACE_COMMANDS)}. A surface was added or removed: update "
+        "SURFACE_COMMANDS deliberately rather than letting the inventory drift."
+    )
+
+    for number, command in SURFACE_COMMANDS.items():
+        assert command in segments[number], (
+            f"{TESTING_DOC} surface {number} no longer carries its own command {command!r} in "
+            "the 'Commands by surface' block. A surface marker without its command is not a "
+            "documented gate."
+        )
+
+    for number, (heading, command) in SECTIONED_SURFACE_COMMANDS.items():
+        section = _doc_section(content, heading)
+        assert command in section, (
+            f"{TESTING_DOC} surface {number} must document {command!r} inside its own "
+            f"{heading!r} section; an occurrence elsewhere in the file does not count."
+        )
 
 
 def test_testing_guide_states_run_tests_is_not_complete():
