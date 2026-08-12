@@ -68,6 +68,8 @@ python -m pytest tests/ --ignore=tests/release -v -m "not e2e"
 python -m pytest tests/release -q
 
 # 3. Collection unit tests
+# CI precedes this with a separate compatibility-contract step under an exported
+# ANSIBLE_COLLECTIONS_PATH — see "Folded into surface 3" below.
 PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q
 
 # 4. Collection integration tests
@@ -108,6 +110,26 @@ fi
 ansible-galaxy collection build --output-path /tmp/dist \
   ansible_collections/tomazb/acm_switchover
 ```
+
+#### Folded into surface 3: the resolved-dependency compatibility check
+
+`ansible-collection-foundation.yml` runs one further collection-pytest step, "Verify resolved
+dependency compatibility", *before* the unit sweep. It is not a tenth surface: it re-runs a
+single file that surface 3 already covers,
+`ansible_collections/tomazb/acm_switchover/tests/unit/test_compatibility_contract.py`. What
+makes it worth naming is the environment. It runs immediately after
+`ansible-galaxy collection install` and **with `ANSIBLE_COLLECTIONS_PATH` exported**, so the
+contract is checked against the dependencies the lane actually resolved. Surface 3's own
+invocation deliberately carries no export, which is why the same file is run twice:
+
+```bash
+export ANSIBLE_COLLECTIONS_PATH="$(pwd):${HOME}/.ansible/collections"
+PYTHONPATH=. python -m pytest \
+  ansible_collections/tomazb/acm_switchover/tests/unit/test_compatibility_contract.py -q
+```
+
+If you reproduce surface 3 without first running this step, a lane-specific dependency
+resolution failure is exactly what you will miss.
 
 Surfaces 8 and 9 are covered under [E2E Tests](#e2e-tests-on-demand) and
 [Release Validation Framework](#release-validation-framework) below.
@@ -328,7 +350,10 @@ Observed on 2026-01-28:
 
 - **lib/utils.py**: StateManager, Phase enum, helper functions
 - **lib/kube_client.py**: KubeClient initialization, CRUD operations, dry-run mode
-- **modules/preflight.py**: All validation checks
+- **modules/preflight/**: the validator package — `base_validator.py`, `backup_validators.py`,
+  `cluster_validators.py`, `namespace_validators.py`, `version_validators.py`, and `reporter.py`.
+  There is no `modules/preflight.py`; the coordinator that drives the package is
+  `modules/preflight_coordinator.py`
 
 ### Coverage Goals
 
@@ -342,21 +367,43 @@ Superpowers design/spec handoff.
 
 ## Code Quality Tools
 
+Every command in this section is copied from the invocation that actually runs it — the `lint`
+and `security` jobs in `.github/workflows/ci-cd.yml`, or `run_tests.sh` where the tool is
+local-only. A scoped command that merely looks plausible fails differently from CI, which is
+worse than no command at all.
+
 ### Flake8 (Style)
 
+CI runs flake8 **twice**, and only the first invocation can fail the build:
+
 ```bash
-flake8 acm_switchover.py lib/ modules/
+# Blocking: syntax errors and undefined names only.
+flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+# Advisory: --exit-zero means this pass reports style findings and always returns 0.
+flake8 . --count --exit-zero --max-complexity=15 --max-line-length=120 --statistics
 ```
 
-Configuration in `setup.cfg`:
-- Max line length: 120
-- Complexity: 15
+So flake8 proves only that the tree has no syntax errors and no undefined names. The
+120-character maximum and the complexity ceiling of 15 are reported, never enforced.
+
+`setup.cfg` also declares `max-line-length = 120` and `max-complexity = 15`, but it is **not**
+the governing authority and must not be cited as one. CI passes both numbers on the command
+line, and passes them to a `--exit-zero` invocation that cannot fail. The value that can break a
+build is the one handed to `black --line-length` and `isort --line-length` below — the same
+authority [`CONTRIBUTING.md`](../../CONTRIBUTING.md) names.
+
+Unlike the black and isort commands below, CI's flake8 does target the repository root, so a
+local run walks `.venv/` and any other generated tree in your checkout.
 
 ### Pylint (Analysis)
 
 ```bash
-pylint acm_switchover.py lib/ modules/
+pylint acm_switchover.py lib/ modules/ --exit-zero --max-line-length=120 \
+  --disable=C0103,C0114,C0115,C0116
 ```
+
+`--exit-zero` again: pylint cannot fail CI. `run_tests.sh` runs the identical command through
+its advisory helper, so it cannot fail the local runner either.
 
 ### Black (Formatting)
 
@@ -401,29 +448,53 @@ CI, which is worse than no command at all.
 
 ### MyPy (Type Checking)
 
+Copied from the `lint` job. The collection plugins and collection tests are part of the checked
+set, and `--explicit-package-bases` and `--no-strict-optional` are both load-bearing — dropping
+either changes what mypy reports:
+
 ```bash
-mypy acm_switchover.py lib/ modules/ --ignore-missing-imports
+mypy --explicit-package-bases acm_switchover.py lib/ modules/ \
+  ansible_collections/tomazb/acm_switchover/plugins \
+  ansible_collections/tomazb/acm_switchover/tests \
+  --ignore-missing-imports --no-strict-optional
 ```
+
+Root `tests/` is deliberately absent: CI does not type-check it.
 
 ## Security Testing
 
 ### Bandit (Static Security Analysis)
 
 ```bash
-bandit --ini .bandit -ll
+bandit --ini .bandit -f json -o bandit-report.json || true
+bandit --ini .bandit -f txt
 ```
+
+The second invocation is the gate; the first only produces the uploaded JSON report and is
+neutralised with `|| true`.
+
+Do **not** substitute `bandit --ini .bandit -ll`, which this guide previously documented. `-ll`
+filters the report to medium-and-above severity, so it is *weaker* than the CI gate: a
+low-severity finding passes locally and then fails CI. Run the unfiltered `-f txt` form above.
 
 ### Safety (Dependency Vulnerabilities)
 
 ```bash
-safety check
+safety scan --full-report
 ```
+
+`safety check` is the removed legacy verb; `scan` is what CI uses. Note that CI appends
+`|| true` to both of its `safety scan` invocations in the `security` job, so safety reports
+vulnerabilities but cannot fail the build. Running it locally is how you actually see them.
 
 ### Pip-Audit (Supply Chain)
 
 ```bash
-pip-audit --desc
+pip-audit
 ```
+
+pip-audit is local-only: it runs in `run_tests.sh`, through the advisory helper, and does not
+appear in any workflow. It is not a CI gate.
 
 ## CI/CD Integration
 
@@ -437,7 +508,11 @@ Runs on every push and pull request:
 - ✅ Security scanning
 - ✅ Syntax validation
 - ✅ Documentation checks
-- ✅ Integration tests (dry-run)
+- ✅ `integration-test` job — smoke checks only, despite the job's "Integration Tests (Dry-Run)"
+  display name. It runs CLI `--help` invocations, prints the version imported from `lib`, and
+  asserts that a freshly saved state file contains its expected top-level keys. No dry-run
+  switchover is executed and no cluster is contacted, so it proves the CLI starts and the state
+  file has the right shape — nothing about switchover behaviour
 - ✅ Container build test
 
 #### Security Workflow (`.github/workflows/security.yml`)
