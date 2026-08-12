@@ -171,7 +171,7 @@ review churn.
 | Python preflight checks | `modules/preflight/` plus `modules/preflight_coordinator.py` and `modules/preflight/reporter.py` |
 | Python phase behaviour | The owning phase module under `modules/` |
 | Python flow, dispatch, and completed/failed-state behaviour | `lib/workflow.py` and `lib/operation_runners.py` |
-| Cross-phase run facts | `lib/run_record.py` (the `RunRecord` facade) — never raw state config keys |
+| Cross-phase run facts | `lib/run_record.py` (the `RunRecord` facade) — never the underlying persisted key literals |
 | Ansible behaviour | The owning role, module, `module_utils`, or action plugin |
 | Release checks | `tests/release/checks/` and the framework contracts |
 | Lab-controller safety | `tests/release/lab_controller/` |
