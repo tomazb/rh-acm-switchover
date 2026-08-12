@@ -1,7 +1,6 @@
 """Regression checks for maintained support documentation."""
 
 import ast
-import configparser
 import re
 from pathlib import Path
 
@@ -102,25 +101,53 @@ def test_contributing_matches_current_dev_workflow():
         assert token in content, f"Missing {token} from CONTRIBUTING.md"
 
 
-def _flake8_max_line_length() -> str:
-    """Read the flake8 `max-line-length` from setup.cfg — the CI-enforced source of truth."""
-    config = configparser.ConfigParser()
-    config.read(REPO_ROOT / "setup.cfg")
-    return config.get("flake8", "max-line-length").strip()
+CI_WORKFLOW = ".github/workflows/ci-cd.yml"
+
+# Matches the governing formatter invocations only: a line whose command is black or isort and
+# which passes --line-length explicitly. pylint/flake8 `--max-line-length` is deliberately not
+# matched (see _ci_governing_line_length).
+_FORMATTER_LINE_LENGTH = re.compile(r"^\s*(?:black|isort)\b[^\n]*?--line-length[ =](\d+)", re.MULTILINE)
+
+
+def _ci_governing_line_length() -> str:
+    """Read the line length CI actually enforces, from its black/isort invocations.
+
+    `setup.cfg` is deliberately NOT the source of truth. CI never consults it: it passes
+    `--max-line-length` to flake8 explicitly, and runs that flake8 pass with `--exit-zero`, so
+    flake8 cannot fail the build at all. The value that can break a build is the one handed to
+    `black --check` and `isort --check-only`.
+
+    A parse failure raises instead of falling back to a default. A silent fallback would
+    reproduce precisely the defect class this guardrail exists to catch: a documented number
+    that no longer tracks the value CI enforces.
+    """
+    workflow = _read(CI_WORKFLOW)
+    values = set(_FORMATTER_LINE_LENGTH.findall(workflow))
+
+    assert values, (
+        f"could not parse a --line-length from any black/isort invocation in {CI_WORKFLOW}; "
+        "this guardrail must fail loudly rather than assume a default"
+    )
+    assert len(values) == 1, (
+        f"{CI_WORKFLOW} passes disagreeing --line-length values to black/isort: {sorted(values)}. "
+        "CONTRIBUTING.md cannot document one maximum until CI agrees with itself."
+    )
+    return values.pop()
 
 
 def test_contributing_line_length_matches_ci():
-    """Contributor line-length guidance must match the configured flake8 CI policy.
+    """Contributor line-length guidance must match the line length CI enforces.
 
-    The maximum is read from `setup.cfg` rather than hard-coded, so this test actually breaks
-    if CI's configured line length ever moves and CONTRIBUTING.md is not updated to match.
+    The maximum is parsed from the workflow's black/isort invocations rather than hard-coded or
+    read from `setup.cfg`, so this test actually breaks if CI's enforced line length moves and
+    CONTRIBUTING.md is not updated to match.
     """
     content = _read(CONTRIBUTING_DOC)
-    max_line_length = _flake8_max_line_length()
+    max_line_length = _ci_governing_line_length()
 
     assert re.search(rf"[Mm]aximum line length:\s*{re.escape(max_line_length)}\b", content), (
-        f"CONTRIBUTING.md must state the configured {max_line_length}-character maximum line "
-        "length (setup.cfg [flake8] max-line-length)"
+        f"CONTRIBUTING.md must state the {max_line_length}-character maximum line length that "
+        f"CI enforces via the black/isort --line-length flags in {CI_WORKFLOW}"
     )
 
     # "100 characters" is the specific obsolete phrasing this guardrail was written to catch.

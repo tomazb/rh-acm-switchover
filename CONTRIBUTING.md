@@ -34,8 +34,11 @@ The repository defaults to `.venv`, and `./run_tests.sh` will reuse an active vi
 - Use meaningful variable and function names
 - Add docstrings to all functions and classes
 - Keep functions focused and single-purpose
-- Maximum line length: 120 characters — this matches CI. See `setup.cfg` and the `black`
-  invocation in `.github/workflows/ci-cd.yml`.
+- Maximum line length: 120 characters — this is the value CI actually enforces. The authority is
+  the `black --line-length` and `isort --line-length` invocations in
+  `.github/workflows/ci-cd.yml`, which pass the number explicitly. `setup.cfg` is not the
+  authority: CI also passes `--max-line-length` to flake8 explicitly, and runs that flake8 pass
+  with `--exit-zero`, so flake8 cannot fail the build regardless of what `setup.cfg` says.
 
 **Example:**
 ```python
@@ -85,7 +88,8 @@ review churn.
 
 | Change | Owner |
 | --- | --- |
-| CLI grammar, required arguments, and mode combinations | `acm_switchover.py` argument parsing (`parse_args`) and its conditionally-required-argument checks (`_missing_parse_required_args`, `acm_switchover.py:72,85-89`) |
+| CLI grammar: flag names, `choices`, mutually exclusive groups, and the conditionally-required-argument checks | `acm_switchover.py` argument parsing (`parse_args`) and `_missing_parse_required_args` (`acm_switchover.py:72,85-89`) |
+| Cross-mode rules: restore-only conflicts, activation-method combinations, Argo CD flag conflicts, setup combinations, and `--non-interactive`/observability guards | `InputValidator.validate_all_cli_args` (`lib/validation.py:341-441`) — most mode-combination policy lives here, not in `parse_args` |
 | Input value validation | `lib/validation.py` |
 | Filesystem path safety and artifact-path policy | `lib/path_safety.py` (`lib/validation.py:253` delegates to it; it owns path syntax, allowed-root enforcement, and symlink-escape rejection) |
 | Python preflight checks | `modules/preflight/` plus `modules/preflight_coordinator.py` and `modules/preflight/reporter.py` |
@@ -192,10 +196,18 @@ State capture and restore around a dry-run is orchestration, not a `KubeClient` 
 owned by `StateManager` (`lib/utils.py:506`).
 
 A dry-run or check-mode pass proves that the planned actions parse and that validation accepts
-the inputs. It skips live proofs — a dry-run switchover can still log a simulated completion
-message and report success without ever exercising live behaviour
-(`lib/operation_runners.py:182`). It is not evidence of live behaviour and never substitutes for
-certification evidence.
+the inputs. When you supply real contexts it does more than that: `lib/runtime_bootstrap.py`
+builds real `KubeClient` instances, hub identities are read from the live clusters, and the
+preflight coordinator performs live discovery (namespace probes, RBAC permission checks, version
+detection). What it does not do is mutate anything — mutations return `KubeClient`'s synthetic
+values — and a dry-run switchover still logs a simulated completion message and reports success
+without exercising live mutation behaviour (`lib/operation_runners.py:182`). It is not evidence
+of live mutating behaviour and never substitutes for certification evidence.
+
+`--validate-only` is narrower still: it returns as soon as preflight completes
+(`lib/workflow.py` `run_validate_only_preflight`, reached from `lib/operation_runners.py:136-137`).
+It proves the inputs and the preflight checks, and proves nothing about whether the later planned
+actions resolve, because those phases are never entered.
 
 ### Logging
 

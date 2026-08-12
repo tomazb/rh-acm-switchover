@@ -171,13 +171,27 @@ The architecture distinguishes validation failures, recoverable API issues, and 
 
 The entrypoint owns:
 
-- CLI argument parsing
+- CLI argument parsing and cross-argument validation entry (`parse_args`, `validate_args`)
 - logger setup
 - runtime bootstrap (client, state-file, and state-directory resolution)
+- construction of the runner hook dataclasses (`_build_switchover_runner_hooks`,
+  `_build_restore_only_runner_hooks`, `_build_operation_dispatch_hooks`, `acm_switchover.py:390`)
+- the dry-run snapshot/restore wrappers around each operation (`run_switchover`,
+  `run_restore_only`, `acm_switchover.py:424`)
+- the concrete phase adapters the hooks point at — `_run_phase_preflight`,
+  `_run_phase_primary_prep`, `_run_phase_activation`, `_run_phase_post_activation`,
+  `_run_phase_finalization` (`acm_switchover.py:616,773`)
+- the setup-mode branch, which is taken before state and clients are created
+  (`acm_switchover.py:1231`)
 - dispatch into the operation runners
 
-It is deliberately thin. Cross-mode branching and phase orchestration were extracted into
-`lib/operation_runners.py` and `lib/workflow.py`; phase modules own resource-specific behaviour.
+What was genuinely extracted is the *ordered phase flow* and the completed/failed-state entry
+decisions, now in `lib/workflow.py`, and operation dispatch, now in `lib/operation_runners.py`.
+The three hook dataclasses are a real seam: the runners can be exercised without a live client.
+The entrypoint is not, however, reduced to parsing and dispatch — it still supplies every phase
+adapter behind those hooks and owns dry-run state rollback. Resume-only branching is not in the
+entrypoint either; `lib/cli_outcomes.py:194` chooses between the Argo CD resume-only path and
+`execute_operation`. Phase modules own resource-specific behaviour.
 
 ### `lib/operation_runners.py`
 
@@ -237,10 +251,16 @@ and prevents a stale or invalid phase from falling through to `COMPLETED`.
 phase recorded for later phases or reports. It exposes only named, typed operations
 (`HubFacts`, `ManagedClusterExpectation`, `StepRecord`, `ErrorRecord`, `RunSummary`).
 
-The split matters: the durable file behind the run belongs to `StateManager`, but the key
-vocabulary belongs to `RunRecord` alone. Reading or writing the underlying persisted key literals
-outside the facade is a contract violation — see the Run record entry in
-[`CONTEXT.md`](../../CONTEXT.md).
+The split matters: the durable file behind the run belongs to `StateManager`, but the vocabulary
+of the cross-phase fact keys belongs to `RunRecord` alone. Reaching those `RunRecord`-owned
+persisted keys directly, outside the facade, is a contract violation — see the Run record entry
+in [`CONTEXT.md`](../../CONTEXT.md).
+
+The prohibition is scoped to those keys, not to the whole durable file. The pause-register
+modules (`lib/argocd_register.py`, `lib/argocd_register_store.py`) hold a documented allowance
+(issue #208) to reach their own persisted pause-register keys through `StateManager`'s private
+storage accessors, which `lib/utils.py:570` records explicitly. Those keys are the pause
+register's, not `RunRecord`'s, so no facade is bypassed.
 
 ### `lib/kube_client.py`
 
