@@ -2034,7 +2034,23 @@ OBSOLETE_CLI_PATTERNS = (
     (re.compile(r"(?<![-\w])passive-sync"), "the obsolete `passive-sync` method value"),
 )
 
-BARE_DOT_FORMATTER = re.compile(r"^\s*(?:\$\s*)?(?:black|isort)\b[^\n]*\s\.\s*$", re.MULTILINE)
+# A repo-root target anywhere in a black/isort command, not merely as the line's final token.
+# The previous end-of-line anchor missed both `black --check . --line-length 120` and a `.`
+# carried on a backslash continuation, which are repo-wide runs just the same.
+#
+# The real documented commands survive this. They are anchored at the start of a line, so prose
+# that merely mentions black or isort mid-sentence is out of scope; and within them `.` occurs
+# only inside filenames such as `acm_switchover.py`, never preceded by whitespace, so the
+# lookbehind never fires on them.
+BARE_DOT_FORMATTER = re.compile(
+    r"^[ \t]*(?:\$[ \t]*)?(?:black|isort)\b[^\n]*?(?<=[ \t])\.(?:/)?(?=[ \t]|$)",
+    re.MULTILINE,
+)
+
+# Folded before matching so a continuation line carrying the `.` is still read as part of its
+# command. CI's real multi-line commands are unaffected: every one of their continuations ends
+# in an explicit path.
+_LINE_CONTINUATION = re.compile(r"\\\n[ \t]*")
 
 FORMATTER_GUIDANCE_DOCS = (CONTRIBUTING_DOC, TESTING_DOC)
 
@@ -2063,15 +2079,22 @@ def test_active_docs_avoid_obsolete_cli_shapes():
 def test_formatter_guidance_avoids_repo_wide_traversal():
     """Documented formatter commands must not target the repository root.
 
+    Backslash continuations are folded first, so a `.` split onto a continuation line is caught
+    as part of the command it belongs to rather than read as a line of its own.
+
     As above, the counter exists so that emptying ``FORMATTER_GUIDANCE_DOCS`` fails this test
     instead of silently retiring it.
     """
     inspected = 0
     for doc in FORMATTER_GUIDANCE_DOCS:
-        content = _read(doc)
+        content = _LINE_CONTINUATION.sub(" ", _read(doc))
         inspected += 1
         match = BARE_DOT_FORMATTER.search(content)
-        assert match is None, f"{doc} documents repo-wide formatting that can walk .venv/: {match.group(0).strip()!r}"
+        assert match is None, (
+            f"{doc} documents repo-wide formatting, which walks generated trees black and isort "
+            f"do not exclude by default (`completions/`, `.claude/worktrees/`, `graphify-out/`, "
+            f"`review/`): {match.group(0).strip()!r}"
+        )
 
     assert inspected, (
         "no document was inspected; this guardrail must fail loudly rather than pass vacuously "

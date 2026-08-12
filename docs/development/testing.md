@@ -419,9 +419,16 @@ its advisory helper, so it cannot fail the local runner either.
 ### Black (Formatting)
 
 Reproduce CI exactly. The path list below is copied from the `lint` job in
-`.github/workflows/ci-cd.yml` — do not substitute `.`, which walks `.venv/` and generated
-trees, and do not rely on an editor auto-format hook, which only touches files edited in your
-session.
+`.github/workflows/ci-cd.yml`. Do not substitute `.`, and do not rely on an editor auto-format
+hook, which only touches files edited in your session.
+
+Substituting `.` is prohibited by [`AGENTS.md`](../../AGENTS.md), which is the authority here.
+The mechanical reason is narrower than it is sometimes stated: black's built-in default excludes
+already cover `.venv/`, `venv/`, `build/`, `dist/`, and the `*_cache` directories, and
+`setup.cfg`'s `[isort] skip` covers a similar set for isort. What neither excludes is this
+repository's other generated and vendored trees — `completions/` (a protected path),
+`.claude/worktrees/` (entire nested checkouts), `graphify-out/`, `htmlcov/`, and `review/`.
+Those are what a repo-root run reformats, and `completions/` alone is reason enough.
 
 Check formatting:
 ```bash
