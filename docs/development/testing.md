@@ -494,9 +494,19 @@ low-severity finding passes locally and then fails CI. Run the unfiltered `-f tx
 safety scan --full-report
 ```
 
-`safety check` is the removed legacy verb; `scan` is what CI uses. Note that CI appends
-`|| true` to both of its `safety scan` invocations in the `security` job, so safety reports
-vulnerabilities but cannot fail the build. Running it locally is how you actually see them.
+`safety check` is the deprecated legacy verb, not a removed one — Safety 3.8.0 still ships it,
+labelled `[deprecated]` and "unsupported beyond 1 May 2024". Use `scan`, which is what the
+workflows invoke.
+
+**Treat Safety as an unverified gate, and install it yourself.** `safety` is declared in neither
+`requirements.txt` nor `requirements-dev.txt`, and both jobs that invoke it — the `security` job
+in `.github/workflows/ci-cd.yml:175-178` and the `dependency-check` job in
+`.github/workflows/security.yml:36-41` — install exactly those two files and nothing else. Every
+one of their four `safety scan` invocations carries `|| true`, so a `command not found` exits 0
+and is indistinguishable from a clean scan. On the evidence in the repository, that step most
+likely performs no scan at all in CI; it certainly cannot fail a job either way. Do not read a
+green `security` job as evidence that dependencies were scanned. A local
+`pip install safety && safety scan --full-report` is the only run whose result you can trust.
 
 ### Pip-Audit (Supply Chain)
 
@@ -504,8 +514,19 @@ vulnerabilities but cannot fail the build. Running it locally is how you actuall
 pip-audit
 ```
 
-pip-audit is local-only: it runs in `run_tests.sh`, through the advisory helper, and does not
-appear in any workflow. It is not a CI gate.
+Unlike Safety, pip-audit is declared (`requirements-dev.txt:21`), so it does install and does
+run. It runs in two places, and neither can fail:
+
+- **Locally**, `run_tests.sh:152` invokes bare `pip-audit` through `run_advisory_check`, which
+  prints findings and returns 0 regardless.
+- **In CI**, the `dependency-check` job of `.github/workflows/security.yml:43-47` runs it twice:
+  `pip-audit --desc --format json --output pip-audit-report.json || true` to produce the
+  uploaded artifact, then a bare `pip-audit --desc` for the log. The second invocation has no
+  `|| true`, so it *can* exit non-zero — but the step carries `continue-on-error: true`, which
+  keeps that non-zero exit from failing the job.
+
+So pip-audit is reported in CI and enforced nowhere. Read the job log or the
+`pip-audit-report.json` artifact; a passing job proves nothing about findings.
 
 ## CI/CD Integration
 
