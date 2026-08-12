@@ -1834,3 +1834,42 @@ def test_architecture_links_authorities_without_restating_status():
     assert not re.search(
         r"Phase 9[A-Z]?\s+(is|remains|has|was)\b", content
     ), "architecture.md must not restate Phase 9 status; the issue tracker owns it"
+
+
+def _run_record_avoid_terms():
+    """Extract the CONTEXT.md `_Avoid_` terms for the Run record concept (CONTEXT.md:21).
+
+    Reads the terms from CONTEXT.md itself, under the `**Run record**:` entry, so this test
+    tracks the authority instead of duplicating its vocabulary. If CONTEXT.md's Run record
+    entry or its `_Avoid_` line goes missing, the extraction fails loudly rather than silently
+    checking nothing.
+    """
+    context = _read("CONTEXT.md")
+    match = re.search(r"\*\*Run record\*\*:.*?^_Avoid_:\s*(.+)$", context, re.DOTALL | re.MULTILINE)
+    assert match, "CONTEXT.md must define an _Avoid_ line under the Run record entry (see CONTEXT.md:21)"
+
+    avoid_line = re.sub(r"\([^)]*\)\s*$", "", match.group(1)).strip()
+
+    terms = []
+    for chunk in avoid_line.split(","):
+        chunk = chunk.strip()
+        if "/" in chunk:
+            terms.extend(part.strip() for part in chunk.split("/") if part.strip())
+        elif chunk:
+            terms.append(chunk)
+    return terms
+
+
+def test_contributor_docs_avoid_run_record_config_vocabulary():
+    """Contributor docs must not use the config-key wording CONTEXT.md bans for Run record."""
+    terms = _run_record_avoid_terms()
+    assert terms, "CONTEXT.md Run record _Avoid_ line must yield at least one banned term"
+
+    for doc in CONTRIBUTOR_DOCS:
+        content_lower = _read(doc).lower()
+        for term in terms:
+            assert term.lower() not in content_lower, (
+                f"{doc} uses the term '{term}', which CONTEXT.md's Run record entry "
+                "(CONTEXT.md:21, under _Avoid_) forbids outside the RunRecord facade; "
+                "reword to RunRecord/persisted-key vocabulary instead"
+            )

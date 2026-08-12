@@ -238,8 +238,8 @@ phase recorded for later phases or reports. It exposes only named, typed operati
 (`HubFacts`, `ManagedClusterExpectation`, `StepRecord`, `ErrorRecord`, `RunSummary`).
 
 The split matters: the durable file behind the run belongs to `StateManager`, but the key
-vocabulary belongs to `RunRecord` alone. Reading or writing raw state config keys outside the
-facade is a contract violation — see the Run record entry in
+vocabulary belongs to `RunRecord` alone. Reading or writing the underlying persisted key literals
+outside the facade is a contract violation — see the Run record entry in
 [`CONTEXT.md`](../../CONTEXT.md).
 
 ### `lib/kube_client.py`
@@ -414,7 +414,7 @@ Important state categories:
 - `completed_steps`
 - `hub_identities` — per-role `{context, cluster_uid}` recorded from each hub's `kube-system` namespace UID; resume re-reads live UIDs and fails closed before mutation if a recorded UID no longer matches the cluster behind the same context name, if hub identities are missing for an in-progress switchover, or if the live UID is unreadable. Operators must use `--reset-state` (different cluster on purpose) or `--force` (legacy state, after manual verification) to recover.
 - detected run facts such as ACM version and observability presence, read and written through
-  the `RunRecord` facade (`lib/run_record.py`) rather than as raw config keys
+  the `RunRecord` facade (`lib/run_record.py`) rather than as raw persisted keys
 - saved resources needed for version-specific restore/unpause behavior
 - Argo CD pause metadata such as `argocd_run_id` and `argocd_paused_apps`
 - error history
