@@ -1960,3 +1960,76 @@ def test_formatter_guidance_avoids_repo_wide_traversal():
         content = _read(doc)
         match = BARE_DOT_FORMATTER.search(content)
         assert match is None, f"{doc} documents repo-wide formatting that can walk .venv/: {match.group(0).strip()!r}"
+
+
+_BASH_FENCE = re.compile(r"^```bash\n(.*?)^```", re.MULTILINE | re.DOTALL)
+_SHELL_LOOP = re.compile(r"^[ \t]*for\s+\w+\s+in\s+.+?;\s*do\s*$(.*?)^[ \t]*done\s*$", re.MULTILINE | re.DOTALL)
+# A real pipe, not the `||` operator.
+_REAL_PIPE = re.compile(r"(?<!\|)\|(?!\|)")
+
+
+def test_documented_verification_loops_aggregate_failures():
+    """A documented loop over verification commands must not swallow an early failure.
+
+    A bare ``for f in ...; do cmd "$f"; done`` exits with the status of the LAST iteration only.
+    A failing playbook followed by a passing one therefore returns 0, and the documented gate
+    reports success while a real defect sits in the log. CI does not make that mistake; the
+    documentation must not either.
+
+    This asserts the *meaning* rather than any particular prose or variable name. Each loop must
+    either:
+
+    * fail immediately inside the loop (``|| exit 1`` / ``|| return 1``), or
+    * accumulate a status flag that is initialised before the loop and consulted after it in a
+      branch that exits non-zero.
+
+    Additionally, a loop whose command is piped (for example through ``tee`` into a log) must be
+    preceded by ``set -o pipefail`` in the same block: without it, ``|| flag=1`` observes the
+    exit status of the last stage of the pipeline instead of the command being verified, and the
+    aggregation is decorative.
+
+    The non-empty guard is deliberate. If no documented loop can be found at all, this test
+    FAILS rather than passing vacuously — a guardrail that quietly inspects nothing is how the
+    defect it guards against comes back.
+    """
+    content = _read(TESTING_DOC)
+
+    inspected = 0
+    for block in _BASH_FENCE.findall(content):
+        for match in _SHELL_LOOP.finditer(block):
+            inspected += 1
+            head, body, tail = block[: match.start()], match.group(1), block[match.end() :]
+
+            fails_inside = "|| exit 1" in body or "|| return 1" in body
+
+            aggregated = False
+            accumulator = re.search(r"\|\|\s*(\w+)=1\b", body)
+            if accumulator:
+                name = re.escape(accumulator.group(1))
+                initialised = re.search(rf"^[ \t]*{name}=0\b", head, re.MULTILINE)
+                acted_on = re.search(rf"\$\{{?{name}\b.*?\bexit\s+1\b", tail, re.DOTALL)
+                aggregated = bool(initialised) and bool(acted_on)
+
+            assert fails_inside or aggregated, (
+                f"{TESTING_DOC} documents a loop that exits with only the last iteration's "
+                f"status, so an early failure is silently swallowed:\n{match.group(0).strip()}\n"
+                "Fail inside the loop, or accumulate a flag initialised before the loop and "
+                "exit non-zero on it afterwards, as CI does."
+            )
+
+            if _REAL_PIPE.search(body):
+                # Anchored to the start of a line so a prose comment *mentioning* pipefail
+                # cannot satisfy the check — only an actual command can.
+                assert re.search(r"^[ \t]*set -o pipefail\b", head, re.MULTILINE), (
+                    f"{TESTING_DOC} documents a loop whose command is piped, without "
+                    "`set -o pipefail` earlier in the same block. The failure check then "
+                    "observes the last stage of the pipe (for example `tee`), which almost "
+                    f"always succeeds, so the aggregation cannot fire:\n{match.group(0).strip()}"
+                )
+
+    assert inspected, (
+        f"no shell loop was found in any ```bash block of {TESTING_DOC}. This guardrail exists "
+        "to keep documented multi-command verification surfaces from swallowing early failures; "
+        "if the loop was replaced, re-point this test at whatever replaced it rather than "
+        "leaving it inspecting nothing."
+    )
