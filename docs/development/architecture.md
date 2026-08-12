@@ -1,7 +1,6 @@
 # ACM Switchover - Architecture & Design
 
-**Version**: 1.6.3  
-**Last Updated**: 2026-04-10
+**Last Updated**: 2026-08-12
 
 ## Overview
 
@@ -13,7 +12,7 @@ The codebase also includes shell helpers for discovery, validation, RBAC bootstr
 
 ```text
 rh-acm-switchover/
-├── acm_switchover.py              # Main CLI entrypoint and phase orchestrator
+├── acm_switchover.py              # Main CLI entrypoint; dispatches to operation runners
 ├── check_rbac.py                  # RBAC validation CLI
 ├── show_state.py                  # State file inspection helper
 ├── run_tests.sh                   # Test wrapper
@@ -173,14 +172,36 @@ The architecture distinguishes validation failures, recoverable API issues, and 
 The entrypoint owns:
 
 - CLI argument parsing
-- Cross-mode branching
 - logger setup
-- state initialization
-- primary and secondary `KubeClient` construction
-- phase orchestration
-- final GitOps report emission
+- runtime bootstrap (client, state-file, and state-directory resolution)
+- dispatch into the operation runners
 
-It is intentionally thin on resource-specific logic; phase modules own most workflow behavior.
+It is deliberately thin. Cross-mode branching and phase orchestration were extracted into
+`lib/operation_runners.py` and `lib/workflow.py`; phase modules own resource-specific behaviour.
+
+### `lib/operation_runners.py`
+
+Owns operation dispatch and the two runner implementations:
+
+- `execute_operation` — the shared dispatch path
+- `run_switchover_impl` — the standard switchover operation
+- `run_restore_only_impl` — the single-hub restore-only operation
+
+The seam between dispatch and each operation is a set of hook dataclasses —
+`OperationDispatchHooks`, `SwitchoverRunnerHooks`, and `RestoreOnlyRunnerHooks` — so the runners
+can be exercised without a live client.
+
+### `lib/workflow.py`
+
+Owns phase-flow execution and state-driven entry decisions:
+
+- `run_phase_flow` — drives the ordered phase handlers
+- `handle_completed_state` — handles reruns against a recently completed state
+- `handle_failed_state` — prepares a failed state for retry, or exits when the retry phase is unknown
+- `run_validate_only_preflight` — the validate-only path
+
+`CompletedStateConfig`, `FailedStateConfig`, and `CompletionLogConfig` carry the parameters for
+these decisions, keeping the banners and exit behaviour consistent across operations.
 
 ### `lib/utils.py`
 
@@ -192,23 +213,34 @@ Provides the operational scaffolding:
 - logging setup
 - version helpers and utility functions
 
-`StateManager` is the backbone for resumability. It persists:
+`StateManager` is the backbone for resumability. It owns the durable file and persists:
 
 - current phase
 - completed steps
-- config discovered during execution
+- cross-phase run facts, reached only through the `RunRecord` facade (see below)
 - Argo CD pause metadata
 - error history
 
 Critical checkpoints call `flush_state()`. Non-critical changes call `save_state()`.
 Dry-run orchestration captures and restores a full `StateManager` snapshot after the run; this is separate from
-validate-only runtime checkpoints, which intentionally preserve discovered config while restoring phase and error
+validate-only runtime checkpoints, which intentionally preserve discovered run facts while restoring phase and error
 state.
 
 The main switchover and restore-only phase loops assert the expected durable phase
 after each handler that returns success. This keeps resume and completion
 criteria tied to `StateManager.current_phase`, not just a handler return value,
 and prevents a stale or invalid phase from falling through to `COMPLETED`.
+
+### `lib/run_record.py`
+
+`RunRecord` is the facade for cross-phase run facts — what preflight discovered, and what each
+phase recorded for later phases or reports. It exposes only named, typed operations
+(`HubFacts`, `ManagedClusterExpectation`, `StepRecord`, `ErrorRecord`, `RunSummary`).
+
+The split matters: the durable file behind the run belongs to `StateManager`, but the key
+vocabulary belongs to `RunRecord` alone. Reading or writing raw state config keys outside the
+facade is a contract violation — see the Run record entry in
+[`CONTEXT.md`](../../CONTEXT.md).
 
 ### `lib/kube_client.py`
 
@@ -381,7 +413,8 @@ Important state categories:
 - `current_phase`
 - `completed_steps`
 - `hub_identities` — per-role `{context, cluster_uid}` recorded from each hub's `kube-system` namespace UID; resume re-reads live UIDs and fails closed before mutation if a recorded UID no longer matches the cluster behind the same context name, if hub identities are missing for an in-progress switchover, or if the live UID is unreadable. Operators must use `--reset-state` (different cluster on purpose) or `--force` (legacy state, after manual verification) to recover.
-- detected config such as ACM version and observability presence
+- detected run facts such as ACM version and observability presence, read and written through
+  the `RunRecord` facade (`lib/run_record.py`) rather than as raw config keys
 - saved resources needed for version-specific restore/unpause behavior
 - Argo CD pause metadata such as `argocd_run_id` and `argocd_paused_apps`
 - error history
@@ -442,6 +475,20 @@ Important test themes include:
 - Argo CD pause/resume and GitOps reporting
 - CLI validation rules
 - script integration
+
+## Release Validation and Lab-Controller Boundary
+
+Release validation lives under `tests/release/`. The live lab controller is a separate
+authority with its own safety invariants. This document does not restate either — it points at
+the owners, because copied invariants and copied status both go stale silently.
+
+- Policy and durable invariants:
+  [Release-Validation and Lab-Controller Authority Boundary](../../AGENTS.md#release-validation-and-lab-controller-authority-boundary)
+- Framework contract: [Release validation framework](release-validation-framework.md)
+- Controller design: [Lab role controller spec](lab-role-controller-spec.md)
+- Non-live orchestration guidance: [Lab role controller agent instructions](lab-role-controller-agent-instructions.md)
+
+Current phase status is owned by the GitHub issue tracker, not by this document.
 
 ## Known Constraints
 

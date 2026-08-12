@@ -1790,3 +1790,47 @@ def test_testing_guide_links_compatibility_authority():
     assert not re.search(
         r"ansible-core\s*==", content
     ), "testing.md must not pin ansible-core versions; link the compatibility authority instead"
+
+
+def test_architecture_names_workflow_and_runner_extraction():
+    """Architecture prose must describe the extracted flow, runner, and run-record layers."""
+    content = _read(ARCHITECTURE_DOC)
+
+    for token in (
+        "run_phase_flow",
+        "handle_completed_state",
+        "execute_operation",
+        "OperationDispatchHooks",
+    ):
+        assert token in content, f"architecture.md must describe {token} in prose"
+
+    for path in ("lib/workflow.py", "lib/operation_runners.py", "lib/run_record.py"):
+        assert content.count(path) >= 2, (
+            f"architecture.md must reference {path} at least twice — a section heading plus a "
+            "prose cross-reference — not merely list it in the file tree."
+        )
+
+
+def test_architecture_uses_run_record_vocabulary():
+    """Architecture must use RunRecord vocabulary, not the config wording CONTEXT.md forbids."""
+    content = _read(ARCHITECTURE_DOC)
+
+    assert "RunRecord" in content, "architecture.md must name the RunRecord facade"
+    assert (
+        "config discovered during execution" not in content
+    ), "architecture.md uses state-config wording that CONTEXT.md lists under Avoid"
+
+
+def test_architecture_links_authorities_without_restating_status():
+    """Architecture must link authority documents and must not carry volatile status or a version."""
+    content = _read(ARCHITECTURE_DOC)
+
+    for token in ("release-validation-framework.md", "lab-role-controller-spec.md"):
+        assert token in content, f"architecture.md must link {token}"
+
+    assert not re.search(
+        r"^\*\*Version\*\*:", content, re.MULTILINE
+    ), "architecture.md must not carry a document version that reads as a product release"
+    assert not re.search(
+        r"Phase 9[A-Z]?\s+(is|remains|has|was)\b", content
+    ), "architecture.md must not restate Phase 9 status; the issue tracker owns it"
