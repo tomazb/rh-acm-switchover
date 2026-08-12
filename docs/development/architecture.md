@@ -6,7 +6,7 @@
 
 `rh-acm-switchover` is a Python-first operational CLI for orchestrating ACM hub switchover between a primary and secondary hub. The design favors explicit phases, resumable state, strong validation, and operator-visible safety checks over hidden automation.
 
-The codebase also includes shell helpers for discovery, validation, RBAC bootstrap, kubeconfig generation, and Argo CD auto-sync management. The Python CLI is the main control plane; the shell scripts are focused operational companions.
+The codebase also includes shell helpers for discovery, validation, RBAC bootstrap, and kubeconfig generation. Argo CD auto-sync *management* is not among them: the shell layer only detects ACM-touching Argo CD Applications and reports the drift risk, directing the operator to the Python `--argocd-manage` feature (`scripts/lib-common.sh:1069`). The Python CLI is the main control plane; the shell scripts are focused operational companions.
 
 ## Current Project Structure
 
@@ -360,7 +360,15 @@ Important activation-related flags:
 
 - re-enabling or recreating `BackupSchedule`
 - verifying new backups after promotion
-- handling old-hub-as-secondary or old-hub decommission prep
+- handling the old hub according to `--old-hub-action`
+
+The old-hub dispositions are not equivalent in blast radius. `secondary` sets up passive sync
+for failback. `none` leaves the hub untouched. `decommission` is **destructive**: finalization
+calls `_decommission_old_hub` (`modules/finalization.py:1090`), which runs the full
+`Decommission.decommission(interactive=False)` teardown (`modules/finalization.py:1122`) and
+removes ACM components — Observability resources, non-local `ManagedCluster` resources, and the
+`MultiClusterHub` — from the old primary. It is a real teardown performed inside the switchover
+run without a further prompt, not a preparation step.
 
 BackupSchedule collision repair deletes and recreates the schedule to refresh backup ownership. After delete, it polls
 for schedule absence with a 30-second timeout and 2-second interval before recreating the schedule, preserving UID
@@ -420,7 +428,10 @@ Key design properties:
 
 - Marker detection can be disabled with `--skip-gitops-check`
 - ArgoCD detection runs automatically (read-only) when Applications CRD is detected
-- `--argocd-manage` is mutating and therefore disallowed with `--validate-only`
+- `--argocd-manage` is mutating, so `--validate-only` downgrades it to read-only rather than
+  rejecting it: the CLI accepts the combination and warns that management has no effect
+  (`acm_switchover.py:379`), then preflight computes effective management as off
+  (`acm_switchover.py:628`) and the run continues
 - Resume is idempotent for already-resumed Applications when the same run owns the pause marker
 - Git remains the source of truth; the tool only coordinates around temporary drift risk
 
@@ -467,8 +478,9 @@ The shell scripts are not alternate implementations of the full Python workflow.
 - `preflight-check.sh` / `postflight-check.sh`: standalone operational checks
 - `setup-rbac.sh`: RBAC deployment and kubeconfig generation wrapper
 - `generate-sa-kubeconfig.sh` / `generate-merged-kubeconfig.sh`: credential packaging helpers
+- `lib-common.sh`: shared helpers, including Argo CD risk **detection and advisory reporting** — it counts ACM-touching Applications and points the operator at `--argocd-manage`; it never pauses or resumes anything
 
-This split keeps the Python CLI focused on orchestration while leaving smaller operator tasks available as composable shell utilities.
+This split keeps the Python CLI focused on orchestration while leaving smaller operator tasks available as composable shell utilities. Every mutation of Argo CD Applications lives in the Python control plane.
 
 ## Setup Architecture
 
@@ -524,10 +536,10 @@ The collection uses a fundamentally different architecture from the Python CLI:
 
 - **Roles** replace Python phase modules: `preflight`, `primary_prep`, `activation`, `post_activation`, `finalization`, `decommission`, `argocd_manage`, `discovery`, `rbac_bootstrap`
 - **Thin custom plugins** (`modules/`, `action/`, `module_utils/`) handle operations that need retry semantics, structured polling, or checkpoint persistence beyond what stock `kubernetes.core` modules provide
-- **Playbooks** (`switchover.yml`, `preflight.yml`, `decommission.yml`, `rbac_bootstrap.yml`, `discovery.yml`, `argocd_resume.yml`) are the operator entrypoints
+- **Playbooks** (`switchover.yml`, `restore_only.yml`, `preflight.yml`, `decommission.yml`, `rbac_bootstrap.yml`, `discovery.yml`, `argocd_resume.yml`) are the operator entrypoints
 - **Grouped variables** (`acm_switchover_hubs`, `acm_switchover_operation`, `acm_switchover_features`) replace CLI flags as the primary operator interface
 - **Optional checkpoint backend** replaces `StateManager` for long-running or interrupted runs; Ansible-native idempotency handles the default case
-- **Report artifacts** use schema version `1.0` across preflight, switchover, restore-only, and decommission paths; Python and collection reports preserve aligned status/report contracts without requiring identical top-level fields for every report type
+- **Report artifacts** carry schema version `1.0` on the preflight, switchover, and restore-only paths. The decommission result does not: its role publishes no `schema_version` field, and `acm_report_artifact` writes the report it is given unchanged. Python and collection reports preserve aligned status/report contracts without requiring identical top-level fields for every report type
 - **Decommission observability** defaults to namespace autodetection in the collection, with explicit `true`/`false` overrides for known environments
 - **Klusterlet helpers** use bounded direct Kubernetes requests and worker futures. Defaults are 10 workers, 30-second per-request timeouts, and 180-second worker future timeout windows for each probe/remediation batch; worker future timeouts are reported as failed cluster results.
 - **Constants isolation**: `plugins/module_utils/constants.py` is the collection's constants file — it cannot import from `lib/constants.py`
