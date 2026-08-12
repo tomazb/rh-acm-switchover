@@ -1939,7 +1939,7 @@ def test_lab_role_controller_spec_attributes_uid_binding_to_owning_authority():
 
 OBSOLETE_CLI_PATTERNS = (
     (re.compile(r"acm_switchover\.py\s+switchover"), "the obsolete `switchover` subcommand"),
-    (re.compile(r"passive-sync"), "the obsolete `passive-sync` method value"),
+    (re.compile(r"(?<![-\w])passive-sync"), "the obsolete `passive-sync` method value"),
 )
 
 BARE_DOT_FORMATTER = re.compile(r"^\s*(?:\$\s*)?(?:black|isort)\b[^\n]*\s\.\s*$", re.MULTILINE)
