@@ -282,28 +282,46 @@ Extract every `acm_switchover.py` example from the document and run it:
 
 ```bash
 python - <<'PY'
-import pathlib, re, shlex, subprocess
+import pathlib, re, shlex, subprocess, sys
 
-doc = pathlib.Path("CONTRIBUTING.md").read_text(encoding="utf-8")
-examples = re.findall(r"^(python acm_switchover\.py(?:[^\n`]*\\\n)*[^\n`]*)$", doc, re.MULTILINE)
+DOC = "CONTRIBUTING.md"
+EXPECTED = 2  # --dry-run and --validate-only; raise this when you add an example
+
+doc = pathlib.Path(DOC).read_text(encoding="utf-8")
+# ^[ \t]* is load-bearing: examples are indented inside numbered lists and fenced blocks.
+# Anchoring to column 0 silently matches nothing and reports a false pass.
+examples = re.findall(
+    r"^[ \t]*(python acm_switchover\.py(?:[^\n`]*\\\n)*[^\n`]*)$", doc, re.MULTILINE
+)
+
+if len(examples) != EXPECTED:
+    sys.exit(f"FAIL: expected {EXPECTED} example(s) in {DOC}, matched {len(examples)}. "
+             "Fix the pattern or update EXPECTED — a check that matches nothing proves nothing.")
+
 failures = []
 for ex in examples:
-    argv = shlex.split(ex.replace("\\\n", " "))
-    proc = subprocess.run(argv, capture_output=True, text=True)
+    proc = subprocess.run(shlex.split(ex.replace("\\\n", " ")), capture_output=True, text=True)
     combined = proc.stdout + proc.stderr
-    # argparse rejects usage errors with exit code 2 and an "error:" usage banner.
+    # argparse signals a usage error with exit code 2 and an "error:" banner.
     if proc.returncode == 2 and "error:" in combined:
-        failures.append((ex, combined.strip().splitlines()[-1]))
+        failures.append((" ".join(ex.split()), combined.strip().splitlines()[-1]))
+
 print(f"checked {len(examples)} example(s)")
 for ex, err in failures:
-    print("BROKEN:", " ".join(ex.split()), "->", err)
-print("result:", "all examples pass argument validation" if not failures else "FAILURES ABOVE")
+    print("BROKEN:", ex, "->", err)
+if failures:
+    sys.exit("FAIL: examples above do not pass argument validation")
+print("result: all examples pass argument validation")
 PY
 ```
 
-Expected: `all examples pass argument validation`. Examples are never run against a real
-cluster — an example that reaches a kubeconfig or connection error has already proven that
-argparse accepted it, which is all this check asserts.
+Expected: `checked 2 example(s)` followed by `all examples pass argument validation`. Examples
+are never run against a real cluster — an example that reaches a kubeconfig or connection error
+has already proven that argparse accepted it, which is all this check asserts.
+
+The `EXPECTED` guard exists because the first two drafts of this check both matched zero
+examples and reported success. A verifier whose empty case is indistinguishable from its
+success case is decoration, not verification.
 
 If an example is reported BROKEN, add the missing required argument rather than deleting the
 example. `--method` and `--old-hub-action` are both required unless `--setup`,
