@@ -829,8 +829,8 @@ phase recorded for later phases or reports. It exposes only named, typed operati
 (`HubFacts`, `ManagedClusterExpectation`, `StepRecord`, `ErrorRecord`, `RunSummary`).
 
 The split matters: the durable file behind the run belongs to `StateManager`, but the key
-vocabulary belongs to `RunRecord` alone. Reading or writing raw state config keys outside the
-facade is a contract violation — see the Run record entry in
+vocabulary belongs to `RunRecord` alone. Reading or writing the underlying persisted key
+literals outside the facade is a contract violation — see the Run record entry in
 [`CONTEXT.md`](../../CONTEXT.md).
 ```
 
@@ -846,7 +846,7 @@ with:
 
 ```markdown
 - detected run facts such as ACM version and observability presence, read and written through
-  the `RunRecord` facade (`lib/run_record.py`) rather than as raw config keys
+  the `RunRecord` facade (`lib/run_record.py`) rather than as raw persisted keys
 ````
 
 - [ ] **Step 7: Add the authority boundary section**
