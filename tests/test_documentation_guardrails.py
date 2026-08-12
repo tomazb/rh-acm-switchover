@@ -29,6 +29,12 @@ LAB_CONTROLLER_SAFETY_DOCS = (
     "docs/development/lab-role-controller-agent-instructions.md",
 )
 
+CONTRIBUTING_DOC = "CONTRIBUTING.md"
+TESTING_DOC = "docs/development/testing.md"
+ARCHITECTURE_DOC = "docs/development/architecture.md"
+LAB_CONTROLLER_SPEC_DOC = "docs/development/lab-role-controller-spec.md"
+CONTRIBUTOR_DOCS = (CONTRIBUTING_DOC, TESTING_DOC, ARCHITECTURE_DOC)
+
 
 def _read(path: str) -> str:
     return (REPO_ROOT / path).read_text(encoding="utf-8")
@@ -93,6 +99,44 @@ def test_contributing_matches_current_dev_workflow():
 
     for token in (".venv", "requirements-dev.txt", "./run_tests.sh", "CHANGELOG.md"):
         assert token in content, f"Missing {token} from CONTRIBUTING.md"
+
+
+def test_contributing_line_length_matches_ci():
+    """Contributor line-length guidance must match the 120-character CI policy."""
+    content = _read(CONTRIBUTING_DOC)
+
+    assert re.search(
+        r"[Mm]aximum line length:\s*120", content
+    ), "CONTRIBUTING.md must state a 120-character maximum line length"
+    assert "100 characters" not in content, "CONTRIBUTING.md still states the obsolete 100-character limit"
+
+
+def test_contributing_routes_validation_to_modular_owners():
+    """Contributor guide must route changes to current owners, not the retired validator class."""
+    content = _read(CONTRIBUTING_DOC)
+
+    for token in (
+        "lib/validation.py",
+        "modules/preflight/",
+        "preflight_coordinator",
+        "lib/workflow.py",
+        "lib/operation_runners.py",
+        "tests/release/checks/",
+        "tests/release/lab_controller/",
+    ):
+        assert token in content, f"CONTRIBUTING.md must route work to {token}"
+
+    assert "PreflightValidator" not in content, "CONTRIBUTING.md still references the retired PreflightValidator class"
+
+
+def test_contributing_names_primary_branch_and_start_gate():
+    """Contributor guide must name the development branch and the mandatory reading gate."""
+    content = _read(CONTRIBUTING_DOC)
+
+    assert "AGENTS.md" in content, "CONTRIBUTING.md must direct contributors to AGENTS.md"
+    assert re.search(
+        r"`ansible`[^\n]*(primary|development) branch", content
+    ), "CONTRIBUTING.md must identify `ansible` as the primary development branch"
 
 
 def test_kustomize_readme_mentions_optional_decommission_extension():
