@@ -31,13 +31,14 @@ of them is live evidence. Fake, dry-run, static-fixture, and local-harness resul
 substitute for live certification evidence — see the
 [Release-Validation and Lab-Controller Authority Boundary](../../AGENTS.md#release-validation-and-lab-controller-authority-boundary).
 
-Surface 2 is local **conditionally**. `tests/release/conftest.py` resolves the release profile
-from `--release-profile` *or* the `ACM_RELEASE_PROFILE` environment variable, and skips
-release-marked items only when neither supplies one. With that variable exported, a plain
-`python -m pytest tests/release -q` — including the one `./run_tests.sh` runs — stops being a
-helper-only lane and runs `tests/release/test_release_certification.py` against real
-infrastructure through live discovery and the stream adapters. Unset it when you want the
-non-live lane.
+Surface 2 is local **conditionally** for direct pytest invocations. `tests/release/conftest.py`
+resolves the release profile from `--release-profile` *or* the `ACM_RELEASE_PROFILE` environment
+variable, and skips release-marked items only when neither supplies one. With that variable
+exported, a direct `python -m pytest tests/release -q` stops being a helper-only lane and runs
+`tests/release/test_release_certification.py` against real infrastructure through live discovery
+and the stream adapters. `./run_tests.sh` is deliberately different: it removes inherited
+`ACM_RELEASE_PROFILE` for its release-helper subprocess, so the default convenience runner remains
+non-live. Invoke the profile-driven pytest entrypoint directly for live certification.
 
 Surface 9 is the profile-based release orchestrator invoked directly from pytest. It is not
 gated by the lab role controller. The controller-owned read-only live-discovery path is a
@@ -178,12 +179,17 @@ tests/
 ./run_tests.sh
 ```
 
-By default, this runs the root test lane, then the release-framework helper tests under `tests/release/`, and excludes long-running E2E tests (marked `@pytest.mark.e2e`). The runner passes no release profile, so that second lane is non-live — unless `ACM_RELEASE_PROFILE` is already exported in your environment, which the runner neither unsets nor warns about.
+By default, this runs the root test lane, then the release-framework helper tests under
+`tests/release/`, and excludes long-running E2E tests (marked `@pytest.mark.e2e`). For the release
+helper subprocess the runner explicitly removes inherited `ACM_RELEASE_PROFILE`, so an exported
+shell profile cannot silently promote the default convenience run into live certification.
+`./run_tests.sh` is not a live-certification entrypoint; invoke certification directly with an
+explicit release profile instead.
 
-`./run_tests.sh` covers surfaces 1 and 2, and adds surface 8 only when you export `RUN_E2E=1`
-(`run_tests.sh:106-112`). No invocation of it runs the collection unit, integration, scenario,
-syntax, or build gates — surfaces 3 through 7 have no code path in the runner at all.
-It is not a complete verification surface for any change that touches `ansible_collections/`.
+`./run_tests.sh` covers surfaces 1 and 2, and adds surface 8 only when you export `RUN_E2E=1`.
+No invocation of it runs the collection unit, integration, scenario, syntax, or build gates —
+surfaces 3 through 7 have no code path in the runner at all. It is not a complete verification
+surface for any change that touches `ansible_collections/`.
 
 CI-equivalent quality gates (`black`, `isort`, `mypy`, and `bandit`) fail by default.
 For a local advisory-only quality pass, run `STRICT_QUALITY=0 ./run_tests.sh`.
@@ -268,9 +274,11 @@ also be runnable directly when you need a tighter release-framework loop:
 python -m pytest tests/release -q
 ```
 
-That command is a helper-only lane only while no profile is resolved. `tests/release/conftest.py`
-takes the profile from `--release-profile` *or* `ACM_RELEASE_PROFILE`, so an exported variable
-turns the same command into a live run.
+That direct command is a helper-only lane only while no profile is resolved.
+`tests/release/conftest.py` takes the profile from `--release-profile` *or*
+`ACM_RELEASE_PROFILE`, so an exported variable turns the same direct command into a live run.
+`./run_tests.sh` deliberately strips `ACM_RELEASE_PROFILE` from its internal release-helper
+subprocess; use the direct profile-driven entrypoint below when live certification is intended.
 
 Live certification requires an explicit profile, supplied by flag or by environment:
 
@@ -496,25 +504,13 @@ Do **not** substitute `bandit --ini .bandit -ll`, which this guide previously do
 filters the report to medium-and-above severity, so it is *weaker* than the CI gate: a
 low-severity finding passes locally and then fails CI. Run the unfiltered `-f txt` form above.
 
-### Safety (Dependency Vulnerabilities)
+### Safety
 
-```bash
-safety scan --full-report
-```
-
-`safety check` is the deprecated legacy verb, not a removed one — Safety 3.8.0 still ships it,
-labelled `[deprecated]` and "unsupported beyond 1 May 2024". Use `scan`, which is what the
-workflows invoke.
-
-**Treat Safety as an unverified gate, and install it yourself.** `safety` is declared in neither
-`requirements.txt` nor `requirements-dev.txt`, and both jobs that invoke it — the `security` job
-in `.github/workflows/ci-cd.yml:175-178` and the `dependency-check` job in
-`.github/workflows/security.yml:36-41` — install exactly those two files and nothing else. Every
-one of their four `safety scan` invocations carries `|| true`, so a `command not found` exits 0
-and is indistinguishable from a clean scan. On the evidence in the repository, that step most
-likely performs no scan at all in CI; it certainly cannot fail a job either way. Do not read a
-green `security` job as evidence that dependencies were scanned. A local
-`pip install safety && safety scan --full-report` is the only run whose result you can trust.
+Safety is not a maintained repository verification gate. The GitHub workflows no longer invoke
+`safety scan`, and `safety` remains absent from the repository dependency files. Dependency
+vulnerability reporting uses the declared `pip-audit` dependency instead. Reintroducing Safety
+would require an explicit CI design, including its installation and authentication contract,
+rather than relying on an undeclared executable whose failure can be masked as success.
 
 ### Pip-Audit (Supply Chain)
 
@@ -522,16 +518,15 @@ green `security` job as evidence that dependencies were scanned. A local
 pip-audit
 ```
 
-Unlike Safety, pip-audit is declared (`requirements-dev.txt:21`), so it does install and does
-run. It runs in two places, and neither can fail:
+`pip-audit` is declared in `requirements-dev.txt`, so it installs with the maintained development
+dependencies. It runs in two places, and neither can fail the overall verification flow:
 
-- **Locally**, `run_tests.sh:152` invokes bare `pip-audit` through `run_advisory_check`, which
-  prints findings and returns 0 regardless.
-- **In CI**, the `dependency-check` job of `.github/workflows/security.yml:43-47` runs it twice:
-  `pip-audit --desc --format json --output pip-audit-report.json || true` to produce the
-  uploaded artifact, then a bare `pip-audit --desc` for the log. The second invocation has no
-  `|| true`, so it *can* exit non-zero — but the step carries `continue-on-error: true`, which
-  keeps that non-zero exit from failing the job.
+- **Locally**, `run_tests.sh` invokes bare `pip-audit` through `run_advisory_check`, which prints
+  findings and returns 0 regardless.
+- **In CI**, the `dependency-check` job of `.github/workflows/security.yml` runs it twice:
+  `pip-audit --desc --format json --output pip-audit-report.json || true` produces the uploaded
+  artifact, then a bare `pip-audit --desc` produces the log. The second invocation can exit
+  non-zero, but the step carries `continue-on-error: true`, so findings remain advisory.
 
 So pip-audit is reported in CI and enforced nowhere. Read the job log or the
 `pip-audit-report.json` artifact; a passing job proves nothing about findings.
@@ -549,10 +544,11 @@ Runs on every push and pull request:
 - ✅ Syntax validation
 - ✅ Documentation checks
 - ✅ `integration-test` job — smoke checks only, despite the job's "Integration Tests (Dry-Run)"
-  display name. It runs CLI `--help` invocations, prints the version imported from `lib`, and
-  asserts that a freshly saved state file contains its expected top-level keys. No dry-run
-  switchover is executed and no cluster is contacted, so it proves the CLI starts and the state
-  file has the right shape — nothing about switchover behaviour
+  display name. It captures the flag-only top-level CLI `--help` output and asserts representative
+  supported flags are present, prints the version imported from `lib`, and asserts that a freshly
+  saved state file contains its expected top-level keys. No dry-run switchover is executed and no
+  cluster is contacted, so it proves only that the CLI help surface starts with the expected flags
+  and that the state file has the right shape — nothing about switchover behaviour
 - ✅ Container build test
 
 #### Security Workflow (`.github/workflows/security.yml`)
@@ -758,4 +754,4 @@ See [CONTRIBUTING.md](../../CONTRIBUTING.md) for details.
 
 ---
 
-**Last Updated**: 2026-08-12
+**Last Updated**: 2026-08-13
