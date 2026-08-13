@@ -55,6 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Hardened verification tooling from #257: the default `run_tests.sh` helper lane now neutralizes inherited
+  `ACM_RELEASE_PROFILE` and `PYTEST_ADDOPTS`, GitHub Actions smoke-check the real flag-only CLI surface,
+  documented `while` verification loops are guarded against swallowed failures, and undeclared dead Safety
+  workflow steps were removed while retaining the existing advisory `pip-audit` path.
 - Fixed collection Argo CD scoped discovery so every requested namespace must
   return one positively validated result before any Application is aggregated
   or patched. Failed, skipped, unreachable, malformed, cardinality-mismatched,
@@ -324,7 +328,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Single-Hub Restore Mode (`--restore-only`)** — a new operational mode for restoring managed clusters from S3 backups onto a fresh ACM hub when the original hub is permanently unavailable (disaster recovery, decommissioned, or unreachable). Key capabilities:
-  - Runs a reduced phase flow: `PREFLIGHT → ACTIVATION → POST_ACTIVATION → FINALIZATION` (skips `PRIMARY_PREP` entirely since there is no source hub)
+  - Runs a reduced phase flow: `PREFLIGHT → ACTIVATION → POST_ACTIVATION → FINALIZATION` (skips `PRIMARY_PREP` entirely since there is no source hub connection)
   - Secondary-only preflight validates ACM version, OADP/Velero, BackupStorageLocation (BSL) connectivity, and required namespaces — without needing a primary hub connection
   - Creates a one-time full Restore from the latest S3 backup to import all managed clusters
   - Automatically enables BackupSchedule on the restored hub so it becomes the new primary
@@ -1144,8 +1148,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Dry-Run Mode
 - Fixed dry-run mode to properly skip all verification waits:
   - `_wait_for_restore_completion()` in activation module
-  - `_verify_managed_clusters_connected()` in post-activation module  
-  - `_verify_disable_auto_import_cleared()` in post-activation module
+  - `_verify_managed_clusters_connected()` in post_activation module  
+  - `_verify_disable_auto_import_cleared()` in post_activation module
   - `_verify_multiclusterhub_health()` in finalization module
 - All skipped operations now log `[DRY-RUN]` messages for visibility
 - Fixed unit tests to properly mock `dry_run=False` to prevent Mock objects from being truthy
@@ -1539,7 +1543,7 @@ pip install -r requirements.txt
 #### Official Python Upgrade Resources
 
 - [Python Downloads](https://www.python.org/downloads/)
-- [Red Hat Python Guide](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/8/html/configuring_basic_system_settings/assembly_installing-and-using-python_configuring-basic-system-settings)
+- [Red Hat Python Guide](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/8/html/configuring_basic_system_settings/assembly_installing-and-using-python_configuring-basic_system_settings)
 - [pyenv Installation](https://github.com/pyenv/pyenv#installation)
 
 ---
