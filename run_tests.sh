@@ -104,7 +104,7 @@ echo "======================================"
 # Keep the default runner non-live even if the caller's shell exports a live
 # profile directly or injects pytest options through the environment.
 # Live certification is invoked explicitly outside this convenience runner.
-ACM_RELEASE_PROFILE= PYTEST_ADDOPTS= python -m pytest tests/release -q
+ACM_RELEASE_PROFILE='' PYTEST_ADDOPTS='' python -m pytest tests/release -q
 
 if [ "${RUN_E2E:-0}" = "1" ]; then
     echo ""
