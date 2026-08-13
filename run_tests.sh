@@ -101,7 +101,10 @@ echo ""
 echo "======================================"
 echo "Running Release Framework Tests"
 echo "======================================"
-python -m pytest tests/release -q
+# Keep the default runner non-live even if the caller's shell exports a live
+# certification profile. Live certification is invoked explicitly, outside this
+# convenience runner, with --release-profile or ACM_RELEASE_PROFILE.
+env -u ACM_RELEASE_PROFILE python -m pytest tests/release -q
 
 if [ "${RUN_E2E:-0}" = "1" ]; then
     echo ""
