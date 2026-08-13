@@ -13,7 +13,8 @@
     context: "{{ item.context if ((item.context | default('')) | length > 0) else omit }}"
   register: _auto_import_orphan_reads
   ignore_errors: true
-  # restore_only is the documented secondary-only flow (AGENTS.md): the primary
+  # restore_only is the documented secondary-only flow
+  # (docs/operations/usage.md, docs/development/architecture.md): the primary
   # hub may be entirely undefined there, so it must not even be templated.
   loop: >-
     {{
