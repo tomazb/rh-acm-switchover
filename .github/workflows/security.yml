@@ -205,7 +205,7 @@ jobs:
           sbom.json
           sbom.xml
         retention-days: 90
-        
+
   license-check:
     name: License Compliance
     runs-on: ubuntu-latest
