@@ -339,9 +339,8 @@ stands, and it is not by itself a repository-wide authority.
 ## Verification Matrix by Changed Surface
 
 Run the gates your change actually invalidates. The authoritative gate inventory and exact
-commands live in [`docs/development/ci.md`](docs/development/ci.md) and
-[`docs/development/testing.md`](docs/development/testing.md); the workflow files under
-`.github/workflows/` are ground truth.
+commands live in [`docs/development/testing.md`](docs/development/testing.md); the workflow
+files under `.github/workflows/` are ground truth.
 
 | Changed surface | Gates that must run |
 | --- | --- |
@@ -559,8 +558,8 @@ Tool-specific invocation mechanics belong in the tool's own instruction file —
 | Collection distribution and packaging | [`ansible_collections/tomazb/acm_switchover/docs/distribution.md`](ansible_collections/tomazb/acm_switchover/docs/distribution.md) |
 | Collection variable surface | [`ansible_collections/tomazb/acm_switchover/docs/variable-reference.md`](ansible_collections/tomazb/acm_switchover/docs/variable-reference.md) |
 | Architecture and module design | [`docs/development/architecture.md`](docs/development/architecture.md) |
-| CI gate inventory | [`docs/development/ci.md`](docs/development/ci.md) |
-| Test suite structure | [`docs/development/testing.md`](docs/development/testing.md) |
+| CI/CD pipeline and container publishing setup | [`docs/development/ci.md`](docs/development/ci.md) |
+| Verification gate inventory and test suite structure | [`docs/development/testing.md`](docs/development/testing.md) |
 | Release validation framework | [`docs/development/release-validation-framework.md`](docs/development/release-validation-framework.md) |
 | Lab role controller | [`docs/development/lab-role-controller-spec.md`](docs/development/lab-role-controller-spec.md) |
 | Operator CLI and workflows | [`docs/operations/usage.md`](docs/operations/usage.md) |
