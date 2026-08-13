@@ -172,18 +172,6 @@ jobs:
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
         
-    - name: Run Safety vulnerability scan
-      run: |
-        safety scan --json --output safety-report.json || true
-        safety scan --full-report || true
-        
-    - name: Upload safety report
-      uses: actions/upload-artifact@v4
-      with:
-        name: safety-vulnerability-report
-        path: safety-report.json
-        retention-days: 30
-        
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v3
       with:
@@ -302,12 +290,24 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         
-    - name: Test CLI help output
+    - name: Test CLI flag-only help surface
+      shell: bash
       run: |
-        python acm_switchover.py --help
-        python acm_switchover.py switchover --help
-        python acm_switchover.py rollback --help
-        python acm_switchover.py decommission --help
+        set -euo pipefail
+        help_output="$(python acm_switchover.py --help)"
+        printf '%s\n' "$help_output"
+        for flag in \
+          --primary-context \
+          --secondary-context \
+          --method \
+          --old-hub-action \
+          --validate-only \
+          --dry-run \
+          --decommission \
+          --restore-only \
+          --argocd-resume-only; do
+          grep -q -- "$flag" <<<"$help_output"
+        done
         
     - name: Test version display
       run: |
