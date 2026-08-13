@@ -45,7 +45,8 @@ def test_orphan_check_omits_empty_context():
 
 
 def test_orphan_check_skips_primary_in_restore_only_mode():
-    """restore_only is the documented secondary-only flow (AGENTS.md): the
+    """restore_only is the documented secondary-only flow
+    (docs/operations/usage.md, docs/development/architecture.md): the
     primary hub may be entirely undefined, so the loop must not template
     acm_switchover_hubs.primary at all in that mode."""
     tasks = yaml.safe_load(ORPHAN_FILE.read_text())
