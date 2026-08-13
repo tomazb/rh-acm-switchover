@@ -17,7 +17,7 @@ This document owns the commands.
 | # | Surface | Nature | What it does not prove |
 | --- | --- | --- | --- |
 | 1 | Root Python and Bash tests | Local, fake-backed | Nothing about live clusters. Of the collection it proves only the four parity contracts — shared constants (`tests/test_constants_parity.py`), Argo CD `ACM_KINDS`/`ACM_NAMESPACES` (`tests/test_argocd_constants_parity.py`), cross-phase state key names (`tests/test_checkpoint_state_parity.py`), and RBAC expansion (`tests/test_rbac_collection_parity.py`). Those compare declared values across the two runtimes; no collection role, playbook, or module is executed |
-| 2 | Release-framework helpers | Local and fake-backed **only when no release profile is supplied** | Not certification evidence. Non-live only while neither `--release-profile` nor `ACM_RELEASE_PROFILE` resolves a profile |
+| 2 | Release-framework helpers | Local and fake-backed **only when no release profile is supplied** | Not certification evidence. Non-live only while neither `--release-profile` (including one injected through `PYTEST_ADDOPTS`) nor `ACM_RELEASE_PROFILE` resolves a profile |
 | 3 | Collection unit tests | Local, static and fake-backed | Nothing about live cluster behaviour. Playbook and cross-role wiring is checked statically against the YAML, not by executing it |
 | 4 | Collection integration tests | Local, fake-backed | Nothing about real cluster responses |
 | 5 | Collection scenario tests | Local, fixture-backed | Nothing about live timing or live partial failure. Interruption and resume are exercised, but only against checked-in fixtures |
@@ -33,12 +33,15 @@ substitute for live certification evidence — see the
 
 Surface 2 is local **conditionally** for direct pytest invocations. `tests/release/conftest.py`
 resolves the release profile from `--release-profile` *or* the `ACM_RELEASE_PROFILE` environment
-variable, and skips release-marked items only when neither supplies one. With that variable
-exported, a direct `python -m pytest tests/release -q` stops being a helper-only lane and runs
+variable, and skips release-marked items only when neither supplies one. Pytest can populate the
+`--release-profile` option from inherited `PYTEST_ADDOPTS` before the conftest reads it. A direct
+`python -m pytest tests/release -q` therefore stops being a helper-only lane whenever the option
+or `ACM_RELEASE_PROFILE` resolves a profile, and then runs
 `tests/release/test_release_certification.py` against real infrastructure through live discovery
-and the stream adapters. `./run_tests.sh` is deliberately different: it removes inherited
-`ACM_RELEASE_PROFILE` for its release-helper subprocess, so the default convenience runner remains
-non-live. Invoke the profile-driven pytest entrypoint directly for live certification.
+and the stream adapters. `./run_tests.sh` is deliberately different: it overrides inherited
+`ACM_RELEASE_PROFILE` and `PYTEST_ADDOPTS` with empty values for its release-helper subprocess,
+so the default convenience runner remains non-live. Invoke the profile-driven pytest entrypoint
+directly for live certification.
 
 Surface 9 is the profile-based release orchestrator invoked directly from pytest. It is not
 gated by the lab role controller. The controller-owned read-only live-discovery path is a
@@ -65,7 +68,7 @@ but the documented form is CI's.
 python -m pytest tests/ --ignore=tests/release -v -m "not e2e"
 
 # 2. Release-framework helper tests
-# Non-live only when no profile is resolved. Verify with: env | grep ACM_RELEASE_PROFILE
+# Non-live only when no profile is resolved. Inspect ACM_RELEASE_PROFILE and PYTEST_ADDOPTS first.
 python -m pytest tests/release -q
 
 # 3. Collection unit tests
@@ -181,10 +184,10 @@ tests/
 
 By default, this runs the root test lane, then the release-framework helper tests under
 `tests/release/`, and excludes long-running E2E tests (marked `@pytest.mark.e2e`). For the release
-helper subprocess the runner explicitly removes inherited `ACM_RELEASE_PROFILE`, so an exported
-shell profile cannot silently promote the default convenience run into live certification.
-`./run_tests.sh` is not a live-certification entrypoint; invoke certification directly with an
-explicit release profile instead.
+helper subprocess the runner overrides inherited `ACM_RELEASE_PROFILE` and `PYTEST_ADDOPTS` with
+empty values, so neither a shell profile nor pytest option injection can silently promote the
+default convenience run into live certification. `./run_tests.sh` is not a live-certification
+entrypoint; invoke certification directly with an explicit release profile instead.
 
 `./run_tests.sh` covers surfaces 1 and 2, and adds surface 8 only when you export `RUN_E2E=1`.
 No invocation of it runs the collection unit, integration, scenario, syntax, or build gates —
@@ -276,9 +279,10 @@ python -m pytest tests/release -q
 
 That direct command is a helper-only lane only while no profile is resolved.
 `tests/release/conftest.py` takes the profile from `--release-profile` *or*
-`ACM_RELEASE_PROFILE`, so an exported variable turns the same direct command into a live run.
-`./run_tests.sh` deliberately strips `ACM_RELEASE_PROFILE` from its internal release-helper
-subprocess; use the direct profile-driven entrypoint below when live certification is intended.
+`ACM_RELEASE_PROFILE`; inherited `PYTEST_ADDOPTS` can also populate the `--release-profile`
+option. `./run_tests.sh` deliberately overrides both environment variables with empty values for
+its internal release-helper subprocess. Use the direct profile-driven entrypoint below when live
+certification is intended.
 
 Live certification requires an explicit profile, supplied by flag or by environment:
 
