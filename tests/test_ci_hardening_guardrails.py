@@ -3,7 +3,6 @@
 import re
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUN_TESTS = REPO_ROOT / "run_tests.sh"
 CI_WORKFLOW = REPO_ROOT / ".github/workflows/ci-cd.yml"
@@ -12,8 +11,7 @@ TESTING_DOC = REPO_ROOT / "docs/development/testing.md"
 REQUIREMENTS_DEV = REPO_ROOT / "requirements-dev.txt"
 
 _OBSOLETE_CLI_SUBCOMMAND = re.compile(
-    r"(?:python(?:3(?:\.\d+)?)?\s+)?(?:\./)?acm_switchover\.py\s+"
-    r"(?P<subcommand>switchover|rollback|decommission)\b"
+    r"(?:python(?:3(?:\.\d+)?)?\s+)?(?:\./)?acm_switchover\.py\s+" r"(?P<subcommand>switchover|rollback|decommission)\b"
 )
 _BASH_FENCE = re.compile(r"^```bash\n(.*?)^```", re.MULTILINE | re.DOTALL)
 _WHILE_LOOP = re.compile(
@@ -41,8 +39,10 @@ def test_run_tests_release_lane_ignores_inherited_release_profile():
     assert len(invocations) == 1, f"expected one release-framework invocation, found {invocations!r}"
     invocation = invocations[0]
     command_offset = invocation.index("python -m pytest tests/release -q")
-    assert invocation.index("ACM_RELEASE_PROFILE") < command_offset
-    assert invocation.index("PYTEST_ADDOPTS") < command_offset
+    prefix_tokens = invocation[:command_offset].split()
+    assignments = {token.partition("=")[0]: token.partition("=")[2] for token in prefix_tokens if "=" in token}
+    assert assignments.get("ACM_RELEASE_PROFILE") == ""
+    assert assignments.get("PYTEST_ADDOPTS") == ""
 
 
 def test_workflows_do_not_invoke_obsolete_cli_subcommands():
@@ -83,9 +83,9 @@ def test_workflows_do_not_carry_dead_safety_scan_lane():
     for path, content in _workflow_texts():
         lowered = content.lower()
         assert "safety scan" not in lowered, f"{path.relative_to(REPO_ROOT)} invokes Safety CLI"
-        assert "safety-report.json" not in lowered, (
-            f"{path.relative_to(REPO_ROOT)} still carries a Safety report artifact"
-        )
+        assert (
+            "safety-report.json" not in lowered
+        ), f"{path.relative_to(REPO_ROOT)} still carries a Safety report artifact"
 
     requirements = REQUIREMENTS_DEV.read_text(encoding="utf-8")
     security = SECURITY_WORKFLOW.read_text(encoding="utf-8")
@@ -96,15 +96,15 @@ def test_workflows_do_not_carry_dead_safety_scan_lane():
 def test_while_loop_guard_pattern_matches_documented_shell_shapes():
     """The while-loop detector must match supported command and redirection shapes."""
     samples = (
-        "while read -r item; do\n  verify \"$item\" || status=1\ndone\n",
-        "while read -r item; do\n  verify \"$item\" || status=1\ndone < <(items)\n",
-        "while read -r item\ndo\n  verify \"$item\" || status=1\ndone\n",
-        "while read -r item &&\n  test -n \"$item\"; do\n  verify \"$item\" || status=1\ndone\n",
+        'while read -r item; do\n  verify "$item" || status=1\ndone\n',
+        'while read -r item; do\n  verify "$item" || status=1\ndone < <(items)\n',
+        'while read -r item\ndo\n  verify "$item" || status=1\ndone\n',
+        'while read -r item &&\n  test -n "$item"; do\n  verify "$item" || status=1\ndone\n',
     )
     for sample in samples:
-        assert _WHILE_LOOP.search(sample), (
-            "while-loop guard pattern no longer matches a protected `while ... do ... done` shape"
-        )
+        assert _WHILE_LOOP.search(
+            sample
+        ), "while-loop guard pattern no longer matches a protected `while ... do ... done` shape"
 
 
 def test_documented_while_verification_loops_aggregate_failures():
@@ -118,7 +118,7 @@ def test_documented_while_verification_loops_aggregate_failures():
 
     for block in _BASH_FENCE.findall(content):
         for match in _WHILE_LOOP.finditer(block):
-            head, body, tail = block[:match.start()], match.group(1), block[match.end():]
+            head, body, tail = block[: match.start()], match.group(1), block[match.end() :]
 
             fails_inside = "|| exit 1" in body or "|| return 1" in body
 
