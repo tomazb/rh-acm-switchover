@@ -102,15 +102,15 @@ echo "======================================"
 echo "Running Release Framework Tests"
 echo "======================================"
 # Keep the default runner non-live even if the caller's shell exports a live
-# certification profile. Live certification is invoked explicitly, outside this
-# convenience runner, with --release-profile or ACM_RELEASE_PROFILE.
-env -u ACM_RELEASE_PROFILE python -m pytest tests/release -q
+# profile directly or injects pytest options through the environment.
+# Live certification is invoked explicitly outside this convenience runner.
+ACM_RELEASE_PROFILE= PYTEST_ADDOPTS= python -m pytest tests/release -q
 
 if [ "${RUN_E2E:-0}" = "1" ]; then
     echo ""
-    echo "======================================"
-    echo "Running E2E Tests (On Demand)"
-    echo "======================================"
+echo "======================================"
+echo "Running E2E Tests (On Demand)"
+echo "======================================"
     python -m pytest tests/e2e/ -v -m e2e --cov=. --cov-append --cov-report=term-missing
 fi
 
