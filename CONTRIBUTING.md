@@ -4,10 +4,20 @@ Thank you for considering contributing to the ACM Switchover Automation project!
 
 ## Getting Started
 
+Before writing anything, read [`AGENTS.md`](AGENTS.md) and the governing issue or spec for
+the work. `AGENTS.md` owns the mandatory start gate, the authority hierarchy, the protected-file
+policy, and the verification matrix; this guide only covers contributor mechanics.
+
 1. Fork the repository
 2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/rh-acm-switchover.git`
-3. Create a feature branch: `git checkout -b feature/your-feature-name`
-4. Set up development environment:
+3. Branch from `ansible`, which is the primary development branch — not `main`:
+   ```bash
+   git fetch origin ansible
+   git checkout -b feature/your-feature-name origin/ansible
+   ```
+4. Use an isolated branch or git worktree for implementation, so independent validation runs
+   against a stable tree.
+5. Set up the development environment:
    ```bash
    python3 -m venv .venv
    source .venv/bin/activate
@@ -24,7 +34,25 @@ The repository defaults to `.venv`, and `./run_tests.sh` will reuse an active vi
 - Use meaningful variable and function names
 - Add docstrings to all functions and classes
 - Keep functions focused and single-purpose
-- Maximum line length: 100 characters
+- Maximum line length: 120 characters — this is the value CI actually enforces. The authority is
+  the `black --check --line-length 120` and `isort --check-only --line-length 120` invocations in
+  `.github/workflows/ci-cd.yml:104,108`. They pass the number explicitly, they run in the `lint`
+  job with no `continue-on-error`, and they fail the job when a file does not match.
+- `setup.cfg` is not the line-length authority, but CI does read it. flake8 runs from the
+  repository root and discovers `setup.cfg` there, so its `[flake8]` settings — notably the
+  `exclude` list and the `ignore = E203,E501,W503` codes — do apply to CI's runs. What the
+  explicit command-line flags do is override the individual values they name for that
+  invocation; they do not switch config discovery off. Today `setup.cfg` and the flags happen to
+  agree on 120, which is exactly why the flags, not the file, are the value to track.
+- flake8 runs twice in the `lint` job, and only one of the two passes can fail the build
+  (`.github/workflows/ci-cd.yml:94,96`). The first —
+  `flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics`, under the comment "Stop
+  the build if there are Python syntax errors or undefined names" — carries no `--exit-zero`, so
+  it **is** blocking for that narrow selection. The second —
+  `flake8 . --count --exit-zero --max-complexity=15 --max-line-length=120 --statistics` — is
+  advisory: `--exit-zero` means the 120-character maximum and the complexity ceiling of 15 are
+  reported and never enforced by flake8. Line length is enforced by black and isort; syntax
+  errors and undefined names are enforced by flake8.
 
 **Example:**
 ```python
@@ -67,47 +95,30 @@ def prepare(self):
 - ❌ Mark steps complete before execution
 - ❌ Fail if resource already in desired state
 
-### Adding New Validation Checks
+### Routing a Change to Its Owner
 
-1. Add method to `PreflightValidator` class
-2. Follow naming convention: `_check_<what>_<where>()`
-3. Use `self.add_result()` to record results
-4. Set `critical=True` for blocking validations
+Find the owner before writing code. Editing the wrong layer is the most common source of
+review churn.
 
-**Example:**
-```python
-def _check_custom_resource(self):
-    """Check custom resource exists."""
-    try:
-        resource = self.primary.get_custom_resource(
-            group="example.io",
-            version="v1",
-            plural="customresources",
-            name="required-resource"
-        )
-        
-        if resource:
-            self.add_result(
-                "Custom resource check",
-                True,
-                "resource exists",
-                critical=True
-            )
-        else:
-            self.add_result(
-                "Custom resource check",
-                False,
-                "resource not found",
-                critical=True
-            )
-    except Exception as e:
-        self.add_result(
-            "Custom resource check",
-            False,
-            f"error checking resource: {e}",
-            critical=True
-        )
-```
+| Change | Owner |
+| --- | --- |
+| CLI grammar: flag names, `choices`, mutually exclusive groups, and the conditionally-required-argument checks | `acm_switchover.py` argument parsing (`parse_args`) and `_missing_parse_required_args` (`acm_switchover.py:72,85-89`) |
+| Cross-mode rules: restore-only conflicts, activation-method combinations, Argo CD flag conflicts, setup combinations, and `--non-interactive`/observability guards | `InputValidator.validate_all_cli_args` (`lib/validation.py:341-441`) — most mode-combination policy lives here, not in `parse_args` |
+| Input value validation | `lib/validation.py` |
+| Filesystem path safety and artifact-path policy | `lib/path_safety.py` (`lib/validation.py:253` delegates to it; it owns path syntax, allowed-root enforcement, and symlink-escape rejection) |
+| Python preflight checks | `modules/preflight/` plus `modules/preflight_coordinator.py` and `modules/preflight/reporter.py` |
+| Python phase behaviour | The owning phase module under `modules/` |
+| Python flow, dispatch, and completed/failed-state behaviour | `lib/workflow.py` and `lib/operation_runners.py` |
+| Cross-phase run facts | `lib/run_record.py` (the `RunRecord` facade), not the persisted key literals it owns. The prohibition covers `RunRecord`'s own keys, not the whole durable file — the pause-register modules hold a documented allowance for their own keys (see [architecture.md](docs/development/architecture.md#librun_recordpy)) |
+| Ansible behaviour | The owning role, module, `module_utils`, or action plugin |
+| Release checks | `tests/release/checks/` and the framework contracts |
+| Lab-controller safety | `tests/release/lab_controller/` |
+| Parity behaviour | Parity fixtures, parity tests, and the parity authority documents |
+
+Preflight checks live in the modular `modules/preflight/` package — `backup_validators.py`,
+`cluster_validators.py`, `namespace_validators.py`, and `version_validators.py`, each building on
+`base_validator.py`. Add a check to the module matching its subject, and let
+`modules/preflight_coordinator.py` orchestrate it and `modules/preflight/reporter.py` render it.
 
 ### Adding New Switchover Steps
 
@@ -163,29 +174,73 @@ except Exception as e:
     raise
 ```
 
-### Dry-Run Support
+### Dry-Run and Check-Mode Behaviour
 
-All Kubernetes operations should respect dry-run mode.
+Dry-run is a property of the client layer *for mutations*. Call sites do still make their own
+dry-run decisions, legitimately — the rule below is about which decisions, not about forbidding
+them outright.
 
-**Use KubeClient methods** - they handle dry-run automatically:
+`KubeClient` mutation methods check `self.dry_run` themselves and return deliberately synthetic
+values instead of calling the API — for example `patch_custom_resource` returns `{}`
+(`lib/kube_client.py:819-821`), `create_custom_resource` returns the supplied body unpersisted
+(`lib/kube_client.py:908-914`), and `delete_custom_resource` returns `True`
+(`lib/kube_client.py:1023-1025`). Routing mutations through `KubeClient` does not make dry-run
+fabrication go away; it centralizes that fabrication in one place instead of letting every call
+site invent its own shape of fake result.
+
+Route mutations through `KubeClient` so this behaviour is centralized and consistent:
+
 ```python
-# Good - dry-run handled automatically
+# Good - dry-run handling is centralized and consistent
 self.client.patch_custom_resource(...)
 
-# Bad - bypasses dry-run
+# Bad - bypasses the client contract entirely
 self.custom_api.patch_namespaced_custom_object(...)
 ```
 
-If adding new KubeClient methods:
-```python
-def new_operation(self, ...):
-    if self.dry_run:
-        logger.info(f"[DRY-RUN] Would execute operation")
-        return {}  # Return safe mock result
-    
-    # Actual operation
-    return self.api.execute_operation(...)
-```
+The line a call site must not cross is **fabrication**: do not add local
+`if self.dry_run: return {}` guards that manufacture a plausible-looking value which later
+phases then treat as a real observation. That reinvents, per call site, the synthetic-return
+behaviour `KubeClient` already provides centrally, and it does so in a shape nobody else knows
+about. If a genuinely new operation needs dry-run support, add it to `KubeClient` alongside the
+existing operations so every caller gets the same synthetic-value shape instead of a one-off
+guess.
+
+What a call site *may* do under `if self.dry_run:` is decline to act and say so:
+
+- **Skip a live verification** it has no business performing when nothing was mutated.
+  `_scale_down_thanos_compactor` returns before its pod-termination wait loop
+  (`modules/primary_prep.py:262-264`) — it produces no value at all, it just does not poll for
+  a termination that was never requested.
+- **Decline to issue a mutation, and log the action it would have taken.**
+  `_disable_observability_on_old_hub` logs `[DRY-RUN] Would delete MultiClusterObservability`
+  and `continue`s to the next object (`modules/finalization.py:1044-1046`), so the deletion is
+  not attempted and no fake deletion result is invented.
+
+Neither of those hands a downstream phase a manufactured fact, which is what makes them
+legitimate. The same principle covers the `dry_run_skip` decorator (`lib/utils.py:44`), which
+some call sites use to skip a live check entirely rather than act on a synthetic result — for
+example `_verify_managed_clusters_connected` in `modules/post_activation.py:212`. And it is why
+callers must never treat a dry-run return value as a real observation.
+
+State capture and restore around a dry-run is orchestration, not a `KubeClient` behaviour:
+`acm_switchover.py` calls `state.capture_state_snapshot()` before a dry-run and
+`state.restore_state_snapshot(...)` after it (`acm_switchover.py:434,439`), and both methods are
+owned by `StateManager` (`lib/utils.py:506`).
+
+A dry-run or check-mode pass proves that the planned actions parse and that validation accepts
+the inputs. When you supply real contexts it does more than that: `lib/runtime_bootstrap.py`
+builds real `KubeClient` instances, hub identities are read from the live clusters, and the
+preflight coordinator performs live discovery (namespace probes, RBAC permission checks, version
+detection). What it does not do is mutate anything — mutations return `KubeClient`'s synthetic
+values — and a dry-run switchover still logs a simulated completion message and reports success
+without exercising live mutation behaviour (`lib/operation_runners.py:182`). It is not evidence
+of live mutating behaviour and never substitutes for certification evidence.
+
+`--validate-only` is narrower still: it returns as soon as preflight completes
+(`lib/workflow.py` `run_validate_only_preflight`, reached from `lib/operation_runners.py:136-137`).
+It proves the inputs and the preflight checks, and proves nothing about whether the later planned
+actions resolve, because those phases are never entered.
 
 ### Logging
 
@@ -218,24 +273,36 @@ Before submitting a PR:
    python -m py_compile acm_switchover.py lib/*.py modules/*.py
    ```
 
-3. **Test dry-run mode:**
+3. **Test dry-run mode.** Both `--method` and `--old-hub-action` are required unless using
+   `--setup`, `--restore-only`, or `--argocd-resume-only` (`acm_switchover.py:85-89`):
    ```bash
    python acm_switchover.py --dry-run \
      --primary-context test-primary \
-     --secondary-context test-secondary
+     --secondary-context test-secondary \
+     --method passive \
+     --old-hub-action secondary
    ```
 
 4. **Test validate-only:**
    ```bash
    python acm_switchover.py --validate-only \
      --primary-context test-primary \
-     --secondary-context test-secondary
+     --secondary-context test-secondary \
+     --method passive \
+     --old-hub-action secondary
    ```
 
-5. **Run collection tests when touching the collection:**
+5. **Run collection tests when touching the collection.** The command keeps the `PYTHONPATH=.`
+   prefix to match CI's invocation exactly (see `.github/workflows/ansible-collection-foundation.yml`).
+   Running from the repository root also works without it, because `setup.cfg` sets
+   `pythonpath = .` for pytest, but the documented form is CI's:
    ```bash
-   python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q
+   PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q
    ```
+
+   Collection unit tests are one surface of several. See
+   [the testing guide](docs/development/testing.md) for the full gate inventory and for which
+   surfaces your change requires.
 
 6. **Test in non-production environment** (if possible)
 
@@ -318,19 +385,11 @@ Before submitting PR, verify:
 - [ ] No hardcoded values
 - [ ] Commit messages follow convention
 
-## Feature Ideas
+## Finding Work
 
-Looking for contribution ideas? Consider:
-
-- **Parallel validation checks** - Speed up pre-flight validation
-- **Progress bars** - Visual feedback using rich library
-- **Notification support** - Email/Slack alerts on completion
-- **Metrics collection** - Track switchover duration and success rate
-- **Automated testing** - Post-switchover functionality tests
-- **Web UI** - Browser-based monitoring interface
-- **Multi-hub support** - Batch switchover for multiple hubs
-- **Enhanced logging** - Structured logging with JSON output
-- **Helm chart** - Deploy as Kubernetes Job
+Work starts from a governing issue or spec, so browse the
+[issue tracker](https://github.com/tomazb/rh-acm-switchover/issues) rather than an inline
+wishlist. Open an issue first if what you want to build does not have one.
 
 ## Questions?
 

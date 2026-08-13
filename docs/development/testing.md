@@ -4,12 +4,149 @@
 
 This document describes the testing strategy, test structure, and how to run tests for the ACM Switchover Automation project.
 
-The repository has four distinct verification surfaces:
+This document is the gate inventory for the repository. It defines every maintained
+verification surface, the exact command that runs it, and — as importantly — what each surface
+does not prove.
 
-- Root tests under `tests/`
-- Collection tests under `ansible_collections/tomazb/acm_switchover/tests/`
-- Release validation framework tests under `tests/release/`
-- On-demand real-cluster E2E tests under `tests/e2e/`
+`AGENTS.md` owns the policy for which gates a change must run; see its
+[Verification Matrix by Changed Surface](../../AGENTS.md#verification-matrix-by-changed-surface).
+This document owns the commands.
+
+### The nine verification surfaces
+
+| # | Surface | Nature | What it does not prove |
+| --- | --- | --- | --- |
+| 1 | Root Python and Bash tests | Local, fake-backed | Nothing about live clusters. Of the collection it proves only the four parity contracts — shared constants (`tests/test_constants_parity.py`), Argo CD `ACM_KINDS`/`ACM_NAMESPACES` (`tests/test_argocd_constants_parity.py`), cross-phase state key names (`tests/test_checkpoint_state_parity.py`), and RBAC expansion (`tests/test_rbac_collection_parity.py`). Those compare declared values across the two runtimes; no collection role, playbook, or module is executed |
+| 2 | Release-framework helpers | Local and fake-backed **only when no release profile is supplied** | Not certification evidence. Non-live only while neither `--release-profile` nor `ACM_RELEASE_PROFILE` resolves a profile |
+| 3 | Collection unit tests | Local, static and fake-backed | Nothing about live cluster behaviour. Playbook and cross-role wiring is checked statically against the YAML, not by executing it |
+| 4 | Collection integration tests | Local, fake-backed | Nothing about real cluster responses |
+| 5 | Collection scenario tests | Local, fixture-backed | Nothing about live timing or live partial failure. Interruption and resume are exercised, but only against checked-in fixtures |
+| 6 | Playbook syntax check | Local | Only that playbooks parse and resolve — no behaviour at all |
+| 7 | Collection archive build | Local | Only that the archive builds — not that it works |
+| 8 | On-demand E2E | Live, real hubs | Not certification evidence. Running it under a release profile does not promote its results to certification evidence |
+| 9 | Profile-driven live release certification | Live, certification-eligible | Bounded by the supplied profile. Driven by the profile-based release orchestrator, not gated by the lab controller |
+
+Surfaces 1 and 3 through 7 are entirely local and fake-backed, fixture-backed, or static. None
+of them is live evidence. Fake, dry-run, static-fixture, and local-harness results never
+substitute for live certification evidence — see the
+[Release-Validation and Lab-Controller Authority Boundary](../../AGENTS.md#release-validation-and-lab-controller-authority-boundary).
+
+Surface 2 is local **conditionally**. `tests/release/conftest.py` resolves the release profile
+from `--release-profile` *or* the `ACM_RELEASE_PROFILE` environment variable, and skips
+release-marked items only when neither supplies one. With that variable exported, a plain
+`python -m pytest tests/release -q` — including the one `./run_tests.sh` runs — stops being a
+helper-only lane and runs `tests/release/test_release_certification.py` against real
+infrastructure through live discovery and the stream adapters. Unset it when you want the
+non-live lane.
+
+Surface 9 is the profile-based release orchestrator invoked directly from pytest. It is not
+gated by the lab role controller. The controller-owned read-only live-discovery path is a
+separate authority whose artifacts are explicitly stamped `certification_eligible=false` and
+`live_certification_evidence=false`, so it cannot establish certification either — see
+[Release validation framework](release-validation-framework.md) and
+[Lab role controller spec](lab-role-controller-spec.md).
+
+### Commands by surface
+
+Surfaces 3 through 7 take their commands from
+`.github/workflows/ansible-collection-foundation.yml`, which is ground truth. Each collection
+pytest command keeps the `PYTHONPATH=.` prefix to match that CI invocation exactly. Running from
+the repository root also works without it, because `setup.cfg` sets `pythonpath = .` for pytest,
+but the documented form is CI's.
+
+```bash
+# 1. Root Python and Bash tests
+# CI (.github/workflows/ci-cd.yml, "Run root tests with coverage") runs this same selection with
+# coverage and JUnit reporting added: --cov=. --cov-report=xml --cov-report=html
+# --cov-report=term --junitxml=pytest-results-<python-version>.xml. The selection of tests is
+# identical; only the reporting artifacts differ. Use the coverage form below when you need
+# the report.
+python -m pytest tests/ --ignore=tests/release -v -m "not e2e"
+
+# 2. Release-framework helper tests
+# Non-live only when no profile is resolved. Verify with: env | grep ACM_RELEASE_PROFILE
+python -m pytest tests/release -q
+
+# 3. Collection unit tests
+# CI precedes this with a separate compatibility-contract step under an exported
+# ANSIBLE_COLLECTIONS_PATH — see "Folded into surface 3" below.
+PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q
+
+# 4. Collection integration tests
+# CI exports ANSIBLE_COLLECTIONS_PATH before this step; `$(pwd)` is the local equivalent of
+# ${GITHUB_WORKSPACE}. Surface 3 above deliberately has no export, matching CI.
+export ANSIBLE_COLLECTIONS_PATH="$(pwd):${HOME}/.ansible/collections"
+PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/ -q
+
+# 5. Collection scenario tests
+export ANSIBLE_COLLECTIONS_PATH="$(pwd):${HOME}/.ansible/collections"
+PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/scenario/ -q
+
+# 6. Playbook syntax check
+# Two things here are load-bearing and are NOT optional polish. A bare loop exits with the
+# status of the *last* playbook, so an early failure followed by a later success returns 0 —
+# a silent false pass. And a resolved collection that does not support this lane's
+# ansible-core must fail the lane, not warn inside a passing run. `set -o pipefail` is what
+# makes `|| status=1` observe ansible-playbook rather than tee.
+set -o pipefail
+export ANSIBLE_COLLECTIONS_PATH="$(pwd):${HOME}/.ansible/collections"
+log="$(mktemp)"
+status=0
+for playbook in ansible_collections/tomazb/acm_switchover/playbooks/*.yml; do
+  echo "== ${playbook}"
+  ansible-playbook "${playbook}" --syntax-check 2>&1 | tee -a "${log}" || status=1
+done
+if [ "${status}" -ne 0 ]; then
+  echo "playbook syntax check failed"
+  exit 1
+fi
+if grep -qE "does not support Ansible version" "${log}"; then
+  echo "a collection reported an unsupported ansible-core version for this lane"
+  grep -nE "does not support Ansible version" "${log}"
+  exit 1
+fi
+
+# 7. Collection archive build
+ansible-galaxy collection build --output-path /tmp/dist \
+  ansible_collections/tomazb/acm_switchover
+```
+
+#### Folded into surface 3: the resolved-dependency compatibility check
+
+`ansible-collection-foundation.yml` runs one further collection-pytest step, "Verify resolved
+dependency compatibility", *before* the unit sweep. It is not a tenth surface: it re-runs a
+single file that surface 3 already covers,
+`ansible_collections/tomazb/acm_switchover/tests/unit/test_compatibility_contract.py`. What
+makes it worth naming is the environment. It runs immediately after
+`ansible-galaxy collection install` and **with `ANSIBLE_COLLECTIONS_PATH` exported**, so the
+contract is checked against the dependencies the lane actually resolved. Surface 3's own
+invocation deliberately carries no export, which is why the same file is run twice:
+
+```bash
+export ANSIBLE_COLLECTIONS_PATH="$(pwd):${HOME}/.ansible/collections"
+PYTHONPATH=. python -m pytest \
+  ansible_collections/tomazb/acm_switchover/tests/unit/test_compatibility_contract.py -q
+```
+
+If you reproduce surface 3 without first running this step, a lane-specific dependency
+resolution failure is exactly what you will miss.
+
+Surfaces 8 and 9 are covered under [E2E Tests](#e2e-tests-on-demand) and
+[Release Validation Framework](#release-validation-framework) below.
+
+CI runs surfaces 3 through 7 across two `ansible-core` lanes: the declared floor and the newest
+tested series. The supported versions are defined by
+[the compatibility authority](../../ansible_collections/tomazb/acm_switchover/docs/compatibility.md)
+and are deliberately not restated here.
+
+### Three levels of confidence
+
+1. **Targeted development loop** — the single test or module you are changing. Fast, and proves
+   only what it covers.
+2. **Complete relevant gate set** — every surface your change invalidates, per the `AGENTS.md`
+   verification matrix. Complete this before terminal validation, so the frozen head is
+   validated once.
+3. **Exact-head hosted CI** — mandatory for merge readiness regardless of local results.
 
 ## Test Structure
 
@@ -18,7 +155,7 @@ tests/
 ├── __init__.py
 ├── test_utils.py             # Tests for lib/utils.py
 ├── test_kube_client.py       # Tests for lib/kube_client.py
-├── test_preflight.py         # Tests for modules/preflight.py
+├── test_preflight.py         # Tests for the modules/preflight/ package
 ├── test_backup_schedule.py   # Tests for modules/backup_schedule.py
 ├── test_primary_prep.py      # Tests for modules/primary_prep.py
 ├── test_decommission.py      # Tests for modules/decommission.py
@@ -41,7 +178,13 @@ tests/
 ./run_tests.sh
 ```
 
-By default, this runs the root test lane, then the non-live release-framework helper tests under `tests/release/`, and excludes long-running E2E tests (marked `@pytest.mark.e2e`).
+By default, this runs the root test lane, then the release-framework helper tests under `tests/release/`, and excludes long-running E2E tests (marked `@pytest.mark.e2e`). The runner passes no release profile, so that second lane is non-live — unless `ACM_RELEASE_PROFILE` is already exported in your environment, which the runner neither unsets nor warns about.
+
+`./run_tests.sh` covers surfaces 1 and 2, and adds surface 8 only when you export `RUN_E2E=1`
+(`run_tests.sh:106-112`). No invocation of it runs the collection unit, integration, scenario,
+syntax, or build gates — surfaces 3 through 7 have no code path in the runner at all.
+It is not a complete verification surface for any change that touches `ansible_collections/`.
+
 CI-equivalent quality gates (`black`, `isort`, `mypy`, and `bandit`) fail by default.
 For a local advisory-only quality pass, run `STRICT_QUALITY=0 ./run_tests.sh`.
 To include E2E tests on demand:
@@ -125,7 +268,11 @@ also be runnable directly when you need a tighter release-framework loop:
 python -m pytest tests/release -q
 ```
 
-Live certification requires an explicit profile:
+That command is a helper-only lane only while no profile is resolved. `tests/release/conftest.py`
+takes the profile from `--release-profile` *or* `ACM_RELEASE_PROFILE`, so an exported variable
+turns the same command into a live run.
+
+Live certification requires an explicit profile, supplied by flag or by environment:
 
 ```bash
 python -m pytest tests/release/test_release_certification.py \
@@ -179,9 +326,14 @@ python -m pytest tests/e2e/test_e2e_switchover.py -v -m e2e \
   --e2e-output-dir ./e2e-results
 ```
 
-### Real-Cluster Validation (Example)
+### Historical observations
 
-Example real-cluster validation using the discovery + preflight scripts:
+The following is a recorded observation from a specific lab on a specific date. It is
+**not** current support evidence, not a compatibility claim, and not a guarantee about any
+other environment. Current supported versions are defined by
+[the compatibility authority](../../ansible_collections/tomazb/acm_switchover/docs/compatibility.md).
+
+Example real-cluster validation using the discovery and preflight scripts:
 
 ```bash
 ./scripts/discover-hub.sh --auto --run
@@ -199,7 +351,10 @@ Observed on 2026-01-28:
 
 - **lib/utils.py**: StateManager, Phase enum, helper functions
 - **lib/kube_client.py**: KubeClient initialization, CRUD operations, dry-run mode
-- **modules/preflight.py**: All validation checks
+- **modules/preflight/**: the validator package — `base_validator.py`, `backup_validators.py`,
+  `cluster_validators.py`, `namespace_validators.py`, `version_validators.py`, and `reporter.py`.
+  There is no `modules/preflight.py`; the coordinator that drives the package is
+  `modules/preflight_coordinator.py`
 
 ### Coverage Goals
 
@@ -213,71 +368,173 @@ Superpowers design/spec handoff.
 
 ## Code Quality Tools
 
+Every command in this section is copied from the invocation that actually runs it — the `lint`
+and `security` jobs in `.github/workflows/ci-cd.yml`, or `run_tests.sh` where the tool is
+local-only. A scoped command that merely looks plausible fails differently from CI, which is
+worse than no command at all.
+
 ### Flake8 (Style)
 
+CI runs flake8 **twice**, and only the first invocation can fail the build:
+
 ```bash
-flake8 acm_switchover.py lib/ modules/
+# Blocking: syntax errors and undefined names only.
+flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+# Advisory: --exit-zero means this pass reports style findings and always returns 0.
+flake8 . --count --exit-zero --max-complexity=15 --max-line-length=120 --statistics
 ```
 
-Configuration in `setup.cfg`:
-- Max line length: 120
-- Complexity: 15
+So flake8 proves only that the tree has no syntax errors and no undefined names. The
+120-character maximum and the complexity ceiling of 15 are reported, never enforced.
+
+`setup.cfg` also declares `max-line-length = 120` and `max-complexity = 15`, but it is **not**
+the governing authority for those numbers and must not be cited as one. CI passes both on the
+command line, to the `--exit-zero` invocation, so neither can fail a build via flake8. The value
+that can break a build over line length is the one handed to `black --line-length` and
+`isort --line-length` below — the same authority [`CONTRIBUTING.md`](../../CONTRIBUTING.md)
+names.
+
+That is a statement about those two numbers, not about the file. CI does read `setup.cfg`:
+flake8 runs from the repository root and discovers it there, so the `[flake8]` section's
+`ignore = E203,E501,W503` and its `exclude` list are both in force. An explicit flag overrides
+the one value it names for that invocation; it does not disable config discovery.
+
+Because `setup.cfg:13-29` already excludes `.git`, `__pycache__`, `.venv`, `venv`,
+`.worktrees`, `.claude/worktrees`, the `*_cache` directories, `build`, `dist`, `completions`,
+`.eggs`, `graphify-out`, `htmlcov`, and `review`, the repository-root `flake8 .` above does not
+walk your virtualenv or the other generated trees. That exclusion is flake8's alone: black and
+isort get no such list, which is why the commands below name paths explicitly instead of
+targeting the root — and why repo-wide formatting stays prohibited on the authority of
+[`AGENTS.md`](../../AGENTS.md), independently of what any exclude list happens to cover.
 
 ### Pylint (Analysis)
 
 ```bash
-pylint acm_switchover.py lib/ modules/
+pylint acm_switchover.py lib/ modules/ --exit-zero --max-line-length=120 \
+  --disable=C0103,C0114,C0115,C0116
 ```
+
+`--exit-zero` again: pylint cannot fail CI. `run_tests.sh` runs the identical command through
+its advisory helper, so it cannot fail the local runner either.
 
 ### Black (Formatting)
 
+Reproduce CI exactly. The path list below is copied from the `lint` job in
+`.github/workflows/ci-cd.yml`. Do not substitute `.`, and do not rely on an editor auto-format
+hook, which only touches files edited in your session.
+
+Substituting `.` is prohibited by [`AGENTS.md`](../../AGENTS.md), which is the authority here.
+The mechanical reason is narrower than it is sometimes stated: black's built-in default excludes
+already cover `.venv/`, `venv/`, `build/`, `dist/`, and the `*_cache` directories, and
+`setup.cfg`'s `[isort] skip` covers a similar set for isort. What neither excludes is this
+repository's other generated and vendored trees — `completions/` (a protected path),
+`.claude/worktrees/` (entire nested checkouts), `graphify-out/`, `htmlcov/`, and `review/`.
+Those are what a repo-root run reformats, and `completions/` alone is reason enough.
+
 Check formatting:
 ```bash
-black --check --line-length 120 .
+black --check --line-length 120 --diff acm_switchover.py lib modules \
+  ansible_collections/tomazb/acm_switchover/plugins \
+  ansible_collections/tomazb/acm_switchover/tests tests
 ```
 
-Auto-format:
+Auto-format (same paths, without `--check --diff`):
 ```bash
-black --line-length 120 .
+black --line-length 120 acm_switchover.py lib modules \
+  ansible_collections/tomazb/acm_switchover/plugins \
+  ansible_collections/tomazb/acm_switchover/tests tests
 ```
 
 ### isort (Import Sorting)
 
 Check imports:
 ```bash
-isort --check-only --profile black --line-length 120 .
+isort --check-only --profile black --line-length 120 acm_switchover.py lib modules \
+  ansible_collections/tomazb/acm_switchover/plugins \
+  ansible_collections/tomazb/acm_switchover/tests tests
 ```
 
-Auto-sort:
+Auto-sort (same paths, without `--check-only`):
 ```bash
-isort --profile black --line-length 120 .
+isort --profile black --line-length 120 acm_switchover.py lib modules \
+  ansible_collections/tomazb/acm_switchover/plugins \
+  ansible_collections/tomazb/acm_switchover/tests tests
 ```
+
+CI does not currently format `check_rbac.py` or `show_state.py`. This documents what CI does,
+not an idealised superset: a scoped command that merely looks plausible fails differently from
+CI, which is worse than no command at all.
 
 ### MyPy (Type Checking)
 
+Copied from the `lint` job. The collection plugins and collection tests are part of the checked
+set, and `--explicit-package-bases` and `--no-strict-optional` are both load-bearing — dropping
+either changes what mypy reports:
+
 ```bash
-mypy acm_switchover.py lib/ modules/ --ignore-missing-imports
+mypy --explicit-package-bases acm_switchover.py lib/ modules/ \
+  ansible_collections/tomazb/acm_switchover/plugins \
+  ansible_collections/tomazb/acm_switchover/tests \
+  --ignore-missing-imports --no-strict-optional
 ```
+
+Root `tests/` is deliberately absent: CI does not type-check it.
 
 ## Security Testing
 
 ### Bandit (Static Security Analysis)
 
 ```bash
-bandit --ini .bandit -ll
+bandit --ini .bandit -f json -o bandit-report.json || true
+bandit --ini .bandit -f txt
 ```
+
+The second invocation is the gate; the first only produces the uploaded JSON report and is
+neutralised with `|| true`.
+
+Do **not** substitute `bandit --ini .bandit -ll`, which this guide previously documented. `-ll`
+filters the report to medium-and-above severity, so it is *weaker* than the CI gate: a
+low-severity finding passes locally and then fails CI. Run the unfiltered `-f txt` form above.
 
 ### Safety (Dependency Vulnerabilities)
 
 ```bash
-safety check
+safety scan --full-report
 ```
+
+`safety check` is the deprecated legacy verb, not a removed one — Safety 3.8.0 still ships it,
+labelled `[deprecated]` and "unsupported beyond 1 May 2024". Use `scan`, which is what the
+workflows invoke.
+
+**Treat Safety as an unverified gate, and install it yourself.** `safety` is declared in neither
+`requirements.txt` nor `requirements-dev.txt`, and both jobs that invoke it — the `security` job
+in `.github/workflows/ci-cd.yml:175-178` and the `dependency-check` job in
+`.github/workflows/security.yml:36-41` — install exactly those two files and nothing else. Every
+one of their four `safety scan` invocations carries `|| true`, so a `command not found` exits 0
+and is indistinguishable from a clean scan. On the evidence in the repository, that step most
+likely performs no scan at all in CI; it certainly cannot fail a job either way. Do not read a
+green `security` job as evidence that dependencies were scanned. A local
+`pip install safety && safety scan --full-report` is the only run whose result you can trust.
 
 ### Pip-Audit (Supply Chain)
 
 ```bash
-pip-audit --desc
+pip-audit
 ```
+
+Unlike Safety, pip-audit is declared (`requirements-dev.txt:21`), so it does install and does
+run. It runs in two places, and neither can fail:
+
+- **Locally**, `run_tests.sh:152` invokes bare `pip-audit` through `run_advisory_check`, which
+  prints findings and returns 0 regardless.
+- **In CI**, the `dependency-check` job of `.github/workflows/security.yml:43-47` runs it twice:
+  `pip-audit --desc --format json --output pip-audit-report.json || true` to produce the
+  uploaded artifact, then a bare `pip-audit --desc` for the log. The second invocation has no
+  `|| true`, so it *can* exit non-zero — but the step carries `continue-on-error: true`, which
+  keeps that non-zero exit from failing the job.
+
+So pip-audit is reported in CI and enforced nowhere. Read the job log or the
+`pip-audit-report.json` artifact; a passing job proves nothing about findings.
 
 ## CI/CD Integration
 
@@ -291,7 +548,11 @@ Runs on every push and pull request:
 - ✅ Security scanning
 - ✅ Syntax validation
 - ✅ Documentation checks
-- ✅ Integration tests (dry-run)
+- ✅ `integration-test` job — smoke checks only, despite the job's "Integration Tests (Dry-Run)"
+  display name. It runs CLI `--help` invocations, prints the version imported from `lib`, and
+  asserts that a freshly saved state file contains its expected top-level keys. No dry-run
+  switchover is executed and no cluster is contacted, so it proves the CLI starts and the state
+  file has the right shape — nothing about switchover behaviour
 - ✅ Container build test
 
 #### Security Workflow (`.github/workflows/security.yml`)
@@ -383,13 +644,15 @@ def setUp(self):
 
 ### Dry-Run Testing
 
-Test against real clusters without making changes:
+Test against real clusters without making changes. The CLI is flag-only — there is no
+`switchover` subcommand:
 
 ```bash
-python acm_switchover.py switchover \
+python acm_switchover.py \
   --primary-context prod-hub \
   --secondary-context dr-hub \
-  --method passive-sync \
+  --method passive \
+  --old-hub-action secondary \
   --dry-run
 ```
 
@@ -398,12 +661,30 @@ python acm_switchover.py switchover \
 Run pre-flight checks only:
 
 ```bash
-python acm_switchover.py switchover \
+python acm_switchover.py \
   --primary-context prod-hub \
   --secondary-context dr-hub \
-  --method passive-sync \
+  --method passive \
+  --old-hub-action secondary \
   --validate-only
 ```
+
+Both modes prove that inputs validate. Both also do real work when you give them real contexts:
+`lib/runtime_bootstrap.initialize_clients` builds actual `KubeClient` instances, hub identities
+are read from the live clusters, and the preflight coordinator performs live discovery —
+namespace probes, RBAC permission checks, and ACM/OADP version detection. So neither mode is
+purely offline.
+
+What they do not prove differs:
+
+- `--validate-only` returns as soon as preflight finishes
+  (`lib/operation_runners.py` dispatches to `run_validate_only_preflight` in `lib/workflow.py`).
+  It therefore proves nothing about whether the later planned actions resolve — those phases are
+  never entered.
+- `--dry-run` walks the phase flow but routes every mutation through `KubeClient`'s synthetic
+  returns, and still logs a simulated completion message on success.
+
+Neither mode is certification evidence, and neither substitutes for surface 8 or 9.
 
 ### Test Clusters
 
@@ -477,4 +758,4 @@ See [CONTRIBUTING.md](../../CONTRIBUTING.md) for details.
 
 ---
 
-**Last Updated**: November 18, 2025
+**Last Updated**: 2026-08-12

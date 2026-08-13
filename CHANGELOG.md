@@ -49,6 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Container bootstrap images are now digest-pinned, the bundled OpenShift client default is updated to `stable-4.21`, and downloaded `jq`, `oc`, and `kubectl` artifacts are verified with SHA-256 checksums before installation.
 - Helm RBAC chart rendering now rejects `rbac.customValidatorRules` entries with verbs outside `get`, `list`, and `watch`, preserving the validator ClusterRole's read-only contract.
 - Local `./run_tests.sh` now runs the non-live `tests/release/` helper suite explicitly after the root test lane, and CI runs the same suite in a dedicated `Release Framework Tests` job instead of implying release readiness via a metadata-only job label.
+- Realigned `CONTRIBUTING.md`, `docs/development/testing.md`, `docs/development/architecture.md`, and
+  `docs/development/lab-role-controller-spec.md` with current source, CI, and `AGENTS.md` policy, and locked
+  the corrected contracts with new `tests/test_documentation_guardrails.py` guardrail tests (#246).
 
 ### Fixed
 

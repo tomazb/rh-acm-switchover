@@ -29,6 +29,12 @@ LAB_CONTROLLER_SAFETY_DOCS = (
     "docs/development/lab-role-controller-agent-instructions.md",
 )
 
+CONTRIBUTING_DOC = "CONTRIBUTING.md"
+TESTING_DOC = "docs/development/testing.md"
+ARCHITECTURE_DOC = "docs/development/architecture.md"
+LAB_CONTROLLER_SPEC_DOC = "docs/development/lab-role-controller-spec.md"
+CONTRIBUTOR_DOCS = (CONTRIBUTING_DOC, TESTING_DOC, ARCHITECTURE_DOC)
+
 
 def _read(path: str) -> str:
     return (REPO_ROOT / path).read_text(encoding="utf-8")
@@ -93,6 +99,96 @@ def test_contributing_matches_current_dev_workflow():
 
     for token in (".venv", "requirements-dev.txt", "./run_tests.sh", "CHANGELOG.md"):
         assert token in content, f"Missing {token} from CONTRIBUTING.md"
+
+
+CI_WORKFLOW = ".github/workflows/ci-cd.yml"
+
+# Matches the governing formatter invocations only: a line whose command is black or isort and
+# which passes --line-length explicitly. pylint/flake8 `--max-line-length` is deliberately not
+# matched (see _ci_governing_line_length).
+_FORMATTER_LINE_LENGTH = re.compile(r"^\s*(?:black|isort)\b[^\n]*?--line-length[ =](\d+)", re.MULTILINE)
+
+
+def _ci_governing_line_length() -> str:
+    """Read the line length CI actually enforces, from its black/isort invocations.
+
+    `setup.cfg` is deliberately NOT the source of truth for this number. CI does consult
+    `setup.cfg` — flake8 discovers it from the repository root, so its `[flake8]` `exclude` and
+    `ignore` settings apply — but the explicit command-line flags override the individual values
+    they name. flake8 itself gets `--max-line-length` only on its second, `--exit-zero` pass, so
+    that pass reports a long line and cannot fail the build; the first flake8 pass
+    (`--select=E9,F63,F7,F82`, no `--exit-zero`) does block, but only on syntax errors and
+    undefined names, never on line length. The value that can break a build over line length is
+    the one handed to `black --check` and `isort --check-only`.
+
+    A parse failure raises instead of falling back to a default. A silent fallback would
+    reproduce precisely the defect class this guardrail exists to catch: a documented number
+    that no longer tracks the value CI enforces.
+    """
+    workflow = _read(CI_WORKFLOW)
+    values = set(_FORMATTER_LINE_LENGTH.findall(workflow))
+
+    assert values, (
+        f"could not parse a --line-length from any black/isort invocation in {CI_WORKFLOW}; "
+        "this guardrail must fail loudly rather than assume a default"
+    )
+    assert len(values) == 1, (
+        f"{CI_WORKFLOW} passes disagreeing --line-length values to black/isort: {sorted(values)}. "
+        "CONTRIBUTING.md cannot document one maximum until CI agrees with itself."
+    )
+    return values.pop()
+
+
+def test_contributing_line_length_matches_ci():
+    """Contributor line-length guidance must match the line length CI enforces.
+
+    The maximum is parsed from the workflow's black/isort invocations rather than hard-coded or
+    read from `setup.cfg`, so this test actually breaks if CI's enforced line length moves and
+    CONTRIBUTING.md is not updated to match.
+    """
+    content = _read(CONTRIBUTING_DOC)
+    max_line_length = _ci_governing_line_length()
+
+    assert re.search(rf"[Mm]aximum line length:\s*{re.escape(max_line_length)}\b", content), (
+        f"CONTRIBUTING.md must state the {max_line_length}-character maximum line length that "
+        f"CI enforces via the black/isort --line-length flags in {CI_WORKFLOW}"
+    )
+
+    # "100 characters" is the specific obsolete phrasing this guardrail was written to catch.
+    # Skip it only if the configured value is itself 100: the dynamic assertion above already
+    # covers correctness then, and this literal would otherwise reject the true value.
+    if max_line_length != "100":
+        assert "100 characters" not in content, "CONTRIBUTING.md still states the obsolete 100-character limit"
+
+
+def test_contributing_routes_validation_to_modular_owners():
+    """Contributor guide must route changes to current owners, not the retired validator class."""
+    content = _read(CONTRIBUTING_DOC)
+
+    for token in (
+        "lib/validation.py",
+        "modules/preflight/",
+        "preflight_coordinator",
+        "lib/workflow.py",
+        "lib/operation_runners.py",
+        "tests/release/checks/",
+        "tests/release/lab_controller/",
+    ):
+        assert token in content, f"CONTRIBUTING.md must route work to {token}"
+
+    assert not re.search(
+        r"[Aa]dd (?:a )?method to\s+`?PreflightValidator", content
+    ), "CONTRIBUTING.md still teaches the obsolete 'add a method to PreflightValidator' recipe"
+
+
+def test_contributing_names_primary_branch_and_start_gate():
+    """Contributor guide must name the development branch and the mandatory reading gate."""
+    content = _read(CONTRIBUTING_DOC)
+
+    assert "AGENTS.md" in content, "CONTRIBUTING.md must direct contributors to AGENTS.md"
+    assert re.search(
+        r"`ansible`[^\n]*(primary|development) branch", content
+    ), "CONTRIBUTING.md must identify `ansible` as the primary development branch"
 
 
 def test_kustomize_readme_mentions_optional_decommission_extension():
@@ -1683,3 +1779,397 @@ def test_lab_role_controller_phase8l_preflight_pilot_rehearsal_status_is_non_con
         "This is not broad live rollout and is not authorization for live contact.",
     ):
         assert token in content
+
+
+COLLECTION_VERIFICATION_TOKENS = (
+    "ansible_collections/tomazb/acm_switchover/tests/unit/",
+    "ansible_collections/tomazb/acm_switchover/tests/integration/",
+    "ansible_collections/tomazb/acm_switchover/tests/scenario/",
+    "--syntax-check",
+    "ansible-galaxy collection build",
+    "tests/e2e",
+    "tests/release",
+    "certification",
+)
+
+COMMANDS_BY_SURFACE_HEADING = "### Commands by surface"
+
+# Each numbered surface must carry its own runnable command inside its own segment of the
+# "Commands by surface" block. Whole-file substring checks cannot enforce that: the
+# "Folded into surface 3" subsection repeats the `.../tests/unit/` path, so deleting surface 3's
+# command outright still satisfies a file-wide search for that prefix. Likewise "certification"
+# occurs in prose throughout the document, so a file-wide search for it says nothing about
+# surface 9. Each value below is therefore the invocation itself, matched per segment.
+SURFACE_COMMANDS = {
+    "1": "python -m pytest tests/ --ignore=tests/release",
+    "2": "python -m pytest tests/release",
+    "3": "python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/",
+    "4": "python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/",
+    "5": "python -m pytest ansible_collections/tomazb/acm_switchover/tests/scenario/",
+    "6": "--syntax-check",
+    "7": "ansible-galaxy collection build",
+}
+
+# Surfaces 8 and 9 are documented in their own sections rather than in that block, so they are
+# scoped to those sections by heading. Surface 9's marker is the certification-mode invocation,
+# not the bare word "certification".
+SECTIONED_SURFACE_COMMANDS = {
+    "8": ("### E2E Tests (On Demand)", "python -m pytest tests/e2e/"),
+    "9": ("### Release Validation Framework", "--release-mode certification"),
+}
+
+_SURFACE_MARKER = re.compile(r"^# (\d+)\.\s", re.MULTILINE)
+_ANY_HEADING = re.compile(r"^#{2,4} ", re.MULTILINE)
+
+
+def _doc_section(content: str, heading: str) -> str:
+    """Return the text of `heading`'s section, up to the next heading of any level."""
+    start = content.find(heading)
+    assert start != -1, f"{TESTING_DOC} no longer contains the heading {heading!r}"
+
+    rest = content[start + len(heading) :]
+    following = _ANY_HEADING.search(rest)
+    return rest[: following.start()] if following else rest
+
+
+def _commands_by_surface_segments(content: str) -> dict:
+    """Split the "Commands by surface" bash block into one segment per numbered surface."""
+    section = _doc_section(content, COMMANDS_BY_SURFACE_HEADING)
+
+    fence = _BASH_FENCE.search(section)
+    assert fence, (
+        f"{TESTING_DOC} has no ```bash block under {COMMANDS_BY_SURFACE_HEADING!r}. This "
+        "guardrail must fail loudly rather than fall back to inspecting the whole file, which "
+        "is precisely the weakness it was written to remove."
+    )
+    block = fence.group(1)
+
+    markers = list(_SURFACE_MARKER.finditer(block))
+    assert markers, f"{TESTING_DOC}'s commands block carries no `# <n>.` surface markers"
+
+    segments = {}
+    for index, marker in enumerate(markers):
+        end = markers[index + 1].start() if index + 1 < len(markers) else len(block)
+        segments[marker.group(1)] = block[marker.start() : end]
+    return segments
+
+
+def test_testing_guide_covers_every_collection_verification_surface():
+    """The gate inventory must name every maintained verification surface separately.
+
+    Two assertions, deliberately: the file-wide tokens below stay as a coarse net, and each
+    surface is then checked inside its own command segment. Only the second can catch an entire
+    documented gate being deleted while some other part of the file keeps its vocabulary alive.
+    """
+    content = _read(TESTING_DOC)
+
+    for token in COLLECTION_VERIFICATION_TOKENS:
+        assert token in content, f"testing.md must document the verification surface using {token}"
+
+    segments = _commands_by_surface_segments(content)
+
+    assert set(segments) == set(SURFACE_COMMANDS), (
+        f"{TESTING_DOC}'s commands block documents surfaces {sorted(segments)}, but this "
+        f"guardrail expects {sorted(SURFACE_COMMANDS)}. A surface was added or removed: update "
+        "SURFACE_COMMANDS deliberately rather than letting the inventory drift."
+    )
+
+    for number, command in SURFACE_COMMANDS.items():
+        assert command in segments[number], (
+            f"{TESTING_DOC} surface {number} no longer carries its own command {command!r} in "
+            "the 'Commands by surface' block. A surface marker without its command is not a "
+            "documented gate."
+        )
+
+    for number, (heading, command) in SECTIONED_SURFACE_COMMANDS.items():
+        section = _doc_section(content, heading)
+        assert command in section, (
+            f"{TESTING_DOC} surface {number} must document {command!r} inside its own "
+            f"{heading!r} section; an occurrence elsewhere in the file does not count."
+        )
+
+
+def test_testing_guide_states_run_tests_is_not_complete():
+    """The runner must not be presented as the complete verification surface."""
+    content = _read(TESTING_DOC)
+
+    assert "./run_tests.sh" in content
+    assert (
+        "is not a complete verification surface" in content
+    ), "testing.md must state that ./run_tests.sh is not a complete verification surface"
+
+
+def test_testing_guide_links_compatibility_authority():
+    """Compatibility facts must be linked to their authority, never restated."""
+    content = _read(TESTING_DOC)
+
+    assert (
+        "ansible_collections/tomazb/acm_switchover/docs/compatibility.md" in content
+    ), "testing.md must link the compatibility authority"
+    assert not re.search(
+        r"ansible-core\s*==", content
+    ), "testing.md must not pin ansible-core versions; link the compatibility authority instead"
+
+
+def test_architecture_names_workflow_and_runner_extraction():
+    """Architecture prose must describe the extracted flow, runner, and run-record layers."""
+    content = _read(ARCHITECTURE_DOC)
+
+    for token in (
+        "run_phase_flow",
+        "handle_completed_state",
+        "execute_operation",
+        "OperationDispatchHooks",
+    ):
+        assert token in content, f"architecture.md must describe {token} in prose"
+
+    for path in ("lib/workflow.py", "lib/operation_runners.py", "lib/run_record.py"):
+        assert content.count(path) >= 2, (
+            f"architecture.md must reference {path} at least twice — a section heading plus a "
+            "prose cross-reference — not merely list it in the file tree."
+        )
+
+
+def test_architecture_uses_run_record_vocabulary():
+    """Architecture must use RunRecord vocabulary, not the config wording CONTEXT.md forbids."""
+    content = _read(ARCHITECTURE_DOC)
+
+    assert "RunRecord" in content, "architecture.md must name the RunRecord facade"
+    assert (
+        "config discovered during execution" not in content
+    ), "architecture.md uses state-config wording that CONTEXT.md lists under Avoid"
+
+
+def test_architecture_links_authorities_without_restating_status():
+    """Architecture must link authority documents and must not carry volatile status or a version."""
+    content = _read(ARCHITECTURE_DOC)
+
+    for token in ("release-validation-framework.md", "lab-role-controller-spec.md"):
+        assert token in content, f"architecture.md must link {token}"
+
+    assert not re.search(
+        r"^\*\*Version\*\*:", content, re.MULTILINE
+    ), "architecture.md must not carry a document version that reads as a product release"
+    assert not re.search(
+        r"Phase 9[A-Z]?\s+(is|remains|has|was)\b", content
+    ), "architecture.md must not restate Phase 9 status; the issue tracker owns it"
+
+
+def _run_record_avoid_terms():
+    """Extract the CONTEXT.md `_Avoid_` terms for the Run record concept (CONTEXT.md:21).
+
+    Reads the terms from CONTEXT.md itself, under the `**Run record**:` entry, so this test
+    tracks the authority instead of duplicating its vocabulary. If CONTEXT.md's Run record
+    entry or its `_Avoid_` line goes missing, the extraction fails loudly rather than silently
+    checking nothing.
+    """
+    context = _read("CONTEXT.md")
+    match = re.search(r"\*\*Run record\*\*:.*?^_Avoid_:\s*(.+)$", context, re.DOTALL | re.MULTILINE)
+    assert match, "CONTEXT.md must define an _Avoid_ line under the Run record entry (see CONTEXT.md:21)"
+
+    avoid_line = re.sub(r"\([^)]*\)\s*$", "", match.group(1)).strip()
+
+    terms = []
+    for chunk in avoid_line.split(","):
+        chunk = chunk.strip()
+        if "/" in chunk:
+            terms.extend(part.strip() for part in chunk.split("/") if part.strip())
+        elif chunk:
+            terms.append(chunk)
+    return terms
+
+
+def test_contributor_docs_avoid_run_record_config_vocabulary():
+    """Contributor docs must not use the config-key wording CONTEXT.md bans for Run record."""
+    terms = _run_record_avoid_terms()
+    assert terms, "CONTEXT.md Run record _Avoid_ line must yield at least one banned term"
+
+    for doc in CONTRIBUTOR_DOCS:
+        content_lower = _read(doc).lower()
+        for term in terms:
+            assert term.lower() not in content_lower, (
+                f"{doc} uses the term '{term}', which CONTEXT.md's Run record entry "
+                "(CONTEXT.md:21, under _Avoid_) forbids outside the RunRecord facade; "
+                "reword to RunRecord/persisted-key vocabulary instead"
+            )
+
+
+def test_lab_role_controller_spec_attributes_uid_binding_to_owning_authority():
+    """Cluster-UID binding must be attributed to its owning authorities, not to AGENTS.md."""
+    content = _read(LAB_CONTROLLER_SPEC_DOC)
+
+    assert (
+        "records hub identities by" in content
+    ), "lab-role-controller-spec.md must still describe cluster-UID identity recording"
+    assert not re.search(
+        r"records hub identities by[^.]*`AGENTS\.md`", content
+    ), "cluster-UID binding must cite docs/operations/usage.md and architecture.md, not AGENTS.md"
+    assert "docs/operations/usage.md" in content
+
+    sentence_match = re.search(
+        r"The Python CLI already records hub identities by.*?(?=The release framework\s+already builds)",
+        content,
+        re.DOTALL,
+    )
+    assert sentence_match, (
+        "lab-role-controller-spec.md must contain the cluster-UID attribution sentence "
+        "immediately preceding the sentence about the release framework's environment "
+        "fingerprints; if that neighbouring sentence moved, update this anchor"
+    )
+    sentence = sentence_match.group(0)
+
+    assert "AGENTS.md" not in sentence, "the cluster-UID attribution sentence must not cite AGENTS.md"
+    assert "docs/operations/usage.md" in sentence, (
+        "the cluster-UID attribution sentence must cite docs/operations/usage.md, not merely "
+        "mention it elsewhere in the file"
+    )
+    assert "docs/development/architecture.md" in sentence, (
+        "the cluster-UID attribution sentence must cite docs/development/architecture.md, not "
+        "merely mention it elsewhere in the file"
+    )
+
+
+OBSOLETE_CLI_PATTERNS = (
+    (re.compile(r"acm_switchover\.py\s+switchover"), "the obsolete `switchover` subcommand"),
+    (re.compile(r"(?<![-\w])passive-sync"), "the obsolete `passive-sync` method value"),
+)
+
+# A repo-root target anywhere in a black/isort command, not merely as the line's final token.
+# The previous end-of-line anchor missed both `black --check . --line-length 120` and a `.`
+# carried on a backslash continuation, which are repo-wide runs just the same.
+#
+# The real documented commands survive this. They are anchored at the start of a line, so prose
+# that merely mentions black or isort mid-sentence is out of scope; and within them `.` occurs
+# only inside filenames such as `acm_switchover.py`, never preceded by whitespace, so the
+# lookbehind never fires on them.
+BARE_DOT_FORMATTER = re.compile(
+    r"^[ \t]*(?:\$[ \t]*)?(?:black|isort)\b[^\n]*?(?<=[ \t])\.(?:/)?(?=[ \t]|$)",
+    re.MULTILINE,
+)
+
+# Folded before matching so a continuation line carrying the `.` is still read as part of its
+# command. CI's real multi-line commands are unaffected: every one of their continuations ends
+# in an explicit path.
+_LINE_CONTINUATION = re.compile(r"\\\n[ \t]*")
+
+FORMATTER_GUIDANCE_DOCS = (CONTRIBUTING_DOC, TESTING_DOC)
+
+
+def test_active_docs_avoid_obsolete_cli_shapes():
+    """Contributor-facing docs must not show CLI shapes the parser rejects.
+
+    The non-empty guard is deliberate. This assertion is purely negative, so an emptied
+    ``CONTRIBUTOR_DOCS`` or ``OBSOLETE_CLI_PATTERNS`` would make it pass while inspecting
+    nothing — which is how the drift it guards against comes back unnoticed.
+    """
+    inspected = 0
+    for doc in CONTRIBUTOR_DOCS:
+        content = _read(doc)
+        for pattern, label in OBSOLETE_CLI_PATTERNS:
+            inspected += 1
+            match = pattern.search(content)
+            assert match is None, f"{doc} still documents {label}: {match.group(0)!r}"
+
+    assert inspected, (
+        "no document/pattern pair was inspected; this guardrail must fail loudly rather than "
+        "pass vacuously when CONTRIBUTOR_DOCS or OBSOLETE_CLI_PATTERNS is empty"
+    )
+
+
+def test_formatter_guidance_avoids_repo_wide_traversal():
+    """Documented formatter commands must not target the repository root.
+
+    Backslash continuations are folded first, so a `.` split onto a continuation line is caught
+    as part of the command it belongs to rather than read as a line of its own.
+
+    As above, the counter exists so that emptying ``FORMATTER_GUIDANCE_DOCS`` fails this test
+    instead of silently retiring it.
+    """
+    inspected = 0
+    for doc in FORMATTER_GUIDANCE_DOCS:
+        content = _LINE_CONTINUATION.sub(" ", _read(doc))
+        inspected += 1
+        match = BARE_DOT_FORMATTER.search(content)
+        assert match is None, (
+            f"{doc} documents repo-wide formatting, which walks generated trees black and isort "
+            f"do not exclude by default (`completions/`, `.claude/worktrees/`, `graphify-out/`, "
+            f"`review/`): {match.group(0).strip()!r}"
+        )
+
+    assert inspected, (
+        "no document was inspected; this guardrail must fail loudly rather than pass vacuously "
+        "when FORMATTER_GUIDANCE_DOCS is empty"
+    )
+
+
+_BASH_FENCE = re.compile(r"^```bash\n(.*?)^```", re.MULTILINE | re.DOTALL)
+_SHELL_LOOP = re.compile(r"^[ \t]*for\s+\w+\s+in\s+.+?;\s*do\s*$(.*?)^[ \t]*done\s*$", re.MULTILINE | re.DOTALL)
+# A real pipe, not the `||` operator.
+_REAL_PIPE = re.compile(r"(?<!\|)\|(?!\|)")
+
+
+def test_documented_verification_loops_aggregate_failures():
+    """A documented loop over verification commands must not swallow an early failure.
+
+    A bare ``for f in ...; do cmd "$f"; done`` exits with the status of the LAST iteration only.
+    A failing playbook followed by a passing one therefore returns 0, and the documented gate
+    reports success while a real defect sits in the log. CI does not make that mistake; the
+    documentation must not either.
+
+    This asserts the *meaning* rather than any particular prose or variable name. Each loop must
+    either:
+
+    * fail immediately inside the loop (``|| exit 1`` / ``|| return 1``), or
+    * accumulate a status flag that is initialised before the loop and consulted after it in a
+      branch that exits non-zero.
+
+    Additionally, a loop whose command is piped (for example through ``tee`` into a log) must be
+    preceded by ``set -o pipefail`` in the same block: without it, ``|| flag=1`` observes the
+    exit status of the last stage of the pipeline instead of the command being verified, and the
+    aggregation is decorative.
+
+    The non-empty guard is deliberate. If no documented loop can be found at all, this test
+    FAILS rather than passing vacuously — a guardrail that quietly inspects nothing is how the
+    defect it guards against comes back.
+    """
+    content = _read(TESTING_DOC)
+
+    inspected = 0
+    for block in _BASH_FENCE.findall(content):
+        for match in _SHELL_LOOP.finditer(block):
+            inspected += 1
+            head, body, tail = block[: match.start()], match.group(1), block[match.end() :]
+
+            fails_inside = "|| exit 1" in body or "|| return 1" in body
+
+            aggregated = False
+            accumulator = re.search(r"\|\|\s*(\w+)=1\b", body)
+            if accumulator:
+                name = re.escape(accumulator.group(1))
+                initialised = re.search(rf"^[ \t]*{name}=0\b", head, re.MULTILINE)
+                acted_on = re.search(rf"\$\{{?{name}\b.*?\bexit\s+1\b", tail, re.DOTALL)
+                aggregated = bool(initialised) and bool(acted_on)
+
+            assert fails_inside or aggregated, (
+                f"{TESTING_DOC} documents a loop that exits with only the last iteration's "
+                f"status, so an early failure is silently swallowed:\n{match.group(0).strip()}\n"
+                "Fail inside the loop, or accumulate a flag initialised before the loop and "
+                "exit non-zero on it afterwards, as CI does."
+            )
+
+            if _REAL_PIPE.search(body):
+                # Anchored to the start of a line so a prose comment *mentioning* pipefail
+                # cannot satisfy the check — only an actual command can.
+                assert re.search(r"^[ \t]*set -o pipefail\b", head, re.MULTILINE), (
+                    f"{TESTING_DOC} documents a loop whose command is piped, without "
+                    "`set -o pipefail` earlier in the same block. The failure check then "
+                    "observes the last stage of the pipe (for example `tee`), which almost "
+                    f"always succeeds, so the aggregation cannot fire:\n{match.group(0).strip()}"
+                )
+
+    assert inspected, (
+        f"no shell loop was found in any ```bash block of {TESTING_DOC}. This guardrail exists "
+        "to keep documented multi-command verification surfaces from swallowing early failures; "
+        "if the loop was replaced, re-point this test at whatever replaced it rather than "
+        "leaving it inspecting nothing."
+    )
