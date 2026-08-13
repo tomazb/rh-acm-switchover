@@ -17,7 +17,7 @@ _OBSOLETE_CLI_SUBCOMMAND = re.compile(
 )
 _BASH_FENCE = re.compile(r"^```bash\n(.*?)^```", re.MULTILINE | re.DOTALL)
 _WHILE_LOOP = re.compile(
-    r"^[ \t]*while\s+.+?;\s*do\s*$(.*?)^[ \t]*done\s*$",
+    r"^[ \t]*while\s+.+?;\s*do[ \t]*$(.*?)^[ \t]*done(?:[ \t]+[^\n]+)?[ \t]*$",
     re.MULTILINE | re.DOTALL,
 )
 _REAL_PIPE = re.compile(r"(?<!\|)\|(?!\|)")
@@ -92,10 +92,16 @@ def test_workflows_do_not_carry_dead_safety_scan_lane():
     assert "pip-audit --desc" in security, "the dependency workflow must retain pip-audit scanning"
 
 
-def test_while_loop_guard_pattern_matches_documented_shell_shape():
-    """The while-loop detector itself must match the shell shape this guardrail protects."""
-    sample = "while read -r item; do\n  verify \"$item\" || status=1\ndone\n"
-    assert _WHILE_LOOP.search(sample), "while-loop guard pattern no longer matches `while ...; do ... done`"
+def test_while_loop_guard_pattern_matches_documented_shell_shapes():
+    """The while-loop detector must match simple loops and loops with input redirection."""
+    samples = (
+        "while read -r item; do\n  verify \"$item\" || status=1\ndone\n",
+        "while read -r item; do\n  verify \"$item\" || status=1\ndone < <(items)\n",
+    )
+    for sample in samples:
+        assert _WHILE_LOOP.search(sample), (
+            "while-loop guard pattern no longer matches a protected `while ...; do ... done` shape"
+        )
 
 
 def test_documented_while_verification_loops_aggregate_failures():
