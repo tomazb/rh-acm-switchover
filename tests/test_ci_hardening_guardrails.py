@@ -17,7 +17,7 @@ _OBSOLETE_CLI_SUBCOMMAND = re.compile(
 )
 _BASH_FENCE = re.compile(r"^```bash\n(.*?)^```", re.MULTILINE | re.DOTALL)
 _WHILE_LOOP = re.compile(
-    r"^[ \t]*while\s+.+?;\s*do[ \t]*$(.*?)^[ \t]*done(?:[ \t]+[^\n]+)?[ \t]*$",
+    r"^[ \t]*while\s+.+?(?:;[ \t]*|\n[ \t]*)do[ \t]*$(.*?)^[ \t]*done(?:[ \t]+[^\n]+)?[ \t]*$",
     re.MULTILINE | re.DOTALL,
 )
 _REAL_PIPE = re.compile(r"(?<!\|)\|(?!\|)")
@@ -38,9 +38,9 @@ def test_run_tests_release_lane_ignores_inherited_release_profile():
         if "python -m pytest tests/release -q" in line and not line.lstrip().startswith("#")
     ]
 
-    assert invocations == ["env -u ACM_RELEASE_PROFILE python -m pytest tests/release -q"], (
-        "run_tests.sh must execute its release-framework lane with ACM_RELEASE_PROFILE removed; "
-        f"found {invocations!r}"
+    assert invocations == ["env -u ACM_RELEASE_PROFILE -u PYTEST_ADDOPTS python -m pytest tests/release -q"], (
+        "run_tests.sh must execute its release-framework lane with ACM_RELEASE_PROFILE and "
+        f"PYTEST_ADDOPTS removed; found {invocations!r}"
     )
 
 
@@ -93,14 +93,16 @@ def test_workflows_do_not_carry_dead_safety_scan_lane():
 
 
 def test_while_loop_guard_pattern_matches_documented_shell_shapes():
-    """The while-loop detector must match simple loops and loops with input redirection."""
+    """The while-loop detector must match supported command and redirection shapes."""
     samples = (
         "while read -r item; do\n  verify \"$item\" || status=1\ndone\n",
         "while read -r item; do\n  verify \"$item\" || status=1\ndone < <(items)\n",
+        "while read -r item\ndo\n  verify \"$item\" || status=1\ndone\n",
+        "while read -r item &&\n  test -n \"$item\"; do\n  verify \"$item\" || status=1\ndone\n",
     )
     for sample in samples:
         assert _WHILE_LOOP.search(sample), (
-            "while-loop guard pattern no longer matches a protected `while ...; do ... done` shape"
+            "while-loop guard pattern no longer matches a protected `while ... do ... done` shape"
         )
 
 
@@ -115,7 +117,7 @@ def test_documented_while_verification_loops_aggregate_failures():
 
     for block in _BASH_FENCE.findall(content):
         for match in _WHILE_LOOP.finditer(block):
-            head, body, tail = block[: match.start()], match.group(1), block[match.end() :]
+            head, body, tail = block[:match.start()], match.group(1), block[match.end():]
 
             fails_inside = "|| exit 1" in body or "|| return 1" in body
 
