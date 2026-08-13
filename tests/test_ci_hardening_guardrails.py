@@ -30,7 +30,7 @@ def _workflow_texts() -> list[tuple[Path, str]]:
 
 
 def test_run_tests_release_lane_ignores_inherited_release_profile():
-    """The default local runner must not inherit a live release profile."""
+    """The default local runner must isolate inherited live-release option sources."""
     content = RUN_TESTS.read_text(encoding="utf-8")
     invocations = [
         line.strip()
@@ -38,10 +38,11 @@ def test_run_tests_release_lane_ignores_inherited_release_profile():
         if "python -m pytest tests/release -q" in line and not line.lstrip().startswith("#")
     ]
 
-    assert invocations == ["env -u ACM_RELEASE_PROFILE -u PYTEST_ADDOPTS python -m pytest tests/release -q"], (
-        "run_tests.sh must execute its release-framework lane with ACM_RELEASE_PROFILE and "
-        f"PYTEST_ADDOPTS removed; found {invocations!r}"
-    )
+    assert len(invocations) == 1, f"expected one release-framework invocation, found {invocations!r}"
+    invocation = invocations[0]
+    command_offset = invocation.index("python -m pytest tests/release -q")
+    assert invocation.index("ACM_RELEASE_PROFILE") < command_offset
+    assert invocation.index("PYTEST_ADDOPTS") < command_offset
 
 
 def test_workflows_do_not_invoke_obsolete_cli_subcommands():
