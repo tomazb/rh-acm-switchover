@@ -188,8 +188,8 @@ explicit release profile instead.
 
 `./run_tests.sh` covers surfaces 1 and 2, and adds surface 8 only when you export `RUN_E2E=1`.
 No invocation of it runs the collection unit, integration, scenario, syntax, or build gates —
-surfaces 3 through 7 have no code path in the runner at all. It is not a complete verification
-surface for any change that touches `ansible_collections/`.
+surfaces 3 through 7 have no code path in the runner at all. In particular, `./run_tests.sh`
+is not a complete verification surface for any change that touches `ansible_collections/`.
 
 CI-equivalent quality gates (`black`, `isort`, `mypy`, and `bandit`) fail by default.
 For a local advisory-only quality pass, run `STRICT_QUALITY=0 ./run_tests.sh`.
