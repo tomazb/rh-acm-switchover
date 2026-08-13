@@ -108,9 +108,9 @@ ACM_RELEASE_PROFILE= PYTEST_ADDOPTS= python -m pytest tests/release -q
 
 if [ "${RUN_E2E:-0}" = "1" ]; then
     echo ""
-echo "======================================"
-echo "Running E2E Tests (On Demand)"
-echo "======================================"
+    echo "======================================"
+    echo "Running E2E Tests (On Demand)"
+    echo "======================================"
     python -m pytest tests/e2e/ -v -m e2e --cov=. --cov-append --cov-report=term-missing
 fi
 
