@@ -37,12 +37,10 @@ def test_run_tests_release_lane_ignores_inherited_release_profile():
     ]
 
     assert len(invocations) == 1, f"expected one release-framework invocation, found {invocations!r}"
-    invocation = invocations[0]
-    command_offset = invocation.index("python -m pytest tests/release -q")
-    prefix_tokens = invocation[:command_offset].split()
-    assignments = {token.partition("=")[0]: token.partition("=")[2] for token in prefix_tokens if "=" in token}
-    assert assignments.get("ACM_RELEASE_PROFILE") == ""
-    assert assignments.get("PYTEST_ADDOPTS") == ""
+    assert invocations[0] in {
+        "ACM_RELEASE_PROFILE='' PYTEST_ADDOPTS='' python -m pytest tests/release -q",
+        "env -u ACM_RELEASE_PROFILE -u PYTEST_ADDOPTS python -m pytest tests/release -q",
+    }
 
 
 def test_workflows_do_not_invoke_obsolete_cli_subcommands():
