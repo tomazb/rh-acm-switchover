@@ -754,8 +754,9 @@ Phase 7A contract:
 - Should live decommission ever run outside disposable labs?
 - What exact JSON schemas should segment and merged artifacts use?
 - What exact lab config and generated profile schema changes are needed?
-- Phase 9 authority is recorded concisely in `AGENTS.md`; later slices must keep it current without duplicating the
-  full design.
+- `AGENTS.md` records concise pointers to Phase 9 design and sequencing authorities; the GitHub issue tracker owns
+  current Phase 9 status. Later slices must keep the authority pointers and tracker reference current without
+  duplicating the full design or status history.
 - Should `rbac-bootstrap-live` remain cataloged as lab-mutating if it stays SAR-only and non-persistent?
 - Should an Agent skill be added only after the controller CLI contract is implemented?
 
