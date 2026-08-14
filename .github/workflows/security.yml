@@ -33,13 +33,6 @@ jobs:
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
         
-    - name: Run Safety vulnerability scan
-      run: |
-        # Use modern 'scan' command; do not fail CI on findings
-        safety scan --json --output safety-report.json || true
-        safety scan --full-report || true
-      continue-on-error: true
-        
     - name: Run pip-audit
       run: |
         pip-audit --desc --format json --output pip-audit-report.json || true
@@ -52,7 +45,6 @@ jobs:
       with:
         name: dependency-security-reports
         path: |
-          safety-report.json
           pip-audit-report.json
         retention-days: 90
 
