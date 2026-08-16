@@ -156,7 +156,7 @@ feedback exists.
 6. **Resolve/reply discipline**: a thread is resolved or replied to only
    after the corresponding fix or rationale is pushed — never
    preemptively.
-7. **Re-validate the new head**: after substantive fixes, obtain a fresh
+7. **Re-validate the new head**: after any pushed change that changes the head, obtain a fresh
    Independent Validator verdict covering the exact new head and governing
    base relationship, published by that Validator as a new top-level PR
    comment. A verdict/comment on an earlier head cannot be reused or edited

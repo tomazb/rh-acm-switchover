@@ -455,10 +455,11 @@ Before merging any PR:
   technical reason; resolve a thread only after the change or reply is pushed.
 - Re-fetch comments and threads after addressing feedback. Do not merge while an actionable
   thread remains unresolved.
-- Confirm the latest Independent Validator terminal report is a top-level PR comment that
-  still matches the current head SHA and governing base/merge-base relationship. A report
-  for an older head or superseded base relationship is stale evidence and requires fresh
-  exact-head validation before merge readiness can be claimed.
+- Confirm the latest Independent Validator terminal report is a top-level PR comment with a
+  `PASS` or `PASS WITH NON-BLOCKING COMMENTS` verdict that still matches the current head
+  SHA and governing base/merge-base relationship. A report for an older head or superseded
+  base relationship is stale evidence and requires fresh exact-head validation before merge
+  readiness can be claimed.
 - Check CI immediately before merge. Do not merge with failing, cancelled, or pending
   required checks.
 
