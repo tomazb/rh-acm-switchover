@@ -239,7 +239,10 @@ Governed work runs as three roles with separated responsibilities:
   invalidates, and records evidence.
 - **Independent validator** — validates the frozen head against the governing acceptance
   criteria from a clean checkout. Independence is a requirement: the validator does not
-  inherit the builder's working tree, assumptions, or unverified claims.
+  inherit the builder's working tree, assumptions, or unverified claims. Its only permitted
+  PR mutation is publishing its terminal exact-head report as a new top-level PR comment;
+  it never implements fixes, pushes commits, changes PR metadata or state, resolves threads,
+  marks the PR ready, or merges it.
 - **PR-comment resolver / final validator** — dispositions every comment and review thread,
   applies accepted changes, and confirms merge readiness.
 
@@ -272,6 +275,17 @@ and the slice cannot ship. The rules below define the termination condition.
 - A non-blocking comment that is a preference, a nit, or already correct as
   written needs a reply and nothing else. Do not file it; a backlog of
   non-findings becomes pressure to reopen validation later.
+- Before publishing its terminal report, the Independent Validator must re-fetch
+  the PR and re-check that the current head SHA is still the validated SHA and
+  that the governing base relationship, including the merge base, is unchanged.
+  If the head or governing base relationship changed, the Validator must not
+  publish the prior result as a current PASS; it must revalidate the new exact
+  state first.
+- After that final re-check succeeds, the Independent Validator publishes its
+  terminal result as a **new top-level PR comment**. The comment must record:
+  the verdict; base SHA, head SHA, and merge-base SHA; changed-file scope;
+  protected-file result; applicable validation results; CI status; review-thread
+  status; merge-readiness assessment; and confidence.
 - Terminal PASS means every required participant has returned a merge-ready
   verdict for the frozen head. Where a workflow defines graded verdicts, both
   `PASS` and `PASS WITH NON-BLOCKING COMMENTS` are merge-ready; non-blocking
@@ -441,6 +455,10 @@ Before merging any PR:
   technical reason; resolve a thread only after the change or reply is pushed.
 - Re-fetch comments and threads after addressing feedback. Do not merge while an actionable
   thread remains unresolved.
+- Confirm the latest Independent Validator terminal report is a top-level PR comment that
+  still matches the current head SHA and governing base/merge-base relationship. A report
+  for an older head or superseded base relationship is stale evidence and requires fresh
+  exact-head validation before merge readiness can be claimed.
 - Check CI immediately before merge. Do not merge with failing, cancelled, or pending
   required checks.
 

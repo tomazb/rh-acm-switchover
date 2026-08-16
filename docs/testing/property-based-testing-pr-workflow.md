@@ -101,8 +101,11 @@ The Validator reviews a Builder PR it did not write.
 
 - Uses a fresh clean checkout/worktree and records the exact PR head SHA and
   current `origin/ansible` SHA it validated.
-- Read-only with respect to the branch: the Validator **never pushes**
-  commits, never amends, never rebases, and never edits the PR.
+- Read-only with respect to the branch and PR state: the Validator **never
+  pushes** commits, never amends, never rebases, never implements fixes,
+  never edits PR metadata, never resolves threads, never marks the PR ready,
+  and never merges it. Its only permitted PR mutation is publishing the
+  terminal validation report as a new top-level PR comment.
 - Independently re-derives the gate checks: base branch correctness,
   allowed-file compliance, protected files untouched, parity statement
   accuracy against the actual diff, spec-section satisfaction, and
@@ -119,8 +122,15 @@ The Validator reviews a Builder PR it did not write.
   - `HARD FAIL` — a gate violation (wrong base, forbidden file touched,
     parity misstatement, unreproducible evidence); the PR must not merge
     and the Builder or Resolver must remediate from the gate level up.
-- Records the verdict, exact head/base SHAs, verification, and findings as
-  PR review content.
+- Immediately before publishing the terminal report, re-fetches the PR and
+  confirms that the current head SHA is still the validated SHA and that the
+  governing base relationship, including merge base, is unchanged. If either
+  changed, the Validator does **not** publish the prior result as a current
+  PASS; it revalidates the new exact state first.
+- Publishes the terminal report as a **new top-level PR comment**. The comment
+  records: verdict; base SHA, head SHA, and merge-base SHA; changed-file
+  scope; protected-file result; applicable validation results; CI status;
+  review-thread status; merge-readiness assessment; and confidence.
 
 ### PR Comments Resolver prompt contract
 
@@ -129,7 +139,9 @@ feedback exists.
 
 1. **Fetch everything first**: top-level issue-style PR comments, review
    comments, review submissions, review threads (including resolution
-   state), and CI/check status for the exact head commit.
+   state), and CI/check status for the exact head commit. Treat Independent
+   Validator terminal comments as evidence tied to the exact head/base
+   relationship they record; never silently reuse a stale report.
 2. **Validate before changing**: every actionable comment is validated
    against the actual source before any edit — the Resolver confirms the
    claim is true (or false) in the code, and never applies a suggested
@@ -145,11 +157,13 @@ feedback exists.
    after the corresponding fix or rationale is pushed — never
    preemptively.
 7. **Re-validate the new head**: after substantive fixes, obtain a fresh
-   Independent Validator verdict covering the exact new head. A verdict on
-   an earlier head cannot be reused.
+   Independent Validator verdict covering the exact new head and governing
+   base relationship, published by that Validator as a new top-level PR
+   comment. A verdict/comment on an earlier head cannot be reused or edited
+   into current evidence by the Resolver.
 8. **Hard fail** if actionable feedback cannot be resolved within scope, if
    required checks are failing, pending, or unknown, or if a current-head
-   Validator verdict is missing at the end of the pass.
+   Validator terminal comment is missing at the end of the pass.
 
 ### Hard-fail message format
 
@@ -182,9 +196,12 @@ A PBT PR may merge only when all of the following hold:
   cleanly.
 - All required CI checks on the exact head commit are green — not pending,
   not unknown.
-- The most recent Independent Validator verdict covers that exact head and
-  is `PASS` or `PASS WITH NON-BLOCKING COMMENTS`; a later commit, `BLOCKED`,
-  or `HARD FAIL` bars merging until the current head is re-validated.
+- The most recent Independent Validator terminal report is a top-level PR
+  comment that records the current exact head and governing base/merge-base
+  relationship, and its verdict is `PASS` or `PASS WITH NON-BLOCKING
+  COMMENTS`; a later commit, changed base relationship, `BLOCKED`, or `HARD
+  FAIL` bars merging until the current exact state is re-validated and a new
+  terminal comment is published.
 - No property covering dual-supported behavior remains an expected failure
   for a parity disagreement unless the operator explicitly approved the
   intentional divergence under the `AGENTS.md` parity gate and the required
