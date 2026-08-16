@@ -2035,10 +2035,13 @@ findings validated in full; ~11 theme/table rows sampled; three of the review's
 seven self-retractions spot-checked (all three retractions correct). The ~80
 medium/low table rows were not validated and receive no tracker rows.
 
-Result: 12 of 14 high findings hold (10 confirmed, 2 confirmed with
-corrections). `H7` is rejected as written — its ansible-core mechanism claim was
-refuted empirically across 2.16–2.21 (see the `GLM-H7` matrix row). `H9` is
-narrowed to a missing intra-collection derivation guard. To avoid colliding with
+Result: 13 of 14 high findings hold at least in part, counted by matrix
+validation label — 10 confirmed (`GLM-H1`, `GLM-H2`, `GLM-H3`, `GLM-H4`,
+`GLM-H5`, `GLM-H6`, `GLM-H8`, `GLM-H10`, `GLM-H13`, `GLM-H14`) and 3 partial
+(`GLM-H9`, `GLM-H11`, `GLM-H12`, each narrowed as recorded in its row). `H7` is
+rejected as written — its ansible-core mechanism claim was refuted empirically
+across 2.16–2.21 (see the `GLM-H7` matrix row); only `GLM-H7a` survives. `H9`
+is narrowed to a missing intra-collection derivation guard. To avoid colliding with
 Review #1's `H*` namespace, tracker IDs use the `GLM-` prefix: `GLM-H<n>` maps
 to `glm-review.md` finding `H<n>`; `GLM-V<n>` rows are defects discovered during
 this validation pass that appear in neither document.
