@@ -38,13 +38,108 @@ Before implementation begins for any remaining Thermos slice:
 This gate applies to the open `SSA-01`-`SSA-10`, `R3-*`, and `TR2D-*`
 boundaries and to any new Thermos follow-up slice added later. It no longer
 applies to the deep-scan queue: every implementation row in the PR Sequence
-table (`PR 01`-`PR 47` and `H1`) is `merged`. `PR 48` is this
-tracker-maintenance correction and is `ready_for_review`, which means only
-that the builder and review-comment resolver passes are complete. GitHub
-readiness is separate, and every branch-head change requires fresh exact-head
-independent validation before a merge-readiness assessment.
+table (`PR 01`-`PR 47` and `H1`) is `merged`. `PR 48` / GitHub PR #197 is
+merged; its exact-head independent validation completed before merge, and
+GitHub PR #196 is closed unmerged as superseded. Current open work is owned by
+the SSA, R3, R4, TR2D, LER, GLM, H3, and deferred-issue boundaries below.
 
-**Last Updated:** 2026-08-16
+**Last Updated:** 2026-08-17
+
+## Current-State Reconciliation (2026-08-17)
+
+This amendment is bound to
+`ansible@7a8cfda155b8c5e7d4d1701e8f2ad44c03163b95` and tracker blob
+`bc251be637022c829921b1a655e856a703ff2246`. Dated sections below remain
+historical evidence for the head they name. When a dated status, scope,
+ownership, or ranking statement conflicts with this amendment or with current
+merged repository history, this amendment owns current tracker state.
+
+The operator-supplied `glm-review.md` has SHA-256
+`0676a6d90dea34beb4e10899a2033474de107ea7938d487962a5951d74f8cfe1` and
+names base `c940f55a92c60c3d31ffb06b1bd562633f8ec8c5`. That base is a valid
+repository commit and the base parent of PR #264's tracker-only merge
+`b6f196a3ef8a3e11c7ea4aeb1524428636fc2e70`; the statement below that it
+resolved to no ref, reflog entry, or worktree is incorrect. The artifact's
+claimed eight-agent execution and clean-worktree process remain supplied
+provenance: the attachment contains no agent transcripts or machine-verifiable
+worktree manifest.
+
+This reconciliation changes tracker status, scope, ownership, and ranking only.
+It authorizes no runtime, test, workflow, RBAC, manifest, Helm, release,
+lab-controller, protected-file, issue, or implementation-slice work.
+
+### Current status and scope corrections
+
+| Finding or boundary | Current disposition | Current owner / consequence |
+| --- | --- | --- |
+| `PR 48` / GitHub PR #197 | merged | PR #196 is closed unmerged as superseded; retain the valid TR2D content already absorbed here. |
+| `SSA-05` | delivered | PR #223 removed `scripts/argocd-manage.sh`; nine SSA slices remain planned. |
+| `SSA-S1`, `SSA-S3` | obsolete shipped-surface findings | No retained Bash Argo CD state/resume implementation remains. |
+| `M5` | resolved | PR #206 removed the cited `lib/argocd_coordinator.py::pause_hubs` architecture; later Argo CD transaction findings remain separate. |
+| `R3-A8` / `R3-08b` | retired as supported-runtime work | The current compatibility authority excludes Python 3.9 controller runtime. |
+| `R3-T3` | partially resolved | PR #223 made the test inspect shipped YAML; residual semantic Jinja/Ansible execution coverage stays in `R3-05b`. |
+| `R3-T8` / `R3-09c` | default-runner defect resolved/reframed | PR #260 neutralized ambient release-profile variables in `./run_tests.sh`; explicit profile-driven pytest remains an intentional live entrypoint. |
+| `F37` | remains resolved | The identity-free explicit-`run_id` / direct-role residual remains under `TR2D-02` / `R4-01`; do not reopen F37. |
+| `R4-A1` | obsolete | The Bash Argo CD surface was removed by PR #223. |
+| `R4-A2`, `R4-A3` | open, scope narrowed | Active form factors are Python and collection only; remove the deleted Bash surface from implementation and tests. |
+| `R4-B2` | partially resolved | PR #224 closed the collection mutation-before-ownership window with the atomic cluster marker; `R4-02` retains the Python residual only. |
+| `R4-E1` | partially resolved | PR #222 covers ordinary exceptions and `KeyboardInterrupt`; `R4-05` retains abrupt process-termination/crash-marker residuals. |
+| `R4-F1` / `GLM-H3` | open, priority elevated | `R4-06`; conditional P1 before relying on the klusterlet wrong-hub gate in a live switchover. |
+
+### Ownership and priority corrections
+
+- `R3-P1` remains open and P1 for fleet-scale use, but its implementation owner
+  is `R3-03`, not `R3-10b`.
+- Remove `R3-T8` from the active P1 queue.
+- Remove `SSA-S1`, `SSA-S3`, `R3-A8`, and `R4-A1` from active implementation
+  queues.
+- Keep the `R3-T3` residual at P3 as test-oracle hardening.
+- `GLM-H1` is P2; treat it as conditional P1 whenever
+  `run_15_switchover_test.sh` output is used as acceptance, release, or
+  certification evidence.
+- `GLM-H3` / `R4-F1` is P2; treat it as conditional P1 before a live switchover
+  relies on klusterlet wrong-hub verification.
+- `GLM-H4` inherits P2 through `TR2D-02` / `R4-01`.
+- `GLM-V2` remains P3 pending proof that mismatched dry-run construction is
+  externally reachable; that proof is required before promotion to P2.
+- `R4-E1` now means the narrowed abrupt-termination residual, not ordinary
+  Python exception or `KeyboardInterrupt` handling.
+
+### GLM detailed-high coverage boundary
+
+The validated GLM tally below covers the fourteen named `H1`-`H14` findings.
+The attachment's detailed tables also contain sixteen high rows. Four of those
+are not represented by a named `H` finding and were not independently validated
+by the tracker pass. They are recorded here as leads only; they are not Finding
+Validation Matrix rows and authorize no implementation.
+
+| Lead | Source claim | Candidate owner | Status |
+| --- | --- | --- | --- |
+| `GLM-DH-RBAC-LOOPS` | Repeated Python RBAC permission-check loops | `GLM-H13` / future RBAC design | pending independent validation |
+| `GLM-DH-KLUSTERLET-MODULE` | Collection `module_utils/klusterlet.py` god-module boundary | H3 design track | pending independent validation |
+| `GLM-DH-PREFLIGHT-FINDINGS` | Repeated preflight finding-append expressions | unassigned design input | pending independent validation |
+| `GLM-DH-BACKUP-SELECTION` | Duplicate latest/completed Backup selection and finding logic | `R4-04` or separate design input | pending independent validation |
+
+### Current work order
+
+1. Reconcile this tracker through the current tracker-only PR and exact-head
+   independent validation.
+2. `SSA-01` — distinct physical-hub UID invariant in both form factors.
+3. `R3-02` — fail-closed collection compactor, connectivity, and
+   auto-import-strategy verification.
+4. `R4-04` — concrete journaled backup and Restore evidence instead of moving
+   `latest` aliases.
+5. Conditional operational blockers before their named workflows:
+   `R4-06`/`GLM-H3`, `R4-01`+`TR2D-02`, `SSA-02`, `R3-06`, and `R4-02`.
+6. `GLM-01`, starting with `GLM-H1`, then `GLM-H2`, `GLM-H5`, and
+   `GLM-H14` as one bounded Bash verification-integrity tranche.
+7. `R3-03` fleet timeout budgeting, followed by lower-priority reporting,
+   guardrail, architecture, and hygiene work.
+
+No row changed by this reconciliation authorizes implementation. Each open
+runtime slice remains subject to its governing design/spec, implementation
+plan, explicit operator approval, parity boundary, protected-file boundary,
+and fresh exact-head validation gate.
 
 ## Post-Merge Revalidation (2026-06-03)
 
@@ -184,7 +279,7 @@ complete):
 1. `PR 34` - `R2-H2`: route the remaining hardcoded API-group/version/plural
    literals in `modules/` through `MANAGED_CLUSTER_API_GROUP` (and companion
    constants where they exist). Delivered scope was 56 literals: the 49
-   top-level sites the review counted plus 7 found in `modules/preflight/`
+   top-level sites the review counted plus 7 more found in `modules/preflight/`
    during the red-test run.
 2. `PR 35` - `R2-M4`: deduplicate `lib/utils.py` `REPORT_PHASE_NAMES` and
    `lib/workflow.py` `_CANONICAL_RESUME_START_PHASES` into one shared mapping.
@@ -204,7 +299,7 @@ complete):
 7. `PR 40` - `R2-M3`: extract the near-duplicate
    `_wait_for_restore_deletion`/`_wait_for_primary_restore_deletion` methods
    into `lib/waiter.py`. (This row originally also claimed Review #1 `M2`; that
-   credit was wrong and was corrected on 2026-07-26 — see the `M2` matrix row.)
+   credit was wrong and was corrected on 2026-07-26 — see the `M2` row.)
 8. `PR 41` - `R2-M5`: factor the 4x-duplicated Ansible summary-path resolution
    logic into one shared `set_fact`/filter.
 9. `PR 42` - `R2-M2`: add resume-path re-validation of Velero-restore
@@ -310,7 +405,7 @@ design/spec and implementation sequence is approved.
 - Ten Review #1 matrix rows were added: nine orphaned findings (`M1`, `M3`,
   `M5`, `L2`-`L7`) plus `M2`, which was a separate mis-credit rather than an
   orphan. All were open but
-  untracked since 2026-07-02 now have Finding Validation Matrix rows. All nine
+  untracked since 2026-07-02 now have rows. All nine
   are still open. The claim that the main queue is complete refers to the
   `PR 34`-`PR 47` slice queue only, not to these findings.
 - All ten `SSA-*` slices remain `planned`, re-confirmed by construction.
@@ -1307,8 +1402,7 @@ source-backed dispositions above.
   `48` row this slice added) are genuinely `MERGED`, with titles matching each
   row's description. No row claims `merged` for a PR that is open, draft, or
   closed-unmerged.
-- **All 7 GitHub issues** (#152-#158) are genuinely `OPEN`, with titles matching
-  the findings attached to them.
+- **All 7 GitHub issues** (#152-#158) are genuinely `OPEN`, with titles matching the findings attached to them.
 - **The Verification Command Reference** is fully accurate: all five commands
   resolve and collect (61, 867, 238, and 140 tests respectively);
   `run_tests.sh` is present and executable.
@@ -1333,8 +1427,7 @@ source-backed dispositions above.
 
 ### Deterministic Review #3 count check
 
-Run from the repository root. This parses the canonical findings table rather
-than trusting prose arithmetic:
+Run from the repository root. This parses the canonical findings table rather than trusting prose arithmetic:
 
 ```bash
 python - <<'PY'
@@ -1385,16 +1478,13 @@ PY
 
 ### All ten SSA slices remain `planned`
 
-All ten SSA slices remain incomplete/planned; some individual acceptance
-criteria are already satisfied as recorded in the per-slice notes.
+All ten SSA slices remain incomplete/planned; some individual acceptance criteria are already satisfied as recorded in the per-slice notes.
 Specifically, `SSA-01`'s unreadable-identity bullet and `SSA-03`'s
-integer/lower-bound worker validation are already satisfied by pre-existing
-code.
+integer/lower-bound worker validation are already satisfied by pre-existing code.
 `git show --stat 4fed598c` touches only
 `tests/release/lab_controller/*`, `tests/release/test_lab_controller_*`,
 `tests/release/README.md`, `CHANGELOG.md`, and `docs/`; `78126c05` is docs-only;
-and the three safe-logging commits merged on 2026-07-18, *before* the 07-20
-check. No product-runtime file under `lib/`, `modules/`, `acm_switchover.py`,
+and the three safe-logging commits merged on 2026-07-18, *before* the 07-20 check. No product-runtime file under `lib/`, `modules/`, `acm_switchover.py`,
 `scripts/`, `ansible_collections/`, `.github/workflows/`, or
 `container-bootstrap/` changed in the interval. No status flips.
 
