@@ -43,7 +43,42 @@ merged; its exact-head independent validation completed before merge, and
 GitHub PR #196 is closed unmerged as superseded. Current open work is owned by
 the SSA, R3, R4, TR2D, LER, GLM, H3, and deferred-issue boundaries below.
 
-**Last Updated:** 2026-08-18
+**Last Updated:** 2026-08-19
+
+## Post-Merge Reconciliation (2026-08-19)
+
+This amendment is bound to
+`ansible@8caf4fa1d865a6f86c61495078d8ae02dce794fe`, the merge commit for
+GitHub PR #265. It supersedes current-status and current-ordering statements in
+the 2026-08-18 reconciliation where they conflict while preserving that dated
+section as historical evidence for its bound head.
+
+- `PR 49` / GitHub PR #265 merged from exact validated head
+  `a8e4f98143a844b9d6afda5daabccdb590852b8f` at
+  `2026-08-19T12:09:48Z` as merge commit
+  `8caf4fa1d865a6f86c61495078d8ae02dce794fe`. The final exact head had green
+  hosted CI and an independent `PASS_EXACT_HEAD` verdict before merge.
+- Current `R3-01b` ownership is split by GitHub issues: `R3-01b-A` / issue #251
+  owns the localized `R3-A2` and `R3-A3` finalization runtime correction;
+  `R3-01b-B` / issue #252 owns the repository-wide literal
+  `register`/`set_fact` collision guardrail and must sequence explicitly with
+  issue #202. Closed issue #212 remains historical superseded B14 authorization
+  only and grants no implementation authority.
+- The operator-supplied 2026-08-19 code-smell report has SHA-256
+  `e4c74f1d5f988791947586bbb5eead18b5db17a4cadc8ec3a9c36c3abb040a74`.
+  Revalidation against `ansible@8caf4fa1d865a6f86c61495078d8ae02dce794fe`
+  independently reconfirmed the existing GLM/R4 ownership and priority model;
+  it creates no new canonical finding IDs, changes no priority, and grants no
+  implementation authority. The `@api_call(not_found_value=[])` shared-mutable
+  observation remains an untracked lead pending a concrete caller/reproducer
+  that demonstrates cross-call mutation impact.
+- GitHub issue #239 remains the issue-level record for the Python Argo CD dry-run
+  mode invariant and adjacent ownership-token requirement. Tracker finding
+  `GLM-V2` remains governed by `R4-01`, not `R3-05a`.
+
+This post-merge reconciliation changes tracker and issue metadata only. It
+changes no runtime, tests, workflows, RBAC, manifests, Helm, release-validation,
+lab-controller, protected-file, or implementation behavior.
 
 ## Current-State Reconciliation (2026-08-18)
 
@@ -73,7 +108,7 @@ lab-controller, protected-file, issue, or implementation-slice work.
 | Finding or boundary | Current disposition | Current owner / consequence |
 | --- | --- | --- |
 | `PR 48` / GitHub PR #197 | merged | PR #196 is closed unmerged as superseded; retain the valid TR2D content already absorbed here. |
-| `PR 49` / GitHub PR #265 | in_progress | This tracker-only correction is the current draft. Builder correction does not imply independent validation, GitHub readiness, or merge readiness. |
+| `PR 49` / GitHub PR #265 | merged | Merged from exact validated head `a8e4f98143a844b9d6afda5daabccdb590852b8f` at `2026-08-19T12:09:48Z` as merge commit `8caf4fa1d865a6f86c61495078d8ae02dce794fe`. |
 | `SSA-05` | delivered | PR #223 removed `scripts/argocd-manage.sh`; nine SSA slices remain planned. |
 | `SSA-S1`, `SSA-S3` | obsolete shipped-surface findings | No retained Bash Argo CD state/resume implementation remains. |
 | `M5` | resolved | PR #206 removed the cited `lib/argocd_coordinator.py::pause_hubs` architecture; later Argo CD transaction findings remain separate. |
@@ -123,18 +158,16 @@ Validation Matrix rows and authorize no implementation.
 
 ### Current work order
 
-1. Reconcile this tracker through the current tracker-only PR and exact-head
-   independent validation.
-2. `SSA-01` — distinct physical-hub UID invariant in both form factors.
-3. `R3-02` — fail-closed collection compactor, connectivity, and
+1. `SSA-01` — distinct physical-hub UID invariant in both form factors.
+2. `R3-02` — fail-closed collection compactor, connectivity, and
    auto-import-strategy verification.
-4. `R4-04` — concrete journaled backup and Restore evidence instead of moving
+3. `R4-04` — concrete journaled backup and Restore evidence instead of moving
    `latest` aliases.
-5. Conditional operational blockers before their named workflows:
+4. Conditional operational blockers before their named workflows:
    `R4-06`/`GLM-H3`, `R4-01`+`TR2D-02`, `SSA-02`, `R3-06`, and `R4-02`.
-6. `GLM-01`, starting with `GLM-H1`, then `GLM-H2`, `GLM-H5`, and
+5. `GLM-01`, starting with `GLM-H1`, then `GLM-H2`, `GLM-H5`, and
    `GLM-H14` as one bounded Bash verification-integrity tranche.
-7. `R3-03` fleet timeout budgeting, followed by lower-priority reporting,
+6. `R3-03` fleet timeout budgeting, followed by lower-priority reporting,
    guardrail, architecture, and hygiene work.
 
 No row changed by this reconciliation authorizes implementation. Each open
@@ -2378,17 +2411,17 @@ Dispositions:
 | 46 | merged | `refactor/thermos-46-rbac-certification-dedup` | `.claude/worktrees/thermos-46-rbac-certification-dedup` | R2-M8 | https://github.com/tomazb/rh-acm-switchover/pull/134 | Design spec `docs/superpowers/specs/2026-07-03-pr46-rbac-certification-dedup-design.md`; implementation plan `docs/superpowers/plans/2026-07-03-pr46-rbac-certification-dedup.md`. Extracted `_evaluate_permissions(..., expect_allowed: bool)` returning `(assertions, unexpected_count, error_count)`; `certify_rbac_permissions` now calls it once for required permissions and once for forbidden permissions, with expected/actual/message strings derived from the polarity so emitted `CertificationAssertion`s are byte-identical to before. Red-first 6-case polarity-matrix unit test (allowed/denied/error × both polarities); guarded by the existing certification suite. Verification: `python -m pytest tests/release/checks/test_rbac_certification.py tests/release/test_orchestrator.py -q` passed (`62 passed`); full `./run_tests.sh` passed (root lane `1563 passed, 105 deselected`; release lane `1027 passed, 3 skipped`; Flake8/Black/isort/MyPy/Bandit/pip-audit clean); `git diff --check` passed. |
 | 47 | merged | `refactor/thermos-47-release-adapter-dedup` | `.claude/worktrees/thermos-47-release-adapter-dedup` | R2-M6 | https://github.com/tomazb/rh-acm-switchover/pull/135 | Design spec `docs/superpowers/specs/2026-07-03-pr47-release-adapter-dedup-design.md`; implementation plan `docs/superpowers/plans/2026-07-03-pr47-release-adapter-dedup.md`. Added `run_stream_subprocess(...)` to `adapters/common.py` owning the mkdir → `subprocess.run` → timeout/normal branches → `write_capture_artifact` pair → exit-code + redaction assertions → `StreamResult` flow; each adapter's `execute()` now builds its command/env and passes stream name, capability, message strings, and a reports callable. Duplicated `_now`/`_decode` moved to `common.py`; per-adapter variance (bash `bash-` capability prefix, bash inherit-env-when-no-extra-env, exact message strings) preserved byte-for-byte per the spec's variance table. Red-first: 4 direct helper tests (success/failure/timeout/reports) in `test_common.py`; the existing adapter suites (asserting on `StreamResult` fields) guard integrated behavior. Verification: `python -m pytest tests/release/adapters/ tests/release/test_orchestrator.py -q` passed (`90 passed`); full `./run_tests.sh` passed (root lane `1563 passed, 105 deselected`; release lane `1026 passed, 3 skipped`); touched-file `black`/`isort` applied, no new flake8 findings; `git diff --check` passed. |
 | 48 | merged | `docs/thermos-48-review3-tracker` | `.claude/worktrees/thermos-48-review3-tracker` | Non-runtime tracker/repository-maintenance correction: 41 unique Review #3 IDs (37 actionable, 1 optional, 2 rejected, 1 routed); PR #196/TR2D reconciliation; corrected H2, SSA, priority, and delivery boundaries | https://github.com/tomazb/rh-acm-switchover/pull/197 | GitHub PR #197 is merged: base `4fed598cb1890959d8e8251b7c70e2eb5434b5f5`; exact head `3dc7b6ef6c655e86c1ef8b9152f2385935dfff15`; merged at `2026-07-26T14:56:16Z`; merge commit `17c9589d41767ce582fe46444f5e1feb07af0d30`. GitHub PR #196 was closed unmerged and superseded by PR #197: base `4fed598cb1890959d8e8251b7c70e2eb5434b5f5`; exact head `8d377e0754d08628a64d68bb619fa98045125505`; closed at `2026-07-26T14:37:55Z`; `mergedAt: null`; `mergeCommit: null` (no merge commit). Historical exact-head evidence retained: independent PASS; targeted documentation/CI/waiter suite 89 passed; strict root lane 1831 passed with 105 deselected; release lane 1169 passed with 3 skipped; Black, isort, MyPy, Bandit, and compile gates passed; the dependency audit was advisory under repository policy; the deterministic parser reported 41 canonical and 41 matrix rows with the 37/1/2/1 disposition. |
-| 49 | in_progress | `docs/thermos-49-tracker-reconciliation` | `.claude/worktrees/pr265-tracker-reconciliation` | Tracker-only reconciliation consistency correction; no implementation authority | https://github.com/tomazb/rh-acm-switchover/pull/265 | Independent validation of exact head `cc444fa33af9a191ca58f9b5966493fe73904cb9` returned `HARD_FAIL_EXACT_HEAD`; the sole blocking finding was incomplete exact PR #196/#197 metadata. This metadata-only correction creates a new exact head, so the prior exact-head CI and validator evidence are historical for `cc444fa33af9a191ca58f9b5966493fe73904cb9`; fresh exact-head CI and clean-checkout independent validation remain required. `in_progress` does not imply GitHub readiness or merge readiness. |
+| 49 | merged | `docs/thermos-49-tracker-reconciliation` | `.claude/worktrees/pr265-tracker-reconciliation` | Tracker-only reconciliation consistency correction; no implementation authority | https://github.com/tomazb/rh-acm-switchover/pull/265 | GitHub PR #265 merged from exact validated head `a8e4f98143a844b9d6afda5daabccdb590852b8f` at `2026-08-19T12:09:48Z` as merge commit `8caf4fa1d865a6f86c61495078d8ae02dce794fe`; the final exact head had green hosted CI and an independent `PASS_EXACT_HEAD` verdict. Independent validation of old head `cc444fa33af9a191ca58f9b5966493fe73904cb9` returned `HARD_FAIL_EXACT_HEAD`; retain that result as historical old-head evidence only. |
 
 
-**PR 48 / PR 49 note:** PR 48 is historical and merged. Its valid exact-head
-validation evidence is retained, and PR #196 remains closed unmerged as
-superseded. PR 49 is the current draft tracker-only correction; no design/spec
-gate applies because it is tracker maintenance rather than an implementation
-slice. `in_progress` records only the current builder state. It does not imply
-independent validation, GitHub readiness, or merge readiness, and every PR 49
-head change requires fresh exact-head CI and clean-checkout independent
-validation.
+**PR 48 / PR 49 note:** PR 48 and PR 49 are historical tracker-maintenance
+slices and both are merged. PR 48's valid exact-head validation evidence is
+retained, and PR #196 remains closed unmerged as superseded. PR 49 merged from
+final exact head `a8e4f98143a844b9d6afda5daabccdb590852b8f`; its final hosted CI and
+independent `PASS_EXACT_HEAD` evidence are retained. The
+`HARD_FAIL_EXACT_HEAD` for `cc444fa33af9a191ca58f9b5966493fe73904cb9`
+remains historical old-head evidence only. Neither tracker-only slice grants
+runtime implementation authority.
 
 **PR39-001 blocker fix evidence (2026-07-05):** The PR39 restore-only regression was reproduced with only `acm_switchover_hubs.secondary`: the new integration test failed red at `Build hub RBAC validation table` with `'dict object' has no attribute 'primary'`. The fix preserves the PR39 `_rbac_hub_validations` table/include design and makes only the skipped primary row's `kubeconfig`/`context` expressions restore-only-safe; normal switchover mode still dereferences the required primary hub. Added `restore_only_rbac_secondary_only.yml` and `test_restore_only_rbac_with_secondary_only_hub_reports_secondary_validation`, proving `preflight-rbac-primary` is absent while `preflight-rbac-secondary` is still reported. No operator-CRD 401 hardening is included in this PR39-001 fix. Verification after the fix: focused repro passed; targeted preflight/RBAC suite passed (`63 passed`); collection unit suite passed (`822 passed`); root RBAC/parity suite passed (`183 passed`); `git diff --check` passed; full `./run_tests.sh` passed (root lane `1584 passed, 105 deselected`; release lane `1034 passed, 3 skipped`; Black/isort/MyPy/Bandit/pip-audit/compile checks clean).
 
