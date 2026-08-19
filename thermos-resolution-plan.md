@@ -35,16 +35,112 @@ Before implementation begins for any remaining Thermos slice:
 3. Use `superpowers:writing-plans` to create the implementation plan from that approved design/spec.
 4. Treat the approved design/spec as the verification source of truth: implementation is not complete until the verification evidence shows the delivered behavior matches the accepted design, not merely that tests pass.
 
-This gate applies to the open `SSA-01`-`SSA-10`, `R3-*`, and `TR2D-*`
-boundaries and to any new Thermos follow-up slice added later. It no longer
-applies to the deep-scan queue: every implementation row in the PR Sequence
-table (`PR 01`-`PR 47` and `H1`) is `merged`. `PR 48` is this
-tracker-maintenance correction and is `ready_for_review`, which means only
-that the builder and review-comment resolver passes are complete. GitHub
-readiness is separate, and every branch-head change requires fresh exact-head
-independent validation before a merge-readiness assessment.
+This gate applies to open `SSA-01`-`SSA-04`, `SSA-06`-`SSA-10`, `R3-*`, and
+`TR2D-*` boundaries and to any new Thermos follow-up slice added later. It no
+longer applies to the deep-scan queue: every implementation row in the PR
+Sequence table (`PR 01`-`PR 47` and `H1`) is `merged`. `PR 48` / GitHub PR #197 is
+merged; its exact-head independent validation completed before merge, and
+GitHub PR #196 is closed unmerged as superseded. Current open work is owned by
+the SSA, R3, R4, TR2D, LER, GLM, H3, and deferred-issue boundaries below.
 
-**Last Updated:** 2026-08-16
+**Last Updated:** 2026-08-18
+
+## Current-State Reconciliation (2026-08-18)
+
+This amendment is bound to
+`ansible@7a8cfda155b8c5e7d4d1701e8f2ad44c03163b95` and tracker blob
+`bc251be637022c829921b1a655e856a703ff2246`. Dated sections below remain
+historical evidence for the head they name. When a dated status, scope,
+ownership, or ranking statement conflicts with this amendment or with current
+merged repository history, this amendment owns current tracker state.
+
+The operator-supplied `glm-review.md` has SHA-256
+`0676a6d90dea34beb4e10899a2033474de107ea7938d487962a5951d74f8cfe1` and
+names base `c940f55a92c60c3d31ffb06b1bd562633f8ec8c5`. That base is a valid
+repository commit and the base parent of PR #264's tracker-only merge
+`b6f196a3ef8a3e11c7ea4aeb1524428636fc2e70`; the earlier tracker claim that it
+resolved to no ref, reflog entry, or worktree was incorrect. The artifact's
+claimed eight-agent execution and clean-worktree process remain supplied
+provenance: the attachment contains no agent transcripts or machine-verifiable
+worktree manifest.
+
+This reconciliation changes tracker status, scope, ownership, and ranking only.
+It authorizes no runtime, test, workflow, RBAC, manifest, Helm, release,
+lab-controller, protected-file, issue, or implementation-slice work.
+
+### Current status and scope corrections
+
+| Finding or boundary | Current disposition | Current owner / consequence |
+| --- | --- | --- |
+| `PR 48` / GitHub PR #197 | merged | PR #196 is closed unmerged as superseded; retain the valid TR2D content already absorbed here. |
+| `PR 49` / GitHub PR #265 | in_progress | This tracker-only correction is the current draft. Builder correction does not imply independent validation, GitHub readiness, or merge readiness. |
+| `SSA-05` | delivered | PR #223 removed `scripts/argocd-manage.sh`; nine SSA slices remain planned. |
+| `SSA-S1`, `SSA-S3` | obsolete shipped-surface findings | No retained Bash Argo CD state/resume implementation remains. |
+| `M5` | resolved | PR #206 removed the cited `lib/argocd_coordinator.py::pause_hubs` architecture; later Argo CD transaction findings remain separate. |
+| `R3-A8` / `R3-08b` | retired as supported-runtime work | The current compatibility authority excludes Python 3.9 controller runtime. |
+| `R3-T3` | partially resolved | PR #223 made the test inspect shipped YAML; residual semantic Jinja/Ansible execution coverage stays in `R3-05b`. |
+| `R3-T8` / `R3-09c` | default-runner defect resolved/reframed | PR #260 neutralized ambient release-profile variables in `./run_tests.sh`; explicit profile-driven pytest remains an intentional live entrypoint. |
+| `F37` | remains resolved | The identity-free explicit-`run_id` / direct-role residual remains under `TR2D-02` / `R4-01`; do not reopen F37. |
+| `R4-A1` | obsolete | The Bash Argo CD surface was removed by PR #223. |
+| `R4-A2`, `R4-A3` | open, scope narrowed | Active form factors are Python and collection only; remove the deleted Bash surface from implementation and tests. |
+| `R4-B2` | partially resolved | PR #224 closed the collection mutation-before-ownership window with the atomic cluster marker; `R4-02` retains the Python residual only. |
+| `R4-E1` | partially resolved | PR #222 covers ordinary exceptions and `KeyboardInterrupt`; `R4-05` retains abrupt process-termination/crash-marker residuals. |
+| `R4-F1` / `GLM-H3` | open, priority elevated | `R4-06`; conditional P1 before relying on the klusterlet wrong-hub gate in a live switchover. |
+
+### Ownership and priority corrections
+
+- `R3-P1` remains open and P1 for fleet-scale use, but its implementation owner
+  is `R3-03`, not `R3-10b`.
+- Remove `R3-T8` from the active P1 queue.
+- Remove `SSA-S1`, `SSA-S3`, `R3-A8`, and `R4-A1` from active implementation
+  queues.
+- Keep the `R3-T3` residual at P3 as test-oracle hardening.
+- `GLM-H1` is P2; treat it as conditional P1 whenever
+  `run_15_switchover_test.sh` output is used as acceptance, release, or
+  certification evidence.
+- `GLM-H3` / `R4-F1` is P2; treat it as conditional P1 before a live switchover
+  relies on klusterlet wrong-hub verification.
+- `GLM-H4` inherits P2 through `TR2D-02` / `R4-01`.
+- `GLM-V2` remains P3 pending proof that mismatched dry-run construction is
+  externally reachable; that proof is required before promotion to P2.
+- `R4-E1` now means the narrowed abrupt-termination residual, not ordinary
+  Python exception or `KeyboardInterrupt` handling.
+
+### GLM detailed-high coverage boundary
+
+The validated GLM tally below covers the fourteen named `H1`-`H14` findings.
+The attachment's detailed tables also contain sixteen high rows. Four of those
+are not represented by a named `H` finding and were not independently validated
+by the tracker pass. They are recorded here as leads only; they are not Finding
+Validation Matrix rows and authorize no implementation.
+
+| Lead | Source claim | Candidate owner | Status |
+| --- | --- | --- | --- |
+| `GLM-DH-RBAC-LOOPS` | Repeated Python RBAC permission-check loops | `GLM-H13` / future RBAC design | pending independent validation |
+| `GLM-DH-KLUSTERLET-MODULE` | Collection `module_utils/klusterlet.py` god-module boundary | H3 design track | pending independent validation |
+| `GLM-DH-PREFLIGHT-FINDINGS` | Repeated preflight finding-append expressions | unassigned design input | pending independent validation |
+| `GLM-DH-BACKUP-SELECTION` | Duplicate latest/completed Backup selection and finding logic | `R4-04` or separate design input | pending independent validation |
+
+### Current work order
+
+1. Reconcile this tracker through the current tracker-only PR and exact-head
+   independent validation.
+2. `SSA-01` — distinct physical-hub UID invariant in both form factors.
+3. `R3-02` — fail-closed collection compactor, connectivity, and
+   auto-import-strategy verification.
+4. `R4-04` — concrete journaled backup and Restore evidence instead of moving
+   `latest` aliases.
+5. Conditional operational blockers before their named workflows:
+   `R4-06`/`GLM-H3`, `R4-01`+`TR2D-02`, `SSA-02`, `R3-06`, and `R4-02`.
+6. `GLM-01`, starting with `GLM-H1`, then `GLM-H2`, `GLM-H5`, and
+   `GLM-H14` as one bounded Bash verification-integrity tranche.
+7. `R3-03` fleet timeout budgeting, followed by lower-priority reporting,
+   guardrail, architecture, and hygiene work.
+
+No row changed by this reconciliation authorizes implementation. Each open
+runtime slice remains subject to its governing design/spec, implementation
+plan, explicit operator approval, parity boundary, protected-file boundary,
+and fresh exact-head validation gate.
 
 ## Post-Merge Revalidation (2026-06-03)
 
@@ -184,7 +280,7 @@ complete):
 1. `PR 34` - `R2-H2`: route the remaining hardcoded API-group/version/plural
    literals in `modules/` through `MANAGED_CLUSTER_API_GROUP` (and companion
    constants where they exist). Delivered scope was 56 literals: the 49
-   top-level sites the review counted plus 7 found in `modules/preflight/`
+   top-level sites the review counted plus 7 more found in `modules/preflight/`
    during the red-test run.
 2. `PR 35` - `R2-M4`: deduplicate `lib/utils.py` `REPORT_PHASE_NAMES` and
    `lib/workflow.py` `_CANONICAL_RESUME_START_PHASES` into one shared mapping.
@@ -204,7 +300,7 @@ complete):
 7. `PR 40` - `R2-M3`: extract the near-duplicate
    `_wait_for_restore_deletion`/`_wait_for_primary_restore_deletion` methods
    into `lib/waiter.py`. (This row originally also claimed Review #1 `M2`; that
-   credit was wrong and was corrected on 2026-07-26 — see the `M2` matrix row.)
+   credit was wrong and was corrected on 2026-07-26 — see the `M2` row.)
 8. `PR 41` - `R2-M5`: factor the 4x-duplicated Ansible summary-path resolution
    logic into one shared `set_fact`/filter.
 9. `PR 42` - `R2-M2`: add resume-path re-validation of Velero-restore
@@ -310,7 +406,7 @@ design/spec and implementation sequence is approved.
 - Ten Review #1 matrix rows were added: nine orphaned findings (`M1`, `M3`,
   `M5`, `L2`-`L7`) plus `M2`, which was a separate mis-credit rather than an
   orphan. All were open but
-  untracked since 2026-07-02 now have Finding Validation Matrix rows. All nine
+  untracked since 2026-07-02 now have rows. All nine
   are still open. The claim that the main queue is complete refers to the
   `PR 34`-`PR 47` slice queue only, not to these findings.
 - All ten `SSA-*` slices remain `planned`, re-confirmed by construction.
@@ -426,7 +522,7 @@ worktrees when their slice-specific designs establish no dependency conflict.
 | SSA-02 | planned | SSA-P1, SSA-PY4 | Strengthen standalone and embedded decommission target/RBAC checks without requiring prior switchover state. | destructive-operation, RBAC, parity, and dry-run review |
 | SSA-03 | planned | SSA-PY2, SSA-A6 | Make klusterlet endpoint selection unambiguous and bound collection worker concurrency. Extended by `R4-06`: implement against `docs/plans/2026-07-29-kubeconfig-ambiguity-guard-design.md` (§1 fail-closed merge with deterministic KUBECONFIG precedence and sanitized merge errors, §2 duplicate-name rule, §3 full normalized-URL endpoint equality **plus the enumerated fail-closed rejection set for malformed server URLs**, §4 snapshot-built client **whose file-backed credential contents — CA, client certificate, client key, and `tokenFile` — are captured at snapshot time and never re-read during client construction**, and §5 mutation barrier). | post-activation parity, timeout, and scale review |
 | SSA-04 | planned | SSA-R1, SSA-R2 | Require explicit release-profile authorization for live decommission and reject safety-critical adapter overrides. | lab-controller trust boundary and release evidence review |
-| SSA-05 | planned | SSA-S1, SSA-S3 | Remove the deprecated Argo CD shell path if compatibility permits; otherwise make state identity, permissions, and context parsing fail closed. | operator migration, shell safety, and documentation review |
+| SSA-05 | delivered | delivered Bash lifecycle | PR #223 removed `scripts/argocd-manage.sh`; no active Bash Argo CD state/resume implementation remains. | historical migration and removal evidence retained below; no implementation work remains |
 | SSA-06 | planned | SSA-C1, SSA-C2 | Establish required dependency/secret gates and pin third-party actions and security tools immutably. | CI availability, false-positive, and update-process review |
 | SSA-07 | planned | SSA-C3, SSA-S2 | Extend blocking Bandit coverage and make CI/release dependency and OpenShift-client inputs reproducible. | supply-chain and multi-architecture build review |
 | SSA-08 | planned | SSA-PY3 | Apply canonical containment and safe-write policy to relative state paths. | resume compatibility and filesystem-adversary review |
@@ -567,9 +663,14 @@ worktrees when their slice-specific designs establish no dependency conflict.
   and is already credited in the `SSA-R1`/`SSA-R2` rows. It satisfies no
   `SSA-04` criterion.
 
-#### SSA-05: Deprecated Script Lifecycle
+#### SSA-05: Deprecated Script Lifecycle (delivered)
 
-**Resolution**
+**Current disposition:** PR #223 removed `scripts/argocd-manage.sh`, so
+`SSA-S1` and `SSA-S3` are obsolete shipped-surface findings. The resolution and
+acceptance text below is preserved as historical design evidence; it is not an
+active implementation boundary.
+
+**Historical resolution**
 - Prefer deleting `scripts/argocd-manage.sh` and its obsolete tests/docs after
   confirming supported Python and collection replacements cover every documented
   operator workflow.
@@ -583,7 +684,7 @@ worktrees when their slice-specific designs establish no dependency conflict.
 - Coordinate related deprecated-shell cleanup with issue #157 so the same
   compatibility surface is not changed twice.
 
-**Acceptance criteria**
+**Historical acceptance criteria**
 - No supported path can patch Argo CD Applications after only warning about a
   state/context mismatch.
 - Any retained state file is owner-only from creation, not repaired only after
@@ -928,16 +1029,16 @@ This is the delivery sequence. Placing two bounded regressions ahead of
 | R3-04a | planned | R3-P2 | Recover Python preflight diagnostics only after sanitizing them before verbose logging; keep raw exception/API/credential material prohibited. | secret-handling and operator troubleshooting |
 | R3-04b | planned | R3-A9 | Sanitize collection report/path data in both success and failure records. | report schema, filesystem-path exposure, success/failure parity |
 | R3-05a | planned | R3-T1, R3-T2 | Add direct dry-run client/decorator contract tests, including controlled rejection of non-boolean `dry_run` values before mutation. | dry-run mutation safety |
-| R3-05b | planned | R3-T3, R3-T4 | Make Argo CD Jinja/filter parity tests load their real artifacts and cover dangerous over-match/absent-automation cases. | mutation-resistance of parity guardrails |
+| R3-05b | planned | R3-T3 residual, R3-T4 | PR #223 made the parity guard inspect shipped YAML; retain semantic Jinja/Ansible execution coverage plus the dangerous over-match/absent-automation cases. | mutation-resistance of parity guardrails |
 | R3-06 | planned | R3-A6, LER-03 | Scope the `reset_from` identity bypass to the pruned phase, revalidate identity after pruning instead of overwriting it, and require every accepted unsafe-legacy transition to rebuild safely or fail closed. | checkpoint identity binding; legacy transition convergence; interaction with `SSA-01` |
 | R3-07 | planned | R3-P3, R3-P5 | Separate control signals and refusal messages from the durable `errors[]` log so the last error always names the real failure. | report-artifact accuracy; resume banner correctness |
 | R3-08a | planned | R3-A7 | Correct klusterlet module/role failure ownership so the role can render diagnostics. | module failure contract and operator diagnostics |
-| R3-08b | planned | R3-A8 | Declare and enforce collection minimum-Python compatibility. | EE portability and supported-version policy |
+| R3-08b | retired | R3-A8 | No active implementation: the compatibility authority excludes Python 3.9 collection controller runtime. | historical Review #3 disposition only |
 | R3-08c | planned | R3-A10 | Make observability restart retry-idempotent. | post-activation outage and checkpoint semantics |
 | R3-08d | planned | R3-A11 | Correct plan/info `changed` semantics. | module contract and `_info` convention |
 | R3-09a | planned under SSA-06 | R3-T5 | Establish immutable, approved CI action references through an action-to-release mapping or equivalent reviewed version policy. Full commit-SHA formatting alone is insufficient. | CI supply-chain policy and update process |
 | R3-09b | planned | R3-T6, R3-T7 | Enforce the property-test profile and a reviewed coverage policy. | CI gate strength and ratchet behavior |
-| R3-09c | planned | R3-T8 | Require explicit live-release opt-in independent of ambient environment. | accidental live-cluster execution |
+| R3-09c | resolved/reframed | R3-T8 | PR #260 neutralized ambient release-profile variables in the default runner; explicit profile-driven pytest remains an intentional live entrypoint. No active implementation remains. | historical Review #3 disposition only |
 | R3-09d | planned | R3-T9 | Consolidate the fixture once at most, or use real `StateManager` instances throughout. | test fidelity and fixture ownership |
 | R3-09e | planned | R3-T10 | Verify checkpoint reset persistence, including stale-field removal after re-read. | checkpoint persistence safety |
 | R3-09f | planned | R3-T12, R2-H2 residual | Expand the literal guardrail to the `lib/rbac_validator.py` residual and resolve the remaining overall H2 scope. | RBAC parity and guardrail scan-root completeness |
@@ -1202,16 +1303,13 @@ rollback boundary, and verification plan.
   `get_last_error_phase()`.
 - The retry still re-runs Argo CD pause.
 
-#### R3-08a-d: Independent Collection Boundaries
+#### R3-08a, R3-08c, and R3-08d: Independent Collection Boundaries
 
-These are four independent design, rollback, and verification boundaries:
+These are three independent design, rollback, and verification boundaries:
 
 - `R3-08a` / `R3-A7`: return probe outcomes without task-level `failed: true`,
   let the role own failure via `failed_when`, and prove role diagnostics render
   for failed, wrong-hub, and skipped clusters before abort.
-- `R3-08b` / `R3-A8`: replace unsupported module-level union expressions,
-  declare the collection's minimum Python version, and import-test that exact
-  floor in CI.
 - `R3-08c` / `R3-A10`: make observatorium-api restart retry-idempotent and prove
   a resumed post-activation does not re-annotate it.
 - `R3-08d` / `R3-A11`: make `acm_restore_info` informational and report
@@ -1220,7 +1318,7 @@ These are four independent design, rollback, and verification boundaries:
 Do not combine these into one collection-contract PR merely because the
 original umbrella was named `R3-08`.
 
-#### R3-09a-f: Independent Test-Infrastructure Boundaries
+#### R3-09a-b and R3-09d-f: Independent Test-Infrastructure Boundaries
 
 - `R3-09a` / `R3-T5` is routed through `SSA-06`: use an approved
   action-to-release mapping or equivalent reviewed version policy, apply it per
@@ -1229,8 +1327,6 @@ original umbrella was named `R3-08`.
   itself to prove that the approved action release is in use.
 - `R3-09b` / `R3-T6` + `R3-T7`: load the CI Hypothesis profile observably and
   establish a reviewed coverage floor/ratchet.
-- `R3-09c` / `R3-T8`: require explicit live-release authorization so an ambient
-  `ACM_RELEASE_PROFILE` alone cannot contact a cluster.
 - `R3-09d` / `R3-T9`: `create_mock_step_context` must exist **at most once**;
   zero is valid when all affected suites use real `StateManager` instances on
   `tmp_path`. In either design, a `StepContext` semantic change must be visible
@@ -1596,12 +1692,12 @@ designs exist; implementation plans are still required).
 
 | Finding | Severity | Surface | Summary |
 | --- | --- | --- | --- |
-| R4-A1 | High | Bash | `scripts/argocd-manage.sh:341,345` pause builds `jq 'del(.automated)'` + `--type=merge` — RFC 7396 no-op; auto-sync stays enabled while the script prints `Paused` and journals success. Python/collection are fixed; Bash is divergent. |
-| R4-A2 | Medium | All three | `automated.enabled: false` (Argo CD ≥2.13) classified as active auto-sync in Python (`lib/argocd.py:423-426`), Bash (`:326-330`), and collection (`pause.yml:58-61`). |
-| R4-A3 | Medium | All three | Resume sends the whole stored `syncPolicy` (overwrites pre-existing keys with stale values; merge patch does not delete added siblings) and never verifies post-resume; Bash also lacks the RV precondition. `TR2D-02` covers collection OCC parity only. |
+| R4-A1 | Obsolete | Bash (removed) | Obsolete shipped-surface finding: PR #223 removed `scripts/argocd-manage.sh`. The former merge-patch no-op remains historical evidence only; no Bash implementation boundary remains. |
+| R4-A2 | Medium | Python + collection | `automated.enabled: false` (Argo CD ≥2.13) is classified as active auto-sync in Python (`lib/argocd.py:423-426`) and the collection (`pause.yml:58-61`). |
+| R4-A3 | Medium | Python + collection | Resume sends the whole stored `syncPolicy` (overwrites pre-existing keys with stale values; merge patch does not delete added siblings) and never verifies post-resume. `TR2D-02` covers collection OCC parity only. |
 | R4-A4 | Medium | Python + collection | Pause step is checkpointed (`modules/primary_prep.py:71-81`); a run resumed at ACTIVATION, and integrated decommission, never revalidate journaled pause state. |
 | R4-B1 | High | Python + collection | Auto-import restore deletes the entire `import-controller-config` ConfigMap (`modules/finalization.py:1545-1553`; collection `state: absent`) — operator-owned keys destroyed; unset ownership only warns and leaves `ImportAndSync` behind. |
-| R4-B2 | Medium | Python + collection | ConfigMap mutated before ownership recorded (`modules/activation.py:630-635`); collection ownership is `set_fact`, durable only via optional checkpointing. |
+| R4-B2 | Partially resolved | Python residual | PR #224 closed the collection mutation-before-ownership window by writing the ownership marker atomically with the ConfigMap mutation. The Python residual remains: `modules/activation.py:630-635` mutates before ownership is recorded. |
 | R4-B3 | Medium | Python + collection | `data: null` raises `AttributeError` → misleading `SwitchoverError` or silent skip (`modules/activation.py:615-616`; both collection roles share the pattern). |
 | R4-B4 | Medium | Python + collection | Decommission ignores an unrestored auto-import transaction. |
 | R4-C1 | High | Python | MCH completion fails open: lingering non-operator pods only warn, MCH CR absence never re-checked, decommission reports success (`modules/decommission.py:420-455`). |
@@ -1614,7 +1710,7 @@ designs exist; implementation plans are still required).
 | R4-D2 | Medium | Python | Explicit `--min-managed-clusters` replaces name enforcement with count-only; explicit `0` disables enforcement (`acm_switchover.py:869-875`). |
 | R4-D3 | Medium | Python | 404→`[]` yields empty baselines on activation/post-activation inventory reads. |
 | R4-D4 | Medium | Python + collection | Integrated teardown consumes no migration evidence. |
-| R4-E1 | High | Python | A killed dry-run/validate-only leaves durable intermediate state (snapshot restore only in `finally`) that later runs trust; no crash marker. |
+| R4-E1 | Partially resolved | Python | PR #222 covers ordinary exceptions and `KeyboardInterrupt`. The remaining abrupt process termination / crash-marker residual can leave durable intermediate dry-run/validate-only state that later runs trust. |
 | R4-E2 | Medium | Python | Validate-only checkpoint restores phase/errors/timestamp only; preflight `config` writes leak (`lib/utils.py:482-505`). |
 | R4-E3 | Medium | Python + collection | No run contract: resume silently accepts changed safety-critical options (`old_hub_action`, method, ArgoCD/auto-import management). |
 | R4-E4 | Medium | Python | Locks are state-file-scoped (`lib/utils.py:156`) and host-local; the same physical hubs don't contend across different `--state-file` paths, and a host-local lock cannot contend across Unix users, containers, AAP execution nodes, or hosts either. The design (`docs/plans/2026-07-29-state-integrity-residuals-design.md` §3) makes a per-hub `coordination.k8s.io/v1` Lease keyed on the hub cluster UID the authoritative lock, with a strict post-acquisition UID revalidation barrier; a local flock survives only as a same-host optimization. No implementation is present in this PR. The implementation slice must add namespaced `coordination.k8s.io/leases` `get`/`create`/`update`/`delete` to `deploy/rbac/role.yaml`, `deploy/helm/acm-switchover-rbac`, and `deploy/acm-policies/` together, and a missing Lease permission fails closed rather than running unlocked. |
@@ -1628,18 +1724,17 @@ designs exist; implementation plans are still required).
 
 | Slice | Status | Findings | Design | Proposed resolution boundary |
 | --- | --- | --- | --- | --- |
-| R4-01 | planned | R4-A1, R4-A2, R4-A3, R4-A4 | `docs/plans/2026-07-29-argocd-pause-correctness-residuals-design.md` | Minimal Bash pause fix (lifecycle stays `SSA-05`), shared five-outcome fail-closed auto-sync classification, versioned journal schema strictly validated before every gate/resume/settlement/mutation, versioned migration of legacy full-`syncPolicy` pause records, durable intent-before-mutation operation record with reconciliation, `automated`-only resume with post-resume verification, journal-scoped destructive-phase gates. |
-| R4-02 | planned | R4-B1, R4-B2, R4-B3, R4-B4 | `docs/plans/2026-07-29-auto-import-transaction-design.md` | Prior-state capture with durable intent before mutation, `created_uid` required/forbidden by transaction state and create-response provenance, explicit outcome precedence in which an unresolved `ownership_conflict` dominates live-state restore/no-op evaluation, key-level restore, `data: null` normalization, decommission gate. |
+| R4-01 | planned | R4-A2, R4-A3, R4-A4 | `docs/plans/2026-07-29-argocd-pause-correctness-residuals-design.md` | Python/collection five-outcome fail-closed auto-sync classification, versioned journal schema strictly validated before every gate/resume/settlement/mutation, versioned migration of legacy full-`syncPolicy` pause records, durable intent-before-mutation operation record with reconciliation, `automated`-only resume with post-resume verification, journal-scoped destructive-phase gates. The deleted Bash pause implementation is outside the active boundary. |
+| R4-02 | planned | R4-B1, R4-B2 Python residual, R4-B3, R4-B4 | `docs/plans/2026-07-29-auto-import-transaction-design.md` | Python prior-state capture with durable intent before mutation; shared remaining work covers `created_uid` provenance, conflict precedence, key-level restore, `data: null` normalization, and the decommission gate. PR #224 already closed the collection R4-B2 ownership window. |
 | R4-03 | planned | R4-C1, R4-C2, R4-C3, R4-C4, R4-C5, R4-C6 | `docs/plans/2026-07-29-decommission-completion-design.md` | Server-side UID-preconditioned DELETE with CR-absence proof, refusal-aborts semantics, one shared strict Kubernetes inventory primitive (contract owned here, consumed by `R4-04` — not decommission-private), destination-observability gate, and identity-bound MCH Pod classification through the exact recorded operator Deployment UID rather than a name prefix. |
 | R4-04 | planned | R4-D1, R4-D2, R4-D3, R4-D4 | `docs/plans/2026-07-29-migration-evidence-design.md` | Freeze `latest` to journaled concrete backup names at activation entry, additive name+count expectations with explicit waiver, strict inventory reads through the shared primitive whose contract `R4-03` owns (error is never absence; absence is fatal for migration consumers), evidence bound to Restore identity/spec, atomic UID+resourceVersion passive patch, durable cleanup state machine with fail-closed ambiguous recovery, final validated UID+resourceVersion DELETE, evidence/cleanup gate before teardown. |
-| R4-05 | planned | R4-E1, R4-E2, R4-E3, R4-E4, R4-E5, R4-E6, LER-01 | `docs/plans/2026-07-29-state-integrity-residuals-design.md` | Full-fidelity simulation snapshot with crash marker, parent-dir fsync on both the rename and the absent-file unlink path, per-hub `coordination.k8s.io/v1` Lease locks with a post-acquisition UID revalidation barrier (requires a coordinated RBAC update — see `R4-E4`), reset-under-lock with narrowed `--force`, run contract with atomic committed contract transitions, and restore-write failure semantics that retain an in-memory retry obligation and never report successful restoration. |
+| R4-05 | planned | R4-E1 abrupt-termination residual, R4-E2, R4-E3, R4-E4, R4-E5, R4-E6, LER-01 | `docs/plans/2026-07-29-state-integrity-residuals-design.md` | Abrupt-termination crash marker and full-fidelity simulation snapshot, parent-dir fsync on both the rename and the absent-file unlink path, per-hub `coordination.k8s.io/v1` Lease locks with a post-acquisition UID revalidation barrier (requires a coordinated RBAC update — see `R4-E4`), reset-under-lock with narrowed `--force`, run contract with atomic committed contract transitions, and restore-write failure semantics that retain an in-memory retry obligation and never report successful restoration. Ordinary exceptions and `KeyboardInterrupt` are already covered by PR #222. |
 | R4-06 | planned | R4-F1, R4-F2, R4-F3 (+ SSA-PY2, SSA-A6) | `docs/plans/2026-07-29-kubeconfig-ambiguity-guard-design.md` | Extends `SSA-03`: fail-closed merge, duplicate-name rule, full-URL endpoint normalization with an enumerated fail-closed rejection set for malformed server URLs, snapshot-built client whose file-backed credential **contents** (CA/cert/key/`tokenFile`) are captured at snapshot time rather than re-read at client construction, mutation barrier. `SSA-03` implementation should use this design. `GLM-H3` amendment (2026-08-16): acceptance must also cover the verification-path consequence of the same seam — `_load_kubeconfig_data`'s fail-open (`modules/post_activation.py:1455-1457`) silently disables the `_verify_klusterlet_connections` wrong-hub gate while `verify()` still returns `True` (`:127-128`), and the silently-skipped `verify_klusterlet_connections` step is marked completed by `StepContext` (`lib/utils.py:852`) so it never re-runs on resume; a per-file load failure returns a truthy empty-merge dict, so all clusters degrade to `unreachable` equally silently (`:1063-1068`). This is outside `PR 21`/`F38` delivered scope (only `99bb3e01` ever touched `_load_kubeconfig_data`) — a scope boundary, not a regression. |
 
 Cross-references (adjacent, not superseded): `SSA-01` (hub distinctness — excluded,
 already tracked), `SSA-02` (decommission target/RBAC — complementary to `R4-03`),
-`SSA-05` (Bash script lifecycle — owns everything beyond the narrow `R4-01` Bash
-correctness fixes for `R4-A1`/`R4-A2`/`R4-A3`, including the remaining Bash
-concurrency-prevention gap), `TR2D-02` (collection resume OCC parity), `R3-10a` (discovery blast radius —
+`SSA-05` (delivered by PR #223; no Bash Argo CD implementation remains),
+`TR2D-02` (collection resume OCC parity), `R3-10a` (discovery blast radius —
 `R4-01` gates are journal-scoped to avoid conflict), `R3-T3` (parity-test oracle),
 `F19`/`F20` (unrelated refactors), `R2-M2`, `R3-P7`, `R3-A6`, `R3-X1`.
 
@@ -1971,30 +2066,24 @@ P4 = hygiene/docs. Conditional P1s bind to the named operation, not the switchov
 | --- | --- | --- |
 | P1 | SSA-A2 + SSA-P2 (`SSA-01`) | No primary≠secondary cluster-UID comparison anywhere in product code; a same-cluster misconfiguration runs the destructive sequence against one hub. |
 | P1 | R3-A4 (`R3-02`) | Collection compactor drain `failed_when: false` fail-open — backup can run against a live compactor. |
-| P1 | R3-P1 (`R3-10b` scope) | Single 180s batch deadline for all klusterlet workers → false post-activation `SwitchoverError` at fleet scale, after production moved. |
+| P1 | R3-P1 (`R3-03`) | Single 180s batch deadline for all klusterlet workers → false post-activation `SwitchoverError` at fleet scale, after production moved. |
 | P1 | R4-D1 (`R4-04`) | Restores bind to the moving `latest` alias on the normal activation path in both form factors; consumed backup never journaled. |
 | P1 (conditional: before next standalone/non-interactive decommission) | SSA-P1 (`SSA-02`) | No wrong-target identity check; `--skip-rbac-validation` + `--non-interactive` remove every remaining gate. |
 | P1 (conditional: any recovery run using persistent `reset_from`) | R3-A6 (`R3-06`) | Truthy `reset_from` disables checkpoint identity validation for the whole run; empty shipped default is inert. |
 | P1 (conditional: auto-import management enabled) | R4-B1 (`R4-02`) | Restore deletes the entire operator-owned import-controller ConfigMap. |
-| P1 (release/test boundary) | R3-T8 | Ambient `ACM_RELEASE_PROFILE` env var unskips live certification tests that invoke the release orchestrator. |
-| P2 | SSA-PY4, SSA-PY2, SSA-R1, SSA-R2, SSA-S1, SSA-PY5, R3-A2, R3-A5, R3-A8, R3-P2, R3-P4, R3-T1, TR2D-02, R2-L7a, R2-L7c; R4-A1, R4-C1, R4-C2, R4-E1, LER-01, LER-02, LER-03; GLM-H2, GLM-H5, GLM-V1 | Real correctness/safety defects with a mitigating precondition: interactive-only paths, deprecated-but-shipped script, reporting-only impact (R3-A5 — unsuppressed identity reads fail first), fleet-scale or shared-hub topology required, spec'd R4 High rows on non-switchover paths, storage-write failure, hung RBAC helper/API call, or direct action-plugin sequencing outside the bundled enter-first role flow. |
-| P3 | SSA-A6, SSA-S3, SSA-C1, SSA-C2, SSA-C3, SSA-S2, SSA-PY3, R3-A3, R3-A7, R3-A9, R3-A10, R3-P3, R3-P5, R3-P6, R3-P7, R3-P9, R3-P12, R3-T2, R3-T3, R3-T4, R3-T7, R3-T10, R3-T12, R2-L6, R2-L7b, R2-L8, H3; R4 Medium rows (including review-discovered R4-C6); GLM-H1, GLM-H6, GLM-H8, GLM-H9, GLM-H10, GLM-H13, GLM-V2, GLM-V3 | Hardening: fail-open windows needing an adversary/misconfiguration, guardrail blind spots, duplication with drift risk. |
+| P2 | SSA-PY4, SSA-PY2, SSA-R1, SSA-R2, SSA-PY5, R3-A2, R3-A5, R3-P2, R3-P4, R3-T1, TR2D-02, R2-L7a, R2-L7c; R4-C1, R4-C2, R4-E1 (abrupt-termination residual), R4-F1 / GLM-H3, LER-01, LER-02, LER-03; GLM-H1, GLM-H2, GLM-H4, GLM-H5, GLM-V1 | Real correctness/safety defects with a mitigating precondition: reporting-only impact (R3-A5 — unsuppressed identity reads fail first), fleet-scale or shared-hub topology required, state/crash recovery, storage-write failure, hung RBAC helper/API call, or direct action-plugin sequencing outside the bundled enter-first role flow. GLM conditional-P1 boundaries are stated below. |
+| P3 | SSA-A6, SSA-C1, SSA-C2, SSA-C3, SSA-S2, SSA-PY3, R3-A3, R3-A7, R3-A9, R3-A10, R3-P3, R3-P5, R3-P6, R3-P7, R3-P9, R3-P12, R3-T2, R3-T3, R3-T4, R3-T7, R3-T10, R3-T12, R2-L6, R2-L7b, R2-L8, H3; R4 Medium rows except R4-F1 (including review-discovered R4-C6); GLM-H6, GLM-H8, GLM-H9, GLM-H10, GLM-H13, GLM-V2, GLM-V3 | Hardening: fail-open windows needing an adversary/misconfiguration, guardrail blind spots, duplication with drift risk. `R3-T3` means only the residual semantic Jinja/Ansible execution coverage. |
 | P4 | SSA-A5, R3-A11, R3-P8, R3-P13, R3-X1, R3-T5, R3-T6, R3-T9, R3-T11, R3-Q1..Q4, TR2D-03, TR2D-04, R2-L1, `/tmp/run` residual; R4-E6, R4-F3; GLM-H14, GLM-H7a | Hygiene, docs, conventions, design-gated refactors. |
 
-**GLM amendment (2026-08-16):** `GLM-*` rows from the GLM Code-Smell Review
-Validation section are ranked on the same scale, without re-ranking any earlier
-row. `GLM-H2`, `GLM-H5`, and `GLM-V1` enter P2 — real correctness/verification
-defects with a mitigating precondition (a rename failure must occur first; the
-check scripts are operator-run rather than switchover-path; the masked timeout
-is currently caught by the downstream `acm_cluster_verify` gate). `GLM-H1`,
-`GLM-H6`, `GLM-H8`, `GLM-H9`, `GLM-H10`, `GLM-H13`, `GLM-V2`, and `GLM-V3`
-enter P3 (duplication with drift risk, guardrail blind spots, fragile hidden
-coupling). `GLM-H14` and `GLM-H7a` enter P4 (unreachable guidance, dead
-diagnostics). Already-tracked GLM findings inherit their owning rows' ranks;
-`GLM-H3`'s evidence (the flagship wrong-hub gate silently disabled while the
-skipped step is marked completed for resume) is an argument for promoting
-`R4-F1` out of the P3 "R4 Medium rows" bucket when `R4-06` is scheduled —
-recorded here rather than silently rewriting the 2026-07-29 buckets.
+**GLM amendment (2026-08-16; reconciled 2026-08-18):** `GLM-*` rows from the
+GLM Code-Smell Review Validation section use the same scale. `GLM-H1` is P2 and
+becomes conditional P1 whenever `run_15_switchover_test.sh` output is used as
+acceptance, release, or certification evidence. `GLM-H3` / `R4-F1` is P2 and
+becomes conditional P1 before a live switchover relies on the klusterlet
+wrong-hub gate. `GLM-H4` inherits P2 through `R4-01` / `TR2D-02`.
+`GLM-H2`, `GLM-H5`, and `GLM-V1` remain P2. `GLM-H6`, `GLM-H8`, `GLM-H9`,
+`GLM-H10`, `GLM-H13`, `GLM-V2`, and `GLM-V3` remain P3; `GLM-V2` stays there
+pending reachability evidence. `GLM-H14` and `GLM-H7a` remain P4.
 
 ### Corrections applied in this pass
 
@@ -2023,10 +2112,17 @@ the run-id marker (`roles/argocd_manage/tasks/resume.yml:5-21`). Fold into `TR2D
 
 ## GLM Code-Smell Review Validation (2026-08-16)
 
-Source: `glm-review.md` (generated 8-agent code-smell analysis dated 2026-08-16).
-Its claimed base `c940f55a` resolves to no ref, reflog entry, or worktree in this
-repository, so the review's provenance claim is unverifiable; validation ran
-against `ansible` HEAD `c56fa395`, where cited line numbers matched near-exactly.
+Source: the operator-supplied `glm-review.md`, SHA-256
+`0676a6d90dea34beb4e10899a2033474de107ea7938d487962a5951d74f8cfe1`, is
+generated analysis whose findings are hypothesis and verified lead input rather
+than implementation authority. Its named base
+`c940f55a92c60c3d31ffb06b1bd562633f8ec8c5` is a valid repository commit and
+the base of PR #264; GitHub recorded PR #264's tracker-only squash merge as
+`b6f196a3ef8a3e11c7ea4aeb1524428636fc2e70`, whose sole parent is that base.
+The attachment's claimed eight-agent execution and clean-worktree process are
+supplied provenance because no machine-verifiable agent transcripts or
+worktree manifests accompany it. Validation ran independently against
+`ansible` HEAD `c56fa395`, where cited line numbers matched near-exactly.
 Method: five parallel read-only validation agents partitioned by surface (Bash;
 Python modules; Argo CD in both form factors; collection; RBAC/constants), each
 returning CONFIRMED/PARTIAL/REFUTED verdicts with quoted source evidence, plus a
@@ -2134,7 +2230,7 @@ Dispositions:
 | M1 | confirmed still open (Review #1; re-confirmed Review #2 and 2026-07-26) | none - deprioritized after PR 29-PR 31 | `lib/operation_runners.py:100-197` (`run_switchover_impl`) and `:200-286` (`run_restore_only_impl`) still share the completed-state/failed-state/validate-only/phase-flow/dry-run/completion skeleton, differing only in the `PhaseFlowEntry` tuples (`:139-165` vs `:238-252`) and message constants. Lower value after the orchestration seams were extracted; collapse into one descriptor-driven runner only if a future change must be made twice again. |
 | M2 | confirmed still open; the `M2` credited to `PR 40` was the waiter unification, not this finding | superseded by `R3-Q2` (slice `R3-10`) | Review #1 `M2` is `lib/constants.py` UI string-table sprawl, not restore-wait dedup. Still present: `lib/constants.py` is 381 lines with 44 top-level `WORKFLOW_*`/`OPERATION_*`/`DRY_RUN_*`/`*_MESSAGE` constants (count verified 2026-07-26), and `lib/workflow.py:9` still opens a long `from lib.constants import (` block. `R3-Q2` is the sharper current framing. |
 | M3 | confirmed still open (Review #1; re-confirmed Review #2 and 2026-07-26) | none - not covered by PR 40 | Two dry-run idioms still coexist: `@dry_run_skip` (`modules/finalization.py:415,724,918,941,1124,1151,1236,1514`) and inline `if self.dry_run:` (`modules/post_activation.py:465,693`; `modules/finalization.py:1046,1065`). `PR 40` moved only the restore-deletion wait into `lib/waiter.py` and touched no dry-run guard. Distinct from `R3-T1`/`R3-T2` (slice `R3-05`), which cover testing the guards rather than unifying the idiom. |
-| M5 | confirmed still open, reprioritized upward by Review #2, re-confirmed 2026-07-26 | none - planned | `lib/argocd_coordinator.py:120-283`: `pause_hubs` is still a 164-line method whose tri-state result-handling block (`:237-282`, `result.patched` / `result.error` / `patch_applied is True/False/None`) was never extracted into `_reconcile_pause_result` (`git log -S` finds that name only in tracker docs). Correctness-critical durable-pause path; `M4`/`PR 35` had no overlap. |
+| M5 | resolved through PR #206 | PR #206 | PR #206 deleted `lib/argocd_coordinator.py` and replaced the cited 164-line `pause_hubs` architecture with the Argo CD pause register. Later Argo CD transaction findings remain separate and receive no closure credit from M5. |
 | L2 | confirmed still open (Review #1; re-confirmed Review #2 and 2026-07-26) | none - opportunistic cleanup | `modules/post_activation.py:1178-1182` derives `bootstrap_namespace` from the import manifest's `bootstrap-hub-kubeconfig` Secret and `:1109` passes it to `_restart_klusterlet` (`:1281`) to patch the `klusterlet` Deployment; the ACM co-residence assumption is still undocumented in the code. |
 | L3 | confirmed still open; silently dropped from Review #2's re-confirmation list without rationale | none - opportunistic cleanup | `deploy/helm/acm-switchover-rbac/templates/namespace.yaml:7-15` inlines its labels and is the only template not using `include "acm-switchover-rbac.labels"` (`templates/_helpers.tpl:35-44`), so the Namespace receives neither `.Values.commonLabels` nor any `managed-by` label. Second residue: `values.yaml:73` sets lowercase `app.kubernetes.io/managed-by: helm`, which will not match a conventional `managed-by=Helm` selector. |
 | L4 | confirmed still open; call sites overlap `SSA-PY2` | resolve inside SSA-03 (planned) | `re.sub(r"https://([^:/]+).*", r"\1", url)` still duplicated 4x at `modules/post_activation.py:1483,1490,1608,1609` with silent passthrough on non-match; no `lib.utils.host_from_url` exists. `SSA-PY2` (hostname-key collapse at `:1490-1491`) targets these exact sites and `SSA-03` replaces hostname-only matching with normalized endpoint identities — extract the shared helper there rather than as a standalone cleanup. |
@@ -2144,7 +2240,7 @@ Dispositions:
 | SSA-A2 | confirmed, corrected P1 | SSA-01 (planned) | Collection contexts and live UIDs are validated independently but never compared; identical contexts or different contexts targeting one cluster can enter self-switchover. |
 | SSA-P1 | confirmed with lower impact, corrected P2 | SSA-02 (planned) | Python standalone decommission intentionally lacks prior state binding; wrong-context risk remains, so add optional expected-UID verification without making switchover state mandatory. |
 | SSA-P2 | confirmed, corrected P1 | SSA-01 (planned) | Python binds each role identity for resume but does not require primary and secondary live UIDs to differ before a new switchover. |
-| SSA-S1 | confirmed, corrected P2 | SSA-05 (planned) | Deprecated `argocd-manage.sh` accepts legacy state and only warns on explicit context mismatch before patching the CLI-selected hub. |
+| SSA-S1 | obsolete shipped-surface finding | SSA-05 (delivered by PR #223) | PR #223 removed `scripts/argocd-manage.sh`; no retained Bash Argo CD state/resume implementation remains. |
 | SSA-R1 | confirmed with lifecycle mitigation, corrected P2 | SSA-04 (planned) | Release Python decommission can build a live non-interactive command while the Ansible stream is forced dry-run; lifecycle gates reduce but do not remove focused-rerun risk. |
 | SSA-R2 | confirmed with controller mitigation, corrected P2 | SSA-04 (planned) | Trusted profile arguments are appended verbatim and a trailing Ansible `-e` can override adapter dry-run defaults, although matrix/controller gates still apply. |
 | SSA-C1 | confirmed with narrower scope, corrected P2 | SSA-06 (planned) | Dependency, secret, Semgrep, and Trivy lanes are advisory; Bandit and CodeQL were incorrectly included in the original claim and are already blocking. |
@@ -2157,7 +2253,7 @@ Dispositions:
 | SSA-C3 | confirmed, corrected P2 | SSA-07 (planned) | Blocking Bandit omits collection plugins, and CI/release dependency resolution has minimum floors without reviewed constraints or lock artifacts. |
 | SSA-PY5 | confirmed with direct reusable-helper exposure, corrected P2 | SSA-09 (planned) | `KubeClient.patch_custom_resource()` logs status, reason, bounded raw API response body, and the rendered exception; full-list aggregation remains a separate lower-urgency subproblem within the same design gate. |
 | SSA-A6 | confirmed with narrower scope, corrected P3 | SSA-03 (planned) | Collection worker configuration has no upper cap; defaults and API timeouts mitigate impact, and the original check-mode concern was not substantiated. |
-| SSA-S3 | confirmed with lower composite impact, corrected P3 | SSA-05 (planned) | Deprecated Argo CD state may be created mode `0644`; token stdout is documented and its wrapper already writes mode `0600`. (2026-07-29 assessment: the "shell jsonpath context lookup breaks on quoted names" claim is withdrawn — the script performs no kubeconfig/JSONPath context parsing; `--context` is forwarded safely quoted.) |
+| SSA-S3 | obsolete shipped-surface finding | SSA-05 (delivered by PR #223) | PR #223 removed the deprecated Bash state-file surface. The earlier mode and context-parsing analysis is preserved in the dated SSA-05 requirements, not as active work. |
 | R3-A1 | merged, High | R3-01 / TR2D-01; issue #199; PR #200 | The correction assigns distinct scoped, cluster-wide, validation, and published variables and guards publication behind complete positive validation. Non-mock primary-prep retry and standalone resume prove the former no-op paths; exact validated head `0bc1a4b6701508f6c3d4cd898515d82b8a29b6a3` merged as `786f8325493c6086e136cb9694a9997557f12e02`, and issue #199 is closed as completed. |
 | R3-A2 | confirmed empirically, Medium | R3-01b (planned) | Same clobber pattern makes the finalization dry-run preview always report `restore_count: 0`. |
 | R3-A3 | confirmed empirically, Medium | R3-01b (planned) | Same clobber pattern defeats the file's own fixture-injection guard; currently benign. |
@@ -2165,7 +2261,7 @@ Dispositions:
 | R3-A5 | confirmed empirically, High | R3-02 (planned) | Preflight hub connectivity is hard-coded `status: pass`; the `fail` branch is unreachable and the fabricated verdict reaches the go/no-go report. |
 | R3-A6 | confirmed, Medium | R3-06 (planned) | `reset_from` disables checkpoint identity validation run-wide, not just for the pruned phase, and rewrites `operation_identity`. Persistent config key shipped in role defaults. |
 | R3-A7 | confirmed, Medium | R3-08a (planned) | Probe returns `failed: true`, failing the task and suppressing the role diagnostics its own documentation promises. |
-| R3-A8 | confirmed, Medium | R3-08b (planned) | `str \| None` in a module-level assignment is not deferred by `from __future__ import annotations`; import raises `TypeError` on Python 3.9 and the collection declares no Python floor. |
+| R3-A8 | retired as supported-runtime work | none | The current compatibility authority supports collection controller Python 3.11/3.12 lanes and excludes Python 3.9; no active `R3-08b` implementation remains. The original Python 3.9 observation stays in the dated Review #3 findings table. |
 | R3-A9 | confirmed, Medium | R3-04b (planned) | `acm_input_validate` re-adds paths stripped from `hubs`; correction must sanitize both success and failure report records. Paths, not credentials. |
 | R3-A10 | confirmed, Medium | R3-08c (planned) | Observatorium-api restart is not idempotent; Python guards the equivalent step with per-step state and the collection has only phase-level checkpointing, disabled by default. |
 | R3-A11 | confirmed, Medium | R3-08d (planned) | Residual of `F17`/`R2-M1`: plan-only `changed=true` outside check mode, contrary to the `_info` convention and documented module behavior. |
@@ -2187,12 +2283,12 @@ Dispositions:
 | R3-P13 | optional hardening | R3-10d (optional only) | Supported documentation invokes the script with sibling `constants.sh` present. No supported copy-one-script contract is shown; a guard may improve packaging/error messages but is not mandatory runtime work. |
 | R3-T1 | confirmed, High | R3-05a (planned) | Four mutating dry-run guards have no dry-run test; deleting the `scale_statefulset` guard leaves all 3079 tests green while `--dry-run` scales the production Thanos compactor to 0. |
 | R3-T2 | confirmed, Medium | R3-05a (planned) | Preferred fail-fast contract: exact `True` skips, exact `False` executes, and any non-boolean value fails in a controlled way before mutation. |
-| R3-T3 | confirmed and already wrong, Medium | R3-05b (planned) | The Jinja parity test never loads `pause.yml`; its hand-written oracle also contradicts the task's `automated is not none` gate. |
+| R3-T3 | partially resolved, Medium | R3-05b (residual planned) | PR #223 made `tests/test_argocd_constants_parity.py` inspect the shipped `pause.yml`/`resume.yml`. Residual semantic Jinja/Ansible execution coverage remains in `R3-05b`; the source-text guard does not execute task semantics. |
 | R3-T4 | confirmed, Medium | R3-05b (planned) | Namespace and filter parity tests assert only positive matches, so over-matching — the dangerous direction for pause selection — passes. |
 | R3-T5 | confirmed, Medium | R3-09a / SSA-06 (planned) | Require a reviewed action-to-release mapping or equivalent version policy per workflow/action. Full commit-SHA formatting alone is insufficient. |
 | R3-T6 | confirmed, Medium | R3-09b (planned) | `HYPOTHESIS_PROFILE` is set nowhere, so the `ci` profile never loads and CI explores half the intended state space; the scaffolding test cannot detect this. |
 | R3-T7 | confirmed, Medium | R3-09b (planned) | Coverage is measured and uploaded with no `--cov-fail-under` and no Codecov threshold — the mechanism by which `R3-T1` stayed invisible. |
-| R3-T8 | confirmed, Medium | R3-09c (planned) | `ACM_RELEASE_PROFILE` alone un-gates real-cluster certification; the opt-in pilot tests model the correct explicit pattern. |
+| R3-T8 | resolved/reframed through PR #260 | none | PR #260 makes `./run_tests.sh` clear `ACM_RELEASE_PROFILE` and `PYTEST_ADDOPTS` for its default release-helper lane. Explicit profile-driven pytest remains an intentional live entrypoint; this disposition does not claim all live entrypoints were removed. |
 | R3-T9 | confirmed, Medium | R3-09d (planned) | `create_mock_step_context` is duplicated in four suites. It must exist at most once; zero is valid if the suites use real `StateManager` instances. |
 | R3-T10 | confirmed, Medium | R3-09e (planned) | Checkpoint reset test seeds three kinds of stale state and asserts none of them, despite the source naming that exact hazard; also never re-reads the persisted file. |
 | R3-T12 | confirmed 2026-07-26, Medium | R3-09f (planned) | Guardrail scan-root blind spot leaves the seven-literal `R2-H2` residual in `lib/rbac_validator.py` unguarded and free to grow. |
@@ -2281,17 +2377,18 @@ Dispositions:
 | 45 | merged | `refactor/thermos-45-release-orchestrator-rbac-dedup` | `.claude/worktrees/thermos-45-release-orchestrator-rbac-dedup` | R2-M7 | https://github.com/tomazb/rh-acm-switchover/pull/133 | Design spec `docs/superpowers/specs/2026-07-03-pr45-orchestrator-rbac-dedup-design.md`; implementation plan `docs/superpowers/plans/2026-07-03-pr45-orchestrator-rbac-dedup.md`. Extracted `_certify_hub_rbac(...)` (scope lookup -> `certify_rbac_permissions` -> `hub:name`-prefixed assertion dicts) and replaced the duplicated primary/secondary blocks in `_run_release_certification` with a loop over `("primary", "secondary")` plus equivalent `all`/`any` status aggregation. Behavior-preserving; guarded by existing live-RBAC characterization tests plus a new red-first direct helper unit test. Verification: `python -m pytest tests/release/test_orchestrator.py tests/release/test_release_certification.py -q` passed; full `./run_tests.sh` passed (root lane `1563 passed, 105 deselected`; release lane `1022 passed, 3 skipped`; Flake8/Black/isort/MyPy/Bandit/pip-audit clean); `git diff --check` passed. Rebased onto PR #132's short-circuit helper after resolving the adjacent release orchestrator conflict. |
 | 46 | merged | `refactor/thermos-46-rbac-certification-dedup` | `.claude/worktrees/thermos-46-rbac-certification-dedup` | R2-M8 | https://github.com/tomazb/rh-acm-switchover/pull/134 | Design spec `docs/superpowers/specs/2026-07-03-pr46-rbac-certification-dedup-design.md`; implementation plan `docs/superpowers/plans/2026-07-03-pr46-rbac-certification-dedup.md`. Extracted `_evaluate_permissions(..., expect_allowed: bool)` returning `(assertions, unexpected_count, error_count)`; `certify_rbac_permissions` now calls it once for required permissions and once for forbidden permissions, with expected/actual/message strings derived from the polarity so emitted `CertificationAssertion`s are byte-identical to before. Red-first 6-case polarity-matrix unit test (allowed/denied/error × both polarities); guarded by the existing certification suite. Verification: `python -m pytest tests/release/checks/test_rbac_certification.py tests/release/test_orchestrator.py -q` passed (`62 passed`); full `./run_tests.sh` passed (root lane `1563 passed, 105 deselected`; release lane `1027 passed, 3 skipped`; Flake8/Black/isort/MyPy/Bandit/pip-audit clean); `git diff --check` passed. |
 | 47 | merged | `refactor/thermos-47-release-adapter-dedup` | `.claude/worktrees/thermos-47-release-adapter-dedup` | R2-M6 | https://github.com/tomazb/rh-acm-switchover/pull/135 | Design spec `docs/superpowers/specs/2026-07-03-pr47-release-adapter-dedup-design.md`; implementation plan `docs/superpowers/plans/2026-07-03-pr47-release-adapter-dedup.md`. Added `run_stream_subprocess(...)` to `adapters/common.py` owning the mkdir → `subprocess.run` → timeout/normal branches → `write_capture_artifact` pair → exit-code + redaction assertions → `StreamResult` flow; each adapter's `execute()` now builds its command/env and passes stream name, capability, message strings, and a reports callable. Duplicated `_now`/`_decode` moved to `common.py`; per-adapter variance (bash `bash-` capability prefix, bash inherit-env-when-no-extra-env, exact message strings) preserved byte-for-byte per the spec's variance table. Red-first: 4 direct helper tests (success/failure/timeout/reports) in `test_common.py`; the existing adapter suites (asserting on `StreamResult` fields) guard integrated behavior. Verification: `python -m pytest tests/release/adapters/ tests/release/test_orchestrator.py -q` passed (`90 passed`); full `./run_tests.sh` passed (root lane `1563 passed, 105 deselected`; release lane `1026 passed, 3 skipped`); touched-file `black`/`isort` applied, no new flake8 findings; `git diff --check` passed. |
-| 48 | ready_for_review | `docs/thermos-48-review3-tracker` | `.claude/worktrees/thermos-48-review3-tracker` | Non-runtime tracker/repository-maintenance correction: 40 original Review #3 claims + 2 revalidation-added raw claims - 1 folded duplicate = 41 unique IDs (37 actionable, 1 optional, 2 rejected, 1 routed); PR #196/TR2D reconciliation; corrected H2, SSA, priority, and delivery boundaries | https://github.com/tomazb/rh-acm-switchover/pull/197 | Builder and review-comment resolver passes complete only; this status does not imply independent validation or merge readiness. GitHub PR is non-draft, while every branch-head change still requires fresh exact-head independent validation. Targeted documentation/CI/waiter suite: 89 passed. Strict `./run_tests.sh`: root lane 1831 passed, 105 deselected; release lane 1169 passed, 3 skipped; Black/isort/MyPy/Bandit/compile gates completed, with pip-audit advisory findings reported under its CI exit-zero policy. Count parser: 41 canonical rows and 41 matrix rows, 37/1/2/1 disposition. `git diff --check` and worktree-ignore check passed. Changed files remain exactly `.gitignore`, `AGENTS.md`, and `thermos-resolution-plan.md`. |
+| 48 | merged | `docs/thermos-48-review3-tracker` | `.claude/worktrees/thermos-48-review3-tracker` | Non-runtime tracker/repository-maintenance correction: 41 unique Review #3 IDs (37 actionable, 1 optional, 2 rejected, 1 routed); PR #196/TR2D reconciliation; corrected H2, SSA, priority, and delivery boundaries | https://github.com/tomazb/rh-acm-switchover/pull/197 | GitHub PR #197 is merged: base `4fed598cb1890959d8e8251b7c70e2eb5434b5f5`; exact head `3dc7b6ef6c655e86c1ef8b9152f2385935dfff15`; merged at `2026-07-26T14:56:16Z`; merge commit `17c9589d41767ce582fe46444f5e1feb07af0d30`. GitHub PR #196 was closed unmerged and superseded by PR #197: base `4fed598cb1890959d8e8251b7c70e2eb5434b5f5`; exact head `8d377e0754d08628a64d68bb619fa98045125505`; closed at `2026-07-26T14:37:55Z`; `mergedAt: null`; `mergeCommit: null` (no merge commit). Historical exact-head evidence retained: independent PASS; targeted documentation/CI/waiter suite 89 passed; strict root lane 1831 passed with 105 deselected; release lane 1169 passed with 3 skipped; Black, isort, MyPy, Bandit, and compile gates passed; the dependency audit was advisory under repository policy; the deterministic parser reported 41 canonical and 41 matrix rows with the 37/1/2/1 disposition. |
+| 49 | in_progress | `docs/thermos-49-tracker-reconciliation` | `.claude/worktrees/pr265-tracker-reconciliation` | Tracker-only reconciliation consistency correction; no implementation authority | https://github.com/tomazb/rh-acm-switchover/pull/265 | Independent validation of exact head `cc444fa33af9a191ca58f9b5966493fe73904cb9` returned `HARD_FAIL_EXACT_HEAD`; the sole blocking finding was incomplete exact PR #196/#197 metadata. This metadata-only correction creates a new exact head, so the prior exact-head CI and validator evidence are historical for `cc444fa33af9a191ca58f9b5966493fe73904cb9`; fresh exact-head CI and clean-checkout independent validation remain required. `in_progress` does not imply GitHub readiness or merge readiness. |
 
 
-**PR 48 note:** this row covers non-runtime tracker/repository-maintenance:
-the Review #3 record, repository worktree-ignore/instruction maintenance, the
-2026-07-26 full-file revalidation, and this corrective resolver pass. No
-design/spec gate applies: like `PR 01`, `PR 13`, `PR 28`, and `PR 32`, it is
-tracker maintenance, not an implementation slice. `ready_for_review` in this
-row means the builder and review-comment resolver passes are complete; GitHub
-readiness is separate, each changed head requires fresh exact-head independent
-validation, and merge readiness remains a further separate determination.
+**PR 48 / PR 49 note:** PR 48 is historical and merged. Its valid exact-head
+validation evidence is retained, and PR #196 remains closed unmerged as
+superseded. PR 49 is the current draft tracker-only correction; no design/spec
+gate applies because it is tracker maintenance rather than an implementation
+slice. `in_progress` records only the current builder state. It does not imply
+independent validation, GitHub readiness, or merge readiness, and every PR 49
+head change requires fresh exact-head CI and clean-checkout independent
+validation.
 
 **PR39-001 blocker fix evidence (2026-07-05):** The PR39 restore-only regression was reproduced with only `acm_switchover_hubs.secondary`: the new integration test failed red at `Build hub RBAC validation table` with `'dict object' has no attribute 'primary'`. The fix preserves the PR39 `_rbac_hub_validations` table/include design and makes only the skipped primary row's `kubeconfig`/`context` expressions restore-only-safe; normal switchover mode still dereferences the required primary hub. Added `restore_only_rbac_secondary_only.yml` and `test_restore_only_rbac_with_secondary_only_hub_reports_secondary_validation`, proving `preflight-rbac-primary` is absent while `preflight-rbac-secondary` is still reported. No operator-CRD 401 hardening is included in this PR39-001 fix. Verification after the fix: focused repro passed; targeted preflight/RBAC suite passed (`63 passed`); collection unit suite passed (`822 passed`); root RBAC/parity suite passed (`183 passed`); `git diff --check` passed; full `./run_tests.sh` passed (root lane `1584 passed, 105 deselected`; release lane `1034 passed, 3 skipped`; Black/isort/MyPy/Bandit/pip-audit/compile checks clean).
 
