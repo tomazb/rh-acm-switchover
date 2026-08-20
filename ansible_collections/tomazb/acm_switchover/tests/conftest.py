@@ -98,22 +98,25 @@ def _materialize_fixture_kubeconfigs(vars_payload: dict, tmp_path: Path) -> None
 
 def _seed_fixture_defaults(vars_payload: dict) -> None:
     test_overrides = vars_payload.get("acm_switchover_test_overrides")
-    if isinstance(test_overrides, dict):
-        activation_restores_info = test_overrides.get("activation_restores_info")
-        if activation_restores_info is not None:
-            vars_payload["acm_activation_restores_info"] = activation_restores_info
+    if not isinstance(test_overrides, dict):
+        test_overrides = {}
+        vars_payload["acm_switchover_test_overrides"] = test_overrides
+    activation_restores_info = test_overrides.get("activation_restores_info")
+    if activation_restores_info is not None:
+        vars_payload["acm_activation_restores_info"] = activation_restores_info
+
+    execution = vars_payload.get("acm_switchover_execution")
+    execution_mode = execution.get("mode", "dry_run") if isinstance(execution, dict) else "dry_run"
+    if execution_mode in {"validate", "dry_run"}:
+        test_overrides.setdefault(
+            "non_live_hub_identities",
+            {
+                "primary": {"cluster_uid": "fixture-primary-uid"},
+                "secondary": {"cluster_uid": "fixture-secondary-uid"},
+            },
+        )
 
     vars_payload.setdefault("acm_switchover_features", {}).setdefault("token_expiry_warning_hours", 4)
-    vars_payload.setdefault(
-        "acm_switchover_hub_identities",
-        {
-            "primary": {"context": "primary-hub", "cluster_uid": "fixture-primary-uid"},
-            "secondary": {
-                "context": "secondary-hub",
-                "cluster_uid": "fixture-secondary-uid",
-            },
-        },
-    )
     vars_payload.setdefault("acm_secondary_backups_info", {"resources": []})
     vars_payload.setdefault("acm_secondary_backup_schedules_info", {"resources": []})
     velero_pods = {"resources": [{"metadata": {"name": "velero"}}]}
@@ -405,11 +408,12 @@ def run_checkpoint_fixture(tmp_path):
                     build_operation_identity,
                 )
 
+                test_overrides = vars_payload.get("acm_switchover_test_overrides") or {}
                 checkpoint_record["operation_identity"] = build_operation_identity(
                     hubs=vars_payload.get("acm_switchover_hubs") or {},
                     operation=vars_payload.get("acm_switchover_operation") or {},
                     collection_version=vars_payload.get("acm_switchover_collection_version"),
-                    hub_identities=vars_payload.get("acm_switchover_hub_identities") or {},
+                    hub_identities=test_overrides.get("non_live_hub_identities") or {},
                 )
             checkpoint_path.write_text(json.dumps(checkpoint_record, indent=2))
 
