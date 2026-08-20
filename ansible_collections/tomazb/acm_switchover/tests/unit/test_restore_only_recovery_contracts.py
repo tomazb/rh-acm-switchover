@@ -181,6 +181,8 @@ def test_preflight_skipped_checkpoint_requires_expected_managedcluster_metadata(
     restored_values = yaml.dump(tasks[restore_index]["ansible.builtin.set_fact"])
     assert ".get('expected_managed_cluster_names', [])" not in restored_values
     assert ".get('expected_managed_cluster_count', 0)" not in restored_values
+    assert "primary_has_observability" in restored_values
+    assert "secondary_has_observability" in restored_values
 
 
 def test_primary_prep_checkpoint_persists_argocd_run_id():
@@ -264,6 +266,28 @@ def test_restore_only_rehydrates_argocd_run_id_from_checkpoint_before_pause():
     assert rehydrate_index < pause_index
     assert "operational_data" in text
     assert "argocd_run_id" in text
+
+
+def test_restore_only_reads_checkpoint_enter_operational_facts_only():
+    """Restore-only must retain operational checkpoint consumers without treating them as identity evidence."""
+    text = (PLAYBOOKS / "restore_only.yml").read_text()
+
+    assert "((_checkpoint_enter | default({})) or {}).get('facts', {}).get('argocd_run_id')" in text
+    assert "((_checkpoint_enter | default({})) or {}).get('facts', {}).get('argocd_discovery_namespaces')" in text
+    assert "_checkpoint_enter.hub_identities" not in text
+    assert "_checkpoint_enter.facts.cluster_uid" not in text
+
+
+def test_preflight_composes_checkpoint_enter_before_operational_fact_rehydration():
+    """The barrier result must reach post-identity compatibility consumers unchanged."""
+    tasks = yaml.safe_load((PREFLIGHT_TASKS / "main.yml").read_text())
+
+    assert [task["ansible.builtin.include_tasks"] for task in tasks] == [
+        "identity_barrier.yml",
+        "post_identity.yml",
+    ]
+    barrier_text = (PREFLIGHT_TASKS / "identity_barrier.yml").read_text()
+    assert "register: _checkpoint_enter" in barrier_text
 
 
 def test_restore_only_rehydrates_discovery_namespaces_from_checkpoint_before_pause():

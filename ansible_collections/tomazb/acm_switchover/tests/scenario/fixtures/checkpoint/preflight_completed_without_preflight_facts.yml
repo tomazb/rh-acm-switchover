@@ -53,6 +53,11 @@ acm_activation_mch_info:
         currentVersion: 2.14.2
 
 acm_switchover_test_overrides:
+  non_live_hub_identities:
+    primary:
+      cluster_uid: fixture-primary-uid
+    secondary:
+      cluster_uid: fixture-secondary-uid
   activation_restores_info:
     resources:
       - metadata:
