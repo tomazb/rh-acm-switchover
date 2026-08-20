@@ -22,6 +22,18 @@ def _get_task_block(playbook: list[dict]) -> dict:
     raise AssertionError("No block found in playbook")
 
 
+def _get_switchover_recovery_blocks(playbook: list[dict]) -> tuple[dict, dict]:
+    """Return the outer reporting block and its post-identity recovery block."""
+    tasks = playbook[0].get("tasks", [])
+    outer = next(
+        task for task in tasks if task.get("name") == "Run switchover phases with reporting"
+    )
+    nested = next(
+        task for task in outer["block"] if task.get("name") == "Run post-barrier switchover phases"
+    )
+    return outer, nested
+
+
 # --- defaults ---
 
 
@@ -35,18 +47,38 @@ def test_resume_on_failure_default_is_false():
 # --- switchover.yml ---
 
 
-def test_switchover_has_rescue_block():
-    """switchover.yml must have a rescue block."""
+def test_switchover_recovery_is_nested_after_the_identity_barrier():
+    """Only post-identity work may enter the switchover recovery path."""
     playbook = _load_playbook("switchover.yml")
-    task_block = _get_task_block(playbook)
-    assert "rescue" in task_block, "switchover.yml main block must have a rescue section"
+    outer, nested = _get_switchover_recovery_blocks(playbook)
+
+    assert "rescue" not in outer
+    identity_index = next(
+        index
+        for index, task in enumerate(outer["block"])
+        if task.get("name") == "Establish trusted identity and checkpoint barrier"
+    )
+    nested_index = outer["block"].index(nested)
+    assert identity_index < nested_index
+
+    identity_task = outer["block"][identity_index]
+    assert identity_task["ansible.builtin.include_role"] == {
+        "name": "tomazb.acm_switchover.preflight",
+        "tasks_from": "identity_barrier",
+    }
+    assert "rescue" in nested
+    assert "when" not in nested
+    assert [task.get("name") for task in outer["always"]] == [
+        "Build switchover report contract",
+        "Write switchover report artifact",
+    ]
 
 
 def test_switchover_rescue_resumes_argocd_on_secondary():
     """switchover.yml rescue must attempt ArgoCD resume on secondary hub."""
     playbook = _load_playbook("switchover.yml")
-    task_block = _get_task_block(playbook)
-    rescue_tasks = task_block["rescue"]
+    _, recovery_block = _get_switchover_recovery_blocks(playbook)
+    rescue_tasks = recovery_block["rescue"]
 
     resume_tasks = [
         t
@@ -67,8 +99,8 @@ def test_switchover_rescue_resumes_argocd_on_secondary():
 def test_switchover_rescue_resumes_argocd_on_primary():
     """switchover.yml rescue must attempt ArgoCD resume on primary hub."""
     playbook = _load_playbook("switchover.yml")
-    task_block = _get_task_block(playbook)
-    rescue_tasks = task_block["rescue"]
+    _, recovery_block = _get_switchover_recovery_blocks(playbook)
+    rescue_tasks = recovery_block["rescue"]
 
     resume_tasks = [
         t
@@ -92,8 +124,8 @@ def test_switchover_rescue_resumes_argocd_on_primary():
 def test_switchover_rescue_has_resume_on_failure_guard():
     """switchover.yml rescue resume tasks must be guarded by resume_on_failure flag."""
     playbook = _load_playbook("switchover.yml")
-    task_block = _get_task_block(playbook)
-    rescue_tasks = task_block["rescue"]
+    _, recovery_block = _get_switchover_recovery_blocks(playbook)
+    rescue_tasks = recovery_block["rescue"]
 
     resume_tasks = [
         t
@@ -109,8 +141,8 @@ def test_switchover_rescue_has_resume_on_failure_guard():
 def test_switchover_rescue_resets_primary_prep_checkpoint_after_resume_on_failure():
     """After best-effort resume, retry must rerun primary_prep and re-pause GitOps."""
     playbook = _load_playbook("switchover.yml")
-    task_block = _get_task_block(playbook)
-    rescue_tasks = task_block["rescue"]
+    _, recovery_block = _get_switchover_recovery_blocks(playbook)
+    rescue_tasks = recovery_block["rescue"]
 
     reset_tasks = [
         task for task in rescue_tasks if task.get("tomazb.acm_switchover.checkpoint_phase", {}).get("status") == "reset"
@@ -134,10 +166,10 @@ def test_switchover_rescue_resets_primary_prep_checkpoint_after_resume_on_failur
 def test_switchover_rescue_reset_preserves_argocd_run_id_for_retry():
     """Failed resume-on-failure retries must keep matching the original pause marker."""
     playbook = _load_playbook("switchover.yml")
-    task_block = _get_task_block(playbook)
+    _, recovery_block = _get_switchover_recovery_blocks(playbook)
     reset_tasks = [
         task
-        for task in task_block["rescue"]
+        for task in recovery_block["rescue"]
         if task.get("tomazb.acm_switchover.checkpoint_phase", {}).get("status") == "reset"
     ]
 
@@ -151,10 +183,10 @@ def test_switchover_rescue_reset_preserves_argocd_run_id_for_retry():
 def test_switchover_rescue_reset_preserves_argocd_discovery_namespaces_for_retry():
     """Failed resume-on-failure retries must keep trusted namespace hints for scoped rediscovery."""
     playbook = _load_playbook("switchover.yml")
-    task_block = _get_task_block(playbook)
+    _, recovery_block = _get_switchover_recovery_blocks(playbook)
     reset_tasks = [
         task
-        for task in task_block["rescue"]
+        for task in recovery_block["rescue"]
         if task.get("tomazb.acm_switchover.checkpoint_phase", {}).get("status") == "reset"
     ]
 
@@ -179,8 +211,8 @@ def test_primary_prep_rehydrates_argocd_run_id_from_checkpoint_before_pause():
 def test_switchover_rescue_uses_ignore_errors():
     """switchover.yml rescue resume tasks must use ignore_errors to prevent compounding failures."""
     playbook = _load_playbook("switchover.yml")
-    task_block = _get_task_block(playbook)
-    rescue_tasks = task_block["rescue"]
+    _, recovery_block = _get_switchover_recovery_blocks(playbook)
+    rescue_tasks = recovery_block["rescue"]
 
     resume_tasks = [
         t
@@ -196,11 +228,26 @@ def test_switchover_rescue_uses_ignore_errors():
 def test_switchover_rescue_reraises_failure():
     """switchover.yml rescue must re-raise the original failure after resume attempt."""
     playbook = _load_playbook("switchover.yml")
-    task_block = _get_task_block(playbook)
-    rescue_tasks = task_block["rescue"]
+    _, recovery_block = _get_switchover_recovery_blocks(playbook)
+    rescue_tasks = recovery_block["rescue"]
 
     fail_tasks = [t for t in rescue_tasks if "ansible.builtin.fail" in t]
     assert len(fail_tasks) >= 1, "rescue must re-raise original failure with ansible.builtin.fail"
+
+
+def test_switchover_recovery_encloses_every_post_barrier_phase():
+    """The block boundary, rather than a fact, decides recovery eligibility."""
+    _, recovery_block = _get_switchover_recovery_blocks(_load_playbook("switchover.yml"))
+
+    expected = [
+        "Run remaining preflight validation",
+        "Stop after preflight when mode is validate",
+        "Run primary prep",
+        "Run activation",
+        "Run post activation verification",
+        "Run finalization",
+    ]
+    assert [task.get("name") for task in recovery_block["block"]] == expected
 
 
 # --- restore_only.yml ---

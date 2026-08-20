@@ -55,6 +55,17 @@ def test_switchover_playbook_rejects_restore_only_mode_before_roles():
     )
 
 
+def test_switchover_identity_refusal_cannot_use_restore_recovery_shape():
+    """The normal playbook must fence recovery after its identity barrier."""
+    tasks = _load_playbook("switchover.yml")[0]["tasks"]
+    outer = next(task for task in tasks if task.get("name") == "Run switchover phases with reporting")
+
+    assert "rescue" not in outer
+    assert outer["block"][0]["name"] == "Establish trusted identity and checkpoint barrier"
+    assert outer["block"][1]["name"] == "Run post-barrier switchover phases"
+    assert "rescue" in outer["block"][1]
+
+
 def test_verify_passive_sync_passes_activation_method_to_restore_selector():
     """Passive activation resume must let acm_restore_info see activation_method=restore."""
     tasks = yaml.safe_load((ACTIVATION_TASKS / "verify_passive_sync.yml").read_text())
@@ -152,7 +163,7 @@ def test_restore_wait_uses_exact_benign_finished_with_errors_matching():
 
 def test_preflight_skipped_checkpoint_requires_expected_managedcluster_metadata():
     """Skipped preflight must not silently downgrade expected ManagedCluster enforcement to 0."""
-    tasks = yaml.safe_load((PREFLIGHT_TASKS / "main.yml").read_text())
+    tasks = yaml.safe_load((PREFLIGHT_TASKS / "post_identity.yml").read_text())
     restore_index = next(
         idx
         for idx, task in enumerate(tasks)
