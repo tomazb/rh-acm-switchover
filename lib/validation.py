@@ -382,15 +382,17 @@ class InputValidator:
         has_argocd_manage = hasattr(args, "argocd_manage") and args.argocd_manage
         has_argocd_resume_only = hasattr(args, "argocd_resume_only") and args.argocd_resume_only
         has_validate_only = hasattr(args, "validate_only") and args.validate_only
+        primary_context = getattr(args, "primary_context", None)
+        secondary_context = getattr(args, "secondary_context", None)
 
         if (
             not is_decommission
             and not is_setup
             and not is_restore_only
             and not has_argocd_resume_only
-            and getattr(args, "primary_context", None)
-            and getattr(args, "secondary_context", None)
-            and args.primary_context == args.secondary_context
+            and primary_context
+            and secondary_context
+            and primary_context == secondary_context
         ):
             raise ValidationError(_SAME_CONTEXT_MESSAGE)
 

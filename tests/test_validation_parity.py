@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 import yaml
 
+from lib import validation
 from lib.exceptions import SecurityValidationError, ValidationError
 from lib.report_artifacts import validate_report_artifact_path
-from lib import validation
 from lib.validation import InputValidator
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "validation_parity_cases.yml"
