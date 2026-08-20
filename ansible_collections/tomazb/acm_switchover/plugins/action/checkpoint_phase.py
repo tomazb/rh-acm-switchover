@@ -364,21 +364,24 @@ class ActionModule(ActionBase):
 
         if expected_operation_identity is None:
             established_identity = checkpoint_data.get("operation_identity")
-            if isinstance(established_identity, Mapping):
-                expected_operation_identity = dict(established_identity)
-            elif is_unsafe_legacy_checkpoint(checkpoint_data) or (
+            if is_unsafe_legacy_checkpoint(checkpoint_data):
+                # Preserve the existing, more specific unsafe legacy refusal
+                # in _normalize_checkpoint_data.
+                expected_operation_identity = {}
+            elif established_identity is None and (
                 checkpoint_data.get("schema_version") == SCHEMA_VERSION and checkpoint_data.get("completed_phases")
             ):
-                # Preserve the existing, more specific unsafe/missing identity
-                # refusals in _normalize_checkpoint_data.
+                # Preserve the existing, more specific missing identity
+                # refusal in _normalize_checkpoint_data.
                 expected_operation_identity = {}
-            elif bool(checkpoint_config.get("enabled", False)) and execution_mode == "execute":
-                return {
-                    "failed": True,
-                    "msg": "Checkpoint has no established operation identity; run the preflight identity barrier first.",
-                }
+            elif established_identity is None:
+                if bool(checkpoint_config.get("enabled", False)) and execution_mode == "execute" and not is_check_mode:
+                    return self._missing_operation_identity_failure()
+                expected_operation_identity = {}
             else:
-                expected_operation_identity = {}
+                expected_operation_identity = self._canonical_established_operation_identity(established_identity)
+                if expected_operation_identity is None:
+                    return self._missing_operation_identity_failure()
 
         if is_check_mode:
             read_only_failure = self._validate_checkpoint_read_only(
@@ -519,6 +522,50 @@ class ActionModule(ActionBase):
                 return save_result
 
         return {"changed": changed, "checkpoint": checkpoint_data}
+
+    @staticmethod
+    def _missing_operation_identity_failure() -> dict:
+        return {
+            "failed": True,
+            "msg": "Checkpoint has no established operation identity; run the preflight identity barrier first.",
+        }
+
+    @staticmethod
+    def _canonical_established_operation_identity(identity) -> dict | None:
+        if not isinstance(identity, Mapping):
+            return None
+        normalized_identity = normalize_operation_identity(identity)
+        canonical_fields = {
+            "primary_context",
+            "secondary_context",
+            "primary_cluster_uid",
+            "secondary_cluster_uid",
+            "method",
+            "activation_method",
+            "restore_only",
+            "old_hub_action",
+            "collection_version",
+        }
+        if set(normalized_identity) != canonical_fields:
+            return None
+        if not isinstance(normalized_identity["restore_only"], bool):
+            return None
+        string_fields = canonical_fields - {"restore_only"}
+        if any(not isinstance(normalized_identity[field], str) for field in string_fields):
+            return None
+        if any(
+            not normalized_identity[field].strip()
+            for field in ("secondary_context", "secondary_cluster_uid", "method", "activation_method", "old_hub_action")
+        ):
+            return None
+        if normalized_identity["restore_only"]:
+            if normalized_identity["primary_context"] or normalized_identity["primary_cluster_uid"]:
+                return None
+        elif (
+            not normalized_identity["primary_context"].strip() or not normalized_identity["primary_cluster_uid"].strip()
+        ):
+            return None
+        return dict(normalized_identity)
 
     def _validate_checkpoint_read_only(
         self,

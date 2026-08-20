@@ -78,6 +78,16 @@ def _task_vars_with_operation_identity(mode="execute", collection_version=None):
     return task_vars
 
 
+def _canonical_normal_operation_identity():
+    task_vars = _task_vars_with_operation_identity(collection_version="9.8.7")
+    return build_operation_identity(
+        hubs=task_vars["acm_switchover_hubs"],
+        operation=task_vars["acm_switchover_operation"],
+        collection_version=task_vars["acm_switchover_collection_version"],
+        hub_identities=task_vars["acm_switchover_hub_identities"],
+    )
+
+
 def _namespace_result(uid):
     return {
         "changed": False,
@@ -224,7 +234,7 @@ def test_action_module_persists_phase_status_on_pass(tmp_path):
                 "schema_version": "2.0",
                 "completed_phases": ["preflight"],
                 "operational_data": {},
-                "operation_identity": build_operation_identity(hubs={}, operation={}),
+                "operation_identity": _canonical_normal_operation_identity(),
                 "errors": [],
                 "report_refs": [],
                 "updated_at": "2026-01-01T00:00:00+00:00",
@@ -277,7 +287,7 @@ def test_action_module_merges_operational_data_on_pass(tmp_path):
                 "schema_version": "2.0",
                 "completed_phases": ["preflight"],
                 "operational_data": {"existing": "keep"},
-                "operation_identity": build_operation_identity(hubs={}, operation={}),
+                "operation_identity": _canonical_normal_operation_identity(),
                 "errors": [],
                 "report_refs": [],
                 "updated_at": "2026-01-01T00:00:00+00:00",
@@ -336,7 +346,7 @@ def test_action_module_does_not_overwrite_operational_data_with_empty_strings(tm
                 "schema_version": "2.0",
                 "completed_phases": ["preflight"],
                 "operational_data": {"backup_schedule_enabled_at": "2026-04-16T10:00:00Z"},
-                "operation_identity": build_operation_identity(hubs={}, operation={}),
+                "operation_identity": _canonical_normal_operation_identity(),
                 "errors": [],
                 "report_refs": [],
                 "updated_at": "2026-01-01T00:00:00+00:00",
@@ -390,7 +400,7 @@ def test_action_module_persists_phase_status_on_fail(tmp_path):
                 "schema_version": "2.0",
                 "completed_phases": ["preflight"],
                 "operational_data": {},
-                "operation_identity": build_operation_identity(hubs={}, operation={}),
+                "operation_identity": _canonical_normal_operation_identity(),
                 "errors": [],
                 "report_refs": [],
                 "updated_at": "2026-01-01T00:00:00+00:00",
@@ -433,7 +443,7 @@ def test_action_module_fail_prunes_previously_completed_phase(tmp_path):
                 "schema_version": "2.0",
                 "completed_phases": ["preflight", "primary_prep", "activation"],
                 "operational_data": {},
-                "operation_identity": build_operation_identity(hubs={}, operation={}),
+                "operation_identity": _canonical_normal_operation_identity(),
                 "errors": [],
                 "report_refs": [],
                 "updated_at": "2026-01-01T00:00:00+00:00",
@@ -478,7 +488,7 @@ def test_action_module_persists_checkpoint_reset_without_error(tmp_path):
                 "schema_version": "2.0",
                 "completed_phases": ["preflight", "primary_prep", "activation"],
                 "operational_data": {"argocd_run_id": "run-1"},
-                "operation_identity": build_operation_identity(hubs={}, operation={}),
+                "operation_identity": _canonical_normal_operation_identity(),
                 "errors": [],
                 "report_refs": [],
                 "updated_at": "2026-01-01T00:00:00+00:00",
@@ -526,7 +536,7 @@ def test_action_module_check_mode_pass_leaves_existing_checkpoint_unchanged(tmp_
         "phase": "preflight",
         "completed_phases": ["preflight"],
         "operational_data": {},
-        "operation_identity": build_operation_identity(hubs={}, operation={}),
+        "operation_identity": _canonical_normal_operation_identity(),
         "errors": [],
         "report_refs": [],
         "created_at": "2026-01-01T00:00:00+00:00",
@@ -564,7 +574,7 @@ def test_action_module_play_context_check_mode_fail_leaves_existing_checkpoint_u
         "phase": "activation",
         "completed_phases": ["preflight"],
         "operational_data": {},
-        "operation_identity": build_operation_identity(hubs={}, operation={}),
+        "operation_identity": _canonical_normal_operation_identity(),
         "errors": [],
         "report_refs": [],
         "created_at": "2026-01-01T00:00:00+00:00",
@@ -602,7 +612,7 @@ def test_action_module_check_mode_and_dry_run_flags_are_non_exclusive(tmp_path):
         "phase": "preflight",
         "completed_phases": ["preflight"],
         "operational_data": {},
-        "operation_identity": build_operation_identity(hubs={}, operation={}),
+        "operation_identity": _canonical_normal_operation_identity(),
         "errors": [],
         "report_refs": [],
         "created_at": "2026-01-01T00:00:00+00:00",
@@ -994,7 +1004,7 @@ def test_action_module_enter_persists_resume_start_phase_when_resuming(tmp_path)
                 "phase": "preflight",
                 "completed_phases": ["preflight"],
                 "operational_data": {},
-                "operation_identity": build_operation_identity(hubs={}, operation={}),
+                "operation_identity": _canonical_normal_operation_identity(),
                 "errors": [],
                 "report_refs": [],
                 "updated_at": "2026-01-01T00:00:00+00:00",
@@ -1036,7 +1046,7 @@ def test_action_module_enter_recovers_from_non_mapping_operational_data(tmp_path
                 "phase": "preflight",
                 "completed_phases": ["preflight"],
                 "operational_data": "bad-data",
-                "operation_identity": build_operation_identity(hubs={}, operation={}),
+                "operation_identity": _canonical_normal_operation_identity(),
                 "errors": [],
                 "report_refs": [],
                 "updated_at": "2026-01-01T00:00:00+00:00",
@@ -1074,7 +1084,7 @@ def test_action_module_dry_run_pass_does_not_mutate_checkpoint_file(tmp_path):
         "phase": "preflight",
         "completed_phases": ["preflight"],
         "operational_data": {"argocd_run_id": "run-1"},
-        "operation_identity": build_operation_identity(hubs={}, operation={}),
+        "operation_identity": _canonical_normal_operation_identity(),
         "errors": [],
         "report_refs": [],
         "updated_at": "2026-01-01T00:00:00+00:00",
@@ -1110,7 +1120,7 @@ def test_action_module_dry_run_fail_does_not_mutate_checkpoint_file(tmp_path):
         "phase": "activation",
         "completed_phases": ["preflight"],
         "operational_data": {},
-        "operation_identity": build_operation_identity(hubs={}, operation={}),
+        "operation_identity": _canonical_normal_operation_identity(),
         "errors": [],
         "report_refs": [],
         "updated_at": "2026-01-01T00:00:00+00:00",
@@ -1268,6 +1278,10 @@ def test_action_module_later_enter_carries_context_identity_from_checkpoint(tmp_
                         },
                     },
                     operation=_task_vars_with_operation_identity()["acm_switchover_operation"],
+                    hub_identities={
+                        "primary": {"cluster_uid": "uid-primary"},
+                        "secondary": {"cluster_uid": "uid-secondary"},
+                    },
                 ),
                 "errors": [],
                 "report_refs": [],
@@ -1363,6 +1377,10 @@ def test_action_module_later_pass_preserves_checkpoint_identity_without_task_var
                 },
             },
             operation=_task_vars_with_operation_identity()["acm_switchover_operation"],
+            hub_identities={
+                "primary": {"cluster_uid": "uid-primary"},
+                "secondary": {"cluster_uid": "uid-secondary"},
+            },
         ),
         "errors": [],
         "report_refs": [],
@@ -2114,7 +2132,7 @@ def test_reset_from_does_not_reprune_phases_completed_in_current_run(tmp_path):
     Regression test for: reset_from fires on every 'enter', not just the first time.
     """
     checkpoint_file = tmp_path / "checkpoint.json"
-    op_identity = build_operation_identity(hubs={}, operation={})
+    op_identity = _canonical_normal_operation_identity()
     checkpoint_file.write_text(
         json.dumps(
             {
@@ -2812,3 +2830,94 @@ def test_initial_identity_barrier_reset_from_uses_trusted_expected_identity(tmp_
     assert result["checkpoint"]["operation_identity"]["primary_cluster_uid"] == "LIVE-PRIMARY"
     assert result["checkpoint"]["operation_identity"]["secondary_cluster_uid"] == "LIVE-SECONDARY"
     assert result["checkpoint"]["completed_phases"] == []
+
+
+def test_native_check_barrier_then_preflight_pass_succeeds_without_checkpoint_file(tmp_path):
+    barrier_args = _identity_barrier_args(tmp_path, mode="execute", enabled=True)
+    barrier = _make_checkpoint_action(barrier_args)
+    barrier._play_context.check_mode = True
+    barrier._execute_module = MagicMock(
+        side_effect=[_namespace_result("LIVE-PRIMARY"), _namespace_result("LIVE-SECONDARY")]
+    )
+    task_vars = _task_vars_with_operation_identity(mode="execute")
+
+    barrier_result = barrier.run(task_vars=task_vars)
+
+    assert barrier_result.get("failed") is not True
+    assert barrier_result["changed"] is False
+    assert barrier_result["checkpoint"]["operation_identity"] is None
+    checkpoint_path = tmp_path / "checkpoint.json"
+    assert not checkpoint_path.exists()
+
+    pass_action = _make_checkpoint_action(
+        {
+            "phase": "preflight",
+            "status": "pass",
+            "checkpoint": {"enabled": True, "path": str(checkpoint_path)},
+        }
+    )
+    pass_action._play_context.check_mode = True
+
+    pass_result = pass_action.run(task_vars=task_vars)
+
+    assert pass_result.get("failed") is not True
+    assert pass_result["changed"] is False
+    assert pass_result["check_mode"] is True
+    assert pass_result["checkpoint"]["operation_identity"] is None
+    assert not checkpoint_path.exists()
+
+
+MALFORMED_PERSISTED_OPERATION_IDENTITIES = [
+    pytest.param(None, id="none"),
+    pytest.param("not-a-mapping", id="non-mapping"),
+    pytest.param({}, id="empty-mapping"),
+    pytest.param(
+        {
+            "primary_context": "primary-hub",
+            "secondary_context": "secondary-hub",
+            "primary_cluster_uid": "UID-PRIMARY",
+            "secondary_cluster_uid": "UID-SECONDARY",
+            "restore_only": False,
+        },
+        id="missing-canonical-fields",
+    ),
+    pytest.param(
+        {**_canonical_normal_operation_identity(), "primary_cluster_uid": ""},
+        id="missing-primary-uid",
+    ),
+    pytest.param(
+        {**_canonical_normal_operation_identity(), "secondary_context": ""},
+        id="missing-secondary-context",
+    ),
+]
+
+
+@pytest.mark.parametrize("persisted_identity", MALFORMED_PERSISTED_OPERATION_IDENTITIES)
+def test_ordinary_execute_transition_rejects_malformed_persisted_identity_without_writing(tmp_path, persisted_identity):
+    checkpoint_path = tmp_path / "checkpoint.json"
+    checkpoint = {
+        "schema_version": "2.0",
+        "phase": "preflight",
+        "completed_phases": ["preflight"],
+        "operational_data": {},
+        "operation_identity": persisted_identity,
+        "errors": [],
+        "report_refs": [],
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+    }
+    checkpoint_path.write_text(json.dumps(checkpoint, indent=2), encoding="utf-8")
+    original_bytes = checkpoint_path.read_bytes()
+    action = _make_checkpoint_action(
+        {
+            "phase": "activation",
+            "status": "pass",
+            "checkpoint": {"enabled": True, "path": str(checkpoint_path)},
+        }
+    )
+
+    result = action.run(task_vars=_task_vars_with_operation_identity(mode="execute"))
+
+    assert result["failed"] is True
+    assert "operation identity" in result["msg"].lower()
+    assert checkpoint_path.read_bytes() == original_bytes
