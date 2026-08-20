@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import MagicMock, call, mock_open, patch
 
+import pytest
+
 from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import (
     ActionModule,
     build_phase_transition,
@@ -74,6 +76,62 @@ def _task_vars_with_operation_identity(mode="execute", collection_version=None):
     if collection_version is not None:
         task_vars["acm_switchover_collection_version"] = collection_version
     return task_vars
+
+
+def _namespace_result(uid):
+    return {
+        "changed": False,
+        "resources": [
+            {
+                "apiVersion": "v1",
+                "kind": "Namespace",
+                "metadata": {"name": "kube-system", "uid": uid},
+            }
+        ],
+    }
+
+
+def _identity_barrier_args(tmp_path, *, mode="execute", enabled=True, restore_only=False):
+    hubs = {
+        "secondary": {
+            "context": "secondary-hub",
+            "kubeconfig": "./kubeconfigs/secondary",
+            "cluster_uid": "INJECTED-HUB-SECONDARY",
+            "unrelated": "INJECTED-ARBITRARY-SECONDARY",
+        }
+    }
+    if not restore_only:
+        hubs["primary"] = {
+            "context": "primary-hub",
+            "kubeconfig": "./kubeconfigs/primary",
+            "cluster_uid": "INJECTED-HUB-PRIMARY",
+            "unrelated": "INJECTED-ARBITRARY-PRIMARY",
+        }
+    return {
+        "identity_barrier": True,
+        "phase": "preflight",
+        "status": "enter",
+        "checkpoint": {
+            "enabled": enabled,
+            "backend": "file",
+            "path": str(tmp_path / "checkpoint.json"),
+        },
+        "hubs": hubs,
+        "operation": {
+            "method": "full" if restore_only else "passive",
+            "activation_method": "patch",
+            "restore_only": restore_only,
+            "old_hub_action": "none" if restore_only else "secondary",
+        },
+        "execution": {"mode": mode},
+        "test_overrides": {},
+        "collection_version": "9.8.7",
+    }
+
+
+def _run_barrier_with_live_uids(action, task_vars, primary_uid="LIVE-PRIMARY", secondary_uid="LIVE-SECONDARY"):
+    action._execute_module = MagicMock(side_effect=[_namespace_result(primary_uid), _namespace_result(secondary_uid)])
+    return action.run(task_vars=task_vars)
 
 
 def test_build_phase_transition_marks_completion():
@@ -488,7 +546,8 @@ def test_action_module_check_mode_pass_leaves_existing_checkpoint_unchanged(tmp_
         }
     )
 
-    result = action.run(task_vars={**_task_vars_for_mode("execute"), "ansible_check_mode": True})
+    action._play_context.check_mode = True
+    result = action.run(task_vars={**_task_vars_for_mode("execute"), "ansible_check_mode": False})
 
     assert result["changed"] is False
     assert result["check_mode"] is True
@@ -563,7 +622,8 @@ def test_action_module_check_mode_and_dry_run_flags_are_non_exclusive(tmp_path):
         }
     )
 
-    result = action.run(task_vars={**_task_vars_for_mode("dry_run"), "ansible_check_mode": True})
+    action._play_context.check_mode = True
+    result = action.run(task_vars={**_task_vars_for_mode("dry_run"), "ansible_check_mode": False})
 
     assert result["changed"] is False
     assert result["check_mode"] is True
@@ -571,24 +631,24 @@ def test_action_module_check_mode_and_dry_run_flags_are_non_exclusive(tmp_path):
     assert checkpoint_file.read_bytes() == original_bytes
 
 
-def test_action_module_check_mode_does_not_create_missing_checkpoint(tmp_path):
+def test_identity_barrier_check_mode_does_not_create_missing_checkpoint(tmp_path):
     checkpoint_file = tmp_path / "missing-checkpoint.json"
-    action = _make_checkpoint_action(
-        {
-            "phase": "preflight",
-            "checkpoint": {
-                "enabled": True,
-                "backend": "file",
-                "path": str(checkpoint_file),
-            },
-            "status": "pass",
-        }
+    args = _identity_barrier_args(tmp_path)
+    args["checkpoint"]["path"] = str(checkpoint_file)
+    action = _make_checkpoint_action(args)
+    action._execute_module = MagicMock(
+        side_effect=[
+            _namespace_result("LIVE-PRIMARY"),
+            _namespace_result("LIVE-SECONDARY"),
+        ]
     )
 
-    result = action.run(task_vars={**_task_vars_for_mode("execute"), "ansible_check_mode": True})
+    action._play_context.check_mode = True
+    result = action.run(task_vars={**_task_vars_for_mode("execute"), "ansible_check_mode": False})
 
     assert result["changed"] is False
-    assert result["check_mode"] is True
+    assert result["checkpoint"]["operation_identity"] is None
+    assert result["hub_identities"]["primary"]["cluster_uid"] == "LIVE-PRIMARY"
     assert not checkpoint_file.exists()
 
 
@@ -722,25 +782,22 @@ def test_action_module_reset_discards_previous_checkpoint_state_on_preflight_ent
 
 
 def test_action_module_new_checkpoint_includes_operation_identity(tmp_path):
-    checkpoint_file = tmp_path / "checkpoint.json"
-    action = _make_checkpoint_action(
-        {
-            "phase": "preflight",
-            "checkpoint": {
-                "enabled": True,
-                "backend": "file",
-                "path": str(checkpoint_file),
-            },
-            "status": "pass",
-        }
-    )
+    args = _identity_barrier_args(tmp_path)
+    action = _make_checkpoint_action(args)
 
-    task_vars = _task_vars_with_operation_identity()
-    result = action.run(task_vars=task_vars)
+    result = _run_barrier_with_live_uids(action, _task_vars_with_operation_identity())
 
     assert result["checkpoint"]["operation_identity"] == build_operation_identity(
-        hubs=task_vars["acm_switchover_hubs"],
-        operation=task_vars["acm_switchover_operation"],
+        hubs={
+            "primary": {"context": "primary-hub"},
+            "secondary": {"context": "secondary-hub"},
+        },
+        operation=args["operation"],
+        collection_version="9.8.7",
+        hub_identities={
+            "primary": {"cluster_uid": "LIVE-PRIMARY"},
+            "secondary": {"cluster_uid": "LIVE-SECONDARY"},
+        },
     )
 
 
@@ -788,7 +845,7 @@ def test_action_module_enter_rejects_missing_identity_with_completed_phases(
 def test_action_module_enter_backfills_identity_for_fresh_checkpoint(
     tmp_path,
 ):
-    """Schema 2.0 checkpoint with no completed phases can safely backfill identity."""
+    """The initial barrier may safely backfill a fresh schema 2.0 checkpoint."""
     import json
 
     checkpoint_file = tmp_path / "checkpoint.json"
@@ -806,25 +863,24 @@ def test_action_module_enter_backfills_identity_for_fresh_checkpoint(
             }
         )
     )
-    action = _make_checkpoint_action(
-        {
-            "phase": "preflight",
-            "checkpoint": {
-                "enabled": True,
-                "backend": "file",
-                "path": str(checkpoint_file),
-            },
-            "status": "enter",
-        }
-    )
+    args = _identity_barrier_args(tmp_path)
+    args["checkpoint"]["path"] = str(checkpoint_file)
+    action = _make_checkpoint_action(args)
 
-    task_vars = _task_vars_with_operation_identity()
-    result = action.run(task_vars=task_vars)
+    result = _run_barrier_with_live_uids(action, _task_vars_with_operation_identity())
 
     assert result.get("failed") is not True
     assert result["checkpoint"]["operation_identity"] == build_operation_identity(
-        hubs=task_vars["acm_switchover_hubs"],
-        operation=task_vars["acm_switchover_operation"],
+        hubs={
+            "primary": {"context": "primary-hub"},
+            "secondary": {"context": "secondary-hub"},
+        },
+        operation=args["operation"],
+        collection_version="9.8.7",
+        hub_identities={
+            "primary": {"cluster_uid": "LIVE-PRIMARY"},
+            "secondary": {"cluster_uid": "LIVE-SECONDARY"},
+        },
     )
 
 
@@ -1191,7 +1247,7 @@ def test_action_module_validate_mode_does_not_skip_completed_phase_on_enter(tmp_
     assert json.loads(checkpoint_file.read_text()) == original
 
 
-def test_action_module_rejects_identity_mismatch_without_explicit_reset(tmp_path):
+def test_action_module_later_enter_carries_context_identity_from_checkpoint(tmp_path):
     checkpoint_file = tmp_path / "checkpoint.json"
     checkpoint_file.write_text(
         json.dumps(
@@ -1233,12 +1289,11 @@ def test_action_module_rejects_identity_mismatch_without_explicit_reset(tmp_path
 
     result = action.run(task_vars=_task_vars_with_operation_identity())
 
-    assert result["failed"] is True
-    assert "operation identity" in result["msg"].lower()
-    assert "reset" in result["msg"].lower()
+    assert result.get("failed") is not True
+    assert result["checkpoint"]["operation_identity"]["secondary_context"] == "other-secondary"
 
 
-def test_action_module_rejects_same_context_with_different_cluster_uid(tmp_path):
+def test_action_module_later_enter_carries_cluster_uid_from_checkpoint(tmp_path):
     checkpoint_file = tmp_path / "checkpoint.json"
     current_vars = _task_vars_with_operation_identity()
     checkpoint_hubs = {
@@ -1283,11 +1338,11 @@ def test_action_module_rejects_same_context_with_different_cluster_uid(tmp_path)
 
     result = action.run(task_vars=current_vars)
 
-    assert result["failed"] is True
-    assert "operation identity" in result["msg"].lower()
+    assert result.get("failed") is not True
+    assert result["checkpoint"]["operation_identity"]["primary_cluster_uid"] == "uid-retargeted"
 
 
-def test_action_module_rejects_identity_mismatch_on_pass_without_explicit_reset(
+def test_action_module_later_pass_preserves_checkpoint_identity_without_task_var_revalidation(
     tmp_path,
 ):
     checkpoint_file = tmp_path / "checkpoint.json"
@@ -1328,9 +1383,9 @@ def test_action_module_rejects_identity_mismatch_on_pass_without_explicit_reset(
 
     result = action.run(task_vars=_task_vars_with_operation_identity())
 
-    assert result["failed"] is True
-    assert "operation identity" in result["msg"].lower()
-    assert json.loads(checkpoint_file.read_text()) == original
+    assert result.get("failed") is not True
+    assert result["checkpoint"]["operation_identity"] == original["operation_identity"]
+    assert json.loads(checkpoint_file.read_text())["operation_identity"] == original["operation_identity"]
 
 
 def test_action_module_rejects_unsafe_legacy_checkpoint_without_explicit_reset(
@@ -1640,8 +1695,9 @@ def test_action_module_returns_actionable_error_for_unwritable_checkpoint_path(
                 "enabled": True,
                 "backend": "file",
                 "path": str(checkpoint_file),
+                "reset": True,
             },
-            "status": "pass",
+            "status": "enter",
         }
     )
 
@@ -1876,7 +1932,8 @@ def test_action_module_check_mode_enter_leaves_checkpoint_file_unchanged(tmp_pat
         }
     )
 
-    result = action.run(task_vars={**task_vars, "ansible_check_mode": True})
+    action._play_context.check_mode = True
+    result = action.run(task_vars={**task_vars, "ansible_check_mode": False})
 
     assert result["changed"] is False
     assert checkpoint_file.read_bytes() == original_bytes
@@ -2139,7 +2196,11 @@ def test_enter_returns_named_facts(tmp_path):
     task_vars = _task_vars_with_operation_identity()
     path = _write_resumable_checkpoint(tmp_path, task_vars)
     action = _make_checkpoint_action(
-        {"phase": "primary_prep", "status": "enter", "checkpoint": {"enabled": True, "path": path}}
+        {
+            "phase": "primary_prep",
+            "status": "enter",
+            "checkpoint": {"enabled": True, "path": path},
+        }
     )
     result = action.run(task_vars=task_vars)
     assert result.get("failed") is not True
@@ -2154,12 +2215,19 @@ def test_resumed_enter_replaces_resume_summary_and_flags_process(tmp_path):
     path = _write_resumable_checkpoint(tmp_path, task_vars)
     with open(path, encoding="utf-8") as fh:
         record = json.load(fh)
-    record["operational_data"]["resume_summary"] = {"resume_start_phase": "preflight", "stale": "yes"}
+    record["operational_data"]["resume_summary"] = {
+        "resume_start_phase": "preflight",
+        "stale": "yes",
+    }
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(record, fh)
 
     action = _make_checkpoint_action(
-        {"phase": "activation", "status": "enter", "checkpoint": {"enabled": True, "path": path}}
+        {
+            "phase": "activation",
+            "status": "enter",
+            "checkpoint": {"enabled": True, "path": path},
+        }
     )
     result = action.run(task_vars=task_vars)
     assert result.get("failed") is not True
@@ -2182,7 +2250,11 @@ def test_same_process_later_enter_does_not_overwrite_resume_summary(tmp_path):
         json.dump(record, fh)
 
     action = _make_checkpoint_action(
-        {"phase": "post_activation", "status": "enter", "checkpoint": {"enabled": True, "path": path}}
+        {
+            "phase": "post_activation",
+            "status": "enter",
+            "checkpoint": {"enabled": True, "path": path},
+        }
     )
     result = action.run(task_vars=task_vars)
     assert result.get("failed") is not True
@@ -2195,11 +2267,8 @@ def test_same_process_later_enter_does_not_overwrite_resume_summary(tmp_path):
 def test_fresh_run_records_no_resume_summary(tmp_path):
     """Empty completed_phases = not a resume: no resume_summary, no process flag."""
     task_vars = _task_vars_with_operation_identity()
-    path = str(tmp_path / "checkpoint.json")
-    action = _make_checkpoint_action(
-        {"phase": "preflight", "status": "enter", "checkpoint": {"enabled": True, "path": path}}
-    )
-    result = action.run(task_vars=task_vars)
+    action = _make_checkpoint_action(_identity_barrier_args(tmp_path))
+    result = _run_barrier_with_live_uids(action, task_vars)
     assert result.get("failed") is not True
     assert "ansible_facts" not in result
     assert result["facts"]["resume_start_phase"] == ""
@@ -2213,7 +2282,11 @@ def test_stale_cached_sentinel_from_other_process_does_not_fence(tmp_path):
     task_vars["_acm_switchover_resume_recorded"] = "99999999-stale"
     path = _write_resumable_checkpoint(tmp_path, task_vars)
     action = _make_checkpoint_action(
-        {"phase": "activation", "status": "enter", "checkpoint": {"enabled": True, "path": path}}
+        {
+            "phase": "activation",
+            "status": "enter",
+            "checkpoint": {"enabled": True, "path": path},
+        }
     )
     result = action.run(task_vars=task_vars)
     assert result.get("failed") is not True
@@ -2221,3 +2294,521 @@ def test_stale_cached_sentinel_from_other_process_does_not_fence(tmp_path):
     with open(path, encoding="utf-8") as fh:
         persisted = json.load(fh)
     assert persisted["operational_data"]["resume_summary"] == {"resume_start_phase": "activation"}
+
+
+@pytest.mark.parametrize(
+    ("phase", "status"),
+    [
+        ("activation", "enter"),
+        ("preflight", "pass"),
+        ("primary_prep", "reset"),
+    ],
+)
+def test_identity_barrier_rejects_non_literal_phase_or_status_before_discovery(tmp_path, phase, status):
+    args = _identity_barrier_args(tmp_path)
+    args.update({"phase": phase, "status": status})
+    action = _make_checkpoint_action(args)
+    action._execute_module = MagicMock()
+
+    result = action.run(task_vars={"acm_switchover_execution": {"mode": "validate"}})
+
+    assert result == {
+        "failed": True,
+        "msg": "identity_barrier requires phase=preflight and status=enter.",
+    }
+    action._execute_module.assert_not_called()
+
+
+def test_identity_barrier_disabled_still_reads_distinct_live_uids_without_file_access(
+    tmp_path,
+):
+    args = _identity_barrier_args(tmp_path, enabled=False)
+    action = _make_checkpoint_action(args)
+    task_vars = {"acm_switchover_execution": {"mode": "validate"}}
+    with patch.object(action, "_load_checkpoint") as load_checkpoint, patch.object(
+        action, "_save_checkpoint"
+    ) as save_checkpoint:
+        result = _run_barrier_with_live_uids(action, task_vars)
+
+    assert result == {
+        "changed": False,
+        "skipped_phase": False,
+        "facts": {},
+        "hub_identities": {
+            "primary": {"cluster_uid": "LIVE-PRIMARY"},
+            "secondary": {"cluster_uid": "LIVE-SECONDARY"},
+        },
+    }
+    assert action._execute_module.call_args_list == [
+        call(
+            module_name="kubernetes.core.k8s_info",
+            module_args={
+                "api_version": "v1",
+                "kind": "Namespace",
+                "name": "kube-system",
+                "kubeconfig": "./kubeconfigs/primary",
+                "context": "primary-hub",
+            },
+            task_vars=task_vars,
+            tmp=None,
+        ),
+        call(
+            module_name="kubernetes.core.k8s_info",
+            module_args={
+                "api_version": "v1",
+                "kind": "Namespace",
+                "name": "kube-system",
+                "kubeconfig": "./kubeconfigs/secondary",
+                "context": "secondary-hub",
+            },
+            task_vars=task_vars,
+            tmp=None,
+        ),
+    ]
+    load_checkpoint.assert_not_called()
+    save_checkpoint.assert_not_called()
+
+
+def test_identity_barrier_rejects_same_context_before_live_reads(tmp_path):
+    args = _identity_barrier_args(tmp_path, enabled=False)
+    args["hubs"]["secondary"]["context"] = "primary-hub"
+    action = _make_checkpoint_action(args)
+    action._execute_module = MagicMock()
+
+    result = action.run(task_vars={})
+
+    assert result == {
+        "failed": True,
+        "msg": "Primary and secondary Kubernetes context names must differ for a normal two-hub switchover.",
+    }
+    action._execute_module.assert_not_called()
+
+
+def test_identity_barrier_rejects_equal_trimmed_live_uids(tmp_path):
+    action = _make_checkpoint_action(_identity_barrier_args(tmp_path, enabled=False))
+    injected = {
+        "acm_switchover_hub_identities": {
+            "primary": {"cluster_uid": "FAKE-DISTINCT-PRIMARY"},
+            "secondary": {"cluster_uid": "FAKE-DISTINCT-SECONDARY"},
+        },
+        "_acm_switchover_verified_hub_identities": {
+            "primary": {"cluster_uid": "PRIVATE-DISTINCT-PRIMARY"},
+            "secondary": {"cluster_uid": "PRIVATE-DISTINCT-SECONDARY"},
+        },
+        "acm_switchover_distinct_hubs_verified": True,
+    }
+
+    result = _run_barrier_with_live_uids(action, injected, primary_uid=" LIVE-SAME ", secondary_uid="LIVE-SAME")
+
+    assert result == {
+        "failed": True,
+        "msg": (
+            "Primary and secondary hubs resolve to the same physical Kubernetes cluster. "
+            "Refusing the normal two-hub switchover."
+        ),
+    }
+    assert action._execute_module.call_count == 2
+
+
+def test_restore_only_identity_barrier_reads_secondary_only(tmp_path):
+    args = _identity_barrier_args(tmp_path, enabled=False, restore_only=True)
+    action = _make_checkpoint_action(args)
+    action._execute_module = MagicMock(return_value=_namespace_result(" RESTORE-SECONDARY "))
+    task_vars = {"primary_failure_sentinel": "MUST-NOT-BE-READ"}
+
+    result = action.run(task_vars=task_vars)
+
+    assert result["hub_identities"] == {"secondary": {"cluster_uid": "RESTORE-SECONDARY"}}
+    action._execute_module.assert_called_once_with(
+        module_name="kubernetes.core.k8s_info",
+        module_args={
+            "api_version": "v1",
+            "kind": "Namespace",
+            "name": "kube-system",
+            "kubeconfig": "./kubeconfigs/secondary",
+            "context": "secondary-hub",
+        },
+        task_vars=task_vars,
+        tmp=None,
+    )
+
+
+MALFORMED_NAMESPACE_RESULTS = [
+    None,
+    {},
+    {"failed": True},
+    {"resources": []},
+    {"resources": [{"metadata": {"uid": "one"}}, {"metadata": {"uid": "two"}}]},
+    {"resources": [{}]},
+    {"resources": [{"metadata": "not-a-mapping"}]},
+    {"resources": [{"metadata": {}}]},
+    {"resources": [{"metadata": {"uid": 123}}]},
+    {"resources": [{"metadata": {"uid": ""}}]},
+    {"resources": [{"metadata": {"uid": "   "}}]},
+]
+
+
+@pytest.mark.parametrize("role", ["primary", "secondary"])
+@pytest.mark.parametrize("malformed_result", MALFORMED_NAMESPACE_RESULTS)
+def test_identity_barrier_rejects_malformed_namespace_results_without_leaking(tmp_path, capsys, role, malformed_result):
+    sentinels = [
+        "API-BODY-SECRET-BD73",
+        "API-PATH-SECRET-PT72",
+        "CONTEXT-SECRET-CT71",
+        "TOKEN-SECRET-TK70",
+        "CREDENTIAL-SECRET-CR69",
+        "RAW-ERROR-SECRET-ER68",
+        "UID-SECRET-UI67",
+    ]
+    args = _identity_barrier_args(tmp_path, enabled=False)
+    args["hubs"][role]["context"] = "CONTEXT-SECRET-CT71"
+    args["hubs"][role]["kubeconfig"] = "CREDENTIAL-SECRET-CR69"
+    if isinstance(malformed_result, dict):
+        malformed_result = {
+            **malformed_result,
+            "msg": "API-BODY-SECRET-BD73 API-PATH-SECRET-PT72 TOKEN-SECRET-TK70",
+            "exception": "RAW-ERROR-SECRET-ER68 UID-SECRET-UI67",
+        }
+    action = _make_checkpoint_action(args)
+    if role == "primary":
+        action._execute_module = MagicMock(return_value=malformed_result)
+    else:
+        action._execute_module = MagicMock(side_effect=[_namespace_result("LIVE-PRIMARY"), malformed_result])
+    malicious_task_vars = {
+        "acm_switchover_hub_identities": {
+            "primary": {"cluster_uid": "PUBLIC-PRIMARY"},
+            "secondary": {"cluster_uid": "PUBLIC-SECONDARY"},
+        },
+        "_checkpoint_enter": {"hub_identities": {role: {"cluster_uid": "UID-SECRET-UI67"}}},
+    }
+
+    result = action.run(task_vars=malicious_task_vars)
+
+    expected_message = (
+        f"Unable to verify the {role} hub physical identity from the live kube-system Namespace UID. "
+        "Refusing the normal two-hub switchover."
+    )
+    assert result == {"failed": True, "msg": expected_message}
+    captured = capsys.readouterr()
+    combined_output = json.dumps(result, sort_keys=True) + captured.out + captured.err
+    for sentinel in sentinels:
+        assert sentinel not in combined_output
+
+
+@pytest.mark.parametrize("mode", ["validate", "dry_run"])
+def test_non_live_override_is_used_only_for_validate_and_dry_run(tmp_path, mode):
+    args = _identity_barrier_args(tmp_path, mode=mode, enabled=True)
+    args["test_overrides"] = {
+        "non_live_hub_identities": {
+            "primary": {"cluster_uid": "OVERRIDE-PRIMARY"},
+            "secondary": {"cluster_uid": "OVERRIDE-SECONDARY"},
+        }
+    }
+    action = _make_checkpoint_action(args)
+    action._execute_module = MagicMock(side_effect=AssertionError("non-live override should avoid API reads"))
+
+    result = action.run(task_vars={"acm_switchover_hub_identities": {"primary": {"cluster_uid": "PUBLIC"}}})
+
+    assert result.get("failed") is not True
+    assert result["hub_identities"] == {
+        "primary": {"cluster_uid": "OVERRIDE-PRIMARY"},
+        "secondary": {"cluster_uid": "OVERRIDE-SECONDARY"},
+    }
+    assert not (tmp_path / "checkpoint.json").exists()
+    action._execute_module.assert_not_called()
+
+
+@pytest.mark.parametrize("native_check", [False, True])
+def test_execute_ignores_all_preseed_and_override_identity_channels(tmp_path, native_check):
+    args = _identity_barrier_args(tmp_path, mode="execute", enabled=True)
+    args["test_overrides"] = {
+        "non_live_hub_identities": {
+            "primary": {"cluster_uid": "OVERRIDE-PRIMARY"},
+            "secondary": {"cluster_uid": "OVERRIDE-SECONDARY"},
+        }
+    }
+    action = _make_checkpoint_action(args)
+    action._play_context.check_mode = native_check
+    injected = {
+        "ansible_check_mode": not native_check,
+        "acm_switchover_execution": {"mode": "validate"},
+        "acm_switchover_hub_identities": {
+            "primary": {"cluster_uid": "PUBLIC-PRIMARY"},
+            "secondary": {"cluster_uid": "PUBLIC-SECONDARY"},
+        },
+        "_acm_switchover_verified_hub_identities": {
+            "primary": {"cluster_uid": "PRIVATE-PRIMARY"},
+            "secondary": {"cluster_uid": "PRIVATE-SECONDARY"},
+        },
+        "_checkpoint_enter": {"hub_identities": {"primary": {"cluster_uid": "REGISTERED"}}},
+        "acm_input_validation": {"passed": True},
+        "_acm_identity_barrier_result": {"passed": True},
+        "acm_switchover_distinct_hubs_verified": True,
+    }
+
+    result = _run_barrier_with_live_uids(action, injected)
+
+    assert result.get("failed") is not True
+    assert result["hub_identities"] == {
+        "primary": {"cluster_uid": "LIVE-PRIMARY"},
+        "secondary": {"cluster_uid": "LIVE-SECONDARY"},
+    }
+    assert action._execute_module.call_count == 2
+    assert (tmp_path / "checkpoint.json").exists() is (not native_check)
+
+
+def test_validate_without_override_still_reads_fresh_namespace_uids(tmp_path):
+    action = _make_checkpoint_action(_identity_barrier_args(tmp_path, mode="validate", enabled=False))
+
+    result = _run_barrier_with_live_uids(
+        action,
+        {"acm_switchover_hub_identities": {"primary": {"cluster_uid": "PUBLIC-PRESEED"}}},
+    )
+
+    assert result.get("failed") is not True
+    assert action._execute_module.call_count == 2
+
+
+def test_identity_barrier_checkpoint_identity_uses_only_trusted_local_uids(tmp_path):
+    args = _identity_barrier_args(tmp_path)
+    action = _make_checkpoint_action(args)
+    task_vars = {
+        "acm_switchover_hubs": {
+            "primary": {
+                "context": "TASKVAR-CONTEXT",
+                "cluster_uid": "TASKVAR-HUB-PRIMARY",
+            },
+            "secondary": {
+                "context": "TASKVAR-CONTEXT",
+                "cluster_uid": "TASKVAR-HUB-SECONDARY",
+            },
+        },
+        "acm_switchover_hub_identities": {
+            "primary": {"cluster_uid": "TASKVAR-PUBLIC-PRIMARY"},
+            "secondary": {"cluster_uid": "TASKVAR-PUBLIC-SECONDARY"},
+        },
+    }
+
+    result = _run_barrier_with_live_uids(action, task_vars)
+
+    identity = result["checkpoint"]["operation_identity"]
+    assert identity == {
+        "primary_context": "primary-hub",
+        "secondary_context": "secondary-hub",
+        "primary_cluster_uid": "LIVE-PRIMARY",
+        "secondary_cluster_uid": "LIVE-SECONDARY",
+        "method": "passive",
+        "activation_method": "patch",
+        "restore_only": False,
+        "old_hub_action": "secondary",
+        "collection_version": "9.8.7",
+    }
+    serialized = json.dumps(identity)
+    assert "INJECTED-HUB" not in serialized
+    assert "INJECTED-ARBITRARY" not in serialized
+    assert "TASKVAR" not in serialized
+
+
+@pytest.mark.parametrize("drift_role", ["primary", "secondary"])
+def test_identity_barrier_preserves_checkpoint_drift_validation_against_live_uids(tmp_path, drift_role):
+    args = _identity_barrier_args(tmp_path)
+    stored_uids = {"primary": "STORED-PRIMARY", "secondary": "STORED-SECONDARY"}
+    stored_identity = build_operation_identity(
+        hubs={
+            "primary": {"context": "primary-hub"},
+            "secondary": {"context": "secondary-hub"},
+        },
+        operation=args["operation"],
+        collection_version="9.8.7",
+        hub_identities={role: {"cluster_uid": uid} for role, uid in stored_uids.items()},
+    )
+    checkpoint_path = tmp_path / "checkpoint.json"
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "2.0",
+                "phase": "preflight",
+                "completed_phases": ["preflight"],
+                "operational_data": {},
+                "operation_identity": stored_identity,
+                "errors": [],
+                "report_refs": [],
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+    )
+    live_uids = dict(stored_uids)
+    live_uids[drift_role] = f"LIVE-DRIFT-{drift_role.upper()}"
+    action = _make_checkpoint_action(args)
+    injected = _task_vars_with_operation_identity()
+    injected["acm_switchover_hub_identities"] = {role: {"cluster_uid": uid} for role, uid in stored_uids.items()}
+    injected["acm_switchover_hubs"][drift_role]["cluster_uid"] = stored_uids[drift_role]
+
+    result = _run_barrier_with_live_uids(
+        action,
+        injected,
+        primary_uid=live_uids["primary"],
+        secondary_uid=live_uids["secondary"],
+    )
+
+    assert result["failed"] is True
+    assert "Checkpoint operation identity does not match the current execution." in result["msg"]
+
+
+def test_completed_preflight_still_rereads_live_identity_before_skip(tmp_path):
+    args = _identity_barrier_args(tmp_path)
+    trusted_identity = build_operation_identity(
+        hubs={
+            "primary": {"context": "primary-hub"},
+            "secondary": {"context": "secondary-hub"},
+        },
+        operation=args["operation"],
+        collection_version="9.8.7",
+        hub_identities={
+            "primary": {"cluster_uid": "LIVE-PRIMARY"},
+            "secondary": {"cluster_uid": "LIVE-SECONDARY"},
+        },
+    )
+    (tmp_path / "checkpoint.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "2.0",
+                "phase": "preflight",
+                "completed_phases": ["preflight"],
+                "operational_data": {"argocd_run_id": "run-1"},
+                "operation_identity": trusted_identity,
+                "errors": [],
+                "report_refs": [],
+            }
+        )
+    )
+    action = _make_checkpoint_action(args)
+
+    result = _run_barrier_with_live_uids(action, {})
+
+    assert action._execute_module.call_count == 2
+    assert result["skipped_phase"] is True
+    assert result["facts"]["argocd_run_id"] == "run-1"
+
+
+def test_ordinary_later_transition_carries_checkpoint_identity_instead_of_task_vars(
+    tmp_path,
+):
+    stored_identity = build_operation_identity(
+        hubs={
+            "primary": {"context": "stored-primary"},
+            "secondary": {"context": "stored-secondary"},
+        },
+        operation={"method": "passive"},
+        hub_identities={
+            "primary": {"cluster_uid": "STORED-PRIMARY"},
+            "secondary": {"cluster_uid": "STORED-SECONDARY"},
+        },
+    )
+    checkpoint_path = tmp_path / "checkpoint.json"
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "2.0",
+                "phase": "preflight",
+                "completed_phases": ["preflight"],
+                "operational_data": {},
+                "operation_identity": stored_identity,
+                "errors": [],
+                "report_refs": [],
+            }
+        )
+    )
+    action = _make_checkpoint_action(
+        {
+            "phase": "activation",
+            "status": "pass",
+            "checkpoint": {"enabled": True, "path": str(checkpoint_path)},
+        }
+    )
+    malicious_task_vars = _task_vars_with_operation_identity()
+    malicious_task_vars["acm_switchover_hubs"]["primary"]["cluster_uid"] = "TASKVAR-PRIMARY"
+
+    result = action.run(task_vars=malicious_task_vars)
+
+    assert result.get("failed") is not True
+    assert result["checkpoint"]["operation_identity"] == stored_identity
+
+
+def test_ordinary_execute_transition_without_established_checkpoint_identity_fails_closed(
+    tmp_path,
+):
+    checkpoint_path = tmp_path / "checkpoint.json"
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "2.0",
+                "phase": "preflight",
+                "completed_phases": [],
+                "operational_data": {},
+                "operation_identity": None,
+                "errors": [],
+                "report_refs": [],
+            }
+        )
+    )
+    action = _make_checkpoint_action(
+        {
+            "phase": "activation",
+            "status": "pass",
+            "checkpoint": {"enabled": True, "path": str(checkpoint_path)},
+        }
+    )
+
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+
+    assert result == {
+        "failed": True,
+        "msg": "Checkpoint has no established operation identity; run the preflight identity barrier first.",
+    }
+
+
+def test_build_reset_from_checkpoint_still_replaces_identity_with_supplied_expected_identity():
+    action = ActionModule.__new__(ActionModule)
+    checkpoint = {
+        "schema_version": "2.0",
+        "completed_phases": ["preflight", "primary_prep", "activation"],
+        "operational_data": {"keep": True},
+        "operation_identity": {"primary_cluster_uid": "STORED"},
+        "errors": [],
+        "report_refs": [],
+    }
+    supplied_expected_identity = {"primary_cluster_uid": "SUPPLIED-EXPECTED"}
+
+    result = action._build_reset_from_checkpoint(checkpoint, "primary_prep", supplied_expected_identity)
+
+    assert result["operation_identity"] == supplied_expected_identity
+    assert result["completed_phases"] == ["preflight"]
+
+
+def test_initial_identity_barrier_reset_from_uses_trusted_expected_identity(tmp_path):
+    args = _identity_barrier_args(tmp_path)
+    args["checkpoint"]["reset_from"] = "preflight"
+    checkpoint_path = tmp_path / "checkpoint.json"
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "2.0",
+                "phase": "activation",
+                "completed_phases": ["preflight", "primary_prep", "activation"],
+                "operational_data": {},
+                "operation_identity": {"primary_cluster_uid": "OLD"},
+                "errors": [],
+                "report_refs": [],
+            }
+        )
+    )
+    action = _make_checkpoint_action(args)
+
+    result = _run_barrier_with_live_uids(action, _task_vars_with_operation_identity())
+
+    assert result.get("failed") is not True
+    assert result["checkpoint"]["operation_identity"]["primary_cluster_uid"] == "LIVE-PRIMARY"
+    assert result["checkpoint"]["operation_identity"]["secondary_cluster_uid"] == "LIVE-SECONDARY"
+    assert result["checkpoint"]["completed_phases"] == []

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from ansible.plugins.action import ActionBase
@@ -29,6 +30,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint i
 )
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (
     ValidationError,
+    validate_context_name,
     validate_report_artifact_path,
 )
 
@@ -77,16 +79,221 @@ class ActionModule(ActionBase):
         task_vars = task_vars or {}
 
         phase = self._task.args.get("phase", "")
-        checkpoint_config = self._task.args.get("checkpoint", {})
         status = self._task.args.get("status", "enter")
-        error = self._task.args.get("error")
-        report_ref = self._task.args.get("report_ref")
-        operational_data = self._task.args.get("operational_data") or {}
+        if self._task.args.get("identity_barrier") is True:
+            if phase != self.INITIAL_PHASE or status != "enter":
+                return {
+                    "failed": True,
+                    "msg": "identity_barrier requires phase=preflight and status=enter.",
+                }
+            return self._run_identity_barrier(tmp=tmp, task_vars=task_vars)
+
         execution = task_vars.get("acm_switchover_execution") or {}
-        execution_mode = execution.get("mode", "dry_run")
-        is_check_mode = (
-            task_vars.get("ansible_check_mode") is True or getattr(self._play_context, "check_mode", False) is True
+        execution_mode = execution.get("mode", "dry_run") if isinstance(execution, Mapping) else "dry_run"
+        return self._run_checkpoint_transition(
+            phase=phase,
+            checkpoint_config=self._task.args.get("checkpoint", {}),
+            status=status,
+            error=self._task.args.get("error"),
+            report_ref=self._task.args.get("report_ref"),
+            operational_data=self._task.args.get("operational_data") or {},
+            execution_mode=execution_mode,
+            is_check_mode=getattr(self._play_context, "check_mode", False) is True,
+            task_vars=task_vars,
+            expected_operation_identity=None,
+            hub_identities=None,
         )
+
+    def _run_identity_barrier(self, *, tmp, task_vars: dict) -> dict:
+        args = self._task.args
+        hubs = args.get("hubs")
+        operation = args.get("operation")
+        execution = args.get("execution")
+        test_overrides = args.get("test_overrides")
+        checkpoint_config = args.get("checkpoint")
+        if not isinstance(hubs, Mapping):
+            hubs = {}
+        if not isinstance(operation, Mapping):
+            operation = {}
+        if not isinstance(execution, Mapping):
+            execution = {}
+        if not isinstance(test_overrides, Mapping):
+            test_overrides = {}
+        if not isinstance(checkpoint_config, Mapping):
+            checkpoint_config = {}
+
+        restore_only = operation.get("restore_only") is True
+        required_roles = ("secondary",) if restore_only else ("primary", "secondary")
+        validated_hubs = {}
+        for role in required_roles:
+            hub = hubs.get(role)
+            if not isinstance(hub, Mapping):
+                return self._identity_failure(role)
+            context = hub.get("context")
+            if not isinstance(context, str):
+                return self._identity_failure(role)
+            try:
+                validate_context_name(context)
+            except ValidationError:
+                return self._identity_failure(role)
+            validated_hubs[role] = {
+                "context": context,
+                "kubeconfig": hub.get("kubeconfig"),
+            }
+
+        if not restore_only and validated_hubs["primary"]["context"] == validated_hubs["secondary"]["context"]:
+            return {
+                "failed": True,
+                "msg": "Primary and secondary Kubernetes context names must differ for a normal two-hub switchover.",
+            }
+
+        execution_mode = execution.get("mode", "dry_run")
+        override_configured = execution_mode in {"validate", "dry_run"} and "non_live_hub_identities" in test_overrides
+        override_identities = test_overrides.get("non_live_hub_identities") if override_configured else None
+        trusted_uids = {}
+        for role in required_roles:
+            if override_configured:
+                role_identity = override_identities.get(role) if isinstance(override_identities, Mapping) else None
+                override_uid = role_identity.get("cluster_uid") if isinstance(role_identity, Mapping) else None
+                try:
+                    trusted_uids[role] = self._validated_namespace_uid(
+                        role,
+                        {"resources": [{"metadata": {"uid": override_uid}}]},
+                    )
+                except ValidationError:
+                    return self._identity_failure(role)
+            else:
+                try:
+                    trusted_uids[role] = self._read_live_namespace_uid(
+                        role,
+                        validated_hubs[role],
+                        task_vars,
+                        tmp,
+                    )
+                except ValidationError:
+                    return self._identity_failure(role)
+
+        if not restore_only and trusted_uids["primary"] == trusted_uids["secondary"]:
+            return {
+                "failed": True,
+                "msg": (
+                    "Primary and secondary hubs resolve to the same physical Kubernetes cluster. "
+                    "Refusing the normal two-hub switchover."
+                ),
+            }
+
+        expected_operation_identity = self._build_trusted_operation_identity(
+            hubs=validated_hubs,
+            operation=operation,
+            collection_version=args.get("collection_version"),
+            trusted_uids=trusted_uids,
+        )
+        identity_summary = {role: {"cluster_uid": trusted_uids[role]} for role in required_roles}
+        if not bool(checkpoint_config.get("enabled", False)):
+            return {
+                "changed": False,
+                "skipped_phase": False,
+                "facts": {},
+                "hub_identities": identity_summary,
+            }
+
+        return self._run_checkpoint_transition(
+            phase=self.INITIAL_PHASE,
+            checkpoint_config=checkpoint_config,
+            status="enter",
+            error=None,
+            report_ref=None,
+            operational_data={},
+            execution_mode=execution_mode,
+            is_check_mode=getattr(self._play_context, "check_mode", False) is True,
+            task_vars=task_vars,
+            expected_operation_identity=expected_operation_identity,
+            hub_identities=identity_summary,
+        )
+
+    def _read_live_namespace_uid(self, role: str, hub: Mapping, task_vars: dict, tmp) -> str:
+        try:
+            result = self._execute_module(
+                module_name="kubernetes.core.k8s_info",
+                module_args={
+                    "api_version": "v1",
+                    "kind": "Namespace",
+                    "name": "kube-system",
+                    "kubeconfig": hub.get("kubeconfig"),
+                    "context": hub.get("context"),
+                },
+                task_vars=task_vars,
+                tmp=tmp,
+            )
+        except Exception:
+            raise ValidationError(self._identity_failure(role)["msg"]) from None
+        return self._validated_namespace_uid(role, result)
+
+    def _validated_namespace_uid(self, role: str, result) -> str:
+        message = self._identity_failure(role)["msg"]
+        if not isinstance(result, Mapping) or result.get("failed") is True:
+            raise ValidationError(message)
+        resources = result.get("resources")
+        if not isinstance(resources, list) or len(resources) != 1:
+            raise ValidationError(message)
+        resource = resources[0]
+        if not isinstance(resource, Mapping):
+            raise ValidationError(message)
+        metadata = resource.get("metadata")
+        if not isinstance(metadata, Mapping):
+            raise ValidationError(message)
+        uid = metadata.get("uid")
+        if not isinstance(uid, str) or not uid.strip():
+            raise ValidationError(message)
+        return uid.strip()
+
+    def _build_trusted_operation_identity(
+        self,
+        hubs: Mapping,
+        operation: Mapping,
+        collection_version,
+        trusted_uids: Mapping,
+    ) -> dict:
+        sanitized_local_hubs = {
+            role: {"context": hubs[role]["context"]} for role in ("primary", "secondary") if role in hubs
+        }
+        trusted_local_hub_identities = {
+            role: {"cluster_uid": trusted_uids[role]} for role in ("primary", "secondary") if role in trusted_uids
+        }
+        return build_operation_identity(
+            hubs=sanitized_local_hubs,
+            operation=dict(operation),
+            collection_version=collection_version,
+            hub_identities=trusted_local_hub_identities,
+        )
+
+    @staticmethod
+    def _identity_failure(role: str) -> dict:
+        return {
+            "failed": True,
+            "msg": (
+                f"Unable to verify the {role} hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover."
+            ),
+        }
+
+    def _run_checkpoint_transition(
+        self,
+        *,
+        phase: str,
+        checkpoint_config,
+        status: str,
+        error,
+        report_ref,
+        operational_data,
+        execution_mode,
+        is_check_mode: bool,
+        task_vars: dict,
+        expected_operation_identity,
+        hub_identities,
+    ) -> dict:
+        if not isinstance(checkpoint_config, Mapping):
+            checkpoint_config = {}
         is_non_mutating = is_check_mode or execution_mode in {"dry_run", "validate"}
 
         backend = checkpoint_config.get("backend", CHECKPOINT_BACKEND_FILE)
@@ -133,26 +340,75 @@ class ActionModule(ActionBase):
                 "msg": f"Invalid checkpoint reset_from '{reset_from}'. Expected one of: {valid_phases}.",
             }
 
-        expected_operation_identity = build_operation_identity(
-            hubs=task_vars.get("acm_switchover_hubs") or {},
-            operation=task_vars.get("acm_switchover_operation") or {},
-            collection_version=task_vars.get("acm_switchover_collection_version"),
-            hub_identities=task_vars.get("acm_switchover_hub_identities") or {},
-        )
         reset = bool(checkpoint_config.get("reset", False))
         has_explicit_reset = reset or bool(reset_from)
         should_reset = reset and status == "enter" and phase == self.INITIAL_PHASE
-        checkpoint_data = (
-            build_checkpoint_record(
+        if expected_operation_identity is None and has_explicit_reset:
+            expected_operation_identity = build_operation_identity(
+                hubs=task_vars.get("acm_switchover_hubs") or {},
+                operation=task_vars.get("acm_switchover_operation") or {},
+                collection_version=task_vars.get("acm_switchover_collection_version"),
+                hub_identities=task_vars.get("acm_switchover_hub_identities") or {},
+            )
+
+        if should_reset and not is_check_mode:
+            checkpoint_data = build_checkpoint_record(
                 phase,
                 {},
                 operation_identity=expected_operation_identity,
             )
-            if should_reset
-            else self._load_checkpoint(path, quarantine_corrupt=not is_non_mutating)
-        )
+        else:
+            checkpoint_data = self._load_checkpoint(path, quarantine_corrupt=not is_non_mutating)
         if checkpoint_data.get("failed"):
             return checkpoint_data
+
+        if expected_operation_identity is None:
+            established_identity = checkpoint_data.get("operation_identity")
+            if isinstance(established_identity, Mapping):
+                expected_operation_identity = dict(established_identity)
+            elif is_unsafe_legacy_checkpoint(checkpoint_data) or (
+                checkpoint_data.get("schema_version") == SCHEMA_VERSION and checkpoint_data.get("completed_phases")
+            ):
+                # Preserve the existing, more specific unsafe/missing identity
+                # refusals in _normalize_checkpoint_data.
+                expected_operation_identity = {}
+            elif bool(checkpoint_config.get("enabled", False)) and execution_mode == "execute":
+                return {
+                    "failed": True,
+                    "msg": "Checkpoint has no established operation identity; run the preflight identity barrier first.",
+                }
+            else:
+                expected_operation_identity = {}
+
+        if is_check_mode:
+            read_only_failure = self._validate_checkpoint_read_only(
+                checkpoint_data=checkpoint_data,
+                expected_operation_identity=expected_operation_identity,
+                has_explicit_reset=has_explicit_reset,
+            )
+            if read_only_failure is not None:
+                return read_only_failure
+            if status == "enter":
+                already_done = (
+                    False if execution_mode == "validate" else not should_resume_phase(checkpoint_data, phase)
+                )
+                result = {
+                    "changed": False,
+                    "checkpoint": checkpoint_data,
+                    "skipped_phase": already_done,
+                    "facts": checkpoint_facts(checkpoint_data),
+                }
+                if hub_identities is not None:
+                    result["hub_identities"] = hub_identities
+                return result
+            result = {
+                "changed": False,
+                "checkpoint": checkpoint_data,
+                "check_mode": True,
+            }
+            if execution_mode in {"dry_run", "validate"}:
+                result[execution_mode] = True
+            return result
 
         checkpoint_data, operation_identity_changed = self._normalize_checkpoint_data(
             checkpoint_data=checkpoint_data,
@@ -208,6 +464,8 @@ class ActionModule(ActionBase):
                 "skipped_phase": already_done,
                 "facts": checkpoint_facts(checkpoint_data),
             }
+            if hub_identities is not None:
+                result["hub_identities"] = hub_identities
             if resume_summary_changed:
                 result["ansible_facts"] = {"_acm_switchover_resume_recorded": str(os.getpid())}
             return result
@@ -261,6 +519,46 @@ class ActionModule(ActionBase):
                 return save_result
 
         return {"changed": changed, "checkpoint": checkpoint_data}
+
+    def _validate_checkpoint_read_only(
+        self,
+        *,
+        checkpoint_data: dict,
+        expected_operation_identity: dict,
+        has_explicit_reset: bool,
+    ) -> dict | None:
+        if is_unsafe_legacy_checkpoint(checkpoint_data):
+            if has_explicit_reset:
+                return None
+            return {
+                "failed": True,
+                "msg": (
+                    "Checkpoint schema 1.0 with completed phases is unsafe to resume. "
+                    "Use checkpoint.reset or checkpoint.reset_from to start from a safe point."
+                ),
+            }
+        if checkpoint_data.get("schema_version") != SCHEMA_VERSION:
+            return None
+        operation_identity = checkpoint_data.get("operation_identity")
+        if operation_identity is None:
+            if checkpoint_data.get("completed_phases") and not has_explicit_reset:
+                return {
+                    "failed": True,
+                    "msg": (
+                        "Checkpoint has completed phases but no operation identity — cannot verify hub binding. "
+                        "Use checkpoint.reset or checkpoint.reset_from to start a new execution safely."
+                    ),
+                }
+            return None
+        if not has_explicit_reset:
+            try:
+                validate_operation_identity(checkpoint_data, expected_operation_identity)
+            except CheckpointIdentityMismatch as exc:
+                return {
+                    "failed": True,
+                    "msg": f"{exc} Use checkpoint.reset or checkpoint.reset_from to start a new execution safely.",
+                }
+        return None
 
     def _normalize_checkpoint_data(
         self,
