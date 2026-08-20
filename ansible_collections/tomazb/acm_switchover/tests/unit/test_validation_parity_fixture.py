@@ -48,9 +48,11 @@ def _run_operation_case(case_input: dict) -> tuple[bool, str]:
 
 
 def _run_hub_context_case(case_input: dict) -> tuple[bool, str]:
-    operation = case_input.get("operation", {})
+    operation = dict(case_input.get("operation", {}))
     hub_contexts = case_input.get("hub_contexts", {})
     restore_only = operation.get("restore_only", False)
+    if restore_only and operation.get("old_hub_action") is None:
+        operation.pop("old_hub_action")
     results = build_input_validation_results(
         {
             "hubs": {

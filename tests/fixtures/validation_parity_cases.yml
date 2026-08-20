@@ -109,7 +109,7 @@
     operation:
       restore_only: true
       method: full
-      old_hub_action: none
+      old_hub_action: null
     execution:
       mode: execute
   expected:
