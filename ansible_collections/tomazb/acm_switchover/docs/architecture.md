@@ -38,10 +38,13 @@ flowchart TD
     A[identity_barrier] --> B[Validate role contexts]
     B --> C[Read live Namespace UIDs]
     C --> D{Distinct trusted UIDs?}
-    D -->|no| E[Fail before recovery or mutation]
-    D -->|yes| F[Validate checkpoint identity]
+    D -->|no| E[Fail before Kubernetes mutation or mutation-capable recovery]
+    E --> I[Controller reporting may still write]
+    D -->|yes| F[Checkpoint identity handling, including disabled checkpoints]
     F --> G[Post-barrier preflight and switchover phases]
-    G --> H[Existing recovery on post-barrier failure]
+    G -->|failure| H[Failure after post-barrier preflight or switchover phases]
+    H --> J[Existing recovery]
+    G -->|complete| I
 ```
 
 `validate` and `dry_run` may use the explicit test-only non-live override.

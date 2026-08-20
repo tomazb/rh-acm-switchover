@@ -24,15 +24,21 @@ Automated, idempotent tool for switching over Red Hat Advanced Cluster Managemen
 
 ## Production Resilience Hardening In 1.7.10
 
-- A normal two-hub switchover rejects identical context names and fails closed
-  when the hubs resolve to the same physical Kubernetes cluster. Before any
-  mutation-capable phase, each form factor reads the live `kube-system`
-  Namespace UID for both hubs and requires distinct non-empty values.
 - Kubernetes API calls, polling waits, and Python/collection klusterlet worker batches are bounded so stalled APIs fail with actionable results instead of hanging indefinitely.
 - Observability checks are blocking by default unless explicitly skipped with `--skip-observability-checks` or `acm_switchover_features.skip_observability_checks`.
 - Argo CD managed pause fails closed for ApplicationSet-managed child Applications, unknown/stale Application impact, and failed post-patch pause verification.
 - Post-activation enforces preflight-derived ManagedCluster expectations when `--min-managed-clusters` is omitted and fails if klusterlet probing/remediation does not converge. After remediation, the post-remediation klusterlet probe waits up to 300 seconds (polling every 10 seconds) for the klusterlet-updated hub kubeconfig secret to converge before failing persistent wrong-hub results.
 - Release parity guardrails cover switchover, restore-only, decommission, RBAC/bootstrap, checkpoint, and report artifacts across the Python CLI and Ansible collection where practical.
+
+---
+
+## Current normal two-hub safety
+
+A normal two-hub switchover rejects identical context names and fails closed
+when the hubs resolve to the same physical Kubernetes cluster. Before any
+mutation-capable phase, each form factor reads the live `kube-system` Namespace
+UID for both hubs and requires distinct non-empty values. Restore-only remains
+secondary-only, and standalone decommission remains outside this two-hub guard.
 
 ---
 

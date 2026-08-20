@@ -88,7 +88,8 @@ Each scenario records:
 - a pre-barrier refusal enters neither recovery nor checkpoint reset; a
   post-barrier failure retains the existing recovery path
 - execute plus native Ansible check mode performs fresh UID GETs and makes no
-  writes; `validate` and `dry_run` use only the explicit non-live test override
+  writes; `validate` and `dry_run` may use the explicit non-live test override,
+  but otherwise the action reads live UIDs
 - restore-only remains secondary-only, and standalone decommission is excluded
 
 Concrete collection coverage is

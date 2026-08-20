@@ -333,9 +333,27 @@ def test_ssa_01_documentation_contract_is_complete():
             assert term in content, f"{path} must document SSA-01 term {term!r}"
 
     tracker = _read("thermos-resolution-plan.md")
-    assert re.search(
-        r"\|\s*SSA-01\s*\|\s*in_progress\s*\|", tracker
-    ), "thermos-resolution-plan.md must record the branch-local SSA-01 in_progress status"
+    ssa_01_section = tracker.split("#### SSA-01: Distinct Physical Hub Guard", 1)[1].split("#### SSA-02:", 1)[0]
+    for term in ("SSA-A2", "SSA-P2", "issue #267", "Implementation evidence", "same-context refusal"):
+        assert term in ssa_01_section, f"SSA-01 tracker evidence must retain {term!r}"
+
+    root_readme = _read("README.md")
+    released_hardening = root_readme.split("## Production Resilience Hardening In 1.7.10", 1)[1].split("---", 1)[0]
+    assert "distinct physical" not in released_hardening.lower()
+    assert "## Current normal two-hub safety" in root_readme
+
+    scenario_catalog = _read("docs/ansible-collection/scenario-catalog.md")
+    assert "may use the explicit non-live test override" in scenario_catalog
+    assert "otherwise the action reads live UIDs" in scenario_catalog
+
+    collection_architecture = _read("ansible_collections/tomazb/acm_switchover/docs/architecture.md")
+    for term in (
+        "Fail before Kubernetes mutation or mutation-capable recovery",
+        "Checkpoint identity handling, including disabled checkpoints",
+        "Failure after post-barrier preflight or switchover phases",
+        "Controller reporting may still write",
+    ):
+        assert term in collection_architecture
 
 
 def test_collection_artifact_schema_documents_current_checkpoint_contract():
