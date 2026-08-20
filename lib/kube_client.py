@@ -209,6 +209,7 @@ class KubeClient:
         dry_run: bool = False,
         request_timeout: int = 30,
         disable_hostname_verification: bool = False,
+        log_config_errors: bool = True,
     ) -> None:
         """
         Initialize Kubernetes client for specific context.
@@ -218,6 +219,7 @@ class KubeClient:
             dry_run: If True, don't make actual changes
             request_timeout: API request timeout in seconds
             disable_hostname_verification: If True, skip TLS hostname verification (not recommended)
+            log_config_errors: If True, log kubeconfig configuration failures before re-raising
         """
         self.context = context
         self.dry_run = dry_run
@@ -228,11 +230,12 @@ class KubeClient:
         try:
             api_client = config.new_client_from_config(context=context, persist_config=False)
         except ConfigException as exc:
-            logger.error(
-                "Failed to load kubeconfig for context %s: %s",
-                context or "default",
-                exc,
-            )
+            if log_config_errors:
+                logger.error(
+                    "Failed to load kubeconfig for context %s: %s",
+                    context or "default",
+                    exc,
+                )
             raise
 
         # Configure only this per-context ApiClient instance.

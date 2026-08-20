@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from kubernetes.client.rest import ApiException
+from kubernetes.config.config_exception import ConfigException
 
 from lib.kube_client import KubeClient, api_call, is_retryable_error
 
@@ -893,6 +894,39 @@ class TestMutatorIdempotency:
 @pytest.mark.unit
 class TestKubeClientInitialization:
     """Test cases for KubeClient initialization."""
+
+    def test_init_logs_configuration_exception_by_default(self, caplog):
+        """Unrelated callers retain the established configuration diagnostic."""
+        context = "unrelated-context-sentinel"
+        raw_error = "raw-config-exception-sentinel"
+
+        with patch(
+            "lib.kube_client.config.new_client_from_config",
+            side_effect=ConfigException(raw_error),
+        ), caplog.at_level("ERROR", logger="acm_switchover"):
+            with pytest.raises(ConfigException):
+                KubeClient(context=context)
+
+        assert "Failed to load kubeconfig for context unrelated-context-sentinel" in caplog.text
+        assert raw_error in caplog.text
+
+    def test_init_can_suppress_configuration_exception_diagnostics_for_identity_checks(self, caplog):
+        """The SSA-01 constructor path must not emit raw configuration details."""
+        context = "identity-context-sentinel"
+        kubeconfig_path = "/private/identity-kubeconfig-sentinel"
+        token = "identity-token-sentinel"
+        credential = "identity-credential-sentinel"
+        raw_error = f"raw-config-exception-sentinel {kubeconfig_path} {token} {credential}"
+
+        with patch(
+            "lib.kube_client.config.new_client_from_config",
+            side_effect=ConfigException(raw_error),
+        ), caplog.at_level("ERROR", logger="acm_switchover"):
+            with pytest.raises(ConfigException):
+                KubeClient(context=context, log_config_errors=False)
+
+        for sentinel in ("raw-config-exception-sentinel", context, kubeconfig_path, token, credential):
+            assert sentinel not in caplog.text
 
     @patch("lib.kube_client.config.load_kube_config")
     @patch("lib.kube_client.config.new_client_from_config")

@@ -2165,6 +2165,80 @@ class TestMainGitOpsReporting:
 
 @pytest.mark.unit
 class TestPrepareRuntime:
+    @pytest.mark.parametrize(
+        ("failing_role", "expected_message"),
+        [
+            (
+                "primary",
+                "Unable to verify the primary hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover.",
+            ),
+            (
+                "secondary",
+                "Unable to verify the secondary hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover.",
+            ),
+        ],
+    )
+    def test_prepare_runtime_sanitizes_normal_two_hub_constructor_failure(
+        self,
+        failing_role,
+        expected_message,
+        caplog,
+        capsys,
+    ):
+        """The CLI failure path exposes only the role-specific refusal."""
+        context = f"{failing_role}-context-sentinel"
+        kubeconfig_path = "/private/kubeconfig-path-sentinel"
+        token = "token-like-sentinel"
+        credential = "credential-sentinel"
+        raw_error = f"raw-config-exception-sentinel {kubeconfig_path} {token} {credential} {context}"
+        args = SimpleNamespace(
+            primary_context="primary-context-sentinel",
+            secondary_context="secondary-context-sentinel",
+            dry_run=True,
+            reset_state=False,
+            argocd_resume_only=False,
+            decommission=False,
+            restore_only=False,
+        )
+        logger = logging.getLogger(f"task2.prepare-runtime.{failing_role}")
+        snapshot = {"state": "before-dry-run"}
+        state = Mock()
+        state.capture_state_snapshot.return_value = snapshot
+        primary_client = Mock(name="primary-client")
+        kube_client = Mock(
+            side_effect=(
+                RuntimeError(raw_error) if failing_role == "primary" else [primary_client, RuntimeError(raw_error)]
+            )
+        )
+
+        with patch("acm_switchover.StateManager", return_value=state), patch(
+            "acm_switchover.KubeClient", kube_client
+        ), caplog.at_level(logging.ERROR, logger=logger.name):
+            with pytest.raises(SystemExit) as exc_info:
+                _prepare_runtime(args, logger, "state.json")
+
+        assert exc_info.value.code == EXIT_FAILURE
+        stdout, stderr = capsys.readouterr()
+        output = f"{caplog.text}{stdout}{stderr}"
+        assert expected_message in output
+        for sentinel in ("raw-config-exception-sentinel", context, kubeconfig_path, token, credential):
+            assert sentinel not in output
+        records = [record for record in caplog.records if record.name == logger.name]
+        assert [record.getMessage() for record in records] == [expected_message]
+        assert all(record.exc_info is None for record in records)
+        state.restore_state_snapshot.assert_called_once_with(snapshot)
+        if failing_role == "primary":
+            assert kube_client.call_args_list == [
+                (("primary-context-sentinel",), {"dry_run": True, "log_config_errors": False}),
+            ]
+        else:
+            assert kube_client.call_args_list == [
+                (("primary-context-sentinel",), {"dry_run": True, "log_config_errors": False}),
+                (("secondary-context-sentinel",), {"dry_run": True, "log_config_errors": False}),
+            ]
+
     def test_prepare_runtime_binds_contexts_and_returns_runtime_objects(self):
         args = TestMainGitOpsReporting._base_args()
         logger = Mock()

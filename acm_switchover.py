@@ -21,7 +21,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
-from typing import Any, Optional, Tuple
+from typing import Optional, Tuple
 
 from lib import (
     KubeClient,
@@ -1153,8 +1153,24 @@ def _prepare_runtime(
     if should_bind_state:
         dry_run_state_guard = _bind_contexts_with_dry_run_guard(state, args)
 
+    sanitize_identity_errors = (
+        not getattr(args, "decommission", False)
+        and not getattr(args, "setup", False)
+        and not getattr(args, "restore_only", False)
+        and not getattr(args, "argocd_resume_only", False)
+        and bool(getattr(args, "primary_context", None))
+        and bool(getattr(args, "secondary_context", None))
+    )
     try:
-        primary, secondary = _initialize_clients(args, logger)
+        primary, secondary = _initialize_clients(args, logger, sanitize_identity_errors=sanitize_identity_errors)
+    except runtime_bootstrap.HubIdentityVerificationError as exc:
+        logger.error("%s", exc)
+        # H10 guard: restore dry-run state before exiting, so the rehearsal's
+        # on-disk effects (including the ensure_contexts reset) are always
+        # rolled back, even on client-init failure.
+        if dry_run_state_guard is not None:
+            state.restore_state_snapshot(dry_run_state_guard)
+        sys.exit(EXIT_FAILURE)
     except Exception as exc:
         logger.error("Failed to initialize Kubernetes clients: %s", exc)
         # H10 guard: restore dry-run state before exiting, so the rehearsal's
@@ -1279,9 +1295,16 @@ def main():
 def _initialize_clients(
     args: argparse.Namespace,
     logger: logging.Logger,
+    *,
+    sanitize_identity_errors: bool = False,
 ) -> Tuple[Optional[KubeClient], Optional[KubeClient]]:
     """Create Kubernetes clients for provided contexts."""
-    return runtime_bootstrap.initialize_clients(args, logger, client_factory=KubeClient)
+    return runtime_bootstrap.initialize_clients(
+        args,
+        logger,
+        client_factory=KubeClient,
+        sanitize_identity_errors=sanitize_identity_errors,
+    )
 
 
 def _collect_hub_identities(

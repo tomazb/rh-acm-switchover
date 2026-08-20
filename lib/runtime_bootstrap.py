@@ -14,6 +14,24 @@ from lib.constants import (
 )
 from lib.validation import InputValidator
 
+_HUB_IDENTITY_VERIFICATION_MESSAGES = {
+    "primary": (
+        "Unable to verify the primary hub physical identity from the live kube-system Namespace UID. "
+        "Refusing the normal two-hub switchover."
+    ),
+    "secondary": (
+        "Unable to verify the secondary hub physical identity from the live kube-system Namespace UID. "
+        "Refusing the normal two-hub switchover."
+    ),
+}
+
+
+class HubIdentityVerificationError(Exception):
+    """A role-specific, non-sensitive client or identity verification failure."""
+
+    def __init__(self, role: str) -> None:
+        super().__init__(_HUB_IDENTITY_VERIFICATION_MESSAGES[role])
+
 
 @dataclass(frozen=True)
 class RuntimeContext:
@@ -119,6 +137,8 @@ def initialize_clients(
     args: argparse.Namespace,
     logger: logging.Logger,
     client_factory=None,
+    *,
+    sanitize_identity_errors: bool = False,
 ) -> tuple[Optional[KubeClient], Optional[KubeClient]]:
     if client_factory is None:
         client_factory = KubeClient
@@ -129,13 +149,29 @@ def initialize_clients(
     primary_context = getattr(args, "primary_context", None)
     if primary_context:
         logger.info("Connecting to primary hub: %s", primary_context)
-        primary = client_factory(primary_context, dry_run=dry_run)
+        try:
+            if sanitize_identity_errors:
+                primary = client_factory(primary_context, dry_run=dry_run, log_config_errors=False)
+            else:
+                primary = client_factory(primary_context, dry_run=dry_run)
+        except Exception:
+            if sanitize_identity_errors:
+                raise HubIdentityVerificationError("primary") from None
+            raise
 
     secondary = None
     secondary_context = getattr(args, "secondary_context", None)
     if secondary_context:
         logger.info("Connecting to secondary hub: %s", secondary_context)
-        secondary = client_factory(secondary_context, dry_run=dry_run)
+        try:
+            if sanitize_identity_errors:
+                secondary = client_factory(secondary_context, dry_run=dry_run, log_config_errors=False)
+            else:
+                secondary = client_factory(secondary_context, dry_run=dry_run)
+        except Exception:
+            if sanitize_identity_errors:
+                raise HubIdentityVerificationError("secondary") from None
+            raise
 
     return primary, secondary
 
