@@ -9,7 +9,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 import pytest
 from kubernetes.client.rest import ApiException
@@ -49,6 +49,7 @@ from acm_switchover import (
     validate_args,
 )
 from lib import KubeClient
+from lib import cli_outcomes
 from lib import argocd as argocd_lib
 from lib.argocd_register import PauseSummary
 from lib.constants import (
@@ -2367,6 +2368,45 @@ class TestBindRuntimeHubIdentities:
             allow_legacy_backfill=False,
             persist=False,
         )
+
+    def test_restore_only_identity_binding_reads_secondary_and_dispatches(self):
+        args = TestMainGitOpsReporting._base_args()
+        args.restore_only = True
+        state = Mock()
+        secondary = Mock()
+        secondary.get_cluster_identity.return_value = {"context": "secondary", "cluster_uid": "uid-secondary"}
+        execute_operation = Mock(return_value=True)
+        reporter = Mock()
+        hooks = cli_outcomes.CliOperationHooks(
+            bind_runtime_hub_identities=_bind_runtime_hub_identities,
+            run_argocd_resume_only=Mock(),
+            execute_operation=execute_operation,
+            write_python_report=Mock(),
+            gitops_reporter_factory=lambda: reporter,
+        )
+
+        exit_code = cli_outcomes.run_operation_mode(
+            args,
+            state,
+            None,
+            secondary,
+            Mock(),
+            should_bind_state=True,
+            should_record_state_errors=True,
+            hooks=hooks,
+            exit_success=EXIT_SUCCESS,
+            exit_failure=EXIT_FAILURE,
+            exit_interrupt=EXIT_INTERRUPT,
+        )
+
+        assert exit_code == EXIT_SUCCESS
+        secondary.get_cluster_identity.assert_called_once_with()
+        state.ensure_hub_identities.assert_called_once_with(
+            {"secondary": {"context": "secondary", "cluster_uid": "uid-secondary"}},
+            allow_legacy_backfill=False,
+            persist=True,
+        )
+        execute_operation.assert_called_once_with(args, state, None, secondary, ANY)
 
     def test_bind_runtime_hub_identities_rejects_same_uid_before_state(self):
         args = TestMainGitOpsReporting._base_args()

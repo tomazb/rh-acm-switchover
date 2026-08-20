@@ -320,7 +320,10 @@ class TestKubeClient:
     ):
         """A refusal must not emit an API response carrying identity-sensitive values."""
         failure = ApiException(status=403, reason="ssa01-secret-raw-exception-EX74")
-        failure.body = "ssa01-secret-api-body-BD73 /api/v1/namespaces/kube-system ssa01-secret-token-TK72"
+        failure.body = (
+            "ssa01-secret-api-body-BD73 /api/v1/namespaces/kube-system ssa01-secret-token-TK72 "
+            "ssa01-secret-uid-UID75 ssa01-secret-credential-CR77"
+        )
         mock_k8s_apis["core_api"].read_namespace.side_effect = failure
 
         monkeypatch.setattr(KubeClient._read_cluster_identity_namespace.retry, "wait", wait_none())
@@ -334,6 +337,8 @@ class TestKubeClient:
             "ssa01-secret-api-body-BD73",
             "/api/v1/namespaces/kube-system",
             "ssa01-secret-token-TK72",
+            "ssa01-secret-uid-UID75",
+            "ssa01-secret-credential-CR77",
         ):
             assert sentinel not in caplog.text
 
@@ -342,7 +347,10 @@ class TestKubeClient:
     ):
         """Retryable identity reads retain bounded retries without raw diagnostics."""
         failure = ApiException(status=503, reason="ssa01-secret-raw-exception-EX74")
-        failure.body = "ssa01-secret-api-body-BD73 /api/v1/namespaces/kube-system ssa01-secret-token-TK72"
+        failure.body = (
+            "ssa01-secret-api-body-BD73 /api/v1/namespaces/kube-system ssa01-secret-token-TK72 "
+            "ssa01-secret-uid-UID75 ssa01-secret-credential-CR77"
+        )
         mock_k8s_apis["core_api"].read_namespace.side_effect = failure
 
         monkeypatch.setattr(KubeClient._read_cluster_identity_namespace.retry, "wait", wait_none())
@@ -356,6 +364,8 @@ class TestKubeClient:
             "ssa01-secret-api-body-BD73",
             "/api/v1/namespaces/kube-system",
             "ssa01-secret-token-TK72",
+            "ssa01-secret-uid-UID75",
+            "ssa01-secret-credential-CR77",
         ):
             assert sentinel not in caplog.text
 

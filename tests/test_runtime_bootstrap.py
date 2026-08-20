@@ -140,6 +140,15 @@ def test_collect_hub_identities_reads_only_present_clients() -> None:
     }
 
 
+def test_collect_hub_identities_reads_only_secondary_client() -> None:
+    secondary = Mock()
+    secondary.get_cluster_identity.return_value = {"context": "hub-b", "cluster_uid": "uid-b"}
+
+    assert collect_hub_identities(None, secondary) == {
+        "secondary": {"context": "hub-b", "cluster_uid": "uid-b"},
+    }
+
+
 def test_collect_hub_identities_reads_both_required_clients() -> None:
     primary = Mock()
     primary.get_cluster_identity.return_value = {"context": "hub-a", "cluster_uid": "uid-a"}

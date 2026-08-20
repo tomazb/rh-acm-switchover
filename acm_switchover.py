@@ -1210,7 +1210,8 @@ def _bind_runtime_hub_identities(
     """Validate and bind live hub identities inside the guarded main flow."""
     try:
         hub_identities = _collect_hub_identities(primary, secondary)
-        validate_distinct_hub_identities(hub_identities)
+        if not getattr(args, "restore_only", False) and primary is not None and secondary is not None:
+            validate_distinct_hub_identities(hub_identities)
     except (runtime_bootstrap.HubIdentityVerificationError, ValidationError) as exc:
         raise StateIdentityMismatch(str(exc)) from None
 
