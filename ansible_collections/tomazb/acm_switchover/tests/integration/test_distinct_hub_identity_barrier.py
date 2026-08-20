@@ -312,8 +312,56 @@ def test_post_barrier_failure_retains_recovery(run_distinct_hub_playbook):
     assert "Reset primary prep checkpoint after Argo CD resume on failure" in output
     assert len(_identity_gets(run.primary_requests)) == 1
     assert len(_identity_gets(run.secondary_requests)) == 1
-    assert [request["method"] for request in run.primary_requests].count("PATCH") == 1
-    assert [request["method"] for request in run.secondary_requests].count("PATCH") == 1
+    assert run.primary_patches == [
+        {
+            "namespace": "argocd",
+            "name": "primary-owned",
+            "changed": True,
+            "body": {
+                "apiVersion": "argoproj.io/v1alpha1",
+                "kind": "Application",
+                "metadata": {
+                    "name": "primary-owned",
+                    "namespace": "argocd",
+                    "resourceVersion": "1",
+                    "annotations": {
+                        "acm-switchover.argoproj.io/paused-by": None,
+                        "acm-switchover.argoproj.io/original-sync-policy": None,
+                    },
+                },
+                "spec": {
+                    "syncPolicy": {
+                        "automated": {"prune": True, "selfHeal": True},
+                    }
+                },
+            },
+        }
+    ]
+    assert run.secondary_patches == [
+        {
+            "namespace": "argocd",
+            "name": "secondary-owned",
+            "changed": True,
+            "body": {
+                "apiVersion": "argoproj.io/v1alpha1",
+                "kind": "Application",
+                "metadata": {
+                    "name": "secondary-owned",
+                    "namespace": "argocd",
+                    "resourceVersion": "1",
+                    "annotations": {
+                        "acm-switchover.argoproj.io/paused-by": None,
+                        "acm-switchover.argoproj.io/original-sync-policy": None,
+                    },
+                },
+                "spec": {
+                    "syncPolicy": {
+                        "automated": {"prune": True, "selfHeal": True},
+                    }
+                },
+            },
+        }
+    ]
     assert run.primary_requests.index({"method": "GET", "path": IDENTITY_PATH}) < next(
         index for index, request in enumerate(run.primary_requests) if request["method"] == "PATCH"
     )
@@ -344,6 +392,9 @@ def test_execute_check_mode_uses_fresh_uids_without_mutation(
     assert len(_identity_gets(run.primary_requests)) == 1
     assert len(_identity_gets(run.secondary_requests)) == 1
     assert (EQUAL_UID_REFUSAL in output) is expect_refusal
+    assert ("Run remaining preflight validation" in output) is not expect_refusal
+    if expect_refusal:
+        assert run.completed.returncode != 0
     assert run.checkpoint_after is None
     assert _write_requests(run) == []
 
@@ -417,7 +468,9 @@ def test_completed_preflight_rereads_before_using_skipped_phase(
 
     assert len(_identity_gets(run.primary_requests)) == 1
     assert len(_identity_gets(run.secondary_requests)) == 1
-    assert "Validate required checkpoint data when preflight is skipped" in output
-    assert "Restore operational facts from checkpoint when preflight is skipped" in output
+    barrier_task = "Enter checkpointed phase"
+    skipped_validation_task = "Validate required checkpoint data when preflight is skipped"
+    skipped_restore_task = "Restore operational facts from checkpoint when preflight is skipped"
+    assert output.index(barrier_task) < output.index(skipped_validation_task) < output.index(skipped_restore_task)
     assert run.checkpoint_after == run.checkpoint_before
     assert _write_requests(run) == []
