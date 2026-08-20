@@ -5,6 +5,7 @@ import pytest
 
 from lib.exceptions import SecurityValidationError
 from lib.runtime_bootstrap import (
+    HubIdentityVerificationError,
     client_context_name,
     collect_hub_identities,
     get_default_state_dir,
@@ -137,6 +138,56 @@ def test_collect_hub_identities_reads_only_present_clients() -> None:
     assert collect_hub_identities(primary, None) == {
         "primary": {"context": "hub-a", "cluster_uid": "uid-a"},
     }
+
+
+def test_collect_hub_identities_reads_both_required_clients() -> None:
+    primary = Mock()
+    primary.get_cluster_identity.return_value = {"context": "hub-a", "cluster_uid": "uid-a"}
+    secondary = Mock()
+    secondary.get_cluster_identity.return_value = {"context": "hub-b", "cluster_uid": "uid-b"}
+
+    assert collect_hub_identities(primary, secondary) == {
+        "primary": {"context": "hub-a", "cluster_uid": "uid-a"},
+        "secondary": {"context": "hub-b", "cluster_uid": "uid-b"},
+    }
+
+
+@pytest.mark.parametrize(
+    ("failing_role", "expected_message"),
+    [
+        (
+            "primary",
+            "Unable to verify the primary hub physical identity from the live kube-system Namespace UID. "
+            "Refusing the normal two-hub switchover.",
+        ),
+        (
+            "secondary",
+            "Unable to verify the secondary hub physical identity from the live kube-system Namespace UID. "
+            "Refusing the normal two-hub switchover.",
+        ),
+    ],
+)
+def test_collect_hub_identities_translates_role_read_failure(failing_role: str, expected_message: str) -> None:
+    """A failed role read yields only stable role-scoped evidence failure text."""
+    primary = Mock()
+    primary.get_cluster_identity.return_value = {"context": "hub-a", "cluster_uid": "uid-a"}
+    secondary = Mock()
+    secondary.get_cluster_identity.return_value = {"context": "hub-b", "cluster_uid": "uid-b"}
+    failing_client = primary if failing_role == "primary" else secondary
+    failing_client.get_cluster_identity.side_effect = RuntimeError("ssa01-secret-raw-exception-EX74")
+
+    with pytest.raises(HubIdentityVerificationError) as exc_info:
+        collect_hub_identities(primary, secondary)
+
+    assert str(exc_info.value) == expected_message
+    assert "ssa01-secret-raw-exception-EX74" not in str(exc_info.value)
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__suppress_context__ is True
+    if failing_role == "primary":
+        secondary.get_cluster_identity.assert_not_called()
+    else:
+        primary.get_cluster_identity.assert_called_once_with()
+        secondary.get_cluster_identity.assert_called_once_with()
 
 
 def test_state_helpers_tolerate_missing_state_shapes() -> None:

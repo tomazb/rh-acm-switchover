@@ -58,7 +58,8 @@ from lib.exceptions import StateLoadError, StateLockError, SwitchoverError
 from lib.gitops_detector import GitOpsCollector
 from lib.report_artifacts import validate_report_artifact_directory
 from lib.run_record import HubFacts, RunRecord
-from lib.validation import InputValidator, ValidationError
+from lib.utils import StateIdentityMismatch
+from lib.validation import InputValidator, ValidationError, validate_distinct_hub_identities
 from modules import (
     Decommission,
     Finalization,
@@ -1207,8 +1208,14 @@ def _bind_runtime_hub_identities(
     secondary: Optional[KubeClient],
 ) -> None:
     """Validate and bind live hub identities inside the guarded main flow."""
+    try:
+        hub_identities = _collect_hub_identities(primary, secondary)
+        validate_distinct_hub_identities(hub_identities)
+    except (runtime_bootstrap.HubIdentityVerificationError, ValidationError) as exc:
+        raise StateIdentityMismatch(str(exc)) from None
+
     state.ensure_hub_identities(
-        _collect_hub_identities(primary, secondary),
+        hub_identities,
         allow_legacy_backfill=getattr(args, "force", False),
         persist=not (getattr(args, "dry_run", False) or getattr(args, "validate_only", False)),
     )

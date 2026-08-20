@@ -328,9 +328,15 @@ class KubeClient:
         """
         return self.get_namespace(name) is not None
 
+    @retry_api_call_advisory
+    def _read_cluster_identity_namespace(self) -> Dict:
+        """Read kube-system identity evidence without generic API-error logging."""
+        namespace = self.core_v1.read_namespace("kube-system", **self._request_timeout_kwargs())
+        return namespace.to_dict()
+
     def get_cluster_identity(self) -> Dict[str, Optional[str]]:
         """Return a stable live identity for the connected cluster."""
-        namespace = self.get_namespace("kube-system")
+        namespace = self._read_cluster_identity_namespace()
         cluster_uid = ((namespace or {}).get("metadata") or {}).get("uid")
         if not cluster_uid:
             raise RuntimeError("Unable to determine cluster identity: kube-system namespace UID is unavailable")

@@ -69,6 +69,7 @@ from lib.constants import (
     TOKEN_DURATION_DEFAULT,
 )
 from lib.exceptions import SwitchoverError
+from lib.utils import StateIdentityMismatch, StateManager
 from lib.validation import ValidationError
 from tests.main_test_helpers import make_restore_only_args, make_switchover_args
 
@@ -1742,6 +1743,14 @@ class TestMainGitOpsReporting:
             argocd_resume_only=False,
         )
 
+    @staticmethod
+    def _normal_hub_clients():
+        primary = Mock()
+        primary.get_cluster_identity.return_value = {"context": "primary", "cluster_uid": "uid-primary"}
+        secondary = Mock()
+        secondary.get_cluster_identity.return_value = {"context": "secondary", "cluster_uid": "uid-secondary"}
+        return primary, secondary
+
     def test_main_prints_gitops_report_on_operation_exception(self):
         args = self._base_args()
         logger = Mock()
@@ -1757,7 +1766,7 @@ class TestMainGitOpsReporting:
         ), patch(
             "acm_switchover.StateManager", return_value=state
         ), patch(
-            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+            "acm_switchover._initialize_clients", return_value=self._normal_hub_clients()
         ), patch(
             "acm_switchover._execute_operation", side_effect=RuntimeError("boom")
         ), patch(
@@ -1820,7 +1829,7 @@ class TestMainGitOpsReporting:
         ), patch(
             "acm_switchover.StateManager", return_value=state
         ), patch(
-            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+            "acm_switchover._initialize_clients", return_value=self._normal_hub_clients()
         ), patch(
             "acm_switchover._execute_operation", side_effect=KeyboardInterrupt
         ), patch(
@@ -1848,7 +1857,7 @@ class TestMainGitOpsReporting:
         ), patch(
             "acm_switchover.StateManager", return_value=state
         ), patch(
-            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+            "acm_switchover._initialize_clients", return_value=self._normal_hub_clients()
         ), patch(
             "acm_switchover._execute_operation", return_value=True
         ), patch(
@@ -1876,7 +1885,7 @@ class TestMainGitOpsReporting:
         ), patch(
             "acm_switchover.StateManager", return_value=state
         ), patch(
-            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+            "acm_switchover._initialize_clients", return_value=self._normal_hub_clients()
         ), patch(
             "acm_switchover._execute_operation", return_value=False
         ), patch(
@@ -2150,7 +2159,7 @@ class TestMainGitOpsReporting:
         ), patch(
             "acm_switchover.StateManager", return_value=state
         ), patch(
-            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+            "acm_switchover._initialize_clients", return_value=self._normal_hub_clients()
         ), patch(
             "acm_switchover._execute_operation", return_value=True
         ), patch(
@@ -2358,6 +2367,66 @@ class TestBindRuntimeHubIdentities:
             allow_legacy_backfill=False,
             persist=False,
         )
+
+    def test_bind_runtime_hub_identities_rejects_same_uid_before_state(self):
+        args = TestMainGitOpsReporting._base_args()
+        state = Mock()
+        identities = {
+            "primary": {"context": "primary", "cluster_uid": "shared-uid"},
+            "secondary": {"context": "secondary", "cluster_uid": "shared-uid"},
+        }
+
+        with patch("acm_switchover._collect_hub_identities", return_value=identities):
+            with pytest.raises(StateIdentityMismatch) as exc_info:
+                _bind_runtime_hub_identities(args, state, Mock(), Mock())
+
+        assert str(exc_info.value) == (
+            "Primary and secondary hubs resolve to the same physical Kubernetes cluster. "
+            "Refusing the normal two-hub switchover."
+        )
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__suppress_context__ is True
+        state.ensure_hub_identities.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "identities",
+        [
+            {},
+            {"primary": {"context": "primary", "cluster_uid": "uid-primary"}},
+            {
+                "primary": {"context": "primary", "cluster_uid": "uid-primary"},
+                "secondary": {"context": "secondary", "cluster_uid": "   "},
+            },
+        ],
+    )
+    def test_bind_runtime_hub_identities_rejects_malformed_evidence_before_state(self, identities):
+        args = TestMainGitOpsReporting._base_args()
+        state = Mock()
+
+        with patch("acm_switchover._collect_hub_identities", return_value=identities):
+            with pytest.raises(StateIdentityMismatch):
+                _bind_runtime_hub_identities(args, state, Mock(), Mock())
+
+        state.ensure_hub_identities.assert_not_called()
+
+    def test_identity_refusal_does_not_persist_or_complete_phase(self, tmp_path):
+        """Equal live UIDs leave durable identity and phase state exactly untouched."""
+        args = TestMainGitOpsReporting._base_args()
+        state = StateManager(str(tmp_path / "state.json"))
+        before = state.capture_state_snapshot()
+        identities = {
+            "primary": {"context": "primary", "cluster_uid": "shared-uid"},
+            "secondary": {"context": "secondary", "cluster_uid": "shared-uid"},
+        }
+
+        with patch("acm_switchover._collect_hub_identities", return_value=identities):
+            with pytest.raises(StateIdentityMismatch):
+                _bind_runtime_hub_identities(args, state, Mock(), Mock())
+
+        after = state.capture_state_snapshot()
+        assert after == before
+        assert after.get("hub_identities") == {}
+        assert after.get("completed_steps", []) == []
 
 
 @pytest.mark.unit

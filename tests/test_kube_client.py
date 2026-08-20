@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from kubernetes.client.rest import ApiException
 from kubernetes.config.config_exception import ConfigException
+from tenacity import wait_none
 
 from lib.kube_client import KubeClient, api_call, is_retryable_error
 
@@ -313,6 +314,50 @@ class TestKubeClient:
 
         assert result == {"context": "test-context", "cluster_uid": "cluster-uid-123"}
         mock_k8s_apis["core_api"].read_namespace.assert_called_with("kube-system", _request_timeout=30)
+
+    def test_cluster_identity_non_retryable_failure_does_not_log_sentinels(
+        self, kube_client, mock_k8s_apis, monkeypatch, caplog
+    ):
+        """A refusal must not emit an API response carrying identity-sensitive values."""
+        failure = ApiException(status=403, reason="ssa01-secret-raw-exception-EX74")
+        failure.body = "ssa01-secret-api-body-BD73 /api/v1/namespaces/kube-system ssa01-secret-token-TK72"
+        mock_k8s_apis["core_api"].read_namespace.side_effect = failure
+
+        monkeypatch.setattr(KubeClient._read_cluster_identity_namespace.retry, "wait", wait_none())
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            with pytest.raises(ApiException):
+                kube_client.get_cluster_identity()
+
+        assert mock_k8s_apis["core_api"].read_namespace.call_count == 1
+        for sentinel in (
+            "ssa01-secret-raw-exception-EX74",
+            "ssa01-secret-api-body-BD73",
+            "/api/v1/namespaces/kube-system",
+            "ssa01-secret-token-TK72",
+        ):
+            assert sentinel not in caplog.text
+
+    def test_cluster_identity_retry_failure_does_not_log_sentinels(
+        self, kube_client, mock_k8s_apis, monkeypatch, caplog
+    ):
+        """Retryable identity reads retain bounded retries without raw diagnostics."""
+        failure = ApiException(status=503, reason="ssa01-secret-raw-exception-EX74")
+        failure.body = "ssa01-secret-api-body-BD73 /api/v1/namespaces/kube-system ssa01-secret-token-TK72"
+        mock_k8s_apis["core_api"].read_namespace.side_effect = failure
+
+        monkeypatch.setattr(KubeClient._read_cluster_identity_namespace.retry, "wait", wait_none())
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            with pytest.raises(ApiException):
+                kube_client.get_cluster_identity()
+
+        assert mock_k8s_apis["core_api"].read_namespace.call_count == 5
+        for sentinel in (
+            "ssa01-secret-raw-exception-EX74",
+            "ssa01-secret-api-body-BD73",
+            "/api/v1/namespaces/kube-system",
+            "ssa01-secret-token-TK72",
+        ):
+            assert sentinel not in caplog.text
 
     def test_get_secret(self, kube_client, mock_k8s_apis):
         """Test getting a secret successfully."""

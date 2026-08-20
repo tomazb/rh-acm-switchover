@@ -182,9 +182,15 @@ def collect_hub_identities(
 ) -> dict[str, dict[str, Optional[str]]]:
     identities: dict[str, dict[str, Optional[str]]] = {}
     if primary is not None:
-        identities["primary"] = primary.get_cluster_identity()
+        try:
+            identities["primary"] = primary.get_cluster_identity()
+        except Exception:
+            raise HubIdentityVerificationError("primary") from None
     if secondary is not None:
-        identities["secondary"] = secondary.get_cluster_identity()
+        try:
+            identities["secondary"] = secondary.get_cluster_identity()
+        except Exception:
+            raise HubIdentityVerificationError("secondary") from None
     return identities
 
 
