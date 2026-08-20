@@ -281,6 +281,63 @@ def test_collection_variable_reference_documents_checkpoint_and_klusterlet_contr
     assert "scripts/discover-hub.sh" in content
 
 
+def test_ssa_01_documentation_contract_is_complete():
+    """Safety-critical SSA-01 facts must stay visible in their operator and developer owners."""
+    required_contracts = {
+        "CHANGELOG.md": ("distinct physical-hub",),
+        "README.md": ("same physical Kubernetes cluster", "kube-system", "Namespace UID"),
+        "ansible_collections/tomazb/acm_switchover/README.md": (
+            "same physical Kubernetes cluster",
+            "kube-system",
+            "Namespace UID",
+        ),
+        "docs/development/architecture.md": (
+            "_collect_hub_identities",
+            "validate_distinct_hub_identities",
+            "ensure_hub_identities",
+        ),
+        "ansible_collections/tomazb/acm_switchover/docs/architecture.md": (
+            "identity_barrier",
+            "action-local",
+            "post-barrier",
+        ),
+        "docs/operations/usage.md": ("same physical Kubernetes cluster", "fresh"),
+        "docs/reference/validation-rules.md": ("same physical Kubernetes cluster", "fails closed"),
+        "docs/ansible-collection/parity-matrix.md": ("distinct physical-hub",),
+        "docs/ansible-collection/behavior-map.md": ("distinct physical-hub",),
+        "ansible_collections/tomazb/acm_switchover/docs/coexistence.md": (
+            "distinct physical-hub",
+            "independent",
+        ),
+        "ansible_collections/tomazb/acm_switchover/docs/variable-reference.md": (
+            "acm_switchover_test_overrides.non_live_hub_identities",
+            "native",
+            "Ansible check mode",
+        ),
+        "ansible_collections/tomazb/acm_switchover/docs/cli-migration-map.md": (
+            "same physical Kubernetes cluster",
+            "restore-only",
+            "decommission",
+        ),
+        "docs/ansible-collection/scenario-catalog.md": ("distinct-physical-hub",),
+        "docs/ansible-collection/test-migration-catalog.md": (
+            "test_distinct_hub_identity_barrier.py",
+            "test_validation_parity.py",
+        ),
+        "thermos-resolution-plan.md": ("SSA-A2", "SSA-P2", "#267"),
+    }
+
+    for path, required_terms in required_contracts.items():
+        content = re.sub(r"\s+", " ", _read(path))
+        for term in required_terms:
+            assert term in content, f"{path} must document SSA-01 term {term!r}"
+
+    tracker = _read("thermos-resolution-plan.md")
+    assert re.search(
+        r"\|\s*SSA-01\s*\|\s*in_progress\s*\|", tracker
+    ), "thermos-resolution-plan.md must record the branch-local SSA-01 in_progress status"
+
+
 def test_collection_artifact_schema_documents_current_checkpoint_contract():
     """Checkpoint docs must describe schema 2.0 and non-mutating validate/dry-run behavior."""
     content = _read("ansible_collections/tomazb/acm_switchover/docs/artifact-schema.md")

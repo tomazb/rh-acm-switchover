@@ -20,6 +20,8 @@ Note: `--secondary-context` is required for switchover operations unless you are
 For `--setup`, `--include-decommission` is only valid with `--role operator` or `--role both`, and should be used only when the generated operator kubeconfig must support teardown workflows.
 
 **What this checks:**
+- Primary and secondary context names differ, and their fresh live
+  `kube-system` Namespace UIDs prove they are different physical clusters
 - ✓ Required namespaces exist on both hubs
 - ✓ ACM versions match between hubs
 - ✓ OADP operator installed on both hubs
@@ -40,6 +42,15 @@ All critical validations passed!
 ```
 
 If any critical validations fail, **DO NOT PROCEED** until issues are resolved.
+
+For a normal two-hub run, matching context names fail immediately. Different
+context names or kubeconfig files can still address the same physical
+Kubernetes cluster. The CLI also fails closed when the fresh live UID values
+match or either UID cannot be read. This is not a checkpoint reset control.
+Resume continues to validate each stored role identity against its current UID,
+and the cross-role guard adds the same-run distinctness check before mutation.
+Restore-only remains secondary-only and standalone decommission does not use
+this two-hub predicate.
 
 ### Step 2: Dry-Run
 

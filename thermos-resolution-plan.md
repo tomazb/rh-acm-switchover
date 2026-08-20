@@ -43,7 +43,7 @@ merged; its exact-head independent validation completed before merge, and
 GitHub PR #196 is closed unmerged as superseded. Current open work is owned by
 the SSA, R3, R4, TR2D, LER, GLM, H3, and deferred-issue boundaries below.
 
-**Last Updated:** 2026-08-19
+**Last Updated:** 2026-08-20
 
 ## Post-Merge Reconciliation (2026-08-19)
 
@@ -551,7 +551,7 @@ worktrees when their slice-specific designs establish no dependency conflict.
 
 | Slice | Status | Findings | Proposed resolution boundary | Required review |
 | --- | --- | --- | --- | --- |
-| SSA-01 | planned | SSA-A2, SSA-P2 | Add a shared-behavior, fail-closed physical-hub distinction guard before any mutation. | Python/collection parity; wrong-context and same-UID safety |
+| SSA-01 | in_progress | SSA-A2, SSA-P2 | Add a shared-behavior, fail-closed physical-hub distinction guard before any mutation. | Python/collection parity; wrong-context and same-UID safety |
 | SSA-02 | planned | SSA-P1, SSA-PY4 | Strengthen standalone and embedded decommission target/RBAC checks without requiring prior switchover state. | destructive-operation, RBAC, parity, and dry-run review |
 | SSA-03 | planned | SSA-PY2, SSA-A6 | Make klusterlet endpoint selection unambiguous and bound collection worker concurrency. Extended by `R4-06`: implement against `docs/plans/2026-07-29-kubeconfig-ambiguity-guard-design.md` (§1 fail-closed merge with deterministic KUBECONFIG precedence and sanitized merge errors, §2 duplicate-name rule, §3 full normalized-URL endpoint equality **plus the enumerated fail-closed rejection set for malformed server URLs**, §4 snapshot-built client **whose file-backed credential contents — CA, client certificate, client key, and `tokenFile` — are captured at snapshot time and never re-read during client construction**, and §5 mutation barrier). | post-activation parity, timeout, and scale review |
 | SSA-04 | planned | SSA-R1, SSA-R2 | Require explicit release-profile authorization for live decommission and reject safety-critical adapter overrides. | lab-controller trust boundary and release evidence review |
@@ -604,6 +604,24 @@ worktrees when their slice-specific designs establish no dependency conflict.
   `live_discovery.py:849-854`, `profiles.py:37-43`, `live_config.py:696-702`.
   These are release-validation-only, never execute in the CLI or the collection,
   and do **not** close `SSA-A2`/`SSA-P2`.
+
+**Implementation evidence (2026-08-20, issue #267 branch work)**
+
+- The local SSA-01 branch implements normal-flow same-context refusal and a
+  fresh live `kube-system` Namespace UID comparison before mutation in the
+  Python binder and collection action-local identity barrier.
+- The collection retains non-live UID fixtures only through the explicit
+  `validate`/`dry_run` test override. Execute mode, including native check
+  mode, reads live UIDs. Public facts and caller UID fields are not authority.
+- Existing stored-versus-current checkpoint identity validation remains
+  additive. `reset_from` behavior is unchanged and remains owned by `R3-06`.
+  Restore-only remains secondary-only; decommission is excluded and remains
+  owned by `SSA-02`.
+- Focused tests cover same live UID, unavailable UID, checkpoint drift,
+  pre-barrier recovery exclusion, post-barrier recovery, and execute-check
+  freshness. This is implementation-branch evidence only. It is not an
+  independent-validation verdict, merged status, release claim, or live
+  certification result.
 
 #### SSA-02: Decommission Target And RBAC Revalidation
 

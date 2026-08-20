@@ -402,6 +402,10 @@ sequenceDiagram
     end
     CLI->>P: create client for primary context
     CLI->>S: create client for secondary context
+    CLI->>P: _collect_hub_identities: read kube-system Namespace UID
+    CLI->>S: _collect_hub_identities: read kube-system Namespace UID
+    CLI->>CLI: validate_distinct_hub_identities
+    CLI->>State: ensure_hub_identities
     CLI->>Mods: run preflight coordinator
     Mods->>Argo: detect Argo CD CRDs for RBAC scoping
     CLI->>Argo: report Argo CD ACM impact (optional, after preflight)
@@ -417,6 +421,13 @@ sequenceDiagram
         CLI->>State: restore pre-run state snapshot
     end
 ```
+
+For a normal two-hub flow, `_bind_runtime_hub_identities` keeps the identity
+order explicit: `_collect_hub_identities`, then
+`validate_distinct_hub_identities`, then `StateManager.ensure_hub_identities`.
+The cross-role comparison uses fresh live `kube-system` Namespace UIDs and is
+additive to stored-versus-current identity binding on resume. Restore-only
+collects only the secondary identity. Decommission does not enter this binder.
 
 ## GitOps and Argo CD Architecture
 

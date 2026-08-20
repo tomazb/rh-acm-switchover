@@ -24,6 +24,10 @@ Automated, idempotent tool for switching over Red Hat Advanced Cluster Managemen
 
 ## Production Resilience Hardening In 1.7.10
 
+- A normal two-hub switchover rejects identical context names and fails closed
+  when the hubs resolve to the same physical Kubernetes cluster. Before any
+  mutation-capable phase, each form factor reads the live `kube-system`
+  Namespace UID for both hubs and requires distinct non-empty values.
 - Kubernetes API calls, polling waits, and Python/collection klusterlet worker batches are bounded so stalled APIs fail with actionable results instead of hanging indefinitely.
 - Observability checks are blocking by default unless explicitly skipped with `--skip-observability-checks` or `acm_switchover_features.skip_observability_checks`.
 - Argo CD managed pause fails closed for ApplicationSet-managed child Applications, unknown/stale Application impact, and failed post-patch pause verification.
@@ -369,6 +373,10 @@ This enables:
 
 ## Safety Features
 
+- **Distinct physical hubs**: a normal two-hub run refuses identical contexts,
+  equal live `kube-system` Namespace UIDs, or unreadable live UID evidence.
+  Restore-only remains secondary-only and standalone decommission is outside
+  this two-hub guard.
 - **ClusterDeployment Protection**: Mandatory check for `preserveOnDelete=true` prevents accidental cluster destruction
 - **Backup State Verification**: Ensures no backups in progress during switchover
 - **Progressive Validation**: Validates at each step before proceeding

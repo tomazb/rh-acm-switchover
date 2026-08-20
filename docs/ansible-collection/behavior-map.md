@@ -33,6 +33,15 @@ hub-identity binding and `reset_from` handling — but does **not** persist any
 checkpoint transitions or perform mutations. This surfaces misconfigured
 checkpoints before an actual execute-mode run.
 
+For the normal two-hub path, Python's runtime binder and the collection's
+`checkpoint_phase` identity barrier independently reject equal context names,
+equal live `kube-system` Namespace UIDs, and unreadable role evidence before a
+mutation-capable phase. The collection keeps UID evidence action-local through
+checkpoint validation; Python keeps the order collect, compare, then bind to
+state. Restore-only and standalone decommission remain outside the two-hub
+comparison. This distinct physical-hub decision preserves operator parity
+without sharing production runtime code.
+
 Observability RBAC permissions are skipped when MCO is verifiably absent: when
 preflight detection finds no `MultiClusterObservability` resources on the hub
 (a successful lookup returning empty), Observability-scoped RBAC checks
