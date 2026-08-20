@@ -2451,6 +2451,84 @@ def test_restore_only_identity_barrier_reads_secondary_only(tmp_path):
     )
 
 
+def test_restore_only_identity_barrier_rejects_stored_secondary_uid_drift(tmp_path):
+    args = _identity_barrier_args(tmp_path, restore_only=True)
+    args["hubs"]["primary"] = {
+        "context": "PRIMARY-POISON-CONTEXT",
+        "kubeconfig": "PRIMARY-POISON-KUBECONFIG",
+    }
+    stored_identity = build_operation_identity(
+        hubs={"secondary": {"context": "secondary-hub"}},
+        operation=args["operation"],
+        collection_version="9.8.7",
+        hub_identities={"secondary": {"cluster_uid": "STORED-SECONDARY"}},
+    )
+    (tmp_path / "checkpoint.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "2.0",
+                "phase": "preflight",
+                "completed_phases": ["preflight"],
+                "operational_data": {},
+                "operation_identity": stored_identity,
+                "errors": [],
+                "report_refs": [],
+            }
+        )
+    )
+    action = _make_checkpoint_action(args)
+    action._execute_module = MagicMock(return_value=_namespace_result("LIVE-SECONDARY"))
+
+    result = action.run(task_vars={"primary_failure_sentinel": "MUST-NOT-BE-READ"})
+
+    assert result["failed"] is True
+    assert "Checkpoint operation identity does not match the current execution." in result["msg"]
+    action._execute_module.assert_called_once()
+    module_args = action._execute_module.call_args.kwargs["module_args"]
+    assert module_args["context"] == "secondary-hub"
+    assert "PRIMARY-POISON" not in json.dumps(module_args)
+
+
+def test_restore_only_identity_barrier_accepts_matching_stored_secondary_uid(tmp_path):
+    args = _identity_barrier_args(tmp_path, restore_only=True)
+    args["hubs"]["primary"] = {
+        "context": "PRIMARY-POISON-CONTEXT",
+        "kubeconfig": "PRIMARY-POISON-KUBECONFIG",
+    }
+    stored_identity = build_operation_identity(
+        hubs={"secondary": {"context": "secondary-hub"}},
+        operation=args["operation"],
+        collection_version="9.8.7",
+        hub_identities={"secondary": {"cluster_uid": "LIVE-SECONDARY"}},
+    )
+    (tmp_path / "checkpoint.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "2.0",
+                "phase": "preflight",
+                "completed_phases": ["preflight"],
+                "operational_data": {},
+                "operation_identity": stored_identity,
+                "errors": [],
+                "report_refs": [],
+            }
+        )
+    )
+    action = _make_checkpoint_action(args)
+    action._execute_module = MagicMock(return_value=_namespace_result("LIVE-SECONDARY"))
+
+    result = action.run(task_vars={"primary_failure_sentinel": "MUST-NOT-BE-READ"})
+
+    assert result["skipped_phase"] is True
+    assert result["facts"]["argocd_run_id"] == ""
+    assert result["facts"]["expected_managed_cluster_count"] is None
+    assert result["checkpoint"]["operation_identity"] == stored_identity
+    action._execute_module.assert_called_once()
+    module_args = action._execute_module.call_args.kwargs["module_args"]
+    assert module_args["context"] == "secondary-hub"
+    assert "PRIMARY-POISON" not in json.dumps(module_args)
+
+
 MALFORMED_NAMESPACE_RESULTS = [
     None,
     {},
