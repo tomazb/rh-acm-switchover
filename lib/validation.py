@@ -18,6 +18,7 @@ Features:
 
 import logging
 import re
+from collections.abc import Mapping
 from typing import Pattern, Sequence
 
 from lib import path_safety
@@ -36,7 +37,7 @@ from lib.exceptions import SecurityValidationError, ValidationError
 
 logger = logging.getLogger("acm_switchover")
 
-__all__ = ["InputValidator", "SecurityValidationError", "ValidationError"]
+__all__ = ["InputValidator", "SecurityValidationError", "ValidationError", "validate_distinct_hub_identities"]
 
 # Kubernetes resource name validation patterns
 # Based on Kubernetes naming conventions: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/
@@ -66,6 +67,43 @@ K8S_LABEL_MAX_LENGTH = 63
 # This accommodates default oc login contexts like 'admin/api-ci-aws' or 'default/api.example.com:6443/admin'
 CONTEXT_NAME_PATTERN: Pattern[str] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:\-/@]*[A-Za-z0-9]$|^[A-Za-z0-9]$")
 CONTEXT_NAME_MAX_LENGTH = 128
+
+_SAME_CONTEXT_MESSAGE = "Primary and secondary Kubernetes context names must differ for a normal two-hub switchover."
+_SAME_PHYSICAL_HUB_MESSAGE = (
+    "Primary and secondary hubs resolve to the same physical Kubernetes cluster. "
+    "Refusing the normal two-hub switchover."
+)
+_UNVERIFIABLE_HUB_IDENTITY_MESSAGES = {
+    "primary": (
+        "Unable to verify the primary hub physical identity from the live kube-system Namespace UID. "
+        "Refusing the normal two-hub switchover."
+    ),
+    "secondary": (
+        "Unable to verify the secondary hub physical identity from the live kube-system Namespace UID. "
+        "Refusing the normal two-hub switchover."
+    ),
+}
+
+
+def validate_distinct_hub_identities(hub_identities: Mapping[str, object]) -> None:
+    """Require distinct, non-empty physical cluster UIDs for both normal-flow hub roles."""
+    if not isinstance(hub_identities, Mapping):
+        raise ValidationError(_UNVERIFIABLE_HUB_IDENTITY_MESSAGES["primary"])
+
+    cluster_uids: dict[str, str] = {}
+    for role in ("primary", "secondary"):
+        identity = hub_identities.get(role)
+        if not isinstance(identity, Mapping):
+            raise ValidationError(_UNVERIFIABLE_HUB_IDENTITY_MESSAGES[role])
+
+        cluster_uid = identity.get("cluster_uid")
+        if not isinstance(cluster_uid, str) or not (trimmed_cluster_uid := cluster_uid.strip()):
+            raise ValidationError(_UNVERIFIABLE_HUB_IDENTITY_MESSAGES[role])
+
+        cluster_uids[role] = trimmed_cluster_uid
+
+    if cluster_uids["primary"] == cluster_uids["secondary"]:
+        raise ValidationError(_SAME_PHYSICAL_HUB_MESSAGE)
 
 
 class InputValidator:
@@ -344,6 +382,17 @@ class InputValidator:
         has_argocd_manage = hasattr(args, "argocd_manage") and args.argocd_manage
         has_argocd_resume_only = hasattr(args, "argocd_resume_only") and args.argocd_resume_only
         has_validate_only = hasattr(args, "validate_only") and args.validate_only
+
+        if (
+            not is_decommission
+            and not is_setup
+            and not is_restore_only
+            and not has_argocd_resume_only
+            and getattr(args, "primary_context", None)
+            and getattr(args, "secondary_context", None)
+            and args.primary_context == args.secondary_context
+        ):
+            raise ValidationError(_SAME_CONTEXT_MESSAGE)
 
         # --restore-only validation rules
         if is_restore_only:

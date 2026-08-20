@@ -9,6 +9,7 @@ import yaml
 
 from lib.exceptions import SecurityValidationError, ValidationError
 from lib.report_artifacts import validate_report_artifact_path
+from lib import validation
 from lib.validation import InputValidator
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "validation_parity_cases.yml"
@@ -32,23 +33,25 @@ def _python_args(case_input: dict) -> MockArgs:
     features = case_input.get("features", {})
     argocd = features.get("argocd") or {}
     restore_only = bool(operation.get("restore_only", False))
+    hub_contexts = case_input.get("hub_contexts") or {}
 
     return MockArgs(
-        primary_context=None if restore_only else "primary-hub",
-        secondary_context="secondary-hub",
+        primary_context=hub_contexts.get("primary", None if restore_only else "primary-hub"),
+        secondary_context=hub_contexts.get("secondary", "secondary-hub"),
         method=operation.get("method", "passive"),
         activation_method=operation.get("activation_method", "patch"),
         old_hub_action=operation.get("old_hub_action"),
         log_format="text",
         state_file=".state/switchover-state.json",
-        decommission=False,
-        setup=False,
+        decommission=bool(operation.get("decommission", False)),
+        setup=bool(operation.get("setup", False)),
         restore_only=restore_only,
         validate_only=execution.get("mode") == "validate",
         dry_run=execution.get("mode") == "dry_run",
         argocd_manage=bool(argocd.get("manage", False)),
         argocd_resume_on_failure=bool(argocd.get("resume_on_failure", False)),
-        argocd_resume_only=False,
+        argocd_resume_only=bool(argocd.get("resume_only", False)),
+        admin_kubeconfig=operation.get("admin_kubeconfig"),
     )
 
 
@@ -76,10 +79,22 @@ def _run_artifact_path_case(case_input: dict) -> tuple[bool, str]:
     return True, ""
 
 
+def _run_hub_identity_case(case_input: dict) -> tuple[bool, str]:
+    try:
+        validation.validate_distinct_hub_identities(case_input["hub_identities"])
+    except (SecurityValidationError, ValidationError) as exc:
+        return False, str(exc)
+    return True, ""
+
+
 @pytest.mark.parametrize("case", _load_cases(), ids=lambda case: case["name"])
 def test_python_validation_matches_shared_parity_fixture(case: dict) -> None:
     if case["kind"] == "operation":
         passed, message = _run_operation_case(case["input"])
+    elif case["kind"] == "hub_contexts":
+        passed, message = _run_operation_case(case["input"])
+    elif case["kind"] == "hub_identity":
+        passed, message = _run_hub_identity_case(case["input"])
     elif case["kind"] == "path":
         passed, message = _run_path_case(case["input"])
     elif case["kind"] == "artifact_path":

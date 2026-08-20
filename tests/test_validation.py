@@ -8,6 +8,7 @@ security, reliability, and proper error handling.
 
 import pytest
 
+from lib import validation
 from lib.exceptions import ConfigurationError
 from lib.validation import (
     CONTEXT_NAME_MAX_LENGTH,
@@ -142,6 +143,84 @@ class TestCLIArgumentValidation:
 
         # Should not raise any exceptions
         InputValidator.validate_all_cli_args(args)
+
+    def test_normal_two_hub_rejects_same_context(self):
+        """Normal two-hub invocation must reject identical context names."""
+        args = MockArgs(
+            primary_context="shared-hub",
+            secondary_context="shared-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+
+        assert str(exc_info.value) == (
+            "Primary and secondary Kubernetes context names must differ for a normal two-hub switchover."
+        )
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            MockArgs(
+                primary_context=None,
+                secondary_context="shared-hub",
+                method="full",
+                old_hub_action=None,
+                restore_only=True,
+                decommission=False,
+            ),
+            MockArgs(
+                primary_context="shared-hub",
+                secondary_context="shared-hub",
+                setup=True,
+                admin_kubeconfig=".state/admin.kubeconfig",
+                role="operator",
+            ),
+            MockArgs(
+                primary_context="shared-hub",
+                secondary_context="shared-hub",
+                method="passive",
+                old_hub_action="secondary",
+                decommission=True,
+            ),
+            MockArgs(
+                primary_context="shared-hub",
+                secondary_context="shared-hub",
+                method="passive",
+                old_hub_action="secondary",
+                decommission=False,
+                argocd_resume_only=True,
+            ),
+        ],
+        ids=["restore-only", "setup", "decommission", "argocd-resume-only"],
+    )
+    def test_same_context_guard_excludes_single_hub_modes(self, args):
+        """The normal two-hub context guard must not apply to excluded modes."""
+        InputValidator.validate_all_cli_args(args)
+
+    def test_same_context_guard_is_not_bypassed_by_force_or_reset_arguments(self):
+        """Force and checkpoint-reset arguments cannot bypass the normal-flow input guard."""
+        args = MockArgs(
+            primary_context="shared-hub",
+            secondary_context="shared-hub",
+            method="passive",
+            old_hub_action="secondary",
+            decommission=False,
+            force=True,
+            reset_from="preflight",
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+
+        assert str(exc_info.value) == (
+            "Primary and secondary Kubernetes context names must differ for a normal two-hub switchover."
+        )
 
     def test_validate_all_cli_args_accepts_safe_report_dir(self):
         """--report-dir should accept safe relative artifact directories."""
@@ -916,6 +995,121 @@ class TestCLIArgumentValidation:
         )
         with pytest.raises(SecurityValidationError):
             InputValidator.validate_all_cli_args(args)
+
+
+class TestDistinctHubIdentityValidation:
+    """Test the pure normal-flow physical hub identity decision."""
+
+    @pytest.mark.parametrize(
+        ("hub_identities", "message"),
+        [
+            (
+                None,
+                "Unable to verify the primary hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover.",
+            ),
+            (
+                {"primary": "not-a-mapping", "secondary": {"cluster_uid": "secondary-uid"}},
+                "Unable to verify the primary hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover.",
+            ),
+            (
+                {"primary": {"cluster_uid": "primary-uid"}, "secondary": "not-a-mapping"},
+                "Unable to verify the secondary hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover.",
+            ),
+            (
+                {"primary": {}, "secondary": {"cluster_uid": "secondary-uid"}},
+                "Unable to verify the primary hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover.",
+            ),
+            (
+                {"primary": {"cluster_uid": "primary-uid"}, "secondary": {}},
+                "Unable to verify the secondary hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover.",
+            ),
+            (
+                {"primary": {"cluster_uid": 1}, "secondary": {"cluster_uid": "secondary-uid"}},
+                "Unable to verify the primary hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover.",
+            ),
+            (
+                {"primary": {"cluster_uid": "primary-uid"}, "secondary": {"cluster_uid": 2}},
+                "Unable to verify the secondary hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover.",
+            ),
+            (
+                {"primary": {"cluster_uid": ""}, "secondary": {"cluster_uid": "secondary-uid"}},
+                "Unable to verify the primary hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover.",
+            ),
+            (
+                {"primary": {"cluster_uid": "primary-uid"}, "secondary": {"cluster_uid": ""}},
+                "Unable to verify the secondary hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover.",
+            ),
+            (
+                {"primary": {"cluster_uid": " \t"}, "secondary": {"cluster_uid": "secondary-uid"}},
+                "Unable to verify the primary hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover.",
+            ),
+            (
+                {"primary": {"cluster_uid": "primary-uid"}, "secondary": {"cluster_uid": "\n"}},
+                "Unable to verify the secondary hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover.",
+            ),
+        ],
+    )
+    def test_validate_distinct_hub_identities_rejects_unverifiable_role(self, hub_identities, message):
+        """Each missing or malformed role UID must fail with its stable role-specific message."""
+        with pytest.raises(ValidationError) as exc_info:
+            validation.validate_distinct_hub_identities(hub_identities)
+
+        assert str(exc_info.value) == message
+
+    def test_validate_distinct_hub_identities_rejects_same_uid(self):
+        """Trimmed matching physical identities must be refused."""
+        with pytest.raises(ValidationError) as exc_info:
+            validation.validate_distinct_hub_identities(
+                {
+                    "primary": {"cluster_uid": "physical-uid"},
+                    "secondary": {"cluster_uid": " physical-uid\t"},
+                }
+            )
+
+        assert str(exc_info.value) == (
+            "Primary and secondary hubs resolve to the same physical Kubernetes cluster. "
+            "Refusing the normal two-hub switchover."
+        )
+
+    def test_validate_distinct_hub_identities_rejects_same_uid_despite_force_or_reset_controls(self):
+        """Unrelated force or reset controls cannot bypass the physical identity predicate."""
+        with pytest.raises(ValidationError) as exc_info:
+            validation.validate_distinct_hub_identities(
+                {
+                    "primary": {"cluster_uid": "physical-uid"},
+                    "secondary": {"cluster_uid": "physical-uid"},
+                    "force": True,
+                    "reset_from": "preflight",
+                }
+            )
+
+        assert str(exc_info.value) == (
+            "Primary and secondary hubs resolve to the same physical Kubernetes cluster. "
+            "Refusing the normal two-hub switchover."
+        )
+
+    def test_validate_distinct_hub_identities_accepts_distinct_uids(self):
+        """Distinct non-empty UIDs pass after surrounding whitespace is removed."""
+        assert (
+            validation.validate_distinct_hub_identities(
+                {
+                    "primary": {"cluster_uid": " primary-uid "},
+                    "secondary": {"cluster_uid": "secondary-uid\n"},
+                }
+            )
+            is None
+        )
 
 
 class TestKubernetesResourceValidation:
