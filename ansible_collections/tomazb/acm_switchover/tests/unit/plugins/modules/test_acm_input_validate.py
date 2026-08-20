@@ -105,6 +105,63 @@ def test_summary_marks_critical_failures():
     assert summary["critical_failures"] == 1
 
 
+def test_normal_two_hub_same_context_fails():
+    """One context must not be accepted as both normal switchover hubs."""
+    results = build_input_validation_results(
+        {
+            "hubs": {
+                "primary": {"context": "shared-hub", "kubeconfig": "./kubeconfigs/primary"},
+                "secondary": {"context": "shared-hub", "kubeconfig": "./kubeconfigs/secondary"},
+            },
+            "operation": {"method": "passive", "activation_method": "patch", "restore_only": False},
+            "execution": {"mode": "execute", "checkpoint": {"path": ".state/run.json"}},
+            "features": {"argocd": {"manage": False}},
+        }
+    )
+
+    distinct_context_result = next(item for item in results if item["id"] == "preflight-input-distinct-hub-contexts")
+
+    assert distinct_context_result["severity"] == "critical"
+    assert distinct_context_result["status"] == "fail"
+    assert (
+        distinct_context_result["message"]
+        == "Primary and secondary Kubernetes context names must differ for a normal two-hub switchover."
+    )
+    assert distinct_context_result["recommended_action"] == "Select two different Kubernetes hub contexts"
+    assert "shared-hub" not in distinct_context_result["message"]
+    assert "shared-hub" not in distinct_context_result["recommended_action"]
+
+    summary = summarize_input_validation(results)
+    assert summary["passed"] is False
+    assert summary["critical_failures"] == 1
+
+
+def test_restore_only_does_not_apply_distinct_context_rule():
+    """Restore-only is secondary-only, so it has no cross-hub context requirement."""
+    results = build_input_validation_results(_restore_only_params())
+
+    assert not any(item["id"] == "preflight-input-distinct-hub-contexts" for item in results)
+    assert summarize_input_validation(results)["passed"] is True
+
+
+def test_different_hub_contexts_pass_distinct_context_rule():
+    """Distinct normal hub contexts remain valid."""
+    results = build_input_validation_results(
+        {
+            "hubs": {
+                "primary": {"context": "primary-hub", "kubeconfig": "./kubeconfigs/primary"},
+                "secondary": {"context": "secondary-hub", "kubeconfig": "./kubeconfigs/secondary"},
+            },
+            "operation": {"method": "passive", "activation_method": "patch", "restore_only": False},
+            "execution": {"mode": "execute", "checkpoint": {"path": ".state/run.json"}},
+            "features": {"argocd": {"manage": False}},
+        }
+    )
+
+    assert not any(item["id"] == "preflight-input-distinct-hub-contexts" for item in results)
+    assert summarize_input_validation(results)["passed"] is True
+
+
 def test_missing_secondary_context_uses_actionable_message_for_nonstandard_modes():
     results = build_input_validation_results(
         {
