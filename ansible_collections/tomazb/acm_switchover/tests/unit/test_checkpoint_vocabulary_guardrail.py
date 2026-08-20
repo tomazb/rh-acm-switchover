@@ -28,6 +28,26 @@ FORBIDDEN_PATTERNS = (
 # checkpoint file for standalone resume, not a checkpoint_phase enter-result
 # register, so it has no `facts` dict to converge on.
 ALLOWED_RAW_CHECKPOINT_PLAYBOOKS = frozenset({"argocd_resume.yml"})
+PREFLIGHT_TASKS_DIR = ROLES_DIR / "preflight" / "tasks"
+PREFLIGHT_POST_IDENTITY = PREFLIGHT_TASKS_DIR / "post_identity.yml"
+
+
+def test_preflight_post_identity_allows_only_checkpoint_control_inputs():
+    """Preflight may resume operational facts, never identity evidence, from enter."""
+    text = PREFLIGHT_POST_IDENTITY.read_text(encoding="utf-8")
+
+    assert "_checkpoint_enter | default({})).skipped_phase" in text
+    assert "_checkpoint_enter | default({})).get('facts', {})" in text
+    for forbidden in (
+        "_checkpoint_enter.hub_identities",
+        "_checkpoint_enter | default({})).hub_identities",
+        "_checkpoint_enter | default({})).get('hub_identities'",
+        "cluster_uid",
+        "operation_identity",
+        "_acm_primary_identity_namespace",
+        "_acm_secondary_identity_namespace",
+    ):
+        assert forbidden not in text, f"post-identity control flow must not trust {forbidden}"
 
 
 def test_roles_do_not_read_operational_data_directly():

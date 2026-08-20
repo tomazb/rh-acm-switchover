@@ -67,7 +67,7 @@ def test_preflight_mch_discovery_is_live_not_preseeded():
 
 def test_preflight_persists_observability_detection_for_later_phases():
     """Collection preflight must carry Python-equivalent Observability detection through checkpoints."""
-    text = (PREFLIGHT_TASKS / "main.yml").read_text()
+    text = (PREFLIGHT_TASKS / "post_identity.yml").read_text()
 
     assert "acm_switchover_primary_has_observability" in text
     assert "acm_switchover_secondary_has_observability" in text
@@ -167,7 +167,7 @@ def test_preflight_rbac_managed_cluster_validation_stays_separate_from_hub_loop(
 
 def test_preflight_skip_requires_observability_checkpoint_data():
     """Skipped preflight checkpoints must not lose post-activation Observability gating inputs."""
-    text = (PREFLIGHT_TASKS / "main.yml").read_text()
+    text = (PREFLIGHT_TASKS / "post_identity.yml").read_text()
 
     assert "Skipped preflight checkpoint is missing required operational metadata" in text
     assert "expected_managed_cluster_names/expected_managed_cluster_count" in text
@@ -176,8 +176,8 @@ def test_preflight_skip_requires_observability_checkpoint_data():
 
 def test_preflight_runs_auto_import_strategy_validator_after_version_checks():
     """Collection preflight must keep Python's ACM 2.14+ auto-import advisory."""
-    main = _load_yaml("main.yml")
-    include_names = _include_task_names(main)
+    post_identity = _load_yaml("post_identity.yml")
+    include_names = _include_task_names(post_identity)
 
     assert "validate_versions.yml" in include_names
     assert "validate_auto_import.yml" in include_names
@@ -196,8 +196,8 @@ def test_preflight_runs_auto_import_strategy_validator_after_version_checks():
 
 def test_preflight_runs_controller_tooling_advisory():
     """Collection preflight should surface Python-equivalent tooling guidance without failing."""
-    main = _load_yaml("main.yml")
-    include_names = _include_task_names(main)
+    post_identity = _load_yaml("post_identity.yml")
+    include_names = _include_task_names(post_identity)
 
     assert "validate_tooling.yml" in include_names
 
