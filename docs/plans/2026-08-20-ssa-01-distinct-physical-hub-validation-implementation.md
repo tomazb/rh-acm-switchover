@@ -47,8 +47,8 @@
 | --- | --- | --- |
 | `lib/validation.py` | CLI input validation and reusable input predicates | Add normal-flow equal-context validation and pure `validate_distinct_hub_identities` shape/type/non-empty/equality validation. |
 | `lib/kube_client.py` | Kubernetes configuration, API clients, generic API retries, and `get_cluster_identity` | Add default-preserving constructor error-log control and an identity-specific, non-logging `kube-system` Namespace read using `retry_api_call_advisory`. |
-| `lib/runtime_bootstrap.py` | State/client construction and hub-identity collection | Add `HubIdentityVerificationError`, role-specific safe messages, role-scoped client-construction translation, and role-scoped identity-read translation. |
-| `acm_switchover.py` | CLI runtime wiring and operation dispatch | Enable sanitized construction on identity-bound paths, convert safe identity failures to existing outcomes, and order fresh collection then cross-role validation then `StateManager.ensure_hub_identities`. |
+| `lib/runtime_bootstrap.py` | State/client construction and hub-identity collection | Add `HubIdentityVerificationError`, role-specific safe messages, normal-two-hub client-construction translation, and role-scoped identity-read translation. |
+| `acm_switchover.py` | CLI runtime wiring and operation dispatch | Enable sanitized construction only for normal two-hub SSA-01 paths, convert safe identity failures to existing outcomes, and order fresh collection then cross-role validation then `StateManager.ensure_hub_identities`. |
 
 `lib/utils.py`, `lib/cli_outcomes.py`, `lib/constants.py`, state schema, and outcome schema remain unchanged production owners. Their tests are regression gates only.
 
@@ -232,13 +232,13 @@ git commit -m "feat: validate distinct switchover hub identities"
 - Extend `KubeClient.__init__` with keyword `log_config_errors: bool = True`. The default preserves every unrelated caller's current logging. When false, the `ConfigException` catch re-raises without logging raw context or exception text.
 - Add `runtime_bootstrap.HubIdentityVerificationError`, constructed only from logical role and emitting the stable role-specific message. It must not retain the raw exception text.
 - Extend `runtime_bootstrap.initialize_clients(..., *, sanitize_identity_errors: bool = False)`. When true, construct each present role separately with `log_config_errors=False`, catch construction/configuration failure at that role boundary, and raise `HubIdentityVerificationError(role) from None`.
-- `_prepare_runtime` passes `sanitize_identity_errors=True` for identity-bound switchover/restore-only preparation, catches `HubIdentityVerificationError` before the generic `Exception` arm, logs only its stable text without `exc_info`, restores the dry-run snapshot when applicable, and exits through the existing failure path.
+- `_prepare_runtime` passes `sanitize_identity_errors=True` only for normal two-hub SSA-01 preparation, catches `HubIdentityVerificationError` before the generic `Exception` arm, logs only its stable text without `exc_info`, restores the dry-run snapshot when applicable, and exits through the existing failure path. Restore-only leaves the option false and keeps its current constructor behavior unchanged.
 
 - [ ] **Step 1: Add constructor-default and suppression tests.** In `tests/test_kube_client.py`, prove default `KubeClient` construction still logs the existing diagnostic for unrelated callers and `log_config_errors=False` emits none of the sentinel `ConfigException`, context, path, token-like, or credential values.
 
-- [ ] **Step 2: Add role-scoped bootstrap tests.** In `tests/test_runtime_bootstrap.py`, add primary and secondary constructor failures using distinct sentinels and assert only the appropriate stable role message is available. Assert the other role is not constructed after the relevant failure and restore-only constructs/translates only secondary.
+- [ ] **Step 2: Add role-scoped normal-flow bootstrap tests.** In `tests/test_runtime_bootstrap.py`, add primary and secondary constructor failures for normal two-hub preparation using distinct sentinels and assert only the appropriate stable role message is available. Assert the other role is not constructed after the relevant failure. Do not add restore-only constructor translation; existing restore-only constructor behavior remains unchanged.
 
-- [ ] **Step 3: Add CLI output/log leak tests.** In `tests/test_main.py`, drive `_prepare_runtime` through both role failures. Capture logger output, stdout, and stderr and assert the stable refusal is present while the kubeconfig path, token-like value, raw exception string, context value, and credential sentinel are absent. Assert the dry-run snapshot restoration call remains intact.
+- [ ] **Step 3: Add CLI output/log leak tests.** In `tests/test_main.py`, drive normal two-hub `_prepare_runtime` through both role failures. Capture logger output, stdout, and stderr and assert the stable refusal is present while the kubeconfig path, token-like value, raw exception string, context value, and credential sentinel are absent. Assert the dry-run snapshot restoration call remains intact.
 
 - [ ] **Step 4: Run the focused tests and record the expected red result.** Failures should identify the missing constructor option and translation path.
 
@@ -247,7 +247,7 @@ python -m pytest tests/test_kube_client.py tests/test_runtime_bootstrap.py tests
   -k "config or initialize_clients or prepare_runtime or identity"
 ```
 
-- [ ] **Step 5: Implement the bounded constructor/logging changes.** Do not modify the generic Kubernetes API decorator, retry configuration, global logger settings, or unrelated constructors. Ensure every translation uses `raise ... from None`.
+- [ ] **Step 5: Implement the bounded constructor/logging changes.** Enable the sanitized constructor path only for normal two-hub SSA-01 preparation. Do not modify restore-only constructor behavior, the generic Kubernetes API decorator, retry configuration, global logger settings, or unrelated constructors. Ensure every translation uses `raise ... from None`.
 
 - [ ] **Step 6: Re-run focused and adjacent bootstrap tests.** Expect no sentinel leakage and no change to default caller behavior.
 
@@ -943,11 +943,13 @@ unset ACM_RELEASE_PROFILE PYTEST_ADDOPTS
 python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ tests/ -q
 ```
 
-- [ ] **Step 4: Reproduce the `min` Collection endpoint.** Use a dedicated environment; do not alter the shared environment.
+- [ ] **Step 4: Reproduce the `min` Collection endpoint.** Run Steps 4 through 7 in one shell. Create one guarded temporary root outside the repository, put both lane virtual environments beneath it, and install a shell trap so an early failure removes them. Do not create `.venv-lane-min`, `.venv-lane-current`, or add a `.gitignore` exception.
 
 ```bash
-python3.11 -m venv .venv-lane-min
-source .venv-lane-min/bin/activate
+SSA01_LANE_ROOT="$(mktemp -d /tmp/ssa-01-ansible-lanes.XXXXXX)"
+trap 'rm -rf -- "${SSA01_LANE_ROOT}"' EXIT
+python3.11 -m venv "${SSA01_LANE_ROOT}/min"
+source "${SSA01_LANE_ROOT}/min/bin/activate"
 python -m pip install --upgrade pip
 pip install "ansible-core==2.16.*" pytest PyYAML "kubernetes>=28.0.0"
 ansible-galaxy collection install -r ansible_collections/tomazb/acm_switchover/requirements.yml
@@ -984,11 +986,11 @@ ansible-galaxy collection build --output-path /tmp/dist \
 deactivate
 ```
 
-- [ ] **Step 6: Reproduce the `current` Collection endpoint.** Repeat all Collection surfaces under Python 3.12 and `ansible-core 2.21.*`.
+- [ ] **Step 6: Reproduce the `current` Collection endpoint.** In the same shell and guarded temporary root, repeat all Collection surfaces under Python 3.12 and `ansible-core 2.21.*`.
 
 ```bash
-python3.12 -m venv .venv-lane-current
-source .venv-lane-current/bin/activate
+python3.12 -m venv "${SSA01_LANE_ROOT}/current"
+source "${SSA01_LANE_ROOT}/current/bin/activate"
 python -m pip install --upgrade pip
 pip install "ansible-core==2.21.*" pytest PyYAML "kubernetes>=28.0.0"
 ansible-galaxy collection install -r ansible_collections/tomazb/acm_switchover/requirements.yml
@@ -1000,9 +1002,39 @@ PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/in
 PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/scenario/ -q
 ```
 
-- [ ] **Step 7: In the same `current` environment, run the identical syntax warning backstop and collection build.** Use the exact Step 5 loop and build command, then `deactivate`.
+- [ ] **Step 7: In the same `current` environment, run the syntax warning backstop and collection build, then remove both external lane environments.** Keep the trap active through all commands. Validate the generated path before explicit removal, disarm the trap only after removal succeeds, and prove the temporary root no longer exists.
 
-- [ ] **Step 8: Run formatter, import, type, lint, and security gates with the repository-authorized scopes.** Do not point black/isort at the repository root.
+```bash
+set -o pipefail
+export ANSIBLE_COLLECTIONS_PATH="$(pwd):${HOME}/.ansible/collections"
+log="$(mktemp)"
+status=0
+for playbook in ansible_collections/tomazb/acm_switchover/playbooks/*.yml; do
+  echo "== ${playbook}"
+  ansible-playbook "${playbook}" --syntax-check 2>&1 | tee -a "${log}" || status=1
+done
+if [ "${status}" -ne 0 ]; then
+  echo "playbook syntax check failed"
+  exit 1
+fi
+if grep -qE "does not support Ansible version" "${log}"; then
+  echo "a collection reported an unsupported ansible-core version for this lane"
+  grep -nE "does not support Ansible version" "${log}"
+  exit 1
+fi
+ansible-galaxy collection build --output-path /tmp/dist \
+  ansible_collections/tomazb/acm_switchover
+deactivate
+case "${SSA01_LANE_ROOT}" in
+  /tmp/ssa-01-ansible-lanes.*) ;;
+  *) echo "refusing to remove unexpected lane path"; exit 1 ;;
+esac
+rm -rf -- "${SSA01_LANE_ROOT}"
+trap - EXIT
+test ! -e "${SSA01_LANE_ROOT}"
+```
+
+- [ ] **Step 8: Run formatter, import, type, lint, and mandatory security gates with the repository-authorized scopes, then report the advisory dependency audit.** Do not point black/isort at the repository root. `pip-audit` is advisory under `docs/development/testing.md`; record its findings, but do not treat an advisory finding as failure of the mandatory SSA-01 gate set.
 
 ```bash
 flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
@@ -1021,15 +1053,35 @@ mypy --explicit-package-bases acm_switchover.py lib/ modules/ \
   --ignore-missing-imports --no-strict-optional
 bandit --ini .bandit -f json -o bandit-report.json || true
 bandit --ini .bandit -f txt
-pip-audit
+pip_audit_status=0
+pip-audit || pip_audit_status=$?
+if [ "${pip_audit_status}" -ne 0 ]; then
+  echo "ADVISORY: pip-audit reported findings; inspect the output, but do not fail the mandatory SSA-01 gates"
+fi
 ```
 
 - [ ] **Step 9: Re-run docs/static checks and inspect reports for sentinel leakage.** Search generated test/report artifacts for every deliberate sentinel. Any occurrence in callback-visible output, reports, stdout/stderr, or retry logs is a failure.
 
 ```bash
 python -m pytest tests/test_documentation_guardrails.py tests/test_ci_guardrails.py -q
+sentinel_scan_paths=()
+for candidate in artifacts .state /tmp/dist; do
+  if [ -e "${candidate}" ]; then
+    sentinel_scan_paths+=("${candidate}")
+  fi
+done
+if [ "${#sentinel_scan_paths[@]}" -eq 0 ]; then
+  echo "sentinel scan has no generated artifact inputs"
+  exit 1
+fi
+sentinel_status=0
 rg -n "ssa01-secret-(kubeconfig|token|api-body|raw-exception|uid|context|credential)|FAKE-A|FAKE-B" \
-  artifacts .state /tmp/dist 2>/dev/null
+  "${sentinel_scan_paths[@]}" || sentinel_status=$?
+case "${sentinel_status}" in
+  0) echo "sentinel leakage detected"; exit 1 ;;
+  1) echo "sentinel leakage scan found no matches" ;;
+  *) echo "sentinel leakage scan failed to execute"; exit "${sentinel_status}" ;;
+esac
 ```
 
 - [ ] **Step 10: Verify no-mutation evidence.** Archive the adversarial fake-server request logs. For every refusal and execute-plus-check case, assert GET-only traffic and no checkpoint write; for post-barrier recovery, identify the recovery request as occurring only after the barrier-success marker.
@@ -1068,6 +1120,8 @@ git status --porcelain=v1
 git diff --check
 git diff --name-status origin/ansible...HEAD
 git diff -- docs/plans/2026-08-20-ssa-01-distinct-physical-hub-validation-design.md
+test ! -e .venv-lane-min
+test ! -e .venv-lane-current
 ```
 
 - [ ] **Step 14: Prepare the exact head for governed validation only after operator-authorized implementation is complete.** Record base, head, merge base, changed files, protected diff, all targeted/full gate results, both endpoint lanes, RBAC result, and no-live evidence. Do not push, create a PR, or invoke an independent validator without the separate authorization required by issue #267.
