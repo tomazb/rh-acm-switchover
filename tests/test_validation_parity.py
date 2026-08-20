@@ -14,6 +14,41 @@ from lib.validation import InputValidator
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "validation_parity_cases.yml"
 
+_EXACT_HUB_REFUSAL_MESSAGES = {
+    "normal two hub rejects same context": (
+        "Primary and secondary Kubernetes context names must differ for a normal two-hub switchover."
+    ),
+    "equal physical hub identities are refused": (
+        "Primary and secondary hubs resolve to the same physical Kubernetes cluster. "
+        "Refusing the normal two-hub switchover."
+    ),
+}
+for _role in ("primary", "secondary"):
+    _EXACT_HUB_REFUSAL_MESSAGES.update(
+        {
+            f"missing {_role} physical identity is refused": (
+                f"Unable to verify the {_role} hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover."
+            ),
+            f"malformed {_role} physical identity is refused": (
+                f"Unable to verify the {_role} hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover."
+            ),
+            f"non-string {_role} physical identity is refused": (
+                f"Unable to verify the {_role} hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover."
+            ),
+            f"empty {_role} physical identity is refused": (
+                f"Unable to verify the {_role} hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover."
+            ),
+            f"whitespace-only {_role} physical identity is refused": (
+                f"Unable to verify the {_role} hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover."
+            ),
+        }
+    )
+
 
 class MockArgs:
     """Minimal argparse-like object for CLI validation tests."""
@@ -25,6 +60,15 @@ class MockArgs:
 
 def _load_cases() -> list[dict]:
     return yaml.safe_load(FIXTURE_PATH.read_text(encoding="utf-8"))
+
+
+def test_shared_fixture_pins_every_distinct_hub_refusal_message() -> None:
+    """The shared parity fixture covers every role/evidence failure exactly."""
+    cases_by_name = {case["name"]: case for case in _load_cases()}
+
+    assert set(_EXACT_HUB_REFUSAL_MESSAGES).issubset(cases_by_name)
+    for name, expected_message in _EXACT_HUB_REFUSAL_MESSAGES.items():
+        assert cases_by_name[name]["expected"]["message"] == expected_message
 
 
 def _python_args(case_input: dict) -> MockArgs:
@@ -105,4 +149,7 @@ def test_python_validation_matches_shared_parity_fixture(case: dict) -> None:
     expected = case["expected"]
     assert passed is expected["passed"], message
     if not expected["passed"]:
-        assert expected["contains"] in message
+        if "message" in expected:
+            assert message == expected["message"]
+        else:
+            assert expected["contains"] in message

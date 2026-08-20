@@ -98,7 +98,7 @@
       mode: execute
   expected:
     passed: false
-    contains: "Primary and secondary Kubernetes context names must differ for a normal two-hub switchover."
+    message: "Primary and secondary Kubernetes context names must differ for a normal two-hub switchover."
 
 - name: restore only excludes same context guard
   kind: hub_contexts
@@ -140,19 +140,74 @@
         cluster_uid: " physical-uid "
   expected:
     passed: false
-    contains: "Primary and secondary hubs resolve to the same physical Kubernetes cluster. Refusing the normal two-hub switchover."
+    message: "Primary and secondary hubs resolve to the same physical Kubernetes cluster. Refusing the normal two-hub switchover."
+
+- name: missing primary physical identity is refused
+  kind: hub_identity
+  input:
+    hub_identities:
+      secondary:
+        cluster_uid: secondary-uid
+  expected:
+    passed: false
+    message: "Unable to verify the primary hub physical identity from the live kube-system Namespace UID. Refusing the normal two-hub switchover."
 
 - name: malformed primary physical identity is refused
   kind: hub_identity
   input:
     hub_identities:
-      primary:
-        cluster_uid: " "
+      primary: not-a-mapping
       secondary:
         cluster_uid: secondary-uid
   expected:
     passed: false
-    contains: "Unable to verify the primary hub physical identity from the live kube-system Namespace UID. Refusing the normal two-hub switchover."
+    message: "Unable to verify the primary hub physical identity from the live kube-system Namespace UID. Refusing the normal two-hub switchover."
+
+- name: non-string primary physical identity is refused
+  kind: hub_identity
+  input:
+    hub_identities:
+      primary:
+        cluster_uid: 101
+      secondary:
+        cluster_uid: secondary-uid
+  expected:
+    passed: false
+    message: "Unable to verify the primary hub physical identity from the live kube-system Namespace UID. Refusing the normal two-hub switchover."
+
+- name: empty primary physical identity is refused
+  kind: hub_identity
+  input:
+    hub_identities:
+      primary:
+        cluster_uid: ""
+      secondary:
+        cluster_uid: secondary-uid
+  expected:
+    passed: false
+    message: "Unable to verify the primary hub physical identity from the live kube-system Namespace UID. Refusing the normal two-hub switchover."
+
+- name: whitespace-only primary physical identity is refused
+  kind: hub_identity
+  input:
+    hub_identities:
+      primary:
+        cluster_uid: " \t"
+      secondary:
+        cluster_uid: secondary-uid
+  expected:
+    passed: false
+    message: "Unable to verify the primary hub physical identity from the live kube-system Namespace UID. Refusing the normal two-hub switchover."
+
+- name: missing secondary physical identity is refused
+  kind: hub_identity
+  input:
+    hub_identities:
+      primary:
+        cluster_uid: primary-uid
+  expected:
+    passed: false
+    message: "Unable to verify the secondary hub physical identity from the live kube-system Namespace UID. Refusing the normal two-hub switchover."
 
 - name: malformed secondary physical identity is refused
   kind: hub_identity
@@ -160,11 +215,46 @@
     hub_identities:
       primary:
         cluster_uid: primary-uid
-      secondary:
-        cluster_uid: null
+      secondary: not-a-mapping
   expected:
     passed: false
-    contains: "Unable to verify the secondary hub physical identity from the live kube-system Namespace UID. Refusing the normal two-hub switchover."
+    message: "Unable to verify the secondary hub physical identity from the live kube-system Namespace UID. Refusing the normal two-hub switchover."
+
+- name: non-string secondary physical identity is refused
+  kind: hub_identity
+  input:
+    hub_identities:
+      primary:
+        cluster_uid: primary-uid
+      secondary:
+        cluster_uid: 202
+  expected:
+    passed: false
+    message: "Unable to verify the secondary hub physical identity from the live kube-system Namespace UID. Refusing the normal two-hub switchover."
+
+- name: empty secondary physical identity is refused
+  kind: hub_identity
+  input:
+    hub_identities:
+      primary:
+        cluster_uid: primary-uid
+      secondary:
+        cluster_uid: ""
+  expected:
+    passed: false
+    message: "Unable to verify the secondary hub physical identity from the live kube-system Namespace UID. Refusing the normal two-hub switchover."
+
+- name: whitespace-only secondary physical identity is refused
+  kind: hub_identity
+  input:
+    hub_identities:
+      primary:
+        cluster_uid: primary-uid
+      secondary:
+        cluster_uid: " \t"
+  expected:
+    passed: false
+    message: "Unable to verify the secondary hub physical identity from the live kube-system Namespace UID. Refusing the normal two-hub switchover."
 
 - name: distinct physical hub identities pass
   kind: hub_identity

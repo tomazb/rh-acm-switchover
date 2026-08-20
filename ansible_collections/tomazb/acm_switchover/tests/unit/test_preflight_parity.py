@@ -1,5 +1,6 @@
 """Static parity tests for preflight role behavior."""
 
+import ast
 import pathlib
 
 import yaml
@@ -8,6 +9,8 @@ from preflight_task_text import validate_backups_text
 
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 PREFLIGHT_TASKS = ROLES_DIR / "preflight" / "tasks"
+COLLECTION_ROOT = ROLES_DIR.parent
+REPOSITORY_ROOT = COLLECTION_ROOT.parents[2]
 
 
 def _load_yaml(name: str) -> list[dict]:
@@ -25,6 +28,170 @@ def _include_task_names(tasks: list[dict]) -> list[str]:
         if "rescue" in task:
             includes.extend(_include_task_names(task["rescue"]))
     return includes
+
+
+def _function_source(path: pathlib.Path, function_name: str) -> str:
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    function = next(
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == function_name
+    )
+    return ast.get_source_segment(source, function) or ""
+
+
+def _production_python_files() -> list[pathlib.Path]:
+    python_roots = [REPOSITORY_ROOT / "lib", REPOSITORY_ROOT / "modules"]
+    files = [REPOSITORY_ROOT / "acm_switchover.py"]
+    for root in python_roots:
+        files.extend(root.rglob("*.py"))
+    files.extend((COLLECTION_ROOT / "plugins").rglob("*.py"))
+    return files
+
+
+def test_distinct_hub_runtime_owners_do_not_cross_import() -> None:
+    """The two form factors share tests, never production or release-controller imports."""
+    violations = []
+    for path in _production_python_files():
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                imported_names = [node.module or ""]
+            else:
+                continue
+
+            for imported_name in imported_names:
+                if path.is_relative_to(COLLECTION_ROOT):
+                    prohibited = imported_name in {"acm_switchover", "lib", "modules"} or imported_name.startswith(
+                        ("lib.", "modules.")
+                    )
+                else:
+                    prohibited = imported_name == "ansible_collections" or imported_name.startswith(
+                        "ansible_collections.tomazb.acm_switchover"
+                    )
+                if prohibited or imported_name.startswith("tests.release"):
+                    violations.append(f"{path.relative_to(REPOSITORY_ROOT)}: {imported_name}")
+
+        if "tests/release" in source:
+            violations.append(f"{path.relative_to(REPOSITORY_ROOT)}: tests/release")
+
+    assert violations == []
+
+
+def test_python_binds_fresh_identities_before_cross_role_validation_and_state() -> None:
+    """Python must compare fresh role identities before durable state binding."""
+    source = _function_source(REPOSITORY_ROOT / "acm_switchover.py", "_bind_runtime_hub_identities")
+    input_source = _function_source(REPOSITORY_ROOT / "lib" / "validation.py", "validate_all_cli_args")
+
+    assert source.index("_collect_hub_identities") < source.index("validate_distinct_hub_identities")
+    assert source.index("validate_distinct_hub_identities") < source.index("state.ensure_hub_identities")
+    for exclusion in ("not is_decommission", "not is_setup", "not is_restore_only", "not has_argocd_resume_only"):
+        assert exclusion in input_source
+
+
+def test_collection_identity_barrier_keeps_namespace_evidence_action_local() -> None:
+    """The barrier owns literal entry, trusted live reads, and sanitized identity construction."""
+    barrier_tasks = _load_yaml("identity_barrier.yml")
+    action_task = next(task for task in barrier_tasks if "tomazb.acm_switchover.checkpoint_phase" in task)
+    action = action_task["tomazb.acm_switchover.checkpoint_phase"]
+    action_source = COLLECTION_ROOT / "plugins" / "action" / "checkpoint_phase.py"
+    read_source = _function_source(action_source, "_read_live_namespace_uid")
+    identity_source = _function_source(action_source, "_run_identity_barrier")
+    build_source = _function_source(action_source, "_build_trusted_operation_identity")
+
+    assert action == {
+        "identity_barrier": True,
+        "phase": "preflight",
+        "status": "enter",
+        "checkpoint": "{{ acm_switchover_execution.checkpoint | default({}) }}",
+        "hubs": "{{ acm_switchover_hubs | default({}) }}",
+        "operation": "{{ acm_switchover_operation | default({}) }}",
+        "execution": "{{ acm_switchover_execution | default({}) }}",
+        "test_overrides": "{{ acm_switchover_test_overrides | default({}) }}",
+        "collection_version": "{{ acm_switchover_collection_version | default('') }}",
+    }
+    assert action_task["register"] == "_checkpoint_enter"
+    assert "when" not in action_task
+
+    assert 'module_name="kubernetes.core.k8s_info"' in read_source
+    for literal in ('"api_version": "v1"', '"kind": "Namespace"', '"name": "kube-system"'):
+        assert literal in read_source
+    assert '"kubeconfig": hub.get("kubeconfig")' in read_source
+    assert '"context": hub.get("context")' in read_source
+
+    assert "task_vars.get(" not in identity_source
+    for caller_visible_evidence in (
+        "acm_switchover_hub_identities",
+        "_acm_switchover_verified_hub_identities",
+        "acm_switchover_distinct_hubs_verified",
+    ):
+        assert caller_visible_evidence not in identity_source
+    assert "sanitized_local_hubs" in build_source
+    assert '"context": hubs[role]["context"]' in build_source
+    assert "kubeconfig" not in build_source
+    assert "hubs=sanitized_local_hubs" in build_source
+    assert "hub_identities=trusted_local_hub_identities" in build_source
+
+    barrier_text = (PREFLIGHT_TASKS / "identity_barrier.yml").read_text(encoding="utf-8")
+    assert "cluster_uid" not in barrier_text
+    assert "operation_identity" not in barrier_text
+
+
+def test_collection_preflight_keeps_checkpoint_control_outside_identity_evidence() -> None:
+    """Only post-barrier preflight may consume filtered operational checkpoint results."""
+    main_text = (PREFLIGHT_TASKS / "main.yml").read_text(encoding="utf-8")
+    barrier_text = (PREFLIGHT_TASKS / "identity_barrier.yml").read_text(encoding="utf-8")
+    post_text = (PREFLIGHT_TASKS / "post_identity.yml").read_text(encoding="utf-8")
+
+    for text in (main_text, barrier_text):
+        assert "_checkpoint_enter.skipped_phase" not in text
+        assert "_checkpoint_enter | default({})).skipped_phase" not in text
+        assert "_checkpoint_enter | default({})).get('facts'" not in text
+
+    assert "_checkpoint_enter | default({})).skipped_phase" in post_text
+    assert "_checkpoint_enter | default({})).get('facts', {})" in post_text
+    assert "hub_identities" not in post_text
+    assert "cluster_uid" not in post_text
+    assert "operation_identity" not in post_text
+
+
+def test_collection_static_boundary_excludes_obsolete_discovery_and_single_hub_workflows() -> None:
+    """Only normal flows use the cross-role barrier and post-barrier recovery boundary."""
+    playbooks = COLLECTION_ROOT / "playbooks"
+    switchover = yaml.safe_load((playbooks / "switchover.yml").read_text(encoding="utf-8"))
+    outer = next(task for task in switchover[0]["tasks"] if task["name"] == "Run switchover phases with reporting")
+    barrier_index = next(
+        index
+        for index, task in enumerate(outer["block"])
+        if task["name"] == "Establish trusted identity and checkpoint barrier"
+    )
+    recovery_index = next(
+        index for index, task in enumerate(outer["block"]) if task["name"] == "Run post-barrier switchover phases"
+    )
+
+    assert "rescue" not in outer
+    assert barrier_index < recovery_index
+    assert "rescue" in outer["block"][recovery_index]
+    assert not (PREFLIGHT_TASKS / "discover_hub_identities.yml").exists()
+    assert "discover_hub_identities.yml" not in "\n".join(
+        path.read_text(encoding="utf-8") for path in PREFLIGHT_TASKS.rglob("*.yml")
+    )
+
+    restore = yaml.safe_load((playbooks / "restore_only.yml").read_text(encoding="utf-8"))
+    restore_roles = [
+        task["ansible.builtin.include_role"]["name"]
+        for task in restore[0]["tasks"][0]["block"]
+        if "ansible.builtin.include_role" in task
+    ]
+    decommission_text = (playbooks / "decommission.yml").read_text(encoding="utf-8")
+    assert "tomazb.acm_switchover.primary_prep" not in restore_roles
+    assert 'required_roles = ("secondary",) if restore_only else ("primary", "secondary")' in _function_source(
+        COLLECTION_ROOT / "plugins" / "action" / "checkpoint_phase.py", "_run_identity_barrier"
+    )
+    assert "checkpoint_phase" not in decommission_text
+    assert "tomazb.acm_switchover.preflight" not in decommission_text
 
 
 def test_validate_kubeconfigs_uses_direct_api_probe():

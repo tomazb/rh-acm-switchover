@@ -112,4 +112,7 @@ def test_collection_validation_matches_shared_parity_fixture(case: dict) -> None
     expected = case["expected"]
     assert passed is expected["passed"], message
     if not expected["passed"]:
-        assert expected["contains"] in message
+        if "message" in expected:
+            assert message == expected["message"]
+        else:
+            assert expected["contains"] in message
