@@ -15,9 +15,7 @@ def _load_playbook(name: str) -> list[dict]:
 def _get_report_contract(playbook: list[dict]) -> dict:
     if playbook[0].get("name") == "ACM Hub Switchover":
         outer = next(
-            task
-            for task in playbook[0].get("tasks", [])
-            if task.get("name") == "Run switchover phases with reporting"
+            task for task in playbook[0].get("tasks", []) if task.get("name") == "Run switchover phases with reporting"
         )
         assert "rescue" not in outer
         assert outer["block"][0].get("name") == "Establish trusted identity and checkpoint barrier"

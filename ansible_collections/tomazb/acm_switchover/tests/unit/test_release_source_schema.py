@@ -115,11 +115,7 @@ def test_summarize_preflight_results_counts_by_severity() -> None:
 
 def test_switchover_report_contract_top_level_keys_are_stable() -> None:
     plays = yaml.safe_load((_PLAYBOOKS_DIR / "switchover.yml").read_text())
-    outer = next(
-        task
-        for task in plays[0]["tasks"]
-        if task.get("name") == "Run switchover phases with reporting"
-    )
+    outer = next(task for task in plays[0]["tasks"] if task.get("name") == "Run switchover phases with reporting")
     contract = _find_task_set_fact(plays, "Build switchover report contract")
 
     assert "rescue" not in outer

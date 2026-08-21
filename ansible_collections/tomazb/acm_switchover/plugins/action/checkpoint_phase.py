@@ -534,7 +534,7 @@ class ActionModule(ActionBase):
     def _canonical_established_operation_identity(identity) -> dict | None:
         if not isinstance(identity, Mapping):
             return None
-        normalized_identity = normalize_operation_identity(identity)
+        normalized_identity = normalize_operation_identity(dict(identity))
         canonical_fields = {
             "primary_context",
             "secondary_context",

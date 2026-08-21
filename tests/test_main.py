@@ -49,8 +49,8 @@ from acm_switchover import (
     validate_args,
 )
 from lib import KubeClient
-from lib import cli_outcomes
 from lib import argocd as argocd_lib
+from lib import cli_outcomes
 from lib.argocd_register import PauseSummary
 from lib.constants import (
     DRY_RUN_RESTORE_ONLY_COMPLETION_MESSAGE,

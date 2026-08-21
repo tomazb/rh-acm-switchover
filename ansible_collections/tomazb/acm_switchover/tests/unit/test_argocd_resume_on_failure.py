@@ -25,12 +25,8 @@ def _get_task_block(playbook: list[dict]) -> dict:
 def _get_switchover_recovery_blocks(playbook: list[dict]) -> tuple[dict, dict]:
     """Return the outer reporting block and its post-identity recovery block."""
     tasks = playbook[0].get("tasks", [])
-    outer = next(
-        task for task in tasks if task.get("name") == "Run switchover phases with reporting"
-    )
-    nested = next(
-        task for task in outer["block"] if task.get("name") == "Run post-barrier switchover phases"
-    )
+    outer = next(task for task in tasks if task.get("name") == "Run switchover phases with reporting")
+    nested = next(task for task in outer["block"] if task.get("name") == "Run post-barrier switchover phases")
     return outer, nested
 
 
