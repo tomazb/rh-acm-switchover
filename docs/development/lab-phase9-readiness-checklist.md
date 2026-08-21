@@ -54,9 +54,10 @@ Not required for the Phase 9B exit gate:
 - OpenShift GitOps
 - Switchover RBAC bootstrap
 
-## Tier B — Phase 9C / 9E known-state readiness
+## Tier B — Phase 9C / 9E / 9F known-state readiness
 
-Required before Phase 9C authorization and Phase 9E mutation:
+Required before Phase 9C authorization and before each live mutating segment (Phase 9E and
+Phase 9F):
 
 - [ ] ACM/MCE and a ready `MultiClusterHub` on both hubs at an officially supported combination
 - [ ] Exactly one active primary and one passive secondary from agreeing ACM evidence
@@ -76,6 +77,11 @@ Required before Phase 9C authorization and Phase 9E mutation:
 - [ ] Initial GitOps posture is no ACM ownership, or observe-only only
 - [ ] Current official-source compatibility evidence recorded and regenerated within policy expiry
       before each authorization window
+
+Tier B is not a one-time gate. Because the Phase 9E segment flips the primary/secondary roles,
+Phase 9F authorization requires re-proving Tier B from fresh controller rediscovery of the post-9E
+state, under a new profile/approval reference and unexpired compatibility evidence, before any 9F
+mutation or handoff.
 
 ## Executable assets already in this repository
 
