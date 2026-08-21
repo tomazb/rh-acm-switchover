@@ -562,7 +562,9 @@ validator/PR-comment-resolver workflow, and a separate reviewable PR. No slice m
 - **Purpose:** add the first real, typed read-only adapter and prove both physical hubs without enabling mutation or
   certification from discovery alone.
 - **Prerequisites:** Phase 9A merged and independently validated; fresh base; explicit operator runtime handles;
-  reviewed Phase 8J guardrails.
+  reviewed Phase 8J guardrails. Operator lab readiness for the identity-only exit gate is summarized in
+  [`docs/development/lab-phase9-readiness-checklist.md`](../development/lab-phase9-readiness-checklist.md) Tier A.
+
 - **Mutation boundary:** none. Any mutating verb, adapter, L10 use, or mutation flag blocks before contact.
 - **Expected files/modules:** new `tests/release/lab_controller/live_discovery.py`; minimal integration in
   `read_only_live_transport.py`/`read_only_backend.py`; controller artifact schema/writer updates; focused tests and

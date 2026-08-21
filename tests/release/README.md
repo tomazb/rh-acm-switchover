@@ -49,6 +49,11 @@ private inventory labels, evidence origins, certificates, credentials, paths, co
 exception text, and arbitrary object representations are never published. Phase 9B does not infer logical
 primary/secondary roles, known state, readiness, mutation/recovery authority, or executable profiles.
 
+Operator lab preparation for Phases 9B–9F is documented in
+[`docs/development/lab-phase9-readiness-checklist.md`](../../docs/development/lab-phase9-readiness-checklist.md).
+That checklist separates Phase 9B physical-identity readiness from later ACM/OADP/GitOps known-state preparation.
+Real runtime bindings and credentials remain outside Git.
+
 ## Framework Tests
 
 Run framework unit and contract tests directly:
