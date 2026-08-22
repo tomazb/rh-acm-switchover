@@ -32,7 +32,8 @@ as a permanent role.
 
 ## Tier A — Phase 9B physical-identity readiness
 
-Required before Issue #188 live exit evidence:
+Required for Phase 9B live-exit evidence (Issue #188 is closed). Re-prove after any later
+preparation mutation:
 
 - [ ] Two distinct, reachable OpenShift hubs with healthy API access
 - [ ] Readable `kube-system` Namespace UID on both hubs
@@ -111,7 +112,7 @@ authorize Phase 9B exit, Phase 9C authorization, or Phase 9E/9F mutation.
 
 ## Phase sequencing reminder
 
-1. Tier A readiness + Issue #188 live read-only exit
+1. Tier A readiness + Issue #188 live read-only exit (closed; rediscover after later prep)
 2. Phase 9C known-state / non-executable authorization
 3. Phase 9D bootstrap automation only after 9C, or continue with operator-proven Tier B state
 4. Phase 9E one Python passive-switchover segment

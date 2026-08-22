@@ -9,8 +9,9 @@ tests are not live ACM certification evidence. The existing profile-driven relea
 `OcDiscoveryClient`, but it is not the Phase 9 controller authority. Phase 9B now provides
 `tests.release.lab_controller.run_phase9b_live_discovery`, a disabled-by-default controller entrypoint over explicit
 runtime-only typed read APIs. It proves physical identities only and always emits non-certification, non-mutation
-artifacts. Deterministic fake API coverage is not live evidence; the Phase 9B live exit gate remains blocked until an
-operator authorizes a real two-hub read-only run. Phase 9C remains blocked.
+artifacts. Deterministic fake API coverage is not live evidence. Issue
+[#188](https://github.com/tomazb/rh-acm-switchover/issues/188) records operator-authorized two-hub Phase 9B
+live-exit evidence; that evidence is physical-identity only and is not certification. Phase 9C remains blocked.
 
 ## Phase 9B Read-Only Physical Identity
 
