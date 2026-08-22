@@ -29,6 +29,7 @@ class DistinctHubPlaybookRun:
 
     completed: subprocess.CompletedProcess[str]
     report: dict
+    preflight_report: dict
     checkpoint: dict
     checkpoint_before: bytes | None
     checkpoint_after: bytes | None
@@ -314,11 +315,16 @@ def run_distinct_hub_playbook(tmp_path):
 
             report_path = report_dir / "switchover-report.json"
             report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else {}
+            preflight_report_path = report_dir / "preflight-report.json"
+            preflight_report = (
+                json.loads(preflight_report_path.read_text(encoding="utf-8")) if preflight_report_path.exists() else {}
+            )
             checkpoint_after = checkpoint_path.read_bytes() if checkpoint_path.exists() else None
             checkpoint = json.loads(checkpoint_after) if checkpoint_after is not None else {}
             return DistinctHubPlaybookRun(
                 completed=completed,
                 report=report,
+                preflight_report=preflight_report,
                 checkpoint=checkpoint,
                 checkpoint_before=checkpoint_before,
                 checkpoint_after=checkpoint_after,

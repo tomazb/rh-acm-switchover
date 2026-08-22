@@ -70,6 +70,12 @@ from modules import (
 from modules.preflight_coordinator import PreflightValidator
 
 
+class _PhysicalHubIdentityRefusal(StateIdentityMismatch):
+    """Mark a sanitized SSA-01 refusal for the outcome report owner."""
+
+    sanitize_refusal_report = True
+
+
 def _missing_parse_required_args(args: argparse.Namespace) -> list[str]:
     """Return conditionally required arguments missing after argparse parses modes."""
 
@@ -985,9 +991,22 @@ def _write_python_report(
     state: Optional[StateManager],
     status: str,
     logger: logging.Logger,
+    *,
+    refusal_message: Optional[str] = None,
+    redact_identity_inputs: bool = False,
 ) -> None:
     """Write a Python CLI report artifact when --report-dir is set."""
-    cli_outcomes.write_python_report(args, state, status, logger)
+    if refusal_message is None and not redact_identity_inputs:
+        cli_outcomes.write_python_report(args, state, status, logger)
+        return
+    cli_outcomes.write_python_report(
+        args,
+        state,
+        status,
+        logger,
+        refusal_message=refusal_message,
+        redact_identity_inputs=redact_identity_inputs,
+    )
 
 
 def _build_cli_operation_hooks() -> cli_outcomes.CliOperationHooks:
@@ -1213,7 +1232,7 @@ def _bind_runtime_hub_identities(
         if not getattr(args, "restore_only", False) and primary is not None and secondary is not None:
             validate_distinct_hub_identities(hub_identities)
     except (runtime_bootstrap.HubIdentityVerificationError, ValidationError) as exc:
-        raise StateIdentityMismatch(str(exc)) from None
+        raise _PhysicalHubIdentityRefusal(str(exc)) from None
 
     state.ensure_hub_identities(
         hub_identities,

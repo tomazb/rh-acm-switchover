@@ -3,6 +3,7 @@
 Tests argument parsing and basic entry point logic.
 """
 
+import json
 import logging
 import os
 import sys
@@ -2467,6 +2468,82 @@ class TestBindRuntimeHubIdentities:
         assert after == before
         assert after.get("hub_identities") == {}
         assert after.get("completed_steps", []) == []
+
+    def test_identity_refusal_report_artifact_omits_sensitive_inputs(self, tmp_path):
+        """The emitted SSA-01 refusal report must contain only sanitized diagnostics."""
+        sentinels = (
+            "ssa01-secret-kubeconfig-KP71",
+            "ssa01-secret-token-TK72",
+            "ssa01-secret-api-body-BD73",
+            "ssa01-secret-raw-exception-EX74",
+            "ssa01-secret-uid-UID75",
+            "ssa01-secret-context-CTX76",
+            "ssa01-secret-credential-CR77",
+        )
+        refusal = (
+            "Primary and secondary hubs resolve to the same physical Kubernetes cluster. "
+            "Refusing the normal two-hub switchover."
+        )
+        args = TestMainGitOpsReporting._base_args()
+        args.primary_context = "|".join(sentinels)
+        args.secondary_context = "secondary-hub"
+        args.primary_kubeconfig = "ssa01-secret-kubeconfig-KP71"
+        args.secondary_kubeconfig = "secondary.kubeconfig"
+        args.method = "passive"
+        args.old_hub_action = "secondary"
+        args.restore_only = False
+        args.decommission = False
+        args.force = False
+        args.dry_run = False
+        args.report_dir = str(tmp_path / "artifacts")
+        state = StateManager(str(tmp_path / "state.json"))
+        before = state.capture_state_snapshot()
+        primary = Mock()
+        secondary = Mock()
+        primary.get_cluster_identity.return_value = {
+            "context": args.primary_context,
+            "cluster_uid": "ssa01-secret-uid-UID75",
+        }
+        secondary.get_cluster_identity.return_value = {
+            "context": args.secondary_context,
+            "cluster_uid": "ssa01-secret-uid-UID75",
+        }
+        execute_operation = Mock(return_value=True)
+        logger = Mock()
+        reporter = Mock()
+        hooks = cli_outcomes.CliOperationHooks(
+            bind_runtime_hub_identities=_bind_runtime_hub_identities,
+            run_argocd_resume_only=Mock(),
+            execute_operation=execute_operation,
+            write_python_report=cli_outcomes.write_python_report,
+            gitops_reporter_factory=lambda: reporter,
+        )
+
+        exit_code = cli_outcomes.run_operation_mode(
+            args,
+            state,
+            primary,
+            secondary,
+            logger,
+            should_bind_state=True,
+            should_record_state_errors=True,
+            hooks=hooks,
+            exit_success=EXIT_SUCCESS,
+            exit_failure=EXIT_FAILURE,
+            exit_interrupt=EXIT_INTERRUPT,
+        )
+
+        report_path = Path(args.report_dir) / "switchover-report.json"
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        serialized = json.dumps(report, sort_keys=True)
+        assert exit_code == EXIT_FAILURE
+        assert report["status"] == "fail"
+        leaked = [sentinel for sentinel in sentinels if sentinel in serialized]
+        assert leaked == []
+        assert refusal in serialized
+        execute_operation.assert_not_called()
+        assert state.capture_state_snapshot() == before
+        logger.error.assert_any_call("\n✗ %s", ANY)
 
 
 @pytest.mark.unit

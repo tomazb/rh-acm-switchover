@@ -20,6 +20,7 @@ ROLE_REFUSAL = (
     "Unable to verify the {role} hub physical identity from the live kube-system Namespace UID. "
     "Refusing the normal two-hub switchover."
 )
+SAME_CONTEXT_REFUSAL = "Primary and secondary Kubernetes context names must differ for a normal two-hub switchover."
 CHECKPOINT_MISMATCH = "Checkpoint operation identity does not match the current execution."
 LEAK_SENTINELS = (
     "ssa01-secret-kubeconfig-KP71",
@@ -157,6 +158,30 @@ def test_same_live_cluster_rejects_spoofed_distinct_extra_vars(
     assert "Mark checkpoint phase completion" not in output
     assert "Run primary prep" not in output
     assert "Reset primary prep checkpoint after Argo CD resume on failure" not in output
+    assert _write_requests(run) == []
+
+
+def test_same_context_refusal_report_artifact_omits_sensitive_inputs(
+    run_distinct_hub_playbook,
+):
+    context_with_sentinels = "|".join(LEAK_SENTINELS)
+    run = run_distinct_hub_playbook(
+        primary_context=context_with_sentinels,
+        secondary_context=context_with_sentinels,
+        primary_kubeconfig_name="ssa01-secret-kubeconfig-KP71-primary",
+        secondary_kubeconfig_name="ssa01-secret-kubeconfig-KP71-secondary",
+        primary_uid="ssa01-secret-uid-UID75",
+        secondary_uid="ssa01-secret-uid-UID75",
+    )
+    serialized = json.dumps(run.preflight_report, sort_keys=True)
+
+    assert run.completed.returncode != 0
+    assert run.preflight_report["status"] == "fail"
+    assert SAME_CONTEXT_REFUSAL in serialized
+    leaked = [sentinel for sentinel in LEAK_SENTINELS if sentinel in serialized]
+    assert leaked == []
+    assert run.primary_requests == []
+    assert run.secondary_requests == []
     assert _write_requests(run) == []
 
 
