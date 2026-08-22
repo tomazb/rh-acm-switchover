@@ -221,7 +221,22 @@ def test_ansible_check_mode_with_execute_mode_does_not_create_or_mutate_checkpoi
     checkpoint_record = {
         **_expected_checkpoint("primary_prep", seeded_phases),
         "schema_version": "2.0",
-        "operation_identity": build_operation_identity(hubs={}, operation={"method": "passive"}),
+        "operation_identity": build_operation_identity(
+            hubs={
+                "primary": {"context": "primary-hub"},
+                "secondary": {"context": "secondary-hub"},
+            },
+            operation={
+                "method": "passive",
+                "activation_method": "patch",
+                "restore_only": False,
+                "old_hub_action": "secondary",
+            },
+            hub_identities={
+                "primary": {"cluster_uid": "stored-primary-uid"},
+                "secondary": {"cluster_uid": "stored-secondary-uid"},
+            },
+        ),
     }
     existing_checkpoint.write_text(
         json.dumps(checkpoint_record, indent=2),

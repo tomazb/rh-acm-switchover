@@ -105,6 +105,9 @@ def build_operation_report(
     args: Any,
     state_snapshot: dict[str, Any],
     phases: dict[str, Any] | None = None,
+    *,
+    refusal_message: str | None = None,
+    redact_identity_inputs: bool = False,
 ) -> dict[str, Any]:
     """Build a schema-compatible report for Python CLI operations."""
     config = state_snapshot.get("config", {}) or {}
@@ -120,7 +123,10 @@ def build_operation_report(
     # test_python_operation_report_schema_fields_round_trip_and_exclude_sensitive_config
     # pins report["errors"] to the snapshot's list verbatim, including the
     # non-dict entries RunSummary.from_snapshot filters out.
-    errors = state_snapshot.get("errors", []) or []
+    errors = [refusal_message] if refusal_message is not None else state_snapshot.get("errors", []) or []
+    summary_data = _summarize_state(state_snapshot, status)
+    if refusal_message is not None:
+        summary_data["error_count"] = 1
 
     report: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -128,8 +134,8 @@ def build_operation_report(
         "source": source,
         "type": report_type,
         "status": status,
-        "summary": _summarize_state(state_snapshot, status),
-        "hubs": _hubs_from_args(args),
+        "summary": summary_data,
+        "hubs": {} if redact_identity_inputs else _hubs_from_args(args),
         "operation": {
             "method": getattr(args, "method", None),
             "old_hub_action": getattr(args, "old_hub_action", None),

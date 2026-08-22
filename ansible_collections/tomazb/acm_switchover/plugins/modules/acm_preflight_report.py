@@ -58,6 +58,8 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation i
     ValidationError,
 )
 
+_DISTINCT_CONTEXT_RESULT_ID = "preflight-input-distinct-hub-contexts"
+
 
 def summarize_preflight_results(results: list[dict]) -> dict:
     critical_failures = [
@@ -95,13 +97,30 @@ def sanitize_report_hubs(hubs: dict, hub_identities: dict | None = None) -> dict
     return report_hubs
 
 
+def _has_distinct_context_refusal(results: list[dict]) -> bool:
+    return any(
+        item.get("id") == _DISTINCT_CONTEXT_RESULT_ID and item.get("status") in {"fail", "error"} for item in results
+    )
+
+
+def _sanitize_distinct_context_refusal_results(results: list[dict]) -> list[dict]:
+    """Retain only the stable SSA-01 refusal without other input diagnostics."""
+    return [
+        {**item, "details": {}}
+        for item in results
+        if item.get("id") == _DISTINCT_CONTEXT_RESULT_ID and item.get("status") in {"fail", "error"}
+    ]
+
+
 def build_preflight_report(
     phase: str,
     results: list[dict],
     hubs: dict,
     hub_identities: dict | None = None,
 ) -> dict:
-    summary = summarize_preflight_results(results)
+    distinct_context_refusal = _has_distinct_context_refusal(results)
+    report_results = _sanitize_distinct_context_refusal_results(results) if distinct_context_refusal else results
+    summary = summarize_preflight_results(report_results)
     return {
         "schema_version": "1.0",
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -109,8 +128,8 @@ def build_preflight_report(
         "phase": phase,
         "status": "pass" if summary["passed"] else "fail",
         "summary": summary,
-        "hubs": sanitize_report_hubs(hubs, hub_identities),
-        "results": results,
+        "hubs": {} if distinct_context_refusal else sanitize_report_hubs(hubs, hub_identities),
+        "results": report_results,
     }
 
 

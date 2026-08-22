@@ -114,7 +114,15 @@ def phase_report_from_state(state_snapshot: dict) -> dict[str, dict[str, Any]]:
     return phases
 
 
-def write_python_report(args: Any, state: Optional[StateManager], status: str, logger: logging.Logger) -> None:
+def write_python_report(
+    args: Any,
+    state: Optional[StateManager],
+    status: str,
+    logger: logging.Logger,
+    *,
+    refusal_message: Optional[str] = None,
+    redact_identity_inputs: bool = False,
+) -> None:
     """Write a Python CLI report artifact when --report-dir is set."""
     report_dir = getattr(args, "report_dir", None)
     if not report_dir or state is None:
@@ -130,6 +138,8 @@ def write_python_report(args: Any, state: Optional[StateManager], status: str, l
             args=args,
             state_snapshot=state_snapshot,
             phases=phase_report_from_state(state_snapshot),
+            refusal_message=refusal_message,
+            redact_identity_inputs=redact_identity_inputs,
         )
         destination = os.path.join(report_dir, filename)
         written_path = write_json_report_artifact(report, destination)
@@ -190,6 +200,7 @@ def run_operation_mode(
 ) -> int:
     """Run the prepared non-setup operation path and return the final exit code."""
     exit_code = exit_failure
+    refusal_report_message: Optional[str] = None
     try:
         if should_bind_state:
             hooks.bind_runtime_hub_identities(args, state, primary, secondary)
@@ -207,6 +218,8 @@ def run_operation_mode(
         # The finally block still emits a report from a read-only snapshot,
         # which is deliberate: it aids diagnosis without mutating the file.
         logger.error("\n✗ %s", exc)
+        if getattr(exc, "sanitize_refusal_report", False):
+            refusal_report_message = str(exc)
         exit_code = exit_failure
     except SwitchoverError as exc:
         logger.error("\n✗ %s", exc)
@@ -232,7 +245,18 @@ def run_operation_mode(
                 logger.error("\n✗ Operation failed!")
             exit_code = exit_failure
     finally:
-        hooks.write_python_report(args, state, "pass" if exit_code == exit_success else "fail", logger)
+        report_status = "pass" if exit_code == exit_success else "fail"
+        if refusal_report_message is None:
+            hooks.write_python_report(args, state, report_status, logger)
+        else:
+            hooks.write_python_report(
+                args,
+                state,
+                report_status,
+                logger,
+                refusal_message=refusal_report_message,
+                redact_identity_inputs=True,
+            )
         hooks.gitops_reporter_factory().print_report()
 
     return exit_code

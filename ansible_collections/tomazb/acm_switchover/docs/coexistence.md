@@ -95,6 +95,22 @@ The collection reaches the same invariant — an obligation is discharged only
 when the reset is proven — via the cluster marker, without requiring
 checkpointing to be enabled.
 
+### Normal two-hub distinct physical-hub identity
+
+Before a normal two-hub switchover can enter a mutation-capable phase, Python
+and the collection independently require different live `kube-system` Namespace
+UIDs. Equal context names fail early; different context names that resolve to
+the same physical cluster fail closed as well. The cross-role check is additive
+to stored-versus-current per-role resume validation. Restore-only remains
+secondary-only, and standalone decommission is excluded from this predicate.
+
+Collection execute mode, including native Ansible check mode, reads the live
+UIDs instead of trusting public facts, registered values, cache, or extra vars.
+Only explicit non-live test fixtures may use
+`acm_switchover_test_overrides.non_live_hub_identities` in `validate` or
+`dry_run`. The Python CLI has no equivalent production override. These are
+independent implementations of one operator decision, not shared runtime code.
+
 **Intentional divergence on read failure:** the collection fails finalization
 closed when `import-controller-config` cannot be read, because the cluster is
 its only register and it has nothing else to consult; the Python CLI, by

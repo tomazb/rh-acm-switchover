@@ -26,6 +26,16 @@ execution-environment posture, and the local validation commands.
 
 The `argocd_manage` role fails closed instead of patching unsafe child Applications. It blocks auto-sync Applications managed by an ApplicationSet when they touch ACM resources, blocks auto-sync Applications with empty or stale `status.resources`, and re-reads patched Applications to confirm auto-sync is disabled. Resume is fail-closed too (ADR-0001): it fails when a pause run_id is recorded but the Application CRD is not visible, and it never patches `spec.syncPolicy` without a recoverable `original-sync-policy` annotation — Applications paused by the Python tool must be resumed with `acm_switchover.py --argocd-resume-only`. For ApplicationSet-managed cases, pause or update the parent ApplicationSet, generator, or template rather than the generated child Application.
 
+## Distinct physical-hub guard
+
+For a normal two-hub switchover, preflight rejects identical context names and
+requires distinct non-empty live `kube-system` Namespace UIDs before it can
+enter a mutation-capable phase. Different contexts or kubeconfigs can still
+resolve to the same physical Kubernetes cluster. Execute mode, including
+native `ansible-playbook --check`, reads both UIDs freshly. Restore-only reads
+only the secondary hub, and
+standalone decommission is outside this two-hub rule.
+
 ## Explicit Non-Scope
 
 - additional functionality beyond the playbooks, roles, plugins, and modules currently shipped in this collection

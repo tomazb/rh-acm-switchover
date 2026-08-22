@@ -77,6 +77,32 @@ Each scenario records:
 - expected validation: shipped manifest permissions are covered, including Argo CD Application patch for operator manage mode
 - expected artifacts: applied manifest list and optional generated kubeconfig path are exposed in the bootstrap result; release guardrails track this separately from switchover reports
 
+### SCENARIO-010 distinct-physical-hub guard
+
+- normal two-hub inputs with matching context names fail before mutation
+- different contexts that return an equal live `kube-system` Namespace UID fail
+  before mutation
+- malformed or unavailable live role evidence fails closed without trusting
+  public, registered, cached, or caller-supplied UID data
+- checkpoint identity drift still fails after the trusted UID comparison
+- a pre-barrier refusal enters neither recovery nor checkpoint reset; a
+  post-barrier failure retains the existing recovery path
+- execute plus native Ansible check mode performs fresh UID GETs and makes no
+  writes; `validate` and `dry_run` may use the explicit non-live test override,
+  but otherwise the action reads live UIDs
+- restore-only remains secondary-only, and standalone decommission is excluded
+
+Concrete collection coverage is
+`ansible_collections/tomazb/acm_switchover/tests/integration/test_distinct_hub_identity_barrier.py`:
+Cases A-F are `test_same_live_cluster_rejects_spoofed_distinct_extra_vars`,
+`test_unavailable_live_uid_rejects_spoofed_identity`,
+`test_checkpoint_drift_rejects_spoofed_stored_identity`,
+`test_pre_barrier_failure_ignores_spoofed_recovery_values`,
+`test_post_barrier_failure_retains_recovery`, and
+`test_execute_check_mode_uses_fresh_uids_without_mutation`. Checkpoint and
+resume compatibility remain in
+`ansible_collections/tomazb/acm_switchover/tests/scenario/test_checkpoint_resume.py`.
+
 ## Collection Coverage (Phase 2)
 
 | Scenario ID | Python | Collection | Notes |
@@ -105,3 +131,4 @@ Each scenario records:
 | `machine-readable-reports` | yes | yes | Python and collection emit schema version `1.0` report artifacts |
 | `runtime-parity-safety` | yes | yes | Backup, restore, post-activation, finalization, RBAC, and decommission safety paths are covered by targeted regression tests |
 | `release-1.7.10-artifact-guardrails` | yes | yes | Release tests cover required fields for switchover, restore-only, decommission, RBAC/bootstrap, checkpoint, and report artifacts |
+| `distinct-physical-hub` | yes | yes | Same-context, same-live-UID, unreadable evidence, resume drift, recovery boundary, native-check freshness, restore-only, and decommission exclusions are pinned by focused tests |

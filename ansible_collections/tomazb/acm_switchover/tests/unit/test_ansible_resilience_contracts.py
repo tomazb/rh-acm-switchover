@@ -736,9 +736,9 @@ def test_collection_mutation_tasks_default_missing_execution_mode_to_dry_run():
         ), f"{path.name} must guard live mutations with dry_run-safe default"
 
 
-def test_preflight_checkpoint_validation_defaults_to_execute():
+def test_post_identity_checkpoint_validation_defaults_to_execute():
     """Checkpoint data validation is read-only; defaulting to execute over-validates safely."""
-    text = (PREFLIGHT_TASKS / "main.yml").read_text()
+    text = (PREFLIGHT_TASKS / "post_identity.yml").read_text()
     assert "default('execute') == 'execute'" in text
     assert "read-only validation assert" in text
 

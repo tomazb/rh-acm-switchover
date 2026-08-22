@@ -13,6 +13,10 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation i
     validate_report_artifact_path,
     validate_safe_path,
 )
+from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_input_validate import (
+    build_input_validation_results,
+    summarize_input_validation,
+)
 
 
 def _find_repo_root() -> Path:
@@ -43,6 +47,35 @@ def _run_operation_case(case_input: dict) -> tuple[bool, str]:
     return True, ""
 
 
+def _run_hub_context_case(case_input: dict) -> tuple[bool, str]:
+    operation = dict(case_input.get("operation", {}))
+    hub_contexts = case_input.get("hub_contexts", {})
+    restore_only = operation.get("restore_only", False)
+    if restore_only and operation.get("old_hub_action") is None:
+        operation.pop("old_hub_action")
+    results = build_input_validation_results(
+        {
+            "hubs": {
+                "primary": {
+                    "context": hub_contexts.get("primary", "" if restore_only else "primary-hub"),
+                    "kubeconfig": "" if restore_only else "./kubeconfigs/primary",
+                },
+                "secondary": {
+                    "context": hub_contexts.get("secondary", "secondary-hub"),
+                    "kubeconfig": "./kubeconfigs/secondary",
+                },
+            },
+            "operation": operation,
+            "execution": case_input.get("execution", {}),
+            "features": case_input.get("features", {}),
+        }
+    )
+    summary = summarize_input_validation(results)
+    if summary["passed"]:
+        return True, ""
+    return False, "\n".join(item["message"] for item in results if item["status"] in {"fail", "error"})
+
+
 def _run_path_case(case_input: dict) -> tuple[bool, str]:
     try:
         validate_safe_path(case_input["path"])
@@ -59,10 +92,16 @@ def _run_artifact_path_case(case_input: dict) -> tuple[bool, str]:
     return True, ""
 
 
-@pytest.mark.parametrize("case", _load_cases(), ids=lambda case: case["name"])
+@pytest.mark.parametrize(
+    "case",
+    [case for case in _load_cases() if case["kind"] != "hub_identity"],
+    ids=lambda case: case["name"],
+)
 def test_collection_validation_matches_shared_parity_fixture(case: dict) -> None:
     if case["kind"] == "operation":
         passed, message = _run_operation_case(case["input"])
+    elif case["kind"] == "hub_contexts":
+        passed, message = _run_hub_context_case(case["input"])
     elif case["kind"] == "path":
         passed, message = _run_path_case(case["input"])
     elif case["kind"] == "artifact_path":
@@ -73,4 +112,7 @@ def test_collection_validation_matches_shared_parity_fixture(case: dict) -> None
     expected = case["expected"]
     assert passed is expected["passed"], message
     if not expected["passed"]:
-        assert expected["contains"] in message
+        if "message" in expected:
+            assert message == expected["message"]
+        else:
+            assert expected["contains"] in message

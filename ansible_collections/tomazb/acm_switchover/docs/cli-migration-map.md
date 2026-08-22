@@ -50,6 +50,14 @@ checkpoint `operation_identity` before including the mutating `argocd_manage`
 role. Explicit `run_id` input remains supported and does not require checkpoint
 loading.
 
+For a normal two-hub switchover, both form factors reject matching context names
+and fail when fresh live `kube-system` Namespace UIDs show the same physical
+Kubernetes cluster. The collection performs that check in its preflight identity
+barrier. It uses the test-only non-live identity override only in `validate` or
+`dry_run`; `execute` and native `--check` still read live UIDs. `--restore-only`
+maps to a secondary-only flow, and `--decommission` maps to standalone
+decommission, so neither flow uses this normal two-hub predicate.
+
 ## Phase 5 Capability Status
 
 | Python / CLI Capability | Collection Phase 5 Status |

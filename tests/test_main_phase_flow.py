@@ -606,7 +606,10 @@ class TestMainExceptionHandlers:
             ],
         ), patch("acm_switchover._initialize_clients", return_value=(Mock(), Mock())), patch(
             "acm_switchover._collect_hub_identities",
-            return_value={},
+            return_value={
+                "primary": {"context": "p1", "cluster_uid": "uid-primary"},
+                "secondary": {"context": "s1", "cluster_uid": "uid-secondary"},
+            },
         ), patch(
             "acm_switchover._execute_operation",
             side_effect=SwitchoverError("Use --force to proceed with stale state"),

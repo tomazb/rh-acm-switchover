@@ -92,6 +92,20 @@ UIDs and fails before resume patches if the live hubs do not match. Supplying an
 explicit `acm_switchover_argocd.run_id` or `acm_switchover_execution.run_id`
 preserves the existing explicit-run-id path and skips checkpoint loading.
 
+### Test-only non-live hub identities
+
+`acm_switchover_test_overrides.non_live_hub_identities` is an explicit test
+fixture contract for `validate` and `dry_run` only. It may supply a non-empty
+`cluster_uid` for each required hub while those non-live modes avoid API reads.
+Do not set it for an operator run: `execute` ignores it, including native
+Ansible check mode, and instead reads fresh live `kube-system` Namespace UIDs.
+Public facts, registered variables, cached values, and
+`acm_switchover_hubs.<role>.cluster_uid` never satisfy the identity barrier.
+
+For a normal two-hub operation, both trusted UIDs must differ. Restore-only
+requires only the secondary UID. `checkpoint.reset` and `checkpoint.reset_from`
+retain their existing checkpoint semantics; neither changes this identity rule.
+
 ### Argo CD management safety
 
 When `acm_switchover_features.argocd.manage` is `true`, the collection refuses to patch unsafe Applications. Auto-sync Applications owned by an ApplicationSet block the run when they touch ACM resources because the parent controller can revert child changes. Remediate by pausing or updating the parent ApplicationSet, generator, or template before retrying.

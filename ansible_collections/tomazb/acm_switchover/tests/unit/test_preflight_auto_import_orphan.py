@@ -81,8 +81,8 @@ def test_orphan_warning_uses_marker_and_import_and_sync():
     assert "acm_switchover_validation_results" in text
 
 
-def test_preflight_main_includes_orphan_check_before_discovery():
-    main = yaml.safe_load((PREFLIGHT_TASKS / "main.yml").read_text())
-    includes = [t.get("ansible.builtin.include_tasks", "") for t in _flatten(main)]
+def test_post_identity_includes_orphan_check_before_resource_discovery():
+    post_identity = yaml.safe_load((PREFLIGHT_TASKS / "post_identity.yml").read_text())
+    includes = [t.get("ansible.builtin.include_tasks", "") for t in _flatten(post_identity)]
     assert "check_auto_import_orphan.yml" in includes
     assert includes.index("check_auto_import_orphan.yml") < includes.index("discover_resources.yml")

@@ -3,13 +3,14 @@
 Tests argument parsing and basic entry point logic.
 """
 
+import json
 import logging
 import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 import pytest
 from kubernetes.client.rest import ApiException
@@ -50,6 +51,7 @@ from acm_switchover import (
 )
 from lib import KubeClient
 from lib import argocd as argocd_lib
+from lib import cli_outcomes
 from lib.argocd_register import PauseSummary
 from lib.constants import (
     DRY_RUN_RESTORE_ONLY_COMPLETION_MESSAGE,
@@ -69,6 +71,7 @@ from lib.constants import (
     TOKEN_DURATION_DEFAULT,
 )
 from lib.exceptions import SwitchoverError
+from lib.utils import StateIdentityMismatch, StateManager
 from lib.validation import ValidationError
 from tests.main_test_helpers import make_restore_only_args, make_switchover_args
 
@@ -1742,6 +1745,14 @@ class TestMainGitOpsReporting:
             argocd_resume_only=False,
         )
 
+    @staticmethod
+    def _normal_hub_clients():
+        primary = Mock()
+        primary.get_cluster_identity.return_value = {"context": "primary", "cluster_uid": "uid-primary"}
+        secondary = Mock()
+        secondary.get_cluster_identity.return_value = {"context": "secondary", "cluster_uid": "uid-secondary"}
+        return primary, secondary
+
     def test_main_prints_gitops_report_on_operation_exception(self):
         args = self._base_args()
         logger = Mock()
@@ -1757,7 +1768,7 @@ class TestMainGitOpsReporting:
         ), patch(
             "acm_switchover.StateManager", return_value=state
         ), patch(
-            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+            "acm_switchover._initialize_clients", return_value=self._normal_hub_clients()
         ), patch(
             "acm_switchover._execute_operation", side_effect=RuntimeError("boom")
         ), patch(
@@ -1820,7 +1831,7 @@ class TestMainGitOpsReporting:
         ), patch(
             "acm_switchover.StateManager", return_value=state
         ), patch(
-            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+            "acm_switchover._initialize_clients", return_value=self._normal_hub_clients()
         ), patch(
             "acm_switchover._execute_operation", side_effect=KeyboardInterrupt
         ), patch(
@@ -1848,7 +1859,7 @@ class TestMainGitOpsReporting:
         ), patch(
             "acm_switchover.StateManager", return_value=state
         ), patch(
-            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+            "acm_switchover._initialize_clients", return_value=self._normal_hub_clients()
         ), patch(
             "acm_switchover._execute_operation", return_value=True
         ), patch(
@@ -1876,7 +1887,7 @@ class TestMainGitOpsReporting:
         ), patch(
             "acm_switchover.StateManager", return_value=state
         ), patch(
-            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+            "acm_switchover._initialize_clients", return_value=self._normal_hub_clients()
         ), patch(
             "acm_switchover._execute_operation", return_value=False
         ), patch(
@@ -2150,7 +2161,7 @@ class TestMainGitOpsReporting:
         ), patch(
             "acm_switchover.StateManager", return_value=state
         ), patch(
-            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+            "acm_switchover._initialize_clients", return_value=self._normal_hub_clients()
         ), patch(
             "acm_switchover._execute_operation", return_value=True
         ), patch(
@@ -2165,6 +2176,80 @@ class TestMainGitOpsReporting:
 
 @pytest.mark.unit
 class TestPrepareRuntime:
+    @pytest.mark.parametrize(
+        ("failing_role", "expected_message"),
+        [
+            (
+                "primary",
+                "Unable to verify the primary hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover.",
+            ),
+            (
+                "secondary",
+                "Unable to verify the secondary hub physical identity from the live kube-system Namespace UID. "
+                "Refusing the normal two-hub switchover.",
+            ),
+        ],
+    )
+    def test_prepare_runtime_sanitizes_normal_two_hub_constructor_failure(
+        self,
+        failing_role,
+        expected_message,
+        caplog,
+        capsys,
+    ):
+        """The CLI failure path exposes only the role-specific refusal."""
+        context = f"{failing_role}-context-sentinel"
+        kubeconfig_path = "/private/kubeconfig-path-sentinel"
+        token = "token-like-sentinel"
+        credential = "credential-sentinel"
+        raw_error = f"raw-config-exception-sentinel {kubeconfig_path} {token} {credential} {context}"
+        args = SimpleNamespace(
+            primary_context="primary-context-sentinel",
+            secondary_context="secondary-context-sentinel",
+            dry_run=True,
+            reset_state=False,
+            argocd_resume_only=False,
+            decommission=False,
+            restore_only=False,
+        )
+        logger = logging.getLogger(f"task2.prepare-runtime.{failing_role}")
+        snapshot = {"state": "before-dry-run"}
+        state = Mock()
+        state.capture_state_snapshot.return_value = snapshot
+        primary_client = Mock(name="primary-client")
+        kube_client = Mock(
+            side_effect=(
+                RuntimeError(raw_error) if failing_role == "primary" else [primary_client, RuntimeError(raw_error)]
+            )
+        )
+
+        with patch("acm_switchover.StateManager", return_value=state), patch(
+            "acm_switchover.KubeClient", kube_client
+        ), caplog.at_level(logging.ERROR, logger=logger.name):
+            with pytest.raises(SystemExit) as exc_info:
+                _prepare_runtime(args, logger, "state.json")
+
+        assert exc_info.value.code == EXIT_FAILURE
+        stdout, stderr = capsys.readouterr()
+        output = f"{caplog.text}{stdout}{stderr}"
+        assert expected_message in output
+        for sentinel in ("raw-config-exception-sentinel", context, kubeconfig_path, token, credential):
+            assert sentinel not in output
+        records = [record for record in caplog.records if record.name == logger.name]
+        assert [record.getMessage() for record in records] == [expected_message]
+        assert all(record.exc_info is None for record in records)
+        state.restore_state_snapshot.assert_called_once_with(snapshot)
+        if failing_role == "primary":
+            assert kube_client.call_args_list == [
+                (("primary-context-sentinel",), {"dry_run": True, "log_config_errors": False}),
+            ]
+        else:
+            assert kube_client.call_args_list == [
+                (("primary-context-sentinel",), {"dry_run": True, "log_config_errors": False}),
+                (("secondary-context-sentinel",), {"dry_run": True, "log_config_errors": False}),
+            ]
+
     def test_prepare_runtime_binds_contexts_and_returns_runtime_objects(self):
         args = TestMainGitOpsReporting._base_args()
         logger = Mock()
@@ -2284,6 +2369,181 @@ class TestBindRuntimeHubIdentities:
             allow_legacy_backfill=False,
             persist=False,
         )
+
+    def test_restore_only_identity_binding_reads_secondary_and_dispatches(self):
+        args = TestMainGitOpsReporting._base_args()
+        args.restore_only = True
+        state = Mock()
+        secondary = Mock()
+        secondary.get_cluster_identity.return_value = {"context": "secondary", "cluster_uid": "uid-secondary"}
+        execute_operation = Mock(return_value=True)
+        reporter = Mock()
+        hooks = cli_outcomes.CliOperationHooks(
+            bind_runtime_hub_identities=_bind_runtime_hub_identities,
+            run_argocd_resume_only=Mock(),
+            execute_operation=execute_operation,
+            write_python_report=Mock(),
+            gitops_reporter_factory=lambda: reporter,
+        )
+
+        exit_code = cli_outcomes.run_operation_mode(
+            args,
+            state,
+            None,
+            secondary,
+            Mock(),
+            should_bind_state=True,
+            should_record_state_errors=True,
+            hooks=hooks,
+            exit_success=EXIT_SUCCESS,
+            exit_failure=EXIT_FAILURE,
+            exit_interrupt=EXIT_INTERRUPT,
+        )
+
+        assert exit_code == EXIT_SUCCESS
+        secondary.get_cluster_identity.assert_called_once_with()
+        state.ensure_hub_identities.assert_called_once_with(
+            {"secondary": {"context": "secondary", "cluster_uid": "uid-secondary"}},
+            allow_legacy_backfill=False,
+            persist=True,
+        )
+        execute_operation.assert_called_once_with(args, state, None, secondary, ANY)
+
+    def test_bind_runtime_hub_identities_rejects_same_uid_before_state(self):
+        args = TestMainGitOpsReporting._base_args()
+        state = Mock()
+        identities = {
+            "primary": {"context": "primary", "cluster_uid": "shared-uid"},
+            "secondary": {"context": "secondary", "cluster_uid": "shared-uid"},
+        }
+
+        with patch("acm_switchover._collect_hub_identities", return_value=identities):
+            with pytest.raises(StateIdentityMismatch) as exc_info:
+                _bind_runtime_hub_identities(args, state, Mock(), Mock())
+
+        assert str(exc_info.value) == (
+            "Primary and secondary hubs resolve to the same physical Kubernetes cluster. "
+            "Refusing the normal two-hub switchover."
+        )
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__suppress_context__ is True
+        state.ensure_hub_identities.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "identities",
+        [
+            {},
+            {"primary": {"context": "primary", "cluster_uid": "uid-primary"}},
+            {
+                "primary": {"context": "primary", "cluster_uid": "uid-primary"},
+                "secondary": {"context": "secondary", "cluster_uid": "   "},
+            },
+        ],
+    )
+    def test_bind_runtime_hub_identities_rejects_malformed_evidence_before_state(self, identities):
+        args = TestMainGitOpsReporting._base_args()
+        state = Mock()
+
+        with patch("acm_switchover._collect_hub_identities", return_value=identities):
+            with pytest.raises(StateIdentityMismatch):
+                _bind_runtime_hub_identities(args, state, Mock(), Mock())
+
+        state.ensure_hub_identities.assert_not_called()
+
+    def test_identity_refusal_does_not_persist_or_complete_phase(self, tmp_path):
+        """Equal live UIDs leave durable identity and phase state exactly untouched."""
+        args = TestMainGitOpsReporting._base_args()
+        state = StateManager(str(tmp_path / "state.json"))
+        before = state.capture_state_snapshot()
+        identities = {
+            "primary": {"context": "primary", "cluster_uid": "shared-uid"},
+            "secondary": {"context": "secondary", "cluster_uid": "shared-uid"},
+        }
+
+        with patch("acm_switchover._collect_hub_identities", return_value=identities):
+            with pytest.raises(StateIdentityMismatch):
+                _bind_runtime_hub_identities(args, state, Mock(), Mock())
+
+        after = state.capture_state_snapshot()
+        assert after == before
+        assert after.get("hub_identities") == {}
+        assert after.get("completed_steps", []) == []
+
+    def test_identity_refusal_report_artifact_omits_sensitive_inputs(self, tmp_path):
+        """The emitted SSA-01 refusal report must contain only sanitized diagnostics."""
+        sentinels = (
+            "ssa01-secret-kubeconfig-KP71",
+            "ssa01-secret-token-TK72",
+            "ssa01-secret-api-body-BD73",
+            "ssa01-secret-raw-exception-EX74",
+            "ssa01-secret-uid-UID75",
+            "ssa01-secret-context-CTX76",
+            "ssa01-secret-credential-CR77",
+        )
+        refusal = (
+            "Primary and secondary hubs resolve to the same physical Kubernetes cluster. "
+            "Refusing the normal two-hub switchover."
+        )
+        args = TestMainGitOpsReporting._base_args()
+        args.primary_context = "|".join(sentinels)
+        args.secondary_context = "secondary-hub"
+        args.primary_kubeconfig = "ssa01-secret-kubeconfig-KP71"
+        args.secondary_kubeconfig = "secondary.kubeconfig"
+        args.method = "passive"
+        args.old_hub_action = "secondary"
+        args.restore_only = False
+        args.decommission = False
+        args.force = False
+        args.dry_run = False
+        args.report_dir = str(tmp_path / "artifacts")
+        state = StateManager(str(tmp_path / "state.json"))
+        before = state.capture_state_snapshot()
+        primary = Mock()
+        secondary = Mock()
+        primary.get_cluster_identity.return_value = {
+            "context": args.primary_context,
+            "cluster_uid": "ssa01-secret-uid-UID75",
+        }
+        secondary.get_cluster_identity.return_value = {
+            "context": args.secondary_context,
+            "cluster_uid": "ssa01-secret-uid-UID75",
+        }
+        execute_operation = Mock(return_value=True)
+        logger = Mock()
+        reporter = Mock()
+        hooks = cli_outcomes.CliOperationHooks(
+            bind_runtime_hub_identities=_bind_runtime_hub_identities,
+            run_argocd_resume_only=Mock(),
+            execute_operation=execute_operation,
+            write_python_report=cli_outcomes.write_python_report,
+            gitops_reporter_factory=lambda: reporter,
+        )
+
+        exit_code = cli_outcomes.run_operation_mode(
+            args,
+            state,
+            primary,
+            secondary,
+            logger,
+            should_bind_state=True,
+            should_record_state_errors=True,
+            hooks=hooks,
+            exit_success=EXIT_SUCCESS,
+            exit_failure=EXIT_FAILURE,
+            exit_interrupt=EXIT_INTERRUPT,
+        )
+
+        report_path = Path(args.report_dir) / "switchover-report.json"
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        serialized = json.dumps(report, sort_keys=True)
+        assert exit_code == EXIT_FAILURE
+        assert report["status"] == "fail"
+        leaked = [sentinel for sentinel in sentinels if sentinel in serialized]
+        assert leaked == []
+        assert refusal in serialized
+        execute_operation.assert_not_called()
+        assert state.capture_state_snapshot() == before
+        logger.error.assert_any_call("\n✗ %s", ANY)
 
 
 @pytest.mark.unit

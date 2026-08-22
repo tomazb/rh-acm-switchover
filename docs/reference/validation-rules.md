@@ -342,11 +342,19 @@ except ValidationError as e:
 
 ### Cross-Argument Rules
 
+- Distinct normal hubs: a normal two-hub invocation rejects identical primary
+  and secondary context names. Before mutation it must prove they are not the
+  same physical Kubernetes cluster by reading fresh live `kube-system`
+  Namespace UIDs for both roles. It fails closed if they are equal, missing,
+  malformed, or unreadable. This is additive to per-role resume identity
+  binding; force and checkpoint reset controls do not bypass it.
 - Secondary context requirement: `--secondary-context` is required for switchover operations unless `--decommission` or `--setup` is set.
 - Non-interactive constraint: `--non-interactive` can only be used together with `--decommission`.
 - Managed cluster threshold: `--min-managed-clusters` must be a non-negative integer. Omitted values derive the expected count from preflight; restore-only defaults to at least one restored non-local ManagedCluster because no primary inventory exists. Explicit `0` is the empty-target opt-out.
 - Argo CD flags: `--argocd-resume-only` requires `--secondary-context` and cannot be combined with `--validate-only`, `--decommission`, or `--setup`. `--argocd-manage` is allowed with `--validate-only` but has no effect and emits a warning.
 - Setup RBAC extension: `--include-decommission` is only valid during `--setup`, and only with `--role operator` or `--role both`.
+- Scope exclusion: restore-only needs only the secondary hub and standalone
+  decommission remains outside the normal two-hub distinctness predicate.
 
 ### Utilities
 

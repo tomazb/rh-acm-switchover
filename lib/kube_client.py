@@ -209,6 +209,7 @@ class KubeClient:
         dry_run: bool = False,
         request_timeout: int = 30,
         disable_hostname_verification: bool = False,
+        log_config_errors: bool = True,
     ) -> None:
         """
         Initialize Kubernetes client for specific context.
@@ -218,6 +219,7 @@ class KubeClient:
             dry_run: If True, don't make actual changes
             request_timeout: API request timeout in seconds
             disable_hostname_verification: If True, skip TLS hostname verification (not recommended)
+            log_config_errors: If True, log kubeconfig configuration failures before re-raising
         """
         self.context = context
         self.dry_run = dry_run
@@ -228,11 +230,12 @@ class KubeClient:
         try:
             api_client = config.new_client_from_config(context=context, persist_config=False)
         except ConfigException as exc:
-            logger.error(
-                "Failed to load kubeconfig for context %s: %s",
-                context or "default",
-                exc,
-            )
+            if log_config_errors:
+                logger.error(
+                    "Failed to load kubeconfig for context %s: %s",
+                    context or "default",
+                    exc,
+                )
             raise
 
         # Configure only this per-context ApiClient instance.
@@ -325,9 +328,15 @@ class KubeClient:
         """
         return self.get_namespace(name) is not None
 
+    @retry_api_call_advisory
+    def _read_cluster_identity_namespace(self) -> Dict:
+        """Read kube-system identity evidence without generic API-error logging."""
+        namespace = self.core_v1.read_namespace("kube-system", **self._request_timeout_kwargs())
+        return namespace.to_dict()
+
     def get_cluster_identity(self) -> Dict[str, Optional[str]]:
         """Return a stable live identity for the connected cluster."""
-        namespace = self.get_namespace("kube-system")
+        namespace = self._read_cluster_identity_namespace()
         cluster_uid = ((namespace or {}).get("metadata") or {}).get("uid")
         if not cluster_uid:
             raise RuntimeError("Unable to determine cluster identity: kube-system namespace UID is unavailable")

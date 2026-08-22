@@ -21,7 +21,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
-from typing import Any, Optional, Tuple
+from typing import Optional, Tuple
 
 from lib import (
     KubeClient,
@@ -58,7 +58,8 @@ from lib.exceptions import StateLoadError, StateLockError, SwitchoverError
 from lib.gitops_detector import GitOpsCollector
 from lib.report_artifacts import validate_report_artifact_directory
 from lib.run_record import HubFacts, RunRecord
-from lib.validation import InputValidator, ValidationError
+from lib.utils import StateIdentityMismatch
+from lib.validation import InputValidator, ValidationError, validate_distinct_hub_identities
 from modules import (
     Decommission,
     Finalization,
@@ -67,6 +68,12 @@ from modules import (
     SecondaryActivation,
 )
 from modules.preflight_coordinator import PreflightValidator
+
+
+class _PhysicalHubIdentityRefusal(StateIdentityMismatch):
+    """Mark a sanitized SSA-01 refusal for the outcome report owner."""
+
+    sanitize_refusal_report = True
 
 
 def _missing_parse_required_args(args: argparse.Namespace) -> list[str]:
@@ -984,9 +991,22 @@ def _write_python_report(
     state: Optional[StateManager],
     status: str,
     logger: logging.Logger,
+    *,
+    refusal_message: Optional[str] = None,
+    redact_identity_inputs: bool = False,
 ) -> None:
     """Write a Python CLI report artifact when --report-dir is set."""
-    cli_outcomes.write_python_report(args, state, status, logger)
+    if refusal_message is None and not redact_identity_inputs:
+        cli_outcomes.write_python_report(args, state, status, logger)
+        return
+    cli_outcomes.write_python_report(
+        args,
+        state,
+        status,
+        logger,
+        refusal_message=refusal_message,
+        redact_identity_inputs=redact_identity_inputs,
+    )
 
 
 def _build_cli_operation_hooks() -> cli_outcomes.CliOperationHooks:
@@ -1153,8 +1173,24 @@ def _prepare_runtime(
     if should_bind_state:
         dry_run_state_guard = _bind_contexts_with_dry_run_guard(state, args)
 
+    sanitize_identity_errors = (
+        not getattr(args, "decommission", False)
+        and not getattr(args, "setup", False)
+        and not getattr(args, "restore_only", False)
+        and not getattr(args, "argocd_resume_only", False)
+        and bool(getattr(args, "primary_context", None))
+        and bool(getattr(args, "secondary_context", None))
+    )
     try:
-        primary, secondary = _initialize_clients(args, logger)
+        primary, secondary = _initialize_clients(args, logger, sanitize_identity_errors=sanitize_identity_errors)
+    except runtime_bootstrap.HubIdentityVerificationError as exc:
+        logger.error("%s", exc)
+        # H10 guard: restore dry-run state before exiting, so the rehearsal's
+        # on-disk effects (including the ensure_contexts reset) are always
+        # rolled back, even on client-init failure.
+        if dry_run_state_guard is not None:
+            state.restore_state_snapshot(dry_run_state_guard)
+        sys.exit(EXIT_FAILURE)
     except Exception as exc:
         logger.error("Failed to initialize Kubernetes clients: %s", exc)
         # H10 guard: restore dry-run state before exiting, so the rehearsal's
@@ -1191,8 +1227,15 @@ def _bind_runtime_hub_identities(
     secondary: Optional[KubeClient],
 ) -> None:
     """Validate and bind live hub identities inside the guarded main flow."""
+    try:
+        hub_identities = _collect_hub_identities(primary, secondary)
+        if not getattr(args, "restore_only", False) and primary is not None and secondary is not None:
+            validate_distinct_hub_identities(hub_identities)
+    except (runtime_bootstrap.HubIdentityVerificationError, ValidationError) as exc:
+        raise _PhysicalHubIdentityRefusal(str(exc)) from None
+
     state.ensure_hub_identities(
-        _collect_hub_identities(primary, secondary),
+        hub_identities,
         allow_legacy_backfill=getattr(args, "force", False),
         persist=not (getattr(args, "dry_run", False) or getattr(args, "validate_only", False)),
     )
@@ -1279,9 +1322,16 @@ def main():
 def _initialize_clients(
     args: argparse.Namespace,
     logger: logging.Logger,
+    *,
+    sanitize_identity_errors: bool = False,
 ) -> Tuple[Optional[KubeClient], Optional[KubeClient]]:
     """Create Kubernetes clients for provided contexts."""
-    return runtime_bootstrap.initialize_clients(args, logger, client_factory=KubeClient)
+    return runtime_bootstrap.initialize_clients(
+        args,
+        logger,
+        client_factory=KubeClient,
+        sanitize_identity_errors=sanitize_identity_errors,
+    )
 
 
 def _collect_hub_identities(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -11,10 +12,31 @@ import yaml
 
 from ansible_collections.tomazb.acm_switchover.tests.conftest import (
     _ansible_env,
+    _fail_ansible_playbook_timeout,
     _materialize_fixture_kubeconfigs,
     _merge_test_vars,
     _seed_fixture_defaults,
 )
+from ansible_collections.tomazb.acm_switchover.tests.integration.argocd_fake_api import (
+    FakeArgoCDHub,
+    write_kubeconfig,
+)
+
+
+@dataclass(frozen=True)
+class DistinctHubPlaybookRun:
+    """Captured shipped-playbook result and fake Kubernetes request evidence."""
+
+    completed: subprocess.CompletedProcess[str]
+    report: dict
+    preflight_report: dict
+    checkpoint: dict
+    checkpoint_before: bytes | None
+    checkpoint_after: bytes | None
+    primary_requests: list[dict[str, str]]
+    secondary_requests: list[dict[str, str]]
+    primary_patches: list[dict]
+    secondary_patches: list[dict]
 
 
 def _find_repo_root() -> Path:
@@ -154,6 +176,171 @@ def run_preflight_fixture(tmp_path):
         report_path = report_dir / "preflight-report.json"
         report = json.loads(report_path.read_text()) if report_path.exists() else {}
         return completed, report
+
+    return _run
+
+
+@pytest.fixture
+def run_distinct_hub_playbook(tmp_path):
+    def _run(
+        *,
+        primary_uid: str = "LIVE-PRIMARY",
+        secondary_uid: str = "LIVE-SECONDARY",
+        primary_context: str = "primary-hub",
+        secondary_context: str = "secondary-hub",
+        primary_kubeconfig_name: str = "primary.kubeconfig",
+        secondary_kubeconfig_name: str = "secondary.kubeconfig",
+        primary_identity_status: int = 200,
+        secondary_identity_status: int = 200,
+        primary_identity_body: dict | None = None,
+        secondary_identity_body: dict | None = None,
+        primary_applications: list[dict] | None = None,
+        secondary_applications: list[dict] | None = None,
+        mode: str = "execute",
+        omit_execution_mode: bool = False,
+        checkpoint_enabled: bool = True,
+        checkpoint_record: dict | None = None,
+        variables: dict | None = None,
+        native_check: bool = False,
+    ) -> DistinctHubPlaybookRun:
+        repo_root = _find_repo_root()
+        primary = FakeArgoCDHub(
+            cluster_uid=primary_uid,
+            applications=list(primary_applications or []),
+            kube_system_status=primary_identity_status,
+            kube_system_body=primary_identity_body,
+        )
+        secondary = FakeArgoCDHub(
+            cluster_uid=secondary_uid,
+            applications=list(secondary_applications or []),
+            kube_system_status=secondary_identity_status,
+            kube_system_body=secondary_identity_body,
+        )
+        try:
+            primary_kubeconfig = tmp_path / primary_kubeconfig_name
+            secondary_kubeconfig = tmp_path / secondary_kubeconfig_name
+            kubeconfig_credentials = {
+                "token": "ssa01-secret-token-TK72",
+                "username": "fixture",
+                "password": "ssa01-secret-credential-CR77",
+            }
+            write_kubeconfig(
+                primary_kubeconfig,
+                context=primary_context,
+                server=primary.url,
+                **kubeconfig_credentials,
+            )
+            write_kubeconfig(
+                secondary_kubeconfig,
+                context=secondary_context,
+                server=secondary.url,
+                **kubeconfig_credentials,
+            )
+
+            fixture_path = (
+                repo_root
+                / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/switchover"
+                / "passive_activation_success.yml"
+            )
+            vars_payload = yaml.safe_load(fixture_path.read_text(encoding="utf-8")) or {}
+            vars_payload["acm_switchover_hubs"] = {
+                "primary": {
+                    "context": primary_context,
+                    "kubeconfig": str(primary_kubeconfig),
+                },
+                "secondary": {
+                    "context": secondary_context,
+                    "kubeconfig": str(secondary_kubeconfig),
+                },
+            }
+            report_dir = tmp_path / "identity-barrier-artifacts"
+            checkpoint_path = tmp_path / "identity-barrier-checkpoint.json"
+            vars_payload["acm_switchover_execution"] = {
+                "run_id": "identity-barrier-run",
+                "report_dir": str(report_dir),
+                "checkpoint": {
+                    "enabled": checkpoint_enabled,
+                    "backend": "file",
+                    "path": str(checkpoint_path),
+                },
+            }
+            if not omit_execution_mode:
+                vars_payload["acm_switchover_execution"]["mode"] = mode
+            vars_payload["acm_switchover_collection_version"] = ""
+            if variables:
+                _merge_test_vars(vars_payload, variables)
+            if omit_execution_mode:
+                vars_payload["acm_switchover_execution"].pop("mode", None)
+            else:
+                vars_payload["acm_switchover_execution"]["mode"] = mode
+            vars_payload["acm_switchover_execution"]["report_dir"] = str(report_dir)
+            vars_payload["acm_switchover_execution"]["checkpoint"].update(
+                {
+                    "enabled": checkpoint_enabled,
+                    "backend": "file",
+                    "path": str(checkpoint_path),
+                }
+            )
+            _seed_fixture_defaults(vars_payload)
+
+            if checkpoint_record is not None:
+                checkpoint_path.write_text(
+                    json.dumps(checkpoint_record, indent=2),
+                    encoding="utf-8",
+                )
+            checkpoint_before = checkpoint_path.read_bytes() if checkpoint_path.exists() else None
+
+            vars_file = tmp_path / "identity-barrier-vars.yml"
+            vars_file.write_text(
+                yaml.safe_dump(vars_payload, sort_keys=False),
+                encoding="utf-8",
+            )
+            command = [
+                "ansible-playbook",
+                "ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml",
+                "-i",
+                "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
+                "-e",
+                f"@{vars_file}",
+            ]
+            if native_check:
+                command.append("--check")
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=repo_root,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    env=_ansible_env(repo_root, tmp_path),
+                    timeout=300,
+                )
+            except subprocess.TimeoutExpired as exc:
+                _fail_ansible_playbook_timeout(exc, 300)
+
+            report_path = report_dir / "switchover-report.json"
+            report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else {}
+            preflight_report_path = report_dir / "preflight-report.json"
+            preflight_report = (
+                json.loads(preflight_report_path.read_text(encoding="utf-8")) if preflight_report_path.exists() else {}
+            )
+            checkpoint_after = checkpoint_path.read_bytes() if checkpoint_path.exists() else None
+            checkpoint = json.loads(checkpoint_after) if checkpoint_after is not None else {}
+            return DistinctHubPlaybookRun(
+                completed=completed,
+                report=report,
+                preflight_report=preflight_report,
+                checkpoint=checkpoint,
+                checkpoint_before=checkpoint_before,
+                checkpoint_after=checkpoint_after,
+                primary_requests=primary.requests,
+                secondary_requests=secondary.requests,
+                primary_patches=list(primary.patches),
+                secondary_patches=list(secondary.patches),
+            )
+        finally:
+            primary.close()
+            secondary.close()
 
     return _run
 

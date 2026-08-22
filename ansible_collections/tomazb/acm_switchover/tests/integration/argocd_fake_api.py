@@ -63,12 +63,17 @@ class FakeArgoCDHub:
         cluster_uid: str,
         applications: list[dict],
         namespace_list_failures: dict[str, str] | None = None,
+        kube_system_status: int = 200,
+        kube_system_body: dict | None = None,
     ):
         self.cluster_uid = cluster_uid
         self._applications = {
             (item["metadata"]["namespace"], item["metadata"]["name"]): copy.deepcopy(item) for item in applications
         }
         self._namespace_list_failures = dict(namespace_list_failures or {})
+        self._kube_system_status = kube_system_status
+        self._kube_system_body = copy.deepcopy(kube_system_body)
+        self._requests: list[dict[str, str]] = []
         self.patches: list[dict] = []
         self._lock = threading.Lock()
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
@@ -78,6 +83,11 @@ class FakeArgoCDHub:
     @property
     def url(self) -> str:
         return f"http://127.0.0.1:{self._server.server_port}"
+
+    @property
+    def requests(self) -> list[dict[str, str]]:
+        with self._lock:
+            return copy.deepcopy(self._requests)
 
     def close(self) -> None:
         self._server.shutdown()
@@ -98,7 +108,28 @@ class FakeArgoCDHub:
                 sync_policy.pop("automated", None)
             app["metadata"]["resourceVersion"] = str(int(app["metadata"]["resourceVersion"]) + 1)
 
-    def _handler(self):
+    def _record_request(self, method: str, path: str) -> None:
+        with self._lock:
+            self._requests.append({"method": method, "path": path})
+
+    def _configured_kube_system_response(self, path: str) -> tuple[int, dict] | None:
+        if path != "/api/v1/namespaces/kube-system":
+            return None
+        if self._kube_system_status == 200 and self._kube_system_body is None:
+            return None
+        payload = self._kube_system_body
+        if payload is None:
+            payload = {
+                "apiVersion": "v1",
+                "kind": "Status",
+                "status": "Failure",
+                "message": "fixture kube-system identity request failed",
+                "reason": "InternalError",
+                "code": self._kube_system_status,
+            }
+        return self._kube_system_status, copy.deepcopy(payload)
+
+    def _handler(self):  # noqa: C901 - one local handler keeps the fake API stateful and auditable
         hub = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -107,6 +138,12 @@ class FakeArgoCDHub:
 
             def do_GET(self):
                 path = unquote(urlsplit(self.path).path)
+                hub._record_request("GET", path)
+                kube_system_response = hub._configured_kube_system_response(path)
+                if kube_system_response is not None:
+                    status, payload = kube_system_response
+                    self._write_json(payload, status=status)
+                    return
                 parts = path.strip("/").split("/")
                 if (
                     len(parts) == 6
@@ -132,6 +169,7 @@ class FakeArgoCDHub:
 
             def do_PATCH(self):
                 path = unquote(urlsplit(self.path).path)
+                hub._record_request("PATCH", path)
                 parts = path.strip("/").split("/")
                 if (
                     len(parts) == 7
@@ -171,6 +209,26 @@ class FakeArgoCDHub:
                     )
                     payload = copy.deepcopy(current)
                 self._write_json(payload)
+
+            def do_POST(self):
+                self._unsupported_write("POST")
+
+            def do_PUT(self):
+                self._unsupported_write("PUT")
+
+            def do_DELETE(self):
+                self._unsupported_write("DELETE")
+
+            def _unsupported_write(self, method: str) -> None:
+                path = unquote(urlsplit(self.path).path)
+                hub._record_request(method, path)
+                length = int(self.headers.get("Content-Length", "0"))
+                self.rfile.read(length)
+                self._status(
+                    405,
+                    message=f"fixture does not implement {method} for this path",
+                    reason="MethodNotAllowed",
+                )
 
             def _get_payload(self, path: str):
                 static = {
@@ -352,7 +410,18 @@ class FakeArgoCDHub:
         return Handler
 
 
-def write_kubeconfig(path: Path, *, context: str, server: str) -> None:
+def write_kubeconfig(
+    path: Path,
+    *,
+    context: str,
+    server: str,
+    token: str | None = None,
+    username: str = "fixture",
+    password: str = "fixture",
+) -> None:
+    user = {"username": username, "password": password}
+    if token is not None:
+        user["token"] = token
     path.write_text(
         yaml.safe_dump(
             {
@@ -380,10 +449,7 @@ def write_kubeconfig(path: Path, *, context: str, server: str) -> None:
                 "users": [
                     {
                         "name": f"{context}-user",
-                        "user": {
-                            "username": "fixture",
-                            "password": "fixture",
-                        },
+                        "user": user,
                     }
                 ],
             },

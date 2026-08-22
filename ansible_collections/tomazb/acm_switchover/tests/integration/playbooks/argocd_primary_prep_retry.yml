@@ -4,6 +4,18 @@
   connection: local
   gather_facts: false
   tasks:
+    - name: Establish trusted hub identity before primary-prep retry exercise
+      tomazb.acm_switchover.checkpoint_phase:
+        identity_barrier: true
+        phase: preflight
+        status: enter
+        checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+        hubs: "{{ acm_switchover_hubs | default({}) }}"
+        operation: "{{ acm_switchover_operation | default({}) }}"
+        execution: "{{ acm_switchover_execution | default({}) }}"
+        test_overrides: "{{ acm_switchover_test_overrides | default({}) }}"
+        collection_version: "{{ acm_switchover_collection_version | default('') }}"
+
     - name: Run primary-prep role
       ansible.builtin.include_role:
         name: tomazb.acm_switchover.primary_prep

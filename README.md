@@ -32,6 +32,16 @@ Automated, idempotent tool for switching over Red Hat Advanced Cluster Managemen
 
 ---
 
+## Current normal two-hub safety
+
+A normal two-hub switchover rejects identical context names and fails closed
+when the hubs resolve to the same physical Kubernetes cluster. Before any
+mutation-capable phase, each form factor reads the live `kube-system` Namespace
+UID for both hubs and requires distinct non-empty values. Restore-only remains
+secondary-only, and standalone decommission remains outside this two-hub guard.
+
+---
+
 ## ✅ ArgoCD Support Is Production-Ready
 
 ArgoCD integration is fully available and stable in the switchover workflow.
@@ -369,6 +379,10 @@ This enables:
 
 ## Safety Features
 
+- **Distinct physical hubs**: a normal two-hub run refuses identical contexts,
+  equal live `kube-system` Namespace UIDs, or unreadable live UID evidence.
+  Restore-only remains secondary-only and standalone decommission is outside
+  this two-hub guard.
 - **ClusterDeployment Protection**: Mandatory check for `preserveOnDelete=true` prevents accidental cluster destruction
 - **Backup State Verification**: Ensures no backups in progress during switchover
 - **Progressive Validation**: Validates at each step before proceeding

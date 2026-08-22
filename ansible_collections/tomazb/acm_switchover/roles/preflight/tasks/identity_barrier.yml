@@ -1,0 +1,39 @@
+---
+- name: Initialize preflight result accumulator
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: []
+    acm_switchover_preflight_summary:
+      passed: true
+      critical_failures: 0
+      warning_failures: 0
+
+- name: Validate controller-side inputs
+  ansible.builtin.include_tasks: validate_inputs.yml
+
+- name: Persist report and summary facts for invalid controller-side input
+  ansible.builtin.include_tasks: write_report.yml
+  when: not acm_switchover_preflight_summary.passed
+
+- name: Stop on invalid controller-side input
+  ansible.builtin.fail:
+    msg: >-
+      Preflight failed with {{ acm_switchover_preflight_summary.critical_failures }} critical finding(s).
+      See the structured preflight report artifact for details.
+  when: not acm_switchover_preflight_summary.passed
+
+- name: Enter checkpointed phase
+  tomazb.acm_switchover.checkpoint_phase:
+    identity_barrier: true
+    phase: preflight
+    status: enter
+    checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+    hubs: "{{ acm_switchover_hubs | default({}) }}"
+    operation: "{{ acm_switchover_operation | default({}) }}"
+    execution: "{{ acm_switchover_execution | default({}) }}"
+    test_overrides: "{{ acm_switchover_test_overrides | default({}) }}"
+    collection_version: "{{ acm_switchover_collection_version | default('') }}"
+  register: _checkpoint_enter
+
+- name: Publish barrier hub identities for report compatibility
+  ansible.builtin.set_fact:
+    acm_switchover_hub_identities: "{{ _checkpoint_enter.hub_identities | default({}) }}"

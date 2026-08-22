@@ -10,6 +10,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from kubernetes.client.rest import ApiException
+from kubernetes.config.config_exception import ConfigException
+from tenacity import wait_none
 
 from lib.kube_client import KubeClient, api_call, is_retryable_error
 
@@ -312,6 +314,60 @@ class TestKubeClient:
 
         assert result == {"context": "test-context", "cluster_uid": "cluster-uid-123"}
         mock_k8s_apis["core_api"].read_namespace.assert_called_with("kube-system", _request_timeout=30)
+
+    def test_cluster_identity_non_retryable_failure_does_not_log_sentinels(
+        self, kube_client, mock_k8s_apis, monkeypatch, caplog
+    ):
+        """A refusal must not emit an API response carrying identity-sensitive values."""
+        failure = ApiException(status=403, reason="ssa01-secret-raw-exception-EX74")
+        failure.body = (
+            "ssa01-secret-api-body-BD73 /api/v1/namespaces/kube-system ssa01-secret-token-TK72 "
+            "ssa01-secret-uid-UID75 ssa01-secret-credential-CR77"
+        )
+        mock_k8s_apis["core_api"].read_namespace.side_effect = failure
+
+        monkeypatch.setattr(KubeClient._read_cluster_identity_namespace.retry, "wait", wait_none())
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            with pytest.raises(ApiException):
+                kube_client.get_cluster_identity()
+
+        assert mock_k8s_apis["core_api"].read_namespace.call_count == 1
+        for sentinel in (
+            "ssa01-secret-raw-exception-EX74",
+            "ssa01-secret-api-body-BD73",
+            "/api/v1/namespaces/kube-system",
+            "ssa01-secret-token-TK72",
+            "ssa01-secret-uid-UID75",
+            "ssa01-secret-credential-CR77",
+        ):
+            assert sentinel not in caplog.text
+
+    def test_cluster_identity_retry_failure_does_not_log_sentinels(
+        self, kube_client, mock_k8s_apis, monkeypatch, caplog
+    ):
+        """Retryable identity reads retain bounded retries without raw diagnostics."""
+        failure = ApiException(status=503, reason="ssa01-secret-raw-exception-EX74")
+        failure.body = (
+            "ssa01-secret-api-body-BD73 /api/v1/namespaces/kube-system ssa01-secret-token-TK72 "
+            "ssa01-secret-uid-UID75 ssa01-secret-credential-CR77"
+        )
+        mock_k8s_apis["core_api"].read_namespace.side_effect = failure
+
+        monkeypatch.setattr(KubeClient._read_cluster_identity_namespace.retry, "wait", wait_none())
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            with pytest.raises(ApiException):
+                kube_client.get_cluster_identity()
+
+        assert mock_k8s_apis["core_api"].read_namespace.call_count == 5
+        for sentinel in (
+            "ssa01-secret-raw-exception-EX74",
+            "ssa01-secret-api-body-BD73",
+            "/api/v1/namespaces/kube-system",
+            "ssa01-secret-token-TK72",
+            "ssa01-secret-uid-UID75",
+            "ssa01-secret-credential-CR77",
+        ):
+            assert sentinel not in caplog.text
 
     def test_get_secret(self, kube_client, mock_k8s_apis):
         """Test getting a secret successfully."""
@@ -893,6 +949,39 @@ class TestMutatorIdempotency:
 @pytest.mark.unit
 class TestKubeClientInitialization:
     """Test cases for KubeClient initialization."""
+
+    def test_init_logs_configuration_exception_by_default(self, caplog):
+        """Unrelated callers retain the established configuration diagnostic."""
+        context = "unrelated-context-sentinel"
+        raw_error = "raw-config-exception-sentinel"
+
+        with patch(
+            "lib.kube_client.config.new_client_from_config",
+            side_effect=ConfigException(raw_error),
+        ), caplog.at_level("ERROR", logger="acm_switchover"):
+            with pytest.raises(ConfigException):
+                KubeClient(context=context)
+
+        assert "Failed to load kubeconfig for context unrelated-context-sentinel" in caplog.text
+        assert raw_error in caplog.text
+
+    def test_init_can_suppress_configuration_exception_diagnostics_for_identity_checks(self, caplog):
+        """The SSA-01 constructor path must not emit raw configuration details."""
+        context = "identity-context-sentinel"
+        kubeconfig_path = "/private/identity-kubeconfig-sentinel"
+        token = "identity-token-sentinel"
+        credential = "identity-credential-sentinel"
+        raw_error = f"raw-config-exception-sentinel {kubeconfig_path} {token} {credential}"
+
+        with patch(
+            "lib.kube_client.config.new_client_from_config",
+            side_effect=ConfigException(raw_error),
+        ), caplog.at_level("ERROR", logger="acm_switchover"):
+            with pytest.raises(ConfigException):
+                KubeClient(context=context, log_config_errors=False)
+
+        for sentinel in ("raw-config-exception-sentinel", context, kubeconfig_path, token, credential):
+            assert sentinel not in caplog.text
 
     @patch("lib.kube_client.config.load_kube_config")
     @patch("lib.kube_client.config.new_client_from_config")

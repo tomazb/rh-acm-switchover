@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Pin nested identity-barrier `kubernetes.core.k8s_info` execution to the
+  controller Python interpreter on ansible-core 2.16 local connections, so
+  live `kube-system` UID reads reach the API instead of failing against a
+  system interpreter that lacks the `kubernetes` package (#267 / #270).
+
 ### Removed
 
 - Removed the deprecated `scripts/argocd-manage.sh` and its `.state/argocd-pause-state.json`
@@ -31,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Normal two-hub switchovers now fail closed when the primary and secondary
+  contexts are identical or resolve to the same live `kube-system` Namespace
+  UID. The distinct physical-hub guard runs before a mutation-capable phase in
+  both supported form factors; restore-only and standalone decommission flows
+  are unchanged.
 - Recorded that Issue #188 satisfied the Phase 9B live-exit gate. Current-status docs no longer say that
   gate remains blocked. Fake API tests and Phase 9B artifacts remain non-certification; Phase 9C stays
   blocked.

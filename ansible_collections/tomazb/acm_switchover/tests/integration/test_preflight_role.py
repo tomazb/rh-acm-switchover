@@ -294,10 +294,16 @@ def test_restore_only_rbac_with_secondary_only_hub_reports_secondary_validation(
     assert results_by_id["preflight-rbac-secondary"]["status"] == "fail"
 
 
-def test_preflight_fixture_without_execution_block_uses_defaults(run_preflight_fixture):
+def test_preflight_fixture_without_execution_block_defaults_to_execute_identity_reads(run_preflight_fixture):
     completed, report = run_preflight_fixture("missing_execution_block.yml")
-    assert completed.returncode == 0
-    assert report["status"] == "pass"
+    output = completed.stdout + completed.stderr
+
+    assert completed.returncode != 0
+    assert (
+        "Unable to verify the primary hub physical identity from the live kube-system Namespace UID. "
+        "Refusing the normal two-hub switchover."
+    ) in output
+    assert report == {}
 
 
 def test_preflight_invalid_report_dir_fails_without_writing_report(

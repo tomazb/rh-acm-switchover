@@ -13,75 +13,83 @@
       when: (acm_switchover_operation | default({})).restore_only | default(false) | bool
 
   tasks:
-    - name: Run switchover phases
+    - name: Run switchover phases with reporting
       block:
-        - name: Run preflight validation
+        - name: Establish trusted identity and checkpoint barrier
           ansible.builtin.include_role:
             name: tomazb.acm_switchover.preflight
+            tasks_from: identity_barrier
 
-        - name: Stop after preflight when mode is validate
-          ansible.builtin.meta: end_play
-          when: acm_switchover_execution.mode | default('') == 'validate'
+        - name: Run post-barrier switchover phases
+          block:
+            - name: Run remaining preflight validation
+              ansible.builtin.include_role:
+                name: tomazb.acm_switchover.preflight
+                tasks_from: post_identity
 
-        - name: Run primary prep
-          ansible.builtin.include_role:
-            name: tomazb.acm_switchover.primary_prep
+            - name: Stop after preflight when mode is validate
+              ansible.builtin.meta: end_play
+              when: acm_switchover_execution.mode | default('') == 'validate'
 
-        - name: Run activation
-          ansible.builtin.include_role:
-            name: tomazb.acm_switchover.activation
+            - name: Run primary prep
+              ansible.builtin.include_role:
+                name: tomazb.acm_switchover.primary_prep
 
-        - name: Run post activation verification
-          ansible.builtin.include_role:
-            name: tomazb.acm_switchover.post_activation
+            - name: Run activation
+              ansible.builtin.include_role:
+                name: tomazb.acm_switchover.activation
 
-        - name: Run finalization
-          ansible.builtin.include_role:
-            name: tomazb.acm_switchover.finalization
+            - name: Run post activation verification
+              ansible.builtin.include_role:
+                name: tomazb.acm_switchover.post_activation
 
-      rescue:
-        - name: Attempt Argo CD resume on secondary hub after failure
-          ansible.builtin.include_role:
-            name: tomazb.acm_switchover.argocd_manage
-          vars:
-            acm_switchover_argocd_mode_override: resume
-            _argocd_discover_hub: secondary
-          when:
-            - acm_switchover_features.argocd.manage | default(false)
-            - acm_switchover_features.argocd.resume_on_failure | default(false)
-          ignore_errors: true  # noqa: ignore-errors
+            - name: Run finalization
+              ansible.builtin.include_role:
+                name: tomazb.acm_switchover.finalization
 
-        - name: Attempt Argo CD resume on primary hub after failure
-          ansible.builtin.include_role:
-            name: tomazb.acm_switchover.argocd_manage
-          vars:
-            acm_switchover_argocd_mode_override: resume
-            _argocd_discover_hub: primary
-          when:
-            - acm_switchover_features.argocd.manage | default(false)
-            - acm_switchover_features.argocd.resume_on_failure | default(false)
-            - acm_switchover_hubs.primary is defined
-            - (acm_switchover_hubs.primary.kubeconfig | default('')) | length > 0
-            - (acm_switchover_hubs.primary.context | default('')) | length > 0
-          ignore_errors: true  # noqa: ignore-errors
+          rescue:
+            - name: Attempt Argo CD resume on secondary hub after failure
+              ansible.builtin.include_role:
+                name: tomazb.acm_switchover.argocd_manage
+              vars:
+                acm_switchover_argocd_mode_override: resume
+                _argocd_discover_hub: secondary
+              when:
+                - acm_switchover_features.argocd.manage | default(false)
+                - acm_switchover_features.argocd.resume_on_failure | default(false)
+              ignore_errors: true  # noqa: ignore-errors
 
-        - name: Reset primary prep checkpoint after Argo CD resume on failure
-          tomazb.acm_switchover.checkpoint_phase:
-            phase: primary_prep
-            checkpoint: "{{ acm_switchover_execution.checkpoint | combine({'reset_from': 'primary_prep'}) }}"
-            status: reset
-            operational_data:
-              argocd_run_id: "{{ acm_switchover_argocd.run_id | default('') }}"
-              argocd_discovery_namespaces: "{{ acm_switchover_argocd_discovery_namespaces | default({}) }}"
-          when:
-            - acm_switchover_features.argocd.manage | default(false)
-            - acm_switchover_features.argocd.resume_on_failure | default(false)
-            - acm_switchover_execution.checkpoint.enabled | default(false)
-          ignore_errors: true  # noqa: ignore-errors
+            - name: Attempt Argo CD resume on primary hub after failure
+              ansible.builtin.include_role:
+                name: tomazb.acm_switchover.argocd_manage
+              vars:
+                acm_switchover_argocd_mode_override: resume
+                _argocd_discover_hub: primary
+              when:
+                - acm_switchover_features.argocd.manage | default(false)
+                - acm_switchover_features.argocd.resume_on_failure | default(false)
+                - acm_switchover_hubs.primary is defined
+                - (acm_switchover_hubs.primary.kubeconfig | default('')) | length > 0
+                - (acm_switchover_hubs.primary.context | default('')) | length > 0
+              ignore_errors: true  # noqa: ignore-errors
 
-        - name: Re-raise original switchover failure
-          ansible.builtin.fail:
-            msg: "{{ ansible_failed_result.msg | default('Switchover failed') }}"
+            - name: Reset primary prep checkpoint after Argo CD resume on failure
+              tomazb.acm_switchover.checkpoint_phase:
+                phase: primary_prep
+                checkpoint: "{{ acm_switchover_execution.checkpoint | combine({'reset_from': 'primary_prep'}) }}"
+                status: reset
+                operational_data:
+                  argocd_run_id: "{{ acm_switchover_argocd.run_id | default('') }}"
+                  argocd_discovery_namespaces: "{{ acm_switchover_argocd_discovery_namespaces | default({}) }}"
+              when:
+                - acm_switchover_features.argocd.manage | default(false)
+                - acm_switchover_features.argocd.resume_on_failure | default(false)
+                - acm_switchover_execution.checkpoint.enabled | default(false)
+              ignore_errors: true  # noqa: ignore-errors
+
+            - name: Re-raise original switchover failure
+              ansible.builtin.fail:
+                msg: "{{ ansible_failed_result.msg | default('Switchover failed') }}"
 
       always:
         - name: Build switchover report contract

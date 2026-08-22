@@ -163,6 +163,15 @@ def build_input_validation_results(params: dict) -> list[dict]:
                 )
             )
 
+    if not restore_only and primary_context and secondary_context and primary_context == secondary_context:
+        results.append(
+            _fail_result(
+                "preflight-input-distinct-hub-contexts",
+                "Primary and secondary Kubernetes context names must differ for a normal two-hub switchover.",
+                "Select two different Kubernetes hub contexts",
+            )
+        )
+
     # --- Path validation (skip primary kubeconfig in restore-only) ---
     path_checks: list[tuple[str, str, Any, bool, Callable[[str], None]]] = [
         (

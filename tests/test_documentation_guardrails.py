@@ -283,6 +283,81 @@ def test_collection_variable_reference_documents_checkpoint_and_klusterlet_contr
     assert "scripts/discover-hub.sh" in content
 
 
+def test_ssa_01_documentation_contract_is_complete():
+    """Safety-critical SSA-01 facts must stay visible in their operator and developer owners."""
+    required_contracts = {
+        "CHANGELOG.md": ("distinct physical-hub",),
+        "README.md": ("same physical Kubernetes cluster", "kube-system", "Namespace UID"),
+        "ansible_collections/tomazb/acm_switchover/README.md": (
+            "same physical Kubernetes cluster",
+            "kube-system",
+            "Namespace UID",
+        ),
+        "docs/development/architecture.md": (
+            "_collect_hub_identities",
+            "validate_distinct_hub_identities",
+            "ensure_hub_identities",
+        ),
+        "ansible_collections/tomazb/acm_switchover/docs/architecture.md": (
+            "identity_barrier",
+            "action-local",
+            "post-barrier",
+        ),
+        "docs/operations/usage.md": ("same physical Kubernetes cluster", "fresh"),
+        "docs/reference/validation-rules.md": ("same physical Kubernetes cluster", "fails closed"),
+        "docs/ansible-collection/parity-matrix.md": ("distinct physical-hub",),
+        "docs/ansible-collection/behavior-map.md": ("distinct physical-hub",),
+        "ansible_collections/tomazb/acm_switchover/docs/coexistence.md": (
+            "distinct physical-hub",
+            "independent",
+        ),
+        "ansible_collections/tomazb/acm_switchover/docs/variable-reference.md": (
+            "acm_switchover_test_overrides.non_live_hub_identities",
+            "native",
+            "Ansible check mode",
+        ),
+        "ansible_collections/tomazb/acm_switchover/docs/cli-migration-map.md": (
+            "same physical Kubernetes cluster",
+            "restore-only",
+            "decommission",
+        ),
+        "docs/ansible-collection/scenario-catalog.md": ("distinct-physical-hub",),
+        "docs/ansible-collection/test-migration-catalog.md": (
+            "test_distinct_hub_identity_barrier.py",
+            "test_validation_parity.py",
+        ),
+        "thermos-resolution-plan.md": ("SSA-A2", "SSA-P2", "#267"),
+    }
+
+    for path, required_terms in required_contracts.items():
+        content = re.sub(r"\s+", " ", _read(path))
+        for term in required_terms:
+            assert term in content, f"{path} must document SSA-01 term {term!r}"
+
+    tracker = _read("thermos-resolution-plan.md")
+    ssa_01_section = tracker.split("#### SSA-01: Distinct Physical Hub Guard", 1)[1].split("#### SSA-02:", 1)[0]
+    for term in ("SSA-A2", "SSA-P2", "issue #267", "Implementation evidence", "same-context refusal"):
+        assert term in ssa_01_section, f"SSA-01 tracker evidence must retain {term!r}"
+
+    root_readme = _read("README.md")
+    released_hardening = root_readme.split("## Production Resilience Hardening In 1.7.10", 1)[1].split("---", 1)[0]
+    assert "distinct physical" not in released_hardening.lower()
+    assert "## Current normal two-hub safety" in root_readme
+
+    scenario_catalog = _read("docs/ansible-collection/scenario-catalog.md")
+    assert "may use the explicit non-live test override" in scenario_catalog
+    assert "otherwise the action reads live UIDs" in scenario_catalog
+
+    collection_architecture = _read("ansible_collections/tomazb/acm_switchover/docs/architecture.md")
+    for term in (
+        "Fail before Kubernetes mutation or mutation-capable recovery",
+        "Checkpoint identity handling, including disabled checkpoints",
+        "Failure after post-barrier preflight or switchover phases",
+        "Controller reporting may still write",
+    ):
+        assert term in collection_architecture
+
+
 def test_collection_artifact_schema_documents_current_checkpoint_contract():
     """Checkpoint docs must describe schema 2.0 and non-mutating validate/dry-run behavior."""
     content = _read("ansible_collections/tomazb/acm_switchover/docs/artifact-schema.md")

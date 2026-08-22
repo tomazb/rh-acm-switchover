@@ -62,3 +62,9 @@ These tests run in CI and must remain green. Add a new test or assertion wheneve
 | Passive sync validation | implemented | dual-supported | 2 | Secondary passive restore required for passive method |
 | RBAC self-validation (SelfSubjectAccessReview) | implemented | dual-supported | 2 | Collection module mirrors Python RBAC gate |
 | Structured validation results | implemented | dual-supported | 2 | Report artifact written before role failure |
+
+Normal two-hub distinct physical-hub identity is part of the existing dual-supported
+preflight contract. Both form factors reject equal context names and equal live
+`kube-system` Namespace UIDs before mutation. This records equivalent operator
+behavior only; it does not change a capability status or permit runtime
+cross-imports.

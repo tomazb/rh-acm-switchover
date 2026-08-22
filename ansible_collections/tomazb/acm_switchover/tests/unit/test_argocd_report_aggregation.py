@@ -13,14 +13,26 @@ def _load_playbook(name: str) -> list[dict]:
 
 
 def _get_report_contract(playbook: list[dict]) -> dict:
-    for play in playbook:
-        for task in play.get("tasks", []):
-            if "block" not in task:
-                continue
-            for always_task in task.get("always", []) or []:
-                sf = always_task.get("ansible.builtin.set_fact")
-                if sf and "acm_switchover_report" in sf:
-                    return sf["acm_switchover_report"]
+    if playbook[0].get("name") == "ACM Hub Switchover":
+        outer = next(
+            task for task in playbook[0].get("tasks", []) if task.get("name") == "Run switchover phases with reporting"
+        )
+        assert "rescue" not in outer
+        assert outer["block"][0].get("name") == "Establish trusted identity and checkpoint barrier"
+        assert outer["block"][1].get("name") == "Run post-barrier switchover phases"
+        assert "always" not in outer["block"][1]
+        tasks = outer.get("always", []) or []
+    else:
+        tasks = [
+            always_task
+            for task in playbook[0].get("tasks", [])
+            if "block" in task
+            for always_task in task.get("always", []) or []
+        ]
+    for always_task in tasks:
+        sf = always_task.get("ansible.builtin.set_fact")
+        if sf and "acm_switchover_report" in sf:
+            return sf["acm_switchover_report"]
     raise AssertionError("Could not locate acm_switchover_report set_fact in playbook always block")
 
 
