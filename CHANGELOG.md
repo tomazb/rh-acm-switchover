@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pause.yml`/`resume.yml` task YAML directly.
 
 ### Added
+- Phase 9 lab readiness checklist separating Tier A physical-identity readiness from Tier B ACM/OADP/GitOps known-state preparation.
 
 - Added the disabled-by-default Phase 9B lab-controller live discovery client for bounded typed read-only physical hub
   identity proof, complete pagination, freshness/provenance binding, stable distinct fingerprints, and fail-closed
