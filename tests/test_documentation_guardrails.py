@@ -2069,6 +2069,12 @@ def test_current_status_docs_do_not_claim_phase9b_live_exit_is_blocked():
     assert "Issue #188 is closed" in checklist
     assert "physical-identity only" in spec
     assert "physical-identity only" in release_readme
+    assert "certification_eligible=false" in spec
+    assert "live_certification_evidence=false" in spec
+    assert "mutation_attempted=false" in spec
+    assert "certification_eligible: false" in release_readme
+    assert "live_certification_evidence: false" in release_readme
+    assert "mutation_attempted: false" in release_readme
 
 
 OBSOLETE_CLI_PATTERNS = (
