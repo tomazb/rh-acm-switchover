@@ -33,6 +33,8 @@ CONTRIBUTING_DOC = "CONTRIBUTING.md"
 TESTING_DOC = "docs/development/testing.md"
 ARCHITECTURE_DOC = "docs/development/architecture.md"
 LAB_CONTROLLER_SPEC_DOC = "docs/development/lab-role-controller-spec.md"
+LAB_PHASE9_CHECKLIST_DOC = "docs/development/lab-phase9-readiness-checklist.md"
+RELEASE_README_DOC = "tests/release/README.md"
 CONTRIBUTOR_DOCS = (CONTRIBUTING_DOC, TESTING_DOC, ARCHITECTURE_DOC)
 
 
@@ -738,7 +740,7 @@ def test_agents_does_not_restate_status_owned_by_another_authority():
         "Phase 9B remains blocked": "phase status is owned by the GitHub issues",
         "monolithic orchestrator": "the Python CLI is a layered entrypoint",
         "Each phase handler checks": "phase eligibility is owned by the workflow layer",
-        "lab-phase9-readiness-checklist": "that document does not exist",
+        "lab-phase9-readiness-checklist": "lab readiness lives in the Phase 9 checklist and GitHub issues",
     }
     for literal, reason in forbidden.items():
         assert literal not in content, f"AGENTS.md still states {literal!r}; {reason}"
@@ -2027,6 +2029,52 @@ def test_lab_role_controller_spec_attributes_uid_binding_to_owning_authority():
         "the cluster-UID attribution sentence must cite docs/development/architecture.md, not "
         "merely mention it elsewhere in the file"
     )
+
+
+def test_current_status_docs_do_not_claim_phase9b_live_exit_is_blocked():
+    """Issue #188 closed the Phase 9B live-exit gate; current-status docs must not contradict that."""
+    stale_phrases = (
+        "the Phase 9B live exit gate remains blocked",
+        "implementation status is blocked for live exit evidence",
+        "Until an operator-authorized two-hub read-only run satisfies the Phase 9B live exit gate",
+        "Required before Issue #188 live exit evidence",
+    )
+    current_status_docs = (
+        LAB_CONTROLLER_SPEC_DOC,
+        RELEASE_README_DOC,
+        LAB_PHASE9_CHECKLIST_DOC,
+        "docs/development/release-validation-framework.md",
+    )
+    for path in current_status_docs:
+        content = _read(path)
+        for phrase in stale_phrases:
+            assert phrase not in content, f"{path} still claims {phrase!r}; Issue #188 is closed"
+
+    spec = _read(LAB_CONTROLLER_SPEC_DOC)
+    release_readme = _read(RELEASE_README_DOC)
+    checklist = _read(LAB_PHASE9_CHECKLIST_DOC)
+    assert re.search(
+        r"#188[\s\S]{0,400}satisfied the Phase 9B live exit gate",
+        spec,
+    ), f"{LAB_CONTROLLER_SPEC_DOC} must bind Issue #188 to the satisfied Phase 9B live-exit clause"
+    assert re.search(
+        r"Phase 9C logical-role[\s\S]{0,300}remain blocked",
+        spec,
+    ), f"{LAB_CONTROLLER_SPEC_DOC} must still state that Phase 9C remains blocked"
+    assert re.search(
+        r"#188[\s\S]{0,400}Phase 9B[\s\S]{0,200}live-exit evidence",
+        release_readme,
+    ), f"{RELEASE_README_DOC} must bind Issue #188 to Phase 9B live-exit evidence"
+    assert "Phase 9C remains blocked" in release_readme
+    assert "Issue #188 is closed" in checklist
+    assert "physical-identity only" in spec
+    assert "physical-identity only" in release_readme
+    assert "certification_eligible=false" in spec
+    assert "live_certification_evidence=false" in spec
+    assert "mutation_attempted=false" in spec
+    assert "certification_eligible: false" in release_readme
+    assert "live_certification_evidence: false" in release_readme
+    assert "mutation_attempted: false" in release_readme
 
 
 OBSOLETE_CLI_PATTERNS = (

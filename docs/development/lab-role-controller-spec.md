@@ -38,10 +38,12 @@ the binding passes its exact access/context objects and validated trust-anchor b
 
 Phase 9B does not authorize certification or mutation. Its artifact always sets
 `purpose=live_read_only`, `certification_eligible=false`, `live_certification_evidence=false`, and
-`mutation_attempted=false`. Deterministic fake API tests prove the contract but are not live evidence. Until an
-operator-authorized two-hub read-only run satisfies the Phase 9B live exit gate, the implementation status is blocked
-for live exit evidence. Phase 9C logical-role, known-state, readiness, profile binding, mutation authorization, and
-recovery authority remain blocked.
+`mutation_attempted=false`. Deterministic fake API tests prove the contract but are not live evidence. Issue
+[#188](https://github.com/tomazb/rh-acm-switchover/issues/188) records that an operator-authorized two-hub
+read-only run satisfied the Phase 9B live exit gate; that evidence is physical-identity only. Later slices must
+re-run fresh Phase 9B discovery after any intervening preparation mutation. Phase 9C logical-role, known-state,
+readiness, profile binding, mutation authorization, and recovery authority remain blocked; current open-slice
+status is owned by the GitHub issues.
 
 The controller described here is a design target for safely certifying a live two-hub ACM lab when scenarios
 may change which physical cluster is the logical primary.
