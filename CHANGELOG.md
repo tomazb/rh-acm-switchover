@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Pin nested identity-barrier `kubernetes.core.k8s_info` execution to the
+  controller Python interpreter on ansible-core 2.16 local connections, so
+  live `kube-system` UID reads reach the API instead of failing against a
+  system interpreter that lacks the `kubernetes` package (#267 / #270).
+
 ### Removed
 
 - Removed the deprecated `scripts/argocd-manage.sh` and its `.state/argocd-pause-state.json`

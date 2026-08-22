@@ -3,6 +3,7 @@
 
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import MagicMock, call, mock_open, patch
@@ -22,6 +23,13 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint i
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (
     validate_operation_inputs,
 )
+
+
+def _controller_module_task_vars(task_vars: dict | None = None) -> dict:
+    """Match ActionModule._task_vars_for_controller_module for auto interpreters."""
+    effective = dict(task_vars or {})
+    effective["ansible_python_interpreter"] = sys.executable
+    return effective
 
 
 def _make_checkpoint_action(task_args):
@@ -2360,6 +2368,7 @@ def test_identity_barrier_disabled_still_reads_distinct_live_uids_without_file_a
             "secondary": {"cluster_uid": "LIVE-SECONDARY"},
         },
     }
+    expected_task_vars = _controller_module_task_vars(task_vars)
     assert action._execute_module.call_args_list == [
         call(
             module_name="kubernetes.core.k8s_info",
@@ -2370,7 +2379,7 @@ def test_identity_barrier_disabled_still_reads_distinct_live_uids_without_file_a
                 "kubeconfig": "./kubeconfigs/primary",
                 "context": "primary-hub",
             },
-            task_vars=task_vars,
+            task_vars=expected_task_vars,
             tmp=None,
         ),
         call(
@@ -2382,7 +2391,7 @@ def test_identity_barrier_disabled_still_reads_distinct_live_uids_without_file_a
                 "kubeconfig": "./kubeconfigs/secondary",
                 "context": "secondary-hub",
             },
-            task_vars=task_vars,
+            task_vars=expected_task_vars,
             tmp=None,
         ),
     ]
@@ -2449,7 +2458,7 @@ def test_restore_only_identity_barrier_reads_secondary_only(tmp_path):
             "kubeconfig": "./kubeconfigs/secondary",
             "context": "secondary-hub",
         },
-        task_vars=task_vars,
+        task_vars=_controller_module_task_vars(task_vars),
         tmp=None,
     )
 
@@ -2647,6 +2656,7 @@ def test_identity_barrier_missing_mode_defaults_to_execute_and_ignores_override(
         "secondary": {"cluster_uid": "LIVE-SECONDARY"},
     }
     assert "OVERRIDE" not in json.dumps(result, sort_keys=True)
+    expected_task_vars = _controller_module_task_vars(task_vars)
     assert action._execute_module.call_args_list == [
         call(
             module_name="kubernetes.core.k8s_info",
@@ -2657,7 +2667,7 @@ def test_identity_barrier_missing_mode_defaults_to_execute_and_ignores_override(
                 "kubeconfig": "./kubeconfigs/primary",
                 "context": "primary-hub",
             },
-            task_vars=task_vars,
+            task_vars=expected_task_vars,
             tmp=None,
         ),
         call(
@@ -2669,10 +2679,38 @@ def test_identity_barrier_missing_mode_defaults_to_execute_and_ignores_override(
                 "kubeconfig": "./kubeconfigs/secondary",
                 "context": "secondary-hub",
             },
-            task_vars=task_vars,
+            task_vars=expected_task_vars,
             tmp=None,
         ),
     ]
+
+
+def test_identity_barrier_pins_controller_python_for_nested_k8s_info(tmp_path):
+    """Nested live reads must not rely on ansible-core 2.16 auto /usr/bin/python3."""
+    action = _make_checkpoint_action(_identity_barrier_args(tmp_path, enabled=False))
+    action._execute_module = MagicMock(
+        side_effect=[_namespace_result("LIVE-PRIMARY"), _namespace_result("LIVE-SECONDARY")]
+    )
+
+    result = action.run(task_vars={"ansible_python_interpreter": "auto_legacy"})
+
+    assert result.get("failed") is not True
+    for module_call in action._execute_module.call_args_list:
+        assert module_call.kwargs["task_vars"]["ansible_python_interpreter"] == sys.executable
+
+
+def test_identity_barrier_preserves_explicit_python_interpreter(tmp_path):
+    action = _make_checkpoint_action(_identity_barrier_args(tmp_path, enabled=False))
+    action._execute_module = MagicMock(
+        side_effect=[_namespace_result("LIVE-PRIMARY"), _namespace_result("LIVE-SECONDARY")]
+    )
+    explicit = "/opt/custom/bin/python"
+
+    result = action.run(task_vars={"ansible_python_interpreter": explicit})
+
+    assert result.get("failed") is not True
+    for module_call in action._execute_module.call_args_list:
+        assert module_call.kwargs["task_vars"]["ansible_python_interpreter"] == explicit
 
 
 @pytest.mark.parametrize("native_check", [False, True])

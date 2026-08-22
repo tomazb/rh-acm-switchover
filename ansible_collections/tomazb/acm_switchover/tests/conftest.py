@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import NoReturn
 
@@ -181,6 +182,11 @@ def _ansible_env(repo_root: Path, tmp_path: Path, *, extra_pythonpaths: tuple[Pa
                 os.path.expanduser("~/.ansible/collections"),
             ]
         ),
+        # Pin local-connection module execution to the controller interpreter that
+        # has collection test dependencies (kubernetes). ansible-core 2.16 auto
+        # discovery otherwise selects /usr/bin/python3 and nested k8s_info fails
+        # before any live request — breaking SSA-01 identity-barrier integration.
+        "ANSIBLE_PYTHON_INTERPRETER": sys.executable,
         "ANSIBLE_LOCAL_TEMP": str(local_tmp),
         "ANSIBLE_REMOTE_TMP": str(remote_tmp),
     }

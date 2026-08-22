@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from collections.abc import Mapping
 from datetime import datetime, timezone
 
@@ -211,6 +212,36 @@ class ActionModule(ActionBase):
             hub_identities=identity_summary,
         )
 
+    _AUTO_PYTHON_INTERPRETERS = frozenset(
+        {
+            None,
+            "",
+            "auto",
+            "auto_legacy",
+            "auto_silent",
+            "auto_legacy_silent",
+        }
+    )
+
+    def _task_vars_for_controller_module(self, task_vars: dict) -> dict:
+        """Ensure nested controller-side modules use a concrete Python interpreter.
+
+        ansible-core 2.16 local-connection auto-discovery frequently selects
+        ``/usr/bin/python3``, which commonly lacks the ``kubernetes`` package
+        installed beside ansible-core. Identity-barrier live reads then fail
+        before any API request. Prefer an explicit inventory/interpreter setting;
+        otherwise pin to the playbook controller interpreter.
+        """
+        effective = dict(task_vars or {})
+        configured = effective.get("ansible_python_interpreter")
+        if configured in self._AUTO_PYTHON_INTERPRETERS:
+            playbook_python = effective.get("ansible_playbook_python")
+            if isinstance(playbook_python, str) and playbook_python.strip():
+                effective["ansible_python_interpreter"] = playbook_python
+            else:
+                effective["ansible_python_interpreter"] = sys.executable
+        return effective
+
     def _read_live_namespace_uid(self, role: str, hub: Mapping, task_vars: dict, tmp) -> str:
         try:
             result = self._execute_module(
@@ -222,7 +253,7 @@ class ActionModule(ActionBase):
                     "kubeconfig": hub.get("kubeconfig"),
                     "context": hub.get("context"),
                 },
-                task_vars=task_vars,
+                task_vars=self._task_vars_for_controller_module(task_vars),
                 tmp=tmp,
             )
         except Exception:
