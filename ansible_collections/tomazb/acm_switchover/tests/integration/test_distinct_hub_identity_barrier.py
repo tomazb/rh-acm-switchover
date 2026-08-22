@@ -161,6 +161,26 @@ def test_same_live_cluster_rejects_spoofed_distinct_extra_vars(
     assert _write_requests(run) == []
 
 
+def test_missing_execution_mode_uses_execute_identity_freshness(
+    run_distinct_hub_playbook,
+):
+    run = run_distinct_hub_playbook(
+        primary_uid="LIVE-SAME",
+        secondary_uid="LIVE-SAME",
+        omit_execution_mode=True,
+        checkpoint_enabled=False,
+        variables=_malicious_identity_variables("OVERRIDE-A", "OVERRIDE-B"),
+    )
+    output = _visible_output(run)
+
+    assert run.completed.returncode != 0
+    assert EQUAL_UID_REFUSAL in output
+    assert len(_identity_gets(run.primary_requests)) == 1
+    assert len(_identity_gets(run.secondary_requests)) == 1
+    assert run.checkpoint_after is None
+    assert _write_requests(run) == []
+
+
 def test_same_context_refusal_report_artifact_omits_sensitive_inputs(
     run_distinct_hub_playbook,
 ):

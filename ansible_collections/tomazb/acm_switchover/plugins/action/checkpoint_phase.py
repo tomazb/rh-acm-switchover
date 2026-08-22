@@ -147,7 +147,7 @@ class ActionModule(ActionBase):
                 "msg": "Primary and secondary Kubernetes context names must differ for a normal two-hub switchover.",
             }
 
-        execution_mode = execution.get("mode", "dry_run")
+        execution_mode = execution.get("mode", "execute")
         override_configured = execution_mode in {"validate", "dry_run"} and "non_live_hub_identities" in test_overrides
         override_identities = test_overrides.get("non_live_hub_identities") if override_configured else None
         trusted_uids = {}

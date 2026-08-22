@@ -251,6 +251,15 @@ def test_collection_identity_barrier_keeps_namespace_evidence_action_local() -> 
     assert '"kubeconfig": hub.get("kubeconfig")' in read_source
     assert '"context": hub.get("context")' in read_source
 
+    validation_source = _function_source(
+        COLLECTION_ROOT / "plugins" / "module_utils" / "validation.py",
+        "validate_operation_inputs",
+    )
+    variable_reference = (COLLECTION_ROOT / "docs" / "variable-reference.md").read_text(encoding="utf-8")
+    assert 'execution.get("mode", "execute")' in validation_source
+    assert 'execution.get("mode", "execute")' in identity_source
+    assert "| `mode` | `execute`, `validate`, `dry_run` | `execute` |" in variable_reference
+
     assert "task_vars.get(" not in identity_source
     for caller_visible_evidence in (
         "acm_switchover_hub_identities",

@@ -19,6 +19,9 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.artifacts im
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
     build_operation_identity,
 )
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (
+    validate_operation_inputs,
+)
 
 
 def _make_checkpoint_action(task_args):
@@ -2612,6 +2615,92 @@ def test_non_live_override_is_used_only_for_validate_and_dry_run(tmp_path, mode)
     }
     assert not (tmp_path / "checkpoint.json").exists()
     action._execute_module.assert_not_called()
+
+
+def test_identity_barrier_missing_mode_defaults_to_execute_and_ignores_override(tmp_path):
+    args = _identity_barrier_args(tmp_path, enabled=False)
+    args["execution"] = {}
+    args["test_overrides"] = {
+        "non_live_hub_identities": {
+            "primary": {"cluster_uid": "OVERRIDE-PRIMARY"},
+            "secondary": {"cluster_uid": "OVERRIDE-SECONDARY"},
+        }
+    }
+    normalized = validate_operation_inputs(
+        operation=args["operation"],
+        features={"argocd": {"manage": False}},
+        execution=args["execution"],
+    )
+    assert normalized["restore_only"] is False
+
+    action = _make_checkpoint_action(args)
+    action._execute_module = MagicMock(
+        side_effect=[_namespace_result("LIVE-PRIMARY"), _namespace_result("LIVE-SECONDARY")]
+    )
+    task_vars: dict[str, Any] = {}
+
+    result = action.run(task_vars=task_vars)
+
+    assert result.get("failed") is not True
+    assert result["hub_identities"] == {
+        "primary": {"cluster_uid": "LIVE-PRIMARY"},
+        "secondary": {"cluster_uid": "LIVE-SECONDARY"},
+    }
+    assert "OVERRIDE" not in json.dumps(result, sort_keys=True)
+    assert action._execute_module.call_args_list == [
+        call(
+            module_name="kubernetes.core.k8s_info",
+            module_args={
+                "api_version": "v1",
+                "kind": "Namespace",
+                "name": "kube-system",
+                "kubeconfig": "./kubeconfigs/primary",
+                "context": "primary-hub",
+            },
+            task_vars=task_vars,
+            tmp=None,
+        ),
+        call(
+            module_name="kubernetes.core.k8s_info",
+            module_args={
+                "api_version": "v1",
+                "kind": "Namespace",
+                "name": "kube-system",
+                "kubeconfig": "./kubeconfigs/secondary",
+                "context": "secondary-hub",
+            },
+            task_vars=task_vars,
+            tmp=None,
+        ),
+    ]
+
+
+@pytest.mark.parametrize("native_check", [False, True])
+def test_identity_barrier_missing_mode_cannot_use_override_to_bypass_equal_live_uid(tmp_path, native_check):
+    args = _identity_barrier_args(tmp_path, enabled=True)
+    args["execution"] = {}
+    args["test_overrides"] = {
+        "non_live_hub_identities": {
+            "primary": {"cluster_uid": "OVERRIDE-A"},
+            "secondary": {"cluster_uid": "OVERRIDE-B"},
+        }
+    }
+    action = _make_checkpoint_action(args)
+    action._play_context.check_mode = native_check
+    action._execute_module = MagicMock(side_effect=[_namespace_result("LIVE-SAME"), _namespace_result("LIVE-SAME")])
+
+    result = action.run(task_vars={})
+
+    assert result == {
+        "failed": True,
+        "msg": (
+            "Primary and secondary hubs resolve to the same physical Kubernetes cluster. "
+            "Refusing the normal two-hub switchover."
+        ),
+    }
+    assert action._execute_module.call_count == 2
+    assert "OVERRIDE" not in json.dumps(result, sort_keys=True)
+    assert not (tmp_path / "checkpoint.json").exists()
 
 
 @pytest.mark.parametrize("native_check", [False, True])

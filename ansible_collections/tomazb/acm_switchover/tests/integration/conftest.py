@@ -197,6 +197,7 @@ def run_distinct_hub_playbook(tmp_path):
         primary_applications: list[dict] | None = None,
         secondary_applications: list[dict] | None = None,
         mode: str = "execute",
+        omit_execution_mode: bool = False,
         checkpoint_enabled: bool = True,
         checkpoint_record: dict | None = None,
         variables: dict | None = None,
@@ -255,7 +256,6 @@ def run_distinct_hub_playbook(tmp_path):
             report_dir = tmp_path / "identity-barrier-artifacts"
             checkpoint_path = tmp_path / "identity-barrier-checkpoint.json"
             vars_payload["acm_switchover_execution"] = {
-                "mode": mode,
                 "run_id": "identity-barrier-run",
                 "report_dir": str(report_dir),
                 "checkpoint": {
@@ -264,10 +264,15 @@ def run_distinct_hub_playbook(tmp_path):
                     "path": str(checkpoint_path),
                 },
             }
+            if not omit_execution_mode:
+                vars_payload["acm_switchover_execution"]["mode"] = mode
             vars_payload["acm_switchover_collection_version"] = ""
             if variables:
                 _merge_test_vars(vars_payload, variables)
-            vars_payload["acm_switchover_execution"]["mode"] = mode
+            if omit_execution_mode:
+                vars_payload["acm_switchover_execution"].pop("mode", None)
+            else:
+                vars_payload["acm_switchover_execution"]["mode"] = mode
             vars_payload["acm_switchover_execution"]["report_dir"] = str(report_dir)
             vars_payload["acm_switchover_execution"]["checkpoint"].update(
                 {
