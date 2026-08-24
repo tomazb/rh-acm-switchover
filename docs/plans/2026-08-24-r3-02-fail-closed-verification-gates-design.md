@@ -199,11 +199,10 @@ After the bounded loop, exactly two failure classes are exposed:
 The downstream decision must not use `result is failed`, `.failed`, or
 `resources | default([])` as the proof predicate.
 
-The read result is treated as sensitive error material. The implementation
-should suppress raw module error detail at this capture boundary (`no_log` or
-an equivalent existing callback-safe pattern) and emit only the stable
-sanitized downstream failure. This does not claim to close the repository-wide
-`ApiException` logging problem owned by `SSA-09`.
+The Pod-capture task uses `no_log: true`. Raw module error detail is therefore
+not emitted by that task; the downstream owner emits only the stable sanitized
+failure. This is a boundary-local protection and does not claim to close the
+repository-wide `ApiException` logging problem owned by `SSA-09`.
 
 No change is made to:
 
@@ -226,7 +225,7 @@ Each hub's `pass` decision is based only on a validated successful result:
 - that resource is a mapping whose `metadata.name` is exactly `default`.
 
 Anything else yields that hub's existing critical connectivity finding with
-`status: fail` and a stable message such as `<role> hub API connectivity probe
+`status: fail` and the stable message `<role> hub API connectivity probe
 failed`.
 
 The result IDs, severity, details structure, restore-only primary skip, and
@@ -234,10 +233,10 @@ preflight aggregation owner remain unchanged. The failure is recorded in
 `acm_switchover_validation_results`, reaches `preflight-report.json`, and is
 then consumed by the existing aggregate `critical_failures` calculation.
 
-The probe capture must not make raw API response bodies, credentials, kubeconfig
-content/path, or raw exception strings part of the new public failure. Existing
-safe context detail in the structured result may remain because this slice does
-not redefine the report schema.
+Both connectivity probe tasks use `no_log: true`. Their raw API/module results
+therefore cannot become callback output. The structured finding retains the
+existing safe context detail but contains no kubeconfig path/content,
+credentials, API response body, or raw exception text.
 
 This design intentionally does not abort immediately on the first failed hub
 probe. The report owner, not the `k8s_info` task, owns the final preflight
@@ -251,7 +250,7 @@ publishing a fabricated successful connectivity result.
 
 The Collection keeps the named ConfigMap read in
 `roles/activation/tasks/apply_immediate_import.yml` before any ManagedCluster
-read or annotation patch.
+read or annotation patch. The ConfigMap-capture task uses `no_log: true`.
 
 The read outcome is classified locally:
 
@@ -278,8 +277,9 @@ non-mapping non-null `data` value is malformed evidence and fails closed.
 #### Read failure / unverifiable result
 
 A result that lacks a valid `resources` list is treated as a read failure, not
-as `autoImportStrategy_unavailable`. Activation fails with a stable sanitized
-message before:
+as `autoImportStrategy_unavailable`. Activation fails with the stable message
+`Unable to verify autoImportStrategy on the destination hub; verify API access and retry.`
+before:
 
 - listing ManagedClusters for immediate-import work;
 - clearing an existing immediate-import annotation; or
@@ -288,10 +288,7 @@ message before:
 The current benign execute-mode result
 `reason: autoImportStrategy_unavailable` is removed for genuine read failures.
 Dry-run and the ACM-version unsupported path retain their existing skip results.
-
-As with the other masked-error reads, the captured module error is not surfaced
-raw through the new failure path. The implementation uses the smallest existing
-callback-safe suppression pattern and emits a stable downstream message.
+The captured raw module error remains hidden by `no_log: true`.
 
 ### 6.4 Python auto-import: use 404-versus-error semantics and fail before mutation
 
@@ -306,12 +303,13 @@ activation behavior.
 The immediate-import path must stop converting the second case into the string
 `"error"` and a warning skip.
 
-To avoid widening raw exception logging as part of this safety fix, the
-implementation should use a narrow ConfigMap read variant following the
-existing `get_custom_resource_advisory()` pattern: retain retries and 404 =>
-`None`, but do not log rendered exception bodies during retry or final failure.
-The helper remains Python-local and is used only where a sanitized caller-owned
-failure is required; it is not shared with the Collection.
+To avoid widening raw exception logging as part of this safety fix, Python adds
+`KubeClient.get_configmap_advisory(namespace, name)`. It follows the existing
+`get_custom_resource_advisory()` pattern: 404 returns `None`, retryable errors
+retain bounded retries, non-404 errors propagate, and the advisory retry/final
+path does not log the rendered exception. This helper remains Python-local and
+is used by the immediate-import verification boundary; it is not shared with
+the Collection.
 
 `SecondaryActivation._get_auto_import_strategy()` then has exactly two normal
 outcomes:
@@ -319,14 +317,15 @@ outcomes:
 - ConfigMap absent => `"default"`;
 - ConfigMap present => normalized configured strategy.
 
-A genuine read failure raises a controlled `FatalError` (or the existing
-activation-domain equivalent chosen by the implementation plan) with a stable
-message that does not include the raw exception. `_apply_immediate_import_annotations()`
-therefore never receives an `"error"` sentinel and never treats an unverified
-strategy as a benign skip.
+A genuine read failure raises `FatalError` with the exact stable message
+`Unable to verify autoImportStrategy on the destination hub; verify API access and retry.`
+The raw exception is retained only as the exception cause, not interpolated
+into the public message or logged by the advisory helper.
+`_apply_immediate_import_annotations()` therefore never receives an `"error"`
+sentinel and never treats an unverified strategy as a benign skip.
 
-The failure must occur before `list_custom_resources(... ManagedCluster ...)`
-or `patch_managed_cluster()` is invoked.
+The failure occurs before `list_custom_resources(... ManagedCluster ...)` or
+`patch_managed_cluster()` is invoked.
 
 This change is limited to the immediate-import annotation decision. The broader
 `_maybe_set_auto_import_strategy()` management transaction and its R4 ownership
@@ -422,9 +421,9 @@ The fixture must distinguish at least:
 5. failure payload containing credential/API-body sentinels => sentinels do not
    appear in public output.
 
-The test harness may shorten retries/delay through existing test seams or a
-narrow non-production fixture input; production retry constants/behavior must
-not be weakened merely to make tests fast.
+The implementation plan must choose a test-harness mechanism that shortens the
+fixture's wait without adding or widening a production/operator override. The
+production `30 x 10s` contract remains unchanged.
 
 ### 9.2 Collection connectivity reporting
 
@@ -458,7 +457,7 @@ Add executable activation coverage for:
 - native check mode => reads occur as needed but no annotation mutation is
   performed.
 
-Negative tests must make subsequent mutation observability explicit: the fake
+Negative tests make subsequent mutation observability explicit: the fake
 API/harness records ManagedCluster GET/PATCH calls so a refused run proves zero
 annotation mutation.
 
@@ -468,15 +467,15 @@ Python unit tests cover:
 
 - advisory ConfigMap read returns `None` => `"default"` behavior;
 - present ConfigMap => configured strategy behavior;
-- read raises an API/transport exception containing a sentinel => controlled
-  activation failure with no sentinel in captured public logs/message;
+- read raises an API/transport exception containing a sentinel => `FatalError`
+  with the exact stable message and no sentinel in captured public logs/message;
 - failure occurs before ManagedCluster listing;
 - failure occurs before `patch_managed_cluster()`;
 - dry-run remains non-mutating.
 
-The Python KubeClient test suite also pins the new narrow advisory ConfigMap read
-contract: 404 => `None`, retryable/non-404 errors propagate, and the advisory
-path does not render the raw exception through its own retry/final logging.
+The Python KubeClient test suite also pins `get_configmap_advisory()`: 404 =>
+`None`, retryable/non-404 errors propagate, and the advisory path does not
+render the raw exception through its own retry/final logging.
 
 ### 9.5 Static and parity guardrails
 
@@ -506,8 +505,7 @@ others only when a test or documentation contract requires them.
 ### Python runtime
 
 - `modules/activation.py`
-- `lib/kube_client.py` only for the narrow advisory ConfigMap read needed to
-  avoid raw exception logging in the corrected Python decision path
+- `lib/kube_client.py` for `get_configmap_advisory()`
 
 ### Tests
 
