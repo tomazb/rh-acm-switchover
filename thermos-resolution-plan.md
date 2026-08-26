@@ -35,15 +35,86 @@ Before implementation begins for any remaining Thermos slice:
 3. Use `superpowers:writing-plans` to create the implementation plan from that approved design/spec.
 4. Treat the approved design/spec as the verification source of truth: implementation is not complete until the verification evidence shows the delivered behavior matches the accepted design, not merely that tests pass.
 
-This gate applies to open `SSA-01`-`SSA-04`, `SSA-06`-`SSA-10`, `R3-*`, and
+This gate applies to open `SSA-02`-`SSA-04`, `SSA-06`-`SSA-10`, `R3-*`, and
 `TR2D-*` boundaries and to any new Thermos follow-up slice added later. It no
 longer applies to the deep-scan queue: every implementation row in the PR
 Sequence table (`PR 01`-`PR 47` and `H1`) is `merged`. `PR 48` / GitHub PR #197 is
 merged; its exact-head independent validation completed before merge, and
-GitHub PR #196 is closed unmerged as superseded. Current open work is owned by
-the SSA, R3, R4, TR2D, LER, GLM, H3, and deferred-issue boundaries below.
+GitHub PR #196 is closed unmerged as superseded. `SSA-01` is no longer open
+implementation work after GitHub PR #270. Current open work is owned by the
+remaining SSA, R3, R4, TR2D, LER, GLM, H3, and deferred-issue boundaries below.
 
-**Last Updated:** 2026-08-20
+**Last Updated:** 2026-08-22
+
+## Post-Merge Reconciliation (2026-08-22)
+
+This amendment is bound to
+`ansible@1bca9fa464d23a3cfdbf954d770ec52614cc9d5e`, the merge commit for
+GitHub PR #270. It supersedes earlier CURRENT-STATUS / CURRENT-ORDERING
+statements where they conflict while retaining dated historical sections as
+historical evidence for the heads they name.
+
+### Implementation closure
+
+- `SSA-01` / findings `SSA-A2` + `SSA-P2` are delivered by GitHub PR #270.
+- PR #270 merged exact independently validated head
+  `ddfaf067ecee4e624c2232c75571fd3a4fde2cff` at
+  `2026-08-22T20:10:16Z` as merge commit
+  `1bca9fa464d23a3cfdbf954d770ec52614cc9d5e`.
+- Merge parents:
+  `54186f2235fb993c2d19b56ae7f11a2212dd7269` and
+  `ddfaf067ecee4e624c2232c75571fd3a4fde2cff`.
+- Exact-head Independent Validator:
+  `PASS_WITH_NON_BLOCKING_COMMENTS` (comment
+  [5382292163](https://github.com/tomazb/rh-acm-switchover/pull/270#issuecomment-5382292163)).
+- Exact-head PR-comment Resolver:
+  `PASS_FINAL_RESOLUTION` (comment
+  [5382325535](https://github.com/tomazb/rh-acm-switchover/pull/270#issuecomment-5382325535)).
+- Exact-head hosted CI used for merge:
+  CI/CD Pipeline run
+  [32592700151](https://github.com/tomazb/rh-acm-switchover/actions/runs/32592700151) —
+  SUCCESS; ansible-collection-foundation run
+  [32592700163](https://github.com/tomazb/rh-acm-switchover/actions/runs/32592700163) —
+  SUCCESS.
+- No base race occurred; no protected files changed; no RBAC expansion
+  occurred; restore-only remained secondary-only; standalone decommission
+  remained outside `SSA-01`; `reset`/`reset_from` remained outside `SSA-01`;
+  no live ACM certification was claimed.
+
+### Delivered behavior
+
+- Same primary/secondary context refuses normal two-hub switchover.
+- Different contexts resolving to the same live `kube-system` Namespace UID
+  refuse.
+- Missing or unusable execute-mode identity evidence fails closed.
+- Execute mode uses fresh trusted identity evidence.
+- Zero mutation occurs before a successful distinct-hub barrier.
+- Existing stored-vs-current per-role checkpoint binding remains additive.
+- Python and Collection remain parity-aligned while independent.
+
+### Active priority and work order
+
+- `SSA-A2` + `SSA-P2` / `SSA-01` are removed from the ACTIVE P1 queue because
+  PR #270 merged. The historical 2026-07-29 priority assessment remains valid
+  historical evidence for the pre-fix state; this amendment makes no new
+  severity judgment.
+- Current work order (SSA-01 removed; prior relative order otherwise unchanged):
+  1. `R3-02` — fail-closed collection compactor, connectivity, and
+     auto-import-strategy verification.
+  2. `R4-04` — concrete journaled backup and Restore evidence instead of moving
+     `latest` aliases.
+  3. Conditional operational blockers before their named workflows:
+     `R4-06`/`GLM-H3`, `R4-01`+`TR2D-02`, `SSA-02`, `R3-06`, `R4-02`.
+  4. `GLM-01`, starting with `GLM-H1`, then `GLM-H2`, `GLM-H5`, `GLM-H14`.
+  5. `R3-03` fleet timeout budgeting, followed by lower-priority reporting,
+     guardrail, architecture, and hygiene work.
+
+Issue [#267](https://github.com/tomazb/rh-acm-switchover/issues/267) remains
+open until **this** tracker reconciliation merges into `ansible`.
+
+This reconciliation itself changes tracker/documentation state only. It changes
+no runtime, tests, workflows, RBAC, manifests, Helm, release validation,
+lab-controller behavior, or protected files.
 
 ## Post-Merge Reconciliation (2026-08-19)
 
@@ -543,15 +614,14 @@ The corrected severity is authoritative for sequencing:
 
 ### Planned Resolution Slices
 
-`SSA-01` is the highest-impact P1 product-runtime invariant. Its design may
-proceed in parallel with the immediate bounded regression deliveries described
-in the global delivery sequence below. Release/CI/docs slices `SSA-04`,
-`SSA-06`, `SSA-07`, and `SSA-10` may also proceed independently in isolated
+`SSA-01` is merged through PR #270; see the 2026-08-22 post-merge
+reconciliation for current status. Release/CI/docs slices `SSA-04`,
+`SSA-06`, `SSA-07`, and `SSA-10` may proceed independently in isolated
 worktrees when their slice-specific designs establish no dependency conflict.
 
 | Slice | Status | Findings | Proposed resolution boundary | Required review |
 | --- | --- | --- | --- | --- |
-| SSA-01 | in_progress | SSA-A2, SSA-P2 | Add a shared-behavior, fail-closed physical-hub distinction guard before any mutation. | Python/collection parity; wrong-context and same-UID safety |
+| SSA-01 | merged | SSA-A2, SSA-P2 | PR [#270](https://github.com/tomazb/rh-acm-switchover/pull/270) merged exact validated head `ddfaf067ecee4e624c2232c75571fd3a4fde2cff` as merge commit `1bca9fa464d23a3cfdbf954d770ec52614cc9d5e`, delivering the shared-behavior fail-closed physical-hub distinction guard before any mutation. | Python/collection parity; wrong-context and same-UID safety (required review completed) |
 | SSA-02 | planned | SSA-P1, SSA-PY4 | Strengthen standalone and embedded decommission target/RBAC checks without requiring prior switchover state. | destructive-operation, RBAC, parity, and dry-run review |
 | SSA-03 | planned | SSA-PY2, SSA-A6 | Make klusterlet endpoint selection unambiguous and bound collection worker concurrency. Extended by `R4-06`: implement against `docs/plans/2026-07-29-kubeconfig-ambiguity-guard-design.md` (§1 fail-closed merge with deterministic KUBECONFIG precedence and sanitized merge errors, §2 duplicate-name rule, §3 full normalized-URL endpoint equality **plus the enumerated fail-closed rejection set for malformed server URLs**, §4 snapshot-built client **whose file-backed credential contents — CA, client certificate, client key, and `tokenFile` — are captured at snapshot time and never re-read during client construction**, and §5 mutation barrier). | post-activation parity, timeout, and scale review |
 | SSA-04 | planned | SSA-R1, SSA-R2 | Require explicit release-profile authorization for live decommission and reject safety-critical adapter overrides. | lab-controller trust boundary and release evidence review |
@@ -605,23 +675,43 @@ worktrees when their slice-specific designs establish no dependency conflict.
   These are release-validation-only, never execute in the CLI or the collection,
   and do **not** close `SSA-A2`/`SSA-P2`.
 
-**Implementation evidence (2026-08-20, issue #267 branch work)**
+**Merged Implementation evidence (2026-08-22, PR #270)**
 
-- The local SSA-01 branch implements normal-flow same-context refusal and a
-  fresh live `kube-system` Namespace UID comparison before mutation in the
-  Python binder and collection action-local identity barrier.
-- The collection retains non-live UID fixtures only through the explicit
-  `validate`/`dry_run` test override. Execute mode, including native check
-  mode, reads live UIDs. Public facts and caller UID fields are not authority.
+- Approved design:
+  `docs/plans/2026-08-20-ssa-01-distinct-physical-hub-validation-design.md`.
+- Approved implementation plan:
+  `docs/plans/2026-08-20-ssa-01-distinct-physical-hub-validation-implementation.md`.
+- Exact independently validated implementation head:
+  `ddfaf067ecee4e624c2232c75571fd3a4fde2cff`.
+- Exact-head Independent Validator:
+  `PASS_WITH_NON_BLOCKING_COMMENTS` (comment
+  [5382292163](https://github.com/tomazb/rh-acm-switchover/pull/270#issuecomment-5382292163)).
+- Exact-head PR-comment Resolver:
+  `PASS_FINAL_RESOLUTION` (comment
+  [5382325535](https://github.com/tomazb/rh-acm-switchover/pull/270#issuecomment-5382325535)).
+- Exact-head hosted CI used for merge: CI/CD Pipeline run
+  [32592700151](https://github.com/tomazb/rh-acm-switchover/actions/runs/32592700151)
+  (SUCCESS); ansible-collection-foundation run
+  [32592700163](https://github.com/tomazb/rh-acm-switchover/actions/runs/32592700163)
+  (SUCCESS).
+- Merge commit:
+  `1bca9fa464d23a3cfdbf954d770ec52614cc9d5e` at `2026-08-22T20:10:16Z`.
+- Delivered behavior: normal-flow same-context refusal and a fresh live
+  `kube-system` Namespace UID comparison before mutation in the Python binder
+  and collection action-local identity barrier. The collection retains non-live
+  UID fixtures only through the explicit `validate`/`dry_run` test override.
+  Execute mode, including native check mode, reads live UIDs. Public facts and
+  caller UID fields are not authority.
 - Existing stored-versus-current checkpoint identity validation remains
   additive. `reset_from` behavior is unchanged and remains owned by `R3-06`.
   Restore-only remains secondary-only; decommission is excluded and remains
   owned by `SSA-02`.
 - Focused tests cover same live UID, unavailable UID, checkpoint drift,
   pre-barrier recovery exclusion, post-barrier recovery, and execute-check
-  freshness. This is implementation-branch evidence only. It is not an
-  independent-validation verdict, merged status, release claim, or live
-  certification result.
+  freshness. This is merged repository evidence for `SSA-01` / `SSA-A2` /
+  `SSA-P2`. It is not a release claim or live ACM certification result.
+  issue #267 remains open until this tracker reconciliation merges into
+  `ansible`.
 
 #### SSA-02: Decommission Target And RBAC Revalidation
 
@@ -2288,9 +2378,9 @@ Dispositions:
 | L5 | confirmed still open; silently dropped from Review #2's re-confirmation list without rationale | none - opportunistic cleanup | `lib/operation_runners.py:78-80,101-105,201-204` still type `args`/`state`/`primary`/`secondary`/`logger` as `Any` despite `argparse.Namespace`, `StateManager`, and `KubeClient` being the real types, used precisely in `lib/workflow.py`. |
 | L6 | confirmed still open (Review #1; re-confirmed Review #2 and 2026-07-26) | none - opportunistic cleanup | `modules/post_activation.py:1289` still does `import time as time_module` inside `_restart_klusterlet` while the module imports `time` at `:12`. |
 | L7 | confirmed still open, wider than originally cited | none - opportunistic cleanup | `%`-style formatting inside `raise SwitchoverError(...)` at `modules/finalization.py:1299-1302,1367-1369,1375-1378,1381-1384,1447-1451` — 5 sites, up from the 2 cited on 2026-06-13 — while the rest of the file uses f-strings. `:1423` uses the same idiom in a `WaitConditionResult.pending` call. |
-| SSA-A2 | confirmed, corrected P1 | SSA-01 (planned) | Collection contexts and live UIDs are validated independently but never compared; identical contexts or different contexts targeting one cluster can enter self-switchover. |
+| SSA-A2 | resolved/merged through PR #270 | SSA-01 (merged); PR #270 | Same-context and same-physical-UID fail-closed guard delivered in both supported form factors; exact validated head `ddfaf067ecee4e624c2232c75571fd3a4fde2cff`; merge commit `1bca9fa464d23a3cfdbf954d770ec52614cc9d5e`. |
 | SSA-P1 | confirmed with lower impact, corrected P2 | SSA-02 (planned) | Python standalone decommission intentionally lacks prior state binding; wrong-context risk remains, so add optional expected-UID verification without making switchover state mandatory. |
-| SSA-P2 | confirmed, corrected P1 | SSA-01 (planned) | Python binds each role identity for resume but does not require primary and secondary live UIDs to differ before a new switchover. |
+| SSA-P2 | resolved/merged through PR #270 | SSA-01 (merged); PR #270 | Same-context and same-physical-UID fail-closed guard delivered in both supported form factors; exact validated head `ddfaf067ecee4e624c2232c75571fd3a4fde2cff`; merge commit `1bca9fa464d23a3cfdbf954d770ec52614cc9d5e`. |
 | SSA-S1 | obsolete shipped-surface finding | SSA-05 (delivered by PR #223) | PR #223 removed `scripts/argocd-manage.sh`; no retained Bash Argo CD state/resume implementation remains. |
 | SSA-R1 | confirmed with lifecycle mitigation, corrected P2 | SSA-04 (planned) | Release Python decommission can build a live non-interactive command while the Ansible stream is forced dry-run; lifecycle gates reduce but do not remove focused-rerun risk. |
 | SSA-R2 | confirmed with controller mitigation, corrected P2 | SSA-04 (planned) | Trusted profile arguments are appended verbatim and a trailing Ansible `-e` can override adapter dry-run defaults, although matrix/controller gates still apply. |
