@@ -56,7 +56,9 @@ def _materialize_report_dir(report_dir: str, tmp_path: Path) -> Path:
     return materialized
 
 
-def _write_preflight_fixture_kubeconfig(kubeconfig_path: Path, context: str, server: str) -> None:
+def _write_preflight_fixture_kubeconfig(
+    kubeconfig_path: Path, context: str, server: str
+) -> None:
     kubeconfig_path.parent.mkdir(parents=True, exist_ok=True)
     cluster_name = f"{context}-cluster"
     user_name = f"{context}-user"
@@ -100,9 +102,14 @@ def _write_preflight_fixture_kubeconfig(kubeconfig_path: Path, context: str, ser
     )
 
 
-def _materialize_preflight_fixture_kubeconfigs(vars_payload: dict, tmp_path: Path) -> None:
+def _materialize_preflight_fixture_kubeconfigs(
+    vars_payload: dict, tmp_path: Path
+) -> None:
     test_overrides = vars_payload.get("acm_switchover_test_overrides")
-    if not isinstance(test_overrides, dict) or "fixture_kubeconfig_server" not in test_overrides:
+    if not isinstance(test_overrides, dict) or not (
+        "fixture_kubeconfig_server" in test_overrides
+        or "fixture_kubeconfig_servers" in test_overrides
+    ):
         _materialize_fixture_kubeconfigs(vars_payload, tmp_path)
         return
 
@@ -111,14 +118,24 @@ def _materialize_preflight_fixture_kubeconfigs(vars_payload: dict, tmp_path: Pat
         return
 
     kubeconfig_dir = tmp_path / "kubeconfigs"
-    kubeconfig_server = str(test_overrides["fixture_kubeconfig_server"])
+    common_server = test_overrides.get("fixture_kubeconfig_server")
+    hub_servers = test_overrides.get("fixture_kubeconfig_servers")
+    if not isinstance(hub_servers, dict):
+        hub_servers = {}
     for hub_name in ("primary", "secondary"):
         hub = hubs.get(hub_name)
         if not isinstance(hub, dict) or not hub.get("kubeconfig"):
             continue
+        kubeconfig_server = hub_servers.get(hub_name, common_server)
+        if not kubeconfig_server:
+            continue
         context = str(hub.get("context") or f"{hub_name}-hub")
         kubeconfig_path = kubeconfig_dir / f"{hub_name}.kubeconfig"
-        _write_preflight_fixture_kubeconfig(kubeconfig_path, context, kubeconfig_server)
+        _write_preflight_fixture_kubeconfig(
+            kubeconfig_path,
+            context,
+            str(kubeconfig_server),
+        )
         hub["kubeconfig"] = str(kubeconfig_path)
 
 
@@ -143,7 +160,9 @@ def run_preflight_fixture(tmp_path):
     ) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = _find_repo_root()
         fixture_path = (
-            repo_root / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/preflight" / fixture_name
+            repo_root
+            / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/preflight"
+            / fixture_name
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
         if overrides:
@@ -242,7 +261,9 @@ def run_distinct_hub_playbook(tmp_path):
                 / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/switchover"
                 / "passive_activation_success.yml"
             )
-            vars_payload = yaml.safe_load(fixture_path.read_text(encoding="utf-8")) or {}
+            vars_payload = (
+                yaml.safe_load(fixture_path.read_text(encoding="utf-8")) or {}
+            )
             vars_payload["acm_switchover_hubs"] = {
                 "primary": {
                     "context": primary_context,
@@ -288,7 +309,9 @@ def run_distinct_hub_playbook(tmp_path):
                     json.dumps(checkpoint_record, indent=2),
                     encoding="utf-8",
                 )
-            checkpoint_before = checkpoint_path.read_bytes() if checkpoint_path.exists() else None
+            checkpoint_before = (
+                checkpoint_path.read_bytes() if checkpoint_path.exists() else None
+            )
 
             vars_file = tmp_path / "identity-barrier-vars.yml"
             vars_file.write_text(
@@ -319,13 +342,23 @@ def run_distinct_hub_playbook(tmp_path):
                 _fail_ansible_playbook_timeout(exc, 300)
 
             report_path = report_dir / "switchover-report.json"
-            report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else {}
+            report = (
+                json.loads(report_path.read_text(encoding="utf-8"))
+                if report_path.exists()
+                else {}
+            )
             preflight_report_path = report_dir / "preflight-report.json"
             preflight_report = (
-                json.loads(preflight_report_path.read_text(encoding="utf-8")) if preflight_report_path.exists() else {}
+                json.loads(preflight_report_path.read_text(encoding="utf-8"))
+                if preflight_report_path.exists()
+                else {}
             )
-            checkpoint_after = checkpoint_path.read_bytes() if checkpoint_path.exists() else None
-            checkpoint = json.loads(checkpoint_after) if checkpoint_after is not None else {}
+            checkpoint_after = (
+                checkpoint_path.read_bytes() if checkpoint_path.exists() else None
+            )
+            checkpoint = (
+                json.loads(checkpoint_after) if checkpoint_after is not None else {}
+            )
             return DistinctHubPlaybookRun(
                 completed=completed,
                 report=report,
@@ -443,7 +476,9 @@ def run_argocd_fixture(tmp_path):
     def _run(fixture_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = _find_repo_root()
         fixture_path = (
-            repo_root / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/argocd" / fixture_name
+            repo_root
+            / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/argocd"
+            / fixture_name
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
 
@@ -498,7 +533,8 @@ def run_argocd_scoped_validation(tmp_path):
         return subprocess.run(
             [
                 "ansible-playbook",
-                "ansible_collections/tomazb/acm_switchover/tests/integration/playbooks/" "argocd_scoped_validation.yml",
+                "ansible_collections/tomazb/acm_switchover/tests/integration/playbooks/"
+                "argocd_scoped_validation.yml",
                 "-i",
                 "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
                 "-e",
@@ -517,10 +553,14 @@ def run_argocd_scoped_validation(tmp_path):
 
 @pytest.fixture
 def run_noncore_fixture(tmp_path):
-    def _run(fixture_name: str, playbook_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
+    def _run(
+        fixture_name: str, playbook_name: str
+    ) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = _find_repo_root()
         fixture_path = (
-            repo_root / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/noncore" / fixture_name
+            repo_root
+            / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/noncore"
+            / fixture_name
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
 
