@@ -53,6 +53,92 @@ def dry_run_client(mock_k8s_apis):
 
 
 @pytest.mark.unit
+class TestConfigMapAdvisoryReads:
+    """ConfigMap advisory reads preserve absence, failure, and retry outcomes."""
+
+    def test_configmap_advisory_returns_present_resource(self, kube_client, mock_k8s_apis):
+        configmap = MagicMock()
+        configmap.to_dict.return_value = {
+            "metadata": {"name": "import-controller-config", "namespace": "multicluster-engine"},
+            "data": {"autoImportStrategy": "ImportOnly"},
+        }
+        mock_k8s_apis["core_api"].read_namespaced_config_map.return_value = configmap
+
+        result = kube_client.get_configmap_advisory("multicluster-engine", "import-controller-config")
+
+        assert result == configmap.to_dict.return_value
+        mock_k8s_apis["core_api"].read_namespaced_config_map.assert_called_once_with(
+            name="import-controller-config",
+            namespace="multicluster-engine",
+            _request_timeout=30,
+        )
+
+    def test_configmap_advisory_returns_none_for_true_404(self, kube_client, mock_k8s_apis):
+        mock_k8s_apis["core_api"].read_namespaced_config_map.side_effect = ApiException(status=404)
+
+        result = kube_client.get_configmap_advisory("multicluster-engine", "import-controller-config")
+
+        assert result is None
+        assert mock_k8s_apis["core_api"].read_namespaced_config_map.call_count == 1
+
+    def test_configmap_advisory_propagates_403_without_logging_detail(
+        self, kube_client, mock_k8s_apis, caplog
+    ):
+        failure = ApiException(status=403, reason="R302-CONFIGMAP-ADVISORY-SENTINEL")
+        mock_k8s_apis["core_api"].read_namespaced_config_map.side_effect = failure
+
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            with pytest.raises(ApiException) as exc_info:
+                kube_client.get_configmap_advisory("multicluster-engine", "import-controller-config")
+
+        assert exc_info.value is failure
+        assert mock_k8s_apis["core_api"].read_namespaced_config_map.call_count == 1
+        assert "R302-CONFIGMAP-ADVISORY-SENTINEL" not in caplog.text
+
+    def test_configmap_advisory_retries_retryable_failure(self, kube_client, mock_k8s_apis):
+        configmap = MagicMock()
+        configmap.to_dict.return_value = {"metadata": {"name": "import-controller-config"}}
+        mock_k8s_apis["core_api"].read_namespaced_config_map.side_effect = [
+            ApiException(status=503),
+            configmap,
+        ]
+
+        with patch.object(KubeClient.get_configmap_advisory.retry, "wait", return_value=0):
+            result = kube_client.get_configmap_advisory("multicluster-engine", "import-controller-config")
+
+        assert result == configmap.to_dict.return_value
+        assert mock_k8s_apis["core_api"].read_namespaced_config_map.call_count == 2
+
+    def test_configmap_advisory_bounds_retry_and_never_logs_exception_detail(
+        self, kube_client, mock_k8s_apis, caplog
+    ):
+        failure = ApiException(status=503, reason="R302-CONFIGMAP-RETRY-SENTINEL")
+        mock_k8s_apis["core_api"].read_namespaced_config_map.side_effect = failure
+
+        with patch.object(KubeClient.get_configmap_advisory.retry, "wait", return_value=0):
+            with caplog.at_level("DEBUG", logger="acm_switchover"):
+                with pytest.raises(ApiException) as exc_info:
+                    kube_client.get_configmap_advisory("multicluster-engine", "import-controller-config")
+
+        assert exc_info.value is failure
+        assert mock_k8s_apis["core_api"].read_namespaced_config_map.call_count == 5
+        assert "R302-CONFIGMAP-RETRY-SENTINEL" not in caplog.text
+
+    @pytest.mark.parametrize(
+        ("namespace", "name"),
+        [
+            ("", "import-controller-config"),
+            ("multicluster-engine", ""),
+        ],
+    )
+    def test_configmap_advisory_preserves_input_validation(self, kube_client, namespace, name):
+        from lib.validation import ValidationError
+
+        with pytest.raises(ValidationError):
+            kube_client.get_configmap_advisory(namespace, name)
+
+
+@pytest.mark.unit
 class TestKubeClient:
     """Test cases for KubeClient class."""
 
