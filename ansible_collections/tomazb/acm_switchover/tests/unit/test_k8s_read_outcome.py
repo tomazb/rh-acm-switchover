@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+import importlib
+import sys
+from types import ModuleType
 from typing import Any
 
-import pytest
-from ansible_collections.kubernetes.core.plugins.module_utils.k8s.exceptions import (
-    CoreException,
-)
 from kubernetes.client.exceptions import ApiException
 from kubernetes.dynamic.exceptions import (
     BadRequestError,
@@ -20,7 +19,65 @@ from kubernetes.dynamic.exceptions import (
 SENTINEL = "R302-SENTINEL-HTTP-BODY"
 
 
-def _api_error(exc_type: type[Exception], status: int, body: str = SENTINEL) -> Exception:
+def _import_module_under_test():
+    """Import the module without exposing Galaxy collections to the unit lane."""
+
+    def package(name: str) -> ModuleType:
+        module = ModuleType(name)
+        module.__path__ = []
+        return module
+
+    args_common = ModuleType(
+        "ansible_collections.kubernetes.core.plugins.module_utils.args_common"
+    )
+    args_common.AUTH_ARG_SPEC = {}
+
+    client = ModuleType(
+        "ansible_collections.kubernetes.core.plugins.module_utils.k8s.client"
+    )
+
+    def unavailable_get_api_client(**_kwargs):
+        raise AssertionError("unit test must patch get_api_client before use")
+
+    client.get_api_client = unavailable_get_api_client
+
+    stubs = {
+        "ansible_collections.kubernetes": package("ansible_collections.kubernetes"),
+        "ansible_collections.kubernetes.core": package(
+            "ansible_collections.kubernetes.core"
+        ),
+        "ansible_collections.kubernetes.core.plugins": package(
+            "ansible_collections.kubernetes.core.plugins"
+        ),
+        "ansible_collections.kubernetes.core.plugins.module_utils": package(
+            "ansible_collections.kubernetes.core.plugins.module_utils"
+        ),
+        "ansible_collections.kubernetes.core.plugins.module_utils.args_common": args_common,
+        "ansible_collections.kubernetes.core.plugins.module_utils.k8s": package(
+            "ansible_collections.kubernetes.core.plugins.module_utils.k8s"
+        ),
+        "ansible_collections.kubernetes.core.plugins.module_utils.k8s.client": client,
+    }
+    previous = {name: sys.modules.get(name) for name in stubs}
+    sys.modules.update(stubs)
+    try:
+        return importlib.import_module(
+            "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_k8s_read_outcome"
+        )
+    finally:
+        for name, module in previous.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+
+
+acm_k8s_read_outcome = _import_module_under_test()
+
+
+def _api_error(
+    exc_type: type[Exception], status: int, body: str = SENTINEL
+) -> Exception:
     class _Resp:
         def __init__(self):
             self.status = status
@@ -74,24 +131,14 @@ def _run_module(
             captured["fail"] = kwargs
             raise SystemExit(1)
 
-    monkeypatch.setattr(
-        "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_k8s_read_outcome.AnsibleModule",
-        FakeModule,
-    )
+    monkeypatch.setattr(acm_k8s_read_outcome, "AnsibleModule", FakeModule)
 
     def fake_get_api_client(module=None, **kwargs):
         if client_error is not None:
             raise client_error
         return client
 
-    monkeypatch.setattr(
-        "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_k8s_read_outcome.get_api_client",
-        fake_get_api_client,
-    )
-
-    from ansible_collections.tomazb.acm_switchover.plugins.modules import (
-        acm_k8s_read_outcome,
-    )
+    monkeypatch.setattr(acm_k8s_read_outcome, "get_api_client", fake_get_api_client)
 
     try:
         acm_k8s_read_outcome.main()
@@ -105,7 +152,9 @@ def _run_module(
 
 
 class _FakeClient:
-    def __init__(self, *, resource=None, resource_error=None, get_result=None, get_error=None):
+    def __init__(
+        self, *, resource=None, resource_error=None, get_result=None, get_error=None
+    ):
         self._resource = resource
         self._resource_error = resource_error
         self._get_result = get_result
@@ -291,7 +340,9 @@ def test_resource_discovery_failure_is_error(monkeypatch):
 
 
 def test_timeout_transport_failure_is_error(monkeypatch):
-    client = _FakeClient(resource=object(), get_error=TimeoutError("timed out connecting"))
+    client = _FakeClient(
+        resource=object(), get_error=TimeoutError("timed out connecting")
+    )
     result = _run_module(
         monkeypatch,
         params={
@@ -316,7 +367,7 @@ def test_client_auth_construction_failure_is_error(monkeypatch):
             "namespace": "ns",
             "name": "cfg",
         },
-        client_error=CoreException(f"auth failed: {SENTINEL}"),
+        client_error=Exception(f"auth failed: {SENTINEL}"),
     )
     assert result["read_status"] == "error"
     assert result["changed"] is False
@@ -378,7 +429,12 @@ def test_sensitive_exception_content_never_returned(monkeypatch):
 def test_every_path_reports_changed_false(monkeypatch):
     cases = [
         (
-            {"read_mode": "list", "api_version": "v1", "kind": "Pod", "namespace": "ns"},
+            {
+                "read_mode": "list",
+                "api_version": "v1",
+                "kind": "Pod",
+                "namespace": "ns",
+            },
             _FakeClient(
                 resource=object(),
                 get_result=_DictResult({"kind": "PodList", "items": []}),
@@ -400,7 +456,12 @@ def test_every_path_reports_changed_false(monkeypatch):
             None,
         ),
         (
-            {"read_mode": "list", "api_version": "v1", "kind": "Pod", "namespace": "ns"},
+            {
+                "read_mode": "list",
+                "api_version": "v1",
+                "kind": "Pod",
+                "namespace": "ns",
+            },
             _FakeClient(
                 resource=object(),
                 get_error=_api_error(BadRequestError, 400),
@@ -408,9 +469,14 @@ def test_every_path_reports_changed_false(monkeypatch):
             None,
         ),
         (
-            {"read_mode": "list", "api_version": "v1", "kind": "Pod", "namespace": "ns"},
+            {
+                "read_mode": "list",
+                "api_version": "v1",
+                "kind": "Pod",
+                "namespace": "ns",
+            },
             None,
-            CoreException("boom"),
+            Exception("boom"),
         ),
     ]
     for params, client, client_error in cases:
