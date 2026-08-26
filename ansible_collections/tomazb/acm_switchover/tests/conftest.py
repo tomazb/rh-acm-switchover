@@ -6,7 +6,10 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from typing import NoReturn
 
 import pytest
@@ -36,7 +39,11 @@ def _prepare_execution_vars(vars_payload: dict, tmp_path: Path) -> Path:
     return effective_report_dir
 
 
-def _write_fixture_kubeconfig(kubeconfig_path: Path, context: str) -> None:
+def _write_fixture_kubeconfig(
+    kubeconfig_path: Path,
+    context: str,
+    server: str = "https://127.0.0.1:9",
+) -> None:
     kubeconfig_path.parent.mkdir(parents=True, exist_ok=True)
     cluster_name = f"{context}-cluster"
     user_name = f"{context}-user"
@@ -49,7 +56,7 @@ def _write_fixture_kubeconfig(kubeconfig_path: Path, context: str) -> None:
                     {
                         "name": cluster_name,
                         "cluster": {
-                            "server": "https://127.0.0.1:9",
+                            "server": server,
                             "insecure-skip-tls-verify": True,
                         },
                     }
@@ -85,6 +92,10 @@ def _materialize_fixture_kubeconfigs(vars_payload: dict, tmp_path: Path) -> None
     if not isinstance(hubs, dict):
         return
 
+    test_overrides = vars_payload.get("acm_switchover_test_overrides") or {}
+    common_server = test_overrides.get("fixture_kubeconfig_server")
+    hub_servers = test_overrides.get("fixture_kubeconfig_servers") or {}
+
     kubeconfig_dir = tmp_path / "kubeconfigs"
     for hub_name in ("primary", "secondary"):
         hub = hubs.get(hub_name)
@@ -93,8 +104,87 @@ def _materialize_fixture_kubeconfigs(vars_payload: dict, tmp_path: Path) -> None
 
         context = str(hub.get("context") or f"{hub_name}-hub")
         kubeconfig_path = kubeconfig_dir / f"{hub_name}.kubeconfig"
-        _write_fixture_kubeconfig(kubeconfig_path, context)
+        server = hub_servers.get(hub_name) or common_server or "https://127.0.0.1:9"
+        _write_fixture_kubeconfig(kubeconfig_path, context, server)
         hub["kubeconfig"] = str(kubeconfig_path)
+
+
+class _FixtureConnectivityHandler(BaseHTTPRequestHandler):
+    """Minimal Kubernetes API for exact default-Namespace connectivity probes."""
+
+    def log_message(self, _format, *_args):
+        return
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        responses = {
+            "/version": {
+                "major": "1",
+                "minor": "28",
+                "gitVersion": "v1.28.0",
+            },
+            "/api": {
+                "kind": "APIVersions",
+                "versions": ["v1"],
+                "serverAddressByClientCIDRs": [],
+            },
+            "/api/v1": {
+                "kind": "APIResourceList",
+                "groupVersion": "v1",
+                "resources": [
+                    {
+                        "name": "namespaces",
+                        "singularName": "",
+                        "namespaced": False,
+                        "kind": "Namespace",
+                        "verbs": ["get", "list"],
+                    }
+                ],
+            },
+            "/api/v1/namespaces/default": {
+                "apiVersion": "v1",
+                "kind": "Namespace",
+                "metadata": {"name": "default"},
+            },
+            "/apis": {
+                "kind": "APIGroupList",
+                "groups": [],
+            },
+        }
+        payload = responses.get(path)
+        if payload is None:
+            self.send_response(404)
+            self.end_headers()
+            return
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+@contextmanager
+def _fixture_connectivity_api():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FixtureConnectivityHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def _ensure_fixture_connectivity_server(vars_payload: dict, server_url: str) -> None:
+    test_overrides = vars_payload.get("acm_switchover_test_overrides")
+    if not isinstance(test_overrides, dict):
+        test_overrides = {}
+        vars_payload["acm_switchover_test_overrides"] = test_overrides
+    if "fixture_kubeconfig_server" in test_overrides or "fixture_kubeconfig_servers" in test_overrides:
+        return
+    test_overrides["fixture_kubeconfig_server"] = server_url
 
 
 def _seed_fixture_defaults(vars_payload: dict) -> None:
@@ -235,36 +325,38 @@ def run_switchover_fixture(tmp_path):
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
         _seed_fixture_defaults(vars_payload)
-        report_dir = _prepare_execution_vars(vars_payload, tmp_path)
+        with _fixture_connectivity_api() as server_url:
+            _ensure_fixture_connectivity_server(vars_payload, server_url)
+            report_dir = _prepare_execution_vars(vars_payload, tmp_path)
 
-        vars_file = tmp_path / "vars.yml"
-        vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))
+            vars_file = tmp_path / "vars.yml"
+            vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))
 
-        env = _ansible_env(repo_root, tmp_path)
+            env = _ansible_env(repo_root, tmp_path)
 
-        try:
-            completed = subprocess.run(
-                [
-                    "ansible-playbook",
-                    "ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml",
-                    "-i",
-                    "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
-                    "-e",
-                    f"@{vars_file}",
-                ],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=False,
-                env=env,
-                timeout=300,
-            )
-        except subprocess.TimeoutExpired as exc:
-            _fail_ansible_playbook_timeout(exc, 300)
+            try:
+                completed = subprocess.run(
+                    [
+                        "ansible-playbook",
+                        "ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml",
+                        "-i",
+                        "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
+                        "-e",
+                        f"@{vars_file}",
+                    ],
+                    cwd=repo_root,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    env=env,
+                    timeout=300,
+                )
+            except subprocess.TimeoutExpired as exc:
+                _fail_ansible_playbook_timeout(exc, 300)
 
-        report_path = report_dir / "switchover-report.json"
-        report = json.loads(report_path.read_text()) if report_path.exists() else {}
-        return completed, report
+            report_path = report_dir / "switchover-report.json"
+            report = json.loads(report_path.read_text()) if report_path.exists() else {}
+            return completed, report
 
     return _run
 
@@ -341,36 +433,38 @@ def run_restore_only_fixture(tmp_path):
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
         _seed_fixture_defaults(vars_payload)
-        report_dir = _prepare_execution_vars(vars_payload, tmp_path)
+        with _fixture_connectivity_api() as server_url:
+            _ensure_fixture_connectivity_server(vars_payload, server_url)
+            report_dir = _prepare_execution_vars(vars_payload, tmp_path)
 
-        vars_file = tmp_path / "vars.yml"
-        vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))
+            vars_file = tmp_path / "vars.yml"
+            vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))
 
-        env = _ansible_env(repo_root, tmp_path)
+            env = _ansible_env(repo_root, tmp_path)
 
-        try:
-            completed = subprocess.run(
-                [
-                    "ansible-playbook",
-                    "ansible_collections/tomazb/acm_switchover/playbooks/restore_only.yml",
-                    "-i",
-                    "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
-                    "-e",
-                    f"@{vars_file}",
-                ],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=False,
-                env=env,
-                timeout=300,
-            )
-        except subprocess.TimeoutExpired as exc:
-            _fail_ansible_playbook_timeout(exc, 300)
+            try:
+                completed = subprocess.run(
+                    [
+                        "ansible-playbook",
+                        "ansible_collections/tomazb/acm_switchover/playbooks/restore_only.yml",
+                        "-i",
+                        "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
+                        "-e",
+                        f"@{vars_file}",
+                    ],
+                    cwd=repo_root,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    env=env,
+                    timeout=300,
+                )
+            except subprocess.TimeoutExpired as exc:
+                _fail_ansible_playbook_timeout(exc, 300)
 
-        report_path = report_dir / "restore-only-report.json"
-        report = json.loads(report_path.read_text()) if report_path.exists() else {}
-        return completed, report
+            report_path = report_dir / "restore-only-report.json"
+            report = json.loads(report_path.read_text()) if report_path.exists() else {}
+            return completed, report
 
     return _run
 
@@ -394,64 +488,66 @@ def run_checkpoint_fixture(tmp_path):
             _merge_test_vars(vars_payload, vars_overrides)
 
         checkpoint_path = tmp_path / checkpoint_name
-        _prepare_execution_vars(vars_payload, tmp_path)
-        vars_payload["acm_switchover_execution"].setdefault("checkpoint", {})
-        vars_payload["acm_switchover_execution"]["checkpoint"]["path"] = str(checkpoint_path)
+        with _fixture_connectivity_api() as server_url:
+            _ensure_fixture_connectivity_server(vars_payload, server_url)
+            _prepare_execution_vars(vars_payload, tmp_path)
+            vars_payload["acm_switchover_execution"].setdefault("checkpoint", {})
+            vars_payload["acm_switchover_execution"]["checkpoint"]["path"] = str(checkpoint_path)
 
-        if pre_completed_phases:
-            checkpoint_record = {
-                "schema_version": checkpoint_schema_version,
-                "phase": pre_completed_phases[-1],
-                "completed_phases": pre_completed_phases,
-                "operational_data": {},
-                "errors": [],
-                "report_refs": [],
-                "created_at": "2026-01-01T00:00:00+00:00",
-                "updated_at": "2026-01-01T00:00:00+00:00",
-            }
-            if checkpoint_schema_version == "2.0":
-                from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
-                    build_operation_identity,
-                )
+            if pre_completed_phases:
+                checkpoint_record = {
+                    "schema_version": checkpoint_schema_version,
+                    "phase": pre_completed_phases[-1],
+                    "completed_phases": pre_completed_phases,
+                    "operational_data": {},
+                    "errors": [],
+                    "report_refs": [],
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                }
+                if checkpoint_schema_version == "2.0":
+                    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
+                        build_operation_identity,
+                    )
 
-                test_overrides = vars_payload.get("acm_switchover_test_overrides") or {}
-                checkpoint_record["operation_identity"] = build_operation_identity(
-                    hubs=vars_payload.get("acm_switchover_hubs") or {},
-                    operation=vars_payload.get("acm_switchover_operation") or {},
-                    collection_version=vars_payload.get("acm_switchover_collection_version"),
-                    hub_identities=test_overrides.get("non_live_hub_identities") or {},
-                )
-            checkpoint_path.write_text(json.dumps(checkpoint_record, indent=2))
+                    test_overrides = vars_payload.get("acm_switchover_test_overrides") or {}
+                    checkpoint_record["operation_identity"] = build_operation_identity(
+                        hubs=vars_payload.get("acm_switchover_hubs") or {},
+                        operation=vars_payload.get("acm_switchover_operation") or {},
+                        collection_version=vars_payload.get("acm_switchover_collection_version"),
+                        hub_identities=test_overrides.get("non_live_hub_identities") or {},
+                    )
+                checkpoint_path.write_text(json.dumps(checkpoint_record, indent=2))
 
-        vars_file = tmp_path / "vars.yml"
-        vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))
+            vars_file = tmp_path / "vars.yml"
+            vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))
 
-        env = _ansible_env(
-            repo_root,
-            tmp_path,
-        )
-
-        try:
-            completed = subprocess.run(
-                [
-                    "ansible-playbook",
-                    "ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml",
-                    "-i",
-                    "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
-                    "-e",
-                    f"@{vars_file}",
-                ],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=False,
-                env=env,
-                timeout=300,
+            env = _ansible_env(
+                repo_root,
+                tmp_path,
             )
-        except subprocess.TimeoutExpired as exc:
-            _fail_ansible_playbook_timeout(exc, 300)
 
-        checkpoint = json.loads(checkpoint_path.read_text()) if checkpoint_path.exists() else {}
-        return completed, checkpoint
+            try:
+                completed = subprocess.run(
+                    [
+                        "ansible-playbook",
+                        "ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml",
+                        "-i",
+                        "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
+                        "-e",
+                        f"@{vars_file}",
+                    ],
+                    cwd=repo_root,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    env=env,
+                    timeout=300,
+                )
+            except subprocess.TimeoutExpired as exc:
+                _fail_ansible_playbook_timeout(exc, 300)
+
+            report = json.loads(checkpoint_path.read_text()) if checkpoint_path.exists() else {}
+            return completed, report
 
     return _run
