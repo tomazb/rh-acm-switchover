@@ -6,13 +6,7 @@ from pathlib import Path
 
 import yaml
 
-TASK_FILE = (
-    Path(__file__).resolve().parents[2]
-    / "roles"
-    / "preflight"
-    / "tasks"
-    / "validate_kubeconfigs.yml"
-)
+TASK_FILE = Path(__file__).resolve().parents[2] / "roles" / "preflight" / "tasks" / "validate_kubeconfigs.yml"
 
 
 def _tasks() -> list[dict]:
@@ -63,11 +57,7 @@ def test_connectivity_pass_requires_exact_default_namespace_evidence():
         assert ".failed" not in expression
         assert "is failed" not in expression
 
-    result_tasks = [
-        task
-        for task in tasks
-        if "connectivity result from direct API probe" in task.get("name", "")
-    ]
+    result_tasks = [task for task in tasks if "connectivity result from direct API probe" in task.get("name", "")]
     assert len(result_tasks) == 2
     result_text = str(result_tasks)
     assert "_acm_primary_connectivity_verified" in result_text

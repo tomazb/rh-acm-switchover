@@ -18,16 +18,9 @@ from ansible_collections.tomazb.acm_switchover.tests.integration.r3_02_fake_api 
     status_payload,
 )
 
-FAILURE_MESSAGE = (
-    "Unable to verify autoImportStrategy on the destination hub; "
-    "verify API access and retry."
-)
-CONFIGMAP_PATH = (
-    "/api/v1/namespaces/multicluster-engine/configmaps/" "import-controller-config"
-)
-MANAGED_CLUSTER_LIST_PATH = (
-    "/apis/cluster.open-cluster-management.io/v1/managedclusters"
-)
+FAILURE_MESSAGE = "Unable to verify autoImportStrategy on the destination hub; " "verify API access and retry."
+CONFIGMAP_PATH = "/api/v1/namespaces/multicluster-engine/configmaps/" "import-controller-config"
+MANAGED_CLUSTER_LIST_PATH = "/apis/cluster.open-cluster-management.io/v1/managedclusters"
 
 
 def _repo_root() -> Path:
@@ -70,8 +63,7 @@ def _run_role(
     )
     command = [
         "ansible-playbook",
-        "ansible_collections/tomazb/acm_switchover/tests/integration/playbooks/"
-        "run_r3_02_activation.yml",
+        "ansible_collections/tomazb/acm_switchover/tests/integration/playbooks/" "run_r3_02_activation.yml",
         "-i",
         "localhost,",
         "-e",
@@ -98,11 +90,7 @@ def _output(completed: subprocess.CompletedProcess[str]) -> str:
 def _managed_cluster_requests(
     requests: list[dict[str, str]],
 ) -> list[dict[str, str]]:
-    return [
-        request
-        for request in requests
-        if request["path"].startswith(MANAGED_CLUSTER_LIST_PATH)
-    ]
+    return [request for request in requests if request["path"].startswith(MANAGED_CLUSTER_LIST_PATH)]
 
 
 def _assert_failure_barrier(
@@ -160,9 +148,7 @@ def test_valid_import_only_configmap_reaches_annotation_path(tmp_path, data):
 
 
 def test_import_and_sync_skips_managed_cluster_work(tmp_path):
-    api = FakeR302API(
-        configmap_body=_configmap(data_marker={"autoImportStrategy": "ImportAndSync"})
-    )
+    api = FakeR302API(configmap_body=_configmap(data_marker={"autoImportStrategy": "ImportAndSync"}))
     try:
         completed, requests = _run_role(tmp_path, api)
     finally:
@@ -253,9 +239,7 @@ def test_malformed_configmap_evidence_stops_before_managed_clusters(
 
 
 def test_check_mode_reads_but_never_patches_managed_clusters(tmp_path):
-    api = FakeR302API(
-        configmap_body=_configmap(data_marker={"autoImportStrategy": "ImportOnly"})
-    )
+    api = FakeR302API(configmap_body=_configmap(data_marker={"autoImportStrategy": "ImportOnly"}))
     try:
         completed, requests = _run_role(tmp_path, api, check_mode=True)
     finally:

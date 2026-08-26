@@ -297,9 +297,7 @@ def test_preflight_input_failure_writes_report_and_fails(run_preflight_fixture):
     assert completed.returncode != 0
     assert report["phase"] == "preflight"
     assert report["status"] == "fail"
-    assert any(
-        item["id"] == "preflight-input-secondary-context" for item in report["results"]
-    )
+    assert any(item["id"] == "preflight-input-secondary-context" for item in report["results"])
 
 
 def test_preflight_success_fixture_passes(
@@ -316,17 +314,14 @@ def test_preflight_success_fixture_passes(
     )
     assert completed.returncode == 0
     assert report["status"] == "pass"
-    assert any(
-        item["id"] == "preflight-version-compatibility" for item in report["results"]
-    )
+    assert any(item["id"] == "preflight-version-compatibility" for item in report["results"])
 
 
 def _connectivity_results(report: dict) -> dict[str, dict]:
     return {
         item["id"]: item
         for item in report["results"]
-        if item["id"].startswith("preflight-kubeconfig-")
-        and item["id"].endswith("-connectivity")
+        if item["id"].startswith("preflight-kubeconfig-") and item["id"].endswith("-connectivity")
     }
 
 
@@ -381,18 +376,10 @@ def test_connectivity_bad_request_fails_only_the_intended_hub_and_reaches_report
     assert completed.returncode != 0
     assert report["status"] == "fail"
     connectivity = _connectivity_results(report)
-    assert (
-        connectivity[f"preflight-kubeconfig-{failed_hub}-connectivity"]["status"]
-        == "fail"
-    )
+    assert connectivity[f"preflight-kubeconfig-{failed_hub}-connectivity"]["status"] == "fail"
     passing_hub = "secondary" if failed_hub == "primary" else "primary"
-    assert (
-        connectivity[f"preflight-kubeconfig-{passing_hub}-connectivity"]["status"]
-        == "pass"
-    )
-    assert "See the structured preflight report artifact for details." in (
-        completed.stdout + completed.stderr
-    )
+    assert connectivity[f"preflight-kubeconfig-{passing_hub}-connectivity"]["status"] == "pass"
+    assert "See the structured preflight report artifact for details." in (completed.stdout + completed.stderr)
 
 
 def test_connectivity_forbidden_is_sanitized_in_callback_and_report(
@@ -426,12 +413,7 @@ def test_connectivity_forbidden_is_sanitized_in_callback_and_report(
 
     output = completed.stdout + completed.stderr
     assert completed.returncode != 0
-    assert (
-        _connectivity_results(report)["preflight-kubeconfig-primary-connectivity"][
-            "status"
-        ]
-        == "fail"
-    )
+    assert _connectivity_results(report)["preflight-kubeconfig-primary-connectivity"]["status"] == "fail"
     assert sentinel not in output
     assert sentinel not in json.dumps(report)
 
@@ -504,9 +486,7 @@ def test_connectivity_rejects_missing_or_wrong_namespace_evidence(
     assert completed.returncode != 0
     connectivity = _connectivity_results(report)
     assert connectivity["preflight-kubeconfig-primary-connectivity"]["status"] == "fail"
-    assert (
-        connectivity["preflight-kubeconfig-secondary-connectivity"]["status"] == "pass"
-    )
+    assert connectivity["preflight-kubeconfig-secondary-connectivity"]["status"] == "pass"
 
 
 def test_preflight_version_mismatch_fails(run_preflight_fixture):
@@ -514,8 +494,7 @@ def test_preflight_version_mismatch_fails(run_preflight_fixture):
     assert completed.returncode != 0
     assert report["status"] == "fail"
     assert any(
-        item["id"] == "preflight-version-compatibility" and item["status"] == "fail"
-        for item in report["results"]
+        item["id"] == "preflight-version-compatibility" and item["status"] == "fail" for item in report["results"]
     )
 
 
@@ -553,9 +532,7 @@ def test_preflight_rbac_failure_still_reports_backup_findings(
     assert results_by_id["preflight-rbac-secondary"]["status"] == "fail"
     assert results_by_id["preflight-backup-latest"]["status"] == "fail"
     assert results_by_id["preflight-backup-schedule"]["status"] == "fail"
-    assert (
-        results_by_id["preflight-backup-storage-location-primary"]["status"] == "fail"
-    )
+    assert results_by_id["preflight-backup-storage-location-primary"]["status"] == "fail"
     assert results_by_id["preflight-passive-restore-secondary"]["status"] == "fail"
 
 
@@ -577,9 +554,7 @@ def test_restore_only_rbac_with_secondary_only_hub_reports_secondary_validation(
     assert "preflight-rbac-primary" not in results_by_id
     assert results_by_id["preflight-rbac-secondary"]["status"] == "fail"
     assert "preflight-kubeconfig-primary-connectivity" not in results_by_id
-    assert (
-        results_by_id["preflight-kubeconfig-secondary-connectivity"]["status"] == "pass"
-    )
+    assert results_by_id["preflight-kubeconfig-secondary-connectivity"]["status"] == "pass"
 
 
 def test_preflight_fixture_without_execution_block_defaults_to_execute_identity_reads(
@@ -602,10 +577,7 @@ def test_preflight_invalid_report_dir_fails_without_writing_report(
     completed, report = run_preflight_fixture("invalid_report_dir.yml")
     assert completed.returncode != 0
     assert report == {}
-    assert (
-        "Path traversal attempt" in completed.stdout
-        or "Path traversal attempt" in completed.stderr
-    )
+    assert "Path traversal attempt" in completed.stdout or "Path traversal attempt" in completed.stderr
 
 
 def test_preflight_nested_argocd_failure_is_callback_safe_and_advisory(
@@ -642,10 +614,7 @@ def test_strict_argocd_discovery_failure_is_callback_safe_and_fails(
 
     output = completed.stdout + completed.stderr
     assert completed.returncode != 0
-    assert (
-        "Argo CD discovery failed; verify controller access and input, then retry."
-        in output
-    )
+    assert "Argo CD discovery failed; verify controller access and input, then retry." in output
     assert not any(
         sentinel in output for sentinel in ARGOCD_FAILURE_SENTINELS
     ), "callback output disclosed protected sentinel data"
@@ -679,10 +648,7 @@ def test_mock_filter_failure_preserves_advisory_and_strict_semantics(
     assert "mock-filter-secret" not in output
     assert "\x1b" not in output
     if expected_status is None:
-        assert (
-            "Argo CD discovery failed; verify controller access and input, then retry."
-            in output
-        )
+        assert "Argo CD discovery failed; verify controller access and input, then retry." in output
     else:
         assert f"DISCOVERY_STATUS={expected_status} COUNT=0" in output
         assert "changed=0" in output

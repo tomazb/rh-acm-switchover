@@ -58,9 +58,7 @@ logger = logging.getLogger("acm_switchover")
 # Set to 0 to allow switchover with only local-cluster
 MIN_MANAGED_CLUSTERS = 0
 
-AUTO_IMPORT_VERIFY_ERROR = (
-    "Unable to verify autoImportStrategy on the destination hub; verify API access and retry."
-)
+AUTO_IMPORT_VERIFY_ERROR = "Unable to verify autoImportStrategy on the destination hub; verify API access and retry."
 
 
 class SecondaryActivation:

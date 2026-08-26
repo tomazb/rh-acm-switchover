@@ -19,8 +19,7 @@ from ansible_collections.tomazb.acm_switchover.tests.integration.r3_02_fake_api 
 )
 
 VERIFICATION_FAILURE = (
-    "Unable to verify Thanos compactor pod termination after scale-down; "
-    "verify API access and retry"
+    "Unable to verify Thanos compactor pod termination after scale-down; " "verify API access and retry"
 )
 POD_PATH = "/api/v1/namespaces/open-cluster-management-observability/pods"
 
@@ -75,8 +74,7 @@ def _run_role(
     completed = subprocess.run(
         [
             "ansible-playbook",
-            "ansible_collections/tomazb/acm_switchover/tests/integration/playbooks/"
-            "run_r3_02_primary_prep.yml",
+            "ansible_collections/tomazb/acm_switchover/tests/integration/playbooks/" "run_r3_02_primary_prep.yml",
             "-i",
             "localhost,",
             "-e",
@@ -102,25 +100,18 @@ def _assert_no_mutation_after_verification(
     require_pod_read: bool = True,
 ) -> None:
     pod_read_indexes = [
-        index
-        for index, request in enumerate(requests)
-        if request["method"] == "GET" and request["path"] == POD_PATH
+        index for index, request in enumerate(requests) if request["method"] == "GET" and request["path"] == POD_PATH
     ]
     write_indexes = [
-        index
-        for index, request in enumerate(requests)
-        if request["method"] in {"POST", "PUT", "PATCH", "DELETE"}
+        index for index, request in enumerate(requests) if request["method"] in {"POST", "PUT", "PATCH", "DELETE"}
     ]
-    assert (
-        write_indexes
-    ), "fixture must prove scale mutation happened before verification"
+    assert write_indexes, "fixture must prove scale mutation happened before verification"
     if require_pod_read:
         assert pod_read_indexes, requests
     if pod_read_indexes:
         assert max(write_indexes) < min(pod_read_indexes), requests
     assert all(
-        request["method"] == "PATCH"
-        and request["path"].endswith("/statefulsets/thanos-compactor/scale")
+        request["method"] == "PATCH" and request["path"].endswith("/statefulsets/thanos-compactor/scale")
         for request in (requests[index] for index in write_indexes)
     ), requests
 

@@ -39,9 +39,7 @@ from lib.waiter import WaitConditionResult
 
 SecondaryActivation = activation_module.SecondaryActivation
 
-AUTO_IMPORT_VERIFY_ERROR = (
-    "Unable to verify autoImportStrategy on the destination hub; verify API access and retry."
-)
+AUTO_IMPORT_VERIFY_ERROR = "Unable to verify autoImportStrategy on the destination hub; verify API access and retry."
 
 
 def create_mock_step_context(is_step_completed_func, mark_step_completed_func):

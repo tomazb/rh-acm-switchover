@@ -53,9 +53,7 @@ class FakeR302API:
         self.configmap_status = configmap_status
         self.configmap_body = copy.deepcopy(configmap_body)
         self.configmap_transport_error = configmap_transport_error
-        self._configmap_transport_errors_remaining = (
-            1 if configmap_transport_error else 0
-        )
+        self._configmap_transport_errors_remaining = 1 if configmap_transport_error else 0
         self.core_resources = copy.deepcopy(core_resources)
         self.managed_clusters = copy.deepcopy(
             managed_clusters
@@ -92,11 +90,7 @@ class FakeR302API:
 
     @property
     def writes(self) -> list[dict[str, str]]:
-        return [
-            request
-            for request in self.requests
-            if request["method"] in {"POST", "PUT", "PATCH", "DELETE"}
-        ]
+        return [request for request in self.requests if request["method"] in {"POST", "PUT", "PATCH", "DELETE"}]
 
     def close(self) -> None:
         self._server.shutdown()
@@ -118,9 +112,7 @@ class FakeR302API:
                 path = unquote(urlsplit(self.path).path)
                 api._record("GET", path)
                 if path == "/version":
-                    self._write_json(
-                        {"major": "1", "minor": "28", "gitVersion": "v1.28.0"}
-                    )
+                    self._write_json({"major": "1", "minor": "28", "gitVersion": "v1.28.0"})
                     return
                 if path == "/api":
                     self._write_json(
@@ -238,8 +230,7 @@ class FakeR302API:
                     )
                     return
                 if path == (
-                    "/apis/apps/v1/namespaces/"
-                    "open-cluster-management-observability/statefulsets/thanos-compactor"
+                    "/apis/apps/v1/namespaces/" "open-cluster-management-observability/statefulsets/thanos-compactor"
                 ):
                     self._write_json(self._statefulset())
                     if api._shutdown_scheduled:
@@ -274,8 +265,7 @@ class FakeR302API:
                     return
                 if path in {
                     "/api/v1/namespaces/test-ns/configmaps/test-config",
-                    "/api/v1/namespaces/multicluster-engine/configmaps/"
-                    "import-controller-config",
+                    "/api/v1/namespaces/multicluster-engine/configmaps/" "import-controller-config",
                 }:
                     if api.configmap_transport_error:
                         with api._lock:
@@ -292,16 +282,8 @@ class FakeR302API:
                         return
                     payload = api.configmap_body
                     if payload is None:
-                        namespace = (
-                            "multicluster-engine"
-                            if "multicluster-engine" in path
-                            else "test-ns"
-                        )
-                        name = (
-                            "import-controller-config"
-                            if "import-controller-config" in path
-                            else "test-config"
-                        )
+                        namespace = "multicluster-engine" if "multicluster-engine" in path else "test-ns"
+                        name = "import-controller-config" if "import-controller-config" in path else "test-config"
                         payload = {
                             "apiVersion": "v1",
                             "kind": "ConfigMap",
@@ -317,9 +299,7 @@ class FakeR302API:
                         status=api.configmap_status,
                     )
                     return
-                if path == (
-                    "/apis/cluster.open-cluster-management.io/v1/" "managedclusters"
-                ):
+                if path == ("/apis/cluster.open-cluster-management.io/v1/" "managedclusters"):
                     with api._lock:
                         items = copy.deepcopy(api.managed_clusters)
                     self._write_json(
@@ -331,9 +311,7 @@ class FakeR302API:
                         }
                     )
                     return
-                managed_cluster_prefix = (
-                    "/apis/cluster.open-cluster-management.io/v1/" "managedclusters/"
-                )
+                managed_cluster_prefix = "/apis/cluster.open-cluster-management.io/v1/" "managedclusters/"
                 if path.startswith(managed_cluster_prefix):
                     name = path.removeprefix(managed_cluster_prefix)
                     with api._lock:
@@ -362,20 +340,14 @@ class FakeR302API:
                 path = unquote(urlsplit(self.path).path)
                 api._record("PATCH", path)
                 length = int(self.headers.get("Content-Length", "0"))
-                body = (
-                    json.loads(self.rfile.read(length).decode("utf-8"))
-                    if length
-                    else {}
-                )
+                body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
                 if path == (
                     "/apis/apps/v1/namespaces/"
                     "open-cluster-management-observability/statefulsets/"
                     "thanos-compactor/scale"
                 ):
                     with api._lock:
-                        api.statefulset_replicas = int(
-                            (body.get("spec") or {}).get("replicas", 0)
-                        )
+                        api.statefulset_replicas = int((body.get("spec") or {}).get("replicas", 0))
                     self._write_json(
                         {
                             "apiVersion": "autoscaling/v1",
@@ -389,24 +361,16 @@ class FakeR302API:
                         }
                     )
                     return
-                prefix = (
-                    "/apis/cluster.open-cluster-management.io/v1/" "managedclusters/"
-                )
+                prefix = "/apis/cluster.open-cluster-management.io/v1/" "managedclusters/"
                 if path.startswith(prefix):
                     name = path.removeprefix(prefix)
                     with api._lock:
                         cluster = next(
-                            (
-                                item
-                                for item in api.managed_clusters
-                                if item.get("metadata", {}).get("name") == name
-                            ),
+                            (item for item in api.managed_clusters if item.get("metadata", {}).get("name") == name),
                             None,
                         )
                         if cluster is not None:
-                            annotations = (body.get("metadata") or {}).get(
-                                "annotations"
-                            ) or {}
+                            annotations = (body.get("metadata") or {}).get("annotations") or {}
                             current_annotations = cluster.setdefault(
                                 "metadata",
                                 {},

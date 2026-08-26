@@ -56,8 +56,7 @@ def _run_module(
     )
     command = [
         "ansible-playbook",
-        "ansible_collections/tomazb/acm_switchover/tests/integration/playbooks/"
-        "run_k8s_read_outcome.yml",
+        "ansible_collections/tomazb/acm_switchover/tests/integration/playbooks/" "run_k8s_read_outcome.yml",
         "-i",
         "localhost,",
         "-e",

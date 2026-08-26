@@ -81,9 +81,7 @@ class TestConfigMapAdvisoryReads:
         assert result is None
         assert mock_k8s_apis["core_api"].read_namespaced_config_map.call_count == 1
 
-    def test_configmap_advisory_propagates_403_without_logging_detail(
-        self, kube_client, mock_k8s_apis, caplog
-    ):
+    def test_configmap_advisory_propagates_403_without_logging_detail(self, kube_client, mock_k8s_apis, caplog):
         failure = ApiException(status=403, reason="R302-CONFIGMAP-ADVISORY-SENTINEL")
         mock_k8s_apis["core_api"].read_namespaced_config_map.side_effect = failure
 
@@ -109,9 +107,7 @@ class TestConfigMapAdvisoryReads:
         assert result == configmap.to_dict.return_value
         assert mock_k8s_apis["core_api"].read_namespaced_config_map.call_count == 2
 
-    def test_configmap_advisory_bounds_retry_and_never_logs_exception_detail(
-        self, kube_client, mock_k8s_apis, caplog
-    ):
+    def test_configmap_advisory_bounds_retry_and_never_logs_exception_detail(self, kube_client, mock_k8s_apis, caplog):
         failure = ApiException(status=503, reason="R302-CONFIGMAP-RETRY-SENTINEL")
         mock_k8s_apis["core_api"].read_namespaced_config_map.side_effect = failure
 

@@ -26,19 +26,13 @@ def test_primary_prep_manage_auto_import_patches_managed_clusters():
     text = (PRIMARY_PREP_TASKS / "manage_auto_import.yml").read_text()
 
     managed_cluster_queries = [
-        task
-        for task in tasks
-        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"
+        task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"
     ]
     patch_tasks = [task for task in tasks if "kubernetes.core.k8s" in task]
 
-    assert (
-        managed_cluster_queries
-    ), "manage_auto_import.yml must query ManagedCluster resources"
+    assert managed_cluster_queries, "manage_auto_import.yml must query ManagedCluster resources"
     assert patch_tasks, "manage_auto_import.yml must patch ManagedClusters"
-    assert (
-        "disable-auto-import" in text
-    ), "manage_auto_import.yml must add the disable-auto-import annotation"
+    assert "disable-auto-import" in text, "manage_auto_import.yml must add the disable-auto-import annotation"
     assert "local-cluster" in text, "manage_auto_import.yml must exclude local-cluster"
 
 
@@ -51,16 +45,10 @@ def test_primary_prep_uses_python_thanos_compactor_selector():
 
 def test_primary_prep_scales_observability_only_when_primary_observability_was_detected():
     tasks = list(_walk_tasks(_load_yaml("main.yml")))
-    scale_tasks = [
-        task
-        for task in tasks
-        if task.get("ansible.builtin.include_tasks") == "scale_observability.yml"
-    ]
+    scale_tasks = [task for task in tasks if task.get("ansible.builtin.include_tasks") == "scale_observability.yml"]
 
     assert scale_tasks, "primary_prep must include scale_observability.yml"
-    assert "acm_switchover_primary_has_observability" in str(
-        scale_tasks[0].get("when", "")
-    )
+    assert "acm_switchover_primary_has_observability" in str(scale_tasks[0].get("when", ""))
 
 
 def test_scale_observability_fails_when_detected_but_compactor_is_missing():
@@ -68,18 +56,12 @@ def test_scale_observability_fails_when_detected_but_compactor_is_missing():
     fail_tasks = [
         task
         for task in tasks
-        if "Thanos compactor StatefulSet was not found"
-        in str(task.get("ansible.builtin.fail", {}))
+        if "Thanos compactor StatefulSet was not found" in str(task.get("ansible.builtin.fail", {}))
     ]
 
-    assert (
-        fail_tasks
-    ), "detected Observability with no Thanos compactor must fail primary_prep"
+    assert fail_tasks, "detected Observability with no Thanos compactor must fail primary_prep"
     fail_when = str(fail_tasks[0].get("when", ""))
-    assert (
-        "(acm_primary_compactor_info.resources | default([]) | length) == 0"
-        in fail_when
-    )
+    assert "(acm_primary_compactor_info.resources | default([]) | length) == 0" in fail_when
     assert "acm_switchover_execution.mode" in fail_when
 
 
@@ -89,27 +71,19 @@ def test_scale_observability_blocks_when_thanos_pods_remain():
     tasks = _load_yaml("scale_observability.yml")
 
     pod_queries = [
-        task
-        for task in tasks
-        if task.get("tomazb.acm_switchover.acm_k8s_read_outcome", {}).get("kind")
-        == "Pod"
+        task for task in tasks if task.get("tomazb.acm_switchover.acm_k8s_read_outcome", {}).get("kind") == "Pod"
     ]
     verification_failures = [
         task
         for task in tasks
-        if "Unable to verify Thanos compactor pod termination"
-        in str(task.get("ansible.builtin.fail", {}))
+        if "Unable to verify Thanos compactor pod termination" in str(task.get("ansible.builtin.fail", {}))
     ]
     count_failures = [
-        task
-        for task in tasks
-        if "Thanos compactor still has" in str(task.get("ansible.builtin.fail", {}))
+        task for task in tasks if "Thanos compactor still has" in str(task.get("ansible.builtin.fail", {}))
     ]
 
     assert "ansible.builtin.pause" not in text
-    assert (
-        pod_queries
-    ), "scale_observability.yml must query Thanos compactor pods after scaling"
+    assert pod_queries, "scale_observability.yml must query Thanos compactor pods after scaling"
     pod_query = pod_queries[0]
     query_args = pod_query["tomazb.acm_switchover.acm_k8s_read_outcome"]
     assert query_args["read_mode"] == "list"
@@ -144,7 +118,4 @@ def test_scale_observability_blocks_when_thanos_pods_remain():
     assert "resources | length" in count_when
     assert ".failed" not in decision_text
     assert "is failed" not in decision_text
-    assert (
-        "acm_primary_compactor_pods_after_scale.resources | default([])"
-        not in decision_text
-    )
+    assert "acm_primary_compactor_pods_after_scale.resources | default([])" not in decision_text

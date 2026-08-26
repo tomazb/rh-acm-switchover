@@ -129,9 +129,7 @@ def _argument_spec() -> dict[str, Any]:
     return spec
 
 
-def _exit_outcome(
-    module: AnsibleModule, read_status: str, resources: list[dict] | None = None
-) -> None:
+def _exit_outcome(module: AnsibleModule, read_status: str, resources: list[dict] | None = None) -> None:
     module.exit_json(
         changed=False,
         read_status=read_status,
@@ -210,9 +208,7 @@ def run_module(module: AnsibleModule) -> None:
         return
 
     try:
-        resource = api_client.resource(
-            module.params["kind"], module.params["api_version"]
-        )
+        resource = api_client.resource(module.params["kind"], module.params["api_version"])
     except Exception:
         _exit_outcome(module, "error")
         return
