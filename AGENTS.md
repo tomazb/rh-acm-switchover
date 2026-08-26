@@ -435,6 +435,35 @@ because a reviewer labelled it a warning:
 **A deferral is complete only when it is filed in the receiving tracker.** A PR reply alone
 is not durable tracking.
 
+### Pre-PR Simplification Gate
+
+Before opening a pull request, the builder must review the changed code and the directly
+affected collaborators for avoidable complexity introduced, exposed, or made materially
+worse by the change.
+
+Apply safe, behavior-preserving simplifications when they are within the authorized scope
+and materially improve the changed implementation. Examples include duplicated logic,
+unnecessarily complex control flow, unclear local interfaces, avoidable indirection, and
+mixed responsibilities directly involved in the change.
+
+- The review scope may extend to directly affected collaborators, but this does not
+  authorize edits outside the governing scope. Record or defer worthwhile out-of-scope
+  simplifications under the normal finding-disposition rules.
+- Do not turn a scoped feature, correctness, or safety fix into a general refactoring
+  effort. Pre-existing complexity alone is not authorization to restructure it.
+- Do not weaken safety, security, concurrency, recovery, idempotency, audit, evidence,
+  parity, compatibility, or operator-facing guarantees for the sake of fewer lines, files,
+  branches, or abstractions.
+- Preserve public and operator-facing interfaces, persisted state and checkpoint contracts,
+  errors and observable outcomes unless the approved change explicitly includes their
+  revision.
+- Prefer readability and explicit control flow over minimizing line count.
+- After any simplification, rerun the targeted tests first and then every verification gate
+  invalidated by the resulting branch changes. Do not open the PR while the required local
+  gate set is failing.
+- Record the simplification review outcome in the PR description: summarize simplifications
+  applied, or state that no safe in-scope simplification was identified.
+
 ### Pull Request Creation Gate
 
 Before creating any PR: run the `code-review` skill against the completed branch changes;
