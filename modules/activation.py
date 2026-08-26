@@ -6,6 +6,7 @@ Secondary hub activation module for ACM switchover.
 
 import logging
 import time
+from collections.abc import Mapping
 from typing import Dict, List, Optional
 
 from kubernetes.client.rest import ApiException
@@ -56,6 +57,10 @@ logger = logging.getLogger("acm_switchover")
 # Minimum number of ManagedClusters expected (excluding local-cluster)
 # Set to 0 to allow switchover with only local-cluster
 MIN_MANAGED_CLUSTERS = 0
+
+AUTO_IMPORT_VERIFY_ERROR = (
+    "Unable to verify autoImportStrategy on the destination hub; verify API access and retry."
+)
 
 
 class SecondaryActivation:
@@ -641,15 +646,27 @@ class SecondaryActivation:
     def _get_auto_import_strategy(self) -> str:
         """Return the autoImportStrategy value or 'default' when not configured."""
         try:
-            cm = self.secondary.get_configmap(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM)
-        except Exception as e:
-            logger.warning("Unable to retrieve autoImportStrategy ConfigMap: %s", e)
-            return "error"
+            configmap = self.secondary.get_configmap_advisory(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM)
+        except Exception as exc:
+            raise FatalError(AUTO_IMPORT_VERIFY_ERROR) from exc
 
-        if not cm:
+        if configmap is None:
             return "default"
 
-        data = cm.get("data") or {}
+        if not isinstance(configmap, Mapping):
+            raise FatalError(AUTO_IMPORT_VERIFY_ERROR)
+
+        metadata = configmap.get("metadata")
+        data = configmap.get("data")
+        if (
+            not isinstance(metadata, Mapping)
+            or metadata.get("name") != IMPORT_CONTROLLER_CONFIG_CM
+            or metadata.get("namespace") != MCE_NAMESPACE
+            or (data is not None and not isinstance(data, Mapping))
+        ):
+            raise FatalError(AUTO_IMPORT_VERIFY_ERROR)
+
+        data = data or {}
         strategy = data.get(AUTO_IMPORT_STRATEGY_KEY, "")
         return strategy or "default"
 
@@ -661,9 +678,6 @@ class SecondaryActivation:
             return
 
         strategy = self._get_auto_import_strategy()
-        if strategy == "error":
-            logger.warning("Skipping immediate-import annotations (autoImportStrategy unknown)")
-            return
         if strategy not in ("default", AUTO_IMPORT_STRATEGY_DEFAULT):
             logger.info(
                 "Skipping immediate-import annotations (autoImportStrategy=%s)",

@@ -18,11 +18,14 @@ from kubernetes.client.rest import ApiException
 
 import modules.activation as activation_module
 from lib.constants import (
+    AUTO_IMPORT_STRATEGY_DEFAULT,
     AUTO_IMPORT_STRATEGY_KEY,
     AUTO_IMPORT_STRATEGY_SYNC,
     BACKUP_NAMESPACE,
     IMMEDIATE_IMPORT_ANNOTATION,
+    IMPORT_CONTROLLER_CONFIG_CM,
     MANAGED_CLUSTER_RESTORE_NAME,
+    MCE_NAMESPACE,
     PATCH_VERIFY_RETRY_DELAY,
     RESTORE_PASSIVE_SYNC_NAME,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
@@ -35,6 +38,10 @@ from lib.run_record import HubFacts, RunRecord
 from lib.waiter import WaitConditionResult
 
 SecondaryActivation = activation_module.SecondaryActivation
+
+AUTO_IMPORT_VERIFY_ERROR = (
+    "Unable to verify autoImportStrategy on the destination hub; verify API access and retry."
+)
 
 
 def create_mock_step_context(is_step_completed_func, mark_step_completed_func):
@@ -51,6 +58,19 @@ def create_mock_step_context(is_step_completed_func, mark_step_completed_func):
             mark_step_completed_func(step_name)
 
     return mock_step
+
+
+def valid_auto_import_configmap(data):
+    """Build verified identity evidence for the activation-time ConfigMap read."""
+    return {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": IMPORT_CONTROLLER_CONFIG_CM,
+            "namespace": MCE_NAMESPACE,
+        },
+        "data": data,
+    }
 
 
 @pytest.fixture
@@ -1101,7 +1121,7 @@ class TestSecondaryActivation:
             method="passive",
         )
 
-        mock_secondary_client.get_configmap.return_value = None
+        mock_secondary_client.get_configmap_advisory.return_value = None
         mock_secondary_client.list_custom_resources.return_value = [
             {"metadata": {"name": "cluster-a", "annotations": {}}},
             {"metadata": {"name": "cluster-b", "annotations": {IMMEDIATE_IMPORT_ANNOTATION: ""}}},
@@ -1115,6 +1135,19 @@ class TestSecondaryActivation:
         assert kwargs["name"] == "cluster-a"
         assert kwargs["patch"]["metadata"]["annotations"][IMMEDIATE_IMPORT_ANNOTATION] == ""
 
+    def test_get_auto_import_strategy_returns_configured_value(self, mock_secondary_client, mock_state_manager):
+        """A valid present ConfigMap returns its configured strategy."""
+        activation = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            method="passive",
+        )
+        mock_secondary_client.get_configmap_advisory.return_value = valid_auto_import_configmap(
+            {AUTO_IMPORT_STRATEGY_KEY: AUTO_IMPORT_STRATEGY_SYNC}
+        )
+
+        assert activation._get_auto_import_strategy() == AUTO_IMPORT_STRATEGY_SYNC
+
     def test_apply_immediate_import_annotations_handles_completed_value(
         self, mock_secondary_client, mock_state_manager
     ):
@@ -1126,7 +1159,9 @@ class TestSecondaryActivation:
             method="passive",
         )
 
-        mock_secondary_client.get_configmap.return_value = {"data": {}}
+        mock_secondary_client.get_configmap_advisory.return_value = valid_auto_import_configmap(
+            {AUTO_IMPORT_STRATEGY_KEY: AUTO_IMPORT_STRATEGY_DEFAULT}
+        )
         mock_secondary_client.list_custom_resources.return_value = [
             {"metadata": {"name": "cluster-a", "annotations": {IMMEDIATE_IMPORT_ANNOTATION: "Completed"}}},
             {"metadata": {"name": "local-cluster", "annotations": {}}},
@@ -1152,12 +1187,68 @@ class TestSecondaryActivation:
             method="passive",
         )
 
-        mock_secondary_client.get_configmap.return_value = {
-            "data": {AUTO_IMPORT_STRATEGY_KEY: AUTO_IMPORT_STRATEGY_SYNC}
-        }
+        mock_secondary_client.get_configmap_advisory.return_value = valid_auto_import_configmap(
+            {AUTO_IMPORT_STRATEGY_KEY: AUTO_IMPORT_STRATEGY_SYNC}
+        )
 
         activation._apply_immediate_import_annotations()
 
+        mock_secondary_client.list_custom_resources.assert_not_called()
+        mock_secondary_client.patch_managed_cluster.assert_not_called()
+
+    def test_apply_immediate_import_annotations_fails_closed_on_read_error(
+        self, mock_secondary_client, mock_state_manager, caplog
+    ):
+        """API failures must raise the stable error before ManagedCluster work."""
+        RunRecord(mock_state_manager).record_hub_facts(HubFacts(secondary_version="2.14.2"))
+        activation = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            method="passive",
+        )
+        failure = RuntimeError("R302-ACTIVATION-READ-SENTINEL")
+        mock_secondary_client.get_configmap_advisory.side_effect = failure
+
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            with pytest.raises(FatalError) as exc_info:
+                activation._apply_immediate_import_annotations()
+
+        assert str(exc_info.value) == AUTO_IMPORT_VERIFY_ERROR
+        assert exc_info.value.__cause__ is failure
+        assert "R302-ACTIVATION-READ-SENTINEL" not in str(exc_info.value)
+        assert "R302-ACTIVATION-READ-SENTINEL" not in caplog.text
+        mock_secondary_client.list_custom_resources.assert_not_called()
+        mock_secondary_client.patch_managed_cluster.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "configmap",
+        [
+            [],
+            valid_auto_import_configmap({AUTO_IMPORT_STRATEGY_KEY: AUTO_IMPORT_STRATEGY_DEFAULT})
+            | {"metadata": {"name": "wrong-name", "namespace": MCE_NAMESPACE}},
+            valid_auto_import_configmap({AUTO_IMPORT_STRATEGY_KEY: AUTO_IMPORT_STRATEGY_DEFAULT})
+            | {"metadata": {"name": IMPORT_CONTROLLER_CONFIG_CM, "namespace": "wrong-namespace"}},
+            valid_auto_import_configmap("not-a-mapping"),
+        ],
+        ids=["not-mapping", "wrong-name", "wrong-namespace", "invalid-data"],
+    )
+    def test_apply_immediate_import_annotations_fails_closed_on_malformed_configmap(
+        self, mock_secondary_client, mock_state_manager, configmap
+    ):
+        """Malformed present evidence must fail before ManagedCluster discovery or patch."""
+        RunRecord(mock_state_manager).record_hub_facts(HubFacts(secondary_version="2.14.2"))
+        activation = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            method="passive",
+        )
+        mock_secondary_client.get_configmap_advisory.return_value = configmap
+
+        with pytest.raises(FatalError) as exc_info:
+            activation._apply_immediate_import_annotations()
+
+        assert str(exc_info.value) == AUTO_IMPORT_VERIFY_ERROR
+        assert str(exc_info.value) != "error"
         mock_secondary_client.list_custom_resources.assert_not_called()
         mock_secondary_client.patch_managed_cluster.assert_not_called()
 
@@ -1170,7 +1261,7 @@ class TestSecondaryActivation:
             method="passive",
         )
 
-        mock_secondary_client.get_configmap.return_value = None
+        mock_secondary_client.get_configmap_advisory.return_value = None
         mock_secondary_client.list_custom_resources.return_value = [
             {"metadata": {"name": "cluster-a", "annotations": {}}},
             {"metadata": {"name": "local-cluster", "annotations": {}}},
