@@ -1,0 +1,24 @@
+---
+- name: Exercise the shipped Kubernetes read outcome module
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Read the requested Kubernetes resource
+      tomazb.acm_switchover.acm_k8s_read_outcome:
+        read_mode: "{{ r3_02_read_mode }}"
+        api_version: v1
+        kind: "{{ r3_02_kind }}"
+        namespace: test-ns
+        name: "{{ r3_02_name if r3_02_read_mode == 'get' else omit }}"
+        label_selectors: "{{ ['app=r3-02'] if r3_02_read_mode == 'list' else omit }}"
+        kubeconfig: "{{ r3_02_kubeconfig }}"
+        context: "{{ r3_02_context }}"
+      register: r3_02_read
+
+    - name: Publish the sanitized read result
+      ansible.builtin.debug:
+        msg: >-
+          READ_STATUS={{ r3_02_read.read_status }}
+          COUNT={{ r3_02_read.resources | length }}
+          CHANGED={{ r3_02_read.changed }}
