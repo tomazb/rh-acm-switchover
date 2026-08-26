@@ -28,14 +28,14 @@ def _import_module_under_test():
         return module
 
     args_common = ModuleType("ansible_collections.kubernetes.core.plugins.module_utils.args_common")
-    args_common.AUTH_ARG_SPEC = {}
+    setattr(args_common, "AUTH_ARG_SPEC", {})
 
     client = ModuleType("ansible_collections.kubernetes.core.plugins.module_utils.k8s.client")
 
     def unavailable_get_api_client(**_kwargs):
         raise AssertionError("unit test must patch get_api_client before use")
 
-    client.get_api_client = unavailable_get_api_client
+    setattr(client, "get_api_client", unavailable_get_api_client)
 
     stubs = {
         "ansible_collections.kubernetes": package("ansible_collections.kubernetes"),
