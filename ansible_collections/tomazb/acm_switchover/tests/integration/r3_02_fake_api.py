@@ -7,6 +7,7 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
+from typing import Any
 from urllib.parse import unquote, urlsplit
 
 SENTINEL = "R302-SENTINEL-HTTP-BODY"
@@ -42,8 +43,8 @@ class FakeR302API:
         configmap_status: int = 200,
         configmap_body: dict | None = None,
         configmap_transport_error: bool = False,
-        core_resources: list[dict] | None = None,
-        managed_clusters: list[dict] | None = None,
+        core_resources: list[dict[str, Any]] | None = None,
+        managed_clusters: list[dict[str, Any]] | None = None,
     ):
         self.pod_list_status = pod_list_status
         self.pod_list_body = copy.deepcopy(pod_list_body)
@@ -54,21 +55,20 @@ class FakeR302API:
         self.configmap_body = copy.deepcopy(configmap_body)
         self.configmap_transport_error = configmap_transport_error
         self._configmap_transport_errors_remaining = 1 if configmap_transport_error else 0
-        self.core_resources = copy.deepcopy(core_resources)
-        self.managed_clusters = copy.deepcopy(
-            managed_clusters
-            if managed_clusters is not None
-            else [
-                {
-                    "apiVersion": "cluster.open-cluster-management.io/v1",
-                    "kind": "ManagedCluster",
-                    "metadata": {
-                        "name": "cluster-a",
-                        "resourceVersion": "1",
-                        "annotations": {},
-                    },
-                }
-            ]
+        self.core_resources: list[dict[str, Any]] | None = copy.deepcopy(core_resources)
+        default_managed_clusters: list[dict[str, Any]] = [
+            {
+                "apiVersion": "cluster.open-cluster-management.io/v1",
+                "kind": "ManagedCluster",
+                "metadata": {
+                    "name": "cluster-a",
+                    "resourceVersion": "1",
+                    "annotations": {},
+                },
+            }
+        ]
+        self.managed_clusters: list[dict[str, Any]] = copy.deepcopy(
+            managed_clusters if managed_clusters is not None else default_managed_clusters
         )
         self.statefulset_replicas = 1
         self._scaled_statefulset_reads = 0

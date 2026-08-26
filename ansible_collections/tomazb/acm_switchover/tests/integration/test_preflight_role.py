@@ -159,6 +159,13 @@ class _FixtureKubernetesHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+class _ConnectivityHTTPServer(ThreadingHTTPServer):
+    fixture_default_namespace_status: int
+    fixture_default_namespace_body: dict | None
+    fixture_advertise_namespace: bool
+    fixture_requests: list[dict[str, str]]
+
+
 class _ConnectivityAPIServer:
     def __init__(
         self,
@@ -167,7 +174,7 @@ class _ConnectivityAPIServer:
         body: dict | None = None,
         advertise_namespace: bool = True,
     ):
-        self._server = ThreadingHTTPServer(
+        self._server = _ConnectivityHTTPServer(
             ("127.0.0.1", 0),
             _FixtureKubernetesHandler,
         )

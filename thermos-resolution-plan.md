@@ -1165,7 +1165,7 @@ This is the delivery sequence. Placing two bounded regressions ahead of
 | --- | --- | --- | --- | --- |
 | R3-01 / TR2D-01 | merged | R3-A1, TR2D-M1, TR2D-L1 | PR [#200](https://github.com/tomazb/rh-acm-switchover/pull/200) merged exact head `0bc1a4b6701508f6c3d4cd898515d82b8a29b6a3` as `786f8325493c6086e136cb9694a9997557f12e02`, removing the skipped-task clobber, requiring positive success for every namespace read before aggregation, failing closed on malformed/failed/skipped/unreachable/mixed results, and adding executable non-mock retry and standalone-resume coverage. The aliases preserve provenance; they do not create duplicate implementation work. | Argo CD pause/resume safety; retry and standalone-resume paths; sanitized failure handling |
 | R3-01b | planned | R3-A2, R3-A3 | Correct the two finalization register/set-fact clobbers and guard fixture/live-query semantics without coupling them to the Argo CD regression delivery. | finalization dry-run preview and fixture/live-read behavior |
-| R3-02 | ready_for_review | R3-A4, R3-A5, GLM-H12 | Make masked-error verification gates fail closed so an API error can never satisfy a drain or connectivity check. Mechanism: exact positive `default` Namespace evidence for connectivity (`k8s_info`); lossless `acm_k8s_read_outcome` for compactor Pod-list and auto-import ConfigMap reads; Python `get_configmap_advisory()` parity for activation. Note: `k8s_info` can normalize empty list, named 404, and BadRequest/400 to the same `api_found: true`, `resources: []` shape across governed kubernetes.core 6.x, so `resources is defined` / empty `resources` alone cannot distinguish success, absence, and error. Focused Tasks 1–8 evidence is recorded below; broader Task 10 gates remain outstanding. | Thanos/observability parity with Python; preflight go/no-go artifact integrity; activation fail-closed before ManagedCluster mutation |
+| R3-02 | ready_for_review | R3-A4, R3-A5, GLM-H12 | Make masked-error verification gates fail closed so an API error can never satisfy a drain or connectivity check. Mechanism: exact positive `default` Namespace evidence for connectivity (`k8s_info`); lossless `acm_k8s_read_outcome` for compactor Pod-list and auto-import ConfigMap reads; Python `get_configmap_advisory()` parity for activation. Note: `k8s_info` can normalize empty list, named 404, and BadRequest/400 to the same `api_found: true`, `resources: []` shape across governed kubernetes.core 6.x, so `resources is defined` / empty `resources` alone cannot distinguish success, absence, and error. Task 10 local gates recorded below; hosted ansible-core 2.21 lane still required on the frozen PR head. | Thanos/observability parity with Python; preflight go/no-go artifact integrity; activation fail-closed before ManagedCluster mutation |
 | R3-03 | planned | R3-P1 | Correct the timeout budget in place. The slice design must choose one explicit algorithm; it must not extract helpers or modules. Decomposition remains owned by `H3`. | post-activation failure semantics at fleet scale; parity with `SSA-03` |
 | R3-04a | planned | R3-P2 | Recover Python preflight diagnostics only after sanitizing them before verbose logging; keep raw exception/API/credential material prohibited. | secret-handling and operator troubleshooting |
 | R3-04b | planned | R3-A9 | Sanitize collection report/path data in both success and failure records. | report schema, filesystem-path exposure, success/failure parity |
@@ -1297,9 +1297,10 @@ rollback boundary, and verification plan.
 **Status:** `ready_for_review` on branch `r3-02-fail-closed-verification` (worktree
 `.claude/worktrees/r3-02-implementation`), based on `origin/ansible@3dc67788`,
 carrying approved design `7723260d` and approved plan `6cbd43c2` (cherry-picked).
-Focused Tasks 1–8 implementation gates pass. Task 10's broader/full gates and
-the repository-tested Ansible endpoint lanes have not run in this task, so this
-status is not a merge-readiness or certification claim.
+Task 10 local gates below passed on the implementation head; this is not merge
+authorization. Hosted Collection endpoint lane ansible-core 2.21 / Python 3.12
+must still pass on the frozen PR head (local environment has ansible-core 2.16
+and Python 3.14 only).
 
 **Resolution (approved hybrid design)**
 - Do **not** rely on `resources is defined`, empty `resources`, or `.failed` after
@@ -1329,39 +1330,22 @@ status is not a merge-readiness or certification claim.
 - Preserve dry-run/check-mode non-mutation, targeting, checkpoints, `changed`
   semantics, and the existing RBAC surface (no new permissions).
 
-**Implementation evidence (focused Tasks 1–8)**
-- Tasks 1–3 lossless reader and compactor paths:
-  `export ANSIBLE_COLLECTIONS_PATH="${PWD}:${HOME}/.ansible/collections" &&
-  PYTHONPATH=".:${HOME}/.ansible/collections" python -m pytest
-  ansible_collections/tomazb/acm_switchover/tests/unit/test_primary_prep_auto_import.py
-  ansible_collections/tomazb/acm_switchover/tests/integration/test_r3_02_compactor_runtime.py
-  ansible_collections/tomazb/acm_switchover/tests/unit/test_k8s_read_outcome.py
-  ansible_collections/tomazb/acm_switchover/tests/integration/test_k8s_read_outcome_runtime.py
-  -q` — 34 passed.
-- Task 4 exact connectivity evidence and report path:
-  `export ANSIBLE_COLLECTIONS_PATH="${PWD}:${HOME}/.ansible/collections" &&
-  PYTHONPATH=".:${HOME}/.ansible/collections" python -m pytest
-  ansible_collections/tomazb/acm_switchover/tests/unit/test_preflight_connectivity_contract.py
-  ansible_collections/tomazb/acm_switchover/tests/integration/test_preflight_role.py
-  -q` — 23 passed.
-- Task 5 Collection activation barrier:
-  `PYTHONPATH=. python -m pytest
-  ansible_collections/tomazb/acm_switchover/tests/unit/test_activation_auto_import.py
-  ansible_collections/tomazb/acm_switchover/tests/integration/test_r3_02_activation_runtime.py
-  -q` — 40 passed.
-- Task 6 Python advisory ConfigMap reads:
-  `python -m pytest tests/test_kube_client.py -q` — 106 passed.
-- Task 7 Python activation parity:
-  `python -m pytest tests/test_activation.py tests/test_kube_client.py -q` —
-  174 passed.
-- Task 8 cross-form-factor guardrail:
-  `python -m pytest tests/test_r3_02_fail_closed_parity.py -q` — 2 passed;
-  `PYTHONPATH=. python -m pytest tests/test_constants_parity.py
-  tests/test_rbac_collection_parity.py tests/test_validation_parity.py -q` —
-  59 passed.
-- TDD RED was observed before each Task 6 and Task 7 production edit. All green
-  commands above exited 0. These local runs used Python 3.14.7 and do not replace
-  the repository-tested Collection lanes or the Task 10 gate set.
+**Implementation evidence (Tasks 1–10 local)**
+- Targeted R3-02 unit/parity: 46 passed.
+- Targeted R3-02 integration: 53 passed.
+- Python `test_kube_client.py` + `test_activation.py`: 174 passed.
+- Compatibility contract: 11 passed; full Collection units: 1017 passed.
+- Collection integration + scenario: 127 passed (includes fixture-harness fix so
+  shared switchover fixtures supply exact `default` Namespace evidence).
+- Playbook syntax check: OK; collection build: OK
+  (`tomazb-acm_switchover-1.7.10.tar.gz`).
+- Combined Collection units + root `tests/`: 4303 passed, 29 skipped.
+- `tests/release -q`: 1169 passed, 3 skipped (no live profile).
+- Protected-file and RBAC-surface diffs: empty.
+- Pre-PR simplification: no further in-scope behavior-preserving simplification
+  beyond formatter alignment; module remains a single-read classifier with no
+  retry/phase/report ownership.
+- Local ansible-core lane exercised: 2.16.14. Hosted 2.21 lane still required.
 
 **Acceptance criteria**
 - A 403, timeout, or connection error during compactor verification fails the
