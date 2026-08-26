@@ -7,7 +7,12 @@ import yaml
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 ACTIVATION_TASKS = ROLES_DIR / "activation" / "tasks"
 FINALIZATION_TASKS = ROLES_DIR / "finalization" / "tasks"
-CONSTANTS_FILE = pathlib.Path(__file__).resolve().parents[2] / "plugins" / "module_utils" / "constants.py"
+CONSTANTS_FILE = (
+    pathlib.Path(__file__).resolve().parents[2]
+    / "plugins"
+    / "module_utils"
+    / "constants.py"
+)
 AUTO_IMPORT_SUPPORT_TASK = ACTIVATION_TASKS / "resolve_auto_import_support.yml"
 
 
@@ -50,10 +55,18 @@ def test_main_includes_manage_after_passive_verification_before_activation():
         elif inc == "reset_auto_import.yml":
             reset_idx = i
 
-    assert manage_idx is not None, "manage_auto_import.yml must be included in activation"
-    assert verify_idx is not None, "verify_passive_sync.yml must be included in activation"
-    assert verify_idx < manage_idx, "passive sync must be verified before ImportAndSync management"
-    assert manage_idx < activate_idx, "manage_auto_import must come before activate_restore"
+    assert (
+        manage_idx is not None
+    ), "manage_auto_import.yml must be included in activation"
+    assert (
+        verify_idx is not None
+    ), "verify_passive_sync.yml must be included in activation"
+    assert (
+        verify_idx < manage_idx
+    ), "passive sync must be verified before ImportAndSync management"
+    assert (
+        manage_idx < activate_idx
+    ), "manage_auto_import must come before activate_restore"
     assert reset_idx is None, (
         "reset_auto_import.yml must NOT be in activation/tasks/main.yml — "
         "it belongs in finalization to match Python CLI timing"
@@ -80,9 +93,13 @@ def test_finalization_includes_reset_after_discover():
         elif inc == "reset_auto_import.yml":
             reset_idx = i
 
-    assert reset_idx is not None, "reset_auto_import.yml must be included in finalization"
+    assert (
+        reset_idx is not None
+    ), "reset_auto_import.yml must be included in finalization"
     assert discover_idx is not None, "discover_resources.yml must be in finalization"
-    assert reset_idx > discover_idx, "reset_auto_import must come after discover_resources"
+    assert (
+        reset_idx > discover_idx
+    ), "reset_auto_import must come after discover_resources"
 
 
 def test_activation_persists_auto_import_reset_flag_in_checkpoint():
@@ -100,7 +117,9 @@ def test_activation_result_defaults_unknown_changed_to_false():
     text = (ACTIVATION_TASKS / "main.yml").read_text()
 
     assert "acm_switchover_restore_activation_result.changed | default(false)" in text
-    assert "acm_switchover_restore_activation_result.changed | default(true)" not in text
+    assert (
+        "acm_switchover_restore_activation_result.changed | default(true)" not in text
+    )
 
 
 def test_finalization_restores_auto_import_reset_flag_from_checkpoint():
@@ -155,15 +174,26 @@ def test_auto_import_support_handles_missing_mch_discovery_fact():
 def test_manage_auto_import_initializes_strategy_for_dry_run_paths():
     """Dry-run skips live ConfigMap discovery, but later when clauses still need a strategy value."""
     tasks = yaml.safe_load((ACTIVATION_TASKS / "manage_auto_import.yml").read_text())
-    init_task = next(task for task in tasks if task.get("name") == "Initialize auto-import strategy management state")
+    init_task = next(
+        task
+        for task in tasks
+        if task.get("name") == "Initialize auto-import strategy management state"
+    )
 
-    assert init_task["ansible.builtin.set_fact"]["_auto_import_current_strategy"] == "default"
+    assert (
+        init_task["ansible.builtin.set_fact"]["_auto_import_current_strategy"]
+        == "default"
+    )
 
 
 def test_manage_auto_import_creates_missing_configmap_like_python():
     """Default strategy is represented by an absent ConfigMap, so manage mode must create it."""
     tasks = yaml.safe_load((ACTIVATION_TASKS / "manage_auto_import.yml").read_text())
-    strategy_task = next(task for task in tasks if task.get("name") == "Set autoImportStrategy to ImportAndSync")
+    strategy_task = next(
+        task
+        for task in tasks
+        if task.get("name") == "Set autoImportStrategy to ImportAndSync"
+    )
     module_args = strategy_task["kubernetes.core.k8s"]
 
     assert module_args["state"] == "present"
@@ -180,13 +210,19 @@ def test_manage_auto_import_omits_missing_secondary_context():
         for task in tasks
         if task.get("kubernetes.core.k8s_info", {}).get("kubeconfig")
         == "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-        or task.get("kubernetes.core.k8s", {}).get("kubeconfig") == "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+        or task.get("kubernetes.core.k8s", {}).get("kubeconfig")
+        == "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     ]
 
     assert kube_tasks
     for task in kube_tasks:
-        module_args = task.get("kubernetes.core.k8s_info", {}) or task.get("kubernetes.core.k8s", {})
-        assert module_args["context"] == "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
+        module_args = task.get("kubernetes.core.k8s_info", {}) or task.get(
+            "kubernetes.core.k8s", {}
+        )
+        assert (
+            module_args["context"]
+            == "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
+        )
 
 
 def test_apply_immediate_import_requires_acm_214_or_newer():
@@ -199,21 +235,92 @@ def test_apply_immediate_import_requires_acm_214_or_newer():
     assert "_acm_secondary_supports_auto_import" in content
 
 
-def test_apply_immediate_import_treats_strategy_read_errors_as_warning_skip():
-    """Python warns and skips immediate-import annotations when strategy lookup is unavailable."""
-    tasks = yaml.safe_load((ACTIVATION_TASKS / "apply_immediate_import.yml").read_text())
-    config_task = next(task for task in tasks if task.get("name") == "Get current autoImportStrategy")
+def test_apply_immediate_import_fails_closed_before_managed_cluster_work():
+    """Only explicit absence or valid ConfigMap evidence may reach ManagedClusters."""
+    tasks = yaml.safe_load(
+        (ACTIVATION_TASKS / "apply_immediate_import.yml").read_text()
+    )
+    config_task = next(
+        task for task in tasks if task.get("name") == "Get current autoImportStrategy"
+    )
     content = (ACTIVATION_TASKS / "apply_immediate_import.yml").read_text()
 
-    assert config_task.get("failed_when") is False
-    assert "autoImportStrategy_unavailable" in content
-    assert "_import_cm_for_annotation.resources is not defined" in content
+    module_args = config_task["tomazb.acm_switchover.acm_k8s_read_outcome"]
+    assert module_args["read_mode"] == "get"
+    assert module_args["api_version"] == "v1"
+    assert module_args["kind"] == "ConfigMap"
+    assert module_args["name"] == "import-controller-config"
+    assert module_args["namespace"] == "multicluster-engine"
+    assert module_args["kubeconfig"] == (
+        "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    )
+    assert module_args["context"] == "{{ acm_switchover_hubs.secondary.context }}"
+    assert config_task.get("no_log") is True
+
+    evidence_task = next(
+        task
+        for task in tasks
+        if "_import_cm_for_annotation_valid" in task.get("ansible.builtin.set_fact", {})
+    )
+    evidence = str(
+        evidence_task["ansible.builtin.set_fact"]["_import_cm_for_annotation_valid"]
+    )
+    assert "read_status == 'ok'" in evidence
+    assert "resources is defined" in evidence
+    assert "resources | type_debug" in evidence
+    assert "resources | length) == 1" in evidence
+    assert "resources[0] is mapping" in evidence
+    assert ".apiVersion" in evidence and "'v1'" in evidence
+    assert ".kind" in evidence and "'ConfigMap'" in evidence
+    assert ".metadata.name" in evidence and "'import-controller-config'" in evidence
+    assert ".metadata.namespace" in evidence and "'multicluster-engine'" in evidence
+    assert ".data is not defined" in evidence
+    assert ".data == none" in evidence
+    assert ".data is mapping" in evidence
+
+    failure_task = next(
+        task
+        for task in tasks
+        if "Unable to verify autoImportStrategy on the destination hub"
+        in str(task.get("ansible.builtin.fail", {}))
+    )
+    failure_when = str(failure_task.get("when", ""))
+    assert "read_status is not defined" in failure_when
+    assert "read_status != 'not_found'" in failure_when
+    assert "_import_cm_for_annotation_valid" in failure_when
+
+    decision_task = next(
+        task
+        for task in tasks
+        if task.get("name") == "Determine if immediate-import annotations are needed"
+    )
+    decision = str(decision_task["ansible.builtin.set_fact"]["_apply_immediate_import"])
+    assert "read_status == 'not_found'" in decision
+    assert "autoImportStrategy" in decision
+
+    managed_cluster_index = next(
+        index
+        for index, task in enumerate(tasks)
+        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"
+    )
+    assert tasks.index(failure_task) < managed_cluster_index
+    assert "autoImportStrategy_unavailable" not in content
+    assert "resources is not defined" not in decision
+    assert "failed_when: false" not in str(config_task)
+    assert "reason: dry_run" in content
+    assert "does not support immediate-import annotations" in content
 
 
 def test_apply_immediate_import_retriggers_non_empty_annotations_like_python():
     """Python removes non-empty immediate-import markers before setting the empty trigger."""
-    tasks = yaml.safe_load((ACTIVATION_TASKS / "apply_immediate_import.yml").read_text())
-    patch_tasks = [task for task in tasks if task.get("kubernetes.core.k8s", {}).get("kind") == "ManagedCluster"]
+    tasks = yaml.safe_load(
+        (ACTIVATION_TASKS / "apply_immediate_import.yml").read_text()
+    )
+    patch_tasks = [
+        task
+        for task in tasks
+        if task.get("kubernetes.core.k8s", {}).get("kind") == "ManagedCluster"
+    ]
 
     null_tasks = [
         task
@@ -232,8 +339,12 @@ def test_apply_immediate_import_retriggers_non_empty_annotations_like_python():
         == ""
     ]
 
-    assert null_tasks, "apply_immediate_import.yml must clear stale non-empty markers first"
-    assert empty_tasks, "apply_immediate_import.yml must then set the empty immediate-import trigger"
+    assert (
+        null_tasks
+    ), "apply_immediate_import.yml must clear stale non-empty markers first"
+    assert (
+        empty_tasks
+    ), "apply_immediate_import.yml must then set the empty immediate-import trigger"
     assert tasks.index(null_tasks[0]) < tasks.index(empty_tasks[0])
 
 
@@ -257,7 +368,9 @@ def test_import_and_sync_patch_carries_ownership_marker():
     )
 
     tasks = yaml.safe_load((ACTIVATION_TASKS / "manage_auto_import.yml").read_text())
-    patch_task = next(t for t in tasks if t.get("name") == "Set autoImportStrategy to ImportAndSync")
+    patch_task = next(
+        t for t in tasks if t.get("name") == "Set autoImportStrategy to ImportAndSync"
+    )
     definition = patch_task["kubernetes.core.k8s"]["definition"]
     annotations = definition["metadata"].get("annotations", {})
     assert annotations.get(AUTO_IMPORT_MARKER_ANNOTATION) == AUTO_IMPORT_MARKER_VALUE
@@ -295,7 +408,11 @@ def test_reset_read_is_not_gated_on_legacy_flag():
     """The CM read must always run in execute mode: marker observation is the
     primary discharge signal and cannot depend on in-memory state (audit C3)."""
     tasks = _load_reset_tasks()
-    read_task = next(t for t in tasks if t.get("name") == "Read import-controller-config before reset")
+    read_task = next(
+        t
+        for t in tasks
+        if t.get("name") == "Read import-controller-config before reset"
+    )
     when = _when_text(read_task)
     assert "_auto_import_strategy_changed" not in when
     assert "!= 'dry_run'" in when
@@ -304,7 +421,10 @@ def test_reset_read_is_not_gated_on_legacy_flag():
 def test_reset_delete_discharges_on_marker_or_legacy_signal():
     tasks = _load_reset_tasks()
     delete_task = next(
-        t for t in tasks if t.get("name") == "Delete import-controller-config to restore default autoImportStrategy"
+        t
+        for t in tasks
+        if t.get("name")
+        == "Delete import-controller-config to restore default autoImportStrategy"
     )
     when = _when_text(delete_task)
     assert "_auto_import_marker_present" in when
@@ -330,7 +450,9 @@ def test_finalization_always_includes_reset_auto_import():
 
     include_task = _find_include(main)
     assert include_task is not None
-    assert "when" not in include_task, "reset_auto_import include must be unconditional; inner tasks gate on mode"
+    assert (
+        "when" not in include_task
+    ), "reset_auto_import include must be unconditional; inner tasks gate on mode"
 
 
 def test_reset_delete_requires_execute_mode():
@@ -339,7 +461,10 @@ def test_reset_delete_requires_execute_mode():
     PR #224)."""
     tasks = _load_reset_tasks()
     delete_task = next(
-        t for t in tasks if t.get("name") == "Delete import-controller-config to restore default autoImportStrategy"
+        t
+        for t in tasks
+        if t.get("name")
+        == "Delete import-controller-config to restore default autoImportStrategy"
     )
     when = _when_text(delete_task)
     assert "== 'execute'" in when

@@ -41,7 +41,9 @@ class FakeR302API:
         close_after_scale: bool = False,
         configmap_status: int = 200,
         configmap_body: dict | None = None,
+        configmap_transport_error: bool = False,
         core_resources: list[dict] | None = None,
+        managed_clusters: list[dict] | None = None,
     ):
         self.pod_list_status = pod_list_status
         self.pod_list_body = copy.deepcopy(pod_list_body)
@@ -50,7 +52,26 @@ class FakeR302API:
         self.close_after_scale = close_after_scale
         self.configmap_status = configmap_status
         self.configmap_body = copy.deepcopy(configmap_body)
+        self.configmap_transport_error = configmap_transport_error
+        self._configmap_transport_errors_remaining = (
+            1 if configmap_transport_error else 0
+        )
         self.core_resources = copy.deepcopy(core_resources)
+        self.managed_clusters = copy.deepcopy(
+            managed_clusters
+            if managed_clusters is not None
+            else [
+                {
+                    "apiVersion": "cluster.open-cluster-management.io/v1",
+                    "kind": "ManagedCluster",
+                    "metadata": {
+                        "name": "cluster-a",
+                        "resourceVersion": "1",
+                        "annotations": {},
+                    },
+                }
+            ]
+        )
         self.statefulset_replicas = 1
         self._scaled_statefulset_reads = 0
         self._shutdown_scheduled = False
@@ -155,6 +176,36 @@ class FakeR302API:
                                         "groupVersion": "apps/v1",
                                         "version": "v1",
                                     },
+                                },
+                                {
+                                    "name": "cluster.open-cluster-management.io",
+                                    "versions": [
+                                        {
+                                            "groupVersion": "cluster.open-cluster-management.io/v1",
+                                            "version": "v1",
+                                        }
+                                    ],
+                                    "preferredVersion": {
+                                        "groupVersion": "cluster.open-cluster-management.io/v1",
+                                        "version": "v1",
+                                    },
+                                },
+                            ],
+                        }
+                    )
+                    return
+                if path == "/apis/cluster.open-cluster-management.io/v1":
+                    self._write_json(
+                        {
+                            "kind": "APIResourceList",
+                            "groupVersion": "cluster.open-cluster-management.io/v1",
+                            "resources": [
+                                {
+                                    "name": "managedclusters",
+                                    "singularName": "managedcluster",
+                                    "namespaced": False,
+                                    "kind": "ManagedCluster",
+                                    "verbs": ["get", "list", "patch"],
                                 }
                             ],
                         }
@@ -221,15 +272,42 @@ class FakeR302API:
                         status=api.pod_list_status,
                     )
                     return
-                if path == "/api/v1/namespaces/test-ns/configmaps/test-config":
+                if path in {
+                    "/api/v1/namespaces/test-ns/configmaps/test-config",
+                    "/api/v1/namespaces/multicluster-engine/configmaps/"
+                    "import-controller-config",
+                }:
+                    if api.configmap_transport_error:
+                        with api._lock:
+                            should_drop = api._configmap_transport_errors_remaining > 0
+                            if should_drop:
+                                api._configmap_transport_errors_remaining -= 1
+                        if should_drop:
+                            self.close_connection = True
+                            return
+                        self._write_json(
+                            status_payload(500),
+                            status=500,
+                        )
+                        return
                     payload = api.configmap_body
                     if payload is None:
+                        namespace = (
+                            "multicluster-engine"
+                            if "multicluster-engine" in path
+                            else "test-ns"
+                        )
+                        name = (
+                            "import-controller-config"
+                            if "import-controller-config" in path
+                            else "test-config"
+                        )
                         payload = {
                             "apiVersion": "v1",
                             "kind": "ConfigMap",
                             "metadata": {
-                                "name": "test-config",
-                                "namespace": "test-ns",
+                                "name": name,
+                                "namespace": namespace,
                                 "resourceVersion": "1",
                             },
                             "data": {},
@@ -238,6 +316,39 @@ class FakeR302API:
                         copy.deepcopy(payload),
                         status=api.configmap_status,
                     )
+                    return
+                if path == (
+                    "/apis/cluster.open-cluster-management.io/v1/" "managedclusters"
+                ):
+                    with api._lock:
+                        items = copy.deepcopy(api.managed_clusters)
+                    self._write_json(
+                        {
+                            "apiVersion": "cluster.open-cluster-management.io/v1",
+                            "kind": "ManagedClusterList",
+                            "metadata": {"resourceVersion": "1"},
+                            "items": items,
+                        }
+                    )
+                    return
+                managed_cluster_prefix = (
+                    "/apis/cluster.open-cluster-management.io/v1/" "managedclusters/"
+                )
+                if path.startswith(managed_cluster_prefix):
+                    name = path.removeprefix(managed_cluster_prefix)
+                    with api._lock:
+                        cluster = next(
+                            (
+                                copy.deepcopy(item)
+                                for item in api.managed_clusters
+                                if item.get("metadata", {}).get("name") == name
+                            ),
+                            None,
+                        )
+                    if cluster is None:
+                        self._write_json(status_payload(404), status=404)
+                    else:
+                        self._write_json(cluster)
                     return
                 self._write_json(status_payload(404), status=404)
 
@@ -277,6 +388,50 @@ class FakeR302API:
                             "status": {"replicas": api.statefulset_replicas},
                         }
                     )
+                    return
+                prefix = (
+                    "/apis/cluster.open-cluster-management.io/v1/" "managedclusters/"
+                )
+                if path.startswith(prefix):
+                    name = path.removeprefix(prefix)
+                    with api._lock:
+                        cluster = next(
+                            (
+                                item
+                                for item in api.managed_clusters
+                                if item.get("metadata", {}).get("name") == name
+                            ),
+                            None,
+                        )
+                        if cluster is not None:
+                            annotations = (body.get("metadata") or {}).get(
+                                "annotations"
+                            ) or {}
+                            current_annotations = cluster.setdefault(
+                                "metadata",
+                                {},
+                            ).setdefault("annotations", {})
+                            for key, value in annotations.items():
+                                if value is None:
+                                    current_annotations.pop(key, None)
+                                else:
+                                    current_annotations[key] = value
+                            cluster["metadata"]["resourceVersion"] = str(
+                                int(
+                                    cluster["metadata"].get(
+                                        "resourceVersion",
+                                        "0",
+                                    )
+                                )
+                                + 1
+                            )
+                            response = copy.deepcopy(cluster)
+                        else:
+                            response = None
+                    if response is None:
+                        self._write_json(status_payload(404), status=404)
+                    else:
+                        self._write_json(response)
                     return
                 self._write_json(status_payload(404), status=404)
 

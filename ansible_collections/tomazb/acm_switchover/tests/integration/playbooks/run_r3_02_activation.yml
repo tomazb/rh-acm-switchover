@@ -1,0 +1,30 @@
+---
+- name: Exercise shipped activation immediate-import tasks
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    acm_switchover_hubs:
+      primary:
+        context: r3-02-primary
+        kubeconfig: ""
+      secondary:
+        context: r3-02-secondary
+        kubeconfig: "{{ r3_02_kubeconfig }}"
+    acm_switchover_execution:
+      mode: execute
+    acm_switchover_operation:
+      activation_method: patch
+    _acm_secondary_version: 2.14.2
+    _acm_secondary_supports_auto_import: true
+  tasks:
+    - name: Run shipped immediate-import path
+      ansible.builtin.include_role:
+        name: tomazb.acm_switchover.activation
+        tasks_from: apply_immediate_import
+
+    - name: Publish safe completion marker
+      ansible.builtin.debug:
+        msg: >-
+          R302_ACTIVATION=ok
+          APPLY={{ _apply_immediate_import }}

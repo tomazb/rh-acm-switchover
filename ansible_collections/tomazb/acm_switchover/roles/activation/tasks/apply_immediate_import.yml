@@ -26,7 +26,8 @@
     - not (_acm_secondary_supports_auto_import | bool)
 
 - name: Get current autoImportStrategy
-  kubernetes.core.k8s_info:
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: get
     api_version: v1
     kind: ConfigMap
     name: import-controller-config
@@ -34,34 +35,66 @@
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
   register: _import_cm_for_annotation
-  failed_when: false
+  no_log: true
   when:
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - _acm_secondary_supports_auto_import | bool
 
-- name: Publish immediate import skip result when autoImportStrategy is unavailable
+- name: Validate autoImportStrategy ConfigMap evidence
   ansible.builtin.set_fact:
-    _apply_immediate_import: false
-    acm_switchover_immediate_import_result:
-      changed: false
-      mode: "{{ acm_switchover_operation.activation_method | default('patch') }}"
-      skipped: true
-      reason: autoImportStrategy_unavailable
+    _import_cm_for_annotation_valid: >-
+      {{
+        _import_cm_for_annotation is mapping
+        and _import_cm_for_annotation.read_status is defined
+        and _import_cm_for_annotation.read_status == 'ok'
+        and _import_cm_for_annotation.resources is defined
+        and (_import_cm_for_annotation.resources | type_debug) == 'list'
+        and (_import_cm_for_annotation.resources | length) == 1
+        and _import_cm_for_annotation.resources[0] is mapping
+        and _import_cm_for_annotation.resources[0].apiVersion | default('') == 'v1'
+        and _import_cm_for_annotation.resources[0].kind | default('') == 'ConfigMap'
+        and _import_cm_for_annotation.resources[0].metadata is mapping
+        and _import_cm_for_annotation.resources[0].metadata.name | default('') == 'import-controller-config'
+        and _import_cm_for_annotation.resources[0].metadata.namespace | default('') == 'multicluster-engine'
+        and (
+          _import_cm_for_annotation.resources[0].data is not defined
+          or _import_cm_for_annotation.resources[0].data == none
+          or _import_cm_for_annotation.resources[0].data is mapping
+        )
+      }}
   when:
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - _acm_secondary_supports_auto_import | bool
-    - _import_cm_for_annotation.resources is not defined
+
+- name: Fail when autoImportStrategy cannot be verified
+  ansible.builtin.fail:
+    msg: >-
+      Unable to verify autoImportStrategy on the destination hub;
+      verify API access and retry.
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - _acm_secondary_supports_auto_import | bool
+    - >-
+      _import_cm_for_annotation.read_status is not defined
+      or (
+        _import_cm_for_annotation.read_status != 'not_found'
+        and not (_import_cm_for_annotation_valid | default(false) | bool)
+      )
 
 - name: Determine if immediate-import annotations are needed
   ansible.builtin.set_fact:
     _apply_immediate_import: >-
-      {{ (_import_cm_for_annotation.resources | default([]) | first | default({}))
-         .get('data', {}).get('autoImportStrategy', 'ImportOnly')
-         in ['ImportOnly', 'default', ''] }}
+      {{
+        _import_cm_for_annotation.read_status == 'not_found'
+        or (
+          (_import_cm_for_annotation.resources[0].data | default({}, true))
+          .get('autoImportStrategy', 'ImportOnly')
+          in ['ImportOnly', 'default', '']
+        )
+      }}
   when:
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - _acm_secondary_supports_auto_import | bool
-    - _import_cm_for_annotation.resources is defined
 
 - name: Get ManagedClusters on secondary hub
   kubernetes.core.k8s_info:
@@ -98,6 +131,7 @@
     - _apply_immediate_import | default(false) | bool
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - _acm_secondary_supports_auto_import | bool
+    - not ansible_check_mode
     - (item.metadata.annotations | default({})).get('import.open-cluster-management.io/immediate-import', '') | length > 0
 
 - name: Apply immediate-import annotation to non-local clusters
@@ -123,6 +157,7 @@
     - _apply_immediate_import | default(false) | bool
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - _acm_secondary_supports_auto_import | bool
+    - not ansible_check_mode
 
 - name: Publish immediate import result
   ansible.builtin.set_fact:
@@ -136,4 +171,3 @@
   when:
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - _acm_secondary_supports_auto_import | bool
-    - _import_cm_for_annotation.resources is defined
