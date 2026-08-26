@@ -1,0 +1,31 @@
+---
+- name: Exercise shipped primary prep compactor verification tasks
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    acm_switchover_hubs:
+      primary:
+        context: r3-02-primary
+        kubeconfig: "{{ r3_02_kubeconfig }}"
+      secondary:
+        context: r3-02-secondary
+        kubeconfig: ""
+    acm_switchover_execution:
+      mode: execute
+    acm_primary_compactor_info:
+      resources:
+        - apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: thanos-compactor
+            namespace: open-cluster-management-observability
+  tasks:
+    - name: Run shipped observability scale and verification path
+      ansible.builtin.include_role:
+        name: tomazb.acm_switchover.primary_prep
+        tasks_from: scale_observability
+
+    - name: Publish safe completion marker
+      ansible.builtin.debug:
+        msg: R302_COMPACTOR_VERIFICATION=ok

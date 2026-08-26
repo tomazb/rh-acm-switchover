@@ -31,7 +31,8 @@
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
 - name: Read thanos-compactor pods after scale-down
-  kubernetes.core.k8s_info:
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: list
     api_version: v1
     kind: Pod
     namespace: open-cluster-management-observability
@@ -40,34 +41,53 @@
     kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.primary.context }}"
   register: acm_primary_compactor_pods_after_scale
-  until: (acm_primary_compactor_pods_after_scale.resources | default([]) | length) == 0
+  until:
+    - acm_primary_compactor_pods_after_scale.read_status is defined
+    - acm_primary_compactor_pods_after_scale.read_status == 'ok'
+    - acm_primary_compactor_pods_after_scale.resources is defined
+    - (acm_primary_compactor_pods_after_scale.resources | type_debug) == 'list'
+    - (acm_primary_compactor_pods_after_scale.resources | length) == 0
   retries: 30
   delay: 10
   failed_when: false
+  no_log: true
   when:
     - (acm_primary_compactor_info.resources | default([]) | length) > 0
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - acm_primary_compactor_scale is defined
 
-- name: Fail when thanos-compactor pods remain after scale-down
+- name: Fail when thanos-compactor pod termination could not be verified
   ansible.builtin.fail:
     msg: >-
-      {% if acm_primary_compactor_pods_after_scale is failed %}
-      Failed to verify Thanos compactor pod termination after scale-down:
-      {{ acm_primary_compactor_pods_after_scale.msg | default('pod query failed') }}
-      {% else %}
-      Thanos compactor still has
-      {{ acm_primary_compactor_pods_after_scale.resources | default([]) | length }}
-      pod(s) running after scale-down
-      {% endif %}
+      Unable to verify Thanos compactor pod termination after scale-down;
+      verify API access and retry.
   when:
     - (acm_primary_compactor_info.resources | default([]) | length) > 0
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - acm_primary_compactor_scale is defined
     - acm_primary_compactor_pods_after_scale is defined
     - >-
-      acm_primary_compactor_pods_after_scale is failed
-      or (acm_primary_compactor_pods_after_scale.resources | default([]) | length) > 0
+      acm_primary_compactor_pods_after_scale.read_status is not defined
+      or acm_primary_compactor_pods_after_scale.read_status != 'ok'
+      or acm_primary_compactor_pods_after_scale.resources is not defined
+      or (acm_primary_compactor_pods_after_scale.resources | type_debug) != 'list'
+
+- name: Fail when thanos-compactor pods remain after scale-down
+  ansible.builtin.fail:
+    msg: >-
+      Thanos compactor still has
+      {{ acm_primary_compactor_pods_after_scale.resources | length }}
+      pod(s) running after scale-down
+  when:
+    - (acm_primary_compactor_info.resources | default([]) | length) > 0
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_primary_compactor_scale is defined
+    - acm_primary_compactor_pods_after_scale is defined
+    - acm_primary_compactor_pods_after_scale.read_status is defined
+    - acm_primary_compactor_pods_after_scale.read_status == 'ok'
+    - acm_primary_compactor_pods_after_scale.resources is defined
+    - (acm_primary_compactor_pods_after_scale.resources | type_debug) == 'list'
+    - (acm_primary_compactor_pods_after_scale.resources | length) > 0
 
 - name: Publish observability scale result
   ansible.builtin.set_fact:
