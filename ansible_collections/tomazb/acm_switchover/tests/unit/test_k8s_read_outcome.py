@@ -27,14 +27,10 @@ def _import_module_under_test():
         module.__path__ = []
         return module
 
-    args_common = ModuleType(
-        "ansible_collections.kubernetes.core.plugins.module_utils.args_common"
-    )
+    args_common = ModuleType("ansible_collections.kubernetes.core.plugins.module_utils.args_common")
     args_common.AUTH_ARG_SPEC = {}
 
-    client = ModuleType(
-        "ansible_collections.kubernetes.core.plugins.module_utils.k8s.client"
-    )
+    client = ModuleType("ansible_collections.kubernetes.core.plugins.module_utils.k8s.client")
 
     def unavailable_get_api_client(**_kwargs):
         raise AssertionError("unit test must patch get_api_client before use")
@@ -43,12 +39,8 @@ def _import_module_under_test():
 
     stubs = {
         "ansible_collections.kubernetes": package("ansible_collections.kubernetes"),
-        "ansible_collections.kubernetes.core": package(
-            "ansible_collections.kubernetes.core"
-        ),
-        "ansible_collections.kubernetes.core.plugins": package(
-            "ansible_collections.kubernetes.core.plugins"
-        ),
+        "ansible_collections.kubernetes.core": package("ansible_collections.kubernetes.core"),
+        "ansible_collections.kubernetes.core.plugins": package("ansible_collections.kubernetes.core.plugins"),
         "ansible_collections.kubernetes.core.plugins.module_utils": package(
             "ansible_collections.kubernetes.core.plugins.module_utils"
         ),
@@ -61,9 +53,7 @@ def _import_module_under_test():
     previous = {name: sys.modules.get(name) for name in stubs}
     sys.modules.update(stubs)
     try:
-        return importlib.import_module(
-            "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_k8s_read_outcome"
-        )
+        return importlib.import_module("ansible_collections.tomazb.acm_switchover.plugins.modules.acm_k8s_read_outcome")
     finally:
         for name, module in previous.items():
             if module is None:
@@ -75,9 +65,7 @@ def _import_module_under_test():
 acm_k8s_read_outcome = _import_module_under_test()
 
 
-def _api_error(
-    exc_type: type[Exception], status: int, body: str = SENTINEL
-) -> Exception:
+def _api_error(exc_type: type[Exception], status: int, body: str = SENTINEL) -> Exception:
     class _Resp:
         def __init__(self):
             self.status = status
@@ -152,9 +140,7 @@ def _run_module(
 
 
 class _FakeClient:
-    def __init__(
-        self, *, resource=None, resource_error=None, get_result=None, get_error=None
-    ):
+    def __init__(self, *, resource=None, resource_error=None, get_result=None, get_error=None):
         self._resource = resource
         self._resource_error = resource_error
         self._get_result = get_result
@@ -340,9 +326,7 @@ def test_resource_discovery_failure_is_error(monkeypatch):
 
 
 def test_timeout_transport_failure_is_error(monkeypatch):
-    client = _FakeClient(
-        resource=object(), get_error=TimeoutError("timed out connecting")
-    )
+    client = _FakeClient(resource=object(), get_error=TimeoutError("timed out connecting"))
     result = _run_module(
         monkeypatch,
         params={
