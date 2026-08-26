@@ -44,7 +44,7 @@ GitHub PR #196 is closed unmerged as superseded. `SSA-01` is no longer open
 implementation work after GitHub PR #270. Current open work is owned by the
 remaining SSA, R3, R4, TR2D, LER, GLM, H3, and deferred-issue boundaries below.
 
-**Last Updated:** 2026-08-22
+**Last Updated:** 2026-08-26
 
 ## Post-Merge Reconciliation (2026-08-22)
 
@@ -1165,7 +1165,7 @@ This is the delivery sequence. Placing two bounded regressions ahead of
 | --- | --- | --- | --- | --- |
 | R3-01 / TR2D-01 | merged | R3-A1, TR2D-M1, TR2D-L1 | PR [#200](https://github.com/tomazb/rh-acm-switchover/pull/200) merged exact head `0bc1a4b6701508f6c3d4cd898515d82b8a29b6a3` as `786f8325493c6086e136cb9694a9997557f12e02`, removing the skipped-task clobber, requiring positive success for every namespace read before aggregation, failing closed on malformed/failed/skipped/unreachable/mixed results, and adding executable non-mock retry and standalone-resume coverage. The aliases preserve provenance; they do not create duplicate implementation work. | Argo CD pause/resume safety; retry and standalone-resume paths; sanitized failure handling |
 | R3-01b | planned | R3-A2, R3-A3 | Correct the two finalization register/set-fact clobbers and guard fixture/live-query semantics without coupling them to the Argo CD regression delivery. | finalization dry-run preview and fixture/live-read behavior |
-| R3-02 | planned | R3-A4, R3-A5 | Make masked-error verification gates fail closed so an API error can never satisfy a drain or connectivity check. | Thanos/observability parity with Python; preflight go/no-go artifact integrity |
+| R3-02 | in_progress | R3-A4, R3-A5, GLM-H12 | Make masked-error verification gates fail closed so an API error can never satisfy a drain or connectivity check. Mechanism: exact positive `default` Namespace evidence for connectivity (`k8s_info`); lossless `acm_k8s_read_outcome` for compactor Pod-list and auto-import ConfigMap reads; Python `get_configmap_advisory()` parity for activation. Note: `k8s_info` can normalize empty list, named 404, and BadRequest/400 to the same `api_found: true`, `resources: []` shape across governed kubernetes.core 6.x, so `resources is defined` / empty `resources` alone cannot distinguish success, absence, and error. | Thanos/observability parity with Python; preflight go/no-go artifact integrity; activation fail-closed before ManagedCluster mutation |
 | R3-03 | planned | R3-P1 | Correct the timeout budget in place. The slice design must choose one explicit algorithm; it must not extract helpers or modules. Decomposition remains owned by `H3`. | post-activation failure semantics at fleet scale; parity with `SSA-03` |
 | R3-04a | planned | R3-P2 | Recover Python preflight diagnostics only after sanitizing them before verbose logging; keep raw exception/API/credential material prohibited. | secret-handling and operator troubleshooting |
 | R3-04b | planned | R3-A9 | Sanitize collection report/path data in both success and failure records. | report schema, filesystem-path exposure, success/failure parity |
@@ -1294,35 +1294,52 @@ rollback boundary, and verification plan.
 
 #### R3-02: Fail-Closed Verification Gates
 
-**Resolution**
-- Key drain and connectivity verdicts on positive evidence
-  (`resources is defined`, expected counts) rather than on `.failed`, or replace
-  `failed_when: false` with `block`/`rescue` so genuine errors stay failures.
-- Follow the shape already correct in
-  `roles/post_activation/tasks/verify_observability.yml:146,222`.
-- Preserve the documented Python behavior as the parity reference; record no
-  intentional divergence.
-- `GLM-H12` (2026-08-16) adds `roles/activation/tasks/apply_immediate_import.yml:28-53`
-  to this slice's scope: `failed_when: false` on the autoImportStrategy read launders a
-  real API/RBAC failure into a `skipped: true` benign result with the error text
-  discarded. Note the mechanism precisely: an absent ConfigMap returns a **defined**
-  empty `resources` list and proceeds to the `'ImportOnly'` default; `resources is not
-  defined` occurs only when the module itself errored (403/connection/API). Classify
-  the captured error and fail closed on non-NotFound, following the sanitized pattern
-  already correct in `roles/argocd_manage/tasks/discover.yml:169-182`.
+**Status:** `in_progress` on branch `r3-02-fail-closed-verification` (worktree
+`.claude/worktrees/r3-02-implementation`), based on `origin/ansible@3dc67788`,
+carrying approved design `7723260d` and approved plan `6cbd43c2` (cherry-picked).
+Implementation and test evidence are not yet claimed.
+
+**Resolution (approved hybrid design)**
+- Do **not** rely on `resources is defined`, empty `resources`, or `.failed` after
+  `failed_when: false` as proof of success, absence, or error. Across the
+  governed `kubernetes.core` 6.x range, `k8s_info` can normalize a valid empty
+  list, a named 404, and BadRequest/400 into the same `api_found: true`,
+  `resources: []` shape. On the current auto-import path, a normalized 400 can
+  therefore proceed toward the default-ImportOnly mutation branch, not merely skip.
+- **Connectivity (`R3-A5`):** keep `kubernetes.core.k8s_info` against the
+  `default` Namespace, but require positive evidence for `pass`: mapping result,
+  `api_found == true`, real list of exactly one object with `kind == Namespace`
+  and `metadata.name == default`. All other forms are critical `fail` in
+  `preflight-report.json`. Preserve complete preflight reporting (no early fatal
+  connectivity abort).
+- **Compactor drain (`R3-A4`) and auto-import ConfigMap (`GLM-H12`):** use the
+  narrow lossless Collection module `acm_k8s_read_outcome` (`ok` /
+  named-`not_found` / `error`) with one read attempt, no internal retry, and no
+  phase policy. Compactor success requires `read_status == "ok"` plus a real
+  empty resource list; retain production `30 x 10s` and `failed_when: false` so
+  exhausted retries reach the role-owned sanitized failure. Auto-import: only
+  explicit named `not_found` means absence (default); `ok` with valid ConfigMap
+  evidence uses configured strategy; any error/malformed result fails before
+  ManagedCluster LIST/PATCH.
+- **Python parity:** add `get_configmap_advisory()` without changing
+  `get_configmap()`; activation uses the advisory path and raises the same
+  stable `FatalError` on API/malformed failure. No intentional divergence.
+- Preserve dry-run/check-mode non-mutation, targeting, checkpoints, `changed`
+  semantics, and the existing RBAC surface (no new permissions).
 
 **Acceptance criteria**
 - A 403, timeout, or connection error during compactor verification fails the
   phase instead of reporting the compactor drained.
 - An RBAC or API failure while reading the auto-import strategy ConfigMap fails
   activation instead of publishing `reason: autoImportStrategy_unavailable` /
-  `skipped: true` (`GLM-H12`).
-- The `until` retry loop cannot exit successfully on a result that carries no
-  `resources` key.
-- Preflight hub connectivity reports `fail` for unreachable hubs, expired
-  tokens, and wrong `server:` URLs, and that verdict reaches
-  `preflight-report.json`.
+  `skipped: true` (`GLM-H12`), and fails before ManagedCluster mutation.
+- The `until` retry loop cannot exit successfully without `read_status == "ok"`
+  and a real empty resource list.
+- Preflight hub connectivity reports `fail` unless the exact `default` Namespace
+  is returned, and that verdict reaches `preflight-report.json`.
 - Negative tests cover each masked-error case for both hubs.
+- Python and Collection make the same fail/continue decision for ConfigMap
+  absence, valid configuration, malformed evidence, and API failure.
 
 #### R3-03: Klusterlet Verification Timeout Budget
 
@@ -2398,8 +2415,8 @@ Dispositions:
 | R3-A1 | merged, High | R3-01 / TR2D-01; issue #199; PR #200 | The correction assigns distinct scoped, cluster-wide, validation, and published variables and guards publication behind complete positive validation. Non-mock primary-prep retry and standalone resume prove the former no-op paths; exact validated head `0bc1a4b6701508f6c3d4cd898515d82b8a29b6a3` merged as `786f8325493c6086e136cb9694a9997557f12e02`, and issue #199 is closed as completed. |
 | R3-A2 | confirmed empirically, Medium | R3-01b (planned) | Same clobber pattern makes the finalization dry-run preview always report `restore_count: 0`. |
 | R3-A3 | confirmed empirically, Medium | R3-01b (planned) | Same clobber pattern defeats the file's own fixture-injection guard; currently benign. |
-| R3-A4 | confirmed empirically, High | R3-02 (planned) | `failed_when: false` makes Thanos compactor drain verification fail open; the `until` loop exits on the first attempt and the follow-up gate is dead code. Python fails closed — parity divergence. |
-| R3-A5 | confirmed empirically, High | R3-02 (planned) | Preflight hub connectivity is hard-coded `status: pass`; the `fail` branch is unreachable and the fabricated verdict reaches the go/no-go report. |
+| R3-A4 | confirmed empirically, High | R3-02 (in_progress) | `failed_when: false` makes Thanos compactor drain verification fail open; the `until` loop exits on the first attempt and the follow-up gate is dead code. Python fails closed — parity divergence. |
+| R3-A5 | confirmed empirically, High | R3-02 (in_progress) | Preflight hub connectivity is hard-coded `status: pass`; the `fail` branch is unreachable and the fabricated verdict reaches the go/no-go report. |
 | R3-A6 | confirmed, Medium | R3-06 (planned) | `reset_from` disables checkpoint identity validation run-wide, not just for the pruned phase, and rewrites `operation_identity`. Persistent config key shipped in role defaults. |
 | R3-A7 | confirmed, Medium | R3-08a (planned) | Probe returns `failed: true`, failing the task and suppressing the role diagnostics its own documentation promises. |
 | R3-A8 | retired as supported-runtime work | none | The current compatibility authority supports collection controller Python 3.11/3.12 lanes and excludes Python 3.9; no active `R3-08b` implementation remains. The original Python 3.9 observation stays in the dated Review #3 findings table. |
