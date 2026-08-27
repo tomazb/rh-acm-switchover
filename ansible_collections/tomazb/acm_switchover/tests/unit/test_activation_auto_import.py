@@ -199,15 +199,67 @@ def test_apply_immediate_import_requires_acm_214_or_newer():
     assert "_acm_secondary_supports_auto_import" in content
 
 
-def test_apply_immediate_import_treats_strategy_read_errors_as_warning_skip():
-    """Python warns and skips immediate-import annotations when strategy lookup is unavailable."""
+def test_apply_immediate_import_fails_closed_before_managed_cluster_work():
+    """Only explicit absence or valid ConfigMap evidence may reach ManagedClusters."""
     tasks = yaml.safe_load((ACTIVATION_TASKS / "apply_immediate_import.yml").read_text())
     config_task = next(task for task in tasks if task.get("name") == "Get current autoImportStrategy")
     content = (ACTIVATION_TASKS / "apply_immediate_import.yml").read_text()
 
-    assert config_task.get("failed_when") is False
-    assert "autoImportStrategy_unavailable" in content
-    assert "_import_cm_for_annotation.resources is not defined" in content
+    module_args = config_task["tomazb.acm_switchover.acm_k8s_read_outcome"]
+    assert module_args["read_mode"] == "get"
+    assert module_args["api_version"] == "v1"
+    assert module_args["kind"] == "ConfigMap"
+    assert module_args["name"] == "import-controller-config"
+    assert module_args["namespace"] == "multicluster-engine"
+    assert module_args["kubeconfig"] == ("{{ acm_switchover_hubs.secondary.kubeconfig }}")
+    assert module_args["context"] == "{{ acm_switchover_hubs.secondary.context }}"
+    assert config_task.get("no_log") is True
+
+    evidence_task = next(
+        task for task in tasks if "_import_cm_for_annotation_valid" in task.get("ansible.builtin.set_fact", {})
+    )
+    evidence = str(evidence_task["ansible.builtin.set_fact"]["_import_cm_for_annotation_valid"])
+    assert "read_status == 'ok'" in evidence
+    assert "resources is defined" in evidence
+    assert "resources | type_debug" in evidence
+    assert "resources | length) == 1" in evidence
+    assert "resources[0] is mapping" in evidence
+    assert ".apiVersion" in evidence and "'v1'" in evidence
+    assert ".kind" in evidence and "'ConfigMap'" in evidence
+    assert ".metadata.name" in evidence and "'import-controller-config'" in evidence
+    assert ".metadata.namespace" in evidence and "'multicluster-engine'" in evidence
+    assert ".data is not defined" in evidence
+    assert ".data == none" in evidence
+    assert ".data is mapping" in evidence
+
+    failure_task = next(
+        task
+        for task in tasks
+        if "Unable to verify autoImportStrategy on the destination hub" in str(task.get("ansible.builtin.fail", {}))
+    )
+    failure_when = str(failure_task.get("when", ""))
+    assert "read_status is not defined" in failure_when
+    assert "read_status != 'not_found'" in failure_when
+    assert "_import_cm_for_annotation_valid" in failure_when
+
+    decision_task = next(
+        task for task in tasks if task.get("name") == "Determine if immediate-import annotations are needed"
+    )
+    decision = str(decision_task["ansible.builtin.set_fact"]["_apply_immediate_import"])
+    assert "read_status == 'not_found'" in decision
+    assert "autoImportStrategy" in decision
+
+    managed_cluster_index = next(
+        index
+        for index, task in enumerate(tasks)
+        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"
+    )
+    assert tasks.index(failure_task) < managed_cluster_index
+    assert "autoImportStrategy_unavailable" not in content
+    assert "resources is not defined" not in decision
+    assert "failed_when: false" not in str(config_task)
+    assert "reason: dry_run" in content
+    assert "does not support immediate-import annotations" in content
 
 
 def test_apply_immediate_import_retriggers_non_empty_annotations_like_python():

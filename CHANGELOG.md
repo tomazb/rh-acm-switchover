@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fail closed when Collection compactor drain, hub connectivity, or activation
+  ConfigMap reads are failed, malformed, or otherwise unverified. Connectivity
+  failures still reach the preflight report, activation stops before
+  immediate-import mutation, and the Python CLI now mirrors the Collection's
+  ConfigMap absence-versus-error decision.
 - Pin nested identity-barrier `kubernetes.core.k8s_info` execution to the
   controller Python interpreter on ansible-core 2.16 local connections, so
   live `kube-system` UID reads reach the API instead of failing against a

@@ -102,7 +102,9 @@ def _write_preflight_fixture_kubeconfig(kubeconfig_path: Path, context: str, ser
 
 def _materialize_preflight_fixture_kubeconfigs(vars_payload: dict, tmp_path: Path) -> None:
     test_overrides = vars_payload.get("acm_switchover_test_overrides")
-    if not isinstance(test_overrides, dict) or "fixture_kubeconfig_server" not in test_overrides:
+    if not isinstance(test_overrides, dict) or not (
+        "fixture_kubeconfig_server" in test_overrides or "fixture_kubeconfig_servers" in test_overrides
+    ):
         _materialize_fixture_kubeconfigs(vars_payload, tmp_path)
         return
 
@@ -111,14 +113,24 @@ def _materialize_preflight_fixture_kubeconfigs(vars_payload: dict, tmp_path: Pat
         return
 
     kubeconfig_dir = tmp_path / "kubeconfigs"
-    kubeconfig_server = str(test_overrides["fixture_kubeconfig_server"])
+    common_server = test_overrides.get("fixture_kubeconfig_server")
+    hub_servers = test_overrides.get("fixture_kubeconfig_servers")
+    if not isinstance(hub_servers, dict):
+        hub_servers = {}
     for hub_name in ("primary", "secondary"):
         hub = hubs.get(hub_name)
         if not isinstance(hub, dict) or not hub.get("kubeconfig"):
             continue
+        kubeconfig_server = hub_servers.get(hub_name, common_server)
+        if not kubeconfig_server:
+            continue
         context = str(hub.get("context") or f"{hub_name}-hub")
         kubeconfig_path = kubeconfig_dir / f"{hub_name}.kubeconfig"
-        _write_preflight_fixture_kubeconfig(kubeconfig_path, context, kubeconfig_server)
+        _write_preflight_fixture_kubeconfig(
+            kubeconfig_path,
+            context,
+            str(kubeconfig_server),
+        )
         hub["kubeconfig"] = str(kubeconfig_path)
 
 

@@ -419,6 +419,27 @@ class KubeClient:
         )
         return cm.to_dict()
 
+    def _get_configmap_raw(self, namespace: str, name: str) -> Optional[Dict]:
+        """Read a ConfigMap once without generic API-error logging."""
+        self._validate_resource_inputs(namespace, name, "ConfigMap")
+
+        try:
+            configmap = self.core_v1.read_namespaced_config_map(
+                name=name,
+                namespace=namespace,
+                **self._request_timeout_kwargs(),
+            )
+            return configmap.to_dict()
+        except ApiException as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+    @retry_api_call_advisory
+    def get_configmap_advisory(self, namespace: str, name: str) -> Optional[Dict]:
+        """Read a ConfigMap with bounded retries and no exception logging."""
+        return self._get_configmap_raw(namespace, name)
+
     def exists_configmap(self, namespace: str, name: str) -> bool:
         """Check if ConfigMap exists.
 

@@ -31,6 +31,54 @@ class _FixtureKubernetesHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0]
+        requests = getattr(self.server, "fixture_requests", None)
+        if isinstance(requests, list):
+            requests.append({"method": "GET", "path": path})
+        if path == "/api/v1":
+            advertise_namespace = getattr(
+                self.server,
+                "fixture_advertise_namespace",
+                True,
+            )
+            self._write_json(
+                {
+                    "kind": "APIResourceList",
+                    "groupVersion": "v1",
+                    "resources": (
+                        [
+                            {
+                                "name": "namespaces",
+                                "singularName": "",
+                                "namespaced": False,
+                                "kind": "Namespace",
+                                "verbs": ["get", "list"],
+                            }
+                        ]
+                        if advertise_namespace
+                        else []
+                    ),
+                }
+            )
+            return
+        if path == "/api/v1/namespaces/default":
+            status = getattr(
+                self.server,
+                "fixture_default_namespace_status",
+                200,
+            )
+            payload = getattr(
+                self.server,
+                "fixture_default_namespace_body",
+                None,
+            )
+            if payload is None:
+                payload = {
+                    "apiVersion": "v1",
+                    "kind": "Namespace",
+                    "metadata": {"name": "default"},
+                }
+            self._write_json(payload, status=status)
+            return
         responses = {
             "/version": {
                 "major": "1",
@@ -41,24 +89,6 @@ class _FixtureKubernetesHandler(BaseHTTPRequestHandler):
                 "kind": "APIVersions",
                 "versions": ["v1"],
                 "serverAddressByClientCIDRs": [],
-            },
-            "/api/v1": {
-                "kind": "APIResourceList",
-                "groupVersion": "v1",
-                "resources": [
-                    {
-                        "name": "namespaces",
-                        "singularName": "",
-                        "namespaced": False,
-                        "kind": "Namespace",
-                        "verbs": ["get", "list"],
-                    }
-                ],
-            },
-            "/api/v1/namespaces/default": {
-                "apiVersion": "v1",
-                "kind": "Namespace",
-                "metadata": {"name": "default"},
             },
             "/apis": {
                 "kind": "APIGroupList",
@@ -127,6 +157,46 @@ class _FixtureKubernetesHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+
+class _ConnectivityHTTPServer(ThreadingHTTPServer):
+    fixture_default_namespace_status: int
+    fixture_default_namespace_body: dict | None
+    fixture_advertise_namespace: bool
+    fixture_requests: list[dict[str, str]]
+
+
+class _ConnectivityAPIServer:
+    def __init__(
+        self,
+        *,
+        status: int = 200,
+        body: dict | None = None,
+        advertise_namespace: bool = True,
+    ):
+        self._server = _ConnectivityHTTPServer(
+            ("127.0.0.1", 0),
+            _FixtureKubernetesHandler,
+        )
+        self._server.fixture_default_namespace_status = status
+        self._server.fixture_default_namespace_body = body
+        self._server.fixture_advertise_namespace = advertise_namespace
+        self._server.fixture_requests = []
+        self._thread = Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self._server.server_port}"
+
+    @property
+    def requests(self) -> list[dict[str, str]]:
+        return list(self._server.fixture_requests)
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=5)
 
 
 class _ArgoFailureKubernetesHandler(_FixtureKubernetesHandler):
@@ -213,6 +283,22 @@ def fixture_argocd_failure_api_server():
         thread.join(timeout=5)
 
 
+@pytest.fixture
+def connectivity_api_factory():
+    servers: list[_ConnectivityAPIServer] = []
+
+    def _create(**kwargs) -> _ConnectivityAPIServer:
+        server = _ConnectivityAPIServer(**kwargs)
+        servers.append(server)
+        return server
+
+    try:
+        yield _create
+    finally:
+        for server in servers:
+            server.close()
+
+
 def test_preflight_input_failure_writes_report_and_fails(run_preflight_fixture):
     completed, report = run_preflight_fixture("input_failure.yml")
     assert completed.returncode != 0
@@ -221,11 +307,193 @@ def test_preflight_input_failure_writes_report_and_fails(run_preflight_fixture):
     assert any(item["id"] == "preflight-input-secondary-context" for item in report["results"])
 
 
-def test_preflight_success_fixture_passes(run_preflight_fixture):
-    completed, report = run_preflight_fixture("passive_success.yml")
+def test_preflight_success_fixture_passes(
+    run_preflight_fixture,
+    fixture_kubernetes_api_server,
+):
+    completed, report = run_preflight_fixture(
+        "passive_success.yml",
+        overrides={
+            "acm_switchover_test_overrides": {
+                "fixture_kubeconfig_server": fixture_kubernetes_api_server,
+            },
+        },
+    )
     assert completed.returncode == 0
     assert report["status"] == "pass"
     assert any(item["id"] == "preflight-version-compatibility" for item in report["results"])
+
+
+def _connectivity_results(report: dict) -> dict[str, dict]:
+    return {
+        item["id"]: item
+        for item in report["results"]
+        if item["id"].startswith("preflight-kubeconfig-") and item["id"].endswith("-connectivity")
+    }
+
+
+@pytest.mark.parametrize("failed_hub", ["primary", "secondary"])
+def test_connectivity_bad_request_fails_only_the_intended_hub_and_reaches_report(
+    run_preflight_fixture,
+    connectivity_api_factory,
+    failed_hub,
+):
+    primary = connectivity_api_factory(
+        status=400 if failed_hub == "primary" else 200,
+        body=(
+            {
+                "apiVersion": "v1",
+                "kind": "Status",
+                "status": "Failure",
+                "reason": "BadRequest",
+                "message": "fixture bad request",
+                "code": 400,
+            }
+            if failed_hub == "primary"
+            else None
+        ),
+    )
+    secondary = connectivity_api_factory(
+        status=400 if failed_hub == "secondary" else 200,
+        body=(
+            {
+                "apiVersion": "v1",
+                "kind": "Status",
+                "status": "Failure",
+                "reason": "BadRequest",
+                "message": "fixture bad request",
+                "code": 400,
+            }
+            if failed_hub == "secondary"
+            else None
+        ),
+    )
+    completed, report = run_preflight_fixture(
+        "passive_success.yml",
+        overrides={
+            "acm_switchover_test_overrides": {
+                "fixture_kubeconfig_servers": {
+                    "primary": primary.url,
+                    "secondary": secondary.url,
+                },
+            },
+        },
+    )
+
+    assert completed.returncode != 0
+    assert report["status"] == "fail"
+    connectivity = _connectivity_results(report)
+    assert connectivity[f"preflight-kubeconfig-{failed_hub}-connectivity"]["status"] == "fail"
+    passing_hub = "secondary" if failed_hub == "primary" else "primary"
+    assert connectivity[f"preflight-kubeconfig-{passing_hub}-connectivity"]["status"] == "pass"
+    assert "See the structured preflight report artifact for details." in (completed.stdout + completed.stderr)
+
+
+def test_connectivity_forbidden_is_sanitized_in_callback_and_report(
+    run_preflight_fixture,
+    connectivity_api_factory,
+):
+    sentinel = "R302-SENTINEL-HTTP-BODY"
+    primary = connectivity_api_factory(
+        status=403,
+        body={
+            "apiVersion": "v1",
+            "kind": "Status",
+            "status": "Failure",
+            "reason": "Forbidden",
+            "message": f"token={sentinel}",
+            "code": 403,
+        },
+    )
+    secondary = connectivity_api_factory()
+    completed, report = run_preflight_fixture(
+        "passive_success.yml",
+        overrides={
+            "acm_switchover_test_overrides": {
+                "fixture_kubeconfig_servers": {
+                    "primary": primary.url,
+                    "secondary": secondary.url,
+                },
+            },
+        },
+    )
+
+    output = completed.stdout + completed.stderr
+    assert completed.returncode != 0
+    assert _connectivity_results(report)["preflight-kubeconfig-primary-connectivity"]["status"] == "fail"
+    assert sentinel not in output
+    assert sentinel not in json.dumps(report)
+
+
+@pytest.mark.parametrize(
+    "primary_kwargs",
+    [
+        {"status": 404},
+        {"advertise_namespace": False},
+        {
+            "body": {
+                "apiVersion": "v1",
+                "kind": "Namespace",
+                "metadata": {"name": "wrong-name"},
+            }
+        },
+        {
+            "body": {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {"name": "default"},
+            }
+        },
+        {
+            "body": {
+                "apiVersion": "v1",
+                "kind": "NamespaceList",
+                "items": [
+                    {
+                        "apiVersion": "v1",
+                        "kind": "Namespace",
+                        "metadata": {"name": "default"},
+                    },
+                    {
+                        "apiVersion": "v1",
+                        "kind": "Namespace",
+                        "metadata": {"name": "extra"},
+                    },
+                ],
+            }
+        },
+    ],
+    ids=[
+        "not-found",
+        "api-unmappable",
+        "wrong-name",
+        "wrong-kind",
+        "wrong-cardinality",
+    ],
+)
+def test_connectivity_rejects_missing_or_wrong_namespace_evidence(
+    run_preflight_fixture,
+    connectivity_api_factory,
+    primary_kwargs,
+):
+    primary = connectivity_api_factory(**primary_kwargs)
+    secondary = connectivity_api_factory()
+    completed, report = run_preflight_fixture(
+        "passive_success.yml",
+        overrides={
+            "acm_switchover_test_overrides": {
+                "fixture_kubeconfig_servers": {
+                    "primary": primary.url,
+                    "secondary": secondary.url,
+                },
+            },
+        },
+    )
+
+    assert completed.returncode != 0
+    connectivity = _connectivity_results(report)
+    assert connectivity["preflight-kubeconfig-primary-connectivity"]["status"] == "fail"
+    assert connectivity["preflight-kubeconfig-secondary-connectivity"]["status"] == "pass"
 
 
 def test_preflight_version_mismatch_fails(run_preflight_fixture):
@@ -292,9 +560,13 @@ def test_restore_only_rbac_with_secondary_only_hub_reports_secondary_validation(
     results_by_id = {item["id"]: item for item in report["results"]}
     assert "preflight-rbac-primary" not in results_by_id
     assert results_by_id["preflight-rbac-secondary"]["status"] == "fail"
+    assert "preflight-kubeconfig-primary-connectivity" not in results_by_id
+    assert results_by_id["preflight-kubeconfig-secondary-connectivity"]["status"] == "pass"
 
 
-def test_preflight_fixture_without_execution_block_defaults_to_execute_identity_reads(run_preflight_fixture):
+def test_preflight_fixture_without_execution_block_defaults_to_execute_identity_reads(
+    run_preflight_fixture,
+):
     completed, report = run_preflight_fixture("missing_execution_block.yml")
     output = completed.stdout + completed.stderr
 
