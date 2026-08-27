@@ -13,7 +13,7 @@
 - `docs/plans/2026-07-29-migration-evidence-design.md`
 - `docs/plans/2026-08-27-r4-04-current-base-design-amendment.md` at accepted exact head `f5f7505d55d7ef97b4642c87844e0c254b635018`
 
-**Plan status:** implementation plan awaiting operator review. This document does **not** authorize runtime implementation by itself.
+**Plan status:** reviewed and approved for publication. This document does **not** authorize runtime implementation by itself.
 
 ---
 
@@ -181,6 +181,13 @@ git commit -m "fix: require durable R4-04 state replacement"
 
 Keep both runtime modules pure: no live Kubernetes calls, no Ansible module execution, no state-file IO.
 
+These two pure modules own AC-27's **evidence-domain** reclassification. Given the method
+and selected evidence category, they classify a generic-resource Backup as
+`resources_generic` or `activation_resources_generic`; they do not change the repository's
+coarse ACM ownership classifiers. Do not widen `ACM_BACKUP_NAME_RE`, add a global generic
+member to `ACM_BACKUP_SCHEDULE_TYPES`, or change unrelated finalization/E2E classification
+paths for this requirement.
+
 ### Step 1: Write failing vector-driven tests
 
 The shared JSON fixture must cover at least:
@@ -192,6 +199,10 @@ The shared JSON fixture must cover at least:
 - passive-patch auxiliary Backup categories `activation_credentials`, `activation_resources`, and `activation_resources_generic`: controller-selectable inputs are derived with the pinned lane's upstream-first selection algebra, a required auxiliary input that cannot be selected deterministically blocks before mutation, and resume keeps the frozen category identities rather than re-resolving later aliases;
 - generic exact-name match;
 - generic fallback timestamp parsed from the ordinary Backup **name**, raw `strings.Contains` semantics, non-prefix Contains candidate, ±30 second boundary, raw ambiguity (0/1/>1) before R4 eligibility;
+- scoped generic reclassification: a generic name already coarsely recognized through the
+  current `resources` ownership pattern becomes `resources_generic` or
+  `activation_resources_generic` only inside migration evidence; ordinary resources stay
+  `resources`, and tests guard against widening unrelated backup classification;
 - exact five-field Velero child evidence validation;
 - ownerRef group/kind/name/UID/controller checks without served-version pinning;
 - child-to-Backup provenance mapping for legacy and 2.17 passive cohorts, including exact binding to `activation_credentials`, `activation_resources`, or `activation_resources_generic` when those journal categories are consumed;
@@ -488,13 +499,13 @@ Cover all mutation kinds and resume:
 1. strict passive Restore discovery failure/partial list blocks before create/patch/delete;
 2. fresh journal absent -> strict complete Backup inventory -> upstream-first selection -> seven-field freeze -> durable `RunRecord.record_migration_backups()` **before mutation**;
 3. each frozen Backup is strict-GET revalidated by namespace/name/UID and by the complete persisted status projection immediately before mutation, comparing `errors`/`warnings` only after the same omitted-counter normalization used during freeze;
-4. `passive_patch` fresh precondition requires sync=true, normalized `skip/latest/latest`, exact empty MC status locator; non-empty locator causes **zero Backup freeze and zero PATCH**;
+4. `passive_patch` fresh precondition requires sync=true, normalized `skip/latest/latest`, exact empty MC status locator, and a strict live read of `spec.cleanupBeforeRestore` that normalizes to the exact `CleanupRestored` value and is bound into the journal before mutation; non-empty locator or cleanup mismatch causes **zero Backup freeze and zero PATCH**;
 5. before `passive_patch`, freeze `activation_credentials`, `activation_resources`, and `activation_resources_generic` in addition to `managed_clusters`, using the pinned lane's exact upstream-first selection rules; if any controller-required auxiliary input cannot be selected deterministically, record no accepted mutation intent and issue zero PATCH; resume revalidates these frozen categories and never re-resolves them to later alias targets;
-6. guarded patch tests UID/resourceVersion/raw MC field and replaces only MC with canonical `latest`;
-7. `passive_restore` creates one-shot concrete MC with credential/resource skips;
-8. `full_restore` uses concrete managed/credential/resource fields and freezes/validates correlated `resources_generic`;
-9. create/patch response binds ACM Restore namespace/name/UID/generation/mutation kind/cleanupBeforeRestore/fingerprint;
-10. resume loads/revalidates journal and never refreezes any managed or passive auxiliary category to later `latest` targets;
+6. immediately before `passive_patch`, a strict live re-read tests that normalized `cleanupBeforeRestore` still equals the journaled value, then the guarded patch tests UID/resourceVersion/raw MC field and replaces only MC with canonical `latest`; cleanup mismatch fails before mutation;
+7. `passive_restore` creates one-shot concrete MC with credential/resource skips and sends the journaled normalized `cleanupBeforeRestore` value;
+8. `full_restore` uses concrete managed/credential/resource fields, freezes/validates correlated `resources_generic`, and sends the journaled normalized `cleanupBeforeRestore` value;
+9. each create response plus mandatory strict post-create read, and each patch response plus strict post-patch read, binds ACM Restore namespace/name/UID/generation/mutation kind/cleanupBeforeRestore/fingerprint and rejects a cleanup mismatch;
+10. resume loads/revalidates the journal, checks `cleanupBeforeRestore` at every governed post-read/evidence/revalidation boundary, and never refreezes any managed or passive auxiliary category to later `latest` targets;
 11. same-name different Backup UID or status drift blocks;
 12. lane-specific child sweep uses strict complete Velero Restore list + exact owner UID filtering, never `.metadata.controller` server selector;
 13. legacy 2.12–2.16 requires the legacy owner cohort and ManagedClusters/Credentials/ResourcesGeneric provenance, with each consumed credential/resource/generic child bound to its corresponding frozen `activation_*` evidence;
@@ -502,6 +513,7 @@ Cover all mutation kinds and resume:
 15. child `spec.backupName` mismatch blocks, including post-PATCH alias race detection and auxiliary child mismatch;
 16. ACM phase `Enabled` is accepted only with the full passive-patch conjunctive proof; `EnabledWithErrors` blocks on 2.17; one-shot/full require `Finished`;
 17. `restore.completed_at` is written only after every required identity/provenance/completion/name predicate is complete, and written last.
+18. cleanup-policy tests prove a pre-PATCH mismatch issues zero PATCH, one-shot and full create bodies send the normalized journal value, post-create/post-patch mismatch blocks, and resume drift blocks.
 
 Run before implementation:
 
@@ -559,6 +571,10 @@ Mirror every Python decision listed in Task 7, plus:
 - explicitly freeze `activation_credentials`, `activation_resources`, and `activation_resources_generic` before a passive PATCH through the same pinned-lane upstream-first selection contract; if a required auxiliary input is indeterminate, persist no accepted mutation transition and issue no PATCH; resume reuses/revalidates those frozen categories rather than re-resolving `latest`;
 - bind every consumed legacy/2.17 credential/resource/generic Velero child `spec.backupName` to the matching frozen `activation_*` category before completion evidence is accepted;
 - strict pre-mutation Backup GET/revalidation compares the seven-field evidence after the same omitted-counter normalization used at freeze time;
+- mirror the complete Task 7 `cleanupBeforeRestore` contract: pre-PATCH strict equality with
+  zero mutation on mismatch, one-shot/full create bodies carrying the journaled normalized
+  value, post-create/post-patch binding, and drift rejection at every resume/revalidation
+  boundary;
 - `check_mode`/dry-run reports prediction but neither mutates Restore nor persists authoritative journal transitions;
 - checkpoint `status:update` receives one complete `migration_backups` mapping per transition;
 - passive patch uses `acm_restore_guarded_mutation`, not `kubernetes.core.k8s state: patched`;
@@ -847,9 +863,10 @@ Do not mark ready or merge while any actionable thread remains. A PASS does not 
 
 ## Implementation authorization gate
 
-This plan deliberately ends before runtime implementation.
+This approved plan deliberately ends before runtime implementation. Its approval does not
+bypass Task 0 or the merged R4-03 prerequisite.
 
-Implementation may begin only after the operator reviews and explicitly approves this exact plan. At that point:
+Runtime implementation may begin only in a new governed builder session that:
 
 1. re-fetch current `origin/ansible` and repeat Task 0;
 2. if R4-03 strict inventory is not merged, stop R4-04 and execute R4-03 first;

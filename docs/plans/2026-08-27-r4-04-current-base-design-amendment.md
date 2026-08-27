@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-27
 **Base:** `ansible@acb002eb561055deb9cdb9a44c4ea74fea10fd41`
-**Status:** third-round revised normative amendment awaiting written-spec review; no implementation plan or implementation authority
+**Status:** accepted normative amendment at exact head `f5f7505d55d7ef97b4642c87844e0c254b635018`; reviewed implementation plan published; no runtime implementation authority
 **Amends:** `docs/plans/2026-07-29-migration-evidence-design.md`
 
 ## Authority and scope
@@ -41,8 +41,8 @@ no migration-evidence barrier before Restore cleanup and old-hub handling.
 
 This is a **design-only** amendment. It changes no runtime, test, RBAC, manifest, Helm,
 release-validation, lab-controller, protected-file, or support behavior. R4-04 remains
-`planned`. The implementation plan is written only after this exact revised amendment is
-reviewed and approved.
+`planned`. The written-spec review was accepted before the implementation plan was written.
+Plan approval does not bypass its Task 0 gate or the merged R4-03 prerequisite.
 
 ### Superseded July assumptions
 
@@ -823,9 +823,9 @@ transaction.**
 
 ## 11. Current implementation-plan boundary
 
-After this exact revised amendment is approved, `superpowers:writing-plans` should produce
-the implementation plan from the July baseline plus this amendment. The plan must not
-start by editing activation call sites.
+The accepted written-spec review opened the implementation-plan gate, and the reviewed plan
+was then produced from the July baseline plus this amendment. Runtime implementation must
+not start by editing activation call sites.
 
 Dependency order:
 
@@ -951,8 +951,8 @@ supersedes them.
 
 ## Written-spec review gate
 
-This amendment deliberately stops before implementation planning. Review must verify at
-least these points against current source and the pinned upstream snapshots:
+This amendment deliberately stopped before implementation planning. Its written-spec review
+verified these points against current source and the pinned upstream snapshots:
 
 - the RunRecord/checkpoint facade ownership matches current guardrails;
 - `status: update` explicitly preserves `phase_status` and `completed_phases` at
@@ -1002,4 +1002,6 @@ least these points against current source and the pinned upstream snapshots:
 - no protected-file, RBAC, release-validation, lab-controller, or unrelated old-hub
   cleanup authority is implied.
 
-Only after that exact written review is accepted does the implementation-plan gate open.
+That written review was accepted at exact amendment head
+`f5f7505d55d7ef97b4642c87844e0c254b635018`, which opened the implementation-plan gate.
+The resulting plan remains subject to its own Task 0 and implementation-authorization gates.
