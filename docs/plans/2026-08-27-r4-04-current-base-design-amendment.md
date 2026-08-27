@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-27
 **Base:** `ansible@acb002eb561055deb9cdb9a44c4ea74fea10fd41`
-**Status:** second-round revised normative amendment awaiting written-spec review; no implementation plan or implementation authority
+**Status:** third-round revised normative amendment awaiting written-spec review; no implementation plan or implementation authority
 **Amends:** `docs/plans/2026-07-29-migration-evidence-design.md`
 
 ## Authority and scope
@@ -18,7 +18,7 @@ after the July design, and because the root-level `thermos-resolution-plan.md` s
 R4-04 implementation obligations, two of them explicit design choices, to the implementing
 slice.
 
-Two independent review rounds materially hardened the current-base design before the
+Three independent review rounds materially hardened the current-base design before the
 implementation-plan gate:
 
 1. the first review showed that generic-resource provenance cannot be bound to the ordinary
@@ -27,7 +27,11 @@ implementation-plan gate:
 2. the second review showed that accepting passive `Enabled` after validating only the
    ManagedClusters child has no aggregate-success guarantee, and that passive activation
    can consume additional credential/resource Backup inputs that must be provenance-bound
-   as part of the same transaction.
+   as part of the same transaction;
+3. the third review showed that fresh passive activation is reachable only when the
+   pre-existing ManagedClusters status locator is empty, and that Velero omits clean
+   zero-valued `errors`/`warnings` counters on the wire even though the journal must persist
+   those normalized values explicitly.
 
 Current-source revalidation on the base above confirms the underlying R4-04 defects remain
 open in both supported form factors: Restore sources can still move through `latest`,
@@ -99,12 +103,12 @@ those facades; it must not reopen raw state access.
   candidate operational data. The requested phase must equal the persisted checkpoint
   phase; a missing checkpoint or phase mismatch is fatal. `error` and `report_ref` inputs
   are invalid for this status.
-- `build_phase_transition()` is an explicit integration point. The implementation must
-  either special-case `status == "update"` there or bypass the phase-transition helper for
-  that status. In either case, the returned/applied values for `completed_phases` and
-  `phase_status` are the **existing persisted values**, not `"update"`. An update may
-  change only `operational_data` and `updated_at`; it must not alter `phase`,
-  `completed_phases`, `phase_status`, `errors`, or `report_refs`.
+- `plugins/action/checkpoint_phase.py::build_phase_transition()` is an explicit integration
+  point. The implementation must either special-case `status == "update"` there or bypass
+  the phase-transition helper for that status. In either case, the returned/applied values
+  for `completed_phases` and `phase_status` are the **existing persisted values**, not
+  `"update"`. An update may change only `operational_data` and `updated_at`; it must not
+  alter `phase`, `completed_phases`, `phase_status`, `errors`, or `report_refs`.
 - R4-04 passes the complete non-empty journal as one top-level mapping:
   `operational_data={"migration_backups": <complete-candidate>}`. The existing top-level
   filtering of `None` / `""` therefore does not strip schema-valid nulls nested inside the
@@ -158,10 +162,11 @@ Only a **readable** store can produce a migration-journal outcome:
 `invalid` is blocking before any R4-04 mutation, Restore cleanup, BackupSchedule
 enablement, finalization completion, or integrated teardown.
 
-No wrong-typed or missing R4-04 field silently becomes `None`, `[]`, `{}`, `0`, or
+No wrong-typed or missing **journal** field silently becomes `None`, `[]`, `{}`, `0`, or
 `False`. Unknown future journal schema versions fail closed rather than being treated as
 empty legacy state. Validation runs before consuming a persisted transition and again
-before writing a candidate transition.
+before writing a candidate transition. This journal rule does not prohibit the explicit
+Velero wire-format normalization for omitted zero-valued counters defined in §3.
 
 ## 3. Backup evidence and upstream selection algebra
 
@@ -178,22 +183,32 @@ errors: 0
 warnings: 0
 ```
 
-`warnings` is the exact non-negative integer observed; `0` above is illustrative. All
-**seven** fields are required. R4-04 eligibility is strict:
+All **seven** persisted fields are required. Before eligibility is evaluated, raw Velero
+Backup JSON normalizes the optional `status.errors` and `status.warnings` counters exactly
+as follows:
+
+- an absent key normalizes to integer `0`, matching Velero's zero-value `omitempty`
+  serialization;
+- a present non-negative integer is retained exactly;
+- a present `null`, boolean, string, floating-point value, negative integer, or any other
+  wrong-typed value is malformed and blocking.
+
+The normalized `errors` and `warnings` integers are what the seven-field journal projection
+persists and later revalidates. R4-04 eligibility is strict:
 
 - `status.phase == "Completed"`;
 - a present, well-formed `status.completionTimestamp`;
-- `status.errors` is a well-formed non-negative integer equal to zero;
-- `status.warnings` is a well-formed non-negative integer;
+- normalized `status.errors == 0`;
+- normalized `status.warnings` is a non-negative integer;
 - `metadata.name` and `metadata.uid` are non-empty strings;
 - `metadata.namespace` equals the exact backup namespace used by the strict read.
 
 Every required Backup is strictly GET/revalidated by namespace/name immediately before the
 Restore mutation boundary. UID and the complete persisted status projection must still
-match. A same-name Backup with a different UID is a replacement and blocks; the run never
-rebinds the journal to it. Status drift away from the persisted successful projection also
-blocks. This proves provenance at each required read instant; it does not claim an
-admission lock after that read returns.
+match after the same counter normalization. A same-name Backup with a different UID is a
+replacement and blocks; the run never rebinds the journal to it. Status drift away from the
+persisted successful projection also blocks. This proves provenance at each required read
+instant; it does not claim an admission lock after that read returns.
 
 ### Journal categories
 
@@ -262,10 +277,12 @@ Backup, R4-04 mirrors the exact-name/fallback algorithm:
    the seven-field success projection.
 4. If the exact object is absent, build the controller's raw ±30-second candidate set over
    the strictly complete generic Backup inventory. The target is the timestamp parsed from
-   the ordinary Backup **name**. A raw candidate is included when its name matches the
-   generic schedule family, its `status.startTimestamp` is present, and that timestamp is
-   within ±30 seconds of the parsed target. There is **no R4-04 phase/success pre-filter**
-   when computing this raw set.
+   the ordinary Backup **name**. A raw candidate is included only when
+   `strings.Contains(candidate.metadata.name, "acm-resources-generic-schedule")` is true,
+   its `status.startTimestamp` is present, and that timestamp is within ±30 seconds of the
+   parsed target. There is **no R4-04 phase/success pre-filter** when computing this raw
+   set, and the substring test is intentionally looser than the prefix test used by direct
+   `latest` selection.
 5. R4-04 accepts the fallback only when the raw set has exactly one object. Zero or more
    than one raw candidates is fatal before mutation because the controller's list-order
    choice is not a provenance proof.
@@ -276,10 +293,13 @@ For full restore this result is stored as `backups.resources_generic`. For passi
 the same selection algebra is used where the pinned controller's auxiliary generic path
 requires `activation_resources_generic`.
 
-The current repository's `ACM_BACKUP_SCHEDULE_TYPES` and `ACM_BACKUP_NAME_RE` do not know
-about generic/activation evidence categories. R4-04 implementation must extend only the
-R4-04 evidence-selection surface needed for these categories; it must not silently broaden
-unrelated backup classification without tests and explicit scope.
+The current repository's `ACM_BACKUP_NAME_RE` already coarsely matches
+`acm-resources-generic-schedule-*` through its broad `resources` alternative, while
+`ACM_BACKUP_SCHEDULE_TYPES` has no distinct generic category. R4-04 therefore requires a
+scoped **reclassification** into `resources_generic` / `activation_resources_generic`
+evidence where this design needs that distinction; it is not merely adding recognition for
+previously unmatched names, and it must not silently broaden unrelated backup
+classification without tests and explicit scope.
 
 ## 4. Restore trigger and spec-binding semantics
 
@@ -321,7 +341,7 @@ restore:
       veleroCredentialsBackupName: latest
       veleroResourcesBackupName: latest
     status_restore_names:
-      veleroManagedClustersRestoreName: "<string; empty allowed>"
+      veleroManagedClustersRestoreName: ""
       veleroCredentialsRestoreName: "<string; empty allowed>"
       veleroResourcesRestoreName: "<string; empty allowed>"
       veleroGenericResourcesRestoreName: "<string; empty allowed>"
@@ -329,11 +349,12 @@ restore:
 
 `backup_fields_normalized` is derived only by the pinned upstream trim/lower operation and
 must equal exactly the shown `skip/latest/latest` values for fresh intent. The raw fields
-are preserved verbatim for guarded comparison/audit. `status_restore_names` records the
-four exact pre-patch status strings; empty is valid because a status association may not
-exist yet. This precondition object is absent for `passive_restore` and `full_restore`.
-It is immutable after the guarded patch is accepted and is not independently reconstructed
-on resume.
+are preserved verbatim for guarded comparison/audit. For fresh `passive_patch` intent,
+`status_restore_names.veleroManagedClustersRestoreName` must be the exact empty string;
+that is an upstream activation precondition, not merely an observed value. The other three
+status strings are recorded exactly and may be empty or non-empty. This precondition object
+is absent for `passive_restore` and `full_restore`. It is immutable after the guarded patch
+is accepted and is not independently reconstructed on resume.
 
 ### `passive_patch`
 
@@ -351,12 +372,16 @@ does **not** patch a concrete name into this existing sync Restore.
 Fresh `passive_patch` intent is exact:
 
 1. Strictly read the passive ACM Restore and preserve the exact raw values of its owned
-   pre-patch spec fields for guarded comparison/audit.
+   pre-patch spec fields and all four status Restore-name fields for guarded comparison and
+   audit.
 2. Normalize the three backup option strings exactly as upstream does. Require normalized
    ManagedClusters `skip`, normalized credentials `latest`, normalized resources `latest`,
-   and `syncRestoreWithNewBackups == true`. Case/outer whitespace accepted by upstream is
-   therefore not rejected merely for presentation. The guarded patch tests the exact raw
-   pre-patch ManagedClusters value before replacing it.
+   `syncRestoreWithNewBackups == true`, and the exact pre-patch
+   `status.veleroManagedClustersRestoreName == ""`. Case/outer whitespace accepted by
+   upstream is therefore not rejected merely for presentation, but a non-empty
+   ManagedClusters status locator refuses fresh intent **before Backup freezing and before
+   any PATCH**. R4-04 does not define an un-patch/restore-to-`skip` recovery path for this
+   rejected starting state.
 3. Freeze `backups.managed_clusters` by mirroring upstream `latest` selection and then
    applying R4-04 eligibility.
 4. Freeze the lane's operator-selectable passive auxiliary inputs before mutation:
@@ -375,9 +400,10 @@ Fresh `passive_patch` intent is exact:
    `{"veleroManagedClustersBackupName": "latest"}`. This is the only R4-04 `latest`
    sentinel permitted in an owned mutation projection. Concrete provenance lives in the
    `backups.*` evidence and validated child Restores.
-8. A different non-empty post-patch `veleroManagedClustersRestoreName` relative to
-   `passive_patch_precondition.status_restore_names.veleroManagedClustersRestoreName` is
-   mandatory. Its Velero Restore must bind to `backups.managed_clusters` under §5.
+8. Post-patch `veleroManagedClustersRestoreName` must become non-empty; because the fresh
+   precondition requires the empty string, this also proves a new status locator was
+   published after mutation. Its Velero Restore must bind to `backups.managed_clusters`
+   under §5.
 9. Every other lane-required child Restore and every status association changed relative
    to `passive_patch_precondition.status_restore_names` must pass §5 completion and
    provenance binding. A child that consumes a Backup different from the corresponding
@@ -385,10 +411,10 @@ Fresh `passive_patch` intent is exact:
 
 On resume after this journal has already recorded an accepted guarded patch, normalized
 live ManagedClusters `latest` is expected and the run reconciles the existing transaction
-instead of requiring the fresh-intent `skip` precondition again. A live normalized
-`latest` without this journal's accepted patch evidence is stale/unowned and blocking.
-Resume never recomputes any frozen `activation_*` Backup from the later meaning of
-`latest`.
+instead of requiring the fresh-intent `skip`/empty-status preconditions again. A live
+normalized `latest` without that journal's accepted patch evidence is stale/unowned and
+blocking. Resume never recomputes any frozen `activation_*` Backup from the later meaning
+of `latest`.
 
 The remaining concurrency limit is explicit. The controller resolves `latest` after the
 PATCH reaches the cluster. R4-04 cannot prevent an unrelated actor from creating a newer
@@ -540,8 +566,9 @@ For `controller_contract: legacy_2_12_2_16`:
    conservative than the 2.17 path on a cluster carrying historical failed children; the
    design chooses fail-closed compatibility rather than inventing a current-cycle filter
    absent from the pinned legacy source.
-2. Post-patch `veleroManagedClustersRestoreName` must be non-empty and different from the
-   pre-patch value, and its child binds to `backups.managed_clusters`.
+2. Post-patch `veleroManagedClustersRestoreName` must be non-empty; its fresh-intent
+   precondition value is necessarily empty, and its child binds to
+   `backups.managed_clusters`.
 3. Post-patch `veleroCredentialsRestoreName` and
    `veleroGenericResourcesRestoreName` are required for the legacy
    `restoreOnlyManagedClusters` path and bind to `backups.activation_credentials` and
@@ -561,15 +588,18 @@ For `controller_contract: active_2_17`:
 
 1. Strictly complete-list and owner-filter all Velero Restores as above.
 2. Reproduce the pinned `getLatestVeleroRestores` completion cohort from the strictly
-   complete owner-filtered inventory: start with all non-empty current ACM status-published
-   Restore names, strip a trailing `-active` to form each base name, and include every
-   owner child whose exact name is current or whose name with a trailing `-active` removed
+   complete owner-filtered inventory. First collect the four non-empty current ACM
+   status-published Restore names. If **all four are empty**, the cohort is the **entire
+   owner-filtered list**, matching the upstream initial-restore branch. Otherwise strip a
+   trailing `-active` from each current name to form base names and include every owner
+   child whose exact name is current or whose name with a trailing `-active` removed
    matches one of those base names.
-3. Every member of that current cohort must be `Completed`. A missing expected child,
+3. Every member of that resulting cohort must be `Completed`. A missing expected child,
    failed/in-progress `-active` variant, malformed object, or child outside the exact owner
    UID is blocking even if the ACM Restore still reads `Enabled`.
 4. The newly published ManagedClusters association remains mandatory and binds to
-   `backups.managed_clusters`.
+   `backups.managed_clusters`; therefore the all-status-empty cohort branch by itself can
+   never authorize `restore.completed_at` for this transaction.
 5. The current-cohort children created for `CredentialsActive` and
    `ResourcesGenericActive` are not directly published into distinct ACM status fields;
    their related `-active` children are nevertheless mandatory completion/provenance
@@ -596,16 +626,19 @@ mechanism.
   child aggregation. In addition:
   1. the guarded patch/reconciliation evidence must be complete for the journaled ACM
      Restore UID/generation/spec projection;
-  2. the post-patch ManagedClusters status name must be new relative to
-     `passive_patch_precondition.status_restore_names.veleroManagedClustersRestoreName`;
+  2. the post-patch ManagedClusters status name must be non-empty while
+     `passive_patch_precondition.status_restore_names.veleroManagedClustersRestoreName` is
+     the required empty string;
   3. every required current/legacy cohort child must be owner-UID-bound, provenance-bound,
      and `Completed`;
   4. the expected ManagedCluster-name predicate for activation must have passed or be
      covered by the explicit audited waiver.
 
-`FinishedWithErrors`, `Error`, `EnabledError`, `Unknown`, missing/malformed phase, and every
-unrecognized value are blocking. The stricter ACM `Finished` outcome remains preferred,
-but it does not eliminate the R4-04 child/provenance checks.
+`FinishedWithErrors`, `Error`, `Unknown`, missing/malformed phase, and every unrecognized
+value are blocking. On the pinned 2.17 contract, wire phase `EnabledWithErrors` is also
+explicitly blocking; legacy 2.12–2.16 do not define that wire value and would reject it as
+unrecognized. The stricter ACM `Finished` outcome remains preferred, but it does not
+eliminate the R4-04 child/provenance checks.
 
 ## 6. `cleanupBeforeRestore` is part of the exact-spec claim
 
@@ -797,15 +830,17 @@ start by editing activation call sites.
 Dependency order:
 
 1. **Foundation:** strict journal facade/validator in both form factors; store-read parity;
-   collection `status: update` with the `build_phase_transition()` no-op semantics;
-   R4-03 strict-read prerequisite/reuse; applicable R4-05 durability prerequisite; exact
-   Backup/Restore/Velero evidence types; deterministic fingerprint helper; upstream
-   selection helpers; all-six-lane controller-contract fixtures.
+   collection `status: update` with the
+   `plugins/action/checkpoint_phase.py::build_phase_transition()` no-op semantics; R4-03
+   strict-read prerequisite/reuse; applicable R4-05 durability prerequisite; exact
+   Backup/Restore/Velero evidence types including omitted-counter normalization;
+   deterministic fingerprint helper; upstream selection helpers; all-six-lane
+   controller-contract fixtures.
 2. **Activation and completion evidence:** method-specific trigger semantics; concrete
    Backup freeze including passive auxiliary evidence; exact
    `passive_patch_precondition` construction; normalized/raw passive trigger validation;
-   additive expectations/waiver; exact Restore create/guarded-patch inputs; lane-specific
-   ACM+Velero completion cohorts; retry/resume.
+   fresh empty-MC-status precondition; additive expectations/waiver; exact Restore
+   create/guarded-patch inputs; lane-specific ACM+Velero completion cohorts; retry/resume.
 3. **Finalization and cleanup:** live teardown revalidation; journal-reserved Restore
    cleanup; guarded UID+resourceVersion DELETE/recovery/repair; BackupSchedule enablement
    and integrated-decommission evidence gates.
@@ -835,29 +870,36 @@ supersedes them.
     invocations in both form factors; collection quarantine cannot turn corruption into
     absence.
 15. Every Backup accepted as migration provenance persists and revalidates all seven
-    fields: namespace, name, UID, phase, completion timestamp, errors, and warnings.
-    Same-name UID replacement or status drift at a required evidence read blocks.
+    fields: namespace, name, UID, phase, completion timestamp, errors, and warnings. Raw
+    Velero omission of `errors`/`warnings` normalizes to zero before eligibility and
+    persistence; a present wrong-typed or negative counter blocks. Same-name UID
+    replacement or normalized status drift at a required evidence read blocks.
 16. Upstream Backup prediction mirrors controller selection **before** applying R4-04's
     stricter success predicate. A controller-selected `PartiallyFailed`/malformed Backup
     blocks; R4-04 never skips it to choose an older successful object the controller would
     not have selected.
 17. Correlated generic selection parses the 14-digit timestamp from the ordinary Backup
     **name**, prefers the exact generic name, and when falling back requires exactly one
-    raw prefix/non-null-startTimestamp/±30-second candidate before applying R4-04
-    eligibility. Full restore journals that result as `backups.resources_generic`.
+    raw `strings.Contains(name, generic-schedule-token)` / non-null-startTimestamp /
+    ±30-second candidate before applying R4-04 eligibility. Direct `latest` prefix
+    selection and correlated fallback substring selection are distinct pinned algorithms.
+    Full restore journals the correlated result as `backups.resources_generic`.
 18. `passive_patch` is the sole permitted R4-04 `latest` trigger. Fresh intent validates
-    upstream-normalized `skip/latest/latest` semantics while preserving the exact strict
-    `passive_patch_precondition` raw/normalized/status projection for guarded mutation and
-    resume. The canonical patch writes lowercase `latest`; an unowned existing normalized
-    ManagedClusters `latest` is blocking.
+    upstream-normalized `skip/latest/latest` semantics **and requires an empty pre-patch
+    ManagedClusters status Restore name** before Backup freezing or mutation, while
+    preserving the exact strict `passive_patch_precondition` raw/normalized/status
+    projection for guarded mutation and resume. The canonical patch writes lowercase
+    `latest`; an unowned existing normalized ManagedClusters `latest` or a non-empty fresh
+    pre-patch ManagedClusters status locator is blocking.
 19. Before `passive_patch`, R4-04 freezes ManagedClusters plus the controller-selectable
     auxiliary credential/resources/generic Backup evidence required by the pinned lane.
     Resume never refreezes any of those categories to later alias targets.
 20. Passive completion uses an immutable ACM-minor/controller-contract matrix. The
     2.12–2.16 snapshots use the legacy owner-list/ManagedClusters+Credentials+ResourcesGeneric
-    model; the pinned 2.17 snapshot additionally requires current-cohort related
-    `CredentialsActive`/`ResourcesGenericActive` evidence. Unknown/unmapped controller
-    behavior is blocking rather than inferred.
+    model; the pinned 2.17 snapshot uses the exact `getLatestVeleroRestores` cohort rule,
+    including its all-status-names-empty → entire owner-list branch and its non-empty
+    current-name/related-`-active` branch. Unknown/unmapped controller behavior is blocking
+    rather than inferred.
 21. `restore.completed_at` for `passive_patch` requires the complete lane-specific child
     cohort to be owner-UID-bound, provenance-bound where consumed by this transaction, and
     `Completed`, regardless of whether ACM phase is `Finished` or conditionally accepted
@@ -879,12 +921,15 @@ supersedes them.
     enforcement unless covered by the audited waiver. `min=0` lowers only the count floor;
     it does not clear names or permit zero when names are expected.
 26. Collection mid-phase migration writes use `checkpoint_phase status: update`;
-    `build_phase_transition()`/its caller preserve the prior `phase_status` and
-    `completed_phases`, and the transition changes only operational data/updated-at while
-    replacing the complete non-empty `migration_backups` mapping as one top-level value.
+    `plugins/action/checkpoint_phase.py::build_phase_transition()` or its caller preserves
+    the prior `phase_status` and `completed_phases`, and the transition changes only
+    operational data/updated-at while replacing the complete non-empty `migration_backups`
+    mapping as one top-level value.
 27. R4-04 uses the R4-03 strict inventory authority and extends/reuses the current
     collection lossless-read seam; it creates neither a competing inventory algebra nor a
-    second expectation resolver.
+    second expectation resolver. Generic Backup evidence uses scoped reclassification of
+    names currently coarsely matched as `resources`; it does not treat them as previously
+    unrecognized names or broaden unrelated classification.
 28. No R4-04 safety-authorizing transition is considered durable until the applicable
     R4-05 file/directory durability contract is satisfied.
 29. Retry/resume never changes frozen concrete Backup evidence, the strict passive-patch
@@ -893,12 +938,16 @@ supersedes them.
     while a journal exists and require explicit full reset for a new transaction.
 30. Tests pin the upstream selection, sync-trigger, owner, status-association, and
     completion-cohort contracts against all six immutable controller snapshots above.
-    Negative fixtures include raw generic-fallback ambiguity, a failed candidate that would
-    sort ahead of an eligible one, wrong owner UID, replacement child UID, wrong
-    `spec.backupName`, stale/unowned passive `latest`, malformed/extra/missing passive
-    precondition keys, unchanged ManagedClusters status name, missing/failed 2.17 `-active`
-    child, malformed/incomplete child LIST, malformed child evidence, malformed
-    store/journal, non-terminal ACM/Velero phases, and min-zero-with-names.
+    Negative/precision fixtures include raw generic-fallback ambiguity; a non-prefix name
+    that still matches the upstream `Contains` fallback; a failed candidate that would sort
+    ahead of an eligible one; a successful Backup with `errors`/`warnings` keys absent; a
+    present malformed/negative counter; wrong owner UID; replacement child UID; wrong
+    `spec.backupName`; stale/unowned passive `latest`; malformed/extra/missing passive
+    precondition keys; a non-empty pre-patch ManagedClusters status name that must refuse
+    before mutation; `EnabledWithErrors` on 2.17; the 2.17 all-status-empty entire-owner-list
+    cohort; missing/failed 2.17 `-active` child; malformed/incomplete child LIST; malformed
+    child evidence; malformed store/journal; non-terminal ACM/Velero phases; and
+    min-zero-with-names.
 
 ## Written-spec review gate
 
@@ -906,24 +955,31 @@ This amendment deliberately stops before implementation planning. Review must ve
 least these points against current source and the pinned upstream snapshots:
 
 - the RunRecord/checkpoint facade ownership matches current guardrails;
-- `status: update` explicitly preserves `phase_status` and `completed_phases` at the
-  current `build_phase_transition()` integration point;
+- `status: update` explicitly preserves `phase_status` and `completed_phases` at
+  `plugins/action/checkpoint_phase.py::build_phase_transition()` or an explicit bypass in
+  its caller;
 - corruption cannot become journal absence on a subsequent invocation;
 - the strict-read dependency does not duplicate R3-02/R4-03 plumbing;
-- the seven-field Backup projection is available from the supported Velero API surface;
+- the seven-field Backup projection is available from the supported Velero API surface,
+  while omitted zero-valued `errors`/`warnings` normalize to explicit persisted zeroes and
+  present malformed counters fail closed;
 - `latest` selection is predicted in the controller's raw order before R4 eligibility is
   applied;
-- generic-resource exact/fallback selection uses the Backup-name timestamp target and
-  computes ambiguity over the unfiltered upstream fallback candidate set;
+- generic-resource exact/fallback selection uses the Backup-name timestamp target,
+  computes ambiguity over the unfiltered upstream fallback candidate set, and reproduces
+  the pinned `strings.Contains` name test rather than silently substituting a prefix test;
 - the pinned 2.12, 2.13, 2.14, 2.15, 2.16, and 2.17 snapshots support the controller
   contract matrix stated in §5;
 - the strict `passive_patch_precondition` schema captures raw/normalized backup values,
-  resourceVersion/generation, and all four pre-patch status names without ambiguous or
-  optional extra fields;
+  resourceVersion/generation, all four pre-patch status names, and requires the fresh
+  ManagedClusters status name to be empty before Backup freezing/mutation;
 - passive auxiliary credential/resources/generic Backup inputs are frozen before mutation
   and every transaction-consumed child binds to the corresponding evidence;
 - every accepted child evidence entry has the exact five-field schema and later drift is
   blocking rather than rewritten;
+- the 2.17 cohort rule includes both the all-status-empty entire-owner-list branch and the
+  non-empty current-name/related-`-active` branch, while the mandatory new ManagedClusters
+  locator prevents the empty-status branch alone from authorizing this transaction;
 - the 2.17 `Enabled` path cannot accept while a required current `-active` child is failed,
   missing, malformed, or still running;
 - legacy-lane owner-list semantics and their deliberate fail-closed behavior are acceptable
@@ -931,9 +987,12 @@ least these points against current source and the pinned upstream snapshots:
 - the passive-patch alias-resolution race is stated as detection-after-mutation rather than
   prevention, and retaining that limitation is acceptable for the supported workflow;
 - method-specific ACM phase rules cannot accept the pre-existing passive `Enabled` state as
-  this run's completion;
+  this run's completion, and the 2.17 blocking wire value is `EnabledWithErrors`;
 - ownerReference matching does not depend on one served API version or a non-portable
   server-side field selector;
+- `ACM_BACKUP_NAME_RE` currently coarsely matches generic names as resources, so R4-04's
+  generic evidence work is scoped reclassification rather than addition of an unmatched
+  name family;
 - `cleanupBeforeRestore` and `mutation_kind` are included consistently in every
   fingerprint/cleanup gate;
 - expected names still enforce when the explicit minimum is zero;
