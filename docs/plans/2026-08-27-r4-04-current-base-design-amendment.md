@@ -304,6 +304,37 @@ strict journal/resume/fingerprint consistency checks; `acm_minor` and
 `controller_contract` remain journal evidence but are not live Restore spec fields and are
 therefore not part of the spec fingerprint.
 
+For `mutation_kind: passive_patch`, the strict journal additionally contains this exact
+precondition object; no extra or missing keys are allowed:
+
+```yaml
+restore:
+  passive_patch_precondition:
+    generation: <positive integer>
+    resource_version: "<non-empty metadata.resourceVersion>"
+    backup_fields_raw:
+      veleroManagedClustersBackupName: "<non-empty raw string>"
+      veleroCredentialsBackupName: "<non-empty raw string>"
+      veleroResourcesBackupName: "<non-empty raw string>"
+    backup_fields_normalized:
+      veleroManagedClustersBackupName: skip
+      veleroCredentialsBackupName: latest
+      veleroResourcesBackupName: latest
+    status_restore_names:
+      veleroManagedClustersRestoreName: "<string; empty allowed>"
+      veleroCredentialsRestoreName: "<string; empty allowed>"
+      veleroResourcesRestoreName: "<string; empty allowed>"
+      veleroGenericResourcesRestoreName: "<string; empty allowed>"
+```
+
+`backup_fields_normalized` is derived only by the pinned upstream trim/lower operation and
+must equal exactly the shown `skip/latest/latest` values for fresh intent. The raw fields
+are preserved verbatim for guarded comparison/audit. `status_restore_names` records the
+four exact pre-patch status strings; empty is valid because a status association may not
+exist yet. This precondition object is absent for `passive_restore` and `full_restore`.
+It is immutable after the guarded patch is accepted and is not independently reconstructed
+on resume.
+
 ### `passive_patch`
 
 The existing passive sync Restore is a `syncRestoreWithNewBackups: true` object. Every
@@ -333,26 +364,24 @@ Fresh `passive_patch` intent is exact:
    `activation_resources_generic`, using §3's exact upstream-first selection rules. If the
    pinned lane cannot deterministically select a required auxiliary input, the patch is
    not attempted.
-5. Persist the ACM Restore namespace/name/UID, pre-patch generation and resourceVersion,
-   raw and normalized owned pre-patch projection, all frozen Backup evidence,
+5. Persist the ACM Restore namespace/name/UID, the exact
+   `restore.passive_patch_precondition` object, all frozen Backup evidence,
    `mutation_kind`, `acm_minor`, and `controller_contract` before mutation.
-6. Record the pre-patch values of all four ACM status Restore-name fields, not only the
-   ManagedClusters field. These values distinguish newly published/changed status
-   associations from existing passive-sync children during post-patch reconciliation.
-7. The guarded JSON Patch tests the exact UID, resourceVersion, and raw current
+6. The guarded JSON Patch tests the exact UID, resourceVersion, and raw current
    `/spec/veleroManagedClustersBackupName`, then replaces that field with canonical
    lowercase `latest`. It does not rewrite credentials/resources merely to normalize their
    spelling.
-8. `restore.backup_fields` for this mutation kind contains exactly
+7. `restore.backup_fields` for this mutation kind contains exactly
    `{"veleroManagedClustersBackupName": "latest"}`. This is the only R4-04 `latest`
    sentinel permitted in an owned mutation projection. Concrete provenance lives in the
    `backups.*` evidence and validated child Restores.
-9. A different non-empty post-patch `veleroManagedClustersRestoreName` is mandatory. Its
-   Velero Restore must bind to `backups.managed_clusters` under §5.
-10. Every other lane-required child Restore and every status association changed by this
-    transaction must pass §5 completion and provenance binding. A child that consumes a
-    Backup different from the corresponding frozen `activation_*` evidence blocks
-    completion/finalization evidence.
+8. A different non-empty post-patch `veleroManagedClustersRestoreName` relative to
+   `passive_patch_precondition.status_restore_names.veleroManagedClustersRestoreName` is
+   mandatory. Its Velero Restore must bind to `backups.managed_clusters` under §5.
+9. Every other lane-required child Restore and every status association changed relative
+   to `passive_patch_precondition.status_restore_names` must pass §5 completion and
+   provenance binding. A child that consumes a Backup different from the corresponding
+   frozen `activation_*` evidence blocks completion/finalization evidence.
 
 On resume after this journal has already recorded an accepted guarded patch, normalized
 live ManagedClusters `latest` is expected and the run reconciles the existing transaction
@@ -377,7 +406,8 @@ The one-shot activation Restore created after deleting/replacing the passive syn
 is not a sync Restore. Its ManagedCluster field uses the concrete frozen
 `backups.managed_clusters.name`; credentials/resources remain the documented skip values.
 `restore.backup_fields` contains only the concrete ManagedCluster field, as in the July
-method-scoped projection. Passive auxiliary categories are absent for this mutation kind.
+method-scoped projection. Passive auxiliary categories and `passive_patch_precondition`
+are absent for this mutation kind.
 
 ### `full_restore`
 
@@ -389,7 +419,8 @@ All three ACM Restore backup-name fields use their concrete journaled names:
 
 `backups.resources_generic` is evidence-only because the ACM Restore API has no fourth
 generic backup-name field. The generic Velero Restore is verified after the controller
-selects it. Passive `activation_*` categories are absent for this mutation kind.
+selects it. Passive `activation_*` categories and `passive_patch_precondition` are absent
+for this mutation kind.
 
 ## 5. ACM Restore to Velero Restore association and lane-specific terminal evidence
 
@@ -430,7 +461,7 @@ For every required Velero Restore R4-04:
 
 1. strictly GETs the exact object in the ACM Restore namespace when a status locator gives
    its name;
-2. requires non-empty Velero Restore `metadata.uid` and journals namespace/name/UID;
+2. requires non-empty Velero Restore `metadata.uid`;
 3. requires exactly one controller ownerReference matching:
    - API group `cluster.open-cluster-management.io` (served version is not pinned),
    - `kind: Restore`,
@@ -467,9 +498,22 @@ restore:
     activation_resources_generic: []
 ```
 
-Each list entry is at least `{namespace, name, uid}` and is immutable once accepted.
-Duplicate locators normalize only when every observed identity agrees; conflicting evidence
-is malformed.
+Every non-empty list entry has **exactly** this schema; extra or missing keys are invalid:
+
+```yaml
+namespace: "<non-empty namespace>"
+name: "<non-empty metadata.name>"
+uid: "<non-empty metadata.uid>"
+backup_name: "<exact concrete spec.backupName>"
+phase: Completed
+```
+
+`backup_name` must equal the journaled Backup category required for that child and `phase`
+must be the exact observed successful phase. Once a child entry is accepted, all five
+fields are immutable. A later required strict read that finds a same-name different UID,
+different `spec.backupName`, or non-`Completed` phase blocks rather than rewriting the
+entry. Duplicate locators normalize only when every observed field agrees; conflicting
+evidence is malformed.
 
 ### Full and one-shot passive requirements
 
@@ -552,8 +596,8 @@ mechanism.
   child aggregation. In addition:
   1. the guarded patch/reconciliation evidence must be complete for the journaled ACM
      Restore UID/generation/spec projection;
-  2. the post-patch ManagedClusters status name must be new relative to the pre-patch
-     value;
+  2. the post-patch ManagedClusters status name must be new relative to
+     `passive_patch_precondition.status_restore_names.veleroManagedClustersRestoreName`;
   3. every required current/legacy cohort child must be owner-UID-bound, provenance-bound,
      and `Completed`;
   4. the expected ManagedCluster-name predicate for activation must have passed or be
@@ -596,9 +640,9 @@ The canonical fingerprint projection is superseded by exactly these keys:
 `backup_fields` is the exact owned live-spec projection from §4. For `passive_patch`, its
 single value is canonical `latest`; concrete provenance lives in the frozen Backup
 categories and child Restore evidence. For one-shot passive/full Restores, consumed owned
-fields are concrete. `acm_minor`, `controller_contract`, and auxiliary Backup evidence are
-journal invariants but are not live-spec fields and therefore do not enter the spec
-fingerprint.
+fields are concrete. `acm_minor`, `controller_contract`, `passive_patch_precondition`, and
+auxiliary Backup evidence are journal invariants but are not live post-mutation Restore
+spec fields and therefore do not enter the spec fingerprint.
 
 Serialization and SHA-256 rules are otherwise unchanged: sorted JSON keys, no
 insignificant whitespace, identical ASCII escaping in both form factors, lowercase
@@ -706,9 +750,9 @@ a newer Backup merely because the phase is being retried.
 For `passive_patch`, this no-refreeze rule covers **all** frozen concrete evidence:
 `managed_clusters` and every `activation_*` category. A resumed run never updates the
 journal to whichever Backups the live `latest` aliases mean later. The recorded
-`acm_minor` and `controller_contract` are also immutable; a resumed run whose live detected
-ACM minor no longer matches the journal blocks rather than silently switching child/cohort
-semantics.
+`acm_minor`, `controller_contract`, and `passive_patch_precondition` are also immutable; a
+resumed run whose live detected ACM minor no longer matches the journal blocks rather than
+silently switching child/cohort semantics.
 
 ### Python
 
@@ -758,9 +802,10 @@ Dependency order:
    Backup/Restore/Velero evidence types; deterministic fingerprint helper; upstream
    selection helpers; all-six-lane controller-contract fixtures.
 2. **Activation and completion evidence:** method-specific trigger semantics; concrete
-   Backup freeze including passive auxiliary evidence; normalized/raw passive trigger
-   validation; additive expectations/waiver; exact Restore create/guarded-patch inputs;
-   lane-specific ACM+Velero completion cohorts; retry/resume.
+   Backup freeze including passive auxiliary evidence; exact
+   `passive_patch_precondition` construction; normalized/raw passive trigger validation;
+   additive expectations/waiver; exact Restore create/guarded-patch inputs; lane-specific
+   ACM+Velero completion cohorts; retry/resume.
 3. **Finalization and cleanup:** live teardown revalidation; journal-reserved Restore
    cleanup; guarded UID+resourceVersion DELETE/recovery/repair; BackupSchedule enablement
    and integrated-decommission evidence gates.
@@ -801,9 +846,10 @@ supersedes them.
     raw prefix/non-null-startTimestamp/±30-second candidate before applying R4-04
     eligibility. Full restore journals that result as `backups.resources_generic`.
 18. `passive_patch` is the sole permitted R4-04 `latest` trigger. Fresh intent validates
-    upstream-normalized `skip/latest/latest` semantics while preserving raw values for the
-    guarded mutation. The canonical patch writes lowercase `latest`; an unowned existing
-    normalized ManagedClusters `latest` is blocking.
+    upstream-normalized `skip/latest/latest` semantics while preserving the exact strict
+    `passive_patch_precondition` raw/normalized/status projection for guarded mutation and
+    resume. The canonical patch writes lowercase `latest`; an unowned existing normalized
+    ManagedClusters `latest` is blocking.
 19. Before `passive_patch`, R4-04 freezes ManagedClusters plus the controller-selectable
     auxiliary credential/resources/generic Backup evidence required by the pinned lane.
     Resume never refreezes any of those categories to later alias targets.
@@ -822,11 +868,13 @@ supersedes them.
 23. Velero owner validation binds `controller=true`, API group, kind, name, and exact ACM
     Restore UID without pinning the served API version literal. Namespace child sweeps use
     strict complete LIST + client-side owner filtering, never the controller-runtime cache
-    index as an API field selector.
+    index as an API field selector. Accepted child journal entries use exactly the
+    five-field namespace/name/UID/backup_name/Completed schema in §5 and are immutable.
 24. `cleanupBeforeRestore` and `mutation_kind` are immutable evidence in the journal,
     fingerprint, cleanup-intent copy, resume comparisons, teardown revalidation, final
-    pre-delete validation, and parity fixtures. Controller-contract metadata and auxiliary
-    Backup evidence remain journal invariants outside the live-spec fingerprint.
+    pre-delete validation, and parity fixtures. Controller-contract metadata,
+    `passive_patch_precondition`, and auxiliary Backup evidence remain journal invariants
+    outside the live-spec fingerprint.
 25. ManagedCluster names and minimum are additive. A non-empty expected-name set enables
     enforcement unless covered by the audited waiver. `min=0` lowers only the count floor;
     it does not clear names or permit zero when names are expected.
@@ -839,16 +887,17 @@ supersedes them.
     second expectation resolver.
 28. No R4-04 safety-authorizing transition is considered durable until the applicable
     R4-05 file/directory durability contract is satisfied.
-29. Retry/resume never changes frozen concrete Backup evidence or controller-contract
-    identity. Collection rewinds at or after activation retain/revalidate the journal;
-    rewinds before the freeze boundary refuse while a journal exists and require explicit
-    full reset for a new transaction.
+29. Retry/resume never changes frozen concrete Backup evidence, the strict passive-patch
+    precondition evidence, or controller-contract identity. Collection rewinds at or after
+    activation retain/revalidate the journal; rewinds before the freeze boundary refuse
+    while a journal exists and require explicit full reset for a new transaction.
 30. Tests pin the upstream selection, sync-trigger, owner, status-association, and
     completion-cohort contracts against all six immutable controller snapshots above.
     Negative fixtures include raw generic-fallback ambiguity, a failed candidate that would
     sort ahead of an eligible one, wrong owner UID, replacement child UID, wrong
-    `spec.backupName`, stale/unowned passive `latest`, unchanged ManagedClusters status
-    name, missing/failed 2.17 `-active` child, malformed/incomplete child LIST, malformed
+    `spec.backupName`, stale/unowned passive `latest`, malformed/extra/missing passive
+    precondition keys, unchanged ManagedClusters status name, missing/failed 2.17 `-active`
+    child, malformed/incomplete child LIST, malformed child evidence, malformed
     store/journal, non-terminal ACM/Velero phases, and min-zero-with-names.
 
 ## Written-spec review gate
@@ -868,8 +917,13 @@ least these points against current source and the pinned upstream snapshots:
   computes ambiguity over the unfiltered upstream fallback candidate set;
 - the pinned 2.12, 2.13, 2.14, 2.15, 2.16, and 2.17 snapshots support the controller
   contract matrix stated in §5;
+- the strict `passive_patch_precondition` schema captures raw/normalized backup values,
+  resourceVersion/generation, and all four pre-patch status names without ambiguous or
+  optional extra fields;
 - passive auxiliary credential/resources/generic Backup inputs are frozen before mutation
   and every transaction-consumed child binds to the corresponding evidence;
+- every accepted child evidence entry has the exact five-field schema and later drift is
+  blocking rather than rewritten;
 - the 2.17 `Enabled` path cannot accept while a required current `-active` child is failed,
   missing, malformed, or still running;
 - legacy-lane owner-list semantics and their deliberate fail-closed behavior are acceptable
