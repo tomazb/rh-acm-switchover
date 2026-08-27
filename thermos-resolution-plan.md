@@ -41,10 +41,88 @@ longer applies to the deep-scan queue: every implementation row in the PR
 Sequence table (`PR 01`-`PR 47` and `H1`) is `merged`. `PR 48` / GitHub PR #197 is
 merged; its exact-head independent validation completed before merge, and
 GitHub PR #196 is closed unmerged as superseded. `SSA-01` is no longer open
-implementation work after GitHub PR #270. Current open work is owned by the
+implementation work after GitHub PR #270. `R3-02` is no longer open
+implementation work after GitHub PR #273. Current open work is owned by the
 remaining SSA, R3, R4, TR2D, LER, GLM, H3, and deferred-issue boundaries below.
 
-**Last Updated:** 2026-08-26
+**Last Updated:** 2026-08-27
+
+## Post-Merge Reconciliation (2026-08-27)
+
+This amendment is bound to
+`ansible@98eb185ce5d0ef7582adfa57c6fbd07265893ae7`, the merge commit for
+GitHub PR #273 and the current `ansible` tip at reconciliation-branch
+creation. It supersedes earlier CURRENT-STATUS / CURRENT-ORDERING
+statements where they conflict while retaining dated historical sections as
+historical evidence for the heads they name.
+
+### Implementation closure
+
+- `R3-02` / findings `R3-A4`, `R3-A5`, and `GLM-H12` are delivered by
+  GitHub PR #273.
+- PR #273 merged exact independently validated head
+  `4ae3ae0987280cc91f057319b7d57f1f13827a37` at
+  `2026-08-27T06:33:21Z` as merge commit
+  `98eb185ce5d0ef7582adfa57c6fbd07265893ae7`.
+- Merge parents:
+  `3dc6778814c1e457b064e97654b6b66f03554119` and
+  `4ae3ae0987280cc91f057319b7d57f1f13827a37`.
+- Exact-head Independent Validator:
+  `PASS_WITH_NON_BLOCKING_COMMENTS` (comment
+  [5431934346](https://github.com/tomazb/rh-acm-switchover/pull/273#issuecomment-5431934346)).
+- Exact-head PR-comment Resolver:
+  `PASS_FINAL_RESOLUTION` (comment
+  [5435224136](https://github.com/tomazb/rh-acm-switchover/pull/273#issuecomment-5435224136)).
+- Exact-head hosted CI used for merge:
+  CI/CD Pipeline run
+  [33012654390](https://github.com/tomazb/rh-acm-switchover/actions/runs/33012654390) —
+  SUCCESS; ansible-collection-foundation run
+  [33012654518](https://github.com/tomazb/rh-acm-switchover/actions/runs/33012654518) —
+  SUCCESS, including both supported endpoints
+  (`ansible-core` 2.16.* / Python 3.11 and `ansible-core` 2.21.* / Python 3.12).
+- No protected files changed; no RBAC expansion occurred; no
+  release/version work; no live ACM certification was claimed.
+
+### Delivered behavior
+
+- Compactor drain verification succeeds only with a verified `ok` empty Pod
+  result; failed or malformed reads cannot satisfy drain.
+- Existing bounded 30 × 10 second retry ownership remains.
+- Connectivity passes only on exact positive `default` Namespace evidence;
+  failed connectivity reaches `preflight-report.json`.
+- Collection auto-import distinguishes explicit named 404 from unverifiable
+  reads and fails before ManagedCluster work on error.
+- Python activation makes the matching fail/continue decision through
+  `get_configmap_advisory()`.
+- Python and Collection remain parity-aligned.
+- Check mode and dry-run remain non-mutating.
+
+### Validation boundary
+
+Evidence is local and hosted fake-backed ordinary CI. It is not live ACM
+certification.
+
+### Active priority and work order
+
+- `R3-A4`, `R3-A5`, and `GLM-H12` / `R3-02` are removed from the ACTIVE
+  delivery queue because PR #273 merged. The historical 2026-07-29 priority
+  assessment and the 2026-08-22 work order remain valid historical evidence
+  for the pre-fix state; this amendment makes no new severity judgment.
+- Current work order (R3-02 removed; prior relative order otherwise unchanged):
+  1. `R4-04` — concrete journaled backup and Restore evidence instead of moving
+     `latest` aliases.
+  2. Conditional operational blockers before their named workflows:
+     `R4-06`/`GLM-H3`, `R4-01`+`TR2D-02`, `SSA-02`, `R3-06`, `R4-02`.
+  3. `GLM-01`, starting with `GLM-H1`, then `GLM-H2`, `GLM-H5`, `GLM-H14`.
+  4. `R3-03` fleet timeout budgeting, followed by lower-priority reporting,
+     guardrail, architecture, and hygiene work.
+
+Issue [#272](https://github.com/tomazb/rh-acm-switchover/issues/272) remains
+open until **this** tracker reconciliation merges into `ansible`.
+
+This reconciliation itself changes tracker/documentation state only. It changes
+no runtime, tests, workflows, RBAC, manifests, Helm, release validation,
+lab-controller behavior, or protected files.
 
 ## Post-Merge Reconciliation (2026-08-22)
 
@@ -1165,7 +1243,7 @@ This is the delivery sequence. Placing two bounded regressions ahead of
 | --- | --- | --- | --- | --- |
 | R3-01 / TR2D-01 | merged | R3-A1, TR2D-M1, TR2D-L1 | PR [#200](https://github.com/tomazb/rh-acm-switchover/pull/200) merged exact head `0bc1a4b6701508f6c3d4cd898515d82b8a29b6a3` as `786f8325493c6086e136cb9694a9997557f12e02`, removing the skipped-task clobber, requiring positive success for every namespace read before aggregation, failing closed on malformed/failed/skipped/unreachable/mixed results, and adding executable non-mock retry and standalone-resume coverage. The aliases preserve provenance; they do not create duplicate implementation work. | Argo CD pause/resume safety; retry and standalone-resume paths; sanitized failure handling |
 | R3-01b | planned | R3-A2, R3-A3 | Correct the two finalization register/set-fact clobbers and guard fixture/live-query semantics without coupling them to the Argo CD regression delivery. | finalization dry-run preview and fixture/live-read behavior |
-| R3-02 | ready_for_review | R3-A4, R3-A5, GLM-H12 | Make masked-error verification gates fail closed so an API error can never satisfy a drain or connectivity check. Mechanism: exact positive `default` Namespace evidence for connectivity (`k8s_info`); lossless `acm_k8s_read_outcome` for compactor Pod-list and auto-import ConfigMap reads; Python `get_configmap_advisory()` parity for activation. Note: `k8s_info` can normalize empty list, named 404, and BadRequest/400 to the same `api_found: true`, `resources: []` shape across governed kubernetes.core 6.x, so `resources is defined` / empty `resources` alone cannot distinguish success, absence, and error. Task 10 local gates recorded below; hosted ansible-core 2.21 lane still required on the frozen PR head. | Thanos/observability parity with Python; preflight go/no-go artifact integrity; activation fail-closed before ManagedCluster mutation |
+| R3-02 | merged | R3-A4, R3-A5, GLM-H12 | PR [#273](https://github.com/tomazb/rh-acm-switchover/pull/273) merged exact independently validated head `4ae3ae0987280cc91f057319b7d57f1f13827a37` as merge commit `98eb185ce5d0ef7582adfa57c6fbd07265893ae7`. Delivered mechanism: exact positive `default` Namespace evidence for connectivity; lossless `acm_k8s_read_outcome` (`ok` / named-`not_found` / `error`) for compactor drain and auto-import ConfigMap reads; Python `get_configmap_advisory()` parity for activation. Independent Validator `PASS_WITH_NON_BLOCKING_COMMENTS`; Resolver `PASS_FINAL_RESOLUTION`. | Thanos/observability parity with Python; preflight go/no-go artifact integrity; activation fail-closed before ManagedCluster mutation |
 | R3-03 | planned | R3-P1 | Correct the timeout budget in place. The slice design must choose one explicit algorithm; it must not extract helpers or modules. Decomposition remains owned by `H3`. | post-activation failure semantics at fleet scale; parity with `SSA-03` |
 | R3-04a | planned | R3-P2 | Recover Python preflight diagnostics only after sanitizing them before verbose logging; keep raw exception/API/credential material prohibited. | secret-handling and operator troubleshooting |
 | R3-04b | planned | R3-A9 | Sanitize collection report/path data in both success and failure records. | report schema, filesystem-path exposure, success/failure parity |
@@ -1294,13 +1372,37 @@ rollback boundary, and verification plan.
 
 #### R3-02: Fail-Closed Verification Gates
 
-**Status:** `ready_for_review` on branch `r3-02-fail-closed-verification` (worktree
-`.claude/worktrees/r3-02-implementation`), based on `origin/ansible@3dc67788`,
-carrying approved design `7723260d` and approved plan `6cbd43c2` (cherry-picked).
-Task 10 local gates below passed on the implementation head; this is not merge
-authorization. Hosted Collection endpoint lane ansible-core 2.21 / Python 3.12
-must still pass on the frozen PR head (local environment has ansible-core 2.16
-and Python 3.14 only).
+**Status:** `merged` through GitHub PR #273. The approved design and plan remain
+historical implementation rationale; merged tests and code are the
+authoritative shipped behavior.
+
+**Merged Implementation evidence (2026-08-27, PR #273)**
+
+- Approved design SHA:
+  `7723260db038e2774513f115fcd00394312e2723`
+  (`docs/plans/2026-08-24-r3-02-fail-closed-verification-gates-design.md`).
+- Approved implementation plan SHA:
+  `6cbd43c208541725a691764fcd4b7e5cae408f6a`
+  (`docs/superpowers/plans/2026-08-26-r3-02-fail-closed-verification-implementation.md`).
+- Exact independently validated implementation head:
+  `4ae3ae0987280cc91f057319b7d57f1f13827a37`.
+- Exact-head Independent Validator:
+  `PASS_WITH_NON_BLOCKING_COMMENTS` (comment
+  [5431934346](https://github.com/tomazb/rh-acm-switchover/pull/273#issuecomment-5431934346)).
+- Exact-head PR-comment Resolver:
+  `PASS_FINAL_RESOLUTION` (comment
+  [5435224136](https://github.com/tomazb/rh-acm-switchover/pull/273#issuecomment-5435224136)).
+- Exact-head hosted CI used for merge: CI/CD Pipeline run
+  [33012654390](https://github.com/tomazb/rh-acm-switchover/actions/runs/33012654390)
+  (SUCCESS); ansible-collection-foundation run
+  [33012654518](https://github.com/tomazb/rh-acm-switchover/actions/runs/33012654518)
+  (SUCCESS), including both supported endpoints.
+- Merge commit:
+  `98eb185ce5d0ef7582adfa57c6fbd07265893ae7` at `2026-08-27T06:33:21Z`.
+- This is merged repository evidence for `R3-02` / `R3-A4` / `R3-A5` /
+  `GLM-H12`. It is not a release claim or live ACM certification result.
+  Issue #272 remains open until this tracker reconciliation merges into
+  `ansible`.
 
 **Resolution (approved hybrid design)**
 - Do **not** rely on `resources is defined`, empty `resources`, or `.failed` after
@@ -1330,24 +1432,7 @@ and Python 3.14 only).
 - Preserve dry-run/check-mode non-mutation, targeting, checkpoints, `changed`
   semantics, and the existing RBAC surface (no new permissions).
 
-**Implementation evidence (Tasks 1–10 local)**
-- Targeted R3-02 unit/parity: 46 passed.
-- Targeted R3-02 integration: 53 passed.
-- Python `test_kube_client.py` + `test_activation.py`: 174 passed.
-- Compatibility contract: 11 passed; full Collection units: 1017 passed.
-- Collection integration + scenario: 127 passed (includes fixture-harness fix so
-  shared switchover fixtures supply exact `default` Namespace evidence).
-- Playbook syntax check: OK; collection build: OK
-  (`tomazb-acm_switchover-1.7.10.tar.gz`).
-- Combined Collection units + root `tests/`: 4303 passed, 29 skipped.
-- `tests/release -q`: 1169 passed, 3 skipped (no live profile).
-- Protected-file and RBAC-surface diffs: empty.
-- Pre-PR simplification: no further in-scope behavior-preserving simplification
-  beyond formatter alignment; module remains a single-read classifier with no
-  retry/phase/report ownership.
-- Local ansible-core lane exercised: 2.16.14. Hosted 2.21 lane still required.
-
-**Acceptance criteria**
+**Acceptance criteria (historical implementation rationale; shipped behavior is owned by the merged tests and code)**
 - A 403, timeout, or connection error during compactor verification fails the
   phase instead of reporting the compactor drained.
 - An RBAC or API failure while reading the auto-import strategy ConfigMap fails
@@ -2435,8 +2520,8 @@ Dispositions:
 | R3-A1 | merged, High | R3-01 / TR2D-01; issue #199; PR #200 | The correction assigns distinct scoped, cluster-wide, validation, and published variables and guards publication behind complete positive validation. Non-mock primary-prep retry and standalone resume prove the former no-op paths; exact validated head `0bc1a4b6701508f6c3d4cd898515d82b8a29b6a3` merged as `786f8325493c6086e136cb9694a9997557f12e02`, and issue #199 is closed as completed. |
 | R3-A2 | confirmed empirically, Medium | R3-01b (planned) | Same clobber pattern makes the finalization dry-run preview always report `restore_count: 0`. |
 | R3-A3 | confirmed empirically, Medium | R3-01b (planned) | Same clobber pattern defeats the file's own fixture-injection guard; currently benign. |
-| R3-A4 | confirmed empirically, High | R3-02 (in_progress) | `failed_when: false` makes Thanos compactor drain verification fail open; the `until` loop exits on the first attempt and the follow-up gate is dead code. Python fails closed — parity divergence. |
-| R3-A5 | confirmed empirically, High | R3-02 (in_progress) | Preflight hub connectivity is hard-coded `status: pass`; the `fail` branch is unreachable and the fabricated verdict reaches the go/no-go report. |
+| R3-A4 | merged/resolved through PR #273, High | R3-02 (merged); PR #273 | Compactor drain verification succeeds only with a verified `ok` empty Pod list via `acm_k8s_read_outcome`; failed or malformed reads cannot satisfy drain. Exact validated head `4ae3ae0987280cc91f057319b7d57f1f13827a37`; merge commit `98eb185ce5d0ef7582adfa57c6fbd07265893ae7`. Historical defect: `failed_when: false` made Thanos compactor drain verification fail open. |
+| R3-A5 | merged/resolved through PR #273, High | R3-02 (merged); PR #273 | Connectivity passes only on exact positive `default` Namespace evidence; failed connectivity reaches `preflight-report.json`. Exact validated head `4ae3ae0987280cc91f057319b7d57f1f13827a37`; merge commit `98eb185ce5d0ef7582adfa57c6fbd07265893ae7`. Historical defect: hub connectivity was hard-coded `status: pass`. |
 | R3-A6 | confirmed, Medium | R3-06 (planned) | `reset_from` disables checkpoint identity validation run-wide, not just for the pruned phase, and rewrites `operation_identity`. Persistent config key shipped in role defaults. |
 | R3-A7 | confirmed, Medium | R3-08a (planned) | Probe returns `failed: true`, failing the task and suppressing the role diagnostics its own documentation promises. |
 | R3-A8 | retired as supported-runtime work | none | The current compatibility authority supports collection controller Python 3.11/3.12 lanes and excludes Python 3.9; no active `R3-08b` implementation remains. The original Python 3.9 observation stays in the dated Review #3 findings table. |
@@ -2500,7 +2585,7 @@ Dispositions:
 | GLM-H3 | confirmed; already tracked | R4-06 (boundary amended 2026-08-16) | Same fail-open seam as `R4-F1`. Outside `PR 21`/`F38` delivered scope (`git log -S` shows only `99bb3e01` ever touched `_load_kubeconfig_data`) — scope boundary, not a regression; the F38 resolved row stands. See the amended `R4-06` boundary for the verification-gate and resume-step-completion additions. |
 | GLM-H4 | confirmed (all sub-claims, both form factors); already tracked | R4-01 + TR2D-02 (planned) | Python `resume_autosync` returns `restored=True` straight from the patch response with no re-read (`lib/argocd.py:849-860`; the `resourceVersion` pin at `:823-843` closes only the read→patch window), and the register purge persists to disk at that trust moment (`lib/argocd_register.py:160-163`, store `_forget` → immediate persist at `argocd_register_store.py:255-258`). Collection `resume.yml` counts module `changed` only; collection `pause.yml` lacks the `resourceVersion` pin resume has, and its post-patch verification checks only `automated`, so a stale clobber of other `syncPolicy` fields passes silently — all inside `R4-A3`'s stated scope plus `TR2D-M2` OCC parity. Fix both form factors in one coordinated change per the parity contract. |
 | GLM-H11 | partial; rides R4-05 | R4-05 (planned) | Six dry-run snapshot-restore sites in `acm_switchover.py` (3 capture sites) in three control-flow shapes — confirmed; the review's claim that every copy cites parity-audit H10 is false for the two `finally`-wrapper sites (`:432-433`, `:520-521`). Consolidate into a `StateManager`-owned context manager inside `R4-05`'s snapshot/crash-marker work. |
-| GLM-H12 | partial; scope added to R3-02 | R3-02 (planned) | See the amended `R3-02` resolution/acceptance. Real defect narrower than reviewed but not milder: absent ConfigMap and API error take different paths; the laundering affects genuine module errors (403/connection), whose text is discarded while activation publishes a benign skip. |
+| GLM-H12 | merged/resolved through PR #273 | R3-02 (merged); PR #273 | Collection auto-import distinguishes explicit named 404 from unverifiable reads and fails before ManagedCluster work on error; Python activation uses `get_configmap_advisory()`. Exact validated head `4ae3ae0987280cc91f057319b7d57f1f13827a37`; merge commit `98eb185ce5d0ef7582adfa57c6fbd07265893ae7`. Historical defect: API/RBAC/transport errors were published as a benign skip. |
 | GLM-H7 | rejected as written 2026-08-16 | none | Claimed ansible-core forces task failure on `until` exhaustion regardless of `failed_when` (citing only the executor's unconditional `failed=True` stamp). Refuted empirically on ansible-core 2.16.3/2.16.14/2.20.7/2.21.0: `failed_when_result` takes strict precedence over the exhaustion stamp for play control (`executor/task_result.py:65-70` in 2.16.x; `_internal/_task.py:738-756` in 2.21). Consequences (b) `delete_multiclusterhub.yml:58-79` (reachable precisely because of its `failed_when: false`) and (c) `verify_observability.yml:302-317` (the designed timeout landing zone, in `post_activation`, not `finalization`) are therefore refuted. Only `GLM-H7a` survives, via a different mechanism. `R3-A7`/`R3-08a` are unaffected (their mechanism is the probe module returning `failed: true`, not until-exhaustion). Must not re-enter this inventory as written. |
 
 ## PR Sequence
