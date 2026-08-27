@@ -189,10 +189,12 @@ The shared JSON fixture must cover at least:
 - Backup counter normalization: omitted errors/warnings -> `0`; present non-negative integer retained; null/bool/string/float/negative rejected;
 - direct `latest` selection ordering: resource-type prefix -> `{Completed, PartiallyFailed}` raw phase eligibility -> `startTimestamp` descending -> first, then R4 eligibility;
 - a `PartiallyFailed` newest Backup blocks instead of selecting an older successful Backup;
+- passive-patch auxiliary Backup categories `activation_credentials`, `activation_resources`, and `activation_resources_generic`: controller-selectable inputs are derived with the pinned lane's upstream-first selection algebra, a required auxiliary input that cannot be selected deterministically blocks before mutation, and resume keeps the frozen category identities rather than re-resolving later aliases;
 - generic exact-name match;
 - generic fallback timestamp parsed from the ordinary Backup **name**, raw `strings.Contains` semantics, non-prefix Contains candidate, ±30 second boundary, raw ambiguity (0/1/>1) before R4 eligibility;
 - exact five-field Velero child evidence validation;
 - ownerRef group/kind/name/UID/controller checks without served-version pinning;
+- child-to-Backup provenance mapping for legacy and 2.17 passive cohorts, including exact binding to `activation_credentials`, `activation_resources`, or `activation_resources_generic` when those journal categories are consumed;
 - 2.17 all-status-empty -> complete owner list and non-empty status -> current/base-`-active` cohort;
 - legacy full-owner cohort;
 - `EnabledWithErrors` rejected for 2.17 and unknown values rejected for legacy;
@@ -474,7 +476,7 @@ PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/un
 - Modify: `modules/restore_discovery.py`
 - Modify: `modules/activation.py`
 - Modify: `acm_switchover.py` only for wiring already validated inputs/effective expectations
-- Modify: `tests/test_restore_discovery.py`
+- Create: `tests/test_restore_discovery.py`
 - Modify: `tests/test_activation.py`
 - Modify: `tests/test_main.py`
 - Reuse: `lib/migration_evidence.py`, `lib/run_record.py`, R4-03 strict KubeClient reads, guarded mutation helpers.
@@ -485,20 +487,21 @@ Cover all mutation kinds and resume:
 
 1. strict passive Restore discovery failure/partial list blocks before create/patch/delete;
 2. fresh journal absent -> strict complete Backup inventory -> upstream-first selection -> seven-field freeze -> durable `RunRecord.record_migration_backups()` **before mutation**;
-3. each frozen Backup is strict-GET revalidated by namespace/name/UID/status immediately before mutation;
+3. each frozen Backup is strict-GET revalidated by namespace/name/UID and by the complete persisted status projection immediately before mutation, comparing `errors`/`warnings` only after the same omitted-counter normalization used during freeze;
 4. `passive_patch` fresh precondition requires sync=true, normalized `skip/latest/latest`, exact empty MC status locator; non-empty locator causes **zero Backup freeze and zero PATCH**;
-5. guarded patch tests UID/resourceVersion/raw MC field and replaces only MC with canonical `latest`;
-6. `passive_restore` creates one-shot concrete MC with credential/resource skips;
-7. `full_restore` uses concrete managed/credential/resource fields and freezes/validates correlated `resources_generic`;
-8. create/patch response binds ACM Restore namespace/name/UID/generation/mutation kind/cleanupBeforeRestore/fingerprint;
-9. resume loads/revalidates journal and never refreezes to later `latest` targets;
-10. same-name different Backup UID or status drift blocks;
-11. lane-specific child sweep uses strict complete Velero Restore list + exact owner UID filtering, never `.metadata.controller` server selector;
-12. legacy 2.12–2.16 requires the legacy owner cohort and ManagedClusters/Credentials/ResourcesGeneric provenance;
-13. 2.17 reproduces the all-status-empty/otherwise-current+`-active` cohort and requires all current children `Completed`;
-14. child `spec.backupName` mismatch blocks, including post-PATCH alias race detection;
-15. ACM phase `Enabled` is accepted only with the full passive-patch conjunctive proof; `EnabledWithErrors` blocks on 2.17; one-shot/full require `Finished`;
-16. `restore.completed_at` is written only after every required identity/provenance/completion/name predicate is complete, and written last.
+5. before `passive_patch`, freeze `activation_credentials`, `activation_resources`, and `activation_resources_generic` in addition to `managed_clusters`, using the pinned lane's exact upstream-first selection rules; if any controller-required auxiliary input cannot be selected deterministically, record no accepted mutation intent and issue zero PATCH; resume revalidates these frozen categories and never re-resolves them to later alias targets;
+6. guarded patch tests UID/resourceVersion/raw MC field and replaces only MC with canonical `latest`;
+7. `passive_restore` creates one-shot concrete MC with credential/resource skips;
+8. `full_restore` uses concrete managed/credential/resource fields and freezes/validates correlated `resources_generic`;
+9. create/patch response binds ACM Restore namespace/name/UID/generation/mutation kind/cleanupBeforeRestore/fingerprint;
+10. resume loads/revalidates journal and never refreezes any managed or passive auxiliary category to later `latest` targets;
+11. same-name different Backup UID or status drift blocks;
+12. lane-specific child sweep uses strict complete Velero Restore list + exact owner UID filtering, never `.metadata.controller` server selector;
+13. legacy 2.12–2.16 requires the legacy owner cohort and ManagedClusters/Credentials/ResourcesGeneric provenance, with each consumed credential/resource/generic child bound to its corresponding frozen `activation_*` evidence;
+14. 2.17 reproduces the all-status-empty/otherwise-current+`-active` cohort, requires all current children `Completed`, and binds any consumed credentials/resources/generic child to `activation_credentials`, `activation_resources`, or `activation_resources_generic` respectively;
+15. child `spec.backupName` mismatch blocks, including post-PATCH alias race detection and auxiliary child mismatch;
+16. ACM phase `Enabled` is accepted only with the full passive-patch conjunctive proof; `EnabledWithErrors` blocks on 2.17; one-shot/full require `Finished`;
+17. `restore.completed_at` is written only after every required identity/provenance/completion/name predicate is complete, and written last.
 
 Run before implementation:
 
@@ -553,6 +556,9 @@ python -m pytest tests/test_restore_discovery.py tests/test_activation.py tests/
 
 Mirror every Python decision listed in Task 7, plus:
 
+- explicitly freeze `activation_credentials`, `activation_resources`, and `activation_resources_generic` before a passive PATCH through the same pinned-lane upstream-first selection contract; if a required auxiliary input is indeterminate, persist no accepted mutation transition and issue no PATCH; resume reuses/revalidates those frozen categories rather than re-resolving `latest`;
+- bind every consumed legacy/2.17 credential/resource/generic Velero child `spec.backupName` to the matching frozen `activation_*` category before completion evidence is accepted;
+- strict pre-mutation Backup GET/revalidation compares the seven-field evidence after the same omitted-counter normalization used at freeze time;
 - `check_mode`/dry-run reports prediction but neither mutates Restore nor persists authoritative journal transitions;
 - checkpoint `status:update` receives one complete `migration_backups` mapping per transition;
 - passive patch uses `acm_restore_guarded_mutation`, not `kubernetes.core.k8s state: patched`;
