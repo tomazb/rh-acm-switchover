@@ -85,11 +85,12 @@ expand the approved scope.
 
 #### YAGNI — You Aren't Gonna Need It
 
-Implement only behavior authorized by the governing issue, approved design or
-specification, approved implementation plan, compatibility or parity contract, or explicit
-operator direction. A review or acceptance finding does not expand implementation scope
-unless it is already in scope under that authority or the operator explicitly approves the
-expansion.
+Implement only behavior authorized by the governing issue, design, or specification, an
+approved implementation plan where applicable, or explicit operator direction.
+Compatibility and parity contracts constrain how authorized work is implemented; they do
+not independently grant implementation scope. A review or acceptance finding does not
+expand implementation authority unless the work is already in scope or the operator
+explicitly approves the expansion.
 
 - Do not add speculative extensibility, generic frameworks, configuration options,
   abstraction layers, fallback modes, or future-facing APIs without a current requirement.
