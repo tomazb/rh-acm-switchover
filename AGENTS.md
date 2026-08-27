@@ -75,11 +75,80 @@ into this file to make the conflict disappear.
 
 ### Engineering principles
 
-- **DRY, bounded**: avoid duplication *within* a form factor and a stable ownership
-  boundary. Never cross-import Python CLI and Ansible collection runtime code merely to
-  remove duplication — deliberate mirrored implementation is the parity mechanism.
-- **KISS**: prefer simple, straightforward solutions over clever or abstract designs.
-- **YAGNI**: do not add speculative features or abstractions.
+Apply YAGNI, KISS, and bounded DRY throughout design, planning, implementation, review, and
+simplification.
+
+These principles are subordinate to the repository's correctness, safety, security,
+concurrency, recovery, idempotency, audit, evidence, parity, compatibility, and
+operator-facing contracts. They are not authorization to weaken a required guarantee or
+expand the approved scope.
+
+#### YAGNI — You Aren't Gonna Need It
+
+Implement only behavior authorized by the governing issue, design, or specification, an
+approved implementation plan where applicable, or explicit operator direction.
+Compatibility and parity contracts constrain how authorized work is implemented; they do
+not independently grant implementation scope. A review or acceptance finding does not
+expand implementation authority unless the work is already in scope or the operator
+explicitly approves the expansion.
+
+- Do not add speculative extensibility, generic frameworks, configuration options,
+  abstraction layers, fallback modes, or future-facing APIs without a current requirement.
+- Do not solve hypothetical variants while implementing a concrete supported case.
+- Do not implement features or introduce abstractions solely for anticipated future
+  requirements.
+- Remove newly introduced unused code, options, and abstractions rather than carrying them
+  forward "just in case."
+
+#### KISS — Keep It Simple
+
+Choose the simplest implementation that completely satisfies the approved requirements and
+preserves all required guarantees.
+
+- Prefer explicit data flow, control flow, state transitions, and failure handling over
+  clever or highly generic mechanisms.
+- Prefer existing repository patterns and platform primitives over introducing another
+  subsystem.
+- Minimize the number of concepts, states, configuration fields, persistence formats, and
+  special cases needed to express the solution.
+- Do not confuse fewer lines with greater simplicity. Readability and verifiability take
+  priority over terseness.
+- When the governing support, parity, and compatibility contracts permit a conservative
+  supported subset that satisfies the requirement safely, prefer it over implementing a
+  substantially more complex general case.
+
+#### DRY — Don't Repeat Yourself, within stable ownership boundaries
+
+Avoid duplicating the same authoritative rule, invariant, algorithm, or knowledge in
+multiple places when one clear shared representation can own it.
+
+- Apply DRY within a form factor and a stable ownership boundary. Never cross-import Python
+  CLI and Ansible Collection runtime code merely to remove duplication — deliberate
+  mirrored implementation plus parity tests is the repository contract.
+- Prefer one authoritative schema, compatibility rule, calculation, validation, or
+  state-transition implementation with callers consuming that result within its ownership
+  boundary.
+- Do not create an abstraction merely because two code fragments currently look similar.
+- Keep duplication when the behaviors have different reasons to change or when sharing them
+  would create coupling, hidden conditionals, or a harder-to-read interface.
+- Documentation and examples should refer to authoritative contracts rather than becoming
+  independent copies of executable rules.
+
+#### When the principles conflict
+
+Use this precedence:
+
+1. Preserve correctness, safety, security, concurrency, recovery, idempotency, audit,
+   evidence, parity, compatibility, and approved observable behavior.
+2. Apply YAGNI: do not build requirements that do not exist.
+3. Apply KISS: implement the required behavior with the smallest clear model.
+4. Apply DRY where a shared abstraction removes duplicated knowledge without increasing
+   coupling or complexity.
+
+In particular, do not violate YAGNI or KISS merely to achieve DRY.
+
+Standing engineering rules remain:
+
 - **Fail fast with clear errors**: detect problems early; surface explicit, actionable
   messages.
 - **Prefer explicit over implicit**: make control flow, side effects, and configuration
@@ -435,34 +504,38 @@ because a reviewer labelled it a warning:
 **A deferral is complete only when it is filed in the receiving tracker.** A PR reply alone
 is not durable tracking.
 
-### Pre-PR Simplification Gate
+### Builder Simplification Gate
 
-Before opening a pull request, the builder must review the changed code and the directly
-affected collaborators for avoidable complexity introduced, exposed, or made materially
-worse by the change.
+Before declaring builder completion, freezing the candidate head for terminal validation, or
+opening a pull request, the builder must review the changed code and the directly affected
+collaborators needed to understand the change for avoidable complexity introduced or
+materially worsened by the implementation.
 
-Apply safe, behavior-preserving simplifications when they are within the authorized scope
-and materially improve the changed implementation. Examples include duplicated logic,
-unnecessarily complex control flow, unclear local interfaces, avoidable indirection, and
-mixed responsibilities directly involved in the change.
+Apply safe, behavior-preserving simplifications when they are local, within the approved
+scope, and materially improve the changed implementation. Examples include duplicated
+logic, unnecessarily complex control flow, unclear local interfaces, avoidable indirection,
+and mixed responsibilities directly involved in the change.
 
-- The review scope may extend to directly affected collaborators, but this does not
-  authorize edits outside the governing scope. Record or defer worthwhile out-of-scope
-  simplifications under the normal finding-disposition rules.
-- Do not turn a scoped feature, correctness, or safety fix into a general refactoring
+- Inspection may extend to directly affected collaborators when necessary to understand the
+  changed implementation, but this does not expand edit authority. Do not edit outside the
+  governing scope. Record worthwhile out-of-scope simplifications for disposition under the
+  governing issue, design, or plan rather than implementing them.
+- Do not turn a scoped feature, correctness, safety, or review fix into a general refactoring
   effort. Pre-existing complexity alone is not authorization to restructure it.
 - Do not weaken safety, security, concurrency, recovery, idempotency, audit, evidence,
   parity, compatibility, or operator-facing guarantees for the sake of fewer lines, files,
   branches, or abstractions.
 - Preserve public and operator-facing interfaces, persisted state and checkpoint contracts,
-  errors and observable outcomes unless the approved change explicitly includes their
+  errors, and observable outcomes unless the approved change explicitly includes their
   revision.
-- Prefer readability and explicit control flow over minimizing line count.
-- After any simplification, rerun the targeted tests first and then every verification gate
-  invalidated by the resulting branch changes. Do not open the PR while the required local
-  gate set is failing.
-- Record the simplification review outcome in the PR description: summarize simplifications
-  applied, or state that no safe in-scope simplification was identified.
+- Prefer readability, explicit control flow, and clear responsibilities over minimizing
+  line count or abstraction count.
+- After any simplification, rerun targeted tests first, then every verification gate
+  invalidated by the resulting changes. Do not declare builder completion, freeze the
+  candidate head, or open the pull request while the required local gate set is failing.
+- Record the simplification review in the builder completion report. Summarize
+  simplifications applied, or state that no safe in-scope simplification was identified. If
+  the work results in a pull request, also record that outcome in the PR description.
 
 ### Pull Request Creation Gate
 
