@@ -568,23 +568,23 @@ after the same risk surface has already been covered.
 
 Useful specialist lenses for this repository include:
 
-* hub, cluster, namespace, context, identity, and mutation-target safety;
-* checkpoint, resume, recovery, concurrency, and fail-closed state transitions;
-* RBAC, security boundaries, secrets, credentials, and sensitive-output handling;
-* Python/Ansible parity plus Ansible idempotence, check mode, and changed reporting;
-* Argo CD Application/ApplicationSet ownership, pause/resume, and reconciliation behavior;
-* release-validation evidence, live-certification claims, and lab-controller authority; and
-* test adequacy, negative safety coverage, and simplification or avoidable complexity.
+- hub, cluster, namespace, context, identity, and mutation-target safety;
+- checkpoint, resume, recovery, concurrency, and fail-closed state transitions;
+- RBAC, security boundaries, secrets, credentials, and sensitive-output handling;
+- Python/Ansible parity plus Ansible idempotence, check mode, and changed reporting;
+- Argo CD Application/ApplicationSet ownership, pause/resume, and reconciliation behavior;
+- release-validation evidence, live-certification claims, and lab-controller authority; and
+- test adequacy, negative safety coverage, and simplification or avoidable complexity.
 
 When more than one specialist reviewer is required for a governed slice:
 
-* define each reviewer's distinct mandate before terminal validation begins;
-* run every required specialist review against the same frozen candidate head;
-* run independent review lenses in parallel when practical rather than serially waiting for
+- define each reviewer's distinct mandate before terminal validation begins;
+- run every required specialist review against the same frozen candidate head;
+- run independent review lenses in parallel when practical rather than serially waiting for
   one review to finish before starting another;
-* do not silently add another reviewer or review mandate to the acceptance gate after
+- do not silently add another reviewer or review mandate to the acceptance gate after
   terminal validation begins; and
-* do not require substantially overlapping specialist mandates unless the governing issue,
+- do not require substantially overlapping specialist mandates unless the governing issue,
   specification, or explicit operator direction requires deliberate redundancy.
 
 Specialization changes review focus, not authority. Every specialist finding still follows
