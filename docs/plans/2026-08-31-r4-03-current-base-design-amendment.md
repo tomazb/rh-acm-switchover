@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-31
 **Branch:** `docs/r4-03-current-base-amendment-2026-08-31` (base `origin/ansible` @ `74268192`)
-**Status:** design amendment awaiting independent review; implementation plan not yet authorized
+**Status:** design amendment independently reviewed; awaiting operator design approval; implementation plan not yet authorized
 **Amends:** [`docs/plans/2026-07-29-decommission-completion-design.md`](2026-07-29-decommission-completion-design.md)
 (the "July design"), which remains the approved historical design and is not modified.
 
@@ -156,15 +156,21 @@ R4-03 **extends the existing module**; no second collection read abstraction is 
 
 1. **List completeness.** List mode follows `continue` tokens to exhaustion; any page
    failure or an outstanding continuation at exit → `error`. `ok` for a list therefore
-   asserts a positively complete inventory. This is a strict *strengthening* of the
-   current single-page read: today a truncated LIST would return `ok` with a partial
-   `resources` list.
-2. **Positive kind-absence.** Add one additive `read_status` value, `kind_not_served`,
+   asserts a positively complete inventory. The current module makes one unpaginated
+   request and supplies no `limit`, so truncation is latent rather than reachable today.
+   The extension makes completeness load-bearing when it adds paging and prevents a
+   future partial response from being reported as `ok`.
+2. **Positive kind-absence.** Add `read_status: kind_not_served`,
    returned only on a *positive* discovery determination that the API
    group/version/kind is not served (the dynamic-client resource-lookup miss after a
    successful discovery fetch). Discovery calls that time out, are unauthorized, or
    return unparseable data remain `error` — the implementation must prove the
-   positive-determination property, not infer it from exception type alone.
+   positive-determination property, not infer it from exception type alone. This is a
+   deliberate reclassification of the current `error` result for that exact positive
+   miss, not a behavior-additive status: the existing unit and runtime integration
+   expectations for the positive miss must be inverted to `kind_not_served`. The
+   module's `RETURN.read_status` choices and descriptions must change with the code and
+   pass the collection sanity lane.
 3. **Namespace absence is composed, not added.** A caller needing `namespace_absent`
    issues a named GET of the `v1` `Namespace`; `not_found` there is the positive proof.
    The module gains no namespace-probing mode (KISS; the algebra outcome exists at the
@@ -176,11 +182,13 @@ core kinds (`Pod`, `ConfigMap`), so `kind_not_served` is unreachable for them;
 `apply_immediate_import.yml` handles `not_found` distinctly (`:84-94`). The list
 strengthening can only convert a previously silent partial inventory into `error`,
 which both consumers treat fail-closed. The implementation plan must nonetheless rerun
-both consumers' contract lanes (the collection's
-`tests/unit/test_primary_prep_auto_import.py` and
-`tests/unit/test_activation_auto_import.py`, plus the read-outcome unit and integration
-lanes) as an explicit task, and extend the read-outcome lanes with pagination and
-`kind_not_served` vectors.
+the runtime consumer lanes that can falsify this claim
+(`tests/integration/test_r3_02_compactor_runtime.py` and
+`tests/integration/test_r3_02_activation_runtime.py`), plus the read-outcome unit and
+runtime integration lanes. The static role-contract tests remain useful structural
+coverage but are not consumer-regression evidence by themselves. Extend the read-outcome
+lanes with pagination and `kind_not_served` vectors, including inversion of the current
+positive discovery-miss expectations.
 
 ### 6.3 Cross-form-factor mapping and parity
 
@@ -384,11 +392,14 @@ The duplication is confirmed current (§4). The consolidation rule:
   collection's mirrored observability constants already exist in
   `module_utils/constants.py` and are parity-tested), and new stable reason-code
   vocabularies — all added to `tests/test_constants_parity.py`.
-- Documentation surfaces: the parity matrix decommission row and behavior map must be
-  updated by the implementation slice to reflect fail-closed semantics (the current row
-  text — "warns if ACM workload pods remain" — describes behavior this design removes),
-  and the strict-read seam gains a documented parity row. Documentation-only here;
-  no edits in this slice.
+- Documentation surfaces: the parity matrix decommission row must replace its current
+  "warns if ACM workload pods remain" text with the fail-closed completion contract.
+  In the behavior map, update the existing `modules/decommission.py` →
+  `roles/decommission/` row to identify the guarded-delete, durable-phase, and
+  classification boundaries, and replace the generic `lib/kube_client.py` target with
+  the Python strict-read → collection `acm_k8s_read_outcome` mapping. The strict-read
+  seam also gains a documented parity row. Documentation-only here; no edits in this
+  slice.
 - Intentional divergences (each already contract-backed, restated for clarity): refusal
   prompts exist only in Python (collection is non-interactive with a confirmed-gate);
   `namespace_absent` is a composed call-site outcome in the collection rather than a
@@ -403,30 +414,33 @@ on the collection side (July deletion boundary):
 
 | Field | Schema | Producer | Consumer | Written | Binds | Class | Freshness | Missing/malformed | Reset |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Teardown record, per resource | key `apiVersion/kind/namespace/name` → `{expected_uid, phase, observed_at?, resource_versions?}` (July §1 phase table) | teardown owner (§11) | reruns; integrated teardown's fresh live gate | forced-durable before DELETE and at every phase transition | exact CR identity via UID | intent + progress; `completed` additionally evidence | `completed` is proof at its final-read instant only; every later destructive decision re-proves live | fail closed before any mutation or clean-skip decision (July §1) | destroyed by `--reset-state`; see limitation below |
-| `operator_deployment` | July §1a schema (CSV + Deployment namespace/name/UID + capture metadata) | MCH teardown, before MCH DELETE | every drain/final-verification pass | one forced-durable write before DELETE | exact operator Deployment UID, bound to the enclosing MCH record key/UID | evidence (identity) | immutable for the record's lifetime; never rebound to a same-name replacement | fail closed; DELETE not issued if the write fails | destroyed by `--reset-state` |
-| `operator_identity_unavailable` | July §1a schema (reason code + capture metadata) | same | same | same | enclosing MCH record | evidence (negative) | immutable; never silently upgraded by rediscovery | exactly one of the two outcomes must exist; both/neither/partial is malformed → fail closed | destroyed by `--reset-state` |
+| Teardown record, per resource | key `apiVersion/kind/namespace/name` → `{expected_uid, phase}` plus mandatory `{observed_at, resource_versions}` when `phase == completed` (July §1 phase table) | teardown owner (§11) | reruns; integrated teardown's fresh live gate | forced-durable before DELETE and at every phase transition | exact CR identity via UID | intent + progress; `completed` additionally evidence | `completed` is proof at its final-read instant only; every later destructive decision re-proves live | fail closed before any mutation or clean-skip decision (July §1) | Python `--reset-state` or collection full `checkpoint.reset` destroys it; collection `reset_from` preserves `operational_data` and therefore the record |
+| `operator_deployment` | July §1a schema (CSV + Deployment namespace/name/UID + capture metadata) | MCH teardown, before MCH DELETE | every drain/final-verification pass | one forced-durable write before DELETE | exact operator Deployment UID, bound to the enclosing MCH record key/UID | recorded identity expectation | immutable for the record's lifetime and never rebound; every pass strictly re-reads the located Deployment and requires the live UID to match, with positive namespace absence the only retained exception | fail closed; DELETE not issued if the write fails; later absence, replacement, or unverifiable read is `recovery_required` | Python `--reset-state` or collection full `checkpoint.reset` destroys it; collection `reset_from` preserves it |
+| `operator_identity_unavailable` | July §1a schema (reason code + capture metadata) | same | same | same | enclosing MCH record | evidence (negative) | immutable; never silently upgraded by rediscovery | exactly one of the two outcomes must exist; both/neither/partial is malformed → fail closed | Python `--reset-state` or collection full `checkpoint.reset` destroys it; collection `reset_from` preserves it |
 
 No other durable state is added. Deliberately **not** persisted: the §9 gate result
 (re-proven fresh on every run), refusal events (they end the run; the summary is
 output, not state), and dry-run observations (§14).
 
-**Reset limitation (explicit).** `--reset-state` removes the state file, destroying
-teardown records; a post-reset rerun that finds a CR absent is indistinguishable from
-never-attempted and takes the clean-skip path — the anti-laundering guarantee of the
-July §1 phase table holds only while the record survives. This is inherent to reset and
-is not solved here: reset hardening (`--reset-state` under lock, narrowed `--force`) is
-owned by R4-05 (R4-E5), and the cross-slice coordination is recorded in §17. The
-operator-facing consequence — resetting state between a failed drain and its rerun
-forfeits the drain obligation's memory — must be stated in the implementation's
-operator documentation.
+**Reset limitation (explicit).** Python `--reset-state` removes the state file and the
+collection's full `checkpoint.reset` rebuilds the checkpoint with empty
+`operational_data`; either destroys teardown records. A post-reset rerun that finds a CR
+absent is indistinguishable from never-attempted and takes the clean-skip path; the
+anti-laundering guarantee of the July §1 phase table holds only while the record survives.
+Collection `reset_from` is different: it prunes completed phases while retaining
+`operational_data`, so it must retain and revalidate these records rather than laundering
+them. General reset hardening (`--reset-state` under lock, narrowed `--force`) is owned by
+R4-05 (R4-E5), and the cross-slice coordination is recorded in §17. The operator-facing
+consequence of a **full** reset must be stated in the implementation's operator
+documentation: resetting state between a failed drain and its rerun forfeits the drain
+obligation's memory.
 
 Resume paths re-prove every live destructive precondition: recorded phases resume
 *obligations*, never conclusions (July §1 phase table); the §9 gate and the §10 final
 classification always run against live state.
 
 Standalone-decommission wiring: `run_decommission` already receives `state`
-(`acm_switchover.py:933`) and must pass it into `Decommission`; collection execute-mode
+(`acm_switchover.py:936`) and must pass it into `Decommission`; collection execute-mode
 decommission requires checkpointing so the identity map is durable before the first
 DELETE (July deletion boundary) — both are net-new wiring the implementation plan must task
 explicitly.
@@ -442,8 +456,12 @@ from a dry run.
 **Ansible check mode and execution mode** — two layers, both specified:
 
 1. *Mode gating (existing pattern).* The role's `acm_switchover_execution.mode`
-   dry-run gate remains the primary operator-facing preview: announce-only debug
-   tasks, no reads required, no mutations, no checkpoint writes. Unchanged.
+   dry-run gate remains the primary operator-facing preview for destructive tasks:
+   they announce rather than mutate. The current role still performs live reads before
+   those gates. Default `has_observability: auto` reads the observability Namespace, and
+   RBAC validation performs live SelfSubjectAccessReviews unless explicitly skipped.
+   Implementation must preserve their read-only character and review them with the new
+   strict-read/check-mode paths. Dry-run performs no mutation and writes no checkpoint.
 2. *Native check mode (currently unhandled in the role).* Every new module supports
    native check mode: `acm_uid_guarded_delete` stops after the live read + UID
    validation and returns `changed: false` with explicit `would_change` (July deletion boundary,
@@ -471,13 +489,27 @@ as the future surface: ACM-namespace `apps deployments get`, `apps replicasets g
 `operators.coreos.com clusterserviceversions get/list`, retained `pods list` and
 `namespaces get`; no speculative `list` on Deployments/ReplicaSets, no `watch`.
 
+The future standalone-decommission surface also adds `get` on all three deleted CR
+resources: `cluster.open-cluster-management.io/managedclusters`,
+`operator.open-cluster-management.io/multiclusterhubs`, and
+`observability.open-cluster-management.io/multiclusterobservabilities`. The current
+standalone tables and optional decommission ClusterRole grant those CRs `list/delete` or
+`delete` only. The named-object reads and final live absence proof retained by §6/§8
+cannot succeed under that grant, and scoped LISTs are not substituted for the named-GET
+contract.
+
 Amendment addition: the §9 destination gate reads the **destination** hub (MCO CR
 list/GET + observability namespace GET through the secondary client). The
 implementation plan must verify whether the existing secondary-hub
 preflight/validator grants already cover those reads and, if not, extend every RBAC
-surface named by `AGENTS.md` together (Python + collection validators, task wiring,
-`deploy/rbac/`, bundled copies, Helm chart, RBAC docs, parity/manifest/negative
-tests). UID-preconditioned DELETE itself changes no verbs (`delete` is already
+surface named by `AGENTS.md` together. The coordinated implementation task must cover the
+Python `DECOMMISSION_CLUSTER_PERMISSIONS` table, the collection
+`DECOMMISSION_CLUSTER_PERMISSIONS` decommission-only table and task wiring, root
+`deploy/rbac/extensions/decommission/clusterrole.yaml`, its collection-bundled copy,
+the Helm decommission ClusterRole, all affected RBAC documentation, Python and collection
+RBAC tests, and parity/static-contract/manifest-consistency/negative-authorization tests.
+It must include both the three CR `get` additions above and any §9 destination-read gap.
+UID-preconditioned DELETE itself changes no verbs (`delete` is already
 granted; preconditions are request-body, not authorization). The read-outcome
 pagination extension changes no verbs.
 
@@ -491,11 +523,14 @@ core future matrix. Current-base additions (each an implementation-plan task):
    later-page failure vectors on both the Python strict surface and the extended
    read-outcome module.
 2. **Read-outcome extension regression**: rerun and extend
-   the collection's `tests/unit/test_k8s_read_outcome.py`, the integration runtime
-   lane, and both merged
-   consumers' contract tests (`test_primary_prep_auto_import.py`,
-   `test_activation_auto_import.py`); new vectors for `kind_not_served` and
-   truncated-list → `error`.
+   the collection's `tests/unit/test_k8s_read_outcome.py` and
+   `tests/integration/test_k8s_read_outcome_runtime.py`; invert their existing positive
+   discovery-miss expectations from `error` to `kind_not_served`; add pagination and
+   incomplete-list → `error` vectors; update the module's `RETURN.read_status` choices;
+   run `ansible-test sanity`; and run the two behavior-falsifying consumer lanes
+   `tests/integration/test_r3_02_compactor_runtime.py` and
+   `tests/integration/test_r3_02_activation_runtime.py`. Static role-contract tests may
+   supplement but do not replace those runtime lanes.
 3. **Fail-open inversions**: the collection MCH wait loses `failed_when: false` — flip
    `test_decommission_role_contracts.py:336-350` and
    `test_ansible_resilience_contracts.py:485`; an unverifiable pod read fails the play.
@@ -513,10 +548,11 @@ core future matrix. Current-base additions (each an implementation-plan task):
 7. **Destination gate matrix**: destination positively absent / present / `error` /
    ambiguous mixed state; ack flag accepted only against positive absence; flag
    rejected when gate passes; resume re-runs the gate.
-8. **State/resume**: phase-table resume matrix (July), post-reset clean-skip limitation
-   documented and asserted as *current* behavior (a test proving the record's absence
-   changes the decision, so the R4-05 coordination is visible), malformed-record
-   fail-closed cases.
+8. **State/resume**: phase-table resume matrix (July), Python/full-collection-reset
+   clean-skip limitation documented and asserted as *current* behavior (a test proving
+   the record's absence changes the decision, so the R4-05 coordination is visible),
+   collection `reset_from` preserving and revalidating teardown `operational_data`, and
+   malformed-record fail-closed cases.
 9. **Consolidation regression (GLM-H6)**: finalization and direct-decommission callers
    both exercise the single teardown path; GitOps-marker recording preserved for the
    finalization caller only; caller-specific preconditions preserved; artifact status
@@ -579,8 +615,10 @@ Rejected, with reasons:
 3. *Gate on recorded `secondary_has_observability`* — rejected; stale-evidence
    substitution for a fresh mutation-time predicate violates the execution-time
    discovery invariant.
-4. *Name-based delete plus before/after reads* — rejected; does not close the
-   read/DELETE race (July deletion boundary, binding).
+4. *Name-based delete plus before/after reads*: rejected; does not close the deleted
+   object's identity race (July deletion boundary, binding). This does not close the
+   separate Hive `preserveOnDelete` authorization TOCTOU, whose behavior is an explicit
+   non-goal retained in §18.
 5. *UID+resourceVersion preconditions for decommission deletes* — rejected; identity
    (UID) is the safety property; RV adds conflict-churn without a safety gain here,
    and would blur the deliberate contrast with R4-04's transaction semantics.
@@ -594,9 +632,9 @@ Rejected, with reasons:
 
 Risks:
 
-- *Read-outcome extension regressions* on merged R3-02 callers — mitigated by additive
-  status values, strengthening-only list semantics, and mandatory consumer-lane reruns
-  (§6.2, §16 item 2).
+- *Read-outcome extension regressions* on merged R3-02 callers: mitigated by explicit
+  inversion of the positive discovery-miss expectations, strengthening-only list
+  semantics, and mandatory runtime consumer-lane reruns (§6.2, §16 item 2).
 - *Reset laundering* (§13) — accepted, documented, R4-05-mitigated.
 - *OLM/CSV contract drift beyond ACM 2.17* — fail-closed by design (July §1a);
   the audit range remains the widest any repository authority claims (§10).
@@ -622,23 +660,33 @@ A2. The collection MCH pod wait contains no `failed_when: false` on
     play; the previously pinning tests are inverted.
 A3. The collection decommission summary artifact reports the real aggregated outcome;
     no hard-coded `pass`.
-A4. Both merged read-outcome consumers' contract lanes pass unchanged in behavior
-    (fail-closed paths remain fail-closed) against the extended module.
-A5. The §7 outcome table is observable: refusal and failure are distinguishable from
-    `not_requested` and `precondition_noop` in the summary and exit code.
-A6. Every mirrored constant introduced or retained by this design is enforced by
-    `tests/test_constants_parity.py`.
+A4. Both merged read-outcome consumers pass their runtime regression lanes unchanged in
+    behavior (`test_r3_02_compactor_runtime.py` and
+    `test_r3_02_activation_runtime.py`); fail-closed paths remain fail-closed against the
+    extended module.
+A5. The §7 outcome table is observable in both form factors: refusal/failure are
+    distinguishable from `not_requested`/`precondition_noop`; Python reports an accurate
+    summary and non-zero exit, while the collection fails the play and publishes an
+    accurate artifact status.
+A6. The operator-prefix drift is closed either by removing that diagnostic from both form
+    factors or by mirroring the surviving constant; every shared constant retained or
+    introduced by §12 is enforced by `tests/test_constants_parity.py`.
 A7. Python teardown exists exactly once (§11); finalization and direct decommission
     drive it with their caller-specific semantics preserved and tested.
 A8. The §13 durable-field table is exhaustive for R4-03: no other durable keys are
-    written, and the reset limitation is documented operator-facing.
+    written, full-reset data loss is documented operator-facing, and collection
+    `reset_from` preserves and revalidates the recorded teardown obligations.
 A9. Native check mode is safe end-to-end in the collection decommission path
-    (no mutation, no checkpoint transition, accurate `changed`/`would_change`).
+    (no mutation, no checkpoint transition, every module and the role-level
+    `acm_switchover_decommission_result.changed` remain false, and prediction is reported
+    separately and accurately as `would_change`).
 
 ## 21. Implementation-plan gate
 
-This amendment authorizes **only** the writing of an R4-03 implementation plan, and only
-after this document passes independent review. The implementation plan must:
+This amendment authorizes no implementation-plan authoring by itself. After final
+exact-head validation, the next authorized step is operator acceptance of this amended
+written design. Only that acceptance authorizes writing an R4-03 implementation plan.
+The later implementation plan must:
 
 - decompose into PR-sized tasks with the §16 matrix mapped to executable test tasks;
 - sequence the strict-read primitive (with parity vectors) before its decommission
@@ -650,4 +698,5 @@ after this document passes independent review. The implementation plan must:
 - follow the builder → independent validator → resolver workflow with terminal
   validation per `AGENTS.md`.
 
-Runtime implementation remains unauthorized until that plan is approved.
+Runtime implementation remains unauthorized until that plan is separately reviewed and
+approved.
