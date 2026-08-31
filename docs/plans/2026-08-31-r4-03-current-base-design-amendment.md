@@ -63,7 +63,7 @@ rather than edited here.
 | Decommission has no durable state (implicit) | Confirmed and sharper: `modules/decommission.py` contains zero `StateManager`/checkpoint references, and `run_decommission` (`acm_switchover.py:933-976`) receives `state` and never uses it; the collection role has zero checkpoint/`operational_data` usage | Retained; §13 makes the wiring explicit |
 | Observability facts are preflight booleans | Now typed: `RunRecord`/`HubFacts` persist `primary_has_observability` **and** `secondary_has_observability` (`lib/run_record.py`), but `Finalization` receives only the primary fact (`acm_switchover.py:911`) | Narrowed; §9 classifies both facts as informational-only for the gate |
 | Design predates the RunRecord facade | `lib/run_record.py` now owns typed named operations over `StateManager` config keys, with guardrail tests locking the seam | New constraint; §13 routes new durable fields through the same facade pattern |
-| Collection MCH wait is a bounded wait that warns | Sharper defect than recorded: `delete_multiclusterhub.yml:53` sets `failed_when: false` and the `until` (`:46-51`) filters `resources | default([])`, so a persistent read/auth failure yields **no** `resources` key → empty → the wait "succeeds" on the first attempt with no warning | Retained and strengthened; §7/§16 |
+| Collection MCH wait is a bounded wait that warns | Sharper defect than recorded: `delete_multiclusterhub.yml:53` sets `failed_when: false` and the `until` (`:46-51`) applies Jinja's `default([])` filter to `resources`, so a persistent read/auth failure yields **no** `resources` key → empty → the wait "succeeds" on the first attempt with no warning | Retained and strengthened; §7/§16 |
 | `acm_uid_guarded_delete` is the only guarded-delete module planned | The accepted R4-04 plan adds a second, Restore-scoped `acm_restore_guarded_mutation` (UID+resourceVersion, patch+delete; plan Task 4) | Retained with a §8 coordination rule |
 | R4-C6 needed a new design (task-brief premise) | **False at this head**: the July design already contains the complete §1a owner-chain contract, goal 5, RBAC table, and the 20-case operator-identity matrix — R4-C6 was folded in during the PR #204 review rounds | Premise corrected; §10 revalidates rather than re-derives |
 
@@ -664,10 +664,11 @@ A4. Both merged read-outcome consumers pass their runtime regression lanes uncha
     behavior (`test_r3_02_compactor_runtime.py` and
     `test_r3_02_activation_runtime.py`); fail-closed paths remain fail-closed against the
     extended module.
-A5. The §7 outcome table is observable in both form factors: refusal/failure are
-    distinguishable from `not_requested`/`precondition_noop`; Python reports an accurate
-    summary and non-zero exit, while the collection fails the play and publishes an
-    accurate artifact status.
+A5. The §7 outcome table is observable in both form factors. Python distinguishes
+    `refused` and `failed` from `not_requested` and `precondition_noop`, reports an
+    accurate summary, and exits non-zero for refusal or failure. The non-interactive
+    collection distinguishes `failed` from `not_requested`, `precondition_noop`, and
+    `completed`, fails the play on `failed`, and publishes an accurate artifact status.
 A6. The operator-prefix drift is closed either by removing that diagnostic from both form
     factors or by mirroring the surviving constant; every shared constant retained or
     introduced by §12 is enforced by `tests/test_constants_parity.py`.
