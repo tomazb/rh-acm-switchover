@@ -504,6 +504,56 @@ because a reviewer labelled it a warning:
 **A deferral is complete only when it is filed in the receiving tracker.** A PR reply alone
 is not durable tracking.
 
+### Reviewer Complexity Firewall
+
+A review finding and the reviewer's proposed remediation are separate decisions. Validate
+the finding against the governing requirements, current source, tests, and concrete
+operational impact before accepting either the finding or its proposed solution.
+
+A demonstrated defect may be blocking even when the reviewer's preferred remediation is not
+authorized. Conversely, labeling a finding Critical, Important, or a "best practice" does
+not authorize additional architecture or expand the governing scope.
+
+A proposed remediation must return through the governing design, specification, or explicit
+operator approval rather than enter an ordinary review fix loop when it would add or
+materially expand any of the following:
+
+* persisted state or a persistence format;
+* a state transition, status, or checkpoint contract;
+* an approval action or operator workflow;
+* configuration surface;
+* compatibility or legacy behavior;
+* retry, reconciliation, takeover, or recovery protocol;
+* abstraction layer, framework, or generic subsystem;
+* backend, lifecycle mode, execution mode, or supported variant;
+* dependency or long-running controller or service; or
+* security mechanism or threat model not already required by the governing design.
+
+Routing a remediation back through design does not invalidate or downgrade the underlying
+finding. If the demonstrated defect violates the governing acceptance gate, a safety
+boundary, or a correctness contract, it remains blocking until an authorized remediation
+satisfies that contract.
+
+Any complexity-increasing remediation proposal must make a **complexity case** that answers:
+
+1. Which current requirement, safety boundary, or correctness contract is violated?
+2. What concrete reachable failure occurs without the change?
+3. What repository, platform, test, or operational evidence supports that failure mode?
+4. What is the smallest safe in-scope remediation?
+5. Why are deletion, narrower in-scope behavior, a fail-closed stop, an existing platform
+   primitive, or explicit operator resolution insufficient under the current support,
+   parity, compatibility, recovery, and operator-facing contracts?
+
+When multiple remediations satisfy the same governing contract, prefer the smallest clear
+in-scope change. Do not add machinery merely because it offers a theoretically stronger or
+more general behavior than the current requirements demand. Severity follows the
+demonstrated defect and its impact, not the sophistication of the proposed solution.
+
+Reviewer findings must identify the concrete defect and supporting evidence separately from
+the suggested remediation. Open-ended recommendations such as "make this more robust,"
+"harden this as much as possible," or "make this production grade" are not independently
+actionable unless they are reduced to a verified requirement or concrete failure mode.
+
 ### Builder Simplification Gate
 
 Before declaring builder completion, freezing the candidate head for terminal validation, or
