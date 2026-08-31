@@ -315,6 +315,26 @@ Governed work runs as three roles with separated responsibilities:
 - **PR-comment resolver / final validator** — dispositions every comment and review thread,
   applies accepted changes, and confirms merge readiness.
 
+### Mutable PR branch write ownership
+
+A mutable PR branch has at most one active write authority at a time. The write authority is
+the agent, session, operator, or automation currently authorized to change the branch tip or
+commit history.
+
+* Other agents and sessions may inspect, test, review, or prepare independent work from
+  isolated checkouts or worktrees, but they must not concurrently commit, push, amend,
+  rebase, reset, cherry-pick, force-update, or otherwise mutate the same PR branch.
+* Automation capable of writing commits or updating the PR branch is a writer for this
+  purpose and must serialize with the active write authority. Status checks, comments,
+  reviews, and other metadata-only automation are not branch writers.
+* A writer handoff is explicit. The previous writer stops mutating the branch before the
+  incoming writer begins. Before its first write, the incoming writer fetches the current
+  branch and base, confirms the expected head and merge-base relationship, verifies its
+  workspace is clean, and records the refreshed exact state.
+* If the PR branch moves unexpectedly while a writer owns it, stop further mutation and
+  reconcile the new state before continuing. Do not overwrite, rebase away, or otherwise
+  conceal an unexpected concurrent change.
+
 Each role independently performs the mandatory start gate and the protected-file diff check.
 Each treats the previous role's conclusions as claims to verify, not as facts.
 
@@ -379,6 +399,56 @@ Reopen validation only when one of the following occurs:
 4. A previously unresolved actionable thread is discovered.
 5. Genuinely new blocking evidence arrives before merge.
 6. The operator explicitly reopens validation.
+
+### Review Evidence Invalidation
+
+Review evidence is scoped to the behavior-relevant tree and artifacts the review actually
+covered. Reuse that evidence while the reviewed surface remains unchanged; exact-head review
+means the final relevant implementation tree must be covered, not that an unchanged tree
+must be reviewed repeatedly.
+
+Changes that can materially invalidate review evidence include runtime or workflow code,
+behavior-relevant tests, dependencies, schemas, executable configuration, generated
+provenance or artifacts, and other inputs explicitly covered by that review. When only part
+of the reviewed surface changes, rerun the smallest review and verification scope needed to
+restore valid evidence.
+
+Elapsed time, PR-description edits, comments, thread disposition, labels, draft/ready state,
+or other metadata-only changes do not by themselves invalidate source-review evidence.
+Likewise, an unrelated repository change does not by itself require another generic review
+of an unchanged PR tree.
+
+This evidence-reuse rule does not weaken terminal-validation binding. Candidate-head,
+base/merge-base, CI, actionable-feedback, and reopening requirements above still apply. When
+the base or merge-base relationship changes, perform the required terminal-state
+reassessment and determine which prior evidence the change can actually affect. An
+unrelated base advance may require refreshed base, mergeability, and CI evidence without
+requiring another generic source review; an overlapping or behavior-relevant base change
+requires the affected review scope to be rerun.
+
+New review output produced after a metadata transition is still evidence. If it contains a
+genuinely new blocking finding, validate and disposition that finding under the normal rules
+even though the metadata transition itself did not invalidate the earlier review.
+
+### Review Tool Availability and Retry Discipline
+
+Tool unavailability, rate limiting, or a transient reviewer failure does not justify branch
+churn or manufacturing a new candidate head merely to obtain another review.
+
+* Do not create no-op commits, rebases, amendments, formatting churn, metadata churn, or
+  unrelated source changes solely to retrigger a reviewer or CI system.
+* Preserve review and verification evidence that remains valid, and record exactly which
+  required evidence could not be obtained and why.
+* Do not retry unavailable tooling indefinitely when doing so prevents review convergence.
+  Retry only when the governing requirements still need evidence that the unavailable tool
+  can provide.
+* Tool unavailability never waives a mandatory review gate. If no valid evidence remains
+  that satisfies a required review, stop and return to the operator rather than substituting
+  unrelated deterministic tests, another tool, or reviewer self-approval unless the
+  governing requirements explicitly permit that substitution.
+* When the unavailable capability returns, restore only the missing or invalidated evidence
+  scope. Do not reopen unrelated completed review merely because one review surface was
+  temporarily unavailable.
 
 ### Safety Boundary
 
