@@ -4236,18 +4236,45 @@ fail-closed validation, sharing no code.
 KEY_DECOMMISSION_TEARDOWN_RECORDS = "decommission_teardown_records"
 
 def teardown_key(api_version, kind, namespace, name) -> str: ...
-def teardown_record(checkpoint, key) -> dict | None: ...   # raises on malformed
-def record_teardown_phase(checkpoint, key, expected_uid, phase, **proof) -> None: ...
-def teardown_records(checkpoint) -> dict: ...
+def split_resource_key(key) -> tuple | None: ...            # the §10.2.1c right-split grammar
+def teardown_record(checkpoint, key) -> dict | None: ...    # raises MalformedTeardownRecord
+def teardown_records(checkpoint) -> dict: ...               # raises on any malformed member
+def validate_stored(key, stored) -> dict: ...               # the one rule set, read and write
+
+def record_teardown_phase(
+    checkpoint,
+    key,
+    expected_uid,
+    phase,
+    *,
+    observed_at=None,          # completed only; a non-empty RFC 3339 UTC string
+    resource_versions=None,    # completed only; None means ABSENT, {} means present-and-empty
+    absence_proofs=None,       # completed only; {key: {"proof_type": ..., "resource_key": ...}}
+    operator_deployment=None,
+    operator_identity_unavailable=None,
+) -> None: ...
+
+# Closed vocabularies, mirrored from lib/teardown_record.py and held equal by CONSTANT_PAIRS.
+RESOURCE_VERSION_LABELS = frozenset({"drain_namespace", "drain_pods", "operator_deployment"})
+ABSENCE_PROOF_KEYS = frozenset({"target_cr", "drain_namespace"})
+ABSENCE_PROOF_TYPES = frozenset({"object_absent", "crd_absent", "namespace_absent"})
+ABSENCE_PROOF_TYPES_BY_KEY = {
+    "target_cr": frozenset({"object_absent", "crd_absent"}),
+    "drain_namespace": frozenset({"namespace_absent"}),
+}
 ```
 
 **Intended behavior.** Identical algebra and identical malformed-record rules to Task B1 —
 §10.2.1a through §10.2.1e completion evidence, §10.2.2 and §10.2.3 nested identity schemas, and
 §10.2.4 record rules — with
 validation in exactly one collection-side function used by both the reader and the writer. The
-mirrored constants `OPERATOR_IDENTITY_UNAVAILABLE_REASONS`, `DRAIN_SCOPED_KINDS`, and
-`IDENTITY_BEARING_KINDS` are added to `module_utils/constants.py` and to `CONSTANT_PAIRS` in this
-task. Roles never touch the raw key; they call these functions through the checkpoint action
+mirrored constants `OPERATOR_IDENTITY_UNAVAILABLE_REASONS`, `DRAIN_SCOPED_KINDS`,
+`IDENTITY_BEARING_KINDS`, `RESOURCE_VERSION_LABELS`, `ABSENCE_PROOF_KEYS`, and
+`ABSENCE_PROOF_TYPES` are added to `module_utils/constants.py` and to `CONSTANT_PAIRS` in this
+task. The explicit keyword arguments above are what make absent-versus-empty representable on this
+side: the writer omits a key from the stored mapping when its argument is `None` and writes `{}`
+when it is an empty mapping, exactly as Task B1 does, and the reader inverts that.
+Roles never touch the raw key; they call these functions through the checkpoint action
 plugin's flattened facts, exactly as the merged vocabulary requires.
 
 **Reset behavior.** A full `checkpoint.reset` rebuilds `operational_data` empty and therefore
