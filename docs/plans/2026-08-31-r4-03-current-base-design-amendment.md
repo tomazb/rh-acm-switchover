@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-31
 **Branch:** `docs/r4-03-current-base-amendment-2026-08-31` (base `origin/ansible` @ `74268192`)
-**Status:** design amendment independently reviewed; awaiting operator design approval; implementation plan not yet authorized
+**Status:** operator-approved design amendment; implementation plan authored; runtime implementation not authorized
 **Amends:** [`docs/plans/2026-07-29-decommission-completion-design.md`](2026-07-29-decommission-completion-design.md)
 (the "July design"), which remains the approved historical design and is not modified.
 
