@@ -9,14 +9,17 @@ does not authorize runtime implementation.**
 **Goal:** Implement the accepted R4-03 decommission-completion design in both production form
 factors so that every MCO, MCH, and ManagedCluster teardown is bound to the observed object
 identity by a server-side UID precondition and proven complete before it reports success; a
-refused destructive substep can never yield a successful decommission; inventory reads
+top-level cancellation or refused destructive substep can never yield a successful decommission; inventory reads
 distinguish empty from unverifiable; integrated decommission cannot silently end observability
 continuity; and MCH drain exclusion is decided by a complete controller-owner chain to a durably
 recorded operator Deployment UID rather than a name prefix.
 
 **Architecture:** One shared strict Kubernetes read algebra owned by R4-03 and consumed by
 R4-04 — `lib/strict_read.py` plus strict methods on `lib/kube_client.py` in Python, and the
-existing `acm_k8s_read_outcome` module extended in the collection. Durable teardown state flows
+existing `acm_k8s_read_outcome` module extended with an exact canonical APIResource-name input in
+the collection. The Python surface includes live Namespace absence, paginated Pod inventory, and
+strict Deployment/ReplicaSet identity producers rather than leaving them to later callers.
+Durable teardown state flows
 through the typed `lib/run_record.py` facade in Python and the `plugins/module_utils/checkpoint.py`
 named-operation vocabulary in the collection, with physically independent stores held equal by
 parity vectors. `modules/decommission.py` becomes the single Python owner of the MCO teardown
@@ -66,7 +69,8 @@ that after this slice:
 5. Integrated decommission blocks before deleting source observability unless the destination
    hub is positively proven to have observability, or the operator acknowledges a positively
    proven absence.
-6. An interactive refusal aborts the run and exits non-zero.
+6. Top-level cancellation and an interactive substep refusal remain distinct but both make the
+   result unsuccessful and the CLI exit non-zero; callers test `.succeeded` explicitly.
 7. The MCO teardown algorithm exists exactly once in Python.
 
 ## 3. Authority and approved-design binding
@@ -179,8 +183,9 @@ Every task inherits these. A change that violates one is wrong even if its own t
 1. **Error is never absence.** Authorization, discovery, transport, TLS, timeout, decode, and
    malformed-response outcomes are `error`. No consumer reads `error` as absence or as an empty
    list.
-2. **Absence is positive or it is not absence.** `object_absent` requires a successful discovery
-   followed by a 404 on the named object. Kind absence requires a positive determination from a
+2. **Absence is positive or it is not absence.** Custom-resource `object_absent` requires a
+   successful discovery followed by a 404 on the named object; PR A's typed built-in Apps GETs
+   classify their own explicit named-GET 404 as `object_absent`. Kind absence requires a positive determination from a
    successful discovery response. Namespace absence requires a positive 404 on a named Namespace
    GET.
 3. **Partial inventory is never complete inventory.** A page failure fails the whole read. An
@@ -194,7 +199,10 @@ Every task inherits these. A change that violates one is wrong even if its own t
 7. **Recorded phases resume obligations, never conclusions.** A stored `completed` is proof at
    the instant of its final read only. Every later destructive decision re-proves live.
 8. **Preview never becomes evidence.** Python dry-run and Ansible check mode persist no
-   identity, no phase, and no completion, and report `changed: false`.
+   identity, no phase, and no completion, call no DELETE primitive, and report actual
+   `changed: false`. Any prediction is carried only in the separately named `would_change`
+   field. The PR that first introduces a writer, mutation, or result aggregation also introduces
+   and tests this guarantee; no intermediate merge waits for PR F to become safe.
 9. **Permissions land no later than the API call that needs them.** Every PR that introduces a
    new API operation carries its full RBAC cross-surface change.
 10. **Parity-sensitive observable behavior changes in both form factors in the same PR.** No
@@ -237,7 +245,8 @@ Every task inherits these. A change that violates one is wrong even if its own t
            +----------------+----------------+
                             v
         +-----------------------------------------------+
-        | PR F  Check-mode closure, docs, parity, gates |
+        | PR F  Integrated proof and consistency gates  |
+        | (no first safety behavior)                    |
         +-----------------------------------------------+
 ```
 
@@ -250,7 +259,7 @@ Edges are hard prerequisites:
 | B to C | C writes teardown phases through the durable APIs B introduces |
 | C to D | D reuses the single guarded-delete primitive C introduces |
 | C to E | E reuses the same primitive and the same phase machine |
-| D and E to F | F asserts end-to-end check-mode and closes the documentation contract |
+| D and E to F | F adds integrated proof that the already-safe B/C/D/E behavior composes; it introduces no safety fix |
 
 D and E are independent of one another and may be built in parallel; either may merge first.
 
@@ -266,7 +275,7 @@ task requires is discharged below.
 | C | Guarded deletion, MCO teardown, GLM-H6, destination gate | both | MCO CR `get`, destination MCO/Namespace reads | yes |
 | D | ManagedCluster teardown | both | `managedclusters get` | yes |
 | E | MCH identity and completion | both | `multiclusterhubs get`, Deployments `get`, ReplicaSets `get`, CSVs `get`/`list` | yes |
-| F | Check-mode closure, documentation and parity | both | none | documentation only |
+| F | Integrated proof and consistency closure | both | none | none |
 
 **Independent reviewability.** A is a read algebra with no destructive caller. B is a state and
 result-vocabulary change with no new API call. C, D, and E each own exactly one resource family's
@@ -276,12 +285,12 @@ teardown. F changes no teardown algorithm.
 
 | After | State |
 | --- | --- |
-| A | Read semantics strengthen only: outcomes that were silently empty or silently partial become `error`. Both merged R3-02 consumers already fail closed on non-`ok`. |
-| B | Refusal now aborts and exits non-zero; the collection artifact reports the real aggregated status. Teardown records exist but no teardown yet writes one, so no clean-skip decision can be laundered. |
-| C | MCO teardown is guarded and proven; the destination gate blocks. ManagedCluster and MCH teardown remain exactly as today and claim nothing they cannot prove — R4-C1 stays open and is not represented as closed. |
-| D | ManagedCluster inventory and deletion are strict and guarded. MCH remains as today. |
-| E | MCH completion is proven; R4-C1 closes. |
-| F | Preview paths are provably non-persisting end to end and the documentation contract matches behavior. |
+| A | A closed strict-read algebra exists in both form factors: exact-resource discovery, custom list/GET, live Namespace absence, complete Pod LIST, and strict Deployment/ReplicaSet GET producers. Outcomes that were silently empty or partial become `error`; both merged R3-02 consumers already fail closed on non-`ok`. |
+| B | Refusal now aborts and exits non-zero; top-level cancellation remains unsuccessful; the collection artifact reports actual `changed: false` in check mode and an independent B-stage `would_change: false`. Python dry-run writes no result or state authority. Teardown records exist but no teardown yet writes one. |
+| C | MCO teardown is guarded and proven. Every C writer and DELETE is check-mode/dry-run-safe, prediction is separate, and the reset-laundering limitation is already operator-visible. The destination gate blocks. ManagedCluster and MCH teardown remain as today — R4-C1 stays open and is not represented as closed. |
+| D | ManagedCluster inventory and deletion are strict, guarded, and independently preview-safe: no DELETE, record write, or actual change in check mode/dry-run. MCH remains as today. |
+| E | MCH identity and completion are proven and independently preview-safe; R4-C1 closes. |
+| F | Integrated scenarios and cross-PR assertions prove the safety already delivered by B/C/D/E. F adds no missing check-mode branch, Python dry-run branch, writer guard, delete guard, result semantic, or first-publication documentation. |
 
 **No API call lands before its RBAC requirement.** C, D, and E each carry the complete RBAC
 cross-surface change for the calls they introduce, in the same PR (§14).
@@ -364,7 +373,8 @@ depend on it.** Both form factors therefore prove kind absence independently:
 
 This rule is version-invariant, so it satisfies both ends of the supported range without a
 version branch. It is also the mechanism that discharges the R4-03 converted implementation-slice
-obligation from the 2026-08-02 triage: a 404 proves absence only after successful discovery.
+obligation from the 2026-08-02 triage: for custom resources, only a named-object 404 after
+successful discovery proves object absence; a discovery-path 404 is itself `error`.
 
 ## 9.3 Files
 
@@ -379,6 +389,8 @@ obligation from the 2026-08-02 triage: a 404 proves absence only after successfu
 - Modify: `ansible_collections/tomazb/acm_switchover/plugins/module_utils/constants.py`
 - Modify: `ansible_collections/tomazb/acm_switchover/tests/unit/test_k8s_read_outcome.py`
 - Modify: `ansible_collections/tomazb/acm_switchover/tests/integration/test_k8s_read_outcome_runtime.py`
+- Modify: the existing R3-02 `acm_k8s_read_outcome` Pod and ConfigMap role call sites and their
+  contract fixtures (add exact `resource_name` only; no behavior change)
 
 ## Task A1: Python strict outcome vocabulary
 
@@ -590,20 +602,26 @@ git commit -m "feat: add shared strict read outcome algebra"
 
 **Files:** Modify `lib/kube_client.py`; modify `tests/test_kube_client.py`.
 
-**Interfaces produced:** `KubeClient._discovery_serves(group, version, plural) -> StrictReadOutcome`
+**Interfaces produced:** `KubeClient._discovery_serves(group, version, resource_name) -> StrictReadOutcome`
 returning an `ITEMS` outcome with an empty list when the kind is served, `CRD_ABSENT` when the
 successful discovery response positively lacks it, and `ERROR` otherwise.
 
 **Intended behavior:** One `GET` of `/apis/{group}/{version}`, or `/api/v1` when `group` is empty,
-issued through this instance's `ApiClient` with the instance request timeout. The response must
-decode to a mapping carrying a list-valued `resources` key. The kind is served when some entry's
-`name` equals `plural`.
+issued through this instance's `ApiClient` with the instance request timeout. `resource_name` is
+the caller-supplied canonical Kubernetes APIResource name/plural (for example,
+`multiclusterobservabilities`), never a value synthesized from `kind`. The response must decode
+to a mapping whose `kind` is `APIResourceList` and whose `resources` is a list. Every resource
+entry must be a mapping with non-empty string `name` and `kind`; malformed data makes the whole
+determination unverifiable. The kind is served only when an entry's exact `name` equals
+`resource_name`.
 
 **Failure behavior:** Non-2xx, timeout, transport failure, undecodable body, missing or non-list
-`resources`, or non-mapping entries all return `ERROR` with
-`STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE`. A 404 on the discovery path is `CRD_ABSENT` only
-because a 404 there is the API server positively answering that the group/version is not served;
-every other status is `ERROR`.
+`resources`, malformed entries, or an unexpected APIResourceList shape all return `ERROR` with
+`STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE`. Discovery HTTP 404, 401/403, 5xx, timeout, TLS,
+transport, and JSON/decode failure are all `ERROR`. Only a successfully fetched, decoded, and
+structurally valid discovery document that lacks the exact canonical `resource_name` proves
+`CRD_ABSENT`; neither `ResourceNotFoundError` nor any swallowed discovery-client failure proves
+absence.
 
 **State implications:** none. **Dry-run implications:** read-only; runs identically in dry-run.
 **Parity implications:** the collection performs the equivalent proof in Task A4.
@@ -627,13 +645,13 @@ class TestDiscoveryProver:
         return client
 
     def test_served_kind_returns_items(self):
-        call = Mock(return_value={"resources": [{"name": "multiclusterhubs", "kind": "MultiClusterHub"}]})
+        call = Mock(return_value={"kind": "APIResourceList", "resources": [{"name": "multiclusterhubs", "kind": "MultiClusterHub"}]})
         client = self._client(call)
         outcome = client._discovery_serves("operator.open-cluster-management.io", "v1", "multiclusterhubs")
         assert outcome.status is StrictReadStatus.ITEMS
 
     def test_absent_kind_in_a_successful_response_is_crd_absent(self):
-        call = Mock(return_value={"resources": [{"name": "somethingelse"}]})
+        call = Mock(return_value={"kind": "APIResourceList", "resources": [{"name": "somethingelse", "kind": "SomethingElse"}]})
         outcome = self._client(call)._discovery_serves("g", "v1", "multiclusterhubs")
         assert outcome.status is StrictReadStatus.CRD_ABSENT
 
@@ -659,13 +677,31 @@ class TestDiscoveryProver:
         call = Mock(return_value={"kind": "APIResourceList"})
         assert self._client(call)._discovery_serves("g", "v1", "p").status is StrictReadStatus.ERROR
 
-    def test_discovery_404_is_positive_kind_absence(self):
+    def test_discovery_404_is_error_not_absence(self):
         call = Mock(side_effect=ApiException(status=404, reason="Not Found"))
         outcome = self._client(call)._discovery_serves("g", "v1", "p")
-        assert outcome.status is StrictReadStatus.CRD_ABSENT
+        assert outcome.status is StrictReadStatus.ERROR
+
+    def test_discovery_decode_failure_is_error_not_absence(self):
+        call = Mock(side_effect=ValueError("invalid json"))
+        assert self._client(call)._discovery_serves("g", "v1", "p").status is StrictReadStatus.ERROR
+
+    def test_malformed_api_resource_list_is_error_not_absence(self):
+        call = Mock(return_value={"kind": "APIResourceList", "resources": [{"name": 7}]})
+        assert self._client(call)._discovery_serves("g", "v1", "p").status is StrictReadStatus.ERROR
+
+    def test_irregular_plural_is_matched_by_exact_resource_name(self):
+        call = Mock(return_value={
+            "kind": "APIResourceList",
+            "resources": [{"name": "multiclusterobservabilities", "kind": "MultiClusterObservability"}],
+        })
+        outcome = self._client(call)._discovery_serves(
+            "observability.open-cluster-management.io", "v1beta2", "multiclusterobservabilities"
+        )
+        assert outcome.status is StrictReadStatus.ITEMS
 
     def test_core_group_uses_the_core_discovery_path(self):
-        call = Mock(return_value={"resources": [{"name": "pods"}]})
+        call = Mock(return_value={"kind": "APIResourceList", "resources": [{"name": "pods", "kind": "Pod"}]})
         self._client(call)._discovery_serves("", "v1", "pods")
         assert call.call_args[0][0] == "/api/v1"
 ```
@@ -692,11 +728,11 @@ after the three API clients are created, add:
 Then add the prover next to the other read helpers:
 
 ```python
-    def _discovery_serves(self, group: str, version: str, plural: str) -> StrictReadOutcome:
+    def _discovery_serves(self, group: str, version: str, resource_name: str) -> StrictReadOutcome:
         """Positively determine whether one kind is served, or fail closed.
 
         Kind absence is proven only by a successful, decodable discovery
-        response that does not list `plural`. A discovery call that fails,
+        response that does not list the exact canonical `resource_name`. A discovery call that fails,
         times out, is unauthorized, or returns an unparseable body is an
         error: an unserved kind and an unreachable API server are not
         distinguishable by exception type, and the client library's own
@@ -712,22 +748,28 @@ Then add the prover next to the other read helpers:
                 _return_http_data_only=True,
                 _request_timeout=self.request_timeout,
             )
-        except ApiException as exc:
-            if exc.status == 404:
-                return StrictReadOutcome.crd_absent(STRICT_READ_REASON_KIND_NOT_SERVED)
+        except ApiException:
             return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
         except Exception:
             return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
 
         if not isinstance(response, dict):
             return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
+        if response.get("kind") != "APIResourceList":
+            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
         resources = response.get("resources")
         if not isinstance(resources, list):
             return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
         for entry in resources:
-            if not isinstance(entry, dict):
+            if (
+                not isinstance(entry, dict)
+                or not isinstance(entry.get("name"), str)
+                or not entry["name"]
+                or not isinstance(entry.get("kind"), str)
+                or not entry["kind"]
+            ):
                 return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
-            if entry.get("name") == plural:
+            if entry["name"] == resource_name:
                 return StrictReadOutcome.from_items([])
         return StrictReadOutcome.crd_absent(STRICT_READ_REASON_KIND_NOT_SERVED)
 ```
@@ -753,7 +795,7 @@ git commit -m "feat: prove kind absence from a successful discovery response"
 
 ## Task A3: Python strict list and strict named GET
 
-**Purpose:** Deliver the two strict operations the July §3 contract defines.
+**Purpose:** Deliver the closed strict-read surface needed by R4-04 and by later R4-03 slices.
 
 **Files:** Modify `lib/kube_client.py`; modify `tests/test_kube_client.py`.
 
@@ -770,6 +812,16 @@ def get_custom_resource_strict(
     self, group: str, version: str, plural: str, name: str,
     namespace: Optional[str] = None,
 ) -> StrictReadOutcome: ...
+
+def get_namespace_strict(self, name: str) -> StrictReadOutcome: ...
+
+def list_pods_strict(
+    self, namespace: str, label_selector: Optional[str] = None,
+) -> StrictReadOutcome: ...
+
+def get_deployment_strict(self, name: str, namespace: str) -> StrictReadOutcome: ...
+
+def get_replicaset_strict(self, name: str, namespace: str) -> StrictReadOutcome: ...
 ```
 
 **Intended behavior.** Both prove the kind is served first. The list then pages through
@@ -787,6 +839,46 @@ TLS, timeout, and decode failures are `ERROR`.
 **Parity implications:** held equal to the collection by Task A5's shared vectors.
 **RBAC implications:** none new — `list` and `get` on the target kinds are added by the consuming
 PRs C, D, and E where each read first becomes live.
+
+**Strict core/typed-read contract.** These four methods are implemented in PR A rather than
+invented at their later call sites. None uses `@api_call(not_found_value=...)`, `@retry_api_call`,
+or another decorator that rewrites 404; each passes the instance's bounded request timeout and
+returns only sanitized reason codes.
+
+- `get_namespace_strict(name)` performs one live CoreV1 named Namespace GET. A well-formed
+  Namespace whose `metadata.name` equals `name` returns `ITEMS`; its explicit GET 404 returns
+  `NAMESPACE_ABSENT`. Authorization, server, timeout, TLS, transport, decode, malformed metadata,
+  or an unexpected returned name is `ERROR`. No cached or preflight namespace fact can satisfy
+  this producer.
+- `list_pods_strict(namespace, label_selector=None)` performs CoreV1 Pod LIST pages to exhaustion,
+  passing the server-provided `_continue` token and a fixed page limit on every bounded call. It
+  has the same 100-page/one-restart bound as the custom-resource list; an expired continuation
+  restarts the whole inventory once. A later-page failure, malformed page/`items`/metadata/Pod
+  member, outstanding continuation, or any partial prefix is `ERROR`. A successful final page
+  with zero Pods is `ITEMS([])`. A Pod LIST 404 does not mean zero Pods: the helper immediately
+  performs a fresh `get_namespace_strict(namespace)`; only `NAMESPACE_ABSENT` is propagated,
+  while namespace present or namespace-read `ERROR` makes the Pod result `ERROR`.
+- `get_deployment_strict(name, namespace)` and `get_replicaset_strict(name, namespace)` perform
+  bounded named AppsV1 GETs. A well-formed object must have the requested name and namespace and
+  a non-empty `metadata.uid`, because every R4-03 consumer needs identity. Explicit 404 returns
+  `OBJECT_ABSENT`; authorization, server, timeout, TLS, transport, decode, malformed metadata,
+  missing UID, or mismatched identity returns `ERROR`. The helpers classify transport only; the
+  operator-owner-chain consumer decides whether `OBJECT_ABSENT` means `recovery_required` or a
+  different blocker.
+
+Add named TDD cases in `TestStrictCoreReads`:
+
+1. Namespace exists; explicit Namespace GET 404 gives `NAMESPACE_ABSENT`; Namespace 403 and 5xx,
+   transport/TLS/timeout, and malformed response give `ERROR`.
+2. Pod LIST zero items; complete multi-page inventory; later-page failure; malformed `items`;
+   malformed Pod member; Pod LIST 404 plus Namespace present gives `ERROR`; Pod LIST 404 plus a
+   fresh Namespace GET 404 gives `NAMESPACE_ABSENT`; auth/timeout/TLS/transport failures give
+   `ERROR`; and no failure exposes a partial inventory.
+3. Deployment and ReplicaSet named GET success carries a non-empty UID; explicit 404 gives
+   `OBJECT_ABSENT`; auth/5xx/timeout/TLS/transport/decode, malformed object, missing UID, or
+   mismatched name/namespace gives `ERROR`.
+4. The `namespace_absent` parity vector invokes `get_namespace_strict`, so the vector has a real
+   Python producer rather than a constructed outcome.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -918,14 +1010,14 @@ class TestStrictCustomResourceReads:
 - [ ] **Step 2: Run and observe the expected failure**
 
 ```bash
-python -m pytest tests/test_kube_client.py -q -k StrictCustomResourceReads
+python -m pytest tests/test_kube_client.py -q -k "StrictCustomResourceReads or StrictCoreReads"
 ```
 
 Expected: FAIL — `AttributeError: ... has no attribute 'list_custom_resources_strict'`.
 
 - [ ] **Step 3: Implement**
 
-Add both methods to `lib/kube_client.py`. Neither carries `@api_call` or `@retry_api_call`: the
+Add all six methods to `lib/kube_client.py`. None carries `@api_call` or `@retry_api_call`: the
 strict surface owns its own classification and must never have a 404 rewritten underneath it, and
 the caller owns the bounded retry budget (July §3, "the primitive itself never polls").
 
@@ -1058,21 +1150,23 @@ _RESTART_READ = object()
 - [ ] **Step 4: Run and observe the tests pass**
 
 ```bash
-python -m pytest tests/test_kube_client.py -q -k StrictCustomResourceReads
+python -m pytest tests/test_kube_client.py -q -k "StrictCustomResourceReads or StrictCoreReads"
 ```
 
 - [ ] **Step 5: Refactor**
 
-`_drain_strict_list` performs exactly one responsibility. If the malformed-response checks read as
-repetition, extract one local `_valid_page(page)` predicate inside `lib/kube_client.py`; do not
-introduce a new module for it.
+`_drain_strict_list` performs exactly one responsibility. Reuse its bounded page-drain mechanics
+for `list_pods_strict` without sharing custom-resource transport calls. If malformed-response
+checks repeat, extract one local `_valid_page(page)` predicate inside `lib/kube_client.py`; do not
+introduce a new module for it. The three named core/Apps GET helpers share only a small private
+metadata validator; they do not own operator-owner-chain policy.
 
 - [ ] **Step 6: Broader gate and commit**
 
 ```bash
 python -m pytest tests/test_kube_client.py tests/test_strict_read.py -q
 git add lib/kube_client.py tests/test_kube_client.py
-git commit -m "feat: add strict custom-resource list and named get"
+git commit -m "feat: add closed strict Kubernetes read surface"
 ```
 
 ## Task A4: Extend the collection read-outcome seam
@@ -1082,9 +1176,12 @@ second read abstraction.
 
 **Files:** Modify `plugins/modules/acm_k8s_read_outcome.py`; modify
 `tests/unit/test_k8s_read_outcome.py`; modify `tests/integration/test_k8s_read_outcome_runtime.py`.
+Modify the two existing R3-02 role call sites and their fixtures/contracts to pass canonical
+`resource_name: pods` and `resource_name: configmaps`.
 
 **Interfaces produced:** `read_status` gains `kind_not_served`; list mode becomes
-completeness-proving.
+completeness-proving; the module gains required `resource_name`, the exact canonical
+APIResource name/plural for `kind`.
 
 **Intended behavior.**
 
@@ -1094,8 +1191,16 @@ completeness-proving.
 2. **Positive kind absence.** When `api_client.resource(kind, api_version)` raises, the module
    does not classify from the exception. It issues its own discovery request for the exact
    group/version through the same client and returns `kind_not_served` only when that request
-   succeeds, decodes, and positively lacks the kind. Anything else is `error` (§9.2).
-3. **Namespace absence stays composed.** The module gains no namespace-probing mode. A caller
+   succeeds, decodes to a structurally valid APIResourceList, and positively lacks the caller's
+   exact `resource_name`. Anything else is `error` (§9.2). The module never derives a plural from
+   `kind`.
+3. **Canonical resource-name flow.** `resource_name` is a required non-empty Kubernetes resource
+   name. PR A updates every existing call site: the compactor passes `pods`, immediate-import
+   passes `configmaps`, and their fixtures/direct module invocations do the same. C passes
+   `multiclusterobservabilities`; D passes `managedclusters` and `clusterdeployments`; E passes
+   `multiclusterhubs`, `clusterserviceversions`, and every exact core/API resource name it probes.
+   This is the sole flow; there is no `kind.lower()`, suffixing, inflector, or fallback.
+4. **Namespace absence stays composed.** The module gains no namespace-probing mode. A caller
    proves namespace absence with `read_mode: get`, `api_version: v1`, `kind: Namespace`.
 
 **Failure behavior.** Unchanged for every existing failure: sanitized `error`, no raw bodies.
@@ -1153,10 +1258,11 @@ def test_list_mode_outstanding_continuation_at_exit_is_error():
 def test_positive_discovery_miss_is_kind_not_served():
     result = run_module_with(
         fake_resource=raises(ResourceNotFoundError("no matches")),
-        fake_discovery={"resources": [{"name": "pods"}]},
+        fake_discovery={"kind": "APIResourceList", "resources": [{"name": "pods", "kind": "Pod"}]},
         read_mode="list",
         api_version="operator.open-cluster-management.io/v1",
         kind="MultiClusterHub",
+        resource_name="multiclusterhubs",
     )
     assert result["read_status"] == "kind_not_served"
 
@@ -1168,6 +1274,7 @@ def test_unverifiable_discovery_is_error_not_kind_not_served():
         read_mode="list",
         api_version="operator.open-cluster-management.io/v1",
         kind="MultiClusterHub",
+        resource_name="multiclusterhubs",
     )
     assert result["read_status"] == "error"
 
@@ -1179,6 +1286,7 @@ def test_undecodable_discovery_is_error_not_kind_not_served():
         read_mode="list",
         api_version="g/v1",
         kind="Widget",
+        resource_name="widgets",
     )
     assert result["read_status"] == "error"
 
@@ -1197,6 +1305,30 @@ def test_module_still_reports_no_namespace_probing_mode():
 
     spec = acm_k8s_read_outcome._argument_spec()
     assert spec["read_mode"]["choices"] == ["get", "list"]
+
+
+def test_irregular_plural_uses_exact_resource_name():
+    result = run_module_with(
+        fake_resource=raises(ResourceNotFoundError("no matches")),
+        fake_discovery={"kind": "APIResourceList", "resources": [
+            {"name": "multiclusterobservabilities", "kind": "MultiClusterObservability"}
+        ]},
+        read_mode="list",
+        api_version="observability.open-cluster-management.io/v1beta2",
+        kind="MultiClusterObservability",
+        resource_name="multiclusterobservabilities",
+    )
+    assert result["read_status"] == "ok"
+
+
+@pytest.mark.parametrize("status", [404, 403, 503])
+def test_discovery_http_failure_is_error_not_kind_not_served(status):
+    result = run_module_with(
+        fake_resource=raises(ResourceNotFoundError("no matches")),
+        fake_discovery=raises(ApiError(str(status))),
+        read_mode="list", api_version="g/v1", kind="Widget", resource_name="widgets",
+    )
+    assert result["read_status"] == "error"
 ```
 
 Invert the existing positive-discovery-miss expectations in the same file and in
@@ -1230,7 +1362,7 @@ and replace the bare `except Exception` around `api_client.resource(...)` with t
 _MAX_LIST_PAGES = 100
 
 
-def _discovery_serves(api_client, api_version: str, kind: str) -> bool | None:
+def _discovery_serves(api_client, api_version: str, resource_name: str) -> bool | None:
     """True if served, False if positively absent, None if unverifiable.
 
     The dynamic client's discovery cache substitutes an empty resource list
@@ -1243,15 +1375,21 @@ def _discovery_serves(api_client, api_version: str, kind: str) -> bool | None:
         body = json.loads(response.data.decode("utf8"))
     except Exception:
         return None
-    if not isinstance(body, dict):
+    if not isinstance(body, dict) or body.get("kind") != "APIResourceList":
         return None
     resources = body.get("resources")
     if not isinstance(resources, list):
         return None
     for entry in resources:
-        if not isinstance(entry, dict):
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("name"), str)
+            or not entry["name"]
+            or not isinstance(entry.get("kind"), str)
+            or not entry["kind"]
+        ):
             return None
-        if entry.get("kind") == kind or entry.get("name") == kind.lower() + "s":
+        if entry["name"] == resource_name:
             return True
     return False
 
@@ -1290,13 +1428,17 @@ Wire them into `run_module`: replace the `resource` lookup's `except Exception: 
     try:
         resource = api_client.resource(module.params["kind"], module.params["api_version"])
     except Exception:
-        served = _discovery_serves(api_client, module.params["api_version"], module.params["kind"])
+        served = _discovery_serves(
+            api_client, module.params["api_version"], module.params["resource_name"]
+        )
         _exit_outcome(module, "kind_not_served" if served is False else "error")
         return
 ```
 
-and replace the list branch's single `get` with `_drain_list`. The `get` branch is unchanged.
-Add `import json` to the module's imports.
+and replace the list branch's single `get` with `_drain_list`. Add the required `resource_name`
+option to `DOCUMENTATION` and `_argument_spec()`, validate it before discovery, and update every
+existing role/task/test call site in this PR as listed above. The `get` branch otherwise remains
+unchanged. Add `import json` to the module's imports.
 
 - [ ] **Step 4: Run and observe the tests pass**
 
@@ -1370,6 +1512,8 @@ VECTORS = [
     ("authorization_failure", "api failure", StrictReadStatus.ERROR, "error"),
     ("transport_failure", "api failure", StrictReadStatus.ERROR, "error"),
     ("discovery_unverifiable", "api failure", StrictReadStatus.ERROR, "error"),
+    ("discovery_http_404", "api failure", StrictReadStatus.ERROR, "error"),
+    ("malformed_discovery", "malformed response", StrictReadStatus.ERROR, "error"),
     ("malformed_items", "malformed response", StrictReadStatus.ERROR, "error"),
     ("later_page_failure", "truncation / incomplete", StrictReadStatus.ERROR, "error"),
     ("outstanding_continuation", "truncation / incomplete", StrictReadStatus.ERROR, "error"),
@@ -1400,7 +1544,11 @@ def test_error_is_never_absence_in_either_form_factor(vector_id, _normative, pyt
 `run_python_vector` and `run_collection_vector` are defined in this file and build their fakes
 from the same vector id, so a vector that is added on one side and forgotten on the other fails.
 Root `tests/` must import the collection module lazily inside `run_collection_vector` so the file
-stays import-safe without `ansible-core` (`AGENTS.md` standing CI constraint).
+stays import-safe without `ansible-core` (`AGENTS.md` standing CI constraint). The
+`namespace_absent` Python runner must call `KubeClient.get_namespace_strict`; it may not construct
+`StrictReadOutcome.namespace_absent(...)` directly. The discovery runners pass the exact
+canonical `resource_name` and include the irregular
+`MultiClusterObservability`/`multiclusterobservabilities` case.
 
 - [ ] **Step 2: Run and observe the expected failure**
 
@@ -1459,8 +1607,10 @@ PYTHONPATH=. python -m pytest \
   ansible_collections/tomazb/acm_switchover/tests/integration/test_r3_02_activation_runtime.py -q
 ```
 
-Expected: PASS with no expectation edits. Both consumers read always-served core kinds (`Pod`,
-`ConfigMap`), so `kind_not_served` is unreachable for them; `scale_observability.yml` already
+Expected: PASS with no behavioral expectation edits. PR A mechanically adds `resource_name: pods`
+and `resource_name: configmaps` to these existing call sites and fixtures. Both consumers read
+always-served core kinds (`Pod`, `ConfigMap`), so `kind_not_served` is unreachable for them;
+`scale_observability.yml` already
 fails closed on any non-`ok` status and `apply_immediate_import.yml` handles `not_found`
 distinctly. If either lane needs an expectation edit, stop: that is a real consumer regression,
 not a test that needs updating.
@@ -1518,7 +1668,8 @@ contract, and under `### Changed` naming the `acm_k8s_read_outcome` reclassifica
 discovery miss from `error` to `kind_not_served`. Add the strict-read seam row to
 [`docs/ansible-collection/behavior-map.md`](../ansible-collection/behavior-map.md) mapping the
 Python strict surface to the collection module, replacing the generic `lib/kube_client.py` row's
-target. Run:
+target. Update [`docs/development/architecture.md`](../development/architecture.md) with the
+closed strict-read surface and exact canonical-resource-name flow. Run:
 
 ```bash
 python -m pytest tests/test_documentation_guardrails.py tests/test_ci_guardrails.py -q
@@ -1534,17 +1685,22 @@ in the builder report and the PR description. Rerun the targeted gates after any
 
 PR A alone must satisfy this checklist verbatim. Each row names the evidence.
 
+For R4-04, "kind absent" therefore means only a successful, decoded, structurally valid
+APIResourceList that lacks the exact canonical `resource_name`. Discovery HTTP 404/403/5xx,
+timeout/TLS/transport/decode failure, malformed discovery, `ResourceNotFoundError`, and swallowed
+client discovery failure are all `error`; R4-04 may not reinterpret them as an empty inventory.
+
 | R4-04 Task 0 Step 2 requirement | Satisfied by |
 | --- | --- |
-| Python strict list/read interface | `KubeClient.list_custom_resources_strict`, `KubeClient.get_custom_resource_strict` (Task A3) |
+| Python strict list/read interface | `KubeClient.list_custom_resources_strict`, `get_custom_resource_strict`, `get_namespace_strict`, `list_pods_strict`, `get_deployment_strict`, and `get_replicaset_strict` (Task A3) |
 | Test: true empty | `test_true_empty_list_is_a_proven_complete_inventory`; parity vector `true_empty` |
-| Test: 404/discovery failure | `test_unserved_kind_short_circuits_to_crd_absent`, `test_discovery_service_unavailable_is_error_not_absence`, `test_list_404_on_a_served_kind_is_error_not_absence`; vectors `kind_not_served`, `discovery_unverifiable` |
+| Test: 404/discovery failure | `test_unserved_kind_short_circuits_to_crd_absent`, `test_discovery_404_is_error_not_absence`, `test_discovery_service_unavailable_is_error_not_absence`, `test_list_404_on_a_served_kind_is_error_not_absence`; vectors `kind_not_served`, `discovery_http_404`, `discovery_unverifiable` |
 | Test: malformed `items` | `test_malformed_items_is_error_not_empty`; vector `malformed_items` |
 | Test: transport/auth failure | `test_authorization_failure_is_error_not_absence`; vectors `authorization_failure`, `transport_failure` |
 | Test: complete pagination | `test_complete_multi_page_inventory_is_joined`, `test_later_page_failure_fails_the_whole_read`, `test_outstanding_continuation_at_exit_is_incomplete`; vectors `complete_pagination`, `later_page_failure`, `outstanding_continuation` |
 | Collection has the corresponding complete list outcome, extending `acm_k8s_read_outcome` rather than adding another abstraction | Task A4; `test_module_still_reports_no_namespace_probing_mode` proves no mode was added |
 | Merged on `origin/ansible` | PR A merges before R4-04 execution begins; R4-04 re-runs its own Task 0 |
-| No competing read algebra | Task A4 extends the single module; Task A5 holds both surfaces to one vector set |
+| No competing read algebra | Task A4 extends the single module with explicit canonical `resource_name`; Task A5 holds both surfaces to one vector set; Task A3 supplies the positive Python namespace-absence producer and strict core reads needed by later R4-03 consumers |
 
 ---
 
@@ -1852,8 +2008,10 @@ destroys these records. `reset_from` prunes completed phases while **retaining**
 `operational_data`; it must therefore retain and revalidate these records rather than launder
 them. Task B4 tests both.
 
-**Check-mode implications.** No `operational_data` transition is written in check mode; Task F1
-asserts this end to end.
+**Check-mode implications.** PR B itself guards every checkpoint enter/exit and teardown-record
+action with `when: not ansible_check_mode`; the action plugin's existing native short-circuit is
+defense in depth. PR B unit/scenario tests prove no `operational_data` transition and
+`changed: false` before B may merge. PR F only repeats this in an integrated scenario.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1920,22 +2078,41 @@ class SubstepOutcome(Enum):
 class DecommissionResult:
     substeps: dict[str, SubstepOutcome]   # "observability" | "managed_clusters" | "multiclusterhub"
     not_attempted: tuple[str, ...]
+    cancelled: bool = False              # top-level banner cancellation only
+    changed: bool = False                # actual live mutation, never prediction
+    would_change: bool = False            # fresh read-only prediction, never authority
     @property
-    def succeeded(self) -> bool: ...      # no REFUSED and no FAILED
+    def succeeded(self) -> bool: ...      # not cancelled and no REFUSED/FAILED
     def summary_lines(self) -> list[str]: ...
 ```
 
+`.succeeded` is exactly `not cancelled and no substep value is REFUSED or FAILED`. A successful
+read-only dry-run may therefore report that the preview command succeeded while `changed` remains
+false and all requested substeps remain `not_attempted`; it never claims teardown completion.
+`summary_lines()` labels `cancelled`, `not attempted`, actual change, and predicted change
+separately. The dataclass defines no `__bool__`; callers must use `.succeeded`.
+
 **Intended behavior.** `Decommission.decommission(interactive=True)` runs the substeps in the
-existing order. A refusal records `REFUSED`, stops immediately, records every remaining substep in
-`not_attempted`, and returns a result whose `succeeded` is `False`. A substep disabled by
+existing order. Top-level banner cancellation returns `cancelled=True`, empty `substeps`, every
+requested substep in `not_attempted`, `changed=False`, `would_change=False`, and
+`.succeeded == False`; it invokes no destructive substep and persists no cancellation/refusal
+state. A later substep refusal remains distinct: it records `REFUSED`, stops immediately, records
+every remaining requested substep in `not_attempted`, and returns `.succeeded == False`. A
+substep disabled by
 configuration records `NOT_REQUESTED`. A substep whose preconditions prove no mutation is needed
 records `PRECONDITION_NOOP`. Non-interactive and integrated paths never prompt.
 
 **Failure behavior.** `FAILED` on any `SwitchoverError`; remaining substeps are not attempted.
 
 **State implications.** None: refusal is output, not state (amendment §13).
-**Dry-run implications.** Dry-run previews requested substeps and records no outcome at all — the
-result carries the requested set and the run reports a preview, never `completed` or `refused`.
+**Dry-run implications.** Before dispatch, Python branches to a read-only prediction path. It
+records no substep outcome, teardown record, operator identity, phase, or other result/state
+authority; calls no delete primitive; returns `changed=False`; places every requested substep in
+`not_attempted`; and sets only `would_change` from fresh strict reads. No later live run consumes
+that value. There is deliberately no `is_preview` field: callers already know the requested
+execution mode, and no operator contract needs a second marker. At B merge, prediction covers the
+existing three resource-family mutations; C/D/E replace each predictor alongside the stricter
+family algorithm so it remains accurate at every merge.
 **Parity implications.** Mirrored by Task B4. **RBAC:** none.
 
 **Caller mapping**, preserving today's observable difference:
@@ -1944,6 +2121,11 @@ result carries the requested set and the run reports a preview, never `completed
 | --- | --- |
 | `acm_switchover.py::run_decommission` | returns `result.succeeded`; logs `result.summary_lines()`; the existing CLI exit path turns `False` into a non-zero exit |
 | `modules/finalization.py::_decommission_old_hub` | raises `SwitchoverError` with its existing message context when `not result.succeeded`, appending the summary |
+
+Both callers compare `.succeeded` explicitly. `if result:` and any other dataclass truthiness are
+forbidden and covered by tests. The standalone CLI therefore preserves today's false/non-zero
+mapping for top-level cancellation. Finalization's integrated non-interactive call cannot produce
+`cancelled=True`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1954,6 +2136,24 @@ in source. Delete that test and add:
 ```python
 class TestDecommissionOutcomes:
     """R4-C2: a refused substep can never produce a successful decommission."""
+
+    @patch("modules.decommission.confirm_action")
+    def test_top_level_cancel_returns_an_unsuccessful_result(self, confirm, decommission_with_obs):
+        confirm.return_value = False
+        result = decommission_with_obs.decommission(interactive=True)
+        assert result.cancelled is True
+        assert result.succeeded is False
+        assert result.substeps == {}
+        assert result.not_attempted == ("observability", "managed_clusters", "multiclusterhub")
+        assert result.changed is False and result.would_change is False
+
+    @patch("modules.decommission.confirm_action")
+    def test_top_level_cancel_invokes_no_substep(self, confirm, decommission_with_obs, monkeypatch):
+        confirm.return_value = False
+        invoked = Mock()
+        monkeypatch.setattr(decommission_with_obs, "_run_substep", invoked)
+        decommission_with_obs.decommission(interactive=True)
+        invoked.assert_not_called()
 
     @patch("modules.decommission.confirm_action")
     def test_refusing_the_first_substep_aborts_and_fails(self, confirm, decommission_with_obs):
@@ -1999,8 +2199,13 @@ class TestDecommissionOutcomes:
 
     def test_dry_run_records_no_outcome_at_all(self, decommission_dry_run):
         result = decommission_dry_run.decommission(interactive=False)
-        assert all(o is SubstepOutcome.NOT_REQUESTED or o is None for o in result.substeps.values()) or \
-            result.is_preview is True
+        assert result.substeps == {}
+        assert result.not_attempted == ("observability", "managed_clusters", "multiclusterhub")
+        assert result.changed is False
+        assert isinstance(result.would_change, bool)
+        assert decommission_dry_run.run_record.all_teardown_records() == {}
+        decommission_dry_run.primary_client.delete_custom_resource.assert_not_called()
+
 ```
 
 Add to `tests/test_finalization.py`:
@@ -2017,6 +2222,12 @@ def test_integrated_decommission_failure_keeps_its_own_message_context(finalizat
         finalization._decommission_old_hub()
     assert "Manual cleanup is required" in str(excinfo.value)
     assert "observability" in str(excinfo.value)
+
+
+def test_finalization_maps_succeeded_explicitly_not_object_truthiness():
+    source = inspect.getsource(Finalization._decommission_old_hub)
+    assert ".succeeded" in source
+    assert "if result:" not in source
 ```
 
 Add to `tests/test_main.py`, which already covers `run_decommission`:
@@ -2027,6 +2238,17 @@ def test_run_decommission_returns_false_on_refusal(monkeypatch, args, primary, s
         decommission_module.Decommission, "decommission",
         lambda self, interactive=True: DecommissionResult(
             substeps={"observability": SubstepOutcome.REFUSED}, not_attempted=("multiclusterhub",)
+        ),
+    )
+    assert run_decommission(args, primary, state, logger) is False
+
+
+def test_run_decommission_preserves_false_cli_result_on_banner_cancel(monkeypatch, args, primary, state, logger):
+    monkeypatch.setattr(
+        decommission_module.Decommission, "decommission",
+        lambda self, interactive=True: DecommissionResult(
+            substeps={}, not_attempted=("observability", "managed_clusters", "multiclusterhub"),
+            cancelled=True,
         ),
     )
     assert run_decommission(args, primary, state, logger) is False
@@ -2068,30 +2290,58 @@ over three declared substeps rather than three copied `if/else` blocks:
             "\nAre you sure you want to proceed with decommissioning the old hub?", default=False
         ):
             logger.info("Decommission cancelled by user")
-            return DecommissionResult(substeps={}, not_attempted=self._SUBSTEPS)
+            requested = tuple(step for step in self._SUBSTEPS if self._substep_requested(step))
+            return DecommissionResult(
+                substeps={}, not_attempted=requested, cancelled=True,
+                changed=False, would_change=False,
+            )
+
+        if self.dry_run:
+            requested = tuple(step for step in self._SUBSTEPS if self._substep_requested(step))
+            predicted = [self._preview_substep(step) for step in requested]
+            return DecommissionResult(
+                substeps={}, not_attempted=requested, changed=False,
+                would_change=any(predicted),
+            )
 
         outcomes: dict[str, SubstepOutcome] = {}
+        changed = False
         for index, substep in enumerate(self._SUBSTEPS):
             if not self._substep_requested(substep):
                 outcomes[substep] = SubstepOutcome.NOT_REQUESTED
                 continue
             if interactive and not confirm_action(self._PROMPTS[substep], default=False):
                 outcomes[substep] = SubstepOutcome.REFUSED
-                return DecommissionResult(substeps=outcomes, not_attempted=self._SUBSTEPS[index + 1 :])
+                remaining = tuple(
+                    step for step in self._SUBSTEPS[index + 1 :] if self._substep_requested(step)
+                )
+                return DecommissionResult(
+                    substeps=outcomes, not_attempted=remaining, changed=changed
+                )
             try:
-                outcomes[substep] = self._run_substep(substep)
+                outcome, substep_changed = self._run_substep(substep)
+                outcomes[substep] = outcome
+                changed = changed or substep_changed
             except SwitchoverError as exc:
                 logger.error("Decommission substep %s failed: %s", substep, exc)
                 outcomes[substep] = SubstepOutcome.FAILED
-                return DecommissionResult(substeps=outcomes, not_attempted=self._SUBSTEPS[index + 1 :])
+                remaining = tuple(
+                    step for step in self._SUBSTEPS[index + 1 :] if self._substep_requested(step)
+                )
+                return DecommissionResult(
+                    substeps=outcomes, not_attempted=remaining, changed=changed
+                )
 
-        return DecommissionResult(substeps=outcomes, not_attempted=())
+        return DecommissionResult(substeps=outcomes, not_attempted=(), changed=changed)
 ```
 
-`_run_substep` dispatches to the three existing private methods, which still return
-`SubstepOutcome.COMPLETED` in this PR; PRs C, D, and E replace their bodies with the guarded phase
-machine and start returning `PRECONDITION_NOOP` where the July §3 rules prove no mutation is
-needed. Update both callers per the mapping table above.
+`_run_substep` dispatches to the three existing private methods and returns
+`(SubstepOutcome, actual_changed)`; `actual_changed` is true only after
+a real live mutation call. `_preview_substep` performs only fresh reads and returns a bool; it is
+never called by a live run and never writes `RunRecord`. PRs C, D, and E replace their family
+dispatch and predictor together with the guarded phase machine and return `PRECONDITION_NOOP`
+where July §3 proves no mutation is needed. Update both callers per the mapping table and add a
+source guardrail forbidding bare truthiness of `DecommissionResult`.
 
 - [ ] **Step 4: Run and observe the tests pass**
 
@@ -2126,15 +2376,21 @@ instead of hard-coded `pass` — and give the collection outcome parity with Tas
 **Intended behavior.** Each substep sets one fact from the mirrored vocabulary:
 `acm_switchover_decommission_outcomes.observability`, `.managed_clusters`, `.multiclusterhub`.
 `main.yml` aggregates them into `acm_switchover_decommission_result.status`, which is `pass` only
-when no substep is `failed`, and computes `changed` from real mutation results. Refusal is not
+when no substep is `failed`, and computes actual `changed` from real mutation results. Refusal is not
 applicable: the role stays non-interactive behind its confirmed-gate.
 
 **Failure behavior.** A `failed` substep fails the play. Today's silent degradation to a warning
 is removed in the substeps PRs C, D, and E own; this task removes the hard-coded `pass` that would
 otherwise mask them.
 
-**Check-mode implications.** In check mode the aggregated `changed` stays `false` and the
-prediction is published as `would_change`; Task F1 asserts it end to end.
+**Check-mode implications.** This safety ships in B. `main.yml` computes `changed: false` whenever
+`ansible_check_mode` is true and never derives actual change from a module's prospective
+`changed`. It publishes prediction only as `would_change`. At the B stage `would_change` is
+explicitly `false`: B has not yet introduced a fresh strict per-family prediction result, and
+debug announcements or a check-mode module's prospective `changed` are not evidence. C/D/E add
+their accurate family predictions in the same PR as each mutation. Check mode skips every
+checkpoint writer and records no substep outcome as completed/refused/failed. B tests this before
+merge; F repeats it only as integrated proof.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2169,6 +2425,20 @@ def test_outcome_values_come_from_the_collection_constants(run_decommission_role
         result["acm_switchover_decommission_result"]["substeps"]["observability"]
         in constants.DECOMMISSION_SUBSTEP_OUTCOMES
     )
+
+
+def test_b_stage_check_mode_reports_no_actual_or_speculative_change(run_decommission_role):
+    result = run_decommission_role(check_mode=True)
+    summary = result["acm_switchover_decommission_result"]
+    assert summary["changed"] is False
+    assert summary["would_change"] is False
+    assert not [task for task in result["tasks"] if task["changed"]]
+
+
+def test_b_stage_check_mode_writes_no_checkpoint_or_outcome(run_decommission_role):
+    result = run_decommission_role(check_mode=True)
+    assert result["operational_data"] == result["before_operational_data"]
+    assert result["acm_switchover_decommission_result"]["substeps"] == {}
 ```
 
 The cross-form-factor comparison belongs in the root parity surface, not here: collection tests do
@@ -2233,6 +2503,14 @@ before the first DELETE.
 closed — the July deletion boundary requires the identity map to be durable before the first
 DELETE. Dry-run and check mode do not require it and write nothing.
 
+**B-merge safety.** Python branches on `self.dry_run` before every RunRecord call and does not
+pass preview data into any state API. Collection checkpoint enter/exit and all future
+`record_teardown_phase` calls carry `when: not ansible_check_mode`; role result aggregation is the
+B4 check-mode-safe expression. A subsequent live run begins from unchanged authoritative state
+and never reads `would_change` as authority. Add tests that seed state, run dry-run/check mode,
+compare byte-equivalent operational data afterward, then run live and prove it performs fresh
+reads rather than trusting the preview.
+
 - [ ] **Step 1: Write the failing tests**
 
 ```python
@@ -2276,10 +2554,15 @@ gates, scope and protected-file check** — the same command set as Task A6 step
 
 - [ ] **Step 3: Documentation**
 
-`CHANGELOG.md` `## [Unreleased]` under `### Fixed`: a refused decommission substep now fails the
-run and exits non-zero; the collection decommission artifact reports its real status. Update
-[`docs/operations/usage.md`](../operations/usage.md)'s "Decommission Old Hub" section to state the
-refusal behavior and the exit status.
+`CHANGELOG.md` `## [Unreleased]` under `### Fixed`: a top-level cancellation or refused
+decommission substep now fails the run and exits non-zero; the collection decommission artifact
+reports its real status. Update [`docs/operations/usage.md`](../operations/usage.md)'s
+"Decommission Old Hub" section to state cancellation/refusal behavior, the exit status, and the
+separate actual `changed` versus `would_change` semantics. Update
+[`docs/development/architecture.md`](../development/architecture.md),
+[`docs/ansible-collection/parity-matrix.md`](../ansible-collection/parity-matrix.md), and
+[`docs/ansible-collection/behavior-map.md`](../ansible-collection/behavior-map.md) in B because the
+result and durable-state interfaces become true here; do not defer those descriptions to F.
 
 ```bash
 python -m pytest tests/test_documentation_guardrails.py -q
@@ -2313,7 +2596,7 @@ of the slice and therefore carries the first RBAC change.
 | Teardown owner | `Decommission` owns the one Python MCO algorithm | Amendment §11 item 1 |
 | GitOps markers | boolean parameter `record_gitops_markers: bool = False` on the shared teardown | Amendment §11 item 2 permits a flag or a callback; a flag is the smaller model and `safe_record_gitops_markers` is already a free function |
 | MCO drain selector | new mirrored constant `OBSERVABILITY_POD_LABEL_SELECTOR = "observability.open-cluster-management.io/name=observability"` | July §1 step 4 promotes the `modules/post_activation.py:569` literal to a shared constant |
-| Strict Pod read | `KubeClient.list_pods_strict(namespace, label_selector=None)` added here, where its first consumer lands | YAGNI — PR A ships only what R4-04's gate names |
+| Strict Pod and namespace reads | consume PR A's `KubeClient.list_pods_strict(...)` and `get_namespace_strict(...)` | The closed transport algebra lands in A; C owns only MCO policy and the first live RBAC use |
 | Ack flag | `--acknowledge-observability-not-migrated` | July §4 step 4 names it; no existing flag collides |
 | Collection ack variable | `acm_switchover_decommission.acknowledge_observability_not_migrated` (default `false`) | Collection variables carry the `acm_switchover_` prefix |
 | Destination gate result | never persisted | Amendment §9 and §13 |
@@ -2457,7 +2740,7 @@ an API status classification, and the non-secret resource identity.
 ### Task C3: Shared Python teardown phase machine and MCO consolidation
 
 **Files:** Modify `modules/decommission.py`; modify `modules/finalization.py`; modify
-`lib/constants.py`; modify `lib/kube_client.py` (`list_pods_strict`); modify
+`lib/constants.py`; consume PR A's strict core reads; modify
 `tests/test_decommission.py`; modify `tests/test_finalization.py`.
 
 **Purpose:** Implement the July §1 phase machine once, in `Decommission`, and delete both current
@@ -2487,7 +2770,7 @@ specs to the same `_teardown_resource`; that is what keeps one algorithm.
 3. `delete_custom_resource_preconditioned(..., uid=expected_uid)`.
 4. Poll strictly for CR absence; record `cr_absent`. A same-name different-UID CR is fatal and is
    left intact.
-5. Record `drain_pending`, then drain: `list_pods_strict(OBSERVABILITY_NAMESPACE,
+5. Record `drain_pending`, then drain: PR A's `list_pods_strict(OBSERVABILITY_NAMESPACE,
    label_selector=OBSERVABILITY_POD_LABEL_SELECTOR)`. A positively absent namespace counts as
    verified-empty under the July §3 fixed-namespace scope rule; an unreadable or ambiguous
    namespace records `recovery_required`.
@@ -2512,8 +2795,15 @@ through the decorator-bypassing mocks at `tests/test_decommission.py:190-204`.
 | `interactive=False` for the integrated path | unchanged (`modules/finalization.py:1141`) |
 | Dry-run preview | single shared behavior |
 
-**Dry-run implications.** In dry-run the machine performs the strict reads, reports the predicted
-blocker set, issues no DELETE, and writes **no** record and no phase.
+**Dry-run/check-mode implications.** This contract is complete in C before C merges. Python
+branches before every `record_teardown_phase`/identity writer and before
+`delete_custom_resource_preconditioned`; it performs strict reads, reports the predicted blocker
+set and MCO `would_change`, issues no DELETE, records no outcome as completed/refused/failed, and
+writes no record or phase. Collection reads may run, but every guarded delete, operational-data
+writer, and phase enter/exit is explicitly skipped under `ansible_check_mode`; the role and every
+task report actual `changed: false`, with accurate MCO prediction only in `would_change`. A
+check-mode run followed by live execution proves the latter performs fresh reads and trusts no
+preview data.
 
 **RBAC implications.** New: MCO CR named `get` (the strict named GET and the final live absence
 proof). Carried in Task C6.
@@ -2531,8 +2821,8 @@ proof). Carried in Task C6.
   proving no premature terminal write.
 - [ ] **Step 2:** run; expected FAIL — `teardown_observability` does not exist and the current
   `_delete_observability` neither records nor re-reads.
-- [ ] **Step 3:** implement `_teardown_resource`, `teardown_observability`, and
-  `list_pods_strict`; delete `modules/finalization.py:1003-1088` and replace it with a call to
+- [ ] **Step 3:** implement `_teardown_resource` and `teardown_observability`, consuming PR A's
+  `list_pods_strict` and `get_namespace_strict`; delete `modules/finalization.py:1003-1088` and replace it with a call to
   `decommission.teardown_observability(record_gitops_markers=True)`; add
   `OBSERVABILITY_POD_LABEL_SELECTOR` to both constants modules and to `CONSTANT_PAIRS`; replace
   the `modules/post_activation.py:569` literal with the constant.
@@ -2577,9 +2867,17 @@ fail closed on any non-`ok`. Add the scoped selector to the MCO pod wait. No nam
 **Failure behavior.** No `failed_when: false`, no `ignore_errors`, and no `default([])` on any
 provenance, ownership, wait, or final-verification path.
 
+**Native check-mode safety.** The role passes canonical
+`resource_name: multiclusterobservabilities` into every discovery-backed read. In check mode it
+runs only reads/prediction, never invokes a phase or operational-data writer, and the guarded
+delete module stops before DELETE. The per-substep result is not `completed`, `refused`, or
+`failed`; actual `changed` is false and MCO `would_change` reflects fresh source/gate state.
+
 - [ ] **Step 1:** write the failing role-contract tests asserting the guarded module is used, the
   selector is present, no `state: absent` MCO task remains, and no failure-absorbing construct
-  appears on those paths.
+  appears on those paths. Add check-mode tests asserting zero DELETE calls, byte-identical
+  `operational_data`, no phase-writer call, no task or summary with actual `changed: true`, and
+  accurate separate `would_change` for present, absent, and unverifiable MCO cases.
 - [ ] **Step 2 through 4:** run, implement, rerun.
 - [ ] **Step 5:** commit `feat: route collection MCO teardown through the guarded delete`.
 
@@ -2610,6 +2908,10 @@ provenance, ownership, wait, or final-verification path.
    gate would pass anyway.
 
 **Never persisted.** The gate result is recomputed fresh on every run, including every resume.
+
+Python namespace reads in both steps use PR A's live `get_namespace_strict`; no cached preflight
+fact proves absence. Collection uses a fresh named Namespace GET. Every MCO discovery-backed call
+passes the exact canonical `resource_name: multiclusterobservabilities`.
 
 **Standalone decommission** has no destination client and is unaffected.
 
@@ -2686,9 +2988,14 @@ not substituted for the named-GET contract.
   `deploy/rbac/extensions/decommission/clusterrole.yaml` and in the collection-bundled copy
   `roles/rbac_bootstrap/files/deploy/rbac/extensions/decommission/clusterrole.yaml`.
 - [ ] **Step 3:** mirror it in `deploy/helm/acm-switchover-rbac/templates/clusterrole.yaml`.
-- [ ] **Step 4:** update [`docs/deployment/rbac-requirements.md`](../deployment/rbac-requirements.md),
-  [`docs/deployment/rbac-deployment.md`](../deployment/rbac-deployment.md), and
-  [`docs/development/rbac-implementation.md`](../development/rbac-implementation.md).
+- [ ] **Step 4:** update all four current RBAC authorities:
+  [`docs/deployment/rbac-requirements.md`](../deployment/rbac-requirements.md),
+  [`docs/deployment/rbac-deployment.md`](../deployment/rbac-deployment.md),
+  [`docs/development/rbac-implementation.md`](../development/rbac-implementation.md), and
+  [`docs/deployment/rbac-live-certification.md`](../deployment/rbac-live-certification.md).
+  The live-certification document's required SelfSubjectAccessReview/read/delete inventory must
+  include the new named GET, but editing that inventory is not evidence that a live certification
+  run occurred; no live run is authorized by this plan.
 - [ ] **Step 5:** add a negative authorization test that denies `multiclusterobservabilities get`
   and proves the MCO teardown blocks **before** any DELETE, with sanitized output.
 - [ ] **Step 6:** run the complete RBAC gate:
@@ -2712,9 +3019,20 @@ PYTHONPATH=. python -m pytest \
   scope and protected-file check — the Task A6 command set.
 - [ ] `CHANGELOG.md` `## [Unreleased]`: UID-preconditioned MCO deletion with a completion proof;
   the destination-observability gate and its flag; the consolidated MCO teardown.
-- [ ] Update the [parity matrix](../ansible-collection/parity-matrix.md) decommission row and the
+- [ ] Publish the full-reset warning now, in C: update
+  [`docs/operations/usage.md`](../operations/usage.md) and
+  [`docs/development/architecture.md`](../development/architecture.md) to state that Python
+  `--reset-state` and collection full `checkpoint.reset` destroy teardown records, so resetting
+  after destructive work can erase the remembered drain obligation and allow a later clean skip;
+  `reset_from` retains and revalidates the records. C is the first PR that can leave a destructive
+  partial record, so this warning may not wait for F.
+- [ ] Update the root and collection READMEs, CLI quick reference/validation rules, relevant
+  Mermaid teardown flow, coexistence/CLI migration and variable-reference surfaces for the new
+  acknowledgement flag, check-mode semantics, destination gate, and MCO phase machine in this PR.
+  Update the [parity matrix](../ansible-collection/parity-matrix.md) decommission row and the
   [behavior map](../ansible-collection/behavior-map.md) `modules/decommission.py` row for the
-  guarded-delete and durable-phase boundaries.
+  guarded-delete and durable-phase boundaries. Update all four RBAC documents in Task C6. No
+  document made false by C is deferred to F.
 - [ ] Simplification gate, then open PR C.
 
 ## 11B. PR D — ManagedCluster teardown
@@ -2747,13 +3065,24 @@ docs, `tests/test_decommission.py`, and the collection role-contract and scenari
 4. Aggregate failures into one `SwitchoverError` listing the survivors.
 5. `local-cluster` continues to be skipped.
 
+Collection callers pass canonical `resource_name: managedclusters` and
+`resource_name: clusterdeployments`; neither caller nor the read module synthesizes a plural from
+the Kind.
+
 **Failure behavior.** A same-name different-UID ManagedCluster is fatal and is left intact. Any
 `error` outcome on inventory, per-cluster GET, or the absence poll is fatal and never absence.
 
 **State/checkpoint implications.** One `TeardownRecord` per ManagedCluster name; the same phase
 table; the same forced-durable ordering.
 
-**Dry-run and check mode.** Preview lists the targets and writes no record.
+**Dry-run and check mode.** D ships its complete safety contract. Python branches before every
+per-cluster teardown-record write and guarded-delete call; collection skips every phase and
+operational-data writer and the guarded-delete module stops before DELETE. Both perform fresh
+strict ManagedCluster and ClusterDeployment inventories, report no substep as
+completed/refused/failed, and report actual `changed: false`; accurate per-target prediction is
+aggregated only into `would_change`. Present targets predict true, proven empty predicts false,
+and unverifiable inventory fails rather than predicts. A live run after preview uses no preview
+data and repeats every authoritative read.
 
 **Parity implications.** The collection routes each delete through `acm_uid_guarded_delete` and
 reads inventory through `acm_k8s_read_outcome`; no name-only `state: absent` remains.
@@ -2771,7 +3100,11 @@ fatal rather than "no ClusterDeployments"; `preserveOnDelete=false` still blocks
 message; an ambiguous ClusterDeployment relationship still blocks with the existing message; each
 delete carries the recorded UID; a same-name replacement between record and DELETE is fatal and
 survives; the survivor list names every ManagedCluster that did not reach `completed`;
-`local-cluster` is never deleted; a denied `managedclusters get` blocks before any DELETE.
+`local-cluster` is never deleted; a denied `managedclusters get` blocks before any DELETE. Add
+Python dry-run and Collection native-check-mode cases for present, empty, and unverifiable
+inventories; assert no DELETE primitive, no teardown-record/operational-data/phase write, no
+completed/refused/failed outcome, no task or summary actual change, accurate separate
+`would_change`, and a subsequent live run's fresh reads.
 
 **Expected failing state before implementation:** the current base fixture
 (`tests/test_decommission.py:25-31`) returns `[]` from the list mocks, so the discovery-failure and
@@ -2785,8 +3118,15 @@ gate set (Task A6 command set plus the full RBAC gate from Task C6 step 6).
 **Commit boundary:** two commits — `feat: make ManagedCluster teardown strict and UID-guarded`,
 and `feat: grant the ManagedCluster read decommission completion requires`.
 
-**Documentation in this PR:** `CHANGELOG.md` `## [Unreleased]`; the RBAC requirements and
-deployment documents; the parity matrix row if the ManagedCluster wording changes.
+**Documentation in this PR:** `CHANGELOG.md` `## [Unreleased]`; root and Collection README and
+`docs/operations/usage.md` wherever their decommission inventory/check-mode descriptions become
+false; architecture/Mermaid, parity matrix, behavior map, and coexistence/CLI migration surfaces
+where ManagedCluster behavior is described; and all four RBAC authorities:
+`docs/deployment/rbac-requirements.md`, `docs/deployment/rbac-deployment.md`,
+`docs/development/rbac-implementation.md`, and
+`docs/deployment/rbac-live-certification.md`. Update the latter's required
+SelfSubjectAccessReview/read inventory without claiming a live certification run. No D behavior
+documentation is deferred to F.
 
 ## 11C. PR E — MCH operator identity and completion
 
@@ -2798,8 +3138,9 @@ largest and highest-risk surface in the slice, which is why it is its own PR.
 
 **Prerequisites:** PR A, PR B, PR C merged. Independent of PR D.
 
-**Files:** Create `modules/decommission_identity.py`; modify `modules/decommission.py`; modify
-`lib/kube_client.py` (`get_deployment_strict`, `get_replicaset_strict`); modify
+**Files:** Create `modules/decommission_identity.py`; modify `modules/decommission.py`; consume
+PR A's `get_namespace_strict`, `list_pods_strict`, `get_deployment_strict`, and
+`get_replicaset_strict`; modify
 `lib/constants.py` and `plugins/module_utils/constants.py`; create
 `plugins/modules/acm_pod_owner_classify.py` and
 `plugins/module_utils/pod_owner_classify.py`; modify
@@ -2816,7 +3157,7 @@ create `tests/test_decommission_identity.py`; modify `tests/test_decommission.py
 
 | Decision | Value | Basis |
 | --- | --- | --- |
-| Classifier placement, Python | `modules/decommission_identity.py`, imported by `modules/decommission.py` | Amendment §10.3 — the helper lives with the teardown owner, and `lib/kube_client.py` stays a transport layer |
+| Classifier placement, Python | `modules/decommission_identity.py`, imported by `modules/decommission.py` | Amendment §10 item 3 — the helper lives with the teardown owner, and `lib/kube_client.py` stays a transport layer |
 | Classifier placement, collection | a collection-owned module plus `module_utils` | July §6 — Jinja name filtering must never be the safety decision |
 | Strict typed reads | `KubeClient.get_deployment_strict`, `get_replicaset_strict` | Transport belongs to the read layer; classification does not |
 | Prefix constant | retained as a supplementary diagnostic only, mirrored and parity-tested | Amendment §10 item 1 and criterion A6 |
@@ -2851,6 +3192,12 @@ is not a recovery-required inconsistency, and the namespace-absence proof stands
 pod-empty predicate and the Deployment re-read. An unreadable or ambiguous namespace state never
 triggers this exception and records `recovery_required`.
 
+That positive proof must come from PR A's fresh `get_namespace_strict(ACM_NAMESPACE)` producer.
+A Pod LIST 404 is not sufficient by itself; `list_pods_strict` performs the fresh Namespace GET
+before it can return `NAMESPACE_ABSENT`. Collection composes the same named Namespace GET. Every
+collection discovery-backed read supplies its canonical `resource_name` explicitly, including
+`multiclusterhubs`, `clusterserviceversions`, and `pods`.
+
 **Under `operator_identity_unavailable`,** no Pod is excluded. A strictly verified empty Pod list
 still satisfies the drain; any remaining Pod blocks.
 
@@ -2867,6 +3214,15 @@ both removed; an unverifiable pod read fails the play. The MCH CR gets a final l
 **Sanitization.** Public errors carry a stable stage and reason code plus sanitized resource
 identity, never raw bodies, headers, client configuration, tokens, certificates, keys, or Secret
 data.
+
+**Dry-run/check-mode safety at E merge.** Python and Collection may execute the strict CSV,
+Namespace, Pod, Deployment, and ReplicaSet reads and owner classification. Python branches before
+the durable identity/phase writer and guarded delete; Collection skips all phase and
+operational-data writers and the guarded-delete module stops before DELETE. Neither records an
+identity or completed/refused/failed outcome, neither invokes DELETE, and every task/result reports
+actual `changed: false`; only fresh, complete classification can set the separate MCH
+`would_change` prediction. Unverifiable identity is a blocker, not predicted success. A later live
+run repeats the reads and trusts no preview observation.
 
 ### 11C.3 The 20-case operator identity matrix
 
@@ -2934,12 +3290,16 @@ Surfaces to change together, all in PR E: `lib/rbac_validator.py`
 `plugins/modules/acm_rbac_validate.py` mirrors both; the collection decommission task wiring;
 `deploy/rbac/role.yaml` ACM-namespace operator Role; its bundled copy under
 `roles/rbac_bootstrap/files/deploy/rbac/`; `deploy/helm/acm-switchover-rbac/templates/role.yaml`;
-`deploy/rbac/extensions/decommission/clusterrole.yaml` and its bundled copy; the RBAC
-requirements, deployment, and implementation documents; Python and collection RBAC tests; the
+`deploy/rbac/extensions/decommission/clusterrole.yaml` and its bundled copy; all four RBAC
+documents (`docs/deployment/rbac-requirements.md`, `docs/deployment/rbac-deployment.md`,
+`docs/development/rbac-implementation.md`, and
+`docs/deployment/rbac-live-certification.md`); Python and collection RBAC tests; the
 parity, static-contract, and manifest/chart consistency tests; and negative authorization tests
 that independently deny Pod `list`, CSV `list` and `get`, ReplicaSet `get`, Deployment `get`, and
 Namespace `get`, each proving the denial blocks before DELETE or before completion with sanitized
-output.
+output. The live-certification document is updated to keep its required
+SelfSubjectAccessReview/read/delete inventory semantically accurate; that documentation update is
+not a live certification result, and this plan authorizes no live certification run.
 
 ### 11C.6 Steps
 
@@ -2951,7 +3311,7 @@ output.
   `tests/test_decommission.py -k operator_pods_excluded` and observe that the existing
   names-only test now fails, confirming the defect it pinned is being removed rather than
   worked around.
-- [ ] **Step 3:** implement `get_deployment_strict` and `get_replicaset_strict`, then
+- [ ] **Step 3:** consume PR A's strict core/Apps helpers and implement
   `modules/decommission_identity.py`, then the MCH `TeardownSpec` that supplies its classifier to
   the Task C3 phase machine; implement the collection module and `module_utils`, then rewrite
   `delete_multiclusterhub.yml` to use them and the guarded delete.
@@ -2963,46 +3323,53 @@ output.
   RBAC gate from Task C6 step 6.
 - [ ] **Step 7:** simplification review — the classifier is one pass over Pods with one memo per
   pass; it must contain no second code path for prefixed Pods.
-- [ ] **Step 8:** the full PR gate set (Task A6 command set), then documentation:
-  `CHANGELOG.md` `## [Unreleased]`; the parity matrix decommission row must **replace** its current
+- [ ] **Step 8:** the full PR gate set (Task A6 command set), then documentation in E:
+  `CHANGELOG.md` `## [Unreleased]`; root and Collection READMEs and relevant Mermaid flows;
+  the parity matrix decommission row must **replace** its current
   "warns if ACM workload pods remain" text with the fail-closed completion contract; the behavior
-  map row gains the classification boundary; `docs/operations/usage.md` gains the operator-facing
-  consequence of an unresolvable operator identity.
+  map row gains the classification boundary; architecture and coexistence/CLI migration surfaces
+  describe the identity/completion rule; `docs/operations/usage.md` gains the operator-facing
+  consequence of an unresolvable operator identity; all four RBAC documents are updated in
+  §11C.5. No E behavior documentation is deferred to F.
 - [ ] **Step 9:** commits — `feat: bind MCH drain exclusion to the recorded operator Deployment`,
   `feat: prove MultiClusterHub teardown completion`, and
   `feat: grant the operator-identity reads MCH completion requires`.
 
 ---
 
-# 12. PR F — check-mode closure, documentation and parity
+# 12. PR F — integrated proof and consistency closure
 
 **Branch:** `feature/r4-03-closure`
 
-**Purpose.** Prove end to end that no preview path can leave trusted state or claim a change, and
-close the documentation and parity contract. Closes criterion A9. Changes no teardown algorithm.
+**Purpose.** Add end-to-end proof that the check-mode/dry-run, result, state, mutation, parity,
+and documentation contracts already delivered by B/C/D/E compose. PR F introduces no production
+safety behavior and repairs no unsafe intermediate merge. A9 is implemented across B/C/D/E; F
+supplies its final integrated proof only.
 
 **Prerequisites:** PRs A, B, C, D, E merged.
 
-## Task F1: Native check mode and dry-run end to end
+## Task F1: Prove native check mode and dry-run end to end
 
-**Files:** Modify `roles/decommission/tasks/*.yml`; modify `modules/decommission.py` where a
-preview branch is missing; create
-`tests/unit/test_decommission_check_mode.py`; create
-`tests/test_decommission_dry_run.py`; modify `tests/scenario/`.
+**Files:** Create `tests/unit/test_decommission_check_mode.py`; create
+`tests/test_decommission_dry_run.py`; modify `tests/scenario/` only to add integrated cases. Test
+cleanup may consolidate duplicate fixtures while preserving behavior. No production Python,
+role/task, module/plugin, state, result, or manifest file is changed in F.
 
 **Intended behavior.**
 
-*Python dry-run.* Performs the strict provenance, inventory, and owner-chain reads read-only;
-reports the predicted blocker set; issues no DELETE; persists no record, no phase, and no operator
-identity; claims no change. A later live run trusts nothing from a dry run.
+*Python dry-run proof.* Re-exercise all three family contracts already implemented in B/C/D/E:
+strict provenance, inventory, and owner-chain reads remain read-only; prediction uses the defined
+`would_change` field; no DELETE primitive is called; no record, phase, operator identity, or
+completed/refused/failed substep outcome is persisted; `changed` is false; and a later live run
+repeats fresh reads and trusts nothing from the dry run.
 
-*Ansible, two layers.* The role's `acm_switchover_execution.mode` dry-run gate remains the primary
+*Ansible integrated proof, two layers.* The role's `acm_switchover_execution.mode` dry-run gate remains the primary
 operator-facing preview and stays read-only — the existing live reads before those gates
 (`has_observability: auto` reading the observability Namespace, and RBAC validation performing
 live SelfSubjectAccessReviews unless explicitly skipped) keep their read-only character and are
-reviewed against the new strict-read paths. Separately, **native** check mode is added wherever a
-task would otherwise mutate or persist: `acm_uid_guarded_delete` stops after the live read and UID
-validation and returns `changed: false` with explicit `would_change`;
+reviewed against the new strict-read paths. Separately, **native** check mode behavior already
+implemented with each mutation is exercised together: `acm_uid_guarded_delete` stops after the
+live read and UID validation and returns `changed: false` with explicit `would_change`;
 `acm_k8s_read_outcome` continues to read (read-only by contract, existing tested behavior); the
 classification module is read-only; no checkpoint `operational_data` transition is written; no
 task reports `changed: true`; and `acm_switchover_decommission_result.changed` is `false`.
@@ -3054,13 +3421,17 @@ def test_dry_run_reports_the_predicted_blocker_set(decommission_dry_run, caplog)
     assert "predicted drain-blocking" in caplog.text
 ```
 
-- [ ] **Steps 2 through 4:** run, observe the expected failures, implement the missing
-  `ansible_check_mode` handling and the missing Python preview branches, rerun.
-- [ ] **Step 5:** commit `fix: make decommission preview paths leave no trusted state`.
+- [ ] Add assertions that dry-run records no substep outcome as completed/refused/failed, calls no
+  guarded-delete primitive, reports `changed is False`, and uses only the already-defined
+  `would_change` prediction. There is no `is_preview` assertion or field.
+- [ ] Run these tests first. Any failure is a regression in B/C/D/E and blocks PR F: repair the
+  owning earlier PR before it merges, or, if already merged, open a separately governed safety
+  fix. Do not add a first safety branch in F.
+- [ ] Commit only integrated proof: `test: prove decommission preview safety end to end`.
 
-## Task F2: Documentation and parity closure
+## Task F2: Documentation and parity consistency audit
 
-**Files to review and update only where behavior actually changed:**
+**Files to review:**
 
 - `README.md` and its Mermaid diagrams
 - `CHANGELOG.md`
@@ -3075,17 +3446,19 @@ def test_dry_run_reports_the_predicted_blocker_set(decommission_dry_run, caplog)
 - `ansible_collections/tomazb/acm_switchover/docs/variable-reference.md`
 - `ansible_collections/tomazb/acm_switchover/docs/cli-migration-map.md`
 - `ansible_collections/tomazb/acm_switchover/examples/group_vars/all.yml`
-- `docs/deployment/rbac-requirements.md`, `rbac-deployment.md`, `docs/development/rbac-implementation.md`
+- all four RBAC authorities: `docs/deployment/rbac-requirements.md`,
+  `docs/deployment/rbac-deployment.md`, `docs/development/rbac-implementation.md`, and
+  `docs/deployment/rbac-live-certification.md`
 - the affected scenario and test-migration catalogs
 
-**Must be documented by the end of this slice:**
+**Must already be documented by the owning PR before F starts:**
 
 1. The decommission outcome vocabulary and the non-zero exit on refusal or failure.
 2. `--acknowledge-observability-not-migrated` and the mirrored collection variable, including that
    it is accepted only against a positively verified absent destination.
 3. The teardown phase model, what `completed` does and does not assert, and that integrated
    teardown re-proves live.
-4. **The full-reset consequence, operator-facing:** Python `--reset-state` and the collection's
+4. **The full-reset consequence, operator-facing (first published in C):** Python `--reset-state` and the collection's
    full `checkpoint.reset` destroy teardown records, so a post-reset rerun that finds a CR absent
    is indistinguishable from never-attempted and takes the clean-skip path. Resetting state between
    a failed drain and its rerun forfeits the drain obligation's memory. `reset_from` is different
@@ -3093,6 +3466,11 @@ def test_dry_run_reports_the_predicted_blocker_set(decommission_dry_run, caplog)
 5. That an unresolvable operator identity means no Pod is excluded, and only a strictly verified
    empty Pod list satisfies the drain.
 6. That R4-03 binds **resource** identity and does not provide wrong-target hub protection (§19).
+
+F runs guardrails and compares the documents against the merged behavior. It may fix a typo,
+broken link, or duplicated test fixture that does not change behavior, but it may not be the first
+PR to document behavior introduced by B/C/D/E. If an already-false operator document is found,
+stop and repair the owning PR before it merges rather than using F as a documentation buffer.
 
 **Do not modify** `docs/ACM_SWITCHOVER_RUNBOOK.md` or `.claude/skills/**`. If implementation
 reveals a genuinely required protected-file change, stop and request separate operator approval
@@ -3102,13 +3480,15 @@ is anticipated, because the runbook documents the manual procedure and this slic
 tool's proof obligations rather than the operator's manual steps.
 
 - [ ] Run `python -m pytest tests/test_documentation_guardrails.py tests/test_ci_guardrails.py -q`
-- [ ] Commit `docs: document the R4-03 decommission completion contract`
+- [ ] Add a documentation-timing guardrail or audit assertion where useful; commit only a
+  consistency-only change, if any. Do not republish the contracts already delivered in B/C/D/E.
 
 ## Task F3: Final slice verification
 
 - [ ] The complete gate set in §21, at the frozen candidate head.
 - [ ] Simplification gate across the whole slice's changed surface.
-- [ ] Commit, open PR F, and run the §22 workflow.
+- [ ] Confirm the F diff contains no production behavior or first-publication operator/RBAC
+  documentation, commit/open PR F, and run the §22 workflow.
 
 ---
 
@@ -3207,11 +3587,13 @@ contract. Each of PR C, PR D, and PR E carries the full set for its own rows:
 7. `docs/deployment/rbac-requirements.md`
 8. `docs/deployment/rbac-deployment.md`
 9. `docs/development/rbac-implementation.md`
-10. Python RBAC tests — `tests/test_rbac_validator.py`, `tests/test_rbac_integration.py`
-11. Collection RBAC tests
-12. Parity and static-contract tests — `tests/test_rbac_collection_parity.py`,
+10. `docs/deployment/rbac-live-certification.md` — update the required live
+    SelfSubjectAccessReview/read/delete inventory; never represent the edit as a completed live run
+11. Python RBAC tests — `tests/test_rbac_validator.py`, `tests/test_rbac_integration.py`
+12. Collection RBAC tests
+13. Parity and static-contract tests — `tests/test_rbac_collection_parity.py`,
     `tests/properties/test_rbac_properties.py`, and the manifest/chart consistency checks
-13. Negative authorization tests — one per newly required permission, each proving the denial
+14. Negative authorization tests — one per newly required permission, each proving the denial
     blocks before DELETE or before a completion claim, with sanitized output
 
 **Timing rule.** Permissions land no later than the PR introducing the corresponding API call. No
@@ -3242,18 +3624,21 @@ permit.
 | Kubernetes defines delete preconditions, with `uid` as the target UID | `https://kubernetes.io/docs/reference/kubernetes-api/definitions/preconditions-v1-meta/` (versioned upstream API definition; unaffected by the July limitation) |
 | Object UIDs are cluster-lifetime identity | `https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids` |
 | Controller owner references carry both name and UID | `https://kubernetes.io/docs/concepts/overview/working-with-objects/owners-dependents/` |
-| Deployment to ReplicaSet to Pod controller relationship | `https://kubernetes.io/docs/concepts/workloads/controllers/deployment/` and `.../replicaset/` |
+| Deployment to ReplicaSet to Pod controller relationship | `https://kubernetes.io/docs/concepts/workloads/controllers/deployment/` and `https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/` |
 | OLM CSV install-strategy model | `https://olm.operatorframework.io/docs/concepts/crds/clusterserviceversion/` |
-| `V1Preconditions` exposes `uid` and `resource_version` | `https://github.com/kubernetes-client/python/blob/v28.1.0/kubernetes/client/models/v1_preconditions.py` and `.../blob/v36.0.1/...` — `openapi_types` is `{'resource_version': 'str', 'uid': 'str'}` and `attribute_map` maps them to `resourceVersion` and `uid` at **both** pins |
-| `V1DeleteOptions.preconditions` is a `V1Preconditions` | `https://github.com/kubernetes-client/python/blob/v28.1.0/kubernetes/client/models/v1_delete_options.py` and the v36.0.1 path |
-| `CustomObjectsApi.delete_namespaced_custom_object` and `delete_cluster_custom_object` accept a `V1DeleteOptions` `body` | `https://github.com/kubernetes-client/python/blob/v36.0.1/kubernetes/client/api/custom_objects_api.py` — `:param body:` typed `V1DeleteOptions`, forwarded as `body_params` |
-| Dynamic client `delete` accepts a `body`, and `get` accepts `_continue` and `limit` | `https://github.com/kubernetes-client/python/blob/v28.1.0/kubernetes/base/dynamic/client.py` and the v36.0.1 path — both signatures and both query-parameter mappings are present at **both** pins |
-| Discovery swallows some fetch failures into an empty resource list | `https://github.com/kubernetes-client/python/blob/v28.1.0/kubernetes/base/dynamic/discovery.py` and the v36.0.1 path — see §15.3 |
-| `kubernetes.core` exposes `get_api_client`, `AUTH_ARG_SPEC`, and `K8SClient.resource` / `.get` / `.delete` | `https://github.com/ansible-collections/kubernetes.core/blob/6.0.0/plugins/module_utils/k8s/client.py` and `.../blob/6.3.0/...`, plus `.../plugins/module_utils/args_common.py` at both tags — all five interfaces are present, and `_find_resource_with_prefix` is unchanged between the two |
+| `V1Preconditions` exposes `uid` and `resource_version` | `https://github.com/kubernetes-client/python/blob/v28.1.0/kubernetes/client/models/v1_preconditions.py` and `https://github.com/kubernetes-client/python/blob/v36.0.1/kubernetes/client/models/v1_preconditions.py` — `openapi_types` includes `resource_version` and `uid`, mapped to `resourceVersion` and `uid`, at **both** pins |
+| `V1DeleteOptions.preconditions` is a `V1Preconditions` | `https://github.com/kubernetes-client/python/blob/v28.1.0/kubernetes/client/models/v1_delete_options.py` and `https://github.com/kubernetes-client/python/blob/v36.0.1/kubernetes/client/models/v1_delete_options.py` |
+| `CustomObjectsApi.delete_namespaced_custom_object` and `delete_cluster_custom_object` accept a `V1DeleteOptions` `body` | `https://github.com/kubernetes-client/python/blob/v28.1.0/kubernetes/client/api/custom_objects_api.py` and `https://github.com/kubernetes-client/python/blob/v36.0.1/kubernetes/client/api/custom_objects_api.py` — the optional `body` is typed `V1DeleteOptions` and forwarded as `body_params` at **both** pins |
+| CoreV1 `list_namespaced_pod` supports bounded pagination via `_continue` and `limit` | `https://github.com/kubernetes-client/python/blob/v28.1.0/kubernetes/client/api/core_v1_api.py` and `https://github.com/kubernetes-client/python/blob/v36.0.1/kubernetes/client/api/core_v1_api.py` — both parameters and query mappings are present at **both** pins |
+| Dynamic client `delete` accepts a `body`, and `get` accepts `_continue` and `limit` | `https://github.com/kubernetes-client/python/blob/v28.1.0/kubernetes/base/dynamic/client.py` and `https://github.com/kubernetes-client/python/blob/v36.0.1/kubernetes/base/dynamic/client.py` — both signatures and both query-parameter mappings are present at **both** pins |
+| Discovery swallows some fetch/decode failures into an empty resource list | `https://github.com/kubernetes-client/python/blob/v28.1.0/kubernetes/base/dynamic/discovery.py` and `https://github.com/kubernetes-client/python/blob/v36.0.1/kubernetes/base/dynamic/discovery.py` — see §15.3 |
+| `kubernetes.core` exposes the required client factory and resource lookup interfaces | `https://github.com/ansible-collections/kubernetes.core/blob/6.0.0/plugins/module_utils/k8s/client.py`, `https://github.com/ansible-collections/kubernetes.core/blob/6.5.0/plugins/module_utils/k8s/client.py`, `https://github.com/ansible-collections/kubernetes.core/blob/6.0.0/plugins/module_utils/args_common.py`, and `https://github.com/ansible-collections/kubernetes.core/blob/6.5.0/plugins/module_utils/args_common.py` — the explicit client/resource interfaces are present, and `_find_resource_with_prefix` is unchanged between the supported floor and current resolved lane |
 
 `v28.1.0` is the earliest released tag satisfying the `kubernetes>=28.0.0` floor; `v36.0.1` is the
-newest release verified during planning. `6.0.0` is the `kubernetes.core` floor and `6.3.0` is the
-release the local lane resolved. No reference above targets `master`, `latest`, a search-result
+newest compatibility pin verified during planning; the repository's current resolved one-off lane
+uses Python client 36.0.3 without changing these load-bearing interfaces. `6.0.0` is the
+`kubernetes.core` floor and `6.5.0` is the current resolved lane checked here. No reference above
+targets `master`, `latest`, a search-result
 snippet, a blog, or a generated summary.
 
 ## 15.3 A behavior that differs materially inside the supported range
@@ -3271,8 +3656,10 @@ raise `ResourceNotFoundError`, which is therefore **not** a proof of kind absenc
 and is differently unreliable between them.
 
 **How this plan accounts for both.** Neither form factor classifies kind absence from an exception
-type. Both prove it from their own discovery request that must succeed and decode (§9.2, Tasks A2
-and A4). That rule is identical at every version in the range, so the implementation needs no
+type, and neither uses discovery HTTP 404 as positive absence. Both prove absence only from their
+own direct discovery request that returns HTTP success, decodes to a structurally valid
+APIResourceList, and lacks the exact canonical resource name (§9.2, Tasks A2 and A4). That rule is
+identical at every version in the range, so the implementation needs no
 version branch and no narrowed supported subset. The behavior difference is therefore accounted
 for rather than fenced off, and the fail-closed direction is preserved at both ends: an
 unverifiable discovery is `error` regardless of which exception the client raised.
@@ -3310,14 +3697,14 @@ asserted against the real seam.
 
 | §16 item | Tests | PR |
 | --- | --- | --- |
-| 1. Strict-read parity vectors, both form factors, pagination completeness and later-page failure | `tests/test_strict_read_parity.py` (12 vectors, three assertions each); `TestStrictCustomResourceReads`; the collection pagination tests in `test_k8s_read_outcome.py` | A |
+| 1. Strict-read parity vectors, both form factors, pagination completeness and later-page failure | `tests/test_strict_read_parity.py` (14 vectors, three assertions each); `TestStrictCustomResourceReads`; `TestStrictCoreReads` for Namespace, paginated Pods, Deployment, and ReplicaSet; the collection pagination, exact irregular-plural, discovery-404, and malformed-discovery tests in `test_k8s_read_outcome.py` | A |
 | 2. Read-outcome extension regression | `test_k8s_read_outcome.py` and `test_k8s_read_outcome_runtime.py` with inverted discovery-miss expectations, new pagination and incomplete-list vectors, and the RETURN assertion; `ansible-test sanity --test validate-modules`; runtime consumer lanes `test_r3_02_compactor_runtime.py` and `test_r3_02_activation_runtime.py` | A |
 | 3. Fail-open inversions | collection: `test_decommission_role_contracts.py:336-350` and `test_ansible_resilience_contracts.py:485` inverted; Python: lingering-pod warning becomes fatal; MCO and MCH absence re-checks asserted against the real client seam | C, E |
-| 4. Refusal matrix | `TestDecommissionOutcomes` — each prompt refused aborts with an accurate summary and a non-zero result; rerun completes idempotently; non-interactive and integrated paths never prompt | B |
+| 4. Refusal matrix | `TestDecommissionOutcomes` — top-level banner cancellation is explicitly unsuccessful with all requested work not attempted and no substep invoked; each later prompt refusal aborts with an accurate summary and non-zero result; current false CLI mapping is preserved; callers use `.succeeded`, never object truthiness; rerun completes idempotently; non-interactive and integrated paths never prompt | B |
 | 5. Guarded-delete matrix | `TestPreconditionedDelete`; the collection `test_uid_guarded_delete.py` set — UID success, 409 and 412 fatal, pre-DELETE disappearance, mid-poll replacement, bounded timeout, check-mode `would_change`, redaction injection | C |
 | 6. Identity and TOCTOU matrix | `tests/test_decommission_identity.py` rows 1 through 20 plus the provenance cases; same-name new-UID replacement between discovery and DELETE; unrelated prefixed Pod; invalid, missing, and multiple owner chains; Deployment and ReplicaSet replacement mid-drain | E |
 | 7. Destination gate matrix | `TestDestinationObservabilityGate` — destination positively absent, present, `error`, and ambiguous mixed state; the flag accepted only against positive absence; the flag rejected when the gate would pass; resume re-runs the gate; the result is not persisted | C |
-| 8. State, resume, reset | the phase-table resume matrix in `tests/test_decommission.py`; the full-reset clean-skip limitation asserted as **current** behavior so the R4-05 coordination stays visible; the collection `reset_from` case retaining and revalidating the records; malformed-record fail-closed cases in `tests/test_teardown_record.py` and `tests/unit/test_teardown_records.py` | B, C |
+| 8. State, resume, reset | the phase-table resume matrix in `tests/test_decommission.py`; the full-reset clean-skip limitation asserted as **current** behavior and published operator-facing in C; the collection `reset_from` case retaining and revalidating the records; malformed-record fail-closed cases in `tests/test_teardown_record.py` and `tests/unit/test_teardown_records.py` | B, C |
 | 9. Consolidation regression, GLM-H6 | `test_finalization_and_direct_decommission_share_one_teardown_path`; `test_no_second_mco_teardown_implementation_remains`; GitOps markers recorded for the finalization caller only; caller preconditions preserved; collection artifact status honesty | B, C |
 | 10. Wrong-target boundary | a negative test asserting R4-03 binds **resource** identity and that no wrong-context or wrong-hub target check exists here, so the SSA-02 boundary is tested rather than silently assumed | F |
 | 11. Constants parity | `CONSTANT_PAIRS` gains the strict-read reason codes, `OBSERVABILITY_POD_LABEL_SELECTOR`, `ACM_OPERATOR_POD_PREFIX`, and the four classification reason codes | A, C, E |
@@ -3325,8 +3712,8 @@ asserted against the real seam.
 ## 16.3 Negative safety coverage required by `AGENTS.md`
 
 Each of these is a defect if missing on a path this slice touches, and each has a named test
-above: wrong-context behavior (§16.2 item 10), check-mode behavior (Task F1), idempotence (item 4
-rerun case), RBAC denial (§14 surface 13), checkpoint and resume failure (item 8), stale Argo CD
+above: wrong-context behavior (§16.2 item 10), check-mode behavior implemented and tested in
+B/C/D/E plus F's integrated proof, idempotence (item 4 rerun case), RBAC denial (§14 surface 14), checkpoint and resume failure (item 8), stale Argo CD
 status (not touched by this slice), timeout failure (items 5 and 6), and destructive-operation
 confirmation (item 4).
 
@@ -3342,7 +3729,7 @@ considered discharged.
 | Criterion | PR | Task | Tests | Gate |
 | --- | --- | --- | --- | --- |
 | R4-C1 MCH completion fails open | E | 11C.6 | matrix rows 1–20; final-verification injection tests; inverted `failed_when: false` pins | root suite + collection surfaces 3–7 |
-| R4-C2 refusal returns success | B | B3, B4 | `TestDecommissionOutcomes`; finalization and CLI mapping tests | root suite |
+| R4-C2 cancellation/refusal returns success | B | B3, B4 | `TestDecommissionOutcomes`; top-level cancellation, no-substep, `.succeeded`, finalization truthiness guard, and CLI mapping tests | root suite |
 | R4-C3 no UID-preconditioned DELETE or absence proof; unscoped pod waits | C, D, E | C1, C2, C3, C4, 11B, 11C.6 | `TestPreconditionedDelete`; `test_uid_guarded_delete.py`; the phase-table matrix; selector-scoping contract test | both form factors + parity |
 | R4-C4 404 to `[]` inventory blindness | A, C, D | A1–A5, C3, 11B | strict outcome and parity vectors; the ManagedCluster discovery-failure test; the Hive missing-CRD test | parity vectors |
 | R4-C5 no destination-observability gate | C | C5 | `TestDestinationObservabilityGate` | root suite + collection |
@@ -3355,7 +3742,7 @@ considered discharged.
 | July criterion | PR | Tests |
 | --- | --- | --- |
 | 1. Every deletion records an immutable UID before DELETE and is server-side preconditioned; reruns never rebind; no success while a targeted CR exists | C, D, E | `test_expected_uid_is_never_rebound_by_a_later_write`; `TestPreconditionedDelete`; same-UID survivor and different-UID replacement cases |
-| 2. A refused substep yields a non-zero result and an accurate summary | B | `TestDecommissionOutcomes` |
+| 2. Top-level cancellation and a refused substep each yield an unsuccessful/non-zero result and accurate summary, without conflating their states | B | `TestDecommissionOutcomes`; CLI and Finalization explicit-`.succeeded` tests |
 | 3. Missing API discovery aborts before any deletion decision depending on the list | A, D | `test_unserved_kind_short_circuits_to_crd_absent`; the ManagedCluster discovery-failure test |
 | 4. Destination gate fails closed; source re-read fresh; ack only against positive absence | C | `TestDestinationObservabilityGate` |
 | 5. Hive `preserveOnDelete` behavior unchanged | D | the retained `preserveOnDelete` and ambiguous-relationship tests |
@@ -3365,7 +3752,7 @@ considered discharged.
 | 9. Operator provenance durably bound before MCH DELETE, or explicitly unavailable | E | the provenance test set; `test_mch_identity_outcome_must_be_exactly_one` |
 | 10. Exclusion only after the complete owner chain; every broken link blocks; rolling-update ReplicaSets accepted only to the same UID | E | matrix rows 1, 8, 9, 10, 11, 12 |
 | 11. Prefix spoofing cannot change classification; unavailable identity means only a verified empty list satisfies the drain; a replaced Deployment fails closed | E | matrix rows 2–7, 14, 15, 16, 17 |
-| 12. Both form factors keep semantics, durable fields, bounds, preview mode, changed reporting, reason codes, redaction, RBAC, and negative tests in parity without cross-imports | A–F | parity vectors; constants parity; RBAC parity; matrix rows 18, 19, 20 |
+| 12. Both form factors keep semantics, durable fields, bounds, preview mode, changed reporting, reason codes, redaction, RBAC, and negative tests in parity without cross-imports | A–E; F integrated proof | parity vectors; per-PR check-mode/dry-run tests; constants parity; RBAC parity; matrix rows 18, 19, 20; F scenarios |
 
 ## 17.3 Amendment criteria A1 through A9
 
@@ -3375,11 +3762,11 @@ considered discharged.
 | A2 no `failed_when: false` on the collection MCH provenance, ownership, wait, or final-verification paths; unverifiable read fails the play; pins inverted | E | inverted `test_decommission_role_contracts.py:336-350` and `test_ansible_resilience_contracts.py:485` | collection unit + scenario |
 | A3 collection summary artifact reports the real aggregated outcome | B | `test_summary_status_is_not_hardcoded`; `test_a_failed_substep_produces_a_failed_status` | collection unit |
 | A4 both merged read-outcome consumers pass their runtime lanes unchanged | A | `test_r3_02_compactor_runtime.py`, `test_r3_02_activation_runtime.py` | collection integration |
-| A5 the §7 outcome table is observable in both form factors | B | `TestDecommissionOutcomes`; `test_outcome_vocabulary_matches_python` | root + collection |
+| A5 the §7 outcome table is observable in both form factors, with banner cancellation distinct and dry-run recording no outcome | B | `TestDecommissionOutcomes`; cancellation/CLI/truthiness tests; `test_outcome_vocabulary_matches_python`; dry-run state/mutation assertions | root + collection |
 | A6 operator-prefix drift closed; every shared constant enforced by the parity test | E | `tests/test_constants_parity.py` with the prefix and reason-code pairs | parity |
 | A7 Python teardown exists exactly once; both callers drive it with their semantics preserved | C | consolidation regression tests | root |
-| A8 the durable-field table is exhaustive; full-reset loss documented operator-facing; `reset_from` preserves and revalidates | B, F | the reset and `reset_from` scenario cases; documentation guardrails | collection scenario + docs |
-| A9 native check mode safe end to end; role-level `changed` false; prediction reported as `would_change` | F | `tests/unit/test_decommission_check_mode.py`; `tests/test_decommission_dry_run.py` | collection unit + scenario |
+| A8 the durable-field table is exhaustive; full-reset loss documented operator-facing before destructive records become reachable; `reset_from` preserves and revalidates | B, C | the reset and `reset_from` scenario cases; C documentation guardrails | collection scenario + docs |
+| A9 native check mode safe end to end; role-level `changed` false; prediction reported as `would_change` | B, C, D, E; F integrated proof | B aggregation/checkpoint tests; each C/D/E family's mutation/writer/prediction tests; F `test_decommission_check_mode.py`, `test_decommission_dry_run.py`, and scenarios | per-PR unit/scenario + F composition proof |
 
 ---
 
@@ -3390,23 +3777,29 @@ sweep.
 
 | Document | PR A | PR B | PR C | PR D | PR E | PR F |
 | --- | --- | --- | --- | --- | --- | --- |
-| `CHANGELOG.md` `## [Unreleased]` | yes | yes | yes | yes | yes | yes |
-| `README.md` and its Mermaid diagrams | no | no | no | no | no | review; update if the operator-facing decommission flow description changes |
-| `docs/operations/usage.md` | no | refusal and exit status | the ack flag and gate behavior | inventory failure behavior | operator-identity consequence | reset consequence and the SSA-02 boundary |
-| `docs/operations/quickref.md` | no | no | the ack flag | no | no | review |
-| `docs/reference/validation-rules.md` | no | no | the ack flag's cross-argument rules | no | no | review |
-| `docs/development/architecture.md` and diagrams | strict-read seam | durable teardown records | the teardown owner and phase machine | no | the classification boundary | review |
-| `docs/ansible-collection/parity-matrix.md` | strict-read row | outcome row | decommission row | decommission row | **replace** the "warns if ACM workload pods remain" text with the fail-closed completion contract | final review |
-| `docs/ansible-collection/behavior-map.md` | replace the generic `lib/kube_client.py` target with the strict-read mapping | state row | guarded-delete and durable-phase boundaries | no | classification boundary | final review |
-| `ansible_collections/.../docs/coexistence.md` | no | outcome parity | gate parity | no | classification parity | final review |
-| `ansible_collections/.../docs/variable-reference.md` | no | no | the ack variable | no | no | review |
-| `ansible_collections/.../docs/cli-migration-map.md` | no | no | the ack flag mapping | no | no | review |
-| `ansible_collections/.../examples/group_vars/all.yml` | no | no | the ack variable | no | no | review |
-| `ansible_collections/.../README.md` | no | no | no | no | no | review |
-| `docs/deployment/rbac-requirements.md` | no | no | yes | yes | yes | review |
-| `docs/deployment/rbac-deployment.md` | no | no | yes | yes | yes | review |
-| `docs/development/rbac-implementation.md` | no | no | yes | yes | yes | review |
-| scenario and test-migration catalogs | no | if mapped behavior changes | if mapped behavior changes | if mapped behavior changes | if mapped behavior changes | final review |
+| `CHANGELOG.md` `## [Unreleased]` | yes | yes | yes | yes | yes | consistency audit only |
+| `README.md` and its Mermaid diagrams | no | no | MCO guarded flow/gate where represented | ManagedCluster flow where represented | MCH completion/identity flow | consistency audit only |
+| `docs/operations/usage.md` | no | cancellation/refusal, exit status, `changed`/`would_change` | ack/gate/check mode and the full-reset warning | strict inventory/check mode | identity/completion/check mode | consistency audit only; SSA-02 boundary if the document already hosts it |
+| `docs/operations/quickref.md` | no | no | the ack flag | no | no | consistency audit only |
+| `docs/reference/validation-rules.md` | no | no | the ack flag's cross-argument rules | no | no | consistency audit only |
+| `docs/development/architecture.md` and diagrams | strict-read seam | durable teardown records and result model | teardown owner, phase machine, check-mode boundary, reset warning | ManagedCluster strict/guarded flow where represented | classification/completion boundary | consistency audit only |
+| `docs/ansible-collection/parity-matrix.md` | strict-read row | outcome/check-mode row | MCO decommission row | ManagedCluster decommission row | **replace** the "warns if ACM workload pods remain" text with fail-closed completion | consistency audit only |
+| `docs/ansible-collection/behavior-map.md` | strict-read and canonical resource-name mapping | state/result row | guarded-delete and durable-phase boundaries | ManagedCluster strict/guarded mapping | classification boundary | consistency audit only |
+| `ansible_collections/.../docs/coexistence.md` | no | outcome parity where described | gate/check-mode parity | ManagedCluster parity where described | classification parity | consistency audit only |
+| `ansible_collections/.../docs/variable-reference.md` | no | no | the ack variable | no | no | consistency audit only |
+| `ansible_collections/.../docs/cli-migration-map.md` | no | no | the ack flag mapping | no | no | consistency audit only |
+| `ansible_collections/.../examples/group_vars/all.yml` | no | no | the ack variable | no | no | consistency audit only |
+| `ansible_collections/.../README.md` | no | outcome semantics where described | MCO gate/guarded flow | ManagedCluster strict/guarded flow | MCH identity/completion | consistency audit only |
+| `docs/deployment/rbac-requirements.md` | no | no | yes | yes | yes | consistency audit only |
+| `docs/deployment/rbac-deployment.md` | no | no | yes | yes | yes | consistency audit only |
+| `docs/development/rbac-implementation.md` | no | no | yes | yes | yes | consistency audit only |
+| `docs/deployment/rbac-live-certification.md` | no | no | required SAR/read/delete inventory only; no run claim | required inventory only; no run claim | required inventory only; no run claim | consistency audit only |
+| scenario and test-migration catalogs | no | with B cases | with C cases | with D cases | with E cases | integrated proof entries only |
+
+The owner PR must update any additional current document made false by its behavior even if the
+row says "where represented"; that qualifier means the document may not discuss the behavior, not
+that an inaccurate statement may remain. F is a cross-check, never a first-publication escape
+hatch.
 
 **Protected files.** `docs/ACM_SWITCHOVER_RUNBOOK.md` and `.claude/skills/**` are **not** planned
 for modification by any task. Current assessment: no change is anticipated, because the runbook
@@ -3468,11 +3861,12 @@ boundary operator-facing.
 Not implemented here: `--reset-state` under lock, narrowed `--force`, Lease-based per-hub locking,
 crash markers, or any other general state-integrity residual.
 
-The reset limitation is **documented and tested as current behavior**: a full reset destroys
+The reset limitation is **documented and tested as current behavior in PR C, before the first
+destructive partial record can be left**: a full reset destroys
 teardown records, so a post-reset rerun that finds a CR absent is indistinguishable from
 never-attempted and takes the clean-skip path. Task B4 asserts exactly that, deliberately, so the
-R4-05 coordination remains visible rather than being silently mitigated inside R4-03. Task F2
-states the operator-facing consequence.
+R4-05 coordination remains visible rather than being silently mitigated inside R4-03. Task C7
+states the operator-facing consequence; F only checks consistency.
 
 ## 19.4 R4-02 — the unrestored auto-import gate stays out
 
@@ -3507,11 +3901,12 @@ step in §21 may be described as one.
 | Recorded operator Deployment 404 or replaced | `recovery_required`; no later Deployment is adopted | E |
 | Any strict read returns `error` | Fatal; never treated as absence or as an empty inventory | A, C, D, E |
 | Malformed durable record | Fail closed before any mutation or clean-skip decision | B1, B2 |
-| Full reset between a failed drain and its rerun | The drain obligation's memory is forfeited and the rerun clean-skips — documented, tested as current behavior, R4-05-owned | B4, F2 |
+| Full reset between a failed drain and its rerun | The drain obligation's memory is forfeited and the rerun clean-skips — documented in C when first reachable, tested as current behavior, R4-05-owned | B4, C7 |
 | `reset_from` | Retains `operational_data`, therefore retains the records, and revalidates rather than laundering them | B4 |
 | Resume of an integrated run | The destination gate re-runs its fresh reads unconditionally; no stored gate result exists to reuse | C5 |
-| Refusal | Ends the run; never persisted; the summary is output | B3 |
-| Dry-run or check mode followed by a live run | The live run finds no record, no identity, and no phase | F1 |
+| Top-level cancellation | Explicit `cancelled=True`, `.succeeded == False`, all requested work not attempted, no substep invoked, never persisted | B3 |
+| Substep refusal | Distinct `REFUSED`; ends the run; never persisted; the summary is output | B3 |
+| Dry-run or check mode followed by a live run | Each owning PR B/C/D/E leaves no record, identity, or phase and forces the live run to re-read; F proves composition | B3–B5, C3–C4, D, E, F1 |
 
 ---
 
@@ -3530,7 +3925,7 @@ and the workflow files under `.github/workflows/` are ground truth.
 | C | dual-supported, parity-sensitive, **RBAC** | same as A, plus the complete RBAC cross-surface gate |
 | D | dual-supported, parity-sensitive, **RBAC** | same as C |
 | E | dual-supported, parity-sensitive, **RBAC** | same as C |
-| F | dual-supported, documentation | same as A |
+| F | integrated tests and consistency audit only | focused integrated root/collection scenario tests; parity/static contracts; documentation/scope guardrails; no production safety repair |
 
 No PR in this plan changes the release-validation framework, so `tests/release` is **not** part of
 any PR's required gate set. If a future review shows a release helper is affected, first verify
@@ -3623,7 +4018,7 @@ PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/un
 ```
 
 Plus the manifest and chart consistency checks, and the negative authorization tests required by
-§14 surface 13.
+§14 surface 14.
 
 ## 21.9 Exact-head convergence
 
@@ -3697,6 +4092,8 @@ concrete technical reason. A deferral is complete only when filed in the receivi
 | Merging PR D and PR E as one "remaining teardown" PR | MCH identity is the largest and highest-risk surface in the slice and carries a 20-case matrix; bundling it with ManagedClusters makes the riskiest change harder to review, for no safety gain |
 | Deferring RBAC to a single trailing RBAC PR | Would put live API calls in front of their permissions — an explicit violation of the timing rule |
 | Deferring the outcome vocabulary to the final PR | PRs C, D, and E each need to report a substep outcome; deferring it would force a temporary parallel result shape |
+| Deferring check-mode/dry-run guards, actual-change honesty, or prediction semantics to F | Would make B/C/D/E unsafe on the day they merge. Each writer, mutation, result field, and predictor lands with its own guard and tests; F is integrated proof only |
+| Deferring reset or behavior documentation to F | Would leave operator guidance false while destructive partial records and changed behavior are already reachable; C publishes the reset warning and every behavior PR updates its invalidated surfaces |
 | A feature flag to let teardown changes land ahead of their permissions or their parity counterpart | Prohibited: no feature flag or compatibility mode is introduced merely to make splitting easier |
 
 ## 23.2 Design alternatives already rejected by the approved design
@@ -3713,11 +4110,20 @@ deletes; absorbing SSA-02; cross-form-factor teardown sharing for GLM-H6; adding
 | --- | --- |
 | Read-outcome extension regresses a merged R3-02 consumer | Explicit inversion of the positive discovery-miss expectations; strengthening-only list semantics; mandatory reruns of both runtime consumer lanes (Task A6 step 1), with an instruction to stop rather than edit expectations if either fails |
 | The discovery prover's own request behaves differently across clusters | The prover requires an explicit success and decode; anything else is `error`. Version-invariant by construction (§15.3) |
-| Reset laundering | Accepted, documented, tested as current behavior, R4-05-owned (§19.3) |
+| Reset laundering | Accepted, tested as current behavior, R4-05-owned, and documented operator-facing in PR C before the first destructive partial record is reachable (§19.3) |
 | OLM or CSV contract drift beyond ACM 2.17 | Fail-closed by design; the audited range is the widest any repository authority claims (§15.4) |
 | Two guarded-mutation modules in the collection | Accepted as different ownership boundaries with intra-collection `module_utils` reuse; revisit only if implementation shows the boundaries collapsing (§19.1) |
 | PR E's size | Mitigated by its own PR, a declared fixture-driven matrix, and a classifier with one code path and no prefixed-Pod special case |
 | A stale tracker sentence routes R4-04's Restore cleanup through `acm_uid_guarded_delete` | Does not affect R4-03 correctness; needs a tracker-reconciliation edit in a slice authorized to touch the tracker (amendment §19). No task here edits the tracker except to add its own PR row |
+
+**Post-repair simplification check.** The strict-read value/helper split remains one value type,
+one Python transport owner, and the existing single Collection module. Canonical plural flow adds
+one required `resource_name` input rather than an inflector or registry. `DecommissionResult`
+adds only the three observable facts consumers need (`cancelled`, actual `changed`, and
+`would_change`) and no preview marker. `TeardownSpec` remains limited to resource, drain, and
+classifier inputs; transport helpers classify reads while decommission owns policy. PR F is
+test/audit-only. No feature flag, compatibility mode, recovery protocol, dependency, or second
+abstraction was introduced by this repair.
 
 ---
 
