@@ -797,12 +797,22 @@ A9. Native check mode is safe end-to-end in the collection decommission path
 
 ## 21. Implementation-plan gate
 
-This amendment authorizes no implementation-plan authoring by itself. After final
-exact-head validation, the next authorized step is operator acceptance of this amended
-written design. Only that acceptance authorizes writing an R4-03 implementation plan.
-The later implementation plan must:
+An R4-03 implementation plan already exists on this branch
+([`2026-08-31-r4-03-decommission-completion-implementation-plan.md`](2026-08-31-r4-03-decommission-completion-implementation-plan.md),
+last repaired at `83d79f7f`). This design-reopen slice does **not** author, repair, or
+re-approve that plan. The plan is **non-authoritative wherever it conflicts with §22** — in
+particular the §10.2.1 encoding of a namespace name under `resource_versions.namespace_absent`
+and the redefinition of `resource_versions` as "strongest identifier" (IV-R403-12).
 
-- decompose into PR-sized tasks with the §16 matrix mapped to executable test tasks;
+This candidate is awaiting independent exact-head **design** validation. Operator re-approval
+of the committed §22 text is required before any further plan work. After that re-approval,
+the next authorized step is **implementation-plan repair** to conform to §22 and to close the
+still-open plan defect IV-R403-01. That repair remains unauthorized until then.
+
+The later repaired plan must still:
+
+- decompose into PR-sized tasks with the §16 matrix mapped to executable test tasks,
+  including §16 item 12;
 - sequence the strict-read primitive (with parity vectors) before its decommission
   consumers, so the R4-04 Task 0 gate can be satisfied by the same merge order;
 - carry the §15 RBAC realignment as an explicit coordinated task across every surface
@@ -812,8 +822,8 @@ The later implementation plan must:
 - follow the builder → independent validator → resolver workflow with terminal
   validation per `AGENTS.md`.
 
-Runtime implementation remains unauthorized until that plan is separately reviewed and
-approved.
+Runtime implementation remains unauthorized until that repaired plan is separately reviewed
+and approved.
 
 ## 22. Design-reopen resolution — completion-evidence encoding
 
@@ -1112,6 +1122,24 @@ the kind has ceased to be served, by a positive discovery-level absence).
 final proof. Any drain key is malformed for this family. No pre-delete revision is retained
 to make the mapping non-empty — the empty mapping is the correct and complete record.
 
+Worked example — the field is present and empty; there is no synthetic revision:
+
+```yaml
+"cluster.open-cluster-management.io/v1/ManagedCluster//cluster-a":
+  expected_uid: "7c12...-uid"
+  phase: "completed"
+  observed_at: "2026-09-04T10:11:12Z"
+  resource_versions: {}
+  absence_proofs:
+    target_cr:
+      proof_type: object_absent
+      resource_key: "cluster.open-cluster-management.io/v1/ManagedCluster//cluster-a"
+```
+
+A kind-absence completion of the same family is identical except
+`proof_type: crd_absent`. The `resource_key` remains the enclosing record key; it is not
+replaced by a CRD identity.
+
 #### MultiClusterHub
 
 The final proof includes positive absence of the target MCH CR plus the approved
@@ -1134,6 +1162,32 @@ Two clarifications the schema depends on:
   of that mode; no separate operator-Deployment absence entry exists, and adding one would
   claim a read that was never performed. An unreadable or ambiguous namespace state never
   triggers this exception and records `recovery_required` instead (July §3).
+
+  Worked example of that mode — empty revision map, namespace name only inside
+  `resource_key`. The July §1a sibling (`operator_deployment` or
+  `operator_identity_unavailable`) is whichever outcome was captured before DELETE; the
+  example shows the captured-identity case. That sibling is not completion evidence.
+  `resource_versions.operator_deployment` is absent because the entailment skipped the
+  Deployment GET, matching §22.3.
+
+```yaml
+"operator.open-cluster-management.io/v1/MultiClusterHub/open-cluster-management/multiclusterhub":
+  expected_uid: "2b71...-uid"
+  phase: "completed"
+  observed_at: "2026-09-04T10:11:12Z"
+  resource_versions: {}
+  absence_proofs:
+    target_cr:
+      proof_type: object_absent
+      resource_key: "operator.open-cluster-management.io/v1/MultiClusterHub/open-cluster-management/multiclusterhub"
+    drain_namespace:
+      proof_type: namespace_absent
+      resource_key: "v1/Namespace//open-cluster-management"
+  operator_deployment:
+    namespace: "open-cluster-management"
+    name: "multiclusterhub-operator"
+    uid: "aa10...-uid"
+```
 - **The operator Deployment re-read is a genuine final-proof read**, performed on every
   pass even when no Pod is proposed for exclusion, so its revision is recorded whenever it
   happens — which is exactly the namespace-present, identity-captured mode.
