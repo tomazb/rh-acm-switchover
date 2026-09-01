@@ -2,9 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:subagent-driven-development` for reviewed task-by-task work in one session, or `superpowers:executing-plans` in a separate session. Every builder, independent validator, and PR-comment resolver must also read current `AGENTS.md` and the directly relevant repository authorities before acting.
 
-**Status:** authored against the operator-approved R4-03 amended design at exact head
-`177554f6e598461571e3785173b52feabdfe4c52`; awaiting independent validation. **This document
-does not authorize runtime implementation.**
+**Status:** repaired to conform to the **operator-reapproved** R4-03 reopened design at exact head
+`335cdbab8011bbc5e291afe76ee73d81c58bd44a`. That design was independently validated at that exact
+head (`PASS_EXACT_HEAD`, PR #280 comment `5495628077`), the design resolver converged
+(`READY_FOR_OPERATOR_DESIGN_REAPPROVAL`, comment `5496000592`), and the operator then explicitly
+re-approved that exact head and authorized this implementation-plan repair. **This repaired plan
+has not itself been validated: it requires a fresh independent exact-head implementation-plan
+validation before approval.** **This document does not authorize runtime implementation.**
 
 **Goal:** Implement the accepted R4-03 decommission-completion design in both production form
 factors so that every MCO, MCH, and ManagedCluster teardown is bound to the observed object
@@ -34,11 +38,16 @@ and `module_utils`, YAML roles and playbooks.
 **Normative specification:**
 
 - [`docs/plans/2026-07-29-decommission-completion-design.md`](2026-07-29-decommission-completion-design.md) (the "July design")
-- [`docs/plans/2026-08-31-r4-03-current-base-design-amendment.md`](2026-08-31-r4-03-current-base-design-amendment.md) at operator-approved exact head `177554f6e598461571e3785173b52feabdfe4c52`
+- [`docs/plans/2026-08-31-r4-03-current-base-design-amendment.md`](2026-08-31-r4-03-current-base-design-amendment.md) (the "amendment") at **operator-reapproved exact head** `335cdbab8011bbc5e291afe76ee73d81c58bd44a`
 
 Where the amendment and the July design disagree, the amendment is authoritative; everywhere
-else the July design stands. This plan restates neither: it references them and adds only the
-executable decomposition.
+else the July design stands. Within the amendment, **§22 is authoritative for completion evidence**
+over every earlier wording in the amendment, the July design, and this plan (amendment §8, §22.7).
+This plan restates neither design: it references them and adds only the executable decomposition.
+
+The earlier head `177554f6e598461571e3785173b52feabdfe4c52` is **historical only**. It is named in
+this document solely to record what a prior round was authored against; it is not the current
+approved design and no rule in this plan derives authority from it.
 
 ---
 
@@ -50,8 +59,10 @@ executable decomposition.
 | Findings | R4-C1, R4-C2, R4-C3, R4-C4, R4-C5, R4-C6, GLM-H6 |
 | Tracker row | [`thermos-resolution-plan.md`](../../thermos-resolution-plan.md) R4-03 |
 | Design base | `origin/ansible` @ `74268192` |
-| Approved design head | `177554f6e598461571e3785173b52feabdfe4c52` |
-| Plan status | authored, awaiting independent validation |
+| Operator-reapproved design head | `335cdbab8011bbc5e291afe76ee73d81c58bd44a` |
+| Superseded design head (historical only) | `177554f6e598461571e3785173b52feabdfe4c52` |
+| Design validation | independently validated `PASS_EXACT_HEAD` at `335cdbab...` (comment `5495628077`); resolver converged (comment `5496000592`); operator re-approved that exact head |
+| Plan status | repaired to conform to `335cdbab...`; awaiting fresh independent exact-head implementation-plan validation |
 | Runtime authorization | **not granted** — see §24 |
 
 ## 2. Goal
@@ -82,7 +93,8 @@ Governing authorities, in `AGENTS.md` hierarchy order:
    [`thermos-resolution-plan.md`](../../thermos-resolution-plan.md), the R4-C1..R4-C6 findings
    table, the GLM-H6 row, and the R4-03 converted implementation-slice obligation from the
    2026-08-02 triage.
-3. The July design and the approved amendment named above; the R4-04 amendment and R4-04
+3. The July design and the **operator-reapproved** amendment named above at exact head
+   `335cdbab8011bbc5e291afe76ee73d81c58bd44a`; the R4-04 amendment and R4-04
    implementation plan as the consumer contract for the shared strict-read primitive; the
    [parity matrix](../ansible-collection/parity-matrix.md),
    [behavior map](../ansible-collection/behavior-map.md),
@@ -91,6 +103,16 @@ Governing authorities, in `AGENTS.md` hierarchy order:
    [architecture](../development/architecture.md), [usage](../operations/usage.md),
    [testing](../development/testing.md), and the RBAC authorities.
 4. Current source, tests, and exact-head CI.
+
+**Binding statement for this repair round.** The reopened design at
+`335cdbab8011bbc5e291afe76ee73d81c58bd44a` is the current authority. This plan was repaired to
+conform to it, and in particular to amendment §22 (completion evidence), §22.8 (the IV-R403-01
+boundary), and the strict-read `resource_version` exposure obligation recorded by the design
+resolver. **An earlier revision of this plan is not an authority anywhere it conflicts with that
+design** (amendment §21, §22.7 item 6): specifically, the rejected `resource_versions` encodings
+(`cr`, `namespace_absent`, "strongest identifier") no longer appear as normative rules anywhere in
+this document. This repaired plan is **not yet approved**; it requires a fresh independent
+exact-head implementation-plan validation, and runtime implementation remains unauthorized (§24).
 
 Every relationship asserted in this plan was verified directly against source and tests at
 `74268192`. Generated-graph analysis was considered as a hypothesis source and rejected as
@@ -405,9 +427,35 @@ consumed by every later task and by R4-04.
 
 **Intended behavior:** A pure value type. It performs no I/O and makes no policy decision.
 
+**`resource_version` — the exact contract.** `StrictReadOutcome.resource_version` is
+`Optional[str]`. It carries the actual Kubernetes revision the read returned, and is the **sole
+permitted provenance** for every value the completion producers persist under §10.2.1b. Its
+semantics are fixed here, once, for all six strict methods:
+
+| Strict read | `resource_version` on success | On absence or error |
+| --- | --- | --- |
+| `list_custom_resources_strict` | the list response's `metadata.resourceVersion` — the single snapshot revision of the **complete** drained read (§9.3 A3.0 rule 8) | `None` |
+| `get_custom_resource_strict` | the returned object's `metadata.resourceVersion` | `None` |
+| `get_namespace_strict` | the returned Namespace's `metadata.resourceVersion` | `None` |
+| `list_pods_strict` | the Pod list's snapshot revision for the complete read, never a per-page value | `None` |
+| `get_deployment_strict` | the returned Deployment's `metadata.resourceVersion` | `None` |
+| `get_replicaset_strict` | the returned ReplicaSet's `metadata.resourceVersion` (exposed for surface uniformity; **never persisted**, because §10.2.1b has no label for it) | `None` |
+
+Two rules bind every producer and are asserted by tests rather than left to prose:
+
+1. **Absence and error never synthesize a revision.** `CRD_ABSENT`, `NAMESPACE_ABSENT`,
+   `OBJECT_ABSENT`, and `ERROR` outcomes always carry `resource_version is None`. There is no
+   empty-string revision, no `"0"`, and no placeholder. A positive absence proof is recorded in
+   `absence_proofs`, never as a fabricated revision.
+2. **A completion producer persists only the revision of the exact final proof read** selected by
+   §10.2.1b for that label. It never persists a revision from an earlier phase, a pre-DELETE read,
+   a preview run, or a different read of the same object.
+
 **Failure behavior:** Constructing an outcome whose `status` is not `ITEMS` with a non-empty
 `items` list is a programming error and raises `ValueError`, so a caller cannot fabricate an
-inventory on an error outcome.
+inventory on an error outcome. Constructing a non-`ITEMS` outcome with a non-`None`
+`resource_version` is likewise a `ValueError`: rule 1 above is enforced by the value type, not only
+by its producers.
 
 **State/checkpoint implications:** none. **Dry-run implications:** none — read-only value type.
 **Parity implications:** the reason codes are mirrored constants entering `CONSTANT_PAIRS`
@@ -460,6 +508,39 @@ def test_positive_absence_outcomes_prove_absence(factory, status):
 def test_non_items_outcome_cannot_carry_items():
     with pytest.raises(ValueError):
         StrictReadOutcome(status=StrictReadStatus.ERROR, items=[{"metadata": {}}])
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        StrictReadOutcome.crd_absent,
+        StrictReadOutcome.namespace_absent,
+        StrictReadOutcome.object_absent,
+        StrictReadOutcome.error,
+    ],
+)
+def test_absence_and_error_outcomes_never_carry_a_revision(factory):
+    """§10.2.1b rule 1: a proof that returns no revision must not manufacture one."""
+    assert factory("positively_absent").resource_version is None
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        StrictReadStatus.CRD_ABSENT,
+        StrictReadStatus.NAMESPACE_ABSENT,
+        StrictReadStatus.OBJECT_ABSENT,
+        StrictReadStatus.ERROR,
+    ],
+)
+def test_a_non_items_outcome_cannot_be_given_a_revision(status):
+    with pytest.raises(ValueError):
+        StrictReadOutcome(status=status, resource_version="88190")
+
+
+def test_an_empty_string_revision_is_rejected():
+    with pytest.raises(ValueError):
+        StrictReadOutcome.from_items([], resource_version="")
 ```
 
 - [ ] **Step 2: Run the test and observe the expected failure**
@@ -515,6 +596,12 @@ class StrictReadOutcome:
             raise ValueError(f"{self.status.value} outcome must not carry items")
         if self.status is not StrictReadStatus.ITEMS and self.resource is not None:
             raise ValueError(f"{self.status.value} outcome must not carry a resource")
+        # An absence proof and an error return no revision. Enforcing it here means no producer
+        # can synthesize one, which is what §10.2.1b's provenance rule depends on.
+        if self.status is not StrictReadStatus.ITEMS and self.resource_version is not None:
+            raise ValueError(f"{self.status.value} outcome must not carry a resource_version")
+        if self.resource_version is not None and not self.resource_version:
+            raise ValueError("resource_version must be a non-empty string when present")
 
     @property
     def is_success(self) -> bool:
@@ -875,11 +962,27 @@ than by inspection of prose:
 4. **No partial prefix ever escapes.** Accumulation is internal to one whole-read attempt; any
    failure returns `StrictReadOutcome.error(...)` with `items == []`.
 5. **One expired continuation (HTTP 410) discards everything accumulated and restarts the whole
-   read from page 1, exactly once.** A second expiry is `error`.
+   read from page 1, exactly once.** The discarded state includes the **snapshot revision** of the
+   abandoned read: a restarted read reports the revision its own page 1 established, never the
+   revision of the read the server expired. A second expiry is `error`.
 6. **Malformed is never empty.** A non-mapping page, missing `items`, non-list `items`, a
    non-mapping member, or missing/non-mapping list metadata is
    `error` with `STRICT_READ_REASON_MALFORMED_RESPONSE`.
 7. **`max_items` is not offered** on any strict method.
+8. **One revision describes the whole read.** Page 1 establishes the read's snapshot revision from
+   its `metadata.resourceVersion`; every continuation page belongs to that same snapshot, because
+   the server pins a paginated LIST to the revision at which the first page was served and the
+   continuation token carries it. The drain helper therefore **captures the revision from page 1
+   and returns that single value** on the final successful `ITEMS` outcome. It does **not** record
+   the last page's `metadata.resourceVersion`, which would be an arbitrary member of the same
+   snapshot rather than a proven description of it. A page whose metadata is missing or non-mapping
+   is `error` under rule 6, so a read can never complete without a revision; an `ITEMS` outcome
+   from a strict list therefore always carries a non-`None` `resource_version`. A later-page
+   failure and a page-budget exhaustion with an outstanding continuation are `error` under rules 3
+   and 4, and neither publishes an inventory or a revision.
+
+Rule 8 is what makes `resource_versions["drain_pods"]` mechanically meaningful (§10.2.1b): the
+persisted value describes the complete drained set that proved the predicate, not one page of it.
 
 **Strict core/typed-read contract.** These six methods are implemented in PR A rather than
 invented at their later call sites. None uses `@api_call(not_found_value=...)`, `@retry_api_call`,
@@ -1050,6 +1153,34 @@ class TestStrictCustomResourceReads:
         restarted = client.custom_api.list_cluster_custom_object.call_args_list[2]
         assert restarted.kwargs["_continue"] is None
 
+    def test_a_restarted_read_reports_the_restarted_snapshot_revision(self):
+        """A3.0 rule 8: the expired read's revision is discarded with its prefix."""
+        pages = [
+            {"items": [{"metadata": {"name": "a"}}],
+             "metadata": {"continue": "tok", "resourceVersion": "100"}},
+            ApiException(status=410, reason="Gone"),
+            {"items": [{"metadata": {"name": "a"}}],
+             "metadata": {"continue": "tok", "resourceVersion": "200"}},
+            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "999"}},
+        ]
+        outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
+        assert outcome.resource_version == "200", "the restarted read's page 1 owns the snapshot"
+
+    def test_the_snapshot_revision_comes_from_page_one_not_the_last_page(self):
+        pages = [
+            {"items": [{"metadata": {"name": "a"}}],
+             "metadata": {"continue": "tok", "resourceVersion": "100"}},
+            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "999"}},
+        ]
+        outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
+        assert outcome.resource_version == "100"
+
+    def test_a_page_without_a_readable_revision_is_malformed(self):
+        pages = [{"items": [], "metadata": {}}]
+        outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.resource_version is None
+
     def test_second_expired_continue_token_fails_closed(self):
         pages = [
             {"items": [{"metadata": {"name": "a"}}], "metadata": {"continue": "tok"}},
@@ -1200,9 +1331,15 @@ _RESTART_READ = object()
         return StrictReadOutcome.error(STRICT_READ_REASON_INVENTORY_INCOMPLETE)
 
     def _drain_strict_list(self, group, version, plural, namespace, label_selector):
-        """One whole-read attempt. Items accumulate here and escape only on success."""
+        """One whole-read attempt. Items accumulate here and escape only on success.
+
+        `snapshot_revision` is captured from page 1 and describes the whole read (A3.0 rule 8).
+        A restart after 410 re-enters this method, so the abandoned read's revision is discarded
+        with its prefix.
+        """
         items: List[Dict[str, Any]] = []
         continue_token: Optional[str] = None
+        snapshot_revision: Optional[str] = None
 
         for _ in range(STRICT_READ_MAX_PAGES):
             try:
@@ -1241,9 +1378,15 @@ _RESTART_READ = object()
             metadata = page.get("metadata")
             if not isinstance(metadata, dict):
                 return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+            if snapshot_revision is None:
+                # Page 1 establishes the snapshot every continuation page belongs to.
+                revision = metadata.get("resourceVersion")
+                if not isinstance(revision, str) or not revision:
+                    return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+                snapshot_revision = revision
             continue_token = metadata.get("continue") or None
             if continue_token is None:
-                return StrictReadOutcome.from_items(items, resource_version=metadata.get("resourceVersion"))
+                return StrictReadOutcome.from_items(items, resource_version=snapshot_revision)
 
         # Page budget exhausted with a continuation still outstanding.
         return StrictReadOutcome.error(STRICT_READ_REASON_INVENTORY_INCOMPLETE)
@@ -1417,6 +1560,32 @@ class TestStrictCoreReads:
         assert [p["metadata"]["name"] for p in outcome.items] == ["a", "b"]
         assert client.core_v1.list_namespaced_pod.call_args_list[2].kwargs["_continue"] is None
 
+    def test_pod_snapshot_revision_is_page_one_and_survives_no_restart(self):
+        """A3.0 rule 8, for the read whose revision becomes `resource_versions["drain_pods"]`."""
+        pages = [
+            self._pod_page(["a"], continue_token="tok", resource_version="100"),
+            self._pod_page(["b"], resource_version="999"),
+        ]
+        outcome = self._client(pod_pages=pages).list_pods_strict("acm")
+        assert outcome.resource_version == "100"
+
+    def test_pod_restarted_read_discards_the_expired_snapshot_revision(self):
+        pages = [
+            self._pod_page(["a"], continue_token="tok", resource_version="100"),
+            ApiException(status=410, reason="Gone"),
+            self._pod_page(["a"], continue_token="tok", resource_version="200"),
+            self._pod_page(["b"], resource_version="999"),
+        ]
+        outcome = self._client(pod_pages=pages).list_pods_strict("acm")
+        assert outcome.resource_version == "200"
+
+    def test_a_failed_pod_read_carries_no_revision(self):
+        pages = [self._pod_page(["a"], continue_token="tok"),
+                 ApiException(status=500, reason="boom")]
+        outcome = self._client(pod_pages=pages).list_pods_strict("acm")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.resource_version is None
+
     def test_pod_second_expiry_fails_closed(self):
         pages = [
             self._pod_page(["a"], continue_token="tok"),
@@ -1545,8 +1714,10 @@ then the same for `list_pods_strict`.
         return StrictReadOutcome.error(STRICT_READ_REASON_INVENTORY_INCOMPLETE)
 
     def _drain_strict_pod_list(self, namespace, label_selector):
+        # snapshot_revision is captured from page 1 and describes the whole read (A3.0 rule 8).
         items: List[Dict[str, Any]] = []
         continue_token: Optional[str] = None
+        snapshot_revision: Optional[str] = None
 
         for _ in range(STRICT_READ_MAX_PAGES):
             try:
@@ -1583,11 +1754,14 @@ then the same for `list_pods_strict`.
             metadata = getattr(page, "metadata", None)
             if metadata is None:
                 return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+            if snapshot_revision is None:
+                revision = getattr(metadata, "resource_version", None)
+                if not isinstance(revision, str) or not revision:
+                    return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+                snapshot_revision = revision
             continue_token = getattr(metadata, "_continue", None) or None
             if continue_token is None:
-                return StrictReadOutcome.from_items(
-                    items, resource_version=getattr(metadata, "resource_version", None)
-                )
+                return StrictReadOutcome.from_items(items, resource_version=snapshot_revision)
 
         return StrictReadOutcome.error(STRICT_READ_REASON_INVENTORY_INCOMPLETE)
 
@@ -1770,7 +1944,44 @@ Modify the two existing R3-02 role call sites and their fixtures/contracts to pa
 
 **Interfaces produced:** `read_status` gains `kind_not_served`; list mode becomes
 completeness-proving under the same bounds as Python; the module gains required `resource_name`,
-the exact canonical APIResource name/plural for `kind`.
+the exact canonical APIResource name/plural for `kind`; and the module result gains
+`resource_version`, the collection's half of the §10.2.1b provenance rule.
+
+**The one `resource_version` output contract.** `_exit_outcome` gains a third optional argument and
+always publishes the key, so callers never branch on its presence:
+
+```python
+def _exit_outcome(
+    module: AnsibleModule,
+    read_status: str,
+    resources: list[dict] | None = None,
+    resource_version: str | None = None,
+) -> None:
+    module.exit_json(
+        changed=False,
+        read_status=read_status,
+        resources=list(resources or []),
+        resource_version=resource_version,
+    )
+```
+
+| Outcome | `resource_version` |
+| --- | --- |
+| `read_status: ok`, `read_mode: get` | the returned object's `metadata.resourceVersion` |
+| `read_status: ok`, `read_mode: list` | the **single snapshot revision of the whole drained read**, taken from page 1 (§9.3 A3.0 rule 8), never a per-page value |
+| `read_status: not_found` | `null` |
+| `read_status: kind_not_served` | `null` |
+| `read_status: error` | `null` |
+
+The key is **always present** in the result and is `null` — never `""`, never `"0"`, never a
+placeholder — on every non-`ok` outcome. A synthetic or empty-string revision is never eligible for
+persistence: the collection completion producer (Tasks C4, D, E) writes
+`acm_switchover_<read>.resource_version` into `resource_versions` only from an `ok` outcome, and the
+Task B2 validator rejects an empty string, so a `null` propagated by mistake fails closed rather
+than becoming evidence. This mirrors the Python rule that an absence or error outcome carries
+`resource_version is None` (Task A1), and it is the collection half of the §10.2.1b provenance
+rule. `read_status: ok` on a list therefore asserts both a positively complete inventory **and** a
+revision that describes it.
 
 **Intended behavior.**
 
@@ -1779,10 +1990,14 @@ the exact canonical APIResource name/plural for `kind`.
    (`STRICT_READ_REQUEST_TIMEOUT`), and the server-provided `_continue` token on every page, and
    repeats until the response carries no continuation. `ok` therefore asserts a positively complete
    inventory. A later-page failure, a page budget exhausted with an outstanding continuation, or a
-   malformed page is `error` and publishes **no** partial prefix.
+   malformed page is `error` and publishes **no** partial prefix **and no revision**. Page 1
+   establishes the read's snapshot revision; a page whose `metadata` is missing, non-mapping, or
+   carries no non-empty `resourceVersion` string is `error` under the malformed-page rule, so an
+   `ok` list can never lack a revision.
 2. **One whole-read restart on an expired continuation.** An HTTP 410 on a continuation page
-   discards every accumulated member and restarts the read from page 1 exactly
-   `STRICT_READ_MAX_RESTARTS` times; a second expiry is `error`. 410 is detected as
+   discards every accumulated member **and the abandoned read's snapshot revision**, and restarts
+   the read from page 1 exactly `STRICT_READ_MAX_RESTARTS` times; the restarted read reports the
+   revision its own page 1 established. A second expiry is `error`. 410 is detected as
    `getattr(exc, "status", None) == 410`, matching the module's existing `_is_named_not_found`
    pattern; the dynamic client maps 410 to `GoneError`, a `DynamicApiError` subclass that carries
    `status`, identically at both pinned client tags (§15.2).
@@ -1827,7 +2042,10 @@ determination unverifiable, which is `error` — never absence.
 check mode — existing tested behavior, preserved deliberately.
 
 **Parity implications.** `kind_not_served` maps to Python `crd_absent`; complete `resources` maps
-to `items`; the three numeric bounds are the mirrored constants from Task A1. Held equal by Task A5.
+to `items`; `resource_version` maps to `StrictReadOutcome.resource_version` with identical
+semantics on every outcome, including `null`/`None` on absence and error and the same whole-read
+snapshot rule for lists; the three numeric bounds are the mirrored constants from Task A1. Held
+equal by Task A5, which adds `resource_version` to every vector's assertions.
 
 **RBAC implications:** none new. `limit` and `continue` are query parameters on the same `list`
 verb, and discovery endpoints require no verb (§14 row 1).
@@ -1930,8 +2148,8 @@ LIST_PARAMS = {
 }
 
 
-def _page(items, continue_token=None):
-    metadata = {"resourceVersion": "1"}
+def _page(items, continue_token=None, resource_version="1"):
+    metadata = {"resourceVersion": resource_version}
     if continue_token:
         metadata["continue"] = continue_token
     return _DictResult({"kind": "PodList", "items": items, "metadata": metadata})
@@ -1946,6 +2164,33 @@ def test_list_mode_follows_continue_tokens_to_exhaustion(monkeypatch):
     assert result["read_status"] == "ok"
     assert [r["metadata"]["name"] for r in result["resources"]] == ["a", "b"]
     assert [p.get("_continue") for p in client.get_params] == [None, "tok"]
+
+
+def test_a_complete_list_publishes_the_page_one_snapshot_revision(monkeypatch):
+    """A3.0 rule 8: one revision describes the whole read, taken from page 1."""
+    client = _FakeClient(
+        resource=object(),
+        pages=[_page([{"metadata": {"name": "a"}}], "tok", resource_version="100"),
+               _page([{"metadata": {"name": "b"}}], resource_version="999")],
+    )
+    result = _run_module(monkeypatch, params=LIST_PARAMS, client=client)
+    assert result["resource_version"] == "100"
+
+
+def test_a_named_get_publishes_the_objects_revision(monkeypatch):
+    client = _FakeClient(
+        resource=object(),
+        get_result=_DictResult({"kind": "ConfigMap",
+                                "metadata": {"name": "cm", "resourceVersion": "77"}}),
+    )
+    result = _run_module(
+        monkeypatch,
+        params={"read_mode": "get", "api_version": "v1", "kind": "ConfigMap",
+                "namespace": "ns", "name": "cm", "resource_name": "configmaps"},
+        client=client,
+    )
+    assert result["read_status"] == "ok"
+    assert result["resource_version"] == "77"
 
 
 def test_every_list_page_carries_the_fixed_limit_and_a_bounded_timeout(monkeypatch):
@@ -1967,6 +2212,7 @@ def test_list_mode_page_failure_is_error_and_returns_no_partial_inventory(monkey
     result = _run_module(monkeypatch, params=LIST_PARAMS, client=client)
     assert result["read_status"] == "error"
     assert result["resources"] == []
+    assert result["resource_version"] is None
 
 
 def test_list_mode_outstanding_continuation_at_exit_is_error(monkeypatch):
@@ -1983,10 +2229,10 @@ def test_expired_continuation_restarts_the_whole_read_once(monkeypatch):
     client = _FakeClient(
         resource=object(),
         pages=[
-            _page([{"metadata": {"name": "a"}}], "tok"),
+            _page([{"metadata": {"name": "a"}}], "tok", resource_version="100"),
             _api_error(GoneError, 410),
-            _page([{"metadata": {"name": "a"}}], "tok"),
-            _page([{"metadata": {"name": "b"}}]),
+            _page([{"metadata": {"name": "a"}}], "tok", resource_version="200"),
+            _page([{"metadata": {"name": "b"}}], resource_version="999"),
         ],
     )
     result = _run_module(monkeypatch, params=LIST_PARAMS, client=client)
@@ -1994,6 +2240,8 @@ def test_expired_continuation_restarts_the_whole_read_once(monkeypatch):
     # The pre-410 prefix is discarded, not carried into the restart.
     assert [r["metadata"]["name"] for r in result["resources"]] == ["a", "b"]
     assert client.get_params[2].get("_continue") is None
+    # ...and so is its snapshot revision.
+    assert result["resource_version"] == "200"
 
 
 def test_second_expired_continuation_is_error_with_no_partial_output(monkeypatch):
@@ -2020,6 +2268,11 @@ def test_second_expired_continuation_is_error_with_no_partial_output(monkeypatch
         _DictResult({"kind": "PodList", "items": ["nope"], "metadata": {"resourceVersion": "1"}}),
         _DictResult({"kind": "PodList", "items": [], "metadata": "nope"}),
         _DictResult({"kind": "PodList", "items": []}),                            # metadata missing
+        _DictResult({"kind": "PodList", "items": [], "metadata": {}}),            # no revision
+        _DictResult({"kind": "PodList", "items": [],
+                     "metadata": {"resourceVersion": ""}}),                       # empty revision
+        _DictResult({"kind": "PodList", "items": [],
+                     "metadata": {"resourceVersion": 7}}),                        # non-string
     ],
 )
 def test_malformed_list_pages_are_error_never_empty_success(monkeypatch, page):
@@ -2027,6 +2280,36 @@ def test_malformed_list_pages_are_error_never_empty_success(monkeypatch, page):
     result = _run_module(monkeypatch, params=LIST_PARAMS, client=client)
     assert result["read_status"] == "error"
     assert result["resources"] == []
+    assert result["resource_version"] is None
+
+
+@pytest.mark.parametrize(
+    "params, client_kwargs, expected_status",
+    [
+        ({"read_mode": "get", "api_version": "v1", "kind": "Namespace",
+          "name": "absent-ns", "resource_name": "namespaces"},
+         {"resource": object(), "get_error": _api_error(NotFoundError, 404)}, "not_found"),
+        ({"read_mode": "list", "api_version": "g/v1", "kind": "Widget",
+          "resource_name": "widgets"},
+         {"resource_error": ResourceNotFoundError("no matches"),
+          "dynamic": _FakeDynamicClient(
+              discovery={"kind": "APIResourceList",
+                         "resources": [{"name": "pods", "kind": "Pod"}]})}, "kind_not_served"),
+    ],
+    ids=["not_found", "kind_not_served"],
+)
+def test_absence_outcomes_never_publish_a_revision(monkeypatch, params, client_kwargs,
+                                                   expected_status):
+    """The collection half of the §10.2.1b rule: absence proofs carry no revision."""
+    result = _run_module(monkeypatch, params=params, client=_FakeClient(**client_kwargs))
+    assert result["read_status"] == expected_status
+    assert result["resource_version"] is None
+
+
+def test_every_outcome_publishes_the_resource_version_key(monkeypatch):
+    """The key is always present, so callers never branch on its absence."""
+    client = _FakeClient(resource=object(), pages=[_page([])])
+    assert "resource_version" in _run_module(monkeypatch, params=LIST_PARAMS, client=client)
 
 
 def test_positive_discovery_miss_is_kind_not_served(monkeypatch):
@@ -2174,6 +2457,14 @@ def test_return_documentation_lists_every_status():
     assert sorted(documented) == ["error", "kind_not_served", "not_found", "ok"]
 
 
+def test_return_documentation_declares_the_resource_version_output():
+    import yaml
+
+    returned = yaml.safe_load(acm_k8s_read_outcome.RETURN)
+    assert returned["resource_version"]["type"] == "str"
+    assert returned["resource_version"]["returned"] == "always"
+
+
 def test_resource_name_is_required_and_module_reports_no_namespace_probing_mode():
     spec = acm_k8s_read_outcome._argument_spec()
     assert spec["read_mode"]["choices"] == ["get", "list"]
@@ -2198,8 +2489,10 @@ request is made (`client.get_params == [{...no limit...}]`); the `kind_not_serve
 because the module returns `error`; the 410 restart tests fail because the exception propagates to
 `error` on the first expiry; the malformed-page parametrization fails for the missing-`items` and
 missing-`metadata` cases because `_normalize_resources` maps a missing `items` to `[]` and reports
-`ok`; the `resource_name` tests fail with `KeyError: 'resource_name'` from `_argument_spec()`; and
-the RETURN assertion fails because `choices` lists three statuses.
+`ok`; the `resource_name` tests fail with `KeyError: 'resource_name'` from `_argument_spec()`; the
+RETURN status assertion fails because `choices` lists three statuses; and every
+`resource_version` assertion fails with `KeyError: 'resource_version'`, because `_exit_outcome`
+publishes only `changed`, `read_status`, and `resources` today.
 
 - [ ] **Step 4: Implement**
 
@@ -2215,34 +2508,56 @@ name (plural) for `kind`; never synthesized from `kind`".
 
 Update the `RETURN` block's `read_status` description and `choices` to
 `[ok, not_found, kind_not_served, error]`, describing `kind_not_served` as "the API group/version
-was read successfully and positively does not serve this kind".
+was read successfully and positively does not serve this kind", and add the new `resource_version`
+output:
+
+```yaml
+resource_version:
+  description:
+    - The Kubernetes C(metadata.resourceVersion) of the successful read, or C(none).
+    - For C(read_mode=get) this is the returned object's own revision.
+    - For C(read_mode=list) this is the single snapshot revision of the complete paginated
+      read, established by its first page; it is never a per-page value.
+    - Always C(none) on C(not_found), C(kind_not_served), and C(error); an absence proof and a
+      failed read carry no revision, and none is ever synthesized.
+  type: str
+  returned: always
+```
 
 Add the strict list-page normalizer. It is a **new** function: `_normalize_resources` keeps its
 current behavior for `read_mode: get`, and is not reused for list pages, because its
 `mapping.get("items", [])` maps a missing `items` field to an empty list.
 
 ```python
-def _strict_list_page(raw) -> tuple[list[dict] | None, str | None]:
-    """Return (members, continue_token) for one list page, or (None, None) if malformed."""
+def _strict_list_page(raw) -> tuple[list[dict] | None, str | None, str | None]:
+    """Return (members, continue_token, revision) for one page, or (None, None, None) if malformed.
+
+    The revision is the page's own `metadata.resourceVersion`. `_drain_list_once` keeps only
+    page 1's, which is the snapshot the whole read belongs to (A3.0 rule 8).
+    """
     mapping = _to_mapping(raw)
     if mapping is None:
-        return None, None
+        return None, None, None
     if "items" not in mapping:
-        return None, None
+        return None, None, None
     items = mapping.get("items")
     if not isinstance(items, list):
-        return None, None
+        return None, None, None
     members: list[dict] = []
     for item in items:
         item_mapping = _to_mapping(item)
         if item_mapping is None:
-            return None, None
+            return None, None, None
         members.append(item_mapping)
     metadata = mapping.get("metadata")
     if not isinstance(metadata, dict):
-        return None, None
+        return None, None, None
+    revision = metadata.get("resourceVersion")
+    if not isinstance(revision, str) or not revision:
+        # A complete read must be describable by a revision; anything else is malformed.
+        return None, None, None
     token = metadata.get("continue") or None
-    return members, token
+    return members, token, revision
 
 
 def _discovery_serves(api_client, api_version: str, resource_name: str) -> bool | None:
@@ -2279,18 +2594,19 @@ def _discovery_serves(api_client, api_version: str, resource_name: str) -> bool 
     return False
 
 
-def _drain_list(api_client, resource, params) -> tuple[list[dict] | None, str]:
+def _drain_list(api_client, resource, params) -> tuple[list[dict] | None, str, str | None]:
     """Drain every page of one list, or fail closed. Never returns a partial prefix."""
     for _ in range(STRICT_READ_MAX_RESTARTS + 1):
-        collected, status = _drain_list_once(api_client, resource, params)
+        collected, status, revision = _drain_list_once(api_client, resource, params)
         if status != "restart":
-            return collected, status
-    return None, "error"
+            return collected, status, revision
+    return None, "error", None
 
 
-def _drain_list_once(api_client, resource, params) -> tuple[list[dict] | None, str]:
+def _drain_list_once(api_client, resource, params) -> tuple[list[dict] | None, str, str | None]:
     collected: list[dict] = []
     continue_token = None
+    snapshot_revision = None          # page 1 owns it; a restart re-enters and re-establishes it
     for _ in range(STRICT_READ_MAX_PAGES):
         page_params = dict(params)
         page_params["limit"] = STRICT_READ_PAGE_LIMIT
@@ -2303,17 +2619,19 @@ def _drain_list_once(api_client, resource, params) -> tuple[list[dict] | None, s
             raw = api_client.get(resource, **page_params)
         except Exception as exc:
             if getattr(exc, "status", None) == 410 and continue_token:
-                # Expired continuation: discard everything and restart the read.
-                return None, "restart"
-            return None, "error"
-        members, token = _strict_list_page(raw)
+                # Expired continuation: discard everything, including this read's revision.
+                return None, "restart", None
+            return None, "error", None
+        members, token, revision = _strict_list_page(raw)
         if members is None:
-            return None, "error"
+            return None, "error", None
+        if snapshot_revision is None:
+            snapshot_revision = revision
         collected.extend(members)
         continue_token = token
         if not continue_token:
-            return collected, "ok"
-    return None, "error"
+            return collected, "ok", snapshot_revision
+    return None, "error", None
 ```
 
 Wire them into `run_module`. Validate `resource_name` immediately after the existing `name`
@@ -2341,16 +2659,45 @@ and replace the list branch's single `get` with `_drain_list`:
 
 ```python
     if read_mode == "list":
-        resources, status = _drain_list(api_client, resource, params)
+        resources, status, revision = _drain_list(api_client, resource, params)
         if status != "ok":
             _exit_outcome(module, "error")
             return
-        _exit_outcome(module, "ok", resources)
+        _exit_outcome(module, "ok", resources, revision)
         return
 ```
 
-The `get` branch otherwise remains unchanged and still classifies its own explicit 404 as
-`not_found`. Update every existing role/task/test call site in this PR to pass canonical
+The `get` branch keeps its own explicit-404 classification and gains the same publication. Its
+success path becomes:
+
+Inside `run_module`, replacing the existing `get`-branch exit:
+
+```python
+    resources = _normalize_resources(read_mode, raw)
+    if resources is None:
+        _exit_outcome(module, "error")
+        return
+    _exit_outcome(module, "ok", resources, _object_revision(resources))
+    return
+```
+
+and one new module-level helper beside `_strict_list_page`:
+
+```python
+def _object_revision(resources: list[dict]) -> str | None:
+    """The named object's own revision, or None when the response cannot supply one."""
+    if len(resources) != 1:
+        return None
+    metadata = resources[0].get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    revision = metadata.get("resourceVersion")
+    return revision if isinstance(revision, str) and revision else None
+```
+
+Every remaining `_exit_outcome` call site — the input-validation failures, `not_found`,
+`kind_not_served`, and every `error` — passes no `resource_version`, so the key is published as
+`null`. That is the whole contract: `ok` carries a real revision, everything else carries `null`. Update every existing role/task/test call site in this PR to pass canonical
 `resource_name` as listed above.
 
 - [ ] **Step 5: Run and observe the tests pass**
@@ -2365,10 +2712,12 @@ PYTHONPATH=. python -m pytest \
 
 - [ ] **Step 6: Refactor**
 
-`_drain_list`, `_drain_list_once`, `_strict_list_page`, and `_discovery_serves` must not log or
-return any part of a response body, and must not return a partial `collected` list on any path.
-Confirm the module still exits only through `_exit_outcome`, and that `_normalize_resources` is now
-reached only from the `get` branch.
+`_drain_list`, `_drain_list_once`, `_strict_list_page`, `_discovery_serves`, and
+`_object_revision` must not log or return any part of a response body, and must not return a
+partial `collected` list on any path. Confirm the module still exits only through `_exit_outcome`;
+that `_normalize_resources` is now reached only from the `get` branch; that no call site passes a
+`resource_version` alongside a non-`ok` status; and that no code path can construct an
+empty-string revision.
 
 - [ ] **Step 7: Module documentation gate**
 
@@ -2418,46 +2767,75 @@ import pytest
 
 from lib.strict_read import StrictReadStatus
 
-# (vector id, normative outcome, python status, collection read_status)
+# (vector id, normative outcome, python status, collection read_status, expected revision)
+#
+# The last column is the exact revision both form factors must publish, and `None` means both
+# must publish no revision at all (Python `resource_version is None`, collection `null`). It is
+# what makes §10.2.1b's provenance rule parity-checkable rather than described.
 VECTORS = [
-    ("true_empty", "success, complete inventory", StrictReadStatus.ITEMS, "ok"),
-    ("complete_pagination", "success, complete inventory", StrictReadStatus.ITEMS, "ok"),
-    ("object_absent", "named-object absence", StrictReadStatus.OBJECT_ABSENT, "not_found"),
-    ("kind_not_served", "positive kind-not-served", StrictReadStatus.CRD_ABSENT, "kind_not_served"),
-    ("namespace_absent", "positive namespace absence", StrictReadStatus.NAMESPACE_ABSENT, "not_found"),
-    ("authorization_failure", "api failure", StrictReadStatus.ERROR, "error"),
-    ("transport_failure", "api failure", StrictReadStatus.ERROR, "error"),
-    ("discovery_unverifiable", "api failure", StrictReadStatus.ERROR, "error"),
-    ("discovery_http_404", "api failure", StrictReadStatus.ERROR, "error"),
-    ("malformed_discovery", "malformed response", StrictReadStatus.ERROR, "error"),
-    ("malformed_items", "malformed response", StrictReadStatus.ERROR, "error"),
-    ("missing_items_key", "malformed response", StrictReadStatus.ERROR, "error"),
-    ("later_page_failure", "truncation / incomplete", StrictReadStatus.ERROR, "error"),
-    ("outstanding_continuation", "truncation / incomplete", StrictReadStatus.ERROR, "error"),
-    ("expired_continuation_restart", "success, complete inventory", StrictReadStatus.ITEMS, "ok"),
-    ("second_expired_continuation", "truncation / incomplete", StrictReadStatus.ERROR, "error"),
-    ("timeout_exhausted", "timeout / retry exhaustion", StrictReadStatus.ERROR, "error"),
+    ("true_empty", "success, complete inventory", StrictReadStatus.ITEMS, "ok", "100"),
+    ("complete_pagination", "success, complete inventory", StrictReadStatus.ITEMS, "ok", "100"),
+    ("object_absent", "named-object absence", StrictReadStatus.OBJECT_ABSENT, "not_found", None),
+    ("kind_not_served", "positive kind-not-served", StrictReadStatus.CRD_ABSENT, "kind_not_served", None),
+    ("namespace_absent", "positive namespace absence", StrictReadStatus.NAMESPACE_ABSENT, "not_found", None),
+    ("named_get_success", "success, complete inventory", StrictReadStatus.ITEMS, "ok", "77"),
+    ("authorization_failure", "api failure", StrictReadStatus.ERROR, "error", None),
+    ("transport_failure", "api failure", StrictReadStatus.ERROR, "error", None),
+    ("discovery_unverifiable", "api failure", StrictReadStatus.ERROR, "error", None),
+    ("discovery_http_404", "api failure", StrictReadStatus.ERROR, "error", None),
+    ("malformed_discovery", "malformed response", StrictReadStatus.ERROR, "error", None),
+    ("malformed_items", "malformed response", StrictReadStatus.ERROR, "error", None),
+    ("missing_items_key", "malformed response", StrictReadStatus.ERROR, "error", None),
+    ("missing_list_revision", "malformed response", StrictReadStatus.ERROR, "error", None),
+    ("later_page_failure", "truncation / incomplete", StrictReadStatus.ERROR, "error", None),
+    ("outstanding_continuation", "truncation / incomplete", StrictReadStatus.ERROR, "error", None),
+    # Page 1 of the restarted read is served at "200"; the abandoned read's "100" is discarded.
+    ("expired_continuation_restart", "success, complete inventory", StrictReadStatus.ITEMS, "ok", "200"),
+    ("second_expired_continuation", "truncation / incomplete", StrictReadStatus.ERROR, "error", None),
+    ("timeout_exhausted", "timeout / retry exhaustion", StrictReadStatus.ERROR, "error", None),
 ]
 
 
-@pytest.mark.parametrize("vector_id, _normative, expected_status, _collection", VECTORS)
-def test_python_strict_surface_matches_the_vector(vector_id, _normative, expected_status, _collection):
+@pytest.mark.parametrize("vector_id, _normative, expected_status, _collection, _revision", VECTORS)
+def test_python_strict_surface_matches_the_vector(vector_id, _normative, expected_status,
+                                                  _collection, _revision):
     outcome = run_python_vector(vector_id)
     assert outcome.status is expected_status
 
 
-@pytest.mark.parametrize("vector_id, _normative, _python, expected_read_status", VECTORS)
-def test_collection_module_matches_the_vector(vector_id, _normative, _python, expected_read_status):
+@pytest.mark.parametrize("vector_id, _normative, _python, expected_read_status, _revision", VECTORS)
+def test_collection_module_matches_the_vector(vector_id, _normative, _python,
+                                              expected_read_status, _revision):
     result = run_collection_vector(vector_id)
     assert result["read_status"] == expected_read_status
 
 
-@pytest.mark.parametrize("vector_id, _normative, python_status, collection_status", VECTORS)
-def test_error_is_never_absence_in_either_form_factor(vector_id, _normative, python_status, collection_status):
+@pytest.mark.parametrize("vector_id, _normative, python_status, collection_status, _revision", VECTORS)
+def test_error_is_never_absence_in_either_form_factor(vector_id, _normative, python_status,
+                                                     collection_status, _revision):
     if python_status is not StrictReadStatus.ERROR:
         return
     assert run_python_vector(vector_id).proves_absence is False
     assert run_collection_vector(vector_id)["resources"] == []
+
+
+@pytest.mark.parametrize("vector_id, _normative, _python, _collection, expected_revision", VECTORS)
+def test_both_form_factors_publish_the_same_revision(vector_id, _normative, _python, _collection,
+                                                     expected_revision):
+    """§10.2.1b provenance, held equal: same revision, or no revision, on both sides."""
+    assert run_python_vector(vector_id).resource_version == expected_revision
+    assert run_collection_vector(vector_id)["resource_version"] == expected_revision
+
+
+@pytest.mark.parametrize("vector_id, _normative, python_status, _collection, expected_revision", VECTORS)
+def test_no_vector_synthesizes_a_revision(vector_id, _normative, python_status, _collection,
+                                          expected_revision):
+    """A non-success outcome must publish no revision, not an empty string or a placeholder."""
+    if python_status is StrictReadStatus.ITEMS:
+        return
+    assert expected_revision is None
+    assert run_python_vector(vector_id).resource_version is None
+    assert run_collection_vector(vector_id)["resource_version"] is None
 ```
 
 Add one bounds-parity test in the same file, so the two paging implementations cannot drift
@@ -2481,6 +2859,11 @@ def test_strict_read_bounds_are_mirrored():
 
 `run_python_vector` and `run_collection_vector` are defined in this file and build their fakes
 from the same vector id, so a vector that is added on one side and forgotten on the other fails.
+Both runners serve **the same declared revisions** for a given vector: page 1 of every successful
+list is served at `"100"` and any later page at `"999"`, so a per-page implementation fails the
+revision assertions on both sides; the `expired_continuation_restart` runner serves the abandoned
+read at `"100"` and the restarted read's page 1 at `"200"`; and the `named_get_success` runner
+serves an object at `"77"`.
 Each runner asserts the bounds its vector exercises: every list request it observes carries
 `limit == STRICT_READ_PAGE_LIMIT` and a bounded request timeout, the `expired_continuation_restart`
 runner asserts the restart re-issued page 1 with no continuation token and published no pre-410
@@ -2565,6 +2948,18 @@ fails closed on any non-`ok` status and `apply_immediate_import.yml` handles `no
 distinctly. If either lane needs an expectation edit, stop: that is a real consumer regression,
 not a test that needs updating.
 
+**The `resource_version` output is purely additive for these consumers.** Neither
+`scale_observability.yml` nor `apply_immediate_import.yml` reads it, and neither registers the
+result with a key that a new dictionary entry can collide with, so no consumer expectation
+changes. The one obligation PR A carries into these lanes is **fixture completeness**: every
+list-mode fixture in both runtime files must supply `metadata.resourceVersion` on every page,
+because a page without a readable revision is now malformed (Task A4, intended behavior 1). The
+merged compactor fixture at `tests/integration/test_r3_02_compactor_runtime.py:152-153` already
+carries it; any fixture that does not is updated as part of PR A, and that is a fixture edit, not
+an expectation edit. Add one assertion per lane that the consumer's own successful read now
+publishes a non-`null` `resource_version`, so the additive output is covered by the runtime lanes
+rather than only by the unit lane.
+
 - [ ] **Step 2: Root and parity gates**
 
 ```bash
@@ -2640,6 +3035,14 @@ APIResourceList that lacks the exact canonical `resource_name`. Discovery HTTP 4
 timeout/TLS/transport/decode failure, malformed discovery, `ResourceNotFoundError`, and swallowed
 client discovery failure are all `error`; R4-04 may not reinterpret them as an empty inventory.
 
+**The `resource_version` exposure is additive to this one shared contract, not a second helper.**
+It is a field on the outcome that PR A already returns — `StrictReadOutcome.resource_version` in
+Python, the `resource_version` result key in the collection — with the same call signatures, the
+same statuses, and the same fail-closed classification. R4-04's Task 0 Step 2 consumers that do not
+need a revision simply ignore it; R4-04 must **not** introduce another read helper, another
+outcome type, or a revision-bearing variant of any strict method to obtain it. R4-04 runtime
+behavior is not implemented here (§19.1).
+
 | R4-04 Task 0 Step 2 requirement | Satisfied by |
 | --- | --- |
 | Python strict list/read interface | `KubeClient.list_custom_resources_strict`, `get_custom_resource_strict`, `get_namespace_strict`, `list_pods_strict`, `get_deployment_strict`, and `get_replicaset_strict` (Task A3) |
@@ -2652,6 +3055,8 @@ client discovery failure are all `error`; R4-04 may not reinterpret them as an e
 | Test: expired continuation restarts the whole read once, then fails closed | Python `test_expired_continue_token_restarts_the_whole_read_once`, `test_second_expired_continue_token_fails_closed`, `test_pod_expired_continuation_restarts_the_whole_read_once`, `test_pod_second_expiry_fails_closed`; collection `test_expired_continuation_restarts_the_whole_read_once`, `test_second_expired_continuation_is_error_with_no_partial_output`; vectors `expired_continuation_restart`, `second_expired_continuation` |
 | Test: missing/`null`/non-list `items` and malformed members or list metadata are never an empty success | Python `test_missing_items_key_is_error_not_empty`, `test_null_items_is_error_not_empty`, `test_malformed_list_metadata_is_error`, `test_non_mapping_member_is_error_not_empty`, `test_pod_page_without_items_is_error_not_empty`, `test_pod_page_with_non_list_items_is_error`, `test_malformed_pod_member_is_error`, `test_pod_page_without_list_metadata_is_error`; collection `test_malformed_list_pages_are_error_never_empty_success` (six cases, including missing `items` and missing metadata); vector `missing_items_key` |
 | Test: canonical resource name is exact, never synthesized | collection `test_irregular_plural_resource_lookup_success_reads_ok`, `test_irregular_plural_matches_the_exact_name_and_never_becomes_absence`, `test_missing_resource_name_is_rejected_before_any_client_work`, `test_resource_name_is_required_and_module_reports_no_namespace_probing_mode`; Python `test_irregular_plural_is_matched_by_exact_resource_name` |
+| Test: a successful read exposes its `resourceVersion`, and no absence or error synthesizes one | Python `test_items_outcome_carries_a_complete_inventory`, `test_named_get_returns_the_resource_and_its_resource_version`, `test_absence_and_error_outcomes_never_carry_a_revision`, `test_a_non_items_outcome_cannot_be_given_a_revision`; collection `test_a_named_get_publishes_the_objects_revision`, `test_absence_outcomes_never_publish_a_revision`, `test_every_outcome_publishes_the_resource_version_key`; parity `test_both_form_factors_publish_the_same_revision`, `test_no_vector_synthesizes_a_revision` |
+| Test: a paginated list exposes one snapshot revision for the whole read, and a 410 restart discards the old one | Python `test_the_snapshot_revision_comes_from_page_one_not_the_last_page`, `test_a_restarted_read_reports_the_restarted_snapshot_revision`, `test_pod_snapshot_revision_is_page_one_and_survives_no_restart`, `test_pod_restarted_read_discards_the_expired_snapshot_revision`, `test_a_page_without_a_readable_revision_is_malformed`; collection `test_a_complete_list_publishes_the_page_one_snapshot_revision`, `test_expired_continuation_restarts_the_whole_read_once` (revision assertion), `test_malformed_list_pages_are_error_never_empty_success` (missing/empty/non-string revision cases); vectors `expired_continuation_restart`, `missing_list_revision` |
 | Collection has the corresponding complete list outcome, extending `acm_k8s_read_outcome` rather than adding another abstraction | Task A4; `test_resource_name_is_required_and_module_reports_no_namespace_probing_mode` proves no mode was added |
 | Merged on `origin/ansible` | PR A merges before R4-04 execution begins; R4-04 re-runs its own Task 0 |
 | No competing read algebra | Task A4 extends the single module with explicit canonical `resource_name`; Task A5 holds both surfaces to one vector set; Task A3 supplies the positive Python namespace-absence producer and strict core reads needed by later R4-03 consumers |
@@ -2686,35 +3091,48 @@ mechanics in PR C. Closes R4-C2 and amendment criteria A3 and A5.
 ## 10.2 Durable schema
 
 Exactly three durable field families, all under the one Python key and the one collection key.
+Completion evidence follows the **amendment §22 contract**, which is authoritative over every
+earlier wording: `resource_versions` is revision-only (§22.1), positive absence is recorded in the
+sibling typed `absence_proofs` structure (§22.4), and the three completion-evidence fields
+(`observed_at`, `resource_versions`, `absence_proofs`) exist **only** at `phase == completed`
+(§22.2).
 
 ```yaml
 # Python: RunRecord key "decommission_teardown_records"
 # Collection: checkpoint operational_data key "decommission_teardown_records"
 
-# MCO record, completed with a successful Pod-drain proof
+# MCO record, completed in the namespace-present drain mode
 "observability.open-cluster-management.io/v1beta2/MultiClusterObservability//observability":
   expected_uid: "8f0a...-uid"          # immutable once written; never rebound
   phase: "completed"                   # delete_started|cr_absent|drain_pending|drained|completed|recovery_required
-  observed_at: "2026-09-04T10:11:12Z"  # required only at phase == completed
-  resource_versions:                   # required only at phase == completed; see the proof-key rule
-    cr: "88214"
-    pods: "88219"
+  observed_at: "2026-09-04T10:11:12Z"  # present only at phase == completed
+  resource_versions:                   # present only at completed; every value is a real revision
+    drain_namespace: "88190"
+    drain_pods: "88219"
+  absence_proofs:                      # present only at completed
+    target_cr:
+      proof_type: "object_absent"
+      resource_key: "observability.open-cluster-management.io/v1beta2/MultiClusterObservability//observability"
 
 # MCO record, completed where positive namespace absence entailed the pod-empty predicate
 "observability.open-cluster-management.io/v1beta2/MultiClusterObservability//observability":
   expected_uid: "8f0a...-uid"
   phase: "completed"
   observed_at: "2026-09-04T10:11:12Z"
-  resource_versions:
-    cr: "88214"
-    namespace_absent: "open-cluster-management-observability"
+  resource_versions: {}                # present and empty: no revision-bearing read proved anything
+  absence_proofs:
+    target_cr:
+      proof_type: "object_absent"
+      resource_key: "observability.open-cluster-management.io/v1beta2/MultiClusterObservability//observability"
+    drain_namespace:
+      proof_type: "namespace_absent"
+      resource_key: "v1/Namespace//open-cluster-management-observability"
 
-# MCH record, mid-teardown, carrying the captured operator identity
+# MCH record, mid-teardown, carrying the captured operator identity.
+# No observed_at, no resource_versions, no absence_proofs: this record is not completed.
 "operator.open-cluster-management.io/v1/MultiClusterHub/open-cluster-management/multiclusterhub":
   expected_uid: "2b71...-uid"
   phase: "delete_started"
-  resource_versions:
-    cr: "77310"
   operator_deployment:                 # exactly one of operator_deployment / operator_identity_unavailable
     namespace: "open-cluster-management"
     name: "multiclusterhub-operator"
@@ -2728,49 +3146,200 @@ Exactly three durable field families, all under the one Python key and the one c
       owned_crd: "multiclusterhubs.operator.open-cluster-management.io"
     mch_teardown_key: "operator.open-cluster-management.io/v1/MultiClusterHub/open-cluster-management/multiclusterhub"
     mch_expected_uid: "2b71...-uid"
+
+# MCH record, completed in the namespace-present drain mode with a captured operator identity
+"operator.open-cluster-management.io/v1/MultiClusterHub/open-cluster-management/multiclusterhub":
+  expected_uid: "2b71...-uid"
+  phase: "completed"
+  observed_at: "2026-09-04T10:11:12Z"
+  resource_versions:
+    drain_namespace: "88190"
+    drain_pods: "88219"
+    operator_deployment: "88203"       # the revision of the final live Deployment GET
+  absence_proofs:
+    target_cr:
+      proof_type: "object_absent"
+      resource_key: "operator.open-cluster-management.io/v1/MultiClusterHub/open-cluster-management/multiclusterhub"
+  operator_deployment:                 # the identity field: which Deployment, not a revision
+    namespace: "open-cluster-management"
+    name: "multiclusterhub-operator"
+    uid: "aa10...-uid"
+    # remaining §10.2.2 fields as above
+
+# ManagedCluster record, completed. No drain scope, so no revision-bearing final-proof read exists.
+"cluster.open-cluster-management.io/v1/ManagedCluster//cluster-a":
+  expected_uid: "7c12...-uid"
+  phase: "completed"
+  observed_at: "2026-09-04T10:11:12Z"
+  resource_versions: {}                # correct and complete; no synthetic revision is invented
+  absence_proofs:
+    target_cr:
+      proof_type: "object_absent"
+      resource_key: "cluster.open-cluster-management.io/v1/ManagedCluster//cluster-a"
 ```
 
-### 10.2.1 Completion proof keys — the exact `resource_versions` contract
+### 10.2.1 Completion evidence — the exact `resource_versions` and `absence_proofs` contract
 
-`resource_versions` is a mapping from a **proof key** to a **non-empty string**. Each key names one
-predicate the record proves, and its value is the strongest identifier the read that proved it can
-carry. This is the explicit omission rule for proofs that carry no server revision; nothing is left
-to the implementer.
+This section implements amendment §22.1 through §22.6 verbatim. It replaces the earlier
+"proof key → strongest identifier" model, which the operator **rejected** (IV-R403-12,
+amendment §22.7 item 5). The keys `cr` and `namespace_absent` no longer exist in
+`resource_versions`, and no pre-DELETE revision is persisted anywhere (§22.6 exclusion 1;
+amendment §13 "deliberately not persisted").
 
-| Proof key | Predicate proven | Value | Source read |
+#### 10.2.1a Phase-conditional presence — absent is not empty
+
+The three completion-evidence fields are `observed_at`, `resource_versions`, and `absence_proofs`.
+
+| Phase | `observed_at` | `resource_versions` | `absence_proofs` |
 | --- | --- | --- | --- |
-| `cr` | the last observed revision of the object this record deleted | `metadata.resourceVersion` | the strict named GET that bound `expected_uid`; written in the **same** forced-durable write as `delete_started` and carried forward unchanged at every later transition |
-| `pods` | the drain scope held zero matching Pods | the list response's `metadata.resourceVersion` | the successful `list_pods_strict(...)` whose final page proved the drain empty |
-| `namespace_absent` | the drain namespace is **positively absent**, which entails the pod-empty predicate (July §3 fixed-namespace scope rule) | the exact namespace name proven absent | the fresh `get_namespace_strict(namespace)` that returned `NAMESPACE_ABSENT` |
+| `delete_started`, `cr_absent`, `drain_pending`, `drained`, `recovery_required` | MUST be absent | MUST be absent | MUST be absent |
+| `completed` | MUST be present, non-empty string | MUST be present as a mapping, possibly `{}` | MUST be present as a mapping, always non-empty in practice (`target_cr` is always required) |
 
-**Why two of the three proofs are not revisions.** A named-GET 404 carries no `resourceVersion`, and
-the approved design proves both CR absence and namespace absence with named GETs (amendment §8
-"final live GET before success"; §6.2 item 3). This plan does **not** substitute a LIST to
-manufacture a revision: that would change the recorded reads and the §14 verb rows. The `cr` key
-therefore records the revision of the object as last observed **before** its deletion — the value
-`StrictReadOutcome.resource_version` already carries for that read (§9.1) — and the namespace proof
-records the proven-absent identity. `pods` is a genuine list revision because the drain proof, when
-it happens, is a successful LIST.
+**A missing field is never equivalent to an empty mapping**, in either direction (§22.2). Both
+implementations must be able to distinguish the two states, so the Python value type models an
+absent field as `None` and a present-and-empty field as `{}` (Task B1), and the collection
+serializer omits the key entirely when the field is absent rather than writing `{}` (Task B2).
+Introducing evidence before `completed` is malformed: the July §1 phase table re-proves the final
+predicates at the `completed` transition, so evidence written earlier could only be stale.
 
-**Required key sets at `phase == completed`**, by resource family and proof mode:
+#### 10.2.1b `resource_versions` — revision-only, closed key set
 
-| Family | Drain proof mode | Required keys | Forbidden keys |
+`resource_versions` is a mapping from a **proof label** to a **non-empty string that is an actual
+Kubernetes `resourceVersion`**, surfaced by a successful revision-bearing read that participated in
+the **final** completion proof of this record (§22.1).
+
+| Label | Predicate whose final-proof read produced this revision | Exact permitted value source |
+| --- | --- | --- |
+| `drain_namespace` | the fixed drain namespace was **present and readable** at final verification, selecting the pod-list drain proof mode | `StrictReadOutcome.resource_version` of the fresh `get_namespace_strict(<drain namespace>)` that returned `ITEMS` |
+| `drain_pods` | the drain scope held zero Pods after §11C identity-based exclusion | `StrictReadOutcome.resource_version` of the successful `list_pods_strict(...)` — the **single snapshot revision of the whole paginated read** (§9.3 A3.0 rule 8), never a per-page value |
+| `operator_deployment` | the durably recorded operator Deployment was re-read live and its UID still matched (July §1a) | `StrictReadOutcome.resource_version` of that fresh `get_deployment_strict(...)` |
+
+Rules, enforced identically on both sides:
+
+- **Closed key set.** Any key outside `{drain_namespace, drain_pods, operator_deployment}` is
+  malformed. That explicitly includes the rejected `cr` and `namespace_absent` keys, any canonical
+  resource identity, any UID, any namespace or resource name, any reason code, and any absence
+  token.
+- **Value type.** A non-string value, or an empty string, is malformed.
+- **Provenance (producer rule).** The only permitted value source is the `resource_version` the
+  strict-read primitive surfaced for that exact read. No derived, reformatted, defaulted, or
+  synthetic value may be written. Kubernetes treats `resourceVersion` as an opaque server-defined
+  string, so no format check is possible or permitted; enforcement is the closed key set, the value
+  type, and **producer-seam tests** that bind the write to the read (§22.1; amendment §16 item 12).
+- **No read is bent to fit the schema.** An approved named GET is never replaced by a LIST to
+  manufacture a revision. Where the approved proof is an absence read, the evidence belongs in
+  `absence_proofs`.
+- **`operator_deployment` if-and-only-if.** `resource_versions.operator_deployment` may be present
+  **if and only if** the record carries an `operator_deployment` **identity** field *and* the record
+  completed in the namespace-present drain mode. Any other combination is malformed (§22.3).
+- **ReplicaSet revisions are never persisted.** `get_replicaset_strict` exposes `resource_version`
+  like every other strict read — the outcome surface is uniform — but no §10.2.1b label exists for
+  it, so a ReplicaSet revision is **not constructible** in a valid record and any attempt to record
+  one is rejected by key closure (§22.6 exclusion 2).
+- **`resource_versions` may validly be `{}`** at `completed` when the complete final proof consisted
+  only of positive absence reads, and every required absence predicate appears in `absence_proofs`.
+
+#### 10.2.1c `absence_proofs` — typed positive-absence evidence
+
+`absence_proofs` records the final-proof predicates that were proven by a **positive absence read**,
+which by construction returns no `resourceVersion` (§22.4). Every entry is a mapping with
+**exactly** the two required non-empty string fields `proof_type` and `resource_key`.
+
+```yaml
+absence_proofs:
+  <key>:
+    proof_type: <object_absent | crd_absent | namespace_absent>
+    resource_key: "<apiVersion>/<kind>/<namespace>/<name>"
+```
+
+| Key | Predicate | Permitted `proof_type` | Required `resource_key` |
 | --- | --- | --- | --- |
-| MCO, MCH | drain proven by a successful Pod LIST | `cr`, `pods` | `namespace_absent` |
-| MCO, MCH | pod-empty predicate entailed by positive namespace absence | `cr`, `namespace_absent` | `pods` |
-| ManagedCluster (no drain scope) | n/a | `cr` | `pods`, `namespace_absent` |
+| `target_cr` | the object this record deleted is **positively absent** at final verification | `object_absent` (successful discovery plus a named GET returning 404 → `StrictReadStatus.OBJECT_ABSENT`) or `crd_absent` (a successful discovery document positively showing the kind is not served → `StrictReadStatus.CRD_ABSENT`) | exactly the enclosing record's own key |
+| `drain_namespace` | the fixed drain namespace is **positively absent** (`get_namespace_strict` → `StrictReadStatus.NAMESPACE_ABSENT`) | `namespace_absent` only | `v1/Namespace//<the family's fixed drain namespace>` |
 
-Validation rules for the mapping, enforced identically on both sides:
+Rules, enforced identically on both sides:
 
-- any key outside `{cr, pods, namespace_absent}` → malformed;
-- any non-string or empty value → malformed;
-- `cr` missing at `completed` → malformed;
-- for a family with a drain scope, neither or both of `pods` / `namespace_absent` → malformed;
-- for a family without a drain scope, either of `pods` / `namespace_absent` present → malformed;
-- `cr` changed by a later write → malformed, exactly like `expected_uid`.
+- **Closed key set** `{target_cr, drain_namespace}`; any other key is malformed.
+- **Closed `proof_type` vocabulary** `{object_absent, crd_absent, namespace_absent}`; a value outside
+  it, or one not permitted for its key, is malformed.
+- **Exact field set.** An entry that is not a mapping, that omits either field, that carries any
+  additional field, or that holds a non-string or empty value, is malformed.
+- **`target_cr` is always required at `completed`** for every R4-03 family: July §3 requires the
+  final check to re-prove the strict CR/CRD-absence predicate, and that read never returns a
+  revision. Namespace absence never substitutes for it (§22.4).
 
-A `completed` record is therefore never accepted merely because `resource_versions` is non-empty:
-the key set must match the family and the recorded proof mode exactly.
+**`resource_key` grammar.** `resource_key` is `<apiVersion>/<kind>/<namespace>/<name>` — the same
+grammar the teardown record key itself uses (§13), reused rather than reinvented. `apiVersion` is
+the literal Kubernetes `apiVersion` string: `group/version` for grouped resources, `version` for
+core resources. `namespace` is empty for cluster-scoped objects. Parsing is deterministic:
+**split from the right on `/` exactly three times**, yielding `[apiVersion, kind, namespace, name]`.
+
+Validation, identical on both sides:
+
+- the right-split MUST yield exactly four segments;
+- `apiVersion` MUST be non-empty and contain at most one `/`;
+- `kind` MUST be non-empty and MUST NOT contain `/`;
+- `name` MUST be non-empty and MUST NOT contain `/`;
+- `namespace` MUST NOT contain `/`, and MAY be empty only for a cluster-scoped object; for
+  `drain_namespace` it MUST be empty, because `Namespace` is cluster-scoped;
+- for `target_cr`, the whole `resource_key` MUST equal the enclosing record's key.
+
+Worked grammar cases the tests assert directly (Tasks B1 and B2):
+
+| Input | Right-split result | Verdict |
+| --- | --- | --- |
+| `cluster.open-cluster-management.io/v1/ManagedCluster//cluster-a` | `["cluster.open-cluster-management.io/v1", "ManagedCluster", "", "cluster-a"]` | valid, grouped API version, cluster-scoped |
+| `v1/Namespace//open-cluster-management-observability` | `["v1", "Namespace", "", "open-cluster-management-observability"]` | valid, core `v1`, cluster-scoped |
+| `operator.open-cluster-management.io/v1/MultiClusterHub/open-cluster-management/multiclusterhub` | `["operator.open-cluster-management.io/v1", "MultiClusterHub", "open-cluster-management", "multiclusterhub"]` | valid, namespaced |
+| `a/b/c/Kind//name` | `["a/b/c", "Kind", "", "name"]` | malformed — `apiVersion` contains more than one `/` |
+| `v1/Namespace/some-ns/open-cluster-management` | `["v1", "Namespace", "some-ns", ...]` | malformed for `drain_namespace` — non-empty namespace on a cluster-scoped kind |
+| `v1//` | fewer than four segments | malformed — empty components |
+
+#### 10.2.1d Required evidence key sets, per family and proof mode
+
+Every final-proof predicate is represented **exactly once**, by a real revision in
+`resource_versions` or by a typed absence in `absence_proofs`, according to the proof path actually
+taken. The recorded key set MUST match this table exactly (§22.6); anything else is malformed.
+
+| Family | Proof mode | `resource_versions` | `absence_proofs` |
+| --- | --- | --- | --- |
+| MultiClusterObservability | namespace present (readable Namespace GET, then a successful selector-scoped Pod LIST proving zero Pods) | exactly `{drain_namespace, drain_pods}` | exactly `{target_cr}` |
+| MultiClusterObservability | namespace positively absent (fresh Namespace GET → 404, entailing the pod-empty predicate under the July §3 fixed-namespace scope rule) | `{}` | exactly `{target_cr, drain_namespace}` |
+| ManagedCluster | named-GET 404, or positive kind absence. No drain scope | `{}` | exactly `{target_cr}` |
+| MultiClusterHub | namespace present, operator identity captured (Namespace GET present, strict all-Pod LIST empty after owner-chain exclusion, recorded Deployment re-read live with a matching UID) | exactly `{drain_namespace, drain_pods, operator_deployment}` | exactly `{target_cr}` |
+| MultiClusterHub | namespace present, `operator_identity_unavailable` (no Deployment identity exists to re-read, so July criterion 11 requires a strictly verified **empty** Pod list with no exclusions) | exactly `{drain_namespace, drain_pods}` | exactly `{target_cr}` |
+| MultiClusterHub | namespace positively absent (the July §1a entailment exception) | `{}` | exactly `{target_cr, drain_namespace}` |
+
+Consequences the validators enforce directly:
+
+- For a family **with** a drain scope, `drain_namespace` appears in exactly one of the two fields.
+  Both, or neither, is malformed — the two modes are exclusive by construction.
+- `drain_pods` appears **if and only if** the namespace was present.
+- For **ManagedCluster**, any drain key in either field is malformed, and the empty
+  `resource_versions` mapping is the correct and complete record. No pre-DELETE revision is retained
+  to make it non-empty.
+- In the MCH **namespace-absent** mode, a single `absence_proofs.drain_namespace` entry is the
+  complete durable representation: it discharges both the pod-empty predicate and the Deployment
+  re-read. No Deployment-absence token exists, and `resource_versions.operator_deployment` is absent
+  because the entailment skipped the Deployment GET (§22.6).
+- In the MCH `operator_identity_unavailable` mode, `resource_versions.operator_deployment` is absent
+  and is malformed if present.
+
+#### 10.2.1e `observed_at`
+
+`observed_at` is a single non-empty RFC 3339 UTC timestamp marking **the completion-proof
+observation boundary of the final verification pass immediately preceding the `completed` durable
+write** (§22.5). It asserts no atomicity across the CR, Pod-list, Deployment, and Namespace reads
+of that pass, and no per-proof timestamps are added. It is mandatory at `completed` and malformed
+at any other phase.
+
+#### 10.2.1f Evidence is historical, never a live predicate
+
+Neither field, alone or together, may satisfy an execution-time predicate about a mutable resource.
+`completed` records that the teardown was proven complete at the instant of its final read; every
+later destructive decision re-runs its own fresh live proof, so a replacement created after the
+completion write is caught by that gate rather than masked (§22.5; `AGENTS.md` execution-time
+discovery). This is asserted by the integrated fresh-gate test (§16.2 item 12.12).
 
 ### 10.2.2 `operator_deployment` — exact nested schema
 
@@ -2829,12 +3398,18 @@ Enforced by `RunRecord` on read and write, and by `checkpoint.py` on read and wr
 | Condition | Result |
 | --- | --- |
 | Missing or empty key component, missing or empty `expected_uid`, or unknown `phase` | malformed — fail closed before any mutation or clean-skip decision |
-| `phase == completed` without `observed_at`, or with a `resource_versions` mapping that violates §10.2.1 | malformed — fail closed |
+| Any of `observed_at`, `resource_versions`, or `absence_proofs` present at `phase != completed` | malformed — fail closed (§10.2.1a) |
+| Any of `observed_at`, `resource_versions`, or `absence_proofs` **missing** at `phase == completed` | malformed — fail closed; an absent field is never an empty mapping |
+| An evidence field present but of the wrong type — `observed_at` not a non-empty string, `resource_versions` or `absence_proofs` not a mapping | malformed — fail closed |
+| A `resource_versions` key outside `{drain_namespace, drain_pods, operator_deployment}`, or a non-string / empty value | malformed — fail closed (§10.2.1b) |
+| An `absence_proofs` key outside `{target_cr, drain_namespace}`; an entry that is not a mapping or whose field set is not exactly `{proof_type, resource_key}`; a `proof_type` outside the vocabulary or not permitted for its key; a `resource_key` violating the grammar or not equal to the value that key requires | malformed — fail closed (§10.2.1c) |
+| A recorded evidence key set that does not match the §10.2.1d required set for the family and proof mode — including both or neither drain mode for a drain-scoped family, any drain key on a ManagedCluster record, and `resource_versions.operator_deployment` present without a captured identity or outside the namespace-present mode | malformed — fail closed |
 | An MCH-family record carrying both `operator_deployment` and `operator_identity_unavailable`, or neither | malformed — fail closed. Every MCH record is born after identity capture, so "exactly one" holds for every phase |
 | A non-MCH-family record carrying either identity field | malformed — fail closed |
 | A nested identity shape violating §10.2.2 or §10.2.3 | malformed — fail closed |
 | `mch_teardown_key` or `mch_expected_uid` not equal to the enclosing record | malformed — fail closed |
-| A later write that changes `expected_uid` or `resource_versions.cr` | malformed — fail closed; the first value stands |
+| A later write that changes `expected_uid` | malformed — fail closed; the first value stands |
+| A later write that changes `resource_versions` or `absence_proofs` once the record is `completed` | malformed — fail closed, exactly like `expected_uid` (§22.2) |
 | A rerun observing a different live UID for a recorded name | fatal before DELETE; the replacement is left intact |
 
 `operator_deployment` and `operator_identity_unavailable` are **written by PR E**, which owns MCH
@@ -2866,14 +3441,35 @@ IDENTITY_BEARING_KINDS = frozenset({"MultiClusterHub"})
 
 def teardown_key(api_version: str, kind: str, namespace: str | None, name: str) -> str: ...
 def teardown_kind(key: str) -> str: ...          # the kind segment of a record key
+def split_resource_key(key: str) -> tuple[str, str, str, str] | None:
+    """Right-split a resource key into (api_version, kind, namespace, name), or None if malformed."""
+
+# §10.2.1c closed vocabularies, mirrored in the collection by Task B2.
+RESOURCE_VERSION_LABELS = frozenset({"drain_namespace", "drain_pods", "operator_deployment"})
+ABSENCE_PROOF_KEYS = frozenset({"target_cr", "drain_namespace"})
+ABSENCE_PROOF_TYPES = frozenset({"object_absent", "crd_absent", "namespace_absent"})
+ABSENCE_PROOF_TYPES_BY_KEY = {
+    "target_cr": frozenset({"object_absent", "crd_absent"}),
+    "drain_namespace": frozenset({"namespace_absent"}),
+}
+
+@dataclass(frozen=True)
+class AbsenceProof:
+    """One positive-absence final-proof predicate (§10.2.1c). Exactly two required fields."""
+    proof_type: str
+    resource_key: str
 
 @dataclass(frozen=True)
 class TeardownRecord:
     key: str
     expected_uid: str
     phase: TeardownPhase
+    # The three completion-evidence fields. `None` means the field is ABSENT; `{}` means the
+    # field is PRESENT and empty. The distinction is load-bearing (§10.2.1a) and is why these
+    # are not `field(default_factory=dict)`.
     observed_at: str | None = None
-    resource_versions: dict[str, str] = field(default_factory=dict)
+    resource_versions: dict[str, str] | None = None
+    absence_proofs: dict[str, AbsenceProof] | None = None
     operator_deployment: dict | None = None
     operator_identity_unavailable: dict | None = None
 
@@ -2883,6 +3479,17 @@ class MalformedTeardownRecord(FatalError): ...
 def record_teardown_phase(self, record: TeardownRecord) -> None: ...
 def teardown_record(self, key: str) -> TeardownRecord | None: ...
 def all_teardown_records(self) -> dict[str, TeardownRecord]: ...
+
+# lib/teardown_record.py validation entry points — one rule set, two entry points.
+def validate(record: TeardownRecord, previous: TeardownRecord | None = None) -> None:
+    """Validate a value-typed record. Raises MalformedTeardownRecord."""
+
+def validate_stored(key: str, stored: object) -> TeardownRecord:
+    """Validate a raw stored mapping and return the record. Raises MalformedTeardownRecord.
+
+    This is the serialization-level entry point: it enforces absent-versus-empty (§10.2.1a)
+    before any value type exists, then delegates the remaining rules to `validate`.
+    """
 ```
 
 **Intended behavior.** `record_teardown_phase` validates the record against §10.2, writes through
@@ -2890,9 +3497,16 @@ def all_teardown_records(self) -> dict[str, TeardownRecord]: ...
 is a property of the API rather than of each call site. `teardown_record` validates on read and
 raises `MalformedTeardownRecord` rather than returning a degraded value: a teardown record is
 mutation authority, so the tolerant-degradation model used by `RunSummary.from_snapshot` for
-reporting facts is wrong here. Validation of the proof keys (§10.2.1), the nested identity shapes
+reporting facts is wrong here. Validation of the completion evidence (§10.2.1a through §10.2.1e), the nested identity shapes
 (§10.2.2, §10.2.3), and the record-level rules (§10.2.4) lives in exactly one function used by both
 the reader and the writer.
+
+**Serialization preserves absent-versus-empty.** `record_teardown_phase` omits `observed_at`,
+`resource_versions`, and `absence_proofs` from the stored mapping when the corresponding attribute
+is `None`, and writes `{}` when the attribute is an empty mapping. `teardown_record` inverts that:
+a key missing from the stored mapping loads as `None`, and a stored `{}` loads as `{}`. Each
+`absence_proofs` entry serializes as exactly `{"proof_type": ..., "resource_key": ...}` and loads
+back into an `AbsenceProof`; a stored entry with any other field set is malformed on read.
 
 **Failure behavior.** A failed durable write propagates; the caller must not proceed to DELETE.
 **Dry-run implications.** `RunRecord` performs no dry-run branching; PR C's callers do not call
@@ -2908,15 +3522,19 @@ fixtures and helper in the style `tests/test_run_record.py` already uses:
 ```python
 """Durable teardown records (R4-03 PR B)."""
 
+import copy
+
 import pytest
 
 from lib.constants import OPERATOR_IDENTITY_UNAVAILABLE_REASONS
 from lib.exceptions import FatalError
 from lib.run_record import RunRecord
 from lib.teardown_record import (
+    AbsenceProof,
     MalformedTeardownRecord,
     TeardownPhase,
     TeardownRecord,
+    split_resource_key,
     teardown_key,
 )
 from lib.utils import StateManager
@@ -2927,6 +3545,34 @@ MCH_KEY = teardown_key("operator.open-cluster-management.io/v1",
                        "MultiClusterHub", "open-cluster-management", "multiclusterhub")
 CLUSTER_KEY = teardown_key("cluster.open-cluster-management.io/v1",
                            "ManagedCluster", None, "spoke-1")
+
+OBSERVABILITY_NS_KEY = "v1/Namespace//open-cluster-management-observability"
+ACM_NS_KEY = "v1/Namespace//open-cluster-management"
+
+OBSERVED_AT = "2026-09-04T00:00:00Z"
+
+
+def _cr_absent(key, proof_type="object_absent"):
+    """The `target_cr` proof every completed record must carry (§10.2.1c)."""
+    return AbsenceProof(proof_type=proof_type, resource_key=key)
+
+
+def _ns_absent(namespace_key):
+    return AbsenceProof(proof_type="namespace_absent", resource_key=namespace_key)
+
+
+def _completed(key, **overrides):
+    """A valid completed record for `key`, defaulting to the MCO namespace-present mode."""
+    fields = {
+        "key": key,
+        "expected_uid": "u",
+        "phase": TeardownPhase.COMPLETED,
+        "observed_at": OBSERVED_AT,
+        "resource_versions": {"drain_namespace": "88190", "drain_pods": "88219"},
+        "absence_proofs": {"target_cr": _cr_absent(key)},
+    }
+    fields.update(overrides)
+    return TeardownRecord(**fields)
 
 
 @pytest.fixture
@@ -2964,11 +3610,11 @@ def _identity(**overrides):
 
 
 def _mch_record(**overrides):
+    # A non-completed record carries NO completion evidence at all (§10.2.1a).
     fields = {
         "key": MCH_KEY,
         "expected_uid": "uid-mch",
         "phase": TeardownPhase.DELETE_STARTED,
-        "resource_versions": {"cr": "77310"},
         "operator_deployment": _identity(),
     }
     fields.update(overrides)
@@ -2984,13 +3630,41 @@ def test_key_is_stable_and_includes_an_empty_namespace_segment_when_cluster_scop
 def test_record_round_trips_through_the_facade(state_manager):
     record = RunRecord(state_manager)
     record.record_teardown_phase(
-        TeardownRecord(key=MCO_KEY, expected_uid="uid-1", phase=TeardownPhase.DELETE_STARTED,
-                       resource_versions={"cr": "88214"})
+        TeardownRecord(key=MCO_KEY, expected_uid="uid-1", phase=TeardownPhase.DELETE_STARTED)
     )
     loaded = record.teardown_record(MCO_KEY)
     assert loaded.expected_uid == "uid-1"
     assert loaded.phase is TeardownPhase.DELETE_STARTED
-    assert loaded.resource_versions == {"cr": "88214"}
+    # No completion evidence exists before `completed`, and absent is not empty.
+    assert loaded.observed_at is None
+    assert loaded.resource_versions is None
+    assert loaded.absence_proofs is None
+
+
+def test_completed_record_round_trips_both_evidence_fields(state_manager):
+    record = RunRecord(state_manager)
+    record.record_teardown_phase(_completed(MCO_KEY, expected_uid="uid-1"))
+    loaded = record.teardown_record(MCO_KEY)
+    assert loaded.observed_at == OBSERVED_AT
+    assert loaded.resource_versions == {"drain_namespace": "88190", "drain_pods": "88219"}
+    assert loaded.absence_proofs == {"target_cr": _cr_absent(MCO_KEY)}
+
+
+def test_present_empty_resource_versions_is_not_the_same_as_absent(state_manager):
+    """§10.2.1a: `{}` is valid evidence for an absence-only proof; `None` is malformed."""
+    record = RunRecord(state_manager)
+    record.record_teardown_phase(
+        _completed(
+            CLUSTER_KEY,
+            resource_versions={},
+            absence_proofs={"target_cr": _cr_absent(CLUSTER_KEY)},
+        )
+    )
+    loaded = record.teardown_record(CLUSTER_KEY)
+    assert loaded.resource_versions == {}
+    assert loaded.resource_versions is not None
+    stored = state_manager._get_config("decommission_teardown_records")[CLUSTER_KEY]
+    assert stored["resource_versions"] == {}, "a present-and-empty mapping must be serialized"
 
 
 def test_absent_record_reads_as_none(state_manager):
@@ -3001,8 +3675,7 @@ def test_phase_write_is_forced_durable_before_returning(state_manager, monkeypat
     flushed = []
     monkeypatch.setattr(state_manager, "flush_state", lambda: flushed.append(True))
     RunRecord(state_manager).record_teardown_phase(
-        TeardownRecord(key=MCO_KEY, expected_uid="uid-1", phase=TeardownPhase.DELETE_STARTED,
-                       resource_versions={"cr": "88214"})
+        TeardownRecord(key=MCO_KEY, expected_uid="uid-1", phase=TeardownPhase.DELETE_STARTED)
     )
     assert flushed, "teardown phase must be forced durable, not left to lazy save"
 
@@ -3011,8 +3684,7 @@ def test_a_failed_durable_write_propagates(state_manager, monkeypatch):
     monkeypatch.setattr(state_manager, "flush_state", _raise(OSError("disk full")))
     with pytest.raises(OSError):
         RunRecord(state_manager).record_teardown_phase(
-            TeardownRecord(key=MCO_KEY, expected_uid="uid-1", phase=TeardownPhase.DELETE_STARTED,
-                           resource_versions={"cr": "88214"})
+            TeardownRecord(key=MCO_KEY, expected_uid="uid-1", phase=TeardownPhase.DELETE_STARTED)
         )
 
 
@@ -3023,8 +3695,6 @@ def test_a_failed_durable_write_propagates(state_manager, monkeypatch):
         {"expected_uid": "", "phase": "delete_started"},   # empty expected_uid
         {"expected_uid": "u", "phase": "banana"},          # unknown phase
         {"expected_uid": "u"},                             # missing phase
-        {"expected_uid": "u", "phase": "completed"},       # completed without proof metadata
-        {"expected_uid": "u", "phase": "completed", "observed_at": "2026-09-04T00:00:00Z"},
         "not-a-mapping",
     ],
 )
@@ -3038,84 +3708,347 @@ def test_malformed_teardown_record_is_fatal():
     assert issubclass(MalformedTeardownRecord, FatalError)
 
 
-# --- §10.2.1 completion proof keys ------------------------------------------------
+# --- §10.2.1 completion evidence: the shared malformed vectors --------------------
+#
+# MALFORMED_COMPLETION_RECORDS is the executable, serialization-level vector set. It is the
+# single source of truth for the malformed completion-evidence matrix on BOTH sides: Task B2's
+# collection tests import it, and the shared parity test in
+# tests/test_checkpoint_state_parity.py asserts that Python and the collection classify every
+# member identically. Each entry is (vector_id, stored_mapping) using only JSON-compatible
+# types, so the collection can consume it without importing any Python-CLI runtime code.
+
+_DROP = object()   # sentinel: remove the key entirely, which is NOT the same as setting it to {}
+
+_VALID_MCO_PRESENT = {
+    "expected_uid": "u",
+    "phase": "completed",
+    "observed_at": OBSERVED_AT,
+    "resource_versions": {"drain_namespace": "88190", "drain_pods": "88219"},
+    "absence_proofs": {"target_cr": {"proof_type": "object_absent", "resource_key": MCO_KEY}},
+}
+
+
+def _mco(**overrides):
+    """A deep copy of the valid MCO namespace-present completed record, with overrides applied."""
+    record = copy.deepcopy(_VALID_MCO_PRESENT)
+    for key, value in overrides.items():
+        if value is _DROP:
+            record.pop(key, None)
+        else:
+            record[key] = value
+    return record
+
+
+MALFORMED_COMPLETION_RECORDS = [
+    # --- §10.2.1a phase-conditional presence -------------------------------------
+    ("evidence_before_completed_observed_at",
+     {"expected_uid": "u", "phase": "drained", "observed_at": OBSERVED_AT}),
+    ("evidence_before_completed_resource_versions",
+     {"expected_uid": "u", "phase": "drained", "resource_versions": {}}),
+    ("evidence_before_completed_absence_proofs",
+     {"expected_uid": "u", "phase": "cr_absent",
+      "absence_proofs": {"target_cr": {"proof_type": "object_absent", "resource_key": MCO_KEY}}}),
+    ("completed_missing_observed_at", _mco(observed_at=_DROP)),
+    ("completed_missing_resource_versions", _mco(resource_versions=_DROP)),
+    ("completed_missing_absence_proofs", _mco(absence_proofs=_DROP)),
+    ("completed_empty_observed_at", _mco(observed_at="")),
+    # --- wrong mapping types ------------------------------------------------------
+    ("resource_versions_not_a_mapping", _mco(resource_versions=["88190"])),
+    ("absence_proofs_not_a_mapping", _mco(absence_proofs=["target_cr"])),
+    ("observed_at_not_a_string", _mco(observed_at=1757000000)),
+    # --- §10.2.1b resource_versions closure and value type ------------------------
+    ("unknown_rv_label", _mco(resource_versions={"drain_namespace": "1", "drain_pods": "2",
+                                                 "pods": "3"})),
+    ("empty_rv_value", _mco(resource_versions={"drain_namespace": "1", "drain_pods": ""})),
+    ("non_string_rv_value", _mco(resource_versions={"drain_namespace": "1", "drain_pods": 88219})),
+    ("rejected_cr_rv_key", _mco(resource_versions={"cr": "88214", "drain_namespace": "1",
+                                                   "drain_pods": "2"})),
+    ("rejected_namespace_absent_rv_key",
+     _mco(resource_versions={"drain_namespace": "1", "namespace_absent": "2"})),
+    ("namespace_name_used_as_a_revision",
+     _mco(resource_versions={"drain_namespace": "open-cluster-management-observability",
+                             "drain_pods": "88219"},
+          absence_proofs={"target_cr": {"proof_type": "object_absent", "resource_key": MCO_KEY}})),
+    ("canonical_identity_used_as_an_rv_key",
+     _mco(resource_versions={"v1/Namespace//open-cluster-management-observability": "88190"})),
+    ("replicaset_revision_recorded",
+     _mco(resource_versions={"drain_namespace": "1", "drain_pods": "2",
+                             "operator_replicaset": "3"})),
+    # --- §10.2.1c absence_proofs schema -------------------------------------------
+    ("unknown_absence_key",
+     _mco(absence_proofs={"target_cr": {"proof_type": "object_absent", "resource_key": MCO_KEY},
+                          "operator_deployment": {"proof_type": "object_absent",
+                                                  "resource_key": MCO_KEY}})),
+    ("absence_entry_not_a_mapping", _mco(absence_proofs={"target_cr": "object_absent"})),
+    ("absence_entry_missing_proof_type",
+     _mco(absence_proofs={"target_cr": {"resource_key": MCO_KEY}})),
+    ("absence_entry_missing_resource_key",
+     _mco(absence_proofs={"target_cr": {"proof_type": "object_absent"}})),
+    ("absence_entry_extra_field",
+     _mco(absence_proofs={"target_cr": {"proof_type": "object_absent", "resource_key": MCO_KEY,
+                                        "observed_at": OBSERVED_AT}})),
+    ("absence_entry_empty_string",
+     _mco(absence_proofs={"target_cr": {"proof_type": "", "resource_key": MCO_KEY}})),
+    ("unknown_proof_type",
+     _mco(absence_proofs={"target_cr": {"proof_type": "assumed_absent",
+                                        "resource_key": MCO_KEY}})),
+    ("proof_type_not_permitted_for_its_key",
+     _mco(absence_proofs={"target_cr": {"proof_type": "namespace_absent",
+                                        "resource_key": MCO_KEY}})),
+    ("target_cr_resource_key_mismatch",
+     _mco(absence_proofs={"target_cr": {"proof_type": "object_absent",
+                                        "resource_key": CLUSTER_KEY}})),
+    ("malformed_resource_key_extra_slash",
+     _mco(absence_proofs={"target_cr": {"proof_type": "object_absent",
+                                        "resource_key": "a/b/c/Kind//name"}})),
+    ("malformed_resource_key_empty_component",
+     _mco(absence_proofs={"target_cr": {"proof_type": "object_absent",
+                                        "resource_key": "v1/Namespace//"}})),
+    ("drain_namespace_proof_with_a_non_empty_namespace_segment",
+     _mco(resource_versions={},
+          absence_proofs={"target_cr": {"proof_type": "object_absent", "resource_key": MCO_KEY},
+                          "drain_namespace": {
+                              "proof_type": "namespace_absent",
+                              "resource_key": "v1/Namespace/some-ns/"
+                                              "open-cluster-management-observability"}})),
+    # --- §10.2.1d family and mode key sets ----------------------------------------
+    ("mco_both_drain_modes",
+     _mco(absence_proofs={"target_cr": {"proof_type": "object_absent", "resource_key": MCO_KEY},
+                          "drain_namespace": {"proof_type": "namespace_absent",
+                                              "resource_key": OBSERVABILITY_NS_KEY}})),
+    ("mco_neither_drain_mode",
+     _mco(resource_versions={},
+          absence_proofs={"target_cr": {"proof_type": "object_absent",
+                                        "resource_key": MCO_KEY}})),
+    ("mco_drain_pods_without_drain_namespace",
+     _mco(resource_versions={"drain_pods": "88219"})),
+    ("mco_namespace_absent_mode_carrying_drain_pods",
+     _mco(resource_versions={"drain_pods": "88219"},
+          absence_proofs={"target_cr": {"proof_type": "object_absent", "resource_key": MCO_KEY},
+                          "drain_namespace": {"proof_type": "namespace_absent",
+                                              "resource_key": OBSERVABILITY_NS_KEY}})),
+    ("managed_cluster_carrying_drain_evidence",
+     {"expected_uid": "u", "phase": "completed", "observed_at": OBSERVED_AT,
+      "resource_versions": {"drain_namespace": "1", "drain_pods": "2"},
+      "absence_proofs": {"target_cr": {"proof_type": "object_absent",
+                                       "resource_key": CLUSTER_KEY}}}),
+    ("managed_cluster_carrying_a_namespace_absence_proof",
+     {"expected_uid": "u", "phase": "completed", "observed_at": OBSERVED_AT,
+      "resource_versions": {},
+      "absence_proofs": {"target_cr": {"proof_type": "object_absent",
+                                       "resource_key": CLUSTER_KEY},
+                         "drain_namespace": {"proof_type": "namespace_absent",
+                                             "resource_key": OBSERVABILITY_NS_KEY}}}),
+    ("completed_without_target_cr_proof",
+     _mco(absence_proofs={})),
+]
+
+# Vector ids whose stored record key is not MCO_KEY, so the tests file them under the right key.
+_VECTOR_KEYS = {
+    "managed_cluster_carrying_drain_evidence": CLUSTER_KEY,
+    "managed_cluster_carrying_a_namespace_absence_proof": CLUSTER_KEY,
+    "target_cr_resource_key_mismatch": MCO_KEY,
+}
+
+
 @pytest.mark.parametrize(
-    "resource_versions",
-    [
-        {},                                                  # empty
-        {"pods": "9"},                                       # missing cr
-        {"cr": "9"},                                         # drain-scoped kind with no drain proof
-        {"cr": "9", "pods": "10", "namespace_absent": "ns"},  # both drain proofs
-        {"cr": "9", "pods": ""},                             # empty value
-        {"cr": "9", "pods": "10", "extra": "x"},             # unknown key
-        {"cr": "9", "pods": 10},                             # non-string value
-    ],
+    "vector_id, stored", MALFORMED_COMPLETION_RECORDS,
+    ids=[vector_id for vector_id, _ in MALFORMED_COMPLETION_RECORDS],
 )
-def test_completed_mco_record_requires_an_exact_proof_key_set(state_manager, resource_versions):
+def test_malformed_completion_evidence_fails_closed_on_read(state_manager, vector_id, stored):
+    key = _VECTOR_KEYS.get(vector_id, MCO_KEY)
+    state_manager._set_config("decommission_teardown_records", {key: stored})
+    with pytest.raises(MalformedTeardownRecord):
+        RunRecord(state_manager).teardown_record(key)
+
+
+# --- §10.2.1d valid per-family, per-mode records ----------------------------------
+def test_completed_mco_namespace_present_records_exactly_the_two_drain_revisions(state_manager):
+    record = RunRecord(state_manager)
+    record.record_teardown_phase(_completed(MCO_KEY))
+    loaded = record.teardown_record(MCO_KEY)
+    assert set(loaded.resource_versions) == {"drain_namespace", "drain_pods"}
+    assert set(loaded.absence_proofs) == {"target_cr"}
+
+
+def test_completed_mco_namespace_absent_records_an_empty_revision_map(state_manager):
+    record = RunRecord(state_manager)
+    record.record_teardown_phase(
+        _completed(
+            MCO_KEY,
+            resource_versions={},
+            absence_proofs={"target_cr": _cr_absent(MCO_KEY),
+                            "drain_namespace": _ns_absent(OBSERVABILITY_NS_KEY)},
+        )
+    )
+    loaded = record.teardown_record(MCO_KEY)
+    assert loaded.resource_versions == {}
+    assert set(loaded.absence_proofs) == {"target_cr", "drain_namespace"}
+    assert loaded.absence_proofs["drain_namespace"].resource_key == OBSERVABILITY_NS_KEY
+
+
+@pytest.mark.parametrize("proof_type", ["object_absent", "crd_absent"])
+def test_completed_managed_cluster_is_absence_only(state_manager, proof_type):
+    record = RunRecord(state_manager)
+    record.record_teardown_phase(
+        _completed(
+            CLUSTER_KEY,
+            resource_versions={},
+            absence_proofs={"target_cr": _cr_absent(CLUSTER_KEY, proof_type)},
+        )
+    )
+    loaded = record.teardown_record(CLUSTER_KEY)
+    assert loaded.resource_versions == {}
+    assert set(loaded.absence_proofs) == {"target_cr"}
+    # A crd_absent completion keeps the enclosing record key; it is not replaced by a CRD identity.
+    assert loaded.absence_proofs["target_cr"].resource_key == CLUSTER_KEY
+
+
+def _unavailable(reason="csv_absent"):
+    return {
+        "reason": reason,
+        "discovery_method": "olm_csv_owned_mch_crd_install_deployment_v1",
+        "captured_at": "2026-09-04T10:09:00Z",
+        "evidence_summary": "no candidate CSV",
+        "mch_teardown_key": MCH_KEY,
+        "mch_expected_uid": "uid-mch",
+    }
+
+
+def test_completed_mch_namespace_present_with_captured_identity(state_manager):
+    record = RunRecord(state_manager)
+    record.record_teardown_phase(
+        TeardownRecord(key=MCH_KEY, expected_uid="uid-mch", phase=TeardownPhase.COMPLETED,
+                       observed_at=OBSERVED_AT,
+                       resource_versions={"drain_namespace": "88190", "drain_pods": "88219",
+                                          "operator_deployment": "88203"},
+                       absence_proofs={"target_cr": _cr_absent(MCH_KEY)},
+                       operator_deployment=_identity())
+    )
+    loaded = record.teardown_record(MCH_KEY)
+    assert set(loaded.resource_versions) == {"drain_namespace", "drain_pods", "operator_deployment"}
+    assert set(loaded.absence_proofs) == {"target_cr"}
+
+
+def test_completed_mch_namespace_present_with_identity_unavailable(state_manager):
+    """July criterion 11: no identity means no exclusion, so only the two drain revisions exist."""
+    record = RunRecord(state_manager)
+    record.record_teardown_phase(
+        TeardownRecord(key=MCH_KEY, expected_uid="uid-mch", phase=TeardownPhase.COMPLETED,
+                       observed_at=OBSERVED_AT,
+                       resource_versions={"drain_namespace": "88190", "drain_pods": "88219"},
+                       absence_proofs={"target_cr": _cr_absent(MCH_KEY)},
+                       operator_identity_unavailable=_unavailable())
+    )
+    loaded = record.teardown_record(MCH_KEY)
+    assert set(loaded.resource_versions) == {"drain_namespace", "drain_pods"}
+    assert "operator_deployment" not in loaded.resource_versions
+
+
+def test_completed_mch_namespace_absent_discharges_both_drain_predicates(state_manager):
+    """§10.2.1d: one namespace-absence entry stands for the pod-empty AND Deployment re-read."""
+    record = RunRecord(state_manager)
+    record.record_teardown_phase(
+        TeardownRecord(key=MCH_KEY, expected_uid="uid-mch", phase=TeardownPhase.COMPLETED,
+                       observed_at=OBSERVED_AT, resource_versions={},
+                       absence_proofs={"target_cr": _cr_absent(MCH_KEY),
+                                       "drain_namespace": _ns_absent(ACM_NS_KEY)},
+                       operator_deployment=_identity())
+    )
+    loaded = record.teardown_record(MCH_KEY)
+    assert loaded.resource_versions == {}
+    # The identity field survives; the Deployment REVISION does not, because no GET happened.
+    assert loaded.operator_deployment["uid"] == "dep-uid-1"
+    assert "operator_deployment" not in loaded.resource_versions
+
+
+def test_deployment_revision_rejected_when_no_identity_was_captured(state_manager):
+    """§10.2.1b if-and-only-if, violation 1: no identity field, so no Deployment revision."""
     with pytest.raises(MalformedTeardownRecord):
         RunRecord(state_manager).record_teardown_phase(
-            TeardownRecord(key=MCO_KEY, expected_uid="u", phase=TeardownPhase.COMPLETED,
-                           observed_at="2026-09-04T00:00:00Z",
-                           resource_versions=resource_versions)
+            TeardownRecord(key=MCH_KEY, expected_uid="uid-mch", phase=TeardownPhase.COMPLETED,
+                           observed_at=OBSERVED_AT,
+                           resource_versions={"drain_namespace": "88190", "drain_pods": "88219",
+                                              "operator_deployment": "88203"},
+                           absence_proofs={"target_cr": _cr_absent(MCH_KEY)},
+                           operator_identity_unavailable=_unavailable())
         )
+
+
+def test_deployment_revision_rejected_in_the_namespace_absent_mode(state_manager):
+    """§10.2.1b if-and-only-if, violation 2: the entailment skipped the Deployment GET."""
+    with pytest.raises(MalformedTeardownRecord):
+        RunRecord(state_manager).record_teardown_phase(
+            TeardownRecord(key=MCH_KEY, expected_uid="uid-mch", phase=TeardownPhase.COMPLETED,
+                           observed_at=OBSERVED_AT,
+                           resource_versions={"operator_deployment": "88203"},
+                           absence_proofs={"target_cr": _cr_absent(MCH_KEY),
+                                           "drain_namespace": _ns_absent(ACM_NS_KEY)},
+                           operator_deployment=_identity())
+        )
+
+
+# --- §10.2.1c resource_key grammar ------------------------------------------------
+@pytest.mark.parametrize(
+    "resource_key, expected",
+    [
+        ("cluster.open-cluster-management.io/v1/ManagedCluster//cluster-a",
+         ("cluster.open-cluster-management.io/v1", "ManagedCluster", "", "cluster-a")),
+        ("v1/Namespace//open-cluster-management-observability",
+         ("v1", "Namespace", "", "open-cluster-management-observability")),
+        ("operator.open-cluster-management.io/v1/MultiClusterHub/"
+         "open-cluster-management/multiclusterhub",
+         ("operator.open-cluster-management.io/v1", "MultiClusterHub",
+          "open-cluster-management", "multiclusterhub")),
+    ],
+)
+def test_resource_key_right_split_is_unambiguous(resource_key, expected):
+    assert split_resource_key(resource_key) == expected
 
 
 @pytest.mark.parametrize(
-    "resource_versions",
+    "resource_key",
     [
-        {"cr": "88214", "pods": "88219"},
-        {"cr": "88214", "namespace_absent": "open-cluster-management-observability"},
+        "a/b/c/Kind//name",        # apiVersion carries more than one "/"
+        "v1/Namespace//",          # empty name
+        "v1/Namespace",            # too few segments
+        "/Namespace//name",        # empty apiVersion
+        "v1///name",               # empty kind
     ],
 )
-def test_completed_mco_record_accepts_either_approved_drain_proof(state_manager, resource_versions):
-    record = RunRecord(state_manager)
-    record.record_teardown_phase(
-        TeardownRecord(key=MCO_KEY, expected_uid="u", phase=TeardownPhase.COMPLETED,
-                       observed_at="2026-09-04T00:00:00Z", resource_versions=resource_versions)
-    )
-    assert record.teardown_record(MCO_KEY).resource_versions == resource_versions
+def test_malformed_resource_keys_are_rejected(resource_key):
+    assert split_resource_key(resource_key) is None
 
 
-def test_completed_managed_cluster_record_carries_no_drain_proof(state_manager):
-    record = RunRecord(state_manager)
-    record.record_teardown_phase(
-        TeardownRecord(key=CLUSTER_KEY, expected_uid="u", phase=TeardownPhase.COMPLETED,
-                       observed_at="2026-09-04T00:00:00Z", resource_versions={"cr": "5"})
-    )
-    assert record.teardown_record(CLUSTER_KEY).phase is TeardownPhase.COMPLETED
-    with pytest.raises(MalformedTeardownRecord):
-        record.record_teardown_phase(
-            TeardownRecord(key=CLUSTER_KEY, expected_uid="u", phase=TeardownPhase.COMPLETED,
-                           observed_at="2026-09-04T00:00:00Z",
-                           resource_versions={"cr": "5", "pods": "6"})
-        )
-
-
+# --- immutability of completion evidence ------------------------------------------
 def test_expected_uid_is_never_rebound_by_a_later_write(state_manager):
     record = RunRecord(state_manager)
     record.record_teardown_phase(
-        TeardownRecord(key=MCO_KEY, expected_uid="uid-1", phase=TeardownPhase.DELETE_STARTED,
-                       resource_versions={"cr": "88214"})
+        TeardownRecord(key=MCO_KEY, expected_uid="uid-1", phase=TeardownPhase.DELETE_STARTED)
     )
     with pytest.raises(MalformedTeardownRecord):
         record.record_teardown_phase(
-            TeardownRecord(key=MCO_KEY, expected_uid="uid-2", phase=TeardownPhase.CR_ABSENT,
-                           resource_versions={"cr": "88214"})
+            TeardownRecord(key=MCO_KEY, expected_uid="uid-2", phase=TeardownPhase.CR_ABSENT)
         )
     assert record.teardown_record(MCO_KEY).expected_uid == "uid-1"
 
 
-def test_cr_proof_revision_is_never_rebound_by_a_later_write(state_manager):
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"resource_versions": {"drain_namespace": "99999", "drain_pods": "88219"}},
+        {"absence_proofs": {"target_cr": AbsenceProof(proof_type="crd_absent",
+                                                      resource_key=MCO_KEY)}},
+        {"observed_at": "2026-09-05T00:00:00Z"},
+    ],
+    ids=["revisions", "absence_proofs", "observed_at"],
+)
+def test_completion_evidence_is_never_mutated_after_completed(state_manager, mutation):
     record = RunRecord(state_manager)
-    record.record_teardown_phase(
-        TeardownRecord(key=MCO_KEY, expected_uid="uid-1", phase=TeardownPhase.DELETE_STARTED,
-                       resource_versions={"cr": "88214"})
-    )
+    record.record_teardown_phase(_completed(MCO_KEY, expected_uid="uid-1"))
     with pytest.raises(MalformedTeardownRecord):
-        record.record_teardown_phase(
-            TeardownRecord(key=MCO_KEY, expected_uid="uid-1", phase=TeardownPhase.CR_ABSENT,
-                           resource_versions={"cr": "99999"})
-        )
+        record.record_teardown_phase(_completed(MCO_KEY, expected_uid="uid-1", **mutation))
+    assert record.teardown_record(MCO_KEY).resource_versions["drain_namespace"] == "88190"
 
 
 # --- §10.2.2 / §10.2.3 nested identity -------------------------------------------
@@ -3135,7 +4068,7 @@ def test_a_non_mch_record_may_not_carry_operator_identity(state_manager):
     with pytest.raises(MalformedTeardownRecord):
         RunRecord(state_manager).record_teardown_phase(
             TeardownRecord(key=MCO_KEY, expected_uid="u", phase=TeardownPhase.DELETE_STARTED,
-                           resource_versions={"cr": "1"}, operator_deployment=_identity())
+                           operator_deployment=_identity())
         )
 
 
@@ -3224,7 +4157,6 @@ def test_malformed_nested_identity_is_rejected_on_reload_too(state_manager):
     state_manager._set_config(
         "decommission_teardown_records",
         {MCH_KEY: {"expected_uid": "uid-mch", "phase": "delete_started",
-                   "resource_versions": {"cr": "77310"},
                    "operator_deployment": {"uid": "dep-uid-1"}}},
     )
     with pytest.raises(MalformedTeardownRecord):
@@ -3234,8 +4166,7 @@ def test_malformed_nested_identity_is_rejected_on_reload_too(state_manager):
 def test_all_teardown_records_fails_closed_on_any_malformed_member(state_manager):
     state_manager._set_config(
         "decommission_teardown_records",
-        {MCO_KEY: {"expected_uid": "u", "phase": "delete_started",
-                   "resource_versions": {"cr": "1"}},
+        {MCO_KEY: {"expected_uid": "u", "phase": "delete_started"},
          MCH_KEY: {"expected_uid": "u", "phase": "banana"}},
     )
     with pytest.raises(MalformedTeardownRecord):
@@ -3256,10 +4187,14 @@ Expected: collection error — `ModuleNotFoundError: No module named 'lib.teardo
 Add `OPERATOR_IDENTITY_UNAVAILABLE_REASONS` (§10.2.3) and the
 `olm_csv_owned_mch_crd_install_deployment_v1` discovery-method constant to `lib/constants.py`, and
 implement `lib/teardown_record.py` with `TeardownPhase`, `DRAIN_SCOPED_KINDS`,
-`IDENTITY_BEARING_KINDS`, `teardown_key`, `teardown_kind`, `TeardownRecord`,
-`MalformedTeardownRecord`, and one `validate(record, previous=None)` function implementing §10.2.1
-through §10.2.4. `previous` carries the currently stored record so the immutability rules for
-`expected_uid` and `resource_versions["cr"]` are checked in the same place as everything else.
+`IDENTITY_BEARING_KINDS`, `RESOURCE_VERSION_LABELS`, `ABSENCE_PROOF_KEYS`, `ABSENCE_PROOF_TYPES`,
+`ABSENCE_PROOF_TYPES_BY_KEY`, `teardown_key`, `teardown_kind`, `split_resource_key`,
+`AbsenceProof`, `TeardownRecord`, `MalformedTeardownRecord`, and one
+`validate(record, previous=None)` function implementing §10.2.1a through §10.2.4. `previous`
+carries the currently stored record so the immutability rules for `expected_uid` and for the
+completion evidence of an already-`completed` record are checked in the same place as everything
+else. `split_resource_key` is the only implementation of the §10.2.1c right-split grammar; the
+absence-proof validator calls it rather than re-parsing.
 
 Keep every raw-key touch inside `lib/run_record.py`; `lib/teardown_record.py` holds only the value
 type, the key helpers, and validation. This is what keeps
@@ -3307,7 +4242,8 @@ def teardown_records(checkpoint) -> dict: ...
 ```
 
 **Intended behavior.** Identical algebra and identical malformed-record rules to Task B1 —
-§10.2.1 proof keys, §10.2.2 and §10.2.3 nested identity schemas, and §10.2.4 record rules — with
+§10.2.1a through §10.2.1e completion evidence, §10.2.2 and §10.2.3 nested identity schemas, and
+§10.2.4 record rules — with
 validation in exactly one collection-side function used by both the reader and the writer. The
 mirrored constants `OPERATOR_IDENTITY_UNAVAILABLE_REASONS`, `DRAIN_SCOPED_KINDS`, and
 `IDENTITY_BEARING_KINDS` are added to `module_utils/constants.py` and to `CONSTANT_PAIRS` in this
@@ -3332,9 +4268,13 @@ the same fixture data and the same expected outcome:
 
 1. round-trip and absent-reads-as-none;
 2. each malformed record shape from §10.2.4 fails closed;
-3. the §10.2.1 proof-key matrix — `completed` requires `observed_at` and an exact proof-key set;
-   both approved MCO drain proofs are accepted; a ManagedCluster record carrying a drain proof is
-   malformed; `resource_versions["cr"]` is never rebound;
+3. the §10.2.1 completion-evidence matrix — every member of `MALFORMED_COMPLETION_RECORDS`
+   (imported from the root test module, or, if the collection lane cannot import it, declared once
+   in a shared JSON fixture both sides load) is rejected on read; the valid per-family, per-mode
+   records of §10.2.1d round-trip; a present-and-empty `resource_versions` is serialized as `{}`
+   while an absent field is omitted entirely; the §10.2.1c `resource_key` right-split grammar
+   accepts the three valid identities and rejects the five malformed ones; and completion evidence
+   is never mutated after `completed`;
 4. the §10.2.2 malformed `operator_deployment` parametrization, member for member;
 5. the §10.2.3 malformed `operator_identity_unavailable` parametrization, member for member, plus
    acceptance of every enumerated reason;
@@ -3346,12 +4286,36 @@ Add to `tests/test_checkpoint_state_parity.py`:
 
 - an assertion that the Python config key and the collection `operational_data` key are the same
   string, and that the two `teardown_key` builders produce identical keys for the same inputs;
-- a **shared malformed-fixture parity test**: one declared list of malformed record payloads
-  (the union of items 2 through 6 above, as plain JSON-compatible dictionaries) asserted to be
-  rejected by **both** `lib/teardown_record.validate` and the collection `checkpoint` reader. A
-  payload that only one side rejects fails this test, so mutation authority can never be tolerated
-  on one side and refused on the other. The collection module is imported lazily inside the test
-  body, keeping root `tests/` import-safe without `ansible-core`.
+- a **shared malformed-fixture parity test**, executable rather than prose. It imports the single
+  declared vector list `MALFORMED_COMPLETION_RECORDS` from `tests/test_teardown_record.py` — plain
+  JSON-compatible dictionaries by construction — together with the §10.2.2/§10.2.3 nested-identity
+  payloads, and asserts every member is rejected by **both** `lib/teardown_record.validate` and the
+  collection `checkpoint` reader:
+
+```python
+def test_every_malformed_completion_record_is_rejected_by_both_implementations():
+    from tests.test_teardown_record import MALFORMED_COMPLETION_RECORDS, _VECTOR_KEYS, MCO_KEY
+    from lib import teardown_record as python_side
+
+    checkpoint = importlib.import_module(
+        "ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint"
+    )   # imported here, not at module scope, so root tests/ stays import-safe without ansible-core
+
+    for vector_id, stored in MALFORMED_COMPLETION_RECORDS:
+        key = _VECTOR_KEYS.get(vector_id, MCO_KEY)
+        with pytest.raises(python_side.MalformedTeardownRecord):
+            python_side.validate_stored(key, stored)
+        with pytest.raises(checkpoint.MalformedTeardownRecord):
+            checkpoint.teardown_record({"operational_data":
+                                        {"decommission_teardown_records": {key: stored}}}, key)
+```
+
+  `validate_stored(key, stored)` is the serialization-level entry point Task B1 exposes alongside
+  `validate(record, previous=None)`; the reader calls it before constructing a `TeardownRecord`, so
+  this parity test and the production read path exercise the same rules. A payload that only one
+  side rejects fails this test, so mutation authority can never be tolerated on one side and
+  refused on the other. The collection module is imported lazily inside the test body, keeping root
+  `tests/` import-safe without `ansible-core`.
 
 - [ ] **Step 2: Run and observe the expected failure**
 
@@ -3436,15 +4400,39 @@ slice. There is no tuple form, no side channel, and no second shape:
 | MCH teardown | `Decommission.teardown_multiclusterhub(self) -> SubstepExecution` | E |
 
 `_run_substep` dispatches to the family method for the named substep and returns its
-`SubstepExecution` unchanged. `Decommission.decommission` aggregates:
+`SubstepExecution` unchanged. `Decommission.decommission` aggregates, in this exact order:
 
-- `outcomes[substep] = execution.outcome`;
-- `changed = changed or execution.changed`, monotonically — once true in an invocation it stays
-  true, including on the paths that return early for refusal or failure.
+1. receive the `SubstepExecution` from `_run_substep`;
+2. record `outcomes[substep] = execution.outcome`;
+3. update `changed = changed or execution.changed`, monotonically — once true in an invocation it
+   stays true, on **every** exit path including the early returns for refusal and failure;
+4. if `execution.outcome` is `FAILED` or `REFUSED`, abort the remaining requested substeps and
+   return the unsuccessful `DecommissionResult` carrying that aggregated `changed`.
+
+**This is the resolution of IV-R403-01, and it is a control-flow rule, not prose.** An expected
+operational failure inside a family teardown is represented as
+`SubstepExecution(SubstepOutcome.FAILED, changed=<the mutation actually performed in this
+invocation>)` — a **normal return value on the one execution-result channel**. Each family method
+converts its own expected `SwitchoverError`-class operational failures into that return at the
+point where it already knows whether the API accepted a UID-preconditioned DELETE, after emitting
+its existing sanitized failure logging. The aggregator therefore receives, and ORs in, the failing
+substep's own `changed` flag. There is exactly **one** execution-result channel: no exception
+attribute, no second exception or result shape, no global or instance side channel, no tuple
+alternative, and no undocumented caller inspection carries mutation state.
+
+**Unexpected exceptions are not converted.** A programming error — `AttributeError`, `TypeError`,
+`KeyError`, or any other exception outside the expected `SwitchoverError` operational class —
+propagates out of `decommission()` uncaught. It never becomes a successful result and never
+becomes a `FAILED` outcome that a caller could mistake for a handled condition. The aggregator has
+**no** `except SwitchoverError` arm: an exception arriving there would mean a family method
+violated this contract, and swallowing it would be exactly the defect IV-R403-01 identified.
 
 Callers never see `SubstepExecution`: `decommission()` returns `DecommissionResult`, and
 `Finalization` consumes `teardown_observability(...).outcome` plus `.changed` for its own logging,
-mapping a non-`COMPLETED`/`PRECONDITION_NOOP` outcome to its existing `SwitchoverError` context.
+raising its existing caller-specific `SwitchoverError` with its own message context when the
+outcome is neither `COMPLETED` nor `PRECONDITION_NOOP`. That inspection is the documented adapter
+between the shared execution channel and finalization's own error semantics; it introduces no
+second channel, because it reads only the returned value.
 
 ### B3.2 What `changed` means, exactly
 
@@ -3461,7 +4449,8 @@ mode, or dry run.
 | UID-bound DELETE accepted in this invocation, later proof fails | `failed` | `true` — the mutation happened |
 | Check mode would delete | no authoritative completion outcome is recorded | `false`; prediction goes to `would_change` |
 | Dry run would delete | no authoritative completion outcome is recorded | `false`; prediction goes to `would_change` |
-| Refusal, cancellation, or failure | `refused` / `failed` / cancelled result | `false`, unless an earlier substep in this same invocation actually mutated |
+| Refusal or top-level cancellation | `refused` / cancelled result | `false`, unless some substep in this same invocation actually mutated |
+| Failure | `failed` | `false` only when this invocation performed no accepted mutation. It is `true` whenever **any** substep in this invocation mutated — **including the failing substep's own accepted DELETE** (the row above). This is IV-R403-01: the failing execution's flag is aggregated before the aggregator returns |
 
 At the B stage the three existing private methods are adapted to return `SubstepExecution`, with
 `changed` true only when this invocation issued a delete request that the API accepted for an
@@ -3486,8 +4475,12 @@ and returns `.succeeded == False`. A substep disabled by configuration records `
 substep whose preconditions prove no mutation is needed records `PRECONDITION_NOOP`.
 Non-interactive and integrated paths never prompt.
 
-**Failure behavior.** `FAILED` on any `SwitchoverError`; remaining substeps are not attempted; any
-change already made in this invocation is still reported.
+**Failure behavior.** A family method converts its own expected `SwitchoverError`-class
+operational failures into `SubstepExecution(FAILED, changed=<its actual mutation>)` and returns it;
+the aggregator records `FAILED`, ORs that flag into `changed`, and leaves the remaining substeps
+not attempted. Every change made in this invocation is therefore reported, including one made by
+the failing substep itself. The aggregator catches nothing, and an unexpected exception propagates
+rather than becoming `FAILED`.
 
 **State implications.** None: refusal is output, not state (amendment §13).
 **Dry-run implications.** Before dispatch, Python branches to a read-only prediction path. It
@@ -3588,17 +4581,34 @@ class TestDecommissionOutcomes:
         assert "__bool__" not in vars(DecommissionResult)
 
 
+# The complete producer list for the one execution-result channel (§B3.1). PR B declares
+# `_run_substep`; C, D, and E each append their family method in the same PR that adds it, so a
+# producer can never be introduced without being covered by the interface guardrail below.
+SUBSTEP_EXECUTORS = ("_run_substep",)   # C adds "teardown_observability" and "_teardown_resource";
+                                        # D adds "teardown_managed_clusters";
+                                        # E adds "teardown_multiclusterhub"
+
+
 class TestActualChangeTruth:
-    """`changed` is accepted mutation in this invocation, never intent or prediction."""
+    """`changed` is accepted mutation in this invocation, never intent or prediction.
+
+    `inspect` is imported at module scope in this file (see Task A3 Cycle 1, which established
+    that convention for `tests/test_kube_client.py`); the same applies here.
+    """
 
     def _executing(self, decommission, executions):
-        """Drive the substep loop with declared per-substep executions."""
+        """Drive the substep loop with declared per-substep executions.
+
+        Every expected outcome, including FAILED, is a returned `SubstepExecution`. A member
+        that is an exception instance is used only by the unexpected-exception test below, and
+        models a programming error escaping a family method, never an expected failure.
+        """
         calls = []
 
         def fake_run_substep(substep):
             calls.append(substep)
             execution = executions[substep]
-            if isinstance(execution, Exception):
+            if isinstance(execution, BaseException):
                 raise execution
             return execution
 
@@ -3634,9 +4644,9 @@ class TestActualChangeTruth:
         assert result.succeeded is True
 
     def test_a_later_failure_does_not_erase_an_earlier_actual_change(self, decommission_with_obs):
-        self._executing(decommission_with_obs, {
+        calls = self._executing(decommission_with_obs, {
             "observability": SubstepExecution(SubstepOutcome.COMPLETED, changed=True),
-            "managed_clusters": SwitchoverError("inventory unverifiable"),
+            "managed_clusters": SubstepExecution(SubstepOutcome.FAILED, changed=False),
             "multiclusterhub": SubstepExecution(SubstepOutcome.COMPLETED, changed=True),
         })
         result = decommission_with_obs.decommission(interactive=False)
@@ -3644,6 +4654,61 @@ class TestActualChangeTruth:
         assert result.succeeded is False
         assert result.substeps["managed_clusters"] is SubstepOutcome.FAILED
         assert result.not_attempted == ("multiclusterhub",)
+        assert calls == ["observability", "managed_clusters"], "a failure aborts later substeps"
+
+    def test_a_failing_substeps_own_mutation_reaches_the_result(self, decommission_with_obs):
+        """IV-R403-01: the SAME substep accepted a DELETE, then failed its proof.
+
+        No earlier substep mutated anything, so the only way `changed` can be true is by
+        aggregating the failing execution's own flag before the early return.
+        """
+        self._executing(decommission_with_obs, {
+            "observability": SubstepExecution(SubstepOutcome.FAILED, changed=True),
+            "managed_clusters": SubstepExecution(SubstepOutcome.COMPLETED, changed=True),
+            "multiclusterhub": SubstepExecution(SubstepOutcome.COMPLETED, changed=True),
+        })
+        result = decommission_with_obs.decommission(interactive=False)
+        assert result.changed is True, "the accepted DELETE in the failing substep must be reported"
+        assert result.succeeded is False
+        assert result.substeps["observability"] is SubstepOutcome.FAILED
+        assert result.not_attempted == ("managed_clusters", "multiclusterhub")
+
+    def test_a_failing_substep_that_mutated_nothing_reports_no_change(self, decommission_with_obs):
+        self._executing(decommission_with_obs, {
+            "observability": SubstepExecution(SubstepOutcome.FAILED, changed=False),
+            "managed_clusters": SubstepExecution(SubstepOutcome.COMPLETED, changed=True),
+            "multiclusterhub": SubstepExecution(SubstepOutcome.COMPLETED, changed=True),
+        })
+        result = decommission_with_obs.decommission(interactive=False)
+        assert result.changed is False
+        assert result.succeeded is False
+
+    def test_a_refused_substep_aborts_the_remaining_requested_substeps(self, decommission_with_obs):
+        calls = self._executing(decommission_with_obs, {
+            "observability": SubstepExecution(SubstepOutcome.REFUSED, changed=False),
+            "managed_clusters": SubstepExecution(SubstepOutcome.COMPLETED, changed=True),
+            "multiclusterhub": SubstepExecution(SubstepOutcome.COMPLETED, changed=True),
+        })
+        result = decommission_with_obs.decommission(interactive=False)
+        assert result.succeeded is False
+        assert calls == ["observability"]
+        assert result.not_attempted == ("managed_clusters", "multiclusterhub")
+
+    def test_an_unexpected_exception_propagates_and_never_becomes_a_result(self, decommission_with_obs):
+        """A programming error must not be laundered into FAILED or into a successful result."""
+        self._executing(decommission_with_obs, {
+            "observability": AttributeError("'NoneType' object has no attribute 'metadata'"),
+            "managed_clusters": SubstepExecution(SubstepOutcome.COMPLETED, changed=False),
+            "multiclusterhub": SubstepExecution(SubstepOutcome.COMPLETED, changed=False),
+        })
+        with pytest.raises(AttributeError):
+            decommission_with_obs.decommission(interactive=False)
+
+    def test_the_aggregator_has_no_switchover_error_handler(self):
+        """One channel: an expected failure is a return value, so no handler may swallow it."""
+        source = inspect.getsource(Decommission.decommission)
+        assert "except SwitchoverError" not in source
+        assert "except Exception" not in source
 
     @patch("modules.decommission.confirm_action")
     def test_a_later_refusal_does_not_erase_an_earlier_actual_change(self, confirm, decommission_with_obs):
@@ -3672,13 +4737,17 @@ class TestActualChangeTruth:
         assert result.would_change is True
         assert result.changed is False
 
-    def test_every_substep_executor_returns_the_one_execution_type(self):
-        # Producer/consumer agreement is asserted, not assumed: C, D, and E extend this list.
-        import inspect
+    @pytest.mark.parametrize("name", SUBSTEP_EXECUTORS)
+    def test_every_substep_executor_returns_the_one_execution_type(self, name):
+        """One execution-result channel, asserted per producer rather than assumed."""
+        annotation = inspect.signature(getattr(Decommission, name)).return_annotation
+        assert annotation in (SubstepExecution, "SubstepExecution")
 
-        for name in ("_run_substep",):
+    def test_no_executor_returns_a_bare_outcome_or_a_tuple(self):
+        for name in SUBSTEP_EXECUTORS:
             annotation = inspect.signature(getattr(Decommission, name)).return_annotation
-            assert annotation in (SubstepExecution, "SubstepExecution")
+            assert annotation not in (SubstepOutcome, "SubstepOutcome")
+            assert "tuple" not in str(annotation).lower()
 ```
 
 `tests/test_decommission.py` already defines `mock_primary_client` (`:26`),
@@ -3814,16 +4883,19 @@ declared substeps rather than three copied `if/else` blocks:
                 return DecommissionResult(
                     substeps=outcomes, not_attempted=self._remaining_after(index), changed=changed
                 )
-            try:
-                execution = self._run_substep(substep)
-            except SwitchoverError as exc:
-                logger.error("Decommission substep %s failed: %s", substep, exc)
-                outcomes[substep] = SubstepOutcome.FAILED
+
+            # The ONE execution-result channel. No try/except here: an expected operational
+            # failure arrives as SubstepExecution(FAILED, changed=...) so this invocation's
+            # actual mutation is aggregated before the early return (IV-R403-01).
+            execution = self._run_substep(substep)
+
+            outcomes[substep] = execution.outcome
+            changed = changed or execution.changed
+
+            if execution.outcome in (SubstepOutcome.FAILED, SubstepOutcome.REFUSED):
                 return DecommissionResult(
                     substeps=outcomes, not_attempted=self._remaining_after(index), changed=changed
                 )
-            outcomes[substep] = execution.outcome
-            changed = changed or execution.changed
 
         return DecommissionResult(substeps=outcomes, not_attempted=(), changed=changed)
 
@@ -3832,15 +4904,29 @@ declared substeps rather than three copied `if/else` blocks:
 ```
 
 `_run_substep(substep) -> SubstepExecution` dispatches to the three family methods and returns their
-`SubstepExecution` unchanged. A substep that raises `SwitchoverError` after having already issued an
-accepted DELETE must report that mutation, so the family methods catch their own mid-flight failure,
-record the phase, and re-raise only after the aggregation above has no further work to do; where a
-family cannot report both, it raises and the earlier substeps' `changed` still stands. `_preview_substep`
-performs only fresh reads and returns a bool; it is never called by a live run and never writes
-`RunRecord`. PRs C, D, and E replace their family dispatch and predictor together with the guarded
-phase machine and return `PRECONDITION_NOOP` where July §3 proves no mutation is needed. Update both
-callers per the mapping table and add a source guardrail forbidding bare truthiness of
-`DecommissionResult`.
+`SubstepExecution` unchanged. It contains no exception handling of its own.
+
+A substep whose UID-preconditioned DELETE was accepted and whose subsequent proof then failed
+reports that mutation **on the return channel**: the family method records the phase, logs the
+sanitized failure, and returns `SubstepExecution(SubstepOutcome.FAILED, changed=True)`. The loop
+above ORs that flag into `changed` **before** it inspects the outcome and returns, so
+`DecommissionResult.changed` is `True` on that path by construction rather than by convention.
+The B-stage adaptation of the three existing private methods establishes this shape; PRs C, D, and
+E preserve it when they replace each family with the guarded phase machine.
+
+At the B stage, converting expected failures is the family method's own responsibility. If a
+B-stage adapter still needs a boundary to catch an expected `SwitchoverError` raised by
+pre-existing code it wraps, that boundary lives **inside the family method**, where the accepted
+DELETE is known, and it returns `SubstepExecution(FAILED, changed=<known>)`. It never lives in the
+aggregator, and it never re-raises to communicate a result. Unexpected exceptions are not caught
+anywhere in this path.
+
+`_preview_substep` performs only fresh reads and returns a bool; it is never called by a live run
+and never writes `RunRecord`. PRs C, D, and E replace their family dispatch and predictor together
+with the guarded phase machine and return `PRECONDITION_NOOP` where July §3 proves no mutation is
+needed. Update both callers per the mapping table and add a source guardrail forbidding bare
+truthiness of `DecommissionResult`, plus a guardrail asserting that
+`Decommission.decommission` contains no `except SwitchoverError` arm.
 
 - [ ] **Step 4: Run and observe the tests pass**
 
@@ -3851,8 +4937,10 @@ python -m pytest tests/test_decommission.py tests/test_finalization.py tests/tes
 - [ ] **Step 5: Refactor**
 
 The loop above replaces three near-identical prompt/skip blocks. Confirm no `return True` remains
-in `modules/decommission.py` and that the broad `except Exception` at the old `:99-102` either
-disappears or is narrowed to a logged `FAILED` outcome rather than a silent success.
+in `modules/decommission.py`; that the broad `except Exception` at the old `:99-102` is **removed**
+rather than narrowed, since an expected failure now arrives as a `FAILED` execution result and an
+unexpected one must propagate; and that `decommission()` contains no exception handler at all, so
+no path can discard a failing substep's `changed` flag.
 
 - [ ] **Step 6: Commit**
 
@@ -3930,7 +5018,11 @@ Returned mapping, exactly:
 
 Accepted options: `check_mode: bool = False`; `execution_mode: str = "execute"`;
 per-substep outcome overrides such as `observability_outcome="failed"`; resource-presence fakes
-`mco_present`, `mch_present`, `managed_clusters`, `destination_mco`, `destination_namespace`;
+`mco_present`, `mch_present`, `managed_clusters`, `destination_mco`, `destination_namespace`,
+`observability_namespace` (`"present"` by default, or `"absent"` to drive the namespace-absent
+drain mode), `acm_namespace` (the same two values for the MCH family), and `fail_after` (a phase
+name after which the fake injects an operational failure, used to assert that no completion
+evidence is written before `completed`);
 `checkpoint_available: bool = True`; and
 `acknowledge_observability_not_migrated: bool = False`.
 
@@ -4034,8 +5126,14 @@ Add to `tests/scenario/` a decommission checkpoint case proving:
 1. a full `checkpoint.reset` removes `decommission_teardown_records`, and a post-reset rerun that
    finds the CR absent takes the clean-skip path — **asserted as current, documented behavior**,
    so the R4-05 coordination stays visible rather than silently mitigated;
-2. `reset_from` retains `operational_data` and therefore retains the teardown records, and the
-   rerun revalidates them instead of laundering them.
+2. `reset_from` retains `operational_data` and therefore retains the teardown records **whole** —
+   including `absence_proofs`, which is a sibling field inside the record and not a separate
+   durable key — and the rerun revalidates them under §10.2.1 instead of laundering them. Assert
+   both directions: a retained record whose completion evidence is valid survives `reset_from`
+   with `resource_versions` and `absence_proofs` byte-identical, and a retained record carrying
+   any `MALFORMED_COMPLETION_RECORDS` payload fails closed on the post-`reset_from` read rather
+   than being accepted because it was already stored. No new reset mechanism is introduced, and
+   the accepted R4-05 reset-laundering limitation is unchanged.
 
 ```bash
 export ANSIBLE_COLLECTIONS_PATH="$(pwd):${HOME}/.ansible/collections"
@@ -4135,7 +5233,6 @@ Add to `tests/test_main.py`, in the same class and the same inline style as Task
                 key=teardown_key("observability.open-cluster-management.io/v1beta2",
                                  "MultiClusterObservability", None, "observability"),
                 expected_uid="u", phase=TeardownPhase.DELETE_STARTED,
-                resource_versions={"cr": "1"},
             )
         )
         assert "decommission_teardown_records" in json.dumps(state.capture_state_snapshot())
@@ -4517,6 +5614,24 @@ changed)` — so `_run_substep` returns what the family method produced, unchang
 `decommission()` aggregates `changed` exactly as B3.1 specifies. There is no tuple form and no
 side channel anywhere in C, D, or E.
 
+**Expected operational failures return; they do not raise (IV-R403-01).** `_teardown_resource`
+owns the conversion, because it is the single place that knows whether the API accepted the
+UID-preconditioned DELETE for this invocation. It maintains one local `changed` flag, set `True`
+the moment the DELETE is accepted (step 3 below) and never cleared. Every expected
+`SwitchoverError`-class operational failure raised by the reads, the delete primitive, the drain,
+or the final verification is caught **inside** `_teardown_resource`, which then:
+
+1. records the appropriate durable phase — `recovery_required` where the response is ambiguous,
+   otherwise leaving the last successfully recorded phase in place;
+2. emits the existing sanitized failure logging, with the stable stage and reason code and no raw
+   body, header, token, or client configuration;
+3. returns `SubstepExecution(SubstepOutcome.FAILED, changed=<that local flag>)`.
+
+Unexpected exceptions are **not** caught here and propagate uncaught, exactly as B3.1 requires.
+`teardown_observability` returns whatever `_teardown_resource` produced, unchanged. `Finalization`
+inspects the returned `.outcome` and raises its own `SwitchoverError` with its finalization-specific
+message context; that is the documented adapter, not a second channel.
+
 `changed` is derived here, per B3.2: it is `True` only when **this invocation** issued a
 UID-preconditioned DELETE that the API server accepted for the recorded `expected_uid`. A resumed
 record whose DELETE was accepted in an earlier invocation contributes `changed=False`, even when
@@ -4543,22 +5658,36 @@ D and E supply their own specs to the same `_teardown_resource`; that is what ke
    label_selector=OBSERVABILITY_POD_LABEL_SELECTOR)`. A positively absent namespace counts as
    verified-empty under the July §3 fixed-namespace scope rule; an unreadable or ambiguous
    namespace records `recovery_required`.
-6. Record `drained` only after the bounded check proves empty; then re-run the CR-absence and
-   pod-empty predicates and write `completed` carrying `observed_at` and the exact §10.2.1 proof
-   keys for the proof mode this run actually used:
-   - `cr` is the revision already recorded at `delete_started` from the strict named GET that bound
-     `expected_uid`, carried forward unchanged;
-   - `pods` is the `resource_version` of the successful `list_pods_strict(...)` whose final page
-     proved the drain empty, when the drain was proven that way;
-   - `namespace_absent` is the exact namespace name, when `get_namespace_strict(...)` returned
-     `NAMESPACE_ABSENT` and the July §3 fixed-namespace scope rule entailed the pod-empty predicate.
+6. Record `drained` only after the bounded check proves empty; then run **one final verification
+   pass** that re-proves the CR-absence and drain predicates with fresh reads, and build the
+   completion evidence **from the outcomes of that pass only** (§10.2.1). Evidence is never copied
+   from an earlier phase, from a pre-DELETE read, from a previous invocation, or from a dry-run or
+   check-mode observation. The exact data sources, all `StrictReadOutcome` values produced by that
+   final pass:
 
-   Exactly one of `pods` / `namespace_absent` is written for MCO and MCH. Writing both, neither, or
-   a key from the other proof mode is malformed and is rejected by Task B1's validator before it
-   reaches the state file.
+   | Field | Exact source in the final pass |
+   | --- | --- |
+   | `observed_at` | the UTC RFC 3339 timestamp taken at the boundary of that pass, immediately before the durable `completed` write (§10.2.1e) |
+   | `absence_proofs["target_cr"]` | the final strict CR read: `OBJECT_ABSENT` → `proof_type="object_absent"`; `CRD_ABSENT` → `proof_type="crd_absent"`. `resource_key` is the enclosing record's own key |
+   | `resource_versions["drain_namespace"]` | `get_namespace_strict(<drain namespace>).resource_version`, when that call returned `ITEMS` |
+   | `absence_proofs["drain_namespace"]` | `proof_type="namespace_absent"` with `resource_key=f"v1/Namespace//{<drain namespace>}"`, when that call returned `NAMESPACE_ABSENT` |
+   | `resource_versions["drain_pods"]` | `list_pods_strict(...).resource_version` — the single whole-read snapshot revision (§9.3 A3.0 rule 8) — of the successful LIST that proved the drain empty; written only in the namespace-present mode |
+
+   The two drain modes are selected by that one fresh Namespace GET and are mutually exclusive:
+   `drain_namespace` appears in exactly one of the two fields, and `drain_pods` appears if and only
+   if the namespace was present. `resource_versions` is `{}` in the namespace-absent mode — present
+   and empty, never omitted. Writing both modes, neither mode, a key from the other mode, or any
+   key outside the §10.2.1b closed label set is malformed and is rejected by Task B1's validator
+   before it reaches the state file. No pre-DELETE revision is carried forward: the `cr` key does
+   not exist. The `completed` write happens only after **all** required evidence has been built and
+   validated; a validation failure leaves the record at its previous phase and returns `FAILED`.
 
 **Failure behavior.** Timeout at any stage, a still-present same-UID CR, or an unobtainable proof
-raises `SwitchoverError`; where the response is ambiguous the record moves to `recovery_required`.
+is an expected operational failure: it is converted, inside `_teardown_resource`, into
+`SubstepExecution(FAILED, changed=<whether this invocation had a DELETE accepted>)` after the
+sanitized logging above. Where the response is ambiguous the record moves to `recovery_required`
+before that return. No expected failure escapes as an exception, and no unexpected exception is
+converted into a result.
 The dead caller-side 404 arm at `modules/decommission.py:139-143` is deleted with the call site it
 guarded, and the behavior it purported to cover is re-asserted against the real seam rather than
 through the decorator-bypassing mocks at `tests/test_decommission.py:190-204`.
@@ -4570,7 +5699,7 @@ through the decorator-bypassing mocks at `tests/test_decommission.py:190-204`.
 | `self.primary` present, `old_hub_action == "secondary"`, `primary_has_observability` gating | `Finalization.finalize` (`modules/finalization.py:211`), unchanged |
 | `state.step("disable_observability_on_secondary")` | `Finalization`, unchanged |
 | GitOps marker recording | `record_gitops_markers=True` from `Finalization` only |
-| Finalization-specific failure text | `Finalization` catches and re-raises with its own message |
+| Finalization-specific failure text | `Finalization` inspects the returned `SubstepExecution.outcome` and raises its own `SwitchoverError` with its own message context; it never catches an exception from the teardown, because expected failures arrive on the return channel (§B3.1) |
 | `interactive=False` for the integrated path | unchanged (`modules/finalization.py:1141`) |
 | Dry-run preview | single shared behavior |
 
@@ -4593,19 +5722,134 @@ proof). Carried in Task C6.
   skip); `cr_absent` plus namespace absent; `drain_pending` with pods still present; any prior
   record plus a CRD, namespace, or pod-list API failure (fatal, never absence); `drained` plus a
   final-verification failure (no `completed` write); a finalizer-stuck MCO whose CR persists past
-  the timeout raising `SwitchoverError`; a rerun after a drain timeout with the CR now absent
+  the bounded timeout, returning `SubstepExecution(FAILED, changed=True)` because the DELETE was
+  accepted, rather than raising; a rerun after a drain timeout with the CR now absent
   still running the pod drain before `drained`; a crash-rerun after `delete_started` with a
   same-name replacement reusing the recorded UID, failing before DELETE, and leaving the
   replacement intact; and injected failure at each of the `drained` and `completed` boundaries
-  proving no premature terminal write. Add the actual-change cases required by B3.2:
-  a clean skip returns `SubstepExecution(PRECONDITION_NOOP, changed=False)`; a live accepted
-  UID-preconditioned DELETE plus a successful completion proof returns
-  `SubstepExecution(COMPLETED, changed=True)`; a resumed `drained` record whose final proof
-  succeeds without any DELETE in this invocation returns `SubstepExecution(COMPLETED,
-  changed=False)`; and a run that accepted the DELETE but then failed the final proof reports
-  `changed=True` while raising. Add the completed-record proof-key cases: a drain proven by a
-  successful Pod LIST writes `{cr, pods}`; a drain entailed by a positive namespace absence writes
-  `{cr, namespace_absent}`; and no path writes both.
+  proving no premature terminal write. Add the **seven mandatory actual-change cases** required by B3.2 and IV-R403-01. Every one of
+  them asserts a returned `SubstepExecution`; none asserts a raise:
+
+```python
+class TestMcoTeardownExecutionResult:
+    """IV-R403-01 for the MCO family: expected failures return, and carry their own mutation."""
+
+    def test_no_mutation_then_proof_failure_reports_failed_and_no_change(self, decommission_with_obs):
+        execution = _run_mco(decommission_with_obs, delete_accepted=False, final_proof="error")
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+
+    def test_accepted_delete_then_cr_absence_proof_failure_reports_the_mutation(self, decommission_with_obs):
+        execution = _run_mco(decommission_with_obs, delete_accepted=True, cr_absence_proof="error")
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+
+    def test_accepted_delete_then_drain_failure_reports_the_mutation(self, decommission_with_obs):
+        execution = _run_mco(decommission_with_obs, delete_accepted=True, drain="error")
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+
+    def test_accepted_delete_then_final_verification_failure_reports_the_mutation(self, decommission_with_obs):
+        execution = _run_mco(decommission_with_obs, delete_accepted=True, final_proof="error")
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        assert decommission_with_obs.run_record.teardown_record(MCO_KEY).phase is not (
+            TeardownPhase.COMPLETED
+        ), "a failed final proof must not write completed"
+
+    def test_resumed_record_without_a_new_delete_then_proof_failure_reports_no_change(self, decommission_with_obs):
+        _seed_record(decommission_with_obs, phase=TeardownPhase.DRAINED)
+        execution = _run_mco(decommission_with_obs, delete_accepted=False, final_proof="error")
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+
+    def test_a_clean_skip_is_a_precondition_noop(self, decommission_with_obs):
+        execution = _run_mco(decommission_with_obs, cr="crd_absent", namespace="absent",
+                             record=None)
+        assert execution == SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
+
+    def test_accepted_delete_with_a_successful_proof_is_completed_and_changed(self, decommission_with_obs):
+        execution = _run_mco(decommission_with_obs, delete_accepted=True)
+        assert execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
+
+    def test_no_expected_failure_escapes_as_an_exception(self, decommission_with_obs):
+        """Every expected operational failure arrives on the return channel."""
+        for injection in ("cr_absence_proof", "drain", "final_proof"):
+            execution = _run_mco(decommission_with_obs, delete_accepted=True, **{injection: "error"})
+            assert execution.outcome is SubstepOutcome.FAILED
+```
+
+  Three new module-level helpers are added next to the existing `tests/test_decommission.py`
+  fixtures. D and E reuse all three with their own family arguments; no further helper is
+  introduced.
+
+```python
+def _seed_record(decommission, *, key=MCO_KEY, phase, expected_uid="uid-1"):
+    """Write one teardown record at `phase` through the real RunRecord, for resume cases."""
+    decommission.run_record.record_teardown_phase(
+        TeardownRecord(key=key, expected_uid=expected_uid, phase=phase)
+    )
+
+
+def _run_mco(decommission, **injections):
+    """Configure the mocked strict-read and delete seams, then run the MCO teardown.
+
+    Recognized injections, each defaulting to the success path:
+      cr                 -- "present" | "object_absent" | "crd_absent" | "error"
+      namespace          -- "present" | "absent" | "error"
+      drain              -- "empty" | "pods_remain" | "error"
+      cr_absence_proof   -- "absent" | "error"      (the post-DELETE absence poll)
+      final_proof        -- "ok" | "error"          (the final verification pass)
+      delete_accepted    -- bool, whether the API accepted the UID-preconditioned DELETE
+      record             -- an existing TeardownPhase to seed, or None for no prior record
+      pre_delete_revision, namespace_revision, pods_revision -- the revisions the seams serve
+    """
+    return _configure_mco_seams(decommission, **injections).run()
+
+
+def _run_mco_capturing_reads(decommission, **injections):
+    """Like `_run_mco`, but returns the recorded seam outcomes instead of the execution result.
+
+    The returned object exposes `final_namespace_outcome` and `final_pods_outcome` -- the exact
+    `StrictReadOutcome` values the final verification pass consumed -- so a producer-seam test can
+    assert the persisted revision IS the read's revision rather than a matching literal.
+    """
+    seams = _configure_mco_seams(decommission, **injections)
+    seams.run()
+    return seams
+```
+
+  `_configure_mco_seams` is the single shared body both call: it builds the fake strict-read and
+  delete seams from the injections, records every outcome it serves, and exposes `run()`, which
+  invokes `decommission.teardown_observability()` and returns its `SubstepExecution`.
+
+  `tests/test_decommission.py` imports `TeardownPhase`, `TeardownRecord`, and `teardown_key` from
+  `lib.teardown_record` and defines its own `MCO_KEY`, `MCH_KEY`, and `CLUSTER_KEY` module
+  constants with the same values as `tests/test_teardown_record.py`. They are **redeclared, not
+  imported across test modules**, matching the repository convention that a test file owns its own
+  constants; only `MALFORMED_COMPLETION_RECORDS` crosses a module boundary, and only into the
+  parity test whose whole purpose is to compare the two sides.
+
+  Add the completed-record evidence cases, asserting the §10.2.1d MCO key sets exactly: a drain
+  proven by a successful Pod LIST writes `resource_versions == {drain_namespace, drain_pods}` with
+  `absence_proofs == {target_cr}`; a drain entailed by a positive namespace absence writes
+  `resource_versions == {}` with `absence_proofs == {target_cr, drain_namespace}`; no path writes
+  both drain modes or neither; the persisted `drain_pods` value is the snapshot revision the strict
+  primitive returned for the whole read, asserted against the seam rather than a literal; and the
+  `cr` key appears nowhere.
+
+```python
+def test_completed_evidence_comes_from_the_final_pass_seam(decommission_with_obs):
+    """Producer-seam test (§10.2.1b provenance): the written revision IS the read's revision."""
+    seams = _run_mco_capturing_reads(decommission_with_obs, delete_accepted=True,
+                                     namespace_revision="88190", pods_revision="88219")
+    record = decommission_with_obs.run_record.teardown_record(MCO_KEY)
+    assert record.resource_versions == {"drain_namespace": "88190", "drain_pods": "88219"}
+    assert record.resource_versions["drain_namespace"] == seams.final_namespace_outcome.resource_version
+    assert record.resource_versions["drain_pods"] == seams.final_pods_outcome.resource_version
+    assert "cr" not in record.resource_versions
+
+
+def test_a_pre_delete_revision_is_never_persisted(decommission_with_obs):
+    _run_mco(decommission_with_obs, delete_accepted=True, pre_delete_revision="77310")
+    stored = json.dumps(decommission_with_obs.run_record.all_teardown_records(), default=str)
+    assert "77310" not in stored
+```
 - [ ] **Step 2:** run; expected FAIL — `teardown_observability` does not exist and the current
   `_delete_observability` neither records nor re-reads.
 - [ ] **Step 3:** implement `_teardown_resource` and `teardown_observability`, consuming PR A's
@@ -4673,11 +5917,11 @@ below assert each element of it:
 | 2 | Read the source MCO inventory | `acm_k8s_read_outcome` with `read_mode: list`, `resource_name: multiclusterobservabilities` | none (read-only) | `acm_switchover_mco_read` |
 | 3 | Fail closed on a non-`ok` read | `ansible.builtin.fail` | `when: acm_switchover_mco_read.read_status not in ["ok", "kind_not_served"]` | — |
 | 4 | Destination gate (Task C5) | gate task file include | `when: acm_switchover_hubs.secondary is defined` | `acm_switchover_observability_gate` |
-| 5 | Record `delete_started` with `expected_uid` and the `cr` revision | `checkpoint` operational-data writer | `when: not ansible_check_mode and acm_switchover_execution.mode == "execute"` | — |
+| 5 | Record `delete_started` with `expected_uid` only — no completion evidence exists before `completed` (§10.2.1a) | `checkpoint` operational-data writer | `when: not ansible_check_mode and acm_switchover_execution.mode == "execute"` | — |
 | 6 | Guarded delete | `tomazb.acm_switchover.acm_uid_guarded_delete` with `expected_uid`, explicit `kubeconfig`/`context`, bounded `request_timeout`/`wait_timeout`/`wait_sleep`, `no_log: true` | none — the module implements native check mode itself and stops before DELETE | `acm_switchover_mco_delete` |
 | 7 | Record `cr_absent`, then `drain_pending` | `checkpoint` writers | same guard as 5 | — |
 | 8 | Selector-scoped bounded drain wait | `acm_k8s_read_outcome` list of Pods with `resource_name: pods` and the observability label selector, inside a bounded `until` with **no** `failed_when: false` and **no** `default([])` | none (read-only) | `acm_switchover_mco_pods` |
-| 9 | Record `drained`, re-prove, then `completed` with the §10.2.1 proof keys | `checkpoint` writers | same guard as 5 | — |
+| 9 | Record `drained`, re-prove with fresh reads, then `completed` carrying `observed_at`, the §10.2.1d `resource_versions` key set for the drain mode this run reached, and `absence_proofs` built from that same final pass | `checkpoint` writers | same guard as 5 | — |
 | 10 | Publish the substep outcome and its actual/predicted change | `ansible.builtin.set_fact` | none | `acm_switchover_decommission_outcomes.observability`, and the substep's `changed`/`would_change` inputs to the B4 aggregation |
 
 Task 6's `changed` is the module's own `changed`, which is true only after an accepted
@@ -4747,12 +5991,43 @@ def test_execute_mode_delete_carries_the_recorded_expected_uid():
     assert result["delete_calls"][0]["kubeconfig"] and result["delete_calls"][0]["context"]
 
 
-def test_completed_record_carries_the_exact_proof_keys():
+def test_completed_record_carries_the_exact_evidence_key_sets():
+    """§10.2.1d, MCO namespace-present mode."""
     result = run_decommission_role(mco_present=True)
     records = result["checkpoint"]["operational_data"]["decommission_teardown_records"]
-    record = next(iter(records.values()))
+    key, record = next(iter(records.items()))
     assert record["phase"] == "completed"
-    assert set(record["resource_versions"]) == {"cr", "pods"}
+    assert set(record["resource_versions"]) == {"drain_namespace", "drain_pods"}
+    assert set(record["absence_proofs"]) == {"target_cr"}
+    assert record["absence_proofs"]["target_cr"] == {
+        "proof_type": "object_absent", "resource_key": key
+    }
+    assert "cr" not in record["resource_versions"]
+
+
+def test_completed_record_in_the_namespace_absent_mode_carries_an_empty_revision_map():
+    """§10.2.1d, MCO namespace-absent mode: present-and-empty, and no namespace name as a value."""
+    result = run_decommission_role(mco_present=True, observability_namespace="absent")
+    records = result["checkpoint"]["operational_data"]["decommission_teardown_records"]
+    key, record = next(iter(records.items()))
+    assert record["resource_versions"] == {}
+    assert set(record["absence_proofs"]) == {"target_cr", "drain_namespace"}
+    assert record["absence_proofs"]["drain_namespace"] == {
+        "proof_type": "namespace_absent",
+        "resource_key": "v1/Namespace//open-cluster-management-observability",
+    }
+    assert "open-cluster-management-observability" not in record["resource_versions"].values()
+
+
+def test_a_non_completed_record_carries_no_completion_evidence():
+    """§10.2.1a: absent is not empty; evidence never appears before `completed`."""
+    result = run_decommission_role(mco_present=True, fail_after="delete_started")
+    records = result["checkpoint"]["operational_data"]["decommission_teardown_records"]
+    record = next(iter(records.values()))
+    assert record["phase"] != "completed"
+    assert "observed_at" not in record
+    assert "resource_versions" not in record
+    assert "absence_proofs" not in record
 ```
 
 - [ ] **Step 2: Run and observe the expected failure**
@@ -5007,8 +6282,11 @@ Expected: FAIL — `AttributeError: 'Decommission' object has no attribute
 Add `ObservabilityGateDecision`, `ObservabilityGateResult`, and the five reason-code constants;
 implement `destination_observability_gate()` as the four-step algorithm above; call it from
 `_teardown_resource` for the MCO spec only, immediately before the `delete_started` write, and map
-`NOT_APPLICABLE` to `SubstepExecution(PRECONDITION_NOOP, changed=False)` and `BLOCKED` to a raised
-`SwitchoverError` naming the reason code. Add the mirrored collection implementation in
+`NOT_APPLICABLE` to `SubstepExecution(PRECONDITION_NOOP, changed=False)` and `BLOCKED` to
+`SubstepExecution(FAILED, changed=False)` after logging the sanitized reason code — the gate runs
+**before** the `delete_started` write, so no mutation can have occurred and `changed` is
+necessarily false. The gate does not raise: like every other expected operational failure it
+travels on the one execution-result channel (§B3.1). Add the mirrored collection implementation in
 `roles/decommission/tasks/destination_observability_gate.yml`, included by
 `delete_observability.yml` at position 4 of the Task C4 table.
 
@@ -5137,14 +6415,21 @@ docs, `tests/test_decommission.py`, and the collection role-contract and scenari
 3. Per cluster: strict named GET → record `expected_uid` forced durable → preconditioned DELETE →
    bounded strict absence poll → final live absence proof → `completed`. One record per name, so
    ManagedClusters retain per-name records.
-4. Aggregate failures into one `SwitchoverError` listing the survivors.
+4. Aggregate per-cluster failures into **one** `SubstepExecution(FAILED, changed=<whether any
+   cluster's DELETE was accepted in this invocation>)`, after logging one sanitized message that
+   lists every ManagedCluster that did not reach `completed`. The family method does not raise:
+   the survivor list is failure context on the log and in the outcome, not an exception payload
+   (§B3.1).
 5. `local-cluster` continues to be skipped.
 6. `Decommission.teardown_managed_clusters(self) -> SubstepExecution` returns the one execution
    type from Task B3.1. Its `changed` is `True` when **any** ManagedCluster in this invocation had a
    UID-preconditioned DELETE accepted, and `False` for a proven-empty inventory, for a resume in
    which every remaining cluster only needed its final absence proof, and for every dry-run or
-   check-mode run. Each cluster's `completed` record carries the §10.2.1 key set for a family
-   without a drain scope: `{cr}` only.
+   check-mode run. Each cluster's `completed` record carries the §10.2.1d key set for a family
+   without a drain scope: `resource_versions == {}` — present and empty, because no
+   revision-bearing read participates in the final proof — and `absence_proofs == {target_cr}`,
+   whose `resource_key` is that cluster's own record key. No pre-DELETE revision is retained to
+   make the mapping non-empty, and any drain key in either field is malformed.
 
 Collection callers pass canonical `resource_name: managedclusters` and
 `resource_name: clusterdeployments`; neither caller nor the read module synthesizes a plural from
@@ -5185,7 +6470,20 @@ survives; the survivor list names every ManagedCluster that did not reach `compl
 proven-empty inventory returns `SubstepExecution(PRECONDITION_NOOP, changed=False)`; a run that
 accepted at least one DELETE and proved completion returns `changed=True`; a resume whose clusters
 are already absent and only need their final proof returns `changed=False`; and each `completed`
-record carries exactly `{cr}` in `resource_versions`. Add
+record carries `resource_versions == {}` with `absence_proofs == {target_cr}` keyed to that
+cluster, plus a `crd_absent` variant whose `resource_key` remains the record key.
+
+Add the **seven IV-R403-01 cases** for this family, mirroring `TestMcoTeardownExecutionResult`
+against `teardown_managed_clusters()` and using the same `_run_mco` / `_seed_record` helper pattern
+with ManagedCluster arguments. Case 3 (accepted DELETE then drain failure) is **inapplicable here,
+and is asserted as inapplicable rather than silently dropped**: ManagedCluster has no drain scope,
+so a test asserts that no drain read is issued on this family's path at all. The remaining six are
+required: no mutation then proof failure returns `FAILED, changed=False`; accepted DELETE then
+CR-absence proof failure returns `FAILED, changed=True`; accepted DELETE then final-verification
+failure returns `FAILED, changed=True` with no `completed` write; a resumed record needing only its
+final proof, which then fails, returns `FAILED, changed=False`; a partially completed batch in
+which one cluster's DELETE was accepted before a later cluster failed returns
+`FAILED, changed=True`; and no expected failure escapes as an exception. Add
 Python dry-run and Collection native-check-mode cases for present, empty, and unverifiable
 inventories; assert no DELETE primitive, no teardown-record/operational-data/phase write, no
 completed/refused/failed outcome, no task or summary actual change, accurate separate
@@ -5294,9 +6592,32 @@ DELETE.
 
 **Execution interface.** `Decommission.teardown_multiclusterhub(self) -> SubstepExecution`, the one
 type from Task B3.1. `changed` is `True` only when this invocation's UID-preconditioned MCH DELETE
-was accepted. The `completed` record carries `{cr, pods}` when the drain was proven by a successful
-Pod LIST and `{cr, namespace_absent}` when positive ACM-namespace absence entailed the pod-empty
-predicate (§10.2.1).
+was accepted. The `completed` record carries the §10.2.1d MCH key set for the mode this run
+actually reached:
+
+| Mode | `resource_versions` | `absence_proofs` |
+| --- | --- | --- |
+| Namespace present, operator identity captured | `{drain_namespace, drain_pods, operator_deployment}` | `{target_cr}` |
+| Namespace present, `operator_identity_unavailable` | `{drain_namespace, drain_pods}` — the Deployment revision is absent, and malformed if present | `{target_cr}` |
+| ACM namespace positively absent | `{}` | `{target_cr, drain_namespace}` — the single entailment entry discharging both drain-side predicates |
+
+`resource_versions.operator_deployment` is the `resource_version` of the **final** live
+`get_deployment_strict(...)` of the completing pass, written if and only if the record carries an
+`operator_deployment` identity **and** completed in the namespace-present mode. ReplicaSet
+revisions are read during owner-chain classification but are **never persisted**: no §10.2.1b label
+exists for them, so key closure rejects any attempt, and their variable cardinality would otherwise
+make two equally valid `completed` records carry different key sets (§22.6 exclusion 2).
+
+PR E adds the **seven IV-R403-01 cases** for this family against `teardown_multiclusterhub()`,
+mirroring `TestMcoTeardownExecutionResult` with MCH arguments: no mutation then proof failure
+returns `FAILED, changed=False`; accepted DELETE then CR-absence proof failure returns
+`FAILED, changed=True`; accepted DELETE then drain failure — an unverifiable Pod read or a broken
+owner chain — returns `FAILED, changed=True`; accepted DELETE then final-verification failure,
+including a replaced operator Deployment UID, returns `FAILED, changed=True` with
+`recovery_required` recorded and no `completed` write; a resumed `drained` record needing only its
+final proof, which then fails, returns `FAILED, changed=False`; an earlier substep's change
+survives an MCH failure, asserted through `decommission()`; and no expected failure escapes as an
+exception.
 
 **Pod member shape.** `list_pods_strict` yields `pod.to_dict()` mappings from the CoreV1 client
 models, so the classifier reads `metadata["owner_references"]`, each entry carrying `api_version`,
@@ -5498,6 +6819,15 @@ def test_check_mode_writes_no_checkpoint_transition():
     assert result["checkpoint"]["operational_data"].get("decommission_teardown_records") is None
 
 
+def test_check_mode_writes_no_completion_evidence():
+    """Native check mode reads, and may observe a revision, but persists nothing."""
+    result = run_role_check_mode(mco_present=True, mch_present=True)
+    serialized = json.dumps(result["checkpoint"]["operational_data"])
+    for field in ("observed_at", "resource_versions", "absence_proofs"):
+        assert field not in serialized
+    assert result["checkpoint"]["operational_data"] == result["checkpoint"]["before_operational_data"]
+
+
 def test_check_mode_reports_no_change_and_predicts_separately():
     result = run_role_check_mode(mch_present=True)
     assert result["acm_switchover_decommission_result"]["changed"] is False
@@ -5523,6 +6853,21 @@ def test_dry_run_persists_no_teardown_record(decommission_dry_run, state_manager
 def test_dry_run_persists_no_operator_identity(decommission_dry_run, state_manager):
     decommission_dry_run.decommission(interactive=False)
     assert "operator_deployment" not in json.dumps(state_manager.capture_state_snapshot())
+
+
+def test_dry_run_persists_no_completion_evidence(decommission_dry_run, state_manager):
+    """§10.2.1f and amendment §14: a preview may read, but its observations are never evidence."""
+    decommission_dry_run.decommission(interactive=False)
+    snapshot = json.dumps(state_manager.capture_state_snapshot())
+    for field in ("observed_at", "resource_versions", "absence_proofs"):
+        assert field not in snapshot
+
+
+def test_a_revision_observed_during_a_preview_is_never_persisted(decommission_dry_run,
+                                                                 state_manager):
+    """A preview read returns a real revision; it must remain transient."""
+    decommission_dry_run.decommission(interactive=False)
+    assert "88190" not in json.dumps(state_manager.capture_state_snapshot())
 
 
 def test_a_live_run_after_a_dry_run_starts_from_no_record(decommission_dry_run, decommission_live,
@@ -5626,7 +6971,8 @@ durable key outside this table is added by this slice.
 | Read timing | before the initial inventory classification, and at every resume | every drain and final-verification pass | every pass |
 | UID binding | the exact CR UID; immutable | the exact Deployment UID; bound to the enclosing MCH key and UID | bound to the enclosing MCH key and UID |
 | `observed_at` | required at `completed` | `captured_at` required | `captured_at` required |
-| `resource_versions` | required at `completed` with the exact §10.2.1 proof-key set for the family and the proof mode used: `cr` always; `pods` when a successful Pod LIST proved the drain; `namespace_absent` when positive namespace absence entailed it; a family without a drain scope carries `cr` only | not applicable | not applicable |
+| `resource_versions` | present at `completed` and **revision-only**; closed label set `{drain_namespace, drain_pods, operator_deployment}`; the exact per-family, per-mode key set of §10.2.1d; validly `{}` for an absence-only proof; absent at every other phase, and an absent field is never an empty mapping | not applicable | not applicable |
+| `absence_proofs` | present at `completed`; a sibling typed structure **inside** the same record, not a fourth durable key; closed key set `{target_cr, drain_namespace}`; each entry exactly `{proof_type, resource_key}` with the §10.2.1c closed vocabulary and right-split grammar; `target_cr` always required; absent at every other phase | not applicable | not applicable |
 | Serialized nested schema | not applicable | §10.2.2, field by field, validated on read and write in both form factors | §10.2.3, field by field, with `reason` drawn from `OPERATOR_IDENTITY_UNAVAILABLE_REASONS` |
 | Malformed or missing | fail closed before any mutation or clean-skip decision | fail closed; DELETE not issued | fail closed; DELETE not issued |
 | Resume behavior | resume from the recorded phase; absence never resets the machine or creates a clean skip | never re-discovered or overwritten | never silently upgraded by rediscovery |
@@ -5824,7 +7170,7 @@ corresponding safety conclusion is carried by an immutable source in §15.2.1 th
 | --- | --- | --- | --- | --- | --- |
 | A DELETE can be bound to a target UID server-side | `kubernetes/kubernetes` | `v1.26.0`, `v1.31.0` | `staging/src/k8s.io/apimachinery/pkg/apis/meta/v1/types.go` | both endpoints, identical | C1, C2 |
 | A UID identifies one object for its lifetime and is never rebound | `kubernetes/kubernetes` | `v1.26.0`, `v1.31.0` | same | both endpoints, identical | B1, B2, C1, C3, D, E |
-| A list response's `resourceVersion` is the revision it was served at | `kubernetes/kubernetes` | `v1.26.0`, `v1.31.0` | same | both endpoints, identical | A3, C3 (`resource_versions.pods`) |
+| A list response's `resourceVersion` is the revision it was served at, and a paginated read's continuation pages belong to the snapshot its first page established | `kubernetes/kubernetes` | `v1.26.0`, `v1.31.0` | same | both endpoints, identical | A3 (A3.0 rule 8), C3 (`resource_versions.drain_pods`) |
 | Pagination continues through `metadata.continue` | `kubernetes/kubernetes` | `v1.26.0`, `v1.31.0` | same | both endpoints, identical | A3, A4 |
 | Discovery's `resources[].name` is the exact plural to match | `kubernetes/kubernetes` | `v1.26.0`, `v1.31.0` | same | both endpoints, identical | A2, A4 |
 | Controller ownership is UID-resolved, Deployment to ReplicaSet to Pod | `kubernetes/kubernetes` | `v1.26.0`, `v1.31.0` | `pkg/controller/deployment/sync.go`, `pkg/controller/replicaset/replica_set.go` | both endpoints, identical semantics | E (11C.2, matrix rows 1, 5–12, 16) |
@@ -5895,7 +7241,8 @@ asserted against the real seam.
 | 5. Guarded-delete matrix | `TestPreconditionedDelete`; the collection `test_uid_guarded_delete.py` set — UID success, 409 and 412 fatal, pre-DELETE disappearance, mid-poll replacement, bounded timeout, check-mode `would_change`, redaction injection | C |
 | 6. Identity and TOCTOU matrix | `tests/test_decommission_identity.py` rows 1 through 20 plus the provenance cases; same-name new-UID replacement between discovery and DELETE; unrelated prefixed Pod; invalid, missing, and multiple owner chains; Deployment and ReplicaSet replacement mid-drain | E |
 | 7. Destination gate matrix | `TestDestinationObservabilityGate` — destination positively absent, present, `error`, and ambiguous mixed state; the flag accepted only against positive absence; the flag rejected when the gate would pass; resume re-runs the gate; the result is not persisted | C |
-| 8. State, resume, reset | the phase-table resume matrix in `tests/test_decommission.py`; the full-reset clean-skip limitation asserted as **current** behavior and published operator-facing in C; the collection `reset_from` case retaining and revalidating the records; the §10.2.1 completion proof-key matrix and the §10.2.2/§10.2.3 malformed nested-identity matrices in `tests/test_teardown_record.py` and `tests/unit/test_teardown_records.py`, held equal by the shared malformed-fixture parity test in `tests/test_checkpoint_state_parity.py`; reload validation on both sides | B, C |
+| 8. State, resume, reset | the phase-table resume matrix in `tests/test_decommission.py`; the full-reset clean-skip limitation asserted as **current** behavior and published operator-facing in C; the collection `reset_from` case retaining and revalidating the records; the §10.2.1 completion-evidence matrix (`MALFORMED_COMPLETION_RECORDS`) and the §10.2.2/§10.2.3 malformed nested-identity matrices in `tests/test_teardown_record.py` and `tests/unit/test_teardown_records.py`, held equal by the shared malformed-fixture parity test in `tests/test_checkpoint_state_parity.py`; reload validation on both sides | B, C |
+| 12. Completion-evidence schema (amendment §22) — all twelve sub-items | **12.1** revision-only key closure: `MALFORMED_COMPLETION_RECORDS["unknown_rv_label"]`, `["canonical_identity_used_as_an_rv_key"]`, `["replicaset_revision_recorded"]`. **12.2** namespace name rejected inside `resource_versions`: `["rejected_namespace_absent_rv_key"]`, `["namespace_name_used_as_a_revision"]`, plus the producer-seam tests `test_completed_evidence_comes_from_the_final_pass_seam` and A1's `test_absence_and_error_outcomes_never_carry_a_revision` / `test_a_non_items_outcome_cannot_be_given_a_revision`, which make a namespace name unwritable at the source. **12.3** arbitrary non-revision token: `["unknown_rv_label"]`, `["non_string_rv_value"]`, `["empty_rv_value"]`. **12.4** required absence proof missing, and absent-versus-empty: `["completed_without_target_cr_proof"]`, `["completed_missing_resource_versions"]`, `["completed_missing_absence_proofs"]`, `["completed_missing_observed_at"]`, plus `test_present_empty_resource_versions_is_not_the_same_as_absent`. **12.5** unknown or impermissible proof type: `["unknown_proof_type"]`, `["proof_type_not_permitted_for_its_key"]`. **12.6** malformed resource key: `["malformed_resource_key_extra_slash"]`, `["malformed_resource_key_empty_component"]`, `["drain_namespace_proof_with_a_non_empty_namespace_segment"]`, `["target_cr_resource_key_mismatch"]`, plus `test_resource_key_right_split_is_unambiguous` and `test_malformed_resource_keys_are_rejected`. **12.7** MCO Pod-list path: `test_completed_mco_namespace_present_records_exactly_the_two_drain_revisions`; C3's `test_completed_evidence_comes_from_the_final_pass_seam` binds `drain_pods` to the whole-read snapshot revision; A3's `test_pod_snapshot_revision_is_page_one_and_survives_no_restart` proves it is not a per-page value. **12.8** MCO namespace-absence path: `test_completed_mco_namespace_absent_records_an_empty_revision_map`, `["mco_namespace_absent_mode_carrying_drain_pods"]`, C4's `test_completed_record_in_the_namespace_absent_mode_carries_an_empty_revision_map`. **12.9** ManagedCluster absence-only: `test_completed_managed_cluster_is_absence_only` (both proof types), `["managed_cluster_carrying_drain_evidence"]`, `["managed_cluster_carrying_a_namespace_absence_proof"]`, and C3's `test_a_pre_delete_revision_is_never_persisted`. **12.10** MCH all three modes: `test_completed_mch_namespace_present_with_captured_identity`, `test_completed_mch_namespace_present_with_identity_unavailable`, `test_completed_mch_namespace_absent_discharges_both_drain_predicates`, `test_deployment_revision_rejected_when_no_identity_was_captured`, `test_deployment_revision_rejected_in_the_namespace_absent_mode`. **12.11** Python/Collection malformed parity: `test_every_malformed_completion_record_is_rejected_by_both_implementations` over the whole vector list. **12.12** evidence never substitutes for the fresh live gate: the integrated fresh-gate test in §16.2 item 8's resume matrix plus F1's live-after-preview cases | A, B, C, D, E |
 | 9. Consolidation regression, GLM-H6 | `test_finalization_and_direct_decommission_share_one_teardown_path`; `test_no_second_mco_teardown_implementation_remains`; GitOps markers recorded for the finalization caller only; caller preconditions preserved; collection artifact status honesty | B, C |
 | 10. Wrong-target boundary | a negative test asserting R4-03 binds **resource** identity and that no wrong-context or wrong-hub target check exists here, so the SSA-02 boundary is tested rather than silently assumed | F |
 | 11. Constants parity | `CONSTANT_PAIRS` gains the strict-read reason codes and the three strict-read bounds (A), `OPERATOR_IDENTITY_UNAVAILABLE_REASONS`, `DRAIN_SCOPED_KINDS`, and `IDENTITY_BEARING_KINDS` (B), `OBSERVABILITY_POD_LABEL_SELECTOR` and the five destination-gate reason codes (C), and `ACM_OPERATOR_POD_PREFIX` plus the four classification reason codes (E); `test_strict_read_bounds_are_mirrored` additionally ties the collection request-timeout constant to the Python client default | A, B, C, E |
@@ -5939,7 +7286,7 @@ considered discharged.
 | 5. Hive `preserveOnDelete` behavior unchanged | D | the retained `preserveOnDelete` and ambiguous-relationship tests |
 | 6. Clean skip only with no record or prior obligation; every recorded phase resumes | C, D, E | the phase-table resume matrix |
 | 7. Positive namespace absence counts as empty only under the fixed-namespace scope proof; `drained` and `completed` only after their full checks | C, E | namespace-absence and boundary-injection tests |
-| 8. `completed` asserts proof at its final-read instant, carries `observed_at` and `resourceVersion`, and integrated teardown re-proves live | B, C | the §10.2.1 proof-key matrix — `test_completed_mco_record_requires_an_exact_proof_key_set`, `test_completed_mco_record_accepts_either_approved_drain_proof`, `test_completed_managed_cluster_record_carries_no_drain_proof`, `test_cr_proof_revision_is_never_rebound_by_a_later_write` — mirrored in `tests/unit/test_teardown_records.py`; C3's completed-record proof-key cases; the integrated fresh-gate test |
+| 8. `completed` asserts proof at its final-read instant, carries `observed_at` and `resourceVersion`, and integrated teardown re-proves live. **Sharpened, not relaxed, by amendment §22.7 item 1 and A8**: every final-proof read that returns a revision must record it, and a positive-absence read — which returns none — is recorded in `absence_proofs` instead | A, B, C | the §10.2.1 completion-evidence matrix in `tests/test_teardown_record.py` (`MALFORMED_COMPLETION_RECORDS`, the per-family valid-record tests, the immutability tests) mirrored in `tests/unit/test_teardown_records.py`; the producer-seam tests `test_completed_evidence_comes_from_the_final_pass_seam` and `test_a_pre_delete_revision_is_never_persisted`; A1's revision-provenance tests; C3's completed-record evidence cases; the integrated fresh-gate test |
 | 9. Operator provenance durably bound before MCH DELETE, or explicitly unavailable | E | the provenance test set; `test_mch_identity_outcome_must_be_exactly_one` |
 | 10. Exclusion only after the complete owner chain; every broken link blocks; rolling-update ReplicaSets accepted only to the same UID | E | matrix rows 1, 8, 9, 10, 11, 12 |
 | 11. Prefix spoofing cannot change classification; unavailable identity means only a verified empty list satisfies the drain; a replaced Deployment fails closed | E | matrix rows 2–7, 14, 15, 16, 17 |
@@ -5956,8 +7303,27 @@ considered discharged.
 | A5 the §7 outcome table is observable in both form factors, with banner cancellation distinct and dry-run recording no outcome | B | `TestDecommissionOutcomes`; cancellation/CLI/truthiness tests; `test_decommission_outcome_vocabulary_parity`; dry-run state/mutation assertions | root + collection |
 | A6 operator-prefix drift closed; every shared constant enforced by the parity test | E | `tests/test_constants_parity.py` with the prefix and reason-code pairs | parity |
 | A7 Python teardown exists exactly once; both callers drive it with their semantics preserved | C | consolidation regression tests | root |
-| A8 the durable-field table is exhaustive; full-reset loss documented operator-facing before destructive records become reachable; `reset_from` preserves and revalidates | B, C | the reset and `reset_from` scenario cases; C documentation guardrails | collection scenario + docs |
-| A9 native check mode safe end to end; role-level `changed` false; prediction reported as `would_change` | B, C, D, E; F integrated proof | the B3.1 execution interface and the B3.2 change-truth table are the mechanism: `SubstepExecution(outcome, changed)` is the only executor result in B/C/D/E, `DecommissionResult.changed` aggregates it monotonically, and prediction stays in `would_change`. Tests: `TestActualChangeTruth`; B4's check-mode aggregation and checkpoint tests through the B4.1 contract; each C/D/E family's mutation/writer/prediction tests; F `test_decommission_check_mode.py`, `test_decommission_dry_run.py`, and scenarios | per-PR unit/scenario + F composition proof |
+| A8 the durable-field table is exhaustive; full-reset loss documented operator-facing before destructive records become reachable; `reset_from` preserves and revalidates; **and a `completed` record satisfies the §22 completion-evidence schema exactly** — `observed_at` present, `resource_versions` present and revision-only, `absence_proofs` present and typed, the per-family required key set matched, and every §22.2 malformed condition failing closed on both sides | B, C | the reset and `reset_from` scenario cases; C documentation guardrails; the whole §16.2 item 12 test set, whose twelve sub-items are the falsifiable form of this criterion; `test_every_malformed_completion_record_is_rejected_by_both_implementations` for the both-sides requirement | collection scenario + docs + parity |
+| A9 native check mode safe end to end; role-level `changed` false; prediction reported as `would_change` | B, C, D, E; F integrated proof | the B3.1 execution interface and the B3.2 change-truth table are the mechanism: `SubstepExecution(outcome, changed)` is the only executor result in B/C/D/E, an expected failure is a `FAILED` value on that same channel, `DecommissionResult.changed` aggregates it monotonically **before** any early return, and prediction stays in `would_change`. Tests: `TestActualChangeTruth`, including `test_a_failing_substeps_own_mutation_reaches_the_result` and `test_the_aggregator_has_no_switchover_error_handler`; the per-family seven-case matrices in C, D, and E; B4's check-mode aggregation and checkpoint tests through the B4.1 contract; each C/D/E family's mutation/writer/prediction tests; F `test_decommission_check_mode.py`, `test_decommission_dry_run.py`, and scenarios | per-PR unit/scenario + F composition proof |
+
+## 17.4 Reopened-design obligations closed by this plan repair
+
+Each row an independent validator can follow from the reapproved design at
+`335cdbab8011bbc5e291afe76ee73d81c58bd44a` to the executable plan task that discharges it.
+
+| Design requirement | Plan location | Executable tasks and tests |
+| --- | --- | --- |
+| §22.1 `resource_versions` is revision-only; every revision-bearing final-proof read is recorded; no read is bent to fit the schema | §10.2.1b | A1 revision contract and `__post_init__` enforcement; `MALFORMED_COMPLETION_RECORDS` key-closure and value-type vectors; C3's producer-seam test; §16.2 item 12.1–12.3 |
+| §22.2 record invariants; absent is not empty; the malformed table | §10.2.1a, §10.2.4 | B1 `validate_stored`; `test_present_empty_resource_versions_is_not_the_same_as_absent`; the phase-conditional and missing-field vectors; §16.2 item 12.4 |
+| §22.3 `resource_versions` closed key grammar, provenance, paginated snapshot, `operator_deployment` if-and-only-if | §10.2.1b | A3.0 rule 8 and its Python tests; A4's collection snapshot rule; `test_deployment_revision_rejected_when_no_identity_was_captured` and `..._in_the_namespace_absent_mode`; §16.2 item 12.7 |
+| §22.4 `absence_proofs` schema, closed vocabularies, `resource_key` right-split grammar | §10.2.1c | `AbsenceProof`, `split_resource_key`, `ABSENCE_PROOF_TYPES_BY_KEY`; the grammar tests and the absence-schema vectors; §16.2 item 12.5–12.6 |
+| §22.5 `observed_at` semantics and freshness; evidence never satisfies a live predicate | §10.2.1e, §10.2.1f | B1 `observed_at` rules; C3's final-pass sourcing table; the integrated fresh-gate test; §16.2 item 12.12 |
+| §22.6 per-family, per-mode required key sets, and the two stated exclusions | §10.2.1d | the six-row family table; the per-family valid-record tests; `test_a_pre_delete_revision_is_never_persisted`; the `replicaset_revision_recorded` vector; §16.2 item 12.7–12.10 |
+| §22.7 supersession — the R2 encoding is rejected and the plan is repaired to conform | header Status, §3 binding statement, §10.2.1 opening | the whole §10.2 rewrite; the placeholder-and-stale-schema scan in §21.7 |
+| §22.8 IV-R403-01 boundary — the plan repair must make the actual-change path mechanical using the shapes already declared, with no second channel | §B3.1, §B3.2, the B3 aggregator snippet, C3's conversion rule | `test_a_failing_substeps_own_mutation_reaches_the_result`; `test_the_aggregator_has_no_switchover_error_handler`; `test_an_unexpected_exception_propagates_and_never_becomes_a_result`; the seven-case matrices in C, D, and E |
+| Amendment §16 item 12 — the twelve completion-evidence test obligations, in both form factors | §16.2 item 12 | that row, sub-item by sub-item |
+| A8 / July criterion 8 | §17.2 row 8, §17.3 row A8 | as listed in those rows |
+| Strict-read `resource_version` exposure in both form factors (design-resolver obligation, comment `5496000592` item 35) | A1 contract table, A3.0 rule 8, A4 output contract and `RETURN`, A5 revision column, §9.6 rows | A1, A3, A4, A5, A6 tests named in the §9.6 gate mapping |
 
 ---
 
@@ -6093,7 +7459,7 @@ step in §21 may be described as one.
 | Any strict read returns `error` | Fatal; never treated as absence or as an empty inventory | A, C, D, E |
 | Malformed durable record | Fail closed before any mutation or clean-skip decision | B1, B2 |
 | Full reset between a failed drain and its rerun | The drain obligation's memory is forfeited and the rerun clean-skips — documented in C when first reachable, tested as current behavior, R4-05-owned | B4, C7 |
-| `reset_from` | Retains `operational_data`, therefore retains the records, and revalidates rather than laundering them | B4 |
+| `reset_from` | Retains `operational_data`, therefore retains the records whole — `absence_proofs` included, as a field inside the record rather than a fourth durable key — and revalidates them under §10.2.1 rather than laundering them; malformed retained evidence fails closed | B4 |
 | Resume of an integrated run | The destination gate re-runs its fresh reads unconditionally; no stored gate result exists to reuse | C5 |
 | Top-level cancellation | Explicit `cancelled=True`, `.succeeded == False`, all requested work not attempted, no substep invoked, never persisted | B3 |
 | Substep refusal | Distinct `REFUSED`; ends the run; never persisted; the summary is output | B3 |
@@ -6198,6 +7564,23 @@ git diff --name-only origin/ansible...HEAD -- docs/ACM_SWITCHOVER_RUNBOOK.md '.c
 
 The protected-file command must print nothing. Resolve every changed relative link in every
 changed document.
+
+**Stale completion-schema scan.** Every runtime PR additionally runs this scan over the source,
+tests, roles, and plugins it touched. The rejected R2 encoding must not reappear in code, fixtures,
+or documentation:
+
+```bash
+git diff --name-only origin/ansible...HEAD | xargs -r grep -nE \
+  'resource_versions\["cr"\]|resource_versions\.cr|"cr":|namespace_absent"?\s*:|strongest identifier' \
+  || echo "clean"
+```
+
+Classify, do not blindly delete: `namespace_absent` is a **legitimate** name in three places — the
+Python `StrictReadStatus.NAMESPACE_ABSENT` outcome and its constructor, the collection's composed
+namespace-absence call site, and the `proof_type` vocabulary value. What must not appear is a
+`resource_versions` key named `cr` or `namespace_absent`, a namespace name used as a revision
+value, or any wording that redefines `resource_versions` as carrying "the strongest identifier the
+proving read can carry".
 
 ## 21.8 RBAC cross-surface gate, for PRs C, D, and E
 
@@ -6314,8 +7697,15 @@ three mirrored integers plus the client timeout that `KubeClient` already owns �
 configuration surface and no second timeout mechanism. `DecommissionResult` adds only the three
 observable facts consumers need (`cancelled`, actual `changed`, and `would_change`) and no preview
 marker; `SubstepExecution` is one two-field frozen value object replacing an ad-hoc tuple, and it is
-the only executor result across B, C, D, and E. The completion proof stays inside the approved
-`resource_versions` field as an explicit, enumerated key rule rather than a new durable field.
+the only executor result across B, C, D, and E, and an expected failure is a value on that channel
+rather than an exception, which is what removes the aggregator's exception arm entirely. The
+completion proof is two explicitly enumerated fields on the **existing** teardown record —
+`resource_versions`, kept revision-only with a three-label closed set, and the sibling
+`absence_proofs`, a two-key closed set of two-field typed entries reusing the record's own
+`resource_key` grammar. No fourth durable key, no generic evidence framework, no per-proof
+timestamps, no pre-DELETE revision, and no ReplicaSet collection is introduced. The strict-read
+`resource_version` exposure is one additional field on the outcome type PR A already returns, not
+another helper or another read surface.
 `TeardownSpec` remains limited to resource, drain, and classifier inputs; transport helpers classify
 reads while decommission owns policy. PR F is test/audit-only. No feature flag, compatibility mode,
 recovery protocol, dependency, or second abstraction was introduced by this repair.
@@ -6327,6 +7717,13 @@ recovery protocol, dependency, or second abstraction was introduced by this repa
 **This implementation plan does not authorize runtime implementation. Runtime implementation
 requires separate explicit operator approval after this plan passes independent validation and
 PR-comment resolution.**
+
+**Current gate state.** The operator has re-approved the reopened R4-03 **design** at exact head
+`335cdbab8011bbc5e291afe76ee73d81c58bd44a` and authorized the **implementation-plan repair** that
+produced this revision. That authorization covers this document and nothing else. The next
+authorized step is a **fresh independent exact-head validation of this repaired implementation
+plan**; runtime implementation remains unauthorized until that validation passes, its comments are
+resolved, and the operator separately approves the plan.
 
 Approval of this plan does not bypass any of the following. Runtime implementation may begin only
 in a new governed builder session that:
