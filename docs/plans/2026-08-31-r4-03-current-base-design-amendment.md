@@ -2,7 +2,16 @@
 
 **Date:** 2026-08-31
 **Branch:** `docs/r4-03-current-base-amendment-2026-08-31` (base `origin/ansible` @ `74268192`)
-**Status:** operator-approved design amendment; implementation plan authored; runtime implementation not authorized
+**Status:** design **reopened** following exact-head validation of the implementation plan
+(`DESIGN_REOPEN_REQUIRED`, IV-R403-12, PR [#280 comment 5494427270](https://github.com/tomazb/rh-acm-switchover/pull/280#issuecomment-5494427270)).
+The operator has approved the design direction — **revision-only `resource_versions` plus a sibling typed
+`absence_proofs` structure** — and §22 is the written reopened design candidate for that direction.
+This candidate is **awaiting independent design validation**; it is not yet operator-approved in its
+committed form. The implementation plan
+([`2026-08-31-r4-03-decommission-completion-implementation-plan.md`](2026-08-31-r4-03-decommission-completion-implementation-plan.md))
+is deliberately unchanged and is **non-authoritative wherever it conflicts with §22**; its repair is not
+authorized until this reopened design is validated and re-approved. Runtime implementation remains
+unauthorized.
 **Amends:** [`docs/plans/2026-07-29-decommission-completion-design.md`](2026-07-29-decommission-completion-design.md)
 (the "July design"), which remains the approved historical design and is not modified.
 
@@ -247,9 +256,17 @@ the collection `acm_uid_guarded_delete` contract — and the "what `completed` a
 unchanged, including: identity captured and forced-durable **before** DELETE; server-side
 `V1DeleteOptions(preconditions=V1Preconditions(uid=expected_uid))`; 409/412 fatal, never
 retried name-only; bounded CR-absence poll; different-UID replacement fatal and left
-intact; final live GET before success; `completed` carries `observed_at` +
-per-resource `resourceVersion` and is necessary-but-never-sufficient for later
-destructive decisions.
+intact; final live GET before success; `completed` carries `observed_at` plus the evidence
+of the reads that proved it, and is necessary-but-never-sufficient for later destructive
+decisions.
+
+**Completion-evidence correction (design reopen).** The July wording "per-resource
+`resourceVersion` values" remains binding for every final-proof read that actually returns a
+revision, but it cannot express the positive-absence reads that carry none. §22 is the
+authoritative completion-evidence schema for this amendment: `resource_versions` stays
+revision-only, and positive absence is recorded in the sibling typed `absence_proofs`
+structure. Where §22 and any earlier wording in this amendment, the July design, or the
+implementation plan disagree about the shape of completion evidence, §22 governs.
 
 Current-base decisions:
 
@@ -387,6 +404,12 @@ The duplication is confirmed current (§4). The consolidation rule:
 - Identical outcome algebras: §6 read outcomes, §7 decommission outcomes, §8 deletion
   phase machine and `changed`/`would_change` reporting, §10 pod-classification reason
   codes. Shared parity vectors, independent implementations, no cross-imports.
+- Identical completion-evidence schema: the §22 `resource_versions` / `absence_proofs`
+  contract — the same closed key sets, the same `proof_type` vocabulary, the same
+  `resource_key` grammar, the same per-family required key sets, and the same malformed
+  classifications — is validated **independently** on each side (Python `RunRecord`,
+  collection `checkpoint`), never through a shared implementation, and held equal by shared
+  parity vectors including the malformed-record vectors.
 - Mirrored constants: any surviving operator-prefix diagnostic, the MCO drain label
   selector (July §1 promotes the observability selector to a shared constant; the
   collection's mirrored observability constants already exist in
@@ -414,13 +437,22 @@ on the collection side (July deletion boundary):
 
 | Field | Schema | Producer | Consumer | Written | Binds | Class | Freshness | Missing/malformed | Reset |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Teardown record, per resource | key `apiVersion/kind/namespace/name` → `{expected_uid, phase}` plus mandatory `{observed_at, resource_versions}` when `phase == completed` (July §1 phase table) | teardown owner (§11) | reruns; integrated teardown's fresh live gate | forced-durable before DELETE and at every phase transition | exact CR identity via UID | intent + progress; `completed` additionally evidence | `completed` is proof at its final-read instant only; every later destructive decision re-proves live | fail closed before any mutation or clean-skip decision (July §1) | Python `--reset-state` or collection full `checkpoint.reset` destroys it; collection `reset_from` preserves `operational_data` and therefore the record |
+| Teardown record, per resource | key `apiVersion/kind/namespace/name` → `{expected_uid, phase}` plus mandatory `{observed_at, resource_versions, absence_proofs}` when `phase == completed`, per the **§22 completion-evidence schema** (July §1 phase table) | teardown owner (§11) | reruns; integrated teardown's fresh live gate | forced-durable before DELETE and at every phase transition | exact CR identity via UID | intent + progress; `completed` additionally evidence | `completed` is proof at its final-read instant only; every later destructive decision re-proves live | fail closed before any mutation or clean-skip decision (July §1) | Python `--reset-state` or collection full `checkpoint.reset` destroys it; collection `reset_from` preserves `operational_data` and therefore the record |
 | `operator_deployment` | July §1a schema (CSV + Deployment namespace/name/UID + capture metadata) | MCH teardown, before MCH DELETE | every drain/final-verification pass | one forced-durable write before DELETE | exact operator Deployment UID, bound to the enclosing MCH record key/UID | recorded identity expectation | immutable for the record's lifetime and never rebound; every pass strictly re-reads the located Deployment and requires the live UID to match, with positive namespace absence the only retained exception | fail closed; DELETE not issued if the write fails; later absence, replacement, or unverifiable read is `recovery_required` | Python `--reset-state` or collection full `checkpoint.reset` destroys it; collection `reset_from` preserves it |
 | `operator_identity_unavailable` | July §1a schema (reason code + capture metadata) | same | same | same | enclosing MCH record | evidence (negative) | immutable; never silently upgraded by rediscovery | exactly one of the two outcomes must exist; both/neither/partial is malformed → fail closed | Python `--reset-state` or collection full `checkpoint.reset` destroys it; collection `reset_from` preserves it |
 
+`absence_proofs` is a sibling field **inside** the teardown record, not a fourth durable
+key. It therefore inherits that record's entire row above unchanged: same producer, same
+consumers, same forced-durable write points, same binding to the record key and
+`expected_uid`, same fail-closed malformed handling before any mutation or clean-skip
+decision, and the same reset behaviour — Python `--reset-state` and the collection's full
+`checkpoint.reset` destroy it with the record, while collection `reset_from` preserves it
+and must revalidate it under §22. §22 owns its schema; this table owns its lifecycle.
+
 No other durable state is added. Deliberately **not** persisted: the §9 gate result
 (re-proven fresh on every run), refusal events (they end the run; the summary is
-output, not state), and dry-run observations (§14).
+output, not state), dry-run observations (§14), and the target CR's pre-DELETE
+`resourceVersion` (§22.6).
 
 **Reset limitation (explicit).** Python `--reset-state` removes the state file and the
 collection's full `checkpoint.reset` rebuilds the checkpoint with empty
@@ -450,7 +482,8 @@ explicitly.
 **Python `--dry-run`** (July §5, retained): performs the strict provenance, inventory,
 and owner-chain reads read-only; reports the predicted blocker set; issues no DELETE;
 persists **no** authoritative teardown transition (no record creation, no phase write,
-no operator-identity persistence); claims no change. A later live run trusts nothing
+no operator-identity persistence, and no completion evidence — neither `observed_at`,
+`resource_versions`, nor `absence_proofs`); claims no change. A later live run trusts nothing
 from a dry run.
 
 **Ansible check mode and execution mode** — two layers, both specified:
@@ -562,6 +595,46 @@ core future matrix. Current-base additions (each an implementation-plan task):
     here and owned by SSA-02, so the boundary itself is tested, not silently assumed.
 11. **Constants parity**: new mirrored constants (surviving prefix diagnostic, drain
     selector, reason codes) added to `tests/test_constants_parity.py`.
+12. **Completion-evidence schema matrix (§22)**, required in both form factors:
+    1. *Revision-only enforcement*: a `completed` record whose `resource_versions`
+       carries any key outside §22.3's closed label set is malformed → fail closed.
+    2. *Namespace name rejected inside `resource_versions`*: the R2 shape — a
+       `namespace_absent` key whose value is the namespace name — is rejected by key
+       closure; paired with a producer-seam test asserting the only value source is the
+       §22.3 provenance rule, so a namespace name can never be written there.
+    3. *Arbitrary non-revision token rejected*: an unknown label, a non-string value, and
+       an empty-string value are each malformed → fail closed.
+    4. *Required absence proof missing*: a `completed` record whose proof path required a
+       typed absence entry and omits it is malformed → fail closed; separately, an
+       **absent** `resource_versions` or `absence_proofs` field at `completed` is
+       malformed even when the record would otherwise be valid with an empty mapping.
+    5. *Unknown absence proof type*: a `proof_type` outside §22.4's closed vocabulary,
+       and a `proof_type` not permitted for its key, are each malformed → fail closed.
+    6. *Malformed resource key*: wrong segment count, empty `apiVersion`/`kind`/`name`, a
+       non-empty namespace on `drain_namespace`, and a `target_cr.resource_key` unequal to
+       the record's own key are each malformed → fail closed.
+    7. *MCO Pod-list proof path*: namespace-present completion records exactly
+       `{drain_namespace, drain_pods}` revisions plus `absence_proofs.target_cr`; the
+       recorded `drain_pods` value is the strict primitive's single snapshot revision for
+       the whole paginated drain read, not a per-page value.
+    8. *MCO namespace-absence proof path*: completion records an empty
+       `resource_versions` mapping plus `absence_proofs.{target_cr, drain_namespace}`, and
+       `drain_pods` is rejected in that mode.
+    9. *ManagedCluster absence-only completion*: a valid `completed` record with an empty
+       `resource_versions` mapping and `absence_proofs.target_cr` only; a record carrying
+       any drain key is malformed; and no pre-DELETE revision is retained to make the
+       mapping non-empty.
+    10. *MCH both drain modes*: namespace-present with captured identity
+        (`{drain_namespace, drain_pods, operator_deployment}`), namespace-present with
+        `operator_identity_unavailable` (`operator_deployment` absent and rejected if
+        present), and namespace-absent (empty `resource_versions`, `drain_namespace`
+        absence proof discharging both the pod-empty and Deployment re-read predicates).
+    11. *Python/Collection malformed-record parity*: every malformed vector above is a
+        shared parity vector, and both independent validators classify it identically.
+    12. *Evidence never substitutes for the fresh live gate*: a valid `completed` record
+        carrying full evidence does not satisfy any later destructive precondition — the
+        integrated teardown's live gate still runs its own reads, and a replacement
+        created after the completion write is caught by that gate.
 
 Behavioral assertions are preferred over implementation-detail mocks throughout; the
 decorator-bypassing mock pattern flagged in §8 item 4 is not carried forward.
@@ -598,8 +671,10 @@ Retained from July: SSA-02 scope; repo-wide strict-read migration; resourceVersi
 preconditions on decommission deletes; Hive `preserveOnDelete` check changes; treating
 names/labels/images as stable contracts; implementing anything in this docs-only slice.
 
-Added: no tracker edits (one stale sentence recorded in §19, not fixed here); no RBAC
-artifact edits; no `tests/release/` or lab-controller changes; no changes to
+Added: no per-proof timestamps beyond the single completion `observed_at` (§22.5); no
+generic or heterogeneous completion-evidence map (§22.7); no repair of the implementation
+plan in this slice, and no design-level resolution of IV-R403-01 (§22.8); no tracker edits
+(one stale sentence recorded in §19, not fixed here); no RBAC artifact edits; no `tests/release/` or lab-controller changes; no changes to
 `acm_restore_guarded_mutation`'s R4-04-owned contract; no parity-matrix/behavior-map
 edits (implementation-slice obligation, §12); no new waiver/compatibility modes for
 observability; no protected-file changes.
@@ -629,6 +704,29 @@ Rejected, with reasons:
    Namespace GET, keeping the R3-02 module narrow (KISS).
 9. *Persisting the destination-gate result* — rejected; would invite stale-evidence
    reuse for a destructive decision.
+10. *Heterogeneous `resource_versions` ("proof key → strongest identifier the proving
+    read can carry")* — **rejected** by operator decision on the design reopen. It
+    silently changes the approved field's meaning, so no consumer can rely on any value
+    being a revision, and it hides the revision/absence distinction that the strict-read
+    algebra exists to keep explicit (§22.1, §22.7).
+11. *A single generic `completion_evidence` map replacing both fields* — rejected. It has
+    the same value-type erasure as alternative 10 with an additional cost: it discards the
+    approved `resource_versions` field name that July criterion 8 and amendment §13 bind,
+    forcing a rename with no safety gain.
+12. *Substituting a LIST for an approved named GET to manufacture a revision* — rejected;
+    it changes the recorded reads, the §15 verb rows, and the July §3 named-GET absence
+    contract in order to satisfy a schema. The schema accommodates the approved reads;
+    the reads are not bent to fit the schema (§22.1).
+13. *Retaining the target CR's pre-DELETE `resourceVersion` as completion evidence* —
+    rejected; that read precedes the mutation and never participates in the final proof,
+    so recording it under a final-proof field would be exactly the masquerade §22.1
+    forbids. Nothing else needs it: UID owns identity binding, and resourceVersion
+    preconditions on decommission deletes remain a non-goal (§18, alternative 5), so it
+    is persisted nowhere (§22.6).
+14. *Recording per-ReplicaSet revisions in the completion evidence* — rejected with the
+    justification in §22.6; their cardinality is variable, nothing consumes them, and
+    excluding them removes no safety property because the owner chain is enforced at
+    proof time rather than by the record.
 
 Risks:
 
@@ -676,7 +774,22 @@ A7. Python teardown exists exactly once (§11); finalization and direct decommis
     drive it with their caller-specific semantics preserved and tested.
 A8. The §13 durable-field table is exhaustive for R4-03: no other durable keys are
     written, full-reset data loss is documented operator-facing, and collection
-    `reset_from` preserves and revalidates the recorded teardown obligations.
+    `reset_from` preserves and revalidates the recorded teardown obligations. A `completed`
+    record satisfies the §22 completion-evidence schema exactly — `observed_at` present,
+    `resource_versions` present and revision-only, `absence_proofs` present and typed, the
+    per-family required key set matched, and every §22.2 malformed condition failing
+    closed on both sides.
+
+**July criterion 8 — clarification (design reopen).** July criterion 8 requires a
+`completed` record to carry "that read's `observed_at` and per-resource `resourceVersion`
+values". That requirement is **retained and sharpened, not relaxed**: every final-proof
+read that returns a revision must have that revision recorded in `resource_versions`
+(§22.1). It is clarified only where it was silent — a positive-absence read returns no
+revision, and July criterion 8 never authorized inventing one. Such evidence is now carried
+by the sibling typed `absence_proofs` structure (§22.4). Criterion 8's substantive
+guarantee — that a `completed` record shows exactly what was proven and when, and that no
+consumer treats it as proof of current state — is unchanged, and A8 above is the criterion
+that closes it.
 A9. Native check mode is safe end-to-end in the collection decommission path
     (no mutation, no checkpoint transition, every module and the role-level
     `acm_switchover_decommission_result.changed` remain false, and prediction is reported
@@ -701,3 +814,438 @@ The later implementation plan must:
 
 Runtime implementation remains unauthorized until that plan is separately reviewed and
 approved.
+
+## 22. Design-reopen resolution — completion-evidence encoding
+
+**Authority.** Independent exact-head validation of the R4-03 implementation plan returned
+`DESIGN_REOPEN_REQUIRED` (IV-R403-12): the plan redefined the approved durable field
+`resource_versions` as "proof key → strongest identifier the proving read can carry" and
+stored a **namespace name** under it. That is a change to the normative meaning of an
+approved durable field, not an implementation detail, so the validator correctly refused to
+choose an encoding. The operator has since resolved the design question and approved this
+direction:
+
+> `resource_versions` remains revision-only, and positive absence evidence is recorded in a
+> sibling typed `absence_proofs` structure.
+
+This section is the written design contract for that decision. It is **authoritative for
+completion evidence** across this amendment, the July design, and any implementation plan.
+It changes no other R4-03 contract: the phase machine, UID-preconditioned deletion, the
+strict-read algebra, the owner-chain classification, the destination gate, the outcome
+table, RBAC, and the `changed` / `would_change` reporting rules are all unchanged.
+
+A completed teardown record carries exactly three completion-evidence fields:
+`observed_at`, `resource_versions`, and `absence_proofs`.
+
+### 22.1 `resource_versions` — revision-only
+
+`resource_versions` is a mapping. It remains semantically literal:
+
+**Every value in this field MUST be an actual Kubernetes `resourceVersion` obtained from a
+successful live read that participated in the final completion proof.**
+
+It MUST NOT contain namespace names, resource names, UIDs, reason codes, absence tokens,
+human-readable descriptions, synthetic revision values, or pre-DELETE revisions
+masquerading as final-proof evidence.
+
+Two rules bind the producer, and both are normative:
+
+1. **Every revision-bearing final-proof read is recorded.** If a successful read that
+   participates in the final completion proof returns a `resourceVersion`, that revision
+   MUST appear in `resource_versions` under its §22.3 label. Evidence is not optional
+   because a later consumer happens not to need it.
+2. **No read is bent to fit the schema.** An approved named GET MUST NOT be replaced by a
+   LIST in order to manufacture a revision. Doing so would change the recorded reads, the
+   §15 verb rows, and the July §3 named-GET absence contract. Where the approved proof is
+   an absence read, the evidence belongs in `absence_proofs`, not in a fabricated revision.
+
+`resource_versions` is **mandatory at `phase == completed`** and MAY be an empty mapping.
+An empty mapping is not missing evidence **if and only if** the complete final proof for
+that record consisted only of positive absence reads, and every required absence predicate
+is represented in `absence_proofs`. An *absent* field is never equivalent to an empty
+mapping (§22.2).
+
+Target identity remains bound by `expected_uid` and the phase machine (§8, July §1).
+`resource_versions` carries no identity role and never rebinds one.
+
+**Enforcement is honest about what a schema can check.** Kubernetes treats
+`resourceVersion` as an opaque, server-defined string, so no validator can decide from the
+value alone that a given string is a genuine revision, and a numeric-format check would
+violate that API contract. Enforcement therefore rests on three checkable properties: the
+closed key set (§22.3), the value type (non-empty string), and the **producer provenance
+rule** — the only permitted value source is the `resourceVersion` surfaced by the strict
+read that proved the predicate (§22.3). Tests bind the producer seam, not the string shape
+(§16 item 12).
+
+### 22.2 Required record invariants
+
+**For `phase != completed`:** `observed_at`, `resource_versions`, and `absence_proofs`
+carry no completion authority and MUST be absent. A record at `delete_started`,
+`cr_absent`, `drain_pending`, `drained`, or `recovery_required` that carries any of the
+three is **malformed → fail closed**. Completion evidence is never introduced early for
+convenience, and no earlier pass's evidence is carried forward: the July §1 phase table
+already requires the final absence and drain predicates to be re-proven at the `completed`
+transition, so evidence written before that transition could only be stale.
+
+**For `phase == completed`:**
+
+- `observed_at` is mandatory (§22.5).
+- `resource_versions` is mandatory, present as a mapping (possibly empty), and
+  revision-only (§22.1).
+- `absence_proofs` is mandatory, present as a mapping, whenever any required final
+  predicate was proven through positive absence. For every R4-03 family this is always the
+  case, because the target-CR predicate is always proven by a positive absence read that
+  returns no revision (§22.6) — so in practice a valid `completed` record always carries a
+  non-empty `absence_proofs`.
+- Every final-proof predicate MUST be represented exactly once, by either a real
+  revision-bearing successful read in `resource_versions` or a typed positive absence in
+  `absence_proofs`, according to the proof path actually taken. The recorded key set MUST
+  match the §22.6 required key set for that family and proof mode.
+
+The following are each **malformed → fail closed**, on both sides, before any mutation or
+clean-skip decision:
+
+| Condition | Classification |
+| --- | --- |
+| Any of the three evidence fields present at `phase != completed` | malformed |
+| `observed_at`, `resource_versions`, or `absence_proofs` missing at `completed` | malformed |
+| An evidence field present but of the wrong type (not a string / not a mapping) | malformed |
+| A key in `resource_versions` outside the §22.3 closed label set | malformed |
+| A `resource_versions` value that is not a string, or is an empty string | malformed |
+| A key in `absence_proofs` outside the §22.4 closed key set | malformed |
+| An `absence_proofs` entry that is not a mapping, or whose field set is not exactly `{proof_type, resource_key}` | malformed |
+| A `proof_type` outside the §22.4 vocabulary, or not permitted for its key | malformed |
+| A `resource_key` violating the §22.4 grammar, or not equal to the value that key requires | malformed |
+| Any empty required string anywhere in the evidence | malformed |
+| A recorded key set that does not match the §22.6 required set for the family and mode | malformed |
+| Evidence contradicting itself — both `resource_versions.drain_namespace` and `absence_proofs.drain_namespace`, or neither, for a family with a drain scope | malformed |
+| `resource_versions` or `absence_proofs` mutated by a later write once `completed` | malformed, exactly like `expected_uid` |
+
+Missing required evidence, unexpected evidence, contradictory evidence, unknown proof
+types, malformed resource identity, and empty required strings all fail closed. No
+persisted evidence, valid or otherwise, may substitute for the fresh live gate required
+before a later destructive decision (§22.5).
+
+### 22.3 `resource_versions` key grammar
+
+The key namespace is a **closed set of explicitly defined proof labels**. Each label names
+one predicate, each may occur at most once, and each maps one-to-one onto a single
+revision-bearing final-proof read across all three families. Canonical Kubernetes resource
+identities are deliberately **not** used as keys here, and the two grammars are never
+mixed: a Pod LIST has no object identity to key on, so a canonical grammar would have to be
+hybrid, which is exactly the ambiguity this decision removes.
+
+| Label | Predicate whose proof this revision came from | Permitted value source |
+| --- | --- | --- |
+| `drain_namespace` | the fixed drain namespace was **present and readable** at final verification, selecting the pod-list proof mode | `metadata.resourceVersion` of the object returned by the fresh strict Namespace GET |
+| `drain_pods` | the drain scope held zero Pods after §10 identity-based exclusion | the `metadata.resourceVersion` of the successful strict Pod LIST that proved the drain empty |
+| `operator_deployment` | the durably recorded operator Deployment was re-read live and its UID still matched, satisfying the July §1a final identity predicate | `metadata.resourceVersion` of the object returned by that fresh strict Deployment GET |
+
+Notes that bind the producer:
+
+- **Provenance.** The value MUST be the `resource_version` the strict-read primitive
+  (§6.1) surfaces for that exact read. No other source, and no derived or reformatted
+  value, may be written.
+- **Paginated drain reads.** `drain_pods` records the **single snapshot revision of the
+  whole read**, which the strict primitive returns for the complete drained list, not a
+  per-page value. The continuation contract pins every subsequent page to that same
+  snapshot, so one revision correctly describes the entire proof.
+- **`drain_namespace` is recorded because §22.1 rule 1 requires it.** The Namespace GET is
+  not incidental: it is the read that decides which drain proof mode applies, so it
+  participates in the final proof and returns a revision. Recording it also makes the two
+  modes structurally exclusive — the same label appears in `resource_versions` when the
+  namespace is present and in `absence_proofs` when it is absent, never in both and never
+  in neither (§22.2).
+- **`operator_deployment` shares its name with the record's sibling identity field
+  deliberately**, and the two are different kinds of fact: the identity field records
+  *which* Deployment, this label records *the revision of the read that re-verified it*.
+  The binding rule removes any ambiguity:
+  `resource_versions.operator_deployment` may be present **if and only if** the record
+  carries an `operator_deployment` identity **and** the record completed in the
+  namespace-present drain mode. Any other combination is malformed (§22.2).
+
+Any key outside `{drain_namespace, drain_pods, operator_deployment}` — including a
+canonical resource identity, an absence token, or the implementation plan's rejected
+`cr` and `namespace_absent` keys — is malformed.
+
+### 22.4 `absence_proofs` — typed positive-absence evidence
+
+`absence_proofs` is a sibling mapping on the completed teardown record. It is **typed
+historical completion evidence for positive absence predicates that provide no Kubernetes
+`resourceVersion`**. Its vocabulary is aligned to the §6 strict-read algebra, so an absence
+recorded here is exactly the outcome the strict primitive returned — never a re-derived or
+generic "absent" string.
+
+It **MUST NOT** be treated as reusable live-state truth. Integrated and later destructive
+decisions rerun the approved fresh live gate regardless of what it contains (§22.5).
+
+**Value schema.** Every entry is a mapping with **exactly** two fields, both required,
+both non-empty strings:
+
+```yaml
+absence_proofs:
+  <key>:
+    proof_type: <object_absent | crd_absent | namespace_absent>
+    resource_key: "<apiVersion>/<kind>/<namespace>/<name>"
+```
+
+Any additional field, any missing field, any non-string value, and any empty string is
+malformed. There is no free-form polymorphism and no untyped variant.
+
+**Key grammar — closed set.**
+
+| Key | Predicate | Permitted `proof_type` | Required `resource_key` |
+| --- | --- | --- | --- |
+| `target_cr` | the object this record deleted is **positively absent** at final verification | `object_absent` — successful discovery plus a named GET returning 404; or `crd_absent` — a successful discovery document positively showing the target kind/APIResource is not served, which entails the object's absence | exactly the enclosing record's own key |
+| `drain_namespace` | the fixed drain namespace is **positively absent**, proven by a fresh Namespace GET returning 404 | `namespace_absent` only | `v1/Namespace//<namespace>`, whose name segment is the fixed drain namespace for that family |
+
+Any key outside `{target_cr, drain_namespace}` is malformed, as is a `proof_type` that is
+outside the vocabulary or not permitted for its key.
+
+**`resource_key` syntax.** `resource_key` is `<apiVersion>/<kind>/<namespace>/<name>` — the
+same key grammar the teardown record itself uses (§13), reused rather than reinvented.
+`apiVersion` is the literal Kubernetes `apiVersion` string, so it is `group/version` for
+grouped resources and `version` for core resources; `namespace` is empty for cluster-scoped
+objects; `name` is the exact object name. Parsing is deterministic: split from the right on
+`/` exactly three times, yielding `[apiVersion, kind, namespace, name]`.
+
+Validation, identical on both sides:
+
+- the right-split MUST yield exactly four segments;
+- `apiVersion` MUST be non-empty and contain at most one `/`;
+- `kind` MUST be non-empty and MUST NOT contain `/`;
+- `name` MUST be non-empty and MUST NOT contain `/`;
+- `namespace` MUST NOT contain `/`, and MAY be empty only for a cluster-scoped object; for
+  `drain_namespace` it MUST be empty, since `Namespace` is cluster-scoped;
+- for `target_cr`, the whole `resource_key` MUST equal the enclosing record's key.
+
+**Two examples, both obeying the grammar.** A ManagedCluster completed by a named-GET 404:
+
+```yaml
+absence_proofs:
+  target_cr:
+    proof_type: object_absent
+    resource_key: "cluster.open-cluster-management.io/v1/ManagedCluster//cluster-a"
+```
+
+An MCO completed in the namespace-absent drain mode:
+
+```yaml
+absence_proofs:
+  target_cr:
+    proof_type: object_absent
+    resource_key: "observability.open-cluster-management.io/v1beta2/MultiClusterObservability//observability"
+  drain_namespace:
+    proof_type: namespace_absent
+    resource_key: "v1/Namespace//open-cluster-management-observability"
+```
+
+**Namespace absence never substitutes for the target-CR predicate.** July §3 requires the
+final completion check to repeat the strict CR/CRD-absence predicate *and* the drain
+predicate, and their joint success alone permits `completed`. `absence_proofs.target_cr` is
+therefore always required at `completed`; `drain_namespace` absence discharges only the
+drain-side predicates (§22.6).
+
+### 22.5 `observed_at` and freshness
+
+**`observed_at` is preserved unchanged as a single completion timestamp.** No per-proof
+timestamps are added: the approved design does not require them, and adding one per read
+would imply a per-read ordering guarantee the design deliberately declines to claim.
+
+`observed_at` means: **the completion-proof observation boundary associated with the final
+verification pass immediately preceding the `completed` durable write.** It does not assert
+atomicity across the several API reads that make up that pass. July §1 already states the
+guarantee at its real strength — no compare-and-swap spans a CR, a Pod list, a Deployment,
+and a namespace, and this design does not invent one — so `observed_at` marks the boundary
+of that pass, not an instant at which all four were simultaneously true.
+
+Freshness semantics are unchanged and are not weakened by adding a second evidence field:
+
+- `completed` is **historical evidence only**. It records that the teardown was proven
+  complete at the instant of its final read; it never asserts current state.
+- Every later destructive decision **reruns fresh live proof**. Integrated teardown
+  re-runs the CR-absence and identity-aware Pod checks against live state before relying
+  on this teardown being complete.
+- Neither `resource_versions` nor `absence_proofs` may, alone or together, satisfy an
+  execution-time predicate about a mutable resource. A replacement created after the
+  completion write is caught by the fresh gate, never masked by the stored proof.
+- The target UID is never rebound, and the recorded operator Deployment UID remains an
+  **expected identity checked against live state** on every pass, never a substitute for
+  reading it.
+- The execution-time discovery invariant (`AGENTS.md`) is unchanged: no persisted evidence
+  becomes an input to a live mutation predicate.
+
+### 22.6 Per-family completion evidence
+
+The required evidence is enumerated per teardown family and proof mode. Nothing here is
+left generic, and nothing requires later invention.
+
+#### MultiClusterObservability
+
+The final proof always includes positive absence of the target MCO CR, recorded as
+`absence_proofs.target_cr`. The drain scope is the selector-scoped Pod set in the fixed
+observability namespace, and it has exactly **two mutually exclusive proof modes**,
+selected by the fresh Namespace GET that opens the drain check (July §3):
+
+| Drain proof mode | `resource_versions` | `absence_proofs` |
+| --- | --- | --- |
+| **Namespace present** — readable namespace, then a successful selector-scoped Pod LIST proving zero matching Pods | exactly `{drain_namespace, drain_pods}` | exactly `{target_cr}` |
+| **Namespace positively absent** — a fresh Namespace GET returning 404, which entails the pod-empty predicate under the July §3 fixed-namespace scope rule | empty mapping | exactly `{target_cr, drain_namespace}` |
+
+The modes are exclusive by construction: the namespace was either read present or proven
+absent, so `drain_namespace` appears in exactly one of the two fields, and `drain_pods`
+appears if and only if the namespace was present. The namespace **name** never appears as a
+value in `resource_versions`; it appears only inside a typed `resource_key`.
+
+#### ManagedCluster
+
+Each ManagedCluster teardown record is per cluster name and has no drain scope: the July
+flow is read → bind UID → preconditioned DELETE → confirm absent. The completion predicate
+is positive final absence of that exact target, proven by a named GET returning 404 (or, if
+the kind has ceased to be served, by a positive discovery-level absence).
+
+| Proof mode | `resource_versions` | `absence_proofs` |
+| --- | --- | --- |
+| Named-GET 404, or positive kind absence | empty mapping | exactly `{target_cr}` |
+
+`resource_versions` is validly **empty** here: no revision-bearing read participates in the
+final proof. Any drain key is malformed for this family. No pre-delete revision is retained
+to make the mapping non-empty — the empty mapping is the correct and complete record.
+
+#### MultiClusterHub
+
+The final proof includes positive absence of the target MCH CR plus the approved
+identity-aware drain and final verification (July §1a). Three modes are reachable, and
+which revision-bearing reads participate differs between them:
+
+| Mode | `resource_versions` | `absence_proofs` |
+| --- | --- | --- |
+| **Namespace present, operator identity captured** — Namespace GET present, strict all-Pod LIST empty after owner-chain exclusion, and the recorded operator Deployment re-read live with a matching UID | exactly `{drain_namespace, drain_pods, operator_deployment}` | exactly `{target_cr}` |
+| **Namespace present, `operator_identity_unavailable`** — no Deployment identity exists to re-read, so July criterion 11 requires a strictly verified **empty** Pod list with no exclusions | exactly `{drain_namespace, drain_pods}` | exactly `{target_cr}` |
+| **Namespace positively absent** — the July §1a entailment exception | empty mapping | exactly `{target_cr, drain_namespace}` |
+
+Two clarifications the schema depends on:
+
+- **The namespace-absence entailment is recorded once and discharges both drain-side
+  predicates.** July §1a states that a positively absent ACM namespace entails both the
+  pod-empty predicate and the recorded Deployment re-read, because a namespaced object
+  cannot exist under a namespace the API positively proves absent. A single
+  `absence_proofs.drain_namespace` entry is therefore the complete durable representation
+  of that mode; no separate operator-Deployment absence entry exists, and adding one would
+  claim a read that was never performed. An unreadable or ambiguous namespace state never
+  triggers this exception and records `recovery_required` instead (July §3).
+- **The operator Deployment re-read is a genuine final-proof read**, performed on every
+  pass even when no Pod is proposed for exclusion, so its revision is recorded whenever it
+  happens — which is exactly the namespace-present, identity-captured mode.
+
+#### Worked example — one completed MCH record
+
+The namespace-present, identity-captured mode, showing both evidence fields together.
+Every `resource_versions` value is a revision; the namespace name appears only inside a
+typed `resource_key`.
+
+```yaml
+"operator.open-cluster-management.io/v1/MultiClusterHub/open-cluster-management/multiclusterhub":
+  expected_uid: "2b71...-uid"
+  phase: "completed"
+  observed_at: "2026-09-04T10:11:12Z"
+  resource_versions:
+    drain_namespace: "88190"
+    drain_pods: "88219"
+    operator_deployment: "88203"
+  absence_proofs:
+    target_cr:
+      proof_type: object_absent
+      resource_key: "operator.open-cluster-management.io/v1/MultiClusterHub/open-cluster-management/multiclusterhub"
+  operator_deployment:
+    namespace: "open-cluster-management"
+    name: "multiclusterhub-operator"
+    uid: "aa10...-uid"
+    # remaining July §1a capture fields omitted here; unchanged by this section
+```
+
+#### What is deliberately not recorded
+
+Two exclusions are decisions, not omissions.
+
+**1. The target CR's pre-DELETE `resourceVersion` is not persisted anywhere.** The
+implementation plan introduced a `cr` key holding the revision observed by the strict named
+GET that bound `expected_uid` — a read that happens *before* the mutation and does not
+participate in the final completion proof. Recording it under a final-proof field is
+precisely the masquerade §22.1 forbids, and the operator's resolution names it explicitly.
+July required no such field: its `delete_started` row records the immutable resource key
+and `expected_uid` and nothing more. Nothing else needs the value either — UID owns
+identity binding, `resourceVersion` preconditions on decommission deletes remain an
+explicit non-goal (§18; §19 alternative 5), and no consumer reads it. It is therefore
+dropped rather than relocated. This overrides the earlier validation note that treated `cr`
+as compatible because it is a genuine revision: it is a genuine revision of the *wrong
+read*.
+
+**2. ReplicaSet revisions are not part of the durable completion evidence.** Owner-chain
+classification reads a ReplicaSet per Pod proposed for exclusion, so between zero and many
+ReplicaSets may be read during a final MCH pass. Their revisions are excluded, with the
+justification stated rather than assumed:
+
+- They prove no completion predicate. The predicate is "the classified Pod set is empty
+  after identity exclusion," which the `drain_pods` list revision and the recorded
+  Deployment identity together pin. A ReplicaSet is an intermediate link in a per-Pod
+  chain, not a predicate.
+- Their cardinality is variable and topology-dependent — a rolling update legitimately
+  produces several — so two equally valid `completed` records for the same cluster would
+  carry different key sets. That is precisely the open-ended key namespace the parity
+  vectors could not pin deterministically, and it would force the hybrid label/identity
+  grammar §22.3 rejects.
+- Nothing consumes them: the record is historical evidence, and every later destructive
+  decision re-runs the full live chain against whatever ReplicaSets then exist.
+- Excluding them removes no safety property. The owner chain is enforced **at proof time**
+  and fails closed on every missing, malformed, ambiguous, replaced, or unreadable link
+  (July §1a, criterion 10). Recording it would not enforce it.
+
+### 22.7 Supersession
+
+The design-reopen resolution, stated exactly:
+
+1. The prior wording "per-resource `resourceVersion` values" (July §1, July criterion 8,
+   amendment §8) **remains binding** for every final-proof read that actually provides a
+   `resourceVersion`. It is not relaxed, and §22.1 rule 1 makes it mandatory rather than
+   best-effort.
+2. Positive absence reads inherently provide no `resourceVersion`. A named GET returning
+   404, a discovery document showing a kind is not served, and a Namespace GET returning
+   404 each prove a predicate and each return no revision. The earlier wording was silent
+   about them; it never authorized inventing one.
+3. Such evidence is now durably represented by the sibling typed `absence_proofs`
+   structure (§22.4), with a closed key set, a closed `proof_type` vocabulary, and an
+   exact `resource_key` grammar.
+4. `resource_versions` is **not** generalized into a heterogeneous evidence map. Every
+   value in it is a real revision, so a consumer may rely on that uniformly (§22.1).
+5. The implementation plan's encoding of a namespace name under
+   `resource_versions.namespace_absent` — and its accompanying "strongest identifier the
+   proving read can carry" redefinition and `cr` key — is **rejected** (IV-R403-12).
+6. The implementation plan is unchanged by this slice and is **non-authoritative wherever
+   it conflicts with this section**. It must be repaired to conform *after* this reopened
+   written design has been independently validated and re-approved by the operator. That
+   repair is a separate, currently unauthorized step.
+
+### 22.8 Boundaries
+
+**IV-R403-01 is not resolved here, and is not affected by this section.** It remains an
+open **implementation-plan** defect: on the same-substep path where a DELETE is accepted
+and the subsequent final proof fails, the plan's aggregator cannot mechanically report the
+actual change. This design's `changed` observable semantics are unchanged — `changed: true`
+only after an accepted intended-UID mutation plus the full completion proof (§14, July
+deletion boundary). No design-level result type, exception type, or reporting channel is
+introduced, renamed, or widened by this slice. The later plan repair must make that path
+report actual change mechanically, using the shapes the plan already declares, without
+inventing a second undocumented channel.
+
+**Reset and resume** are covered by §13 without a new rule: `absence_proofs` lives inside
+the teardown record, so Python `--reset-state` and the collection's full `checkpoint.reset`
+destroy it with the record, collection `reset_from` preserves it and must revalidate it
+against §22.2, malformed reload fails closed, and parity validation covers it on both
+sides (§12). The accepted R4-05 reset limitation (§13) is unchanged, and reset laundering
+is not solved here.
+
+**Cross-slice boundaries are unchanged.** This section absorbs no R4-05 reset/locking work,
+no SSA-02 target-identity work, and no R4-04 evidence-transaction work. It adds no runtime
+behavior, no RBAC verb, and no new persisted key beyond the sibling field on an
+already-planned record.
