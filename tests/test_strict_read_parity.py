@@ -34,6 +34,11 @@ VECTORS = [
     ("discovery_unverifiable", "api failure", StrictReadStatus.ERROR, "error", None),
     ("discovery_http_404", "api failure", StrictReadStatus.ERROR, "error", None),
     ("malformed_discovery", "malformed response", StrictReadStatus.ERROR, "error", None),
+    # A malformed entry makes the whole document unverifiable whatever order the server served
+    # its entries in. Stopping at the first match would let one response mean `served` or
+    # `unverifiable` depending on ordering alone, which no declared vector could pin down.
+    ("malformed_discovery_after_match", "malformed response", StrictReadStatus.ERROR, "error", None),
+    ("malformed_discovery_before_match", "malformed response", StrictReadStatus.ERROR, "error", None),
     ("malformed_items", "malformed response", StrictReadStatus.ERROR, "error", None),
     ("missing_items_key", "malformed response", StrictReadStatus.ERROR, "error", None),
     ("missing_list_revision", "malformed response", StrictReadStatus.ERROR, "error", None),
@@ -212,6 +217,36 @@ def _python_malformed_discovery():
     return outcome
 
 
+def _python_malformed_discovery_after_match():
+    """The requested entry is valid and comes first; a malformed entry follows it.
+
+    The list transport is stocked with a complete successful page, so a prover that returns on
+    the first match publishes a healthy inventory at revision "100" instead of failing closed.
+    """
+    call_api = Mock(
+        return_value=_raw_body(
+            {"kind": "APIResourceList", "resources": [{"name": _PLURAL, "kind": "Widget"}, {"name": 7}]}
+        )
+    )
+    client = _python_client(call_api=call_api, list_effects=[{"items": [], "metadata": {"resourceVersion": "100"}}])
+    outcome = client.list_custom_resources_strict(_GROUP, _VERSION, _PLURAL)
+    client.custom_api.list_cluster_custom_object.assert_not_called()
+    return outcome
+
+
+def _python_malformed_discovery_before_match():
+    """The mirror: the malformed entry precedes the requested one. Already fails closed."""
+    call_api = Mock(
+        return_value=_raw_body(
+            {"kind": "APIResourceList", "resources": [{"name": 7}, {"name": _PLURAL, "kind": "Widget"}]}
+        )
+    )
+    client = _python_client(call_api=call_api, list_effects=[{"items": [], "metadata": {"resourceVersion": "100"}}])
+    outcome = client.list_custom_resources_strict(_GROUP, _VERSION, _PLURAL)
+    client.custom_api.list_cluster_custom_object.assert_not_called()
+    return outcome
+
+
 def _python_malformed_items():
     client = _python_client(list_effects=[{"items": "nope", "metadata": {"resourceVersion": "100"}}])
     outcome = client.list_custom_resources_strict(_GROUP, _VERSION, _PLURAL)
@@ -327,6 +362,8 @@ _PYTHON_VECTORS = {
     "discovery_unverifiable": _python_discovery_unverifiable,
     "discovery_http_404": _python_discovery_http_404,
     "malformed_discovery": _python_malformed_discovery,
+    "malformed_discovery_after_match": _python_malformed_discovery_after_match,
+    "malformed_discovery_before_match": _python_malformed_discovery_before_match,
     "malformed_items": _python_malformed_items,
     "missing_items_key": _python_missing_items_key,
     "missing_list_revision": _python_missing_list_revision,
@@ -700,6 +737,28 @@ def _collection_malformed_discovery():
     return _run_collection(_WIDGET_PARAMS, client=client)
 
 
+def _collection_malformed_discovery_after_match():
+    """Mirror of the Python vector: valid requested entry first, malformed entry after it.
+
+    This call site maps both `True` and `None` to `error`, so the module's `read_status` is
+    already `error` before the prover is fixed. The order-sensitivity itself is asserted on the
+    prover directly in the collection unit lane; this vector holds the outcome contract equal.
+    """
+    dynamic = _FakeDynamicClient(
+        discovery={"kind": "APIResourceList", "resources": [{"name": "widgets", "kind": "Widget"}, {"name": 7}]}
+    )
+    client = _FakeK8sClient(resource_error=ResourceNotFoundError("no matches"), dynamic=dynamic)
+    return _run_collection(_WIDGET_PARAMS, client=client)
+
+
+def _collection_malformed_discovery_before_match():
+    dynamic = _FakeDynamicClient(
+        discovery={"kind": "APIResourceList", "resources": [{"name": 7}, {"name": "widgets", "kind": "Widget"}]}
+    )
+    client = _FakeK8sClient(resource_error=ResourceNotFoundError("no matches"), dynamic=dynamic)
+    return _run_collection(_WIDGET_PARAMS, client=client)
+
+
 def _collection_malformed_items():
     client = _FakeK8sClient(
         resource=object(),
@@ -877,6 +936,8 @@ _COLLECTION_VECTORS = {
     "discovery_unverifiable": _collection_discovery_unverifiable,
     "discovery_http_404": _collection_discovery_http_404,
     "malformed_discovery": _collection_malformed_discovery,
+    "malformed_discovery_after_match": _collection_malformed_discovery_after_match,
+    "malformed_discovery_before_match": _collection_malformed_discovery_before_match,
     "malformed_items": _collection_malformed_items,
     "missing_items_key": _collection_missing_items_key,
     "missing_list_revision": _collection_missing_list_revision,

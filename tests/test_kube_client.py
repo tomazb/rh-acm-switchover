@@ -1724,6 +1724,27 @@ class TestDiscoveryProver:
         call = Mock(return_value=self._body({"kind": "APIResourceList", "resources": [{"name": 7}]}))
         assert self._client(call)._discovery_serves("g", "v1", "p").status is StrictReadStatus.ERROR
 
+    @pytest.mark.parametrize(
+        "resources",
+        [
+            [{"name": "p", "kind": "P"}, {"name": 7}],
+            [{"name": 7}, {"name": "p", "kind": "P"}],
+        ],
+        ids=["malformed_after_match", "malformed_before_match"],
+    )
+    def test_a_malformed_entry_anywhere_is_error_whatever_the_entry_order(self, resources):
+        """The whole document is validated before any verdict is returned.
+
+        Deciding on the first matching entry makes one response mean `ITEMS` or `ERROR`
+        depending only on the order the server happened to serve its entries in, which no
+        parity vector can pin down. Absence was never order-sensitive — it already requires
+        the full list to validate — so only the served verdict needed closing.
+        """
+        call = Mock(return_value=self._body({"kind": "APIResourceList", "resources": resources}))
+        outcome = self._client(call)._discovery_serves("g", "v1", "p")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE
+
     def test_irregular_plural_is_matched_by_exact_resource_name(self):
         call = Mock(
             return_value=self._body(

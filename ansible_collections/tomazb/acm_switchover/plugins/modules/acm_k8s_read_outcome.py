@@ -271,6 +271,9 @@ def _discovery_serves(api_client, api_version: str, resource_name: str) -> bool 
     resources = body.get("resources")
     if not isinstance(resources, list):
         return None
+    # The whole document is validated before any verdict. Deciding on the first matching entry
+    # would let one response mean `served` or `unverifiable` purely by server entry order.
+    # Absence was never order-sensitive: it already required the full list to validate.
     for entry in resources:
         if (
             not isinstance(entry, dict)
@@ -280,8 +283,8 @@ def _discovery_serves(api_client, api_version: str, resource_name: str) -> bool 
             or not entry["kind"]
         ):
             return None
-        if entry["name"] == resource_name:
-            return True
+    if any(entry["name"] == resource_name for entry in resources):
+        return True
     return False
 
 

@@ -872,6 +872,26 @@ def test_unverifiable_discovery_is_error_not_kind_not_served(monkeypatch, dynami
     assert result["read_status"] == "error"
 
 
+@pytest.mark.parametrize(
+    "resources",
+    [
+        [{"name": "widgets", "kind": "Widget"}, {"name": 7}],
+        [{"name": 7}, {"name": "widgets", "kind": "Widget"}],
+    ],
+    ids=["malformed_after_match", "malformed_before_match"],
+)
+def test_a_malformed_entry_anywhere_is_unverifiable_whatever_the_entry_order(resources):
+    """Mirrors the Python prover: the whole document validates before any verdict is returned.
+
+    Asserted on the prover itself rather than through `read_status`, because this call site
+    maps both `True` and `None` to `error`, which hides the order-dependence from the module's
+    output while leaving it wrong in the helper the parity contract holds equal.
+    """
+    dynamic = _FakeDynamicClient(discovery={"kind": "APIResourceList", "resources": resources})
+    client = _FakeClient(resource_error=ResourceNotFoundError("no matches"), dynamic=dynamic)
+    assert acm_k8s_read_outcome._discovery_serves(client, "g/v1", "widgets") is None
+
+
 def test_irregular_plural_resource_lookup_success_reads_ok(monkeypatch):
     """The canonical plural is supplied by the caller and the read completes normally."""
     client = _FakeClient(
