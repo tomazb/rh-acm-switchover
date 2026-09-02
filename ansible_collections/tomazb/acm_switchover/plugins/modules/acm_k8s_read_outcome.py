@@ -393,6 +393,11 @@ def run_module(module: AnsibleModule) -> None:
         _exit_outcome(module, "ok", resources, revision)
         return
 
+    # Every strict request is bounded, not just the paginated ones: the Python surface bounds
+    # each call with its per-instance request timeout, and the collection has no client instance
+    # to carry one (plan section 9.1, per-call timeout).
+    params["_request_timeout"] = STRICT_READ_REQUEST_TIMEOUT
+
     try:
         raw = api_client.get(resource, **params)
     except Exception as exc:

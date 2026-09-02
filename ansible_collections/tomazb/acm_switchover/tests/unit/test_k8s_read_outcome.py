@@ -954,3 +954,30 @@ def test_resource_name_is_required_and_module_reports_no_namespace_probing_mode(
     spec = acm_k8s_read_outcome._argument_spec()
     assert spec["read_mode"]["choices"] == ["get", "list"]
     assert spec["resource_name"]["required"] is True
+
+
+def test_a_named_get_is_bounded(monkeypatch):
+    """§9.1 per-call timeout: the collection bounds EVERY strict request, not just list pages.
+
+    Python bounds each strict call with the per-instance request timeout; the collection has no
+    client instance, so it passes STRICT_READ_REQUEST_TIMEOUT. An unbounded named GET can hang
+    indefinitely and would break that parity.
+    """
+    client = _FakeClient(
+        resource=object(),
+        get_result=_DictResult({"kind": "ConfigMap", "metadata": {"name": "cm", "resourceVersion": "77"}}),
+    )
+    result = _run_module(
+        monkeypatch,
+        params={
+            "read_mode": "get",
+            "api_version": "v1",
+            "kind": "ConfigMap",
+            "namespace": "ns",
+            "name": "cm",
+            "resource_name": "configmaps",
+        },
+        client=client,
+    )
+    assert result["read_status"] == "ok"
+    assert client.get_params[0]["_request_timeout"] == constants.STRICT_READ_REQUEST_TIMEOUT
