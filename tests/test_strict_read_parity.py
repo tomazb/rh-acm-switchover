@@ -70,15 +70,25 @@ _OBS_VERSION = "v1beta2"
 _OBS_PLURAL = "multiclusterobservabilities"
 
 
+def _raw_body(payload):
+    """A raw client response: the Python prover decodes the discovery body itself.
+
+    Returning a decoded mapping here would mock away the decode step and hide a client
+    signature change, which is exactly how the `response_type`/`response_types_map` rename
+    reached the branch unnoticed.
+    """
+    return Mock(data=json.dumps(payload).encode("utf-8"))
+
+
 def _served_discovery(name=_PLURAL, kind="Widget"):
-    return {"kind": "APIResourceList", "resources": [{"name": name, "kind": kind}]}
+    return _raw_body({"kind": "APIResourceList", "resources": [{"name": name, "kind": kind}]})
 
 
 def _unserved_discovery(excluding):
     # A structurally valid APIResourceList that simply does not list `excluding`.
     resources = [{"name": "pods", "kind": "Pod"}]
     assert all(entry["name"] != excluding for entry in resources), "fixture must not actually serve `excluding`"
-    return {"kind": "APIResourceList", "resources": resources}
+    return _raw_body({"kind": "APIResourceList", "resources": resources})
 
 
 # ==============================================================================================
@@ -195,7 +205,7 @@ def _python_discovery_http_404():
 
 
 def _python_malformed_discovery():
-    call_api = Mock(return_value={"kind": "APIResourceList", "resources": [{"name": 7}]})
+    call_api = Mock(return_value=_raw_body({"kind": "APIResourceList", "resources": [{"name": 7}]}))
     client = _python_client(call_api=call_api, list_effects=[])
     outcome = client.list_custom_resources_strict(_GROUP, _VERSION, _PLURAL)
     client.custom_api.list_cluster_custom_object.assert_not_called()

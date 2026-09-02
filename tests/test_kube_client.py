@@ -6,6 +6,7 @@ Tests cover KubeClient initialization, CRUD operations, and dry-run mode.
 
 import errno
 import inspect
+import json
 from itertools import chain, repeat
 from unittest.mock import MagicMock, Mock, patch
 
@@ -1644,6 +1645,17 @@ class TestGetPodLogs:
 class TestDiscoveryProver:
     """R4-03: kind absence must come from a successful discovery response."""
 
+    @staticmethod
+    def _body(payload):
+        """A raw client response: the prover decodes the body itself, so fixtures carry bytes.
+
+        Returning a decoded mapping here would mock away the decode step and hide a client
+        signature change, which is how the `response_type`/`response_types_map` rename slipped
+        past this class once already.
+        """
+        data = payload if isinstance(payload, (bytes, str)) else json.dumps(payload)
+        return Mock(data=data.encode("utf-8") if isinstance(data, str) else data)
+
     def _client(self, call_api):
         client = KubeClient.__new__(KubeClient)
         client.request_timeout = 30
@@ -1654,10 +1666,12 @@ class TestDiscoveryProver:
 
     def test_served_kind_returns_items(self):
         call = Mock(
-            return_value={
-                "kind": "APIResourceList",
-                "resources": [{"name": "multiclusterhubs", "kind": "MultiClusterHub"}],
-            }
+            return_value=self._body(
+                {
+                    "kind": "APIResourceList",
+                    "resources": [{"name": "multiclusterhubs", "kind": "MultiClusterHub"}],
+                }
+            )
         )
         client = self._client(call)
         outcome = client._discovery_serves("operator.open-cluster-management.io", "v1", "multiclusterhubs")
@@ -1665,10 +1679,12 @@ class TestDiscoveryProver:
 
     def test_absent_kind_in_a_successful_response_is_crd_absent(self):
         call = Mock(
-            return_value={
-                "kind": "APIResourceList",
-                "resources": [{"name": "somethingelse", "kind": "SomethingElse"}],
-            }
+            return_value=self._body(
+                {
+                    "kind": "APIResourceList",
+                    "resources": [{"name": "somethingelse", "kind": "SomethingElse"}],
+                }
+            )
         )
         outcome = self._client(call)._discovery_serves("g", "v1", "multiclusterhubs")
         assert outcome.status is StrictReadStatus.CRD_ABSENT
@@ -1688,11 +1704,11 @@ class TestDiscoveryProver:
         assert self._client(call)._discovery_serves("g", "v1", "p").status is StrictReadStatus.ERROR
 
     def test_undecodable_discovery_body_is_error_not_absence(self):
-        call = Mock(return_value="<html>gateway error</html>")
+        call = Mock(return_value=self._body("<html>gateway error</html>"))
         assert self._client(call)._discovery_serves("g", "v1", "p").status is StrictReadStatus.ERROR
 
     def test_missing_resources_key_is_error_not_absence(self):
-        call = Mock(return_value={"kind": "APIResourceList"})
+        call = Mock(return_value=self._body({"kind": "APIResourceList"}))
         assert self._client(call)._discovery_serves("g", "v1", "p").status is StrictReadStatus.ERROR
 
     def test_discovery_404_is_error_not_absence(self):
@@ -1705,25 +1721,73 @@ class TestDiscoveryProver:
         assert self._client(call)._discovery_serves("g", "v1", "p").status is StrictReadStatus.ERROR
 
     def test_malformed_api_resource_list_is_error_not_absence(self):
-        call = Mock(return_value={"kind": "APIResourceList", "resources": [{"name": 7}]})
+        call = Mock(return_value=self._body({"kind": "APIResourceList", "resources": [{"name": 7}]}))
         assert self._client(call)._discovery_serves("g", "v1", "p").status is StrictReadStatus.ERROR
 
     def test_irregular_plural_is_matched_by_exact_resource_name(self):
         call = Mock(
-            return_value={
-                "kind": "APIResourceList",
-                "resources": [
-                    {"name": "multiclusterobservabilities", "kind": "MultiClusterObservability"},
-                ],
-            }
+            return_value=self._body(
+                {
+                    "kind": "APIResourceList",
+                    "resources": [
+                        {"name": "multiclusterobservabilities", "kind": "MultiClusterObservability"},
+                    ],
+                }
+            )
         )
         outcome = self._client(call)._discovery_serves(
             "observability.open-cluster-management.io", "v1beta2", "multiclusterobservabilities"
         )
         assert outcome.status is StrictReadStatus.ITEMS
 
+    def test_discovery_call_binds_the_real_api_client_signature(self):
+        """The prover must issue a call the installed client actually accepts.
+
+        Every other test in this class replaces `call_api` with a `Mock`, which accepts any
+        keyword, so none of them can prove the call is issuable. That matters here because the
+        deserialization keyword was RENAMED inside the supported dependency range
+        (`response_type` on kubernetes 28.x/31.x, `response_types_map` on 36.x), and plan section 9.2
+        requires the discovery mechanism to be version-invariant. This test drives a real
+        `ApiClient` with only its transport patched, so a keyword the resolved client rejects
+        fails here instead of silently degrading every custom-resource strict read to
+        `discovery_unverifiable` against a live cluster.
+        """
+        from kubernetes.client.api_client import ApiClient
+
+        class _FakeRESTResponse:
+            def __init__(self, payload):
+                self.data = json.dumps(payload).encode("utf-8")
+                self.status = 200
+                self.reason = "OK"
+
+            def getheaders(self):
+                return {}
+
+        seen = {}
+
+        def fake_request(method, url, **kwargs):
+            seen["method"] = method
+            seen["url"] = url
+            return _FakeRESTResponse({"kind": "APIResourceList", "resources": [{"name": "pods", "kind": "Pod"}]})
+
+        api_client = ApiClient()
+        api_client.request = fake_request
+
+        client = KubeClient.__new__(KubeClient)
+        client.request_timeout = 30
+        client.dry_run = False
+        client._api_client = api_client
+
+        outcome = client._discovery_serves("", "v1", "pods")
+
+        assert outcome.status is StrictReadStatus.ITEMS
+        assert seen["method"] == "GET"
+        assert seen["url"].endswith("/api/v1")
+
     def test_core_group_uses_the_core_discovery_path(self):
-        call = Mock(return_value={"kind": "APIResourceList", "resources": [{"name": "pods", "kind": "Pod"}]})
+        call = Mock(
+            return_value=self._body({"kind": "APIResourceList", "resources": [{"name": "pods", "kind": "Pod"}]})
+        )
         self._client(call)._discovery_serves("", "v1", "pods")
         assert call.call_args[0][0] == "/api/v1"
 

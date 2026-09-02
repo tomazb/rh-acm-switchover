@@ -7,6 +7,7 @@ names, namespaces, and other parameters to improve security and reliability.
 
 import errno
 import functools
+import json
 import logging
 import socket
 import time
@@ -311,14 +312,20 @@ class KubeClient:
         """
         path = f"/apis/{group}/{version}" if group else f"/api/{version}"
         try:
-            response = self._api_client.call_api(
+            # The raw body is decoded here rather than by the client. `call_api`'s
+            # deserialization keyword was renamed inside the supported dependency range
+            # (`response_type` on kubernetes 28.x/31.x, `response_types_map` on 36.x), so asking
+            # the client to deserialize would make this prover version-dependent — the exact
+            # failure mode it exists to avoid. These four keywords bind on the whole range.
+            raw = self._api_client.call_api(
                 path,
                 "GET",
-                response_type="object",
                 auth_settings=["BearerToken"],
+                _preload_content=False,
                 _return_http_data_only=True,
                 _request_timeout=self.request_timeout,
             )
+            response = json.loads(raw.data.decode("utf-8"))
         except Exception:
             # Every failure mode is unverifiable discovery: an API error, a timeout, a TLS or
             # transport failure, and an undecodable body are all indistinguishable from an
