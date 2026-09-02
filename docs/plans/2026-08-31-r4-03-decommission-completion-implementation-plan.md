@@ -441,7 +441,7 @@ semantics are fixed here, once, for all six strict methods:
 | `get_deployment_strict` | the returned Deployment's `metadata.resourceVersion` | `None` |
 | `get_replicaset_strict` | the returned ReplicaSet's `metadata.resourceVersion` (exposed for surface uniformity; **never persisted**, because §10.2.1b has no label for it) | `None` |
 
-Two rules bind every producer and are asserted by tests rather than left to prose:
+Three rules bind every producer and are asserted by tests rather than left to prose:
 
 1. **Absence and error never synthesize a revision.** `CRD_ABSENT`, `NAMESPACE_ABSENT`,
    `OBJECT_ABSENT`, and `ERROR` outcomes always carry `resource_version is None`. There is no
@@ -450,6 +450,16 @@ Two rules bind every producer and are asserted by tests rather than left to pros
 2. **A completion producer persists only the revision of the exact final proof read** selected by
    §10.2.1b for that label. It never persists a revision from an earlier phase, a pre-DELETE read,
    a preview run, or a different read of the same object.
+3. **Each of these six reads publishes a real revision on success, or it does not succeed.** The
+   table above is a producer obligation, not a best effort. A successful list cannot complete
+   without a snapshot revision that every page agreed on (§9.3 A3.0 rule 8), and a successful
+   named GET classifies a missing, empty, or non-string `metadata.resourceVersion` as
+   `ERROR` with `STRICT_READ_REASON_MALFORMED_RESPONSE` rather than returning `ITEMS` carrying
+   `None` (§9.3 A3.0 rule 9). The obligation binds these six **public producers**, not the
+   `StrictReadOutcome` type: the internal `_discovery_serves` helper (Task A2) returns a
+   revisionless `ITEMS` value as its "the kind is served" sentinel, and non-completion consumers
+   such as the Task C5 destination gate legitimately build revisionless outcomes in their own
+   fixtures, so `__post_init__` deliberately does **not** require a revision on `ITEMS`.
 
 **Failure behavior:** Constructing an outcome whose `status` is not `ITEMS` with a non-empty
 `items` list is a programming error and raises `ValueError`, so a caller cannot fabricate an
@@ -966,23 +976,66 @@ than by inspection of prose:
    abandoned read: a restarted read reports the revision its own page 1 established, never the
    revision of the read the server expired. A second expiry is `error`.
 6. **Malformed is never empty.** A non-mapping page, missing `items`, non-list `items`, a
-   non-mapping member, or missing/non-mapping list metadata is
-   `error` with `STRICT_READ_REASON_MALFORMED_RESPONSE`.
+   non-mapping member, missing/non-mapping list metadata, or list metadata whose
+   `resourceVersion` is missing, empty, or not a string is `error` with
+   `STRICT_READ_REASON_MALFORMED_RESPONSE`. The revision requirement is stated here directly
+   rather than left to be inferred: a present-but-empty `metadata` mapping is neither missing nor
+   non-mapping, so nothing else in this rule would reject it. It applies to **every** page of a
+   read, not only to page 1.
 7. **`max_items` is not offered** on any strict method.
-8. **One revision describes the whole read.** Page 1 establishes the read's snapshot revision from
-   its `metadata.resourceVersion`; every continuation page belongs to that same snapshot, because
-   the server pins a paginated LIST to the revision at which the first page was served and the
-   continuation token carries it. The drain helper therefore **captures the revision from page 1
-   and returns that single value** on the final successful `ITEMS` outcome. It does **not** record
-   the last page's `metadata.resourceVersion`, which would be an arbitrary member of the same
-   snapshot rather than a proven description of it. A page whose metadata is missing or non-mapping
-   is `error` under rule 6, so a read can never complete without a revision; an `ITEMS` outcome
-   from a strict list therefore always carries a non-`None` `resource_version`. A later-page
-   failure and a page-budget exhaustion with an outstanding continuation are `error` under rules 3
-   and 4, and neither publishes an inventory or a revision.
+8. **One revision describes the whole read, and every page must agree with it.** Page 1
+   establishes the read's `snapshot_revision` from its `metadata.resourceVersion`. Every **normal**
+   continuation page MUST carry a non-empty string `metadata.resourceVersion` **equal to that
+   `snapshot_revision`**. This is not an assumption about server behavior: the Kubernetes list
+   contract states that the `resourceVersion` returned when using a continue value is identical to
+   the value in the first response, unless the token came from an error message
+   (`staging/src/k8s.io/apimachinery/pkg/apis/meta/v1/types.go`, `ListMeta.Continue`, byte-identical
+   at `v1.26.0:80` and `v1.31.0:80` — §15.2.1). A continuation page whose revision differs is
+   therefore either a contract violation or an error-token continuation; in both cases the pages do
+   not form one consistent snapshot and the read may not be reported as complete. The drain helper
+   **validates the current page's revision on every page** and, on mismatch, returns `error` with
+   `STRICT_READ_REASON_MALFORMED_RESPONSE` (collection `read_status: error`) — publishing no
+   inventory, no partial prefix, and no revision. No new outcome or reason vocabulary is introduced
+   for this case: it is rule 6's malformed-response rule applied to the page's revision.
+   On success the drain helper **returns page 1's single captured value** on the final `ITEMS`
+   outcome. It does **not** read the revision off the last page: after this check the last page's
+   value is by construction the same string, and taking it from page 1 keeps one owner for the
+   snapshot the whole read belongs to.
+   **A restart re-establishes the snapshot.** After an HTTP 410 whole-read restart (rule 5) the
+   abandoned prefix **and** the abandoned `snapshot_revision` are discarded. The restarted read's
+   page 1 establishes a **new** `snapshot_revision`, and every normal continuation page of the
+   restarted read must equal that new value. The old revision is never compared against the
+   restarted read and never published.
+   Because rules 6 and 8 reject a page without a readable revision, an `ITEMS` outcome from a
+   strict list always carries a non-`None` `resource_version`. A later-page failure and a
+   page-budget exhaustion with an outstanding continuation are `error` under rules 3 and 4, and
+   neither publishes an inventory or a revision.
+
+9. **A successful public strict read always publishes a real revision.** The six methods listed
+   below are the strict boundary's public producers, and Task A1 declares on-success
+   `resourceVersion` semantics for every one of them. A successful list publishes its snapshot
+   revision under rule 8. A successful **named GET** — `get_custom_resource_strict`,
+   `get_namespace_strict`, `get_deployment_strict`, `get_replicaset_strict`, and the collection's
+   `read_mode: get` — must read the returned object's own `metadata.resourceVersion` and require a
+   non-empty string **before** it constructs a success; a missing, empty, or non-string value is
+   `error` with `STRICT_READ_REASON_MALFORMED_RESPONSE` (collection `read_status: error`). This is
+   rule 6 applied at the named-GET boundary, not a new concept and not a second read result type.
+   The **producer** owns this classification: a malformed server response must be reported as a
+   strict-read failure carrying the malformed-response reason code, not deferred to the B1/B2
+   durable-record validator, which would misattribute a bad response to the record schema and lose
+   the reason code.
+   This invariant binds the six public producers, **not** the `StrictReadOutcome` type. It is
+   deliberately not enforced in `StrictReadOutcome.__post_init__`, because the internal
+   `_discovery_serves` helper (Task A2) returns a revisionless `ITEMS` value as its
+   "the kind is served" sentinel, and non-completion consumers (for example the Task C5
+   destination gate) legitimately construct revisionless outcomes in their own fixtures. Only a
+   successful read that actually returned a Kubernetes API object or list must carry a revision.
 
 Rule 8 is what makes `resource_versions["drain_pods"]` mechanically meaningful (§10.2.1b): the
 persisted value describes the complete drained set that proved the predicate, not one page of it.
+Rule 9 is what makes `resource_versions["drain_namespace"]` and
+`resource_versions["operator_deployment"]` mechanically meaningful: the producing named GET cannot
+report success without the revision those keys record.
 
 **Strict core/typed-read contract.** These six methods are implemented in PR A rather than
 invented at their later call sites. None uses `@api_call(not_found_value=...)`, `@retry_api_call`,
@@ -993,13 +1046,17 @@ returns only sanitized reason codes.
   `CustomObjectsApi` pages under the A3.0 policy. The custom-objects API returns plain
   dictionaries, so page/member/metadata validation is dictionary-shaped.
 - `get_custom_resource_strict(...)` proves the kind is served first, then performs one bounded
-  named GET. It returns a single-resource `ITEMS` outcome carrying `metadata.resourceVersion`, or
-  `OBJECT_ABSENT` on a 404 that followed a successful discovery determination.
+  named GET. It returns a single-resource `ITEMS` outcome carrying a non-empty
+  `metadata.resourceVersion`, or `OBJECT_ABSENT` on a 404 that followed a successful discovery
+  determination. A returned object whose `metadata.resourceVersion` is missing, empty, or not a
+  string is `ERROR` with `STRICT_READ_REASON_MALFORMED_RESPONSE` (rule 9).
 - `get_namespace_strict(name)` performs one live CoreV1 named Namespace GET. A well-formed
-  Namespace whose `metadata.name` equals `name` returns `ITEMS`; its explicit GET 404 returns
-  `NAMESPACE_ABSENT`. Authorization, server, timeout, TLS, transport, decode, malformed metadata,
-  or an unexpected returned name is `ERROR`. No cached or preflight namespace fact can satisfy
-  this producer.
+  Namespace whose `metadata.name` equals `name` **and whose `metadata.resource_version` is a
+  non-empty string** returns `ITEMS`; its explicit GET 404 returns `NAMESPACE_ABSENT`.
+  Authorization, server, timeout, TLS, transport, decode, malformed metadata, an unexpected
+  returned name, or a missing/empty/non-string revision is `ERROR` (rule 9) — this is the read
+  whose revision becomes `resource_versions["drain_namespace"]`. No cached or preflight namespace
+  fact can satisfy this producer.
 - `list_pods_strict(namespace, label_selector=None)` drains CoreV1 Pod LIST pages under the same
   A3.0 policy. **CoreV1 returns typed models, not dictionaries**: the page is a `V1PodList`, its
   members are `V1Pod`, and its list metadata is `V1ListMeta` whose continuation attribute is
@@ -1014,10 +1071,13 @@ returns only sanitized reason codes.
   `NAMESPACE_ABSENT` is propagated, while namespace present or namespace-read `ERROR` makes the
   Pod result `ERROR`.
 - `get_deployment_strict(name, namespace)` and `get_replicaset_strict(name, namespace)` perform
-  bounded named AppsV1 GETs. A well-formed object must have the requested name and namespace and
-  a non-empty `metadata.uid`, because every R4-03 consumer needs identity. Explicit 404 returns
-  `OBJECT_ABSENT`; authorization, server, timeout, TLS, transport, decode, malformed metadata,
-  missing UID, or mismatched identity returns `ERROR`. The helpers classify transport only; the
+  bounded named AppsV1 GETs. A well-formed object must have the requested name and namespace, a
+  non-empty `metadata.uid`, because every R4-03 consumer needs identity, and a non-empty
+  `metadata.resource_version` (rule 9). Explicit 404 returns `OBJECT_ABSENT`; authorization,
+  server, timeout, TLS, transport, decode, malformed metadata, missing UID, mismatched identity,
+  or a missing/empty/non-string revision returns `ERROR`. The Deployment revision is the one
+  recorded as `resource_versions["operator_deployment"]`; the ReplicaSet revision is never
+  persisted (§10.2.1b). The helpers classify transport only; the
   operator-owner-chain consumer decides whether `OBJECT_ABSENT` means `recovery_required` or a
   different blocker.
 
@@ -1034,11 +1094,14 @@ is delegated to a "similarly" instruction.
 
 - [ ] **Step 1: Write the failing tests**
 
-Add these imports to the top of `tests/test_kube_client.py` if they are not already present —
-`inspect` is imported **at module scope**, because more than one test below uses it:
+Add these imports to the top of `tests/test_kube_client.py` if they are not already present.
+`inspect` is imported **at module scope**, because more than one test below uses it, and `Mock`
+must be added to the file's existing `unittest.mock` import — the file imports only `MagicMock`
+and `patch` today, while every fixture in this task builds `Mock()` objects:
 
 ```python
 import inspect
+from unittest.mock import Mock
 
 from lib.constants import (
     STRICT_READ_MAX_PAGES,
@@ -1084,23 +1147,25 @@ class TestStrictCustomResourceReads:
         return client
 
     def test_true_empty_list_is_a_proven_complete_inventory(self):
-        client = self._client(list_pages=[{"items": [], "metadata": {}}])
+        client = self._client(list_pages=[{"items": [], "metadata": {"resourceVersion": "100"}}])
         outcome = client.list_custom_resources_strict("g", "v1", "widgets")
         assert outcome.status is StrictReadStatus.ITEMS
         assert outcome.items == []
 
     def test_complete_multi_page_inventory_is_joined(self):
         pages = [
-            {"items": [{"metadata": {"name": "a"}}], "metadata": {"continue": "tok"}},
-            {"items": [{"metadata": {"name": "b"}}], "metadata": {}},
+            {"items": [{"metadata": {"name": "a"}}],
+             "metadata": {"continue": "tok", "resourceVersion": "100"}},
+            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "100"}},
         ]
         outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
         assert [i["metadata"]["name"] for i in outcome.items] == ["a", "b"]
 
     def test_every_page_request_carries_the_fixed_page_limit(self):
         pages = [
-            {"items": [{"metadata": {"name": "a"}}], "metadata": {"continue": "tok"}},
-            {"items": [{"metadata": {"name": "b"}}], "metadata": {}},
+            {"items": [{"metadata": {"name": "a"}}],
+             "metadata": {"continue": "tok", "resourceVersion": "100"}},
+            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "100"}},
         ]
         client = self._client(list_pages=pages)
         client.list_custom_resources_strict("g", "v1", "widgets")
@@ -1113,8 +1178,8 @@ class TestStrictCustomResourceReads:
 
     def test_every_page_request_is_bounded_and_follows_the_continuation(self):
         pages = [
-            {"items": [], "metadata": {"continue": "tok"}},
-            {"items": [], "metadata": {}},
+            {"items": [], "metadata": {"continue": "tok", "resourceVersion": "100"}},
+            {"items": [], "metadata": {"resourceVersion": "100"}},
         ]
         client = self._client(list_pages=pages)
         client.list_custom_resources_strict("g", "v1", "widgets")
@@ -1124,7 +1189,8 @@ class TestStrictCustomResourceReads:
 
     def test_later_page_failure_fails_the_whole_read(self):
         pages = [
-            {"items": [{"metadata": {"name": "a"}}], "metadata": {"continue": "tok"}},
+            {"items": [{"metadata": {"name": "a"}}],
+             "metadata": {"continue": "tok", "resourceVersion": "100"}},
             ApiException(status=500, reason="Internal Server Error"),
         ]
         outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
@@ -1133,17 +1199,21 @@ class TestStrictCustomResourceReads:
 
     def test_outstanding_continuation_at_exit_is_incomplete(self):
         # A server that keeps returning a continue token must not be reported as complete.
-        pages = [{"items": [], "metadata": {"continue": "tok"}}] * (STRICT_READ_MAX_PAGES + 5)
+        pages = [
+            {"items": [], "metadata": {"continue": "tok", "resourceVersion": "100"}}
+        ] * (STRICT_READ_MAX_PAGES + 5)
         outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
         assert outcome.status is StrictReadStatus.ERROR
         assert outcome.reason == STRICT_READ_REASON_INVENTORY_INCOMPLETE
 
     def test_expired_continue_token_restarts_the_whole_read_once(self):
         pages = [
-            {"items": [{"metadata": {"name": "a"}}], "metadata": {"continue": "tok"}},
+            {"items": [{"metadata": {"name": "a"}}],
+             "metadata": {"continue": "tok", "resourceVersion": "100"}},
             ApiException(status=410, reason="Gone"),
-            {"items": [{"metadata": {"name": "a"}}], "metadata": {"continue": "tok"}},
-            {"items": [{"metadata": {"name": "b"}}], "metadata": {}},
+            {"items": [{"metadata": {"name": "a"}}],
+             "metadata": {"continue": "tok", "resourceVersion": "200"}},
+            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "200"}},
         ]
         client = self._client(list_pages=pages)
         outcome = client.list_custom_resources_strict("g", "v1", "widgets")
@@ -1161,19 +1231,49 @@ class TestStrictCustomResourceReads:
             ApiException(status=410, reason="Gone"),
             {"items": [{"metadata": {"name": "a"}}],
              "metadata": {"continue": "tok", "resourceVersion": "200"}},
-            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "999"}},
+            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "200"}},
         ]
         outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
         assert outcome.resource_version == "200", "the restarted read's page 1 owns the snapshot"
 
-    def test_the_snapshot_revision_comes_from_page_one_not_the_last_page(self):
+    def test_a_coherent_multi_page_read_publishes_its_one_snapshot_revision(self):
+        """A3.0 rule 8: every normal continuation page is served at page 1's revision."""
+        pages = [
+            {"items": [{"metadata": {"name": "a"}}],
+             "metadata": {"continue": "tok", "resourceVersion": "100"}},
+            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "100"}},
+        ]
+        outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
+        assert outcome.status is StrictReadStatus.ITEMS
+        assert outcome.resource_version == "100"
+
+    def test_a_continuation_page_at_a_different_revision_is_malformed(self):
+        """A3.0 rule 8, negative: mismatched pages are not one snapshot, so the read fails."""
         pages = [
             {"items": [{"metadata": {"name": "a"}}],
              "metadata": {"continue": "tok", "resourceVersion": "100"}},
             {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "999"}},
         ]
         outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
-        assert outcome.resource_version == "100"
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_MALFORMED_RESPONSE
+        assert outcome.items == []
+        assert outcome.resource_version is None
+
+    def test_a_restarted_read_with_an_inconsistent_continuation_is_malformed(self):
+        """The restarted read establishes a new snapshot, and its pages must agree with it."""
+        pages = [
+            {"items": [{"metadata": {"name": "a"}}],
+             "metadata": {"continue": "tok", "resourceVersion": "100"}},
+            ApiException(status=410, reason="Gone"),
+            {"items": [{"metadata": {"name": "a"}}],
+             "metadata": {"continue": "tok", "resourceVersion": "200"}},
+            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "100"}},
+        ]
+        outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_MALFORMED_RESPONSE
+        assert outcome.resource_version is None
 
     def test_a_page_without_a_readable_revision_is_malformed(self):
         pages = [{"items": [], "metadata": {}}]
@@ -1183,9 +1283,11 @@ class TestStrictCustomResourceReads:
 
     def test_second_expired_continue_token_fails_closed(self):
         pages = [
-            {"items": [{"metadata": {"name": "a"}}], "metadata": {"continue": "tok"}},
+            {"items": [{"metadata": {"name": "a"}}],
+             "metadata": {"continue": "tok", "resourceVersion": "100"}},
             ApiException(status=410, reason="Gone"),
-            {"items": [{"metadata": {"name": "a"}}], "metadata": {"continue": "tok"}},
+            {"items": [{"metadata": {"name": "a"}}],
+             "metadata": {"continue": "tok", "resourceVersion": "200"}},
             ApiException(status=410, reason="Gone"),
         ]
         outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
@@ -1250,6 +1352,24 @@ class TestStrictCustomResourceReads:
         assert outcome.status is StrictReadStatus.ITEMS
         assert outcome.resource is resource
         assert outcome.resource_version == "77"
+
+    @pytest.mark.parametrize(
+        "metadata",
+        [
+            {"name": "mch", "uid": "u-1"},                            # revision missing
+            {"name": "mch", "uid": "u-1", "resourceVersion": ""},     # revision empty
+            {"name": "mch", "uid": "u-1", "resourceVersion": 77},     # revision not a string
+        ],
+        ids=["missing", "empty", "non_string"],
+    )
+    def test_named_get_without_a_usable_revision_is_malformed(self, metadata):
+        """A3.0 rule 9: a successful named GET may never publish a null revision."""
+        outcome = self._client(get_result={"metadata": metadata}).get_custom_resource_strict(
+            "g", "v1", "widgets", "mch"
+        )
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_MALFORMED_RESPONSE
+        assert outcome.resource_version is None
 
     def test_named_get_is_bounded(self):
         client = self._client(get_result={"metadata": {"name": "mch", "resourceVersion": "77"}})
@@ -1334,8 +1454,9 @@ _RESTART_READ = object()
         """One whole-read attempt. Items accumulate here and escape only on success.
 
         `snapshot_revision` is captured from page 1 and describes the whole read (A3.0 rule 8).
-        A restart after 410 re-enters this method, so the abandoned read's revision is discarded
-        with its prefix.
+        Every normal continuation page must be served at that same revision; a mismatch is a
+        malformed response and fails the whole read. A restart after 410 re-enters this method,
+        so the abandoned read's revision is discarded with its prefix.
         """
         items: List[Dict[str, Any]] = []
         continue_token: Optional[str] = None
@@ -1378,12 +1499,15 @@ _RESTART_READ = object()
             metadata = page.get("metadata")
             if not isinstance(metadata, dict):
                 return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+            # A3.0 rule 8: page 1 establishes the snapshot, and every normal continuation
+            # page must be served at that same revision or the pages are not one snapshot.
+            revision = metadata.get("resourceVersion")
+            if not isinstance(revision, str) or not revision:
+                return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
             if snapshot_revision is None:
-                # Page 1 establishes the snapshot every continuation page belongs to.
-                revision = metadata.get("resourceVersion")
-                if not isinstance(revision, str) or not revision:
-                    return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
                 snapshot_revision = revision
+            elif revision != snapshot_revision:
+                return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
             continue_token = metadata.get("continue") or None
             if continue_token is None:
                 return StrictReadOutcome.from_items(items, resource_version=snapshot_revision)
@@ -1433,7 +1557,11 @@ _RESTART_READ = object()
         metadata = resource.get("metadata")
         if not isinstance(metadata, dict):
             return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
-        return StrictReadOutcome.from_resource(resource, resource_version=metadata.get("resourceVersion"))
+        # A3.0 rule 9: a successful named GET must carry the object's own revision.
+        revision = metadata.get("resourceVersion")
+        if not isinstance(revision, str) or not revision:
+            return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+        return StrictReadOutcome.from_resource(resource, resource_version=revision)
 ```
 
 - [ ] **Step 4: Run and observe the tests pass**
@@ -1494,6 +1622,7 @@ class TestStrictCoreReads:
     def test_present_namespace_is_items(self):
         outcome = self._client(namespace_result=self._namespace("acm")).get_namespace_strict("acm")
         assert outcome.status is StrictReadStatus.ITEMS
+        assert outcome.resource_version == "12"
 
     def test_namespace_get_404_is_namespace_absent(self):
         outcome = self._client(
@@ -1524,6 +1653,15 @@ class TestStrictCoreReads:
         client = self._client(namespace_result=self._namespace("acm"))
         client.get_namespace_strict("acm")
         assert client.core_v1.read_namespace.call_args.kwargs["_request_timeout"] == 30
+
+    @pytest.mark.parametrize("revision", [None, "", 12], ids=["missing", "empty", "non_string"])
+    def test_namespace_get_without_a_usable_revision_is_malformed(self, revision):
+        """A3.0 rule 9: `resource_versions["drain_namespace"]` has no null-revision source."""
+        client = self._client(namespace_result=self._namespace("acm", resource_version=revision))
+        outcome = client.get_namespace_strict("acm")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_MALFORMED_RESPONSE
+        assert outcome.resource_version is None
 
     # --- list_pods_strict -----------------------------------------------------
     def test_zero_pods_is_a_proven_empty_inventory(self):
@@ -1564,17 +1702,30 @@ class TestStrictCoreReads:
         """A3.0 rule 8, for the read whose revision becomes `resource_versions["drain_pods"]`."""
         pages = [
             self._pod_page(["a"], continue_token="tok", resource_version="100"),
+            self._pod_page(["b"], resource_version="100"),
+        ]
+        outcome = self._client(pod_pages=pages).list_pods_strict("acm")
+        assert outcome.status is StrictReadStatus.ITEMS
+        assert outcome.resource_version == "100"
+
+    def test_a_pod_continuation_page_at_a_different_revision_is_malformed(self):
+        """A3.0 rule 8, negative, on the drain read that produces final-proof evidence."""
+        pages = [
+            self._pod_page(["a"], continue_token="tok", resource_version="100"),
             self._pod_page(["b"], resource_version="999"),
         ]
         outcome = self._client(pod_pages=pages).list_pods_strict("acm")
-        assert outcome.resource_version == "100"
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_MALFORMED_RESPONSE
+        assert outcome.items == []
+        assert outcome.resource_version is None
 
     def test_pod_restarted_read_discards_the_expired_snapshot_revision(self):
         pages = [
             self._pod_page(["a"], continue_token="tok", resource_version="100"),
             ApiException(status=410, reason="Gone"),
             self._pod_page(["a"], continue_token="tok", resource_version="200"),
-            self._pod_page(["b"], resource_version="999"),
+            self._pod_page(["b"], resource_version="200"),
         ]
         outcome = self._client(pod_pages=pages).list_pods_strict("acm")
         assert outcome.resource_version == "200"
@@ -1692,9 +1843,13 @@ then the same for `list_pods_strict`.
         returned_name = getattr(metadata, "name", None)
         if not isinstance(returned_name, str) or returned_name != name:
             return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+        # A3.0 rule 9: this revision becomes `resource_versions["drain_namespace"]`.
+        revision = getattr(metadata, "resource_version", None)
+        if not isinstance(revision, str) or not revision:
+            return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
         return StrictReadOutcome.from_resource(
             {"metadata": {"name": returned_name}},
-            resource_version=getattr(metadata, "resource_version", None),
+            resource_version=revision,
         )
 
     def list_pods_strict(
@@ -1714,7 +1869,8 @@ then the same for `list_pods_strict`.
         return StrictReadOutcome.error(STRICT_READ_REASON_INVENTORY_INCOMPLETE)
 
     def _drain_strict_pod_list(self, namespace, label_selector):
-        # snapshot_revision is captured from page 1 and describes the whole read (A3.0 rule 8).
+        # snapshot_revision is captured from page 1 and describes the whole read (A3.0 rule 8);
+        # every normal continuation page must be served at that same revision.
         items: List[Dict[str, Any]] = []
         continue_token: Optional[str] = None
         snapshot_revision: Optional[str] = None
@@ -1754,11 +1910,14 @@ then the same for `list_pods_strict`.
             metadata = getattr(page, "metadata", None)
             if metadata is None:
                 return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+            # A3.0 rule 8, on the typed CoreV1 page shape.
+            revision = getattr(metadata, "resource_version", None)
+            if not isinstance(revision, str) or not revision:
+                return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
             if snapshot_revision is None:
-                revision = getattr(metadata, "resource_version", None)
-                if not isinstance(revision, str) or not revision:
-                    return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
                 snapshot_revision = revision
+            elif revision != snapshot_revision:
+                return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
             continue_token = getattr(metadata, "_continue", None) or None
             if continue_token is None:
                 return StrictReadOutcome.from_items(items, resource_version=snapshot_revision)
@@ -1804,10 +1963,24 @@ class TestStrictAppsReads:
         return client
 
     @staticmethod
-    def _object(name="multiclusterhub-operator", namespace="open-cluster-management", uid="u-1"):
+    def _object(name="multiclusterhub-operator", namespace="open-cluster-management", uid="u-1",
+                resource_version="7"):
+        """A V1Deployment/V1ReplicaSet-shaped mock.
+
+        `to_dict()` produces the client's snake_case mapping, so the revision key is
+        `resource_version`. It is explicit here because A3.0 rule 9 makes a successful
+        Apps GET impossible without one.
+        """
         model = Mock()
         model.to_dict = Mock(
-            return_value={"metadata": {"name": name, "namespace": namespace, "uid": uid}}
+            return_value={
+                "metadata": {
+                    "name": name,
+                    "namespace": namespace,
+                    "uid": uid,
+                    "resource_version": resource_version,
+                }
+            }
         )
         return model
 
@@ -1818,6 +1991,7 @@ class TestStrictAppsReads:
         outcome = getattr(client, method)("multiclusterhub-operator", "open-cluster-management")
         assert outcome.status is StrictReadStatus.ITEMS
         assert outcome.resource["metadata"]["uid"] == "u-1"
+        assert outcome.resource_version == "7"
 
     @pytest.mark.parametrize("kind, method", [("deployment", "get_deployment_strict"),
                                               ("replicaset", "get_replicaset_strict")])
@@ -1848,6 +2022,16 @@ class TestStrictAppsReads:
         model.to_dict = Mock(return_value="nope")
         client = self._client(result=model)
         assert client.get_deployment_strict("d", "ns").status is StrictReadStatus.ERROR
+
+    @pytest.mark.parametrize("revision", [None, "", 7], ids=["missing", "empty", "non_string"])
+    def test_apps_get_without_a_usable_revision_is_malformed(self, revision):
+        """A3.0 rule 9: `resource_versions["operator_deployment"]` has no null-revision source."""
+        client = self._client(result=self._object(resource_version=revision))
+        outcome = client.get_deployment_strict("multiclusterhub-operator",
+                                               "open-cluster-management")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_MALFORMED_RESPONSE
+        assert outcome.resource_version is None
 
     def test_apps_get_is_bounded(self):
         client = self._client(result=self._object())
@@ -1901,9 +2085,12 @@ Expected: FAIL — `AttributeError: 'KubeClient' object has no attribute 'get_de
         uid = metadata.get("uid")
         if not isinstance(uid, str) or not uid:
             return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
-        return StrictReadOutcome.from_resource(
-            resource, resource_version=metadata.get("resource_version")
-        )
+        # A3.0 rule 9. The client model's snake_case key is the revision on this shape;
+        # the Deployment case becomes `resource_versions["operator_deployment"]`.
+        revision = metadata.get("resource_version")
+        if not isinstance(revision, str) or not revision:
+            return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+        return StrictReadOutcome.from_resource(resource, resource_version=revision)
 ```
 
 - [ ] **Step 12: Run and observe the tests pass**
@@ -1967,8 +2154,8 @@ def _exit_outcome(
 
 | Outcome | `resource_version` |
 | --- | --- |
-| `read_status: ok`, `read_mode: get` | the returned object's `metadata.resourceVersion` |
-| `read_status: ok`, `read_mode: list` | the **single snapshot revision of the whole drained read**, taken from page 1 (§9.3 A3.0 rule 8), never a per-page value |
+| `read_status: ok`, `read_mode: get` | the returned object's `metadata.resourceVersion`, which must be a non-empty string; a missing, empty, or non-string value is `error`, never `ok` (§9.3 A3.0 rule 9) |
+| `read_status: ok`, `read_mode: list` | the **single snapshot revision of the whole drained read**, established by page 1 and matched by every normal continuation page (§9.3 A3.0 rule 8), never a per-page value; a continuation page served at a different revision is `error` |
 | `read_status: not_found` | `null` |
 | `read_status: kind_not_served` | `null` |
 | `read_status: error` | `null` |
@@ -1993,11 +2180,15 @@ revision that describes it.
    malformed page is `error` and publishes **no** partial prefix **and no revision**. Page 1
    establishes the read's snapshot revision; a page whose `metadata` is missing, non-mapping, or
    carries no non-empty `resourceVersion` string is `error` under the malformed-page rule, so an
-   `ok` list can never lack a revision.
+   `ok` list can never lack a revision. **Every normal continuation page must additionally be
+   served at that same revision** (A3.0 rule 8, from the `ListMeta.Continue` contract pinned in
+   §15.2.1): a page whose revision differs from page 1's is not part of the same snapshot, so the
+   read is `error` with no inventory and no revision.
 2. **One whole-read restart on an expired continuation.** An HTTP 410 on a continuation page
    discards every accumulated member **and the abandoned read's snapshot revision**, and restarts
    the read from page 1 exactly `STRICT_READ_MAX_RESTARTS` times; the restarted read reports the
-   revision its own page 1 established. A second expiry is `error`. 410 is detected as
+   revision its own page 1 established, and every normal continuation page of the restarted read
+   must equal that new revision. A second expiry is `error`. 410 is detected as
    `getattr(exc, "status", None) == 410`, matching the module's existing `_is_named_not_found`
    pattern; the dynamic client maps 410 to `GoneError`, a `DynamicApiError` subclass that carries
    `status`, identically at both pinned client tags (§15.2).
@@ -2167,14 +2358,45 @@ def test_list_mode_follows_continue_tokens_to_exhaustion(monkeypatch):
 
 
 def test_a_complete_list_publishes_the_page_one_snapshot_revision(monkeypatch):
-    """A3.0 rule 8: one revision describes the whole read, taken from page 1."""
+    """A3.0 rule 8: one revision describes the whole read, and every page agrees with it."""
+    client = _FakeClient(
+        resource=object(),
+        pages=[_page([{"metadata": {"name": "a"}}], "tok", resource_version="100"),
+               _page([{"metadata": {"name": "b"}}], resource_version="100")],
+    )
+    result = _run_module(monkeypatch, params=LIST_PARAMS, client=client)
+    assert result["read_status"] == "ok"
+    assert result["resource_version"] == "100"
+
+
+def test_a_continuation_page_at_a_different_revision_is_error(monkeypatch):
+    """A3.0 rule 8, negative: mismatched pages are not one snapshot, so the read fails."""
     client = _FakeClient(
         resource=object(),
         pages=[_page([{"metadata": {"name": "a"}}], "tok", resource_version="100"),
                _page([{"metadata": {"name": "b"}}], resource_version="999")],
     )
     result = _run_module(monkeypatch, params=LIST_PARAMS, client=client)
-    assert result["resource_version"] == "100"
+    assert result["read_status"] == "error"
+    assert result["resources"] == []
+    assert result["resource_version"] is None
+
+
+def test_a_restarted_read_with_an_inconsistent_continuation_is_error(monkeypatch):
+    """The restarted read establishes a new snapshot, and its pages must agree with it."""
+    client = _FakeClient(
+        resource=object(),
+        pages=[
+            _page([{"metadata": {"name": "a"}}], "tok", resource_version="100"),
+            _api_error(GoneError, 410),
+            _page([{"metadata": {"name": "a"}}], "tok", resource_version="200"),
+            _page([{"metadata": {"name": "b"}}], resource_version="100"),
+        ],
+    )
+    result = _run_module(monkeypatch, params=LIST_PARAMS, client=client)
+    assert result["read_status"] == "error"
+    assert result["resources"] == []
+    assert result["resource_version"] is None
 
 
 def test_a_named_get_publishes_the_objects_revision(monkeypatch):
@@ -2191,6 +2413,32 @@ def test_a_named_get_publishes_the_objects_revision(monkeypatch):
     )
     assert result["read_status"] == "ok"
     assert result["resource_version"] == "77"
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"name": "cm"},                              # revision missing
+        {"name": "cm", "resourceVersion": ""},       # revision empty
+        {"name": "cm", "resourceVersion": 77},       # revision not a string
+    ],
+    ids=["missing", "empty", "non_string"],
+)
+def test_a_named_get_without_a_usable_revision_is_error(monkeypatch, metadata):
+    """A3.0 rule 9: `read_status: ok` is unreachable without the object's own revision."""
+    client = _FakeClient(
+        resource=object(),
+        get_result=_DictResult({"kind": "ConfigMap", "metadata": metadata}),
+    )
+    result = _run_module(
+        monkeypatch,
+        params={"read_mode": "get", "api_version": "v1", "kind": "ConfigMap",
+                "namespace": "ns", "name": "cm", "resource_name": "configmaps"},
+        client=client,
+    )
+    assert result["read_status"] == "error"
+    assert result["resources"] == []
+    assert result["resource_version"] is None
 
 
 def test_every_list_page_carries_the_fixed_limit_and_a_bounded_timeout(monkeypatch):
@@ -2232,7 +2480,7 @@ def test_expired_continuation_restarts_the_whole_read_once(monkeypatch):
             _page([{"metadata": {"name": "a"}}], "tok", resource_version="100"),
             _api_error(GoneError, 410),
             _page([{"metadata": {"name": "a"}}], "tok", resource_version="200"),
-            _page([{"metadata": {"name": "b"}}], resource_version="999"),
+            _page([{"metadata": {"name": "b"}}], resource_version="200"),
         ],
     )
     result = _run_module(monkeypatch, params=LIST_PARAMS, client=client)
@@ -2607,6 +2855,7 @@ def _drain_list_once(api_client, resource, params) -> tuple[list[dict] | None, s
     collected: list[dict] = []
     continue_token = None
     snapshot_revision = None          # page 1 owns it; a restart re-enters and re-establishes it
+                                      # and every later page must be served at that same value
     for _ in range(STRICT_READ_MAX_PAGES):
         page_params = dict(params)
         page_params["limit"] = STRICT_READ_PAGE_LIMIT
@@ -2625,8 +2874,11 @@ def _drain_list_once(api_client, resource, params) -> tuple[list[dict] | None, s
         members, token, revision = _strict_list_page(raw)
         if members is None:
             return None, "error", None
+        # A3.0 rule 8: every normal continuation page belongs to page 1's snapshot.
         if snapshot_revision is None:
             snapshot_revision = revision
+        elif revision != snapshot_revision:
+            return None, "error", None
         collected.extend(members)
         continue_token = token
         if not continue_token:
@@ -2677,7 +2929,13 @@ Inside `run_module`, replacing the existing `get`-branch exit:
     if resources is None:
         _exit_outcome(module, "error")
         return
-    _exit_outcome(module, "ok", resources, _object_revision(resources))
+    revision = _object_revision(resources)
+    if revision is None:
+        # A3.0 rule 9: a successful named GET must expose the object's own revision.
+        # A response that cannot supply one is a malformed response, not an `ok` with null.
+        _exit_outcome(module, "error")
+        return
+    _exit_outcome(module, "ok", resources, revision)
     return
 ```
 
@@ -2685,7 +2943,11 @@ and one new module-level helper beside `_strict_list_page`:
 
 ```python
 def _object_revision(resources: list[dict]) -> str | None:
-    """The named object's own revision, or None when the response cannot supply one."""
+    """The named object's own revision, or None when the response cannot supply one.
+
+    `None` is not an `ok` value on the `get` path: its only caller classifies it as
+    `error` before any success is published (A3.0 rule 9).
+    """
     if len(resources) != 1:
         return None
     metadata = resources[0].get("metadata")
@@ -2697,8 +2959,13 @@ def _object_revision(resources: list[dict]) -> str | None:
 
 Every remaining `_exit_outcome` call site — the input-validation failures, `not_found`,
 `kind_not_served`, and every `error` — passes no `resource_version`, so the key is published as
-`null`. That is the whole contract: `ok` carries a real revision, everything else carries `null`. Update every existing role/task/test call site in this PR to pass canonical
-`resource_name` as listed above.
+`null`. The contract is therefore **enforced at the producer rather than described**: exactly two
+call sites can reach `read_status: ok`, and neither can reach it without a revision. The list path
+exits `ok` only from `_drain_list`, which cannot return `"ok"` unless page 1 supplied a non-empty
+string revision that every normal continuation page matched (A3.0 rule 8). The `get` path exits
+`ok` only after `_object_revision` returned a non-empty string, and exits `error` otherwise (A3.0
+rule 9). So `ok` carries a real revision, and every other outcome carries `null`. Update every
+existing role/task/test call site in this PR to pass canonical `resource_name` as listed above.
 
 - [ ] **Step 5: Run and observe the tests pass**
 
@@ -2716,8 +2983,10 @@ PYTHONPATH=. python -m pytest \
 `_object_revision` must not log or return any part of a response body, and must not return a
 partial `collected` list on any path. Confirm the module still exits only through `_exit_outcome`;
 that `_normalize_resources` is now reached only from the `get` branch; that no call site passes a
-`resource_version` alongside a non-`ok` status; and that no code path can construct an
-empty-string revision.
+`resource_version` alongside a non-`ok` status; that no code path can construct an empty-string
+revision; and that **no `_exit_outcome(module, "ok", ...)` call site can be reached with a `None`
+revision** — grep the module for `"ok"` and check each of the two success exits against A3.0
+rules 8 and 9.
 
 - [ ] **Step 7: Module documentation gate**
 
@@ -2787,6 +3056,12 @@ VECTORS = [
     ("malformed_items", "malformed response", StrictReadStatus.ERROR, "error", None),
     ("missing_items_key", "malformed response", StrictReadStatus.ERROR, "error", None),
     ("missing_list_revision", "malformed response", StrictReadStatus.ERROR, "error", None),
+    # A3.0 rule 8: a continuation page served at a revision other than page 1's is not part of
+    # the same snapshot, so the whole read fails closed in both form factors.
+    ("inconsistent_continuation_revision", "malformed response", StrictReadStatus.ERROR, "error", None),
+    # A3.0 rule 9: a well-formed named GET whose object carries no revision is a malformed
+    # response, never an `ITEMS`/`ok` with a null revision.
+    ("named_get_missing_revision", "malformed response", StrictReadStatus.ERROR, "error", None),
     ("later_page_failure", "truncation / incomplete", StrictReadStatus.ERROR, "error", None),
     ("outstanding_continuation", "truncation / incomplete", StrictReadStatus.ERROR, "error", None),
     # Page 1 of the restarted read is served at "200"; the abandoned read's "100" is discarded.
@@ -2847,6 +3122,7 @@ def test_strict_read_bounds_are_mirrored():
 
     import ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants as ans_constants
 
+    import lib.constants as py_constants
     from lib.kube_client import KubeClient
 
     for name in ("STRICT_READ_PAGE_LIMIT", "STRICT_READ_MAX_PAGES", "STRICT_READ_MAX_RESTARTS"):
@@ -2859,15 +3135,22 @@ def test_strict_read_bounds_are_mirrored():
 
 `run_python_vector` and `run_collection_vector` are defined in this file and build their fakes
 from the same vector id, so a vector that is added on one side and forgotten on the other fails.
-Both runners serve **the same declared revisions** for a given vector: page 1 of every successful
-list is served at `"100"` and any later page at `"999"`, so a per-page implementation fails the
-revision assertions on both sides; the `expired_continuation_restart` runner serves the abandoned
-read at `"100"` and the restarted read's page 1 at `"200"`; and the `named_get_success` runner
-serves an object at `"77"`.
+Both runners serve **the same declared revisions** for a given vector. **Every page of a
+successful multi-page list is served at `"100"`** — page 1 and every continuation page alike —
+because A3.0 rule 8 requires them to be equal; a runner that served a later page at a different
+revision would be modelling a malformed response, not a success, so no successful vector uses a
+mismatched later-page revision. The `expired_continuation_restart` runner serves the abandoned
+read's page 1 at `"100"`, and after the 410 serves **every** page of the restarted read at `"200"`.
+The `inconsistent_continuation_revision` runner is the mismatch case, and the only place a
+mismatched pair appears: page 1 at `"100"` and its normal continuation page at `"999"`. The
+`named_get_success` runner serves an object at `"77"`, and the `named_get_missing_revision` runner
+serves an otherwise well-formed named object whose `metadata` carries no `resourceVersion` at all.
 Each runner asserts the bounds its vector exercises: every list request it observes carries
 `limit == STRICT_READ_PAGE_LIMIT` and a bounded request timeout, the `expired_continuation_restart`
 runner asserts the restart re-issued page 1 with no continuation token and published no pre-410
-prefix, and the `second_expired_continuation` runner asserts an empty result on both sides.
+prefix, and the `second_expired_continuation`, `inconsistent_continuation_revision`, and
+`named_get_missing_revision` runners each assert an empty result and a null revision on both
+sides.
 Root `tests/` must import the collection module lazily inside `run_collection_vector` so the file
 stays import-safe without `ansible-core` (`AGENTS.md` standing CI constraint). The
 `namespace_absent` Python runner must call `KubeClient.get_namespace_strict`; it may not construct
@@ -3055,8 +3338,10 @@ behavior is not implemented here (§19.1).
 | Test: expired continuation restarts the whole read once, then fails closed | Python `test_expired_continue_token_restarts_the_whole_read_once`, `test_second_expired_continue_token_fails_closed`, `test_pod_expired_continuation_restarts_the_whole_read_once`, `test_pod_second_expiry_fails_closed`; collection `test_expired_continuation_restarts_the_whole_read_once`, `test_second_expired_continuation_is_error_with_no_partial_output`; vectors `expired_continuation_restart`, `second_expired_continuation` |
 | Test: missing/`null`/non-list `items` and malformed members or list metadata are never an empty success | Python `test_missing_items_key_is_error_not_empty`, `test_null_items_is_error_not_empty`, `test_malformed_list_metadata_is_error`, `test_non_mapping_member_is_error_not_empty`, `test_pod_page_without_items_is_error_not_empty`, `test_pod_page_with_non_list_items_is_error`, `test_malformed_pod_member_is_error`, `test_pod_page_without_list_metadata_is_error`; collection `test_malformed_list_pages_are_error_never_empty_success` (six cases, including missing `items` and missing metadata); vector `missing_items_key` |
 | Test: canonical resource name is exact, never synthesized | collection `test_irregular_plural_resource_lookup_success_reads_ok`, `test_irregular_plural_matches_the_exact_name_and_never_becomes_absence`, `test_missing_resource_name_is_rejected_before_any_client_work`, `test_resource_name_is_required_and_module_reports_no_namespace_probing_mode`; Python `test_irregular_plural_is_matched_by_exact_resource_name` |
-| Test: a successful read exposes its `resourceVersion`, and no absence or error synthesizes one | Python `test_items_outcome_carries_a_complete_inventory`, `test_named_get_returns_the_resource_and_its_resource_version`, `test_absence_and_error_outcomes_never_carry_a_revision`, `test_a_non_items_outcome_cannot_be_given_a_revision`; collection `test_a_named_get_publishes_the_objects_revision`, `test_absence_outcomes_never_publish_a_revision`, `test_every_outcome_publishes_the_resource_version_key`; parity `test_both_form_factors_publish_the_same_revision`, `test_no_vector_synthesizes_a_revision` |
-| Test: a paginated list exposes one snapshot revision for the whole read, and a 410 restart discards the old one | Python `test_the_snapshot_revision_comes_from_page_one_not_the_last_page`, `test_a_restarted_read_reports_the_restarted_snapshot_revision`, `test_pod_snapshot_revision_is_page_one_and_survives_no_restart`, `test_pod_restarted_read_discards_the_expired_snapshot_revision`, `test_a_page_without_a_readable_revision_is_malformed`; collection `test_a_complete_list_publishes_the_page_one_snapshot_revision`, `test_expired_continuation_restarts_the_whole_read_once` (revision assertion), `test_malformed_list_pages_are_error_never_empty_success` (missing/empty/non-string revision cases); vectors `expired_continuation_restart`, `missing_list_revision` |
+| Test: a successful read exposes its `resourceVersion`, and no absence or error synthesizes one | Python `test_items_outcome_carries_a_complete_inventory`, `test_named_get_returns_the_resource_and_its_resource_version`, `test_present_namespace_is_items`, `test_present_object_carries_identity`, `test_absence_and_error_outcomes_never_carry_a_revision`, `test_a_non_items_outcome_cannot_be_given_a_revision`; collection `test_a_named_get_publishes_the_objects_revision`, `test_absence_outcomes_never_publish_a_revision`, `test_every_outcome_publishes_the_resource_version_key`; parity `test_both_form_factors_publish_the_same_revision`, `test_no_vector_synthesizes_a_revision` |
+| Test: a successful **named GET** cannot publish a null revision (A3.0 rule 9) | Python `test_named_get_without_a_usable_revision_is_malformed`, `test_namespace_get_without_a_usable_revision_is_malformed`, `test_apps_get_without_a_usable_revision_is_malformed` (each parametrized missing / empty / non-string); collection `test_a_named_get_without_a_usable_revision_is_error` (same three cases); vector `named_get_missing_revision` |
+| Test: a paginated list exposes one snapshot revision for the whole read, and a 410 restart discards the old one | **Positive:** Python `test_a_coherent_multi_page_read_publishes_its_one_snapshot_revision`, `test_a_restarted_read_reports_the_restarted_snapshot_revision`, `test_pod_snapshot_revision_is_page_one_and_survives_no_restart`, `test_pod_restarted_read_discards_the_expired_snapshot_revision`; collection `test_a_complete_list_publishes_the_page_one_snapshot_revision`, `test_expired_continuation_restarts_the_whole_read_once` (revision assertion). **Negative:** Python `test_a_page_without_a_readable_revision_is_malformed`; collection `test_malformed_list_pages_are_error_never_empty_success` (missing / empty / non-string revision cases). Vectors `expired_continuation_restart`, `missing_list_revision` |
+| Test: every normal continuation page must be served at page 1's revision, and a mismatch fails the whole read closed (A3.0 rule 8) | Python `test_a_continuation_page_at_a_different_revision_is_malformed`, `test_a_pod_continuation_page_at_a_different_revision_is_malformed`, `test_a_restarted_read_with_an_inconsistent_continuation_is_malformed`; collection `test_a_continuation_page_at_a_different_revision_is_error`, `test_a_restarted_read_with_an_inconsistent_continuation_is_error`; vector `inconsistent_continuation_revision`. Each asserts `error`, an empty inventory, and no revision |
 | Collection has the corresponding complete list outcome, extending `acm_k8s_read_outcome` rather than adding another abstraction | Task A4; `test_resource_name_is_required_and_module_reports_no_namespace_probing_mode` proves no mode was added |
 | Merged on `origin/ansible` | PR A merges before R4-04 execution begins; R4-04 re-runs its own Task 0 |
 | No competing read algebra | Task A4 extends the single module with explicit canonical `resource_name`; Task A5 holds both surfaces to one vector set; Task A3 supplies the positive Python namespace-absence producer and strict core reads needed by later R4-03 consumers |
@@ -3444,7 +3729,9 @@ def teardown_kind(key: str) -> str: ...          # the kind segment of a record 
 def split_resource_key(key: str) -> tuple[str, str, str, str] | None:
     """Right-split a resource key into (api_version, kind, namespace, name), or None if malformed."""
 
-# §10.2.1c closed vocabularies, mirrored in the collection by Task B2.
+# §10.2.1c closed vocabularies, mirrored in the collection by Task B2 and held equal by
+# Task B2's `test_teardown_vocabularies_are_mirrored`. This module is their single
+# authoritative Python definition; they are deliberately not restated in lib/constants.py.
 RESOURCE_VERSION_LABELS = frozenset({"drain_namespace", "drain_pods", "operator_deployment"})
 ABSENCE_PROOF_KEYS = frozenset({"target_cr", "drain_namespace"})
 ABSENCE_PROOF_TYPES = frozenset({"object_absent", "crd_absent", "namespace_absent"})
@@ -4225,7 +4512,8 @@ git commit -m "feat: add durable decommission teardown records"
 
 **Files:** Modify `plugins/module_utils/checkpoint.py`; modify
 `plugins/module_utils/constants.py`; modify `tests/unit/test_checkpoint_vocabulary_guardrail.py`;
-create `tests/unit/test_teardown_records.py`; modify `tests/test_checkpoint_state_parity.py`.
+create `tests/unit/test_teardown_records.py`; modify `tests/test_checkpoint_state_parity.py`;
+modify `tests/test_constants_parity.py`.
 
 **Purpose:** Mirror Task B1 in the collection's own store, with the same schema and the same
 fail-closed validation, sharing no code.
@@ -4254,7 +4542,9 @@ def record_teardown_phase(
     operator_identity_unavailable=None,
 ) -> None: ...
 
-# Closed vocabularies, mirrored from lib/teardown_record.py and held equal by CONSTANT_PAIRS.
+# Closed vocabularies, mirrored from lib/teardown_record.py and held equal by
+# test_teardown_vocabularies_are_mirrored (not CONSTANT_PAIRS: their Python owner is
+# lib/teardown_record.py, which CONSTANT_PAIRS does not resolve against).
 RESOURCE_VERSION_LABELS = frozenset({"drain_namespace", "drain_pods", "operator_deployment"})
 ABSENCE_PROOF_KEYS = frozenset({"target_cr", "drain_namespace"})
 ABSENCE_PROOF_TYPES = frozenset({"object_absent", "crd_absent", "namespace_absent"})
@@ -4269,9 +4559,69 @@ ABSENCE_PROOF_TYPES_BY_KEY = {
 §10.2.4 record rules — with
 validation in exactly one collection-side function used by both the reader and the writer. The
 mirrored constants `OPERATOR_IDENTITY_UNAVAILABLE_REASONS`, `DRAIN_SCOPED_KINDS`,
-`IDENTITY_BEARING_KINDS`, `RESOURCE_VERSION_LABELS`, `ABSENCE_PROOF_KEYS`, and
-`ABSENCE_PROOF_TYPES` are added to `module_utils/constants.py` and to `CONSTANT_PAIRS` in this
-task. The explicit keyword arguments above are what make absent-versus-empty representable on this
+`IDENTITY_BEARING_KINDS`, `RESOURCE_VERSION_LABELS`, `ABSENCE_PROOF_KEYS`, `ABSENCE_PROOF_TYPES`,
+and `ABSENCE_PROOF_TYPES_BY_KEY` are all added to `module_utils/constants.py` in this task, and
+every one of them is held equal to its Python owner by `tests/test_constants_parity.py`.
+
+**Which parity mechanism applies follows from where the Python definition lives**, because
+`CONSTANT_PAIRS` resolves each Python name with `getattr(py_constants, name)` against
+`lib/constants.py`:
+
+- `OPERATOR_IDENTITY_UNAVAILABLE_REASONS` is defined in `lib/constants.py` (§10.2.3), so it is
+  added to `CONSTANT_PAIRS` in this task, exactly like the strict-read constants added by Task A5.
+- The six teardown vocabularies are defined in `lib/teardown_record.py` (Task B1), which is their
+  single authoritative Python home. Copying them into `lib/constants.py` only so the generic helper
+  can reach them would create a second Python definition of each vocabulary and a new drift
+  surface — the opposite of what the parity contract is for. They are covered instead by one
+  dedicated assertion added beside `test_shared_constants_parity`, comparing the two authoritative
+  definitions directly:
+
+```python
+import lib.teardown_record as py_teardown_record
+
+# Closed vocabularies whose Python owner is lib/teardown_record.py, not lib/constants.py.
+TEARDOWN_VOCABULARY_NAMES = (
+    "DRAIN_SCOPED_KINDS",
+    "IDENTITY_BEARING_KINDS",
+    "RESOURCE_VERSION_LABELS",
+    "ABSENCE_PROOF_KEYS",
+    "ABSENCE_PROOF_TYPES",
+    "ABSENCE_PROOF_TYPES_BY_KEY",
+)
+
+
+def test_teardown_vocabularies_are_mirrored():
+    """R4-03 §10.2.1c closed vocabularies: one authoritative definition per form factor.
+
+    CONSTANT_PAIRS resolves Python names from lib.constants; these live in
+    lib.teardown_record, so they are compared directly against the collection's
+    module_utils/constants.py rather than duplicated to fit the generic helper.
+    """
+    mismatches = []
+    for name in TEARDOWN_VOCABULARY_NAMES:
+        py_val = getattr(py_teardown_record, name, _MISSING)
+        ans_val = getattr(ans_constants, name, _MISSING)
+        if py_val is _MISSING:
+            mismatches.append(f"Python missing: lib.teardown_record.{name}")
+        elif ans_val is _MISSING:
+            mismatches.append(f"Ansible missing: {name}")
+        elif py_val != ans_val:
+            mismatches.append(f"{name}={py_val!r} (Python) != {ans_val!r} (Ansible)")
+
+    assert not mismatches, "Teardown vocabulary drift detected:\n  " + "\n  ".join(mismatches)
+```
+
+`_MISSING` is the sentinel the file already defines at module scope for
+`test_shared_constants_parity`, and `ans_constants` is already imported there; this adds one test
+and one import, not a parity framework. `frozenset` values compare by value, and
+`ABSENCE_PROOF_TYPES_BY_KEY` compares as a plain mapping of `frozenset`s, so no custom comparison
+is needed. That mapping is the reason this assertion exists rather than relying on the three flat
+sets: `ABSENCE_PROOF_KEYS` and `ABSENCE_PROOF_TYPES` can both match while the **key to
+permitted-type** mapping between them diverges, and the shared
+`proof_type_not_permitted_for_its_key` malformed vector catches only the specific pairing it
+encodes, not every asymmetric edit. The explicit comparison closes that hole.
+
+The explicit keyword arguments above are what make absent-versus-empty representable on this
 side: the writer omits a key from the stored mapping when its argument is `None` and writes `{}`
 when it is an empty mapping, exactly as Task B1 does, and the reader inverts that.
 Roles never touch the raw key; they call these functions through the checkpoint action
@@ -7129,6 +7479,7 @@ depends on. Path is
 | An object UID is unique in time and space, server-generated, and may not change | `ObjectMeta.UID` — "UID is the unique in time and space value for this object … not allowed to change on PUT operations. Populated by the system. Read-only." | `:151-159` | `:151-159` |
 | A controller owner reference carries both the referent's kind/apiVersion and its UID, and marks the controller | `OwnerReference{ APIVersion, Kind, Name, UID types.UID, Controller *bool }` | `:290-305` | `:294-309` |
 | A list response carries its own revision and its continuation token | `ListMeta{ ResourceVersion string \`json:"resourceVersion,omitempty"\`; Continue string \`json:"continue,omitempty"\` }` | `:73`, `:82` | `:73`, `:82` |
+| A **normal** continuation response is served at the **same** revision as the first response, so a paginated read is one consistent snapshot; a differing revision means the token came from an error message and the pages are not one snapshot | `ListMeta.Continue` doc comment — "The resourceVersion field returned when using this continue value will be identical to the value in the first response, unless you have received this token from an error message." | `:80` | `:80` |
 | Discovery returns `APIResourceList.resources`, whose `name` is the **plural** resource name that strict classification matches exactly | `APIResource{ Name string // "name is the plural name of the resource" }`, `APIResourceList{ APIResources []APIResource \`json:"resources"\` }` | `:1081-1083`, `:1131-1137` | `:1141-1143`, `:1193-1200` |
 
 | Claim | Immutable source | v1.26.0 | v1.31.0 |
@@ -7197,7 +7548,7 @@ corresponding safety conclusion is carried by an immutable source in §15.2.1 th
 | --- | --- | --- | --- | --- | --- |
 | A DELETE can be bound to a target UID server-side | `kubernetes/kubernetes` | `v1.26.0`, `v1.31.0` | `staging/src/k8s.io/apimachinery/pkg/apis/meta/v1/types.go` | both endpoints, identical | C1, C2 |
 | A UID identifies one object for its lifetime and is never rebound | `kubernetes/kubernetes` | `v1.26.0`, `v1.31.0` | same | both endpoints, identical | B1, B2, C1, C3, D, E |
-| A list response's `resourceVersion` is the revision it was served at, and a paginated read's continuation pages belong to the snapshot its first page established | `kubernetes/kubernetes` | `v1.26.0`, `v1.31.0` | same | both endpoints, identical | A3 (A3.0 rule 8), C3 (`resource_versions.drain_pods`) |
+| A list response's `resourceVersion` is the revision it was served at, and every **normal** continuation page of a paginated read is served at the revision its first page established — so the tool **verifies that equality on every page** and fails the read closed on a mismatch rather than assuming the guarantee held | `kubernetes/kubernetes` | `v1.26.0`, `v1.31.0` | same, `ListMeta.Continue:80` byte-identical | both endpoints, identical | A3 (A3.0 rule 8), A4 (`_drain_list_once`), C3 (`resource_versions.drain_pods`) |
 | Pagination continues through `metadata.continue` | `kubernetes/kubernetes` | `v1.26.0`, `v1.31.0` | same | both endpoints, identical | A3, A4 |
 | Discovery's `resources[].name` is the exact plural to match | `kubernetes/kubernetes` | `v1.26.0`, `v1.31.0` | same | both endpoints, identical | A2, A4 |
 | Controller ownership is UID-resolved, Deployment to ReplicaSet to Pod | `kubernetes/kubernetes` | `v1.26.0`, `v1.31.0` | `pkg/controller/deployment/sync.go`, `pkg/controller/replicaset/replica_set.go` | both endpoints, identical semantics | E (11C.2, matrix rows 1, 5–12, 16) |
@@ -7261,7 +7612,7 @@ asserted against the real seam.
 
 | §16 item | Tests | PR |
 | --- | --- | --- |
-| 1. Strict-read parity vectors, both form factors, pagination completeness and later-page failure | `tests/test_strict_read_parity.py` (17 vectors, three assertions each, plus `test_strict_read_bounds_are_mirrored`); `TestStrictCustomResourceReads`; `TestStrictCoreReads` for Namespace and paginated Pods; `TestStrictAppsReads` for Deployment and ReplicaSet; the collection pagination, mandatory-`limit`, bounded-timeout, 410-restart, malformed-page, exact irregular-plural, discovery-404, and malformed-discovery tests in `test_k8s_read_outcome.py` | A |
+| 1. Strict-read parity vectors, both form factors, pagination completeness and later-page failure | `tests/test_strict_read_parity.py` (21 vectors, five vector-parametrized assertions each, plus `test_strict_read_bounds_are_mirrored`); `TestStrictCustomResourceReads`; `TestStrictCoreReads` for Namespace and paginated Pods; `TestStrictAppsReads` for Deployment and ReplicaSet; the collection pagination, mandatory-`limit`, bounded-timeout, 410-restart, malformed-page, exact irregular-plural, discovery-404, and malformed-discovery tests in `test_k8s_read_outcome.py`. The A3.0 rule 8 snapshot-consistency and rule 9 named-GET-revision cases are mirrored on both sides and carried by the `inconsistent_continuation_revision` and `named_get_missing_revision` vectors (§9.6) | A |
 | 2. Read-outcome extension regression | `test_k8s_read_outcome.py` and `test_k8s_read_outcome_runtime.py` with inverted discovery-miss expectations, canonical `resource_name` on every invocation, new pagination/bounds/restart/malformed-page vectors, and the RETURN plus required-option assertions; `ansible-test sanity --test validate-modules`; runtime consumer lanes `test_r3_02_compactor_runtime.py` and `test_r3_02_activation_runtime.py` | A |
 | 3. Fail-open inversions | collection: `test_decommission_role_contracts.py:336-350` and `test_ansible_resilience_contracts.py:485` inverted; Python: lingering-pod warning becomes fatal; MCO and MCH absence re-checks asserted against the real client seam | C, E |
 | 4. Refusal matrix | `TestDecommissionOutcomes` — top-level banner cancellation is explicitly unsuccessful with all requested work not attempted and no substep invoked; each later prompt refusal aborts with an accurate summary and non-zero result; current false CLI mapping is preserved; callers use `.succeeded`, never object truthiness; rerun completes idempotently; non-interactive and integrated paths never prompt | B |
@@ -7269,10 +7620,10 @@ asserted against the real seam.
 | 6. Identity and TOCTOU matrix | `tests/test_decommission_identity.py` rows 1 through 20 plus the provenance cases; same-name new-UID replacement between discovery and DELETE; unrelated prefixed Pod; invalid, missing, and multiple owner chains; Deployment and ReplicaSet replacement mid-drain | E |
 | 7. Destination gate matrix | `TestDestinationObservabilityGate` — destination positively absent, present, `error`, and ambiguous mixed state; the flag accepted only against positive absence; the flag rejected when the gate would pass; resume re-runs the gate; the result is not persisted | C |
 | 8. State, resume, reset | the phase-table resume matrix in `tests/test_decommission.py`; the full-reset clean-skip limitation asserted as **current** behavior and published operator-facing in C; the collection `reset_from` case retaining and revalidating the records; the §10.2.1 completion-evidence matrix (`MALFORMED_COMPLETION_RECORDS`) and the §10.2.2/§10.2.3 malformed nested-identity matrices in `tests/test_teardown_record.py` and `tests/unit/test_teardown_records.py`, held equal by the shared malformed-fixture parity test in `tests/test_checkpoint_state_parity.py`; reload validation on both sides | B, C |
-| 12. Completion-evidence schema (amendment §22) — all twelve sub-items | **12.1** revision-only key closure: `MALFORMED_COMPLETION_RECORDS["unknown_rv_label"]`, `["canonical_identity_used_as_an_rv_key"]`, `["replicaset_revision_recorded"]`. **12.2** namespace name rejected inside `resource_versions`: `["rejected_namespace_absent_rv_key"]`, `["namespace_name_used_as_a_revision"]`, plus the producer-seam tests `test_completed_evidence_comes_from_the_final_pass_seam` and A1's `test_absence_and_error_outcomes_never_carry_a_revision` / `test_a_non_items_outcome_cannot_be_given_a_revision`, which make a namespace name unwritable at the source. **12.3** arbitrary non-revision token: `["unknown_rv_label"]`, `["non_string_rv_value"]`, `["empty_rv_value"]`. **12.4** required absence proof missing, and absent-versus-empty: `["completed_without_target_cr_proof"]`, `["completed_missing_resource_versions"]`, `["completed_missing_absence_proofs"]`, `["completed_missing_observed_at"]`, plus `test_present_empty_resource_versions_is_not_the_same_as_absent`. **12.5** unknown or impermissible proof type: `["unknown_proof_type"]`, `["proof_type_not_permitted_for_its_key"]`. **12.6** malformed resource key: `["malformed_resource_key_extra_slash"]`, `["malformed_resource_key_empty_component"]`, `["drain_namespace_proof_with_a_non_empty_namespace_segment"]`, `["target_cr_resource_key_mismatch"]`, plus `test_resource_key_right_split_is_unambiguous` and `test_malformed_resource_keys_are_rejected`. **12.7** MCO Pod-list path: `test_completed_mco_namespace_present_records_exactly_the_two_drain_revisions`; C3's `test_completed_evidence_comes_from_the_final_pass_seam` binds `drain_pods` to the whole-read snapshot revision; A3's `test_pod_snapshot_revision_is_page_one_and_survives_no_restart` proves it is not a per-page value. **12.8** MCO namespace-absence path: `test_completed_mco_namespace_absent_records_an_empty_revision_map`, `["mco_namespace_absent_mode_carrying_drain_pods"]`, C4's `test_completed_record_in_the_namespace_absent_mode_carries_an_empty_revision_map`. **12.9** ManagedCluster absence-only: `test_completed_managed_cluster_is_absence_only` (both proof types), `["managed_cluster_carrying_drain_evidence"]`, `["managed_cluster_carrying_a_namespace_absence_proof"]`, and C3's `test_a_pre_delete_revision_is_never_persisted`. **12.10** MCH all three modes: `test_completed_mch_namespace_present_with_captured_identity`, `test_completed_mch_namespace_present_with_identity_unavailable`, `test_completed_mch_namespace_absent_discharges_both_drain_predicates`, `test_deployment_revision_rejected_when_no_identity_was_captured`, `test_deployment_revision_rejected_in_the_namespace_absent_mode`. **12.11** Python/Collection malformed parity: `test_every_malformed_completion_record_is_rejected_by_both_implementations` over the whole vector list. **12.12** evidence never substitutes for the fresh live gate: the integrated fresh-gate test in §16.2 item 8's resume matrix plus F1's live-after-preview cases | A, B, C, D, E |
+| 12. Completion-evidence schema (amendment §22) — all twelve sub-items | **12.1** revision-only key closure: `MALFORMED_COMPLETION_RECORDS["unknown_rv_label"]`, `["canonical_identity_used_as_an_rv_key"]`, `["replicaset_revision_recorded"]`. **12.2** namespace name rejected inside `resource_versions`: `["rejected_namespace_absent_rv_key"]`, `["namespace_name_used_as_a_revision"]`, plus the producer-seam tests `test_completed_evidence_comes_from_the_final_pass_seam` and A1's `test_absence_and_error_outcomes_never_carry_a_revision` / `test_a_non_items_outcome_cannot_be_given_a_revision`, which make a namespace name unwritable at the source. **12.3** arbitrary non-revision token: `["unknown_rv_label"]`, `["non_string_rv_value"]`, `["empty_rv_value"]`. **12.4** required absence proof missing, and absent-versus-empty: `["completed_without_target_cr_proof"]`, `["completed_missing_resource_versions"]`, `["completed_missing_absence_proofs"]`, `["completed_missing_observed_at"]`, plus `test_present_empty_resource_versions_is_not_the_same_as_absent`. **12.5** unknown or impermissible proof type: `["unknown_proof_type"]`, `["proof_type_not_permitted_for_its_key"]`. **12.6** malformed resource key: `["malformed_resource_key_extra_slash"]`, `["malformed_resource_key_empty_component"]`, `["drain_namespace_proof_with_a_non_empty_namespace_segment"]`, `["target_cr_resource_key_mismatch"]`, plus `test_resource_key_right_split_is_unambiguous` and `test_malformed_resource_keys_are_rejected`. **12.7** MCO Pod-list path: `test_completed_mco_namespace_present_records_exactly_the_two_drain_revisions`; C3's `test_completed_evidence_comes_from_the_final_pass_seam` binds `drain_pods` to the whole-read snapshot revision; A3's `test_pod_snapshot_revision_is_page_one_and_survives_no_restart` proves it is the one revision the whole coherent read was served at, and `test_a_pod_continuation_page_at_a_different_revision_is_malformed` proves a read whose pages disagree never produces one at all. **12.8** MCO namespace-absence path: `test_completed_mco_namespace_absent_records_an_empty_revision_map`, `["mco_namespace_absent_mode_carrying_drain_pods"]`, C4's `test_completed_record_in_the_namespace_absent_mode_carries_an_empty_revision_map`. **12.9** ManagedCluster absence-only: `test_completed_managed_cluster_is_absence_only` (both proof types), `["managed_cluster_carrying_drain_evidence"]`, `["managed_cluster_carrying_a_namespace_absence_proof"]`, and C3's `test_a_pre_delete_revision_is_never_persisted`. **12.10** MCH all three modes: `test_completed_mch_namespace_present_with_captured_identity`, `test_completed_mch_namespace_present_with_identity_unavailable`, `test_completed_mch_namespace_absent_discharges_both_drain_predicates`, `test_deployment_revision_rejected_when_no_identity_was_captured`, `test_deployment_revision_rejected_in_the_namespace_absent_mode`. **12.11** Python/Collection malformed parity: `test_every_malformed_completion_record_is_rejected_by_both_implementations` over the whole vector list. **12.12** evidence never substitutes for the fresh live gate: the integrated fresh-gate test in §16.2 item 8's resume matrix plus F1's live-after-preview cases | A, B, C, D, E |
 | 9. Consolidation regression, GLM-H6 | `test_finalization_and_direct_decommission_share_one_teardown_path`; `test_no_second_mco_teardown_implementation_remains`; GitOps markers recorded for the finalization caller only; caller preconditions preserved; collection artifact status honesty | B, C |
 | 10. Wrong-target boundary | a negative test asserting R4-03 binds **resource** identity and that no wrong-context or wrong-hub target check exists here, so the SSA-02 boundary is tested rather than silently assumed | F |
-| 11. Constants parity | `CONSTANT_PAIRS` gains the strict-read reason codes and the three strict-read bounds (A), `OPERATOR_IDENTITY_UNAVAILABLE_REASONS`, `DRAIN_SCOPED_KINDS`, and `IDENTITY_BEARING_KINDS` (B), `OBSERVABILITY_POD_LABEL_SELECTOR` and the five destination-gate reason codes (C), and `ACM_OPERATOR_POD_PREFIX` plus the four classification reason codes (E); `test_strict_read_bounds_are_mirrored` additionally ties the collection request-timeout constant to the Python client default | A, B, C, E |
+| 11. Constants parity | `CONSTANT_PAIRS` gains the strict-read reason codes and the three strict-read bounds (A), `OPERATOR_IDENTITY_UNAVAILABLE_REASONS` (B), `OBSERVABILITY_POD_LABEL_SELECTOR` and the five destination-gate reason codes (C), and `ACM_OPERATOR_POD_PREFIX` plus the four classification reason codes (E) — every one of them defined Python-side in `lib/constants.py`, which is what `CONSTANT_PAIRS` resolves against. The six §10.2.1c closed vocabularies whose Python owner is `lib/teardown_record.py` — `DRAIN_SCOPED_KINDS`, `IDENTITY_BEARING_KINDS`, `RESOURCE_VERSION_LABELS`, `ABSENCE_PROOF_KEYS`, `ABSENCE_PROOF_TYPES`, and `ABSENCE_PROOF_TYPES_BY_KEY` — are held equal by Task B2's `test_teardown_vocabularies_are_mirrored` in the same file, which compares the two authoritative definitions directly rather than duplicating them into `lib/constants.py`; `ABSENCE_PROOF_TYPES_BY_KEY` is the key-to-permitted-type mapping the flat sets cannot cover. `test_strict_read_bounds_are_mirrored` additionally ties the collection request-timeout constant to the Python client default | A, B, C, E |
 
 ## 16.3 Negative safety coverage required by `AGENTS.md`
 
@@ -7342,15 +7693,15 @@ Each row an independent validator can follow from the reapproved design at
 | --- | --- | --- |
 | §22.1 `resource_versions` is revision-only; every revision-bearing final-proof read is recorded; no read is bent to fit the schema | §10.2.1b | A1 revision contract and `__post_init__` enforcement; `MALFORMED_COMPLETION_RECORDS` key-closure and value-type vectors; C3's producer-seam test; §16.2 item 12.1–12.3 |
 | §22.2 record invariants; absent is not empty; the malformed table | §10.2.1a, §10.2.4 | B1 `validate_stored`; `test_present_empty_resource_versions_is_not_the_same_as_absent`; the phase-conditional and missing-field vectors; §16.2 item 12.4 |
-| §22.3 `resource_versions` closed key grammar, provenance, paginated snapshot, `operator_deployment` if-and-only-if | §10.2.1b | A3.0 rule 8 and its Python tests; A4's collection snapshot rule; `test_deployment_revision_rejected_when_no_identity_was_captured` and `..._in_the_namespace_absent_mode`; §16.2 item 12.7 |
-| §22.4 `absence_proofs` schema, closed vocabularies, `resource_key` right-split grammar | §10.2.1c | `AbsenceProof`, `split_resource_key`, `ABSENCE_PROOF_TYPES_BY_KEY`; the grammar tests and the absence-schema vectors; §16.2 item 12.5–12.6 |
+| §22.3 `resource_versions` closed key grammar, provenance, paginated snapshot, `operator_deployment` if-and-only-if | §10.2.1b | A3.0 rule 8 — including the per-page snapshot-equality check that makes §22.3's "the continuation contract pins every subsequent page to that same snapshot" **verified rather than assumed** — and its Python and collection tests, positive and negative; A3.0 rule 9 for the two named-GET-sourced keys; `test_deployment_revision_rejected_when_no_identity_was_captured` and `..._in_the_namespace_absent_mode`; §16.2 item 12.7 |
+| §22.4 `absence_proofs` schema, closed vocabularies, `resource_key` right-split grammar | §10.2.1c | `AbsenceProof`, `split_resource_key`, `ABSENCE_PROOF_TYPES_BY_KEY`; the grammar tests and the absence-schema vectors; B2's `test_teardown_vocabularies_are_mirrored`, which holds `ABSENCE_PROOF_TYPES_BY_KEY` and the five sibling closed vocabularies equal across form factors; §16.2 items 11 and 12.5–12.6 |
 | §22.5 `observed_at` semantics and freshness; evidence never satisfies a live predicate | §10.2.1e, §10.2.1f | B1 `observed_at` rules; C3's final-pass sourcing table; the integrated fresh-gate test; §16.2 item 12.12 |
 | §22.6 per-family, per-mode required key sets, and the two stated exclusions | §10.2.1d | the six-row family table; the per-family valid-record tests; `test_a_pre_delete_revision_is_never_persisted`; the `replicaset_revision_recorded` vector; §16.2 item 12.7–12.10 |
 | §22.7 supersession — the R2 encoding is rejected and the plan is repaired to conform | header Status, §3 binding statement, §10.2.1 opening | the whole §10.2 rewrite; the placeholder-and-stale-schema scan in §21.7 |
 | §22.8 IV-R403-01 boundary — the plan repair must make the actual-change path mechanical using the shapes already declared, with no second channel | §B3.1, §B3.2, the B3 aggregator snippet, C3's conversion rule | `test_a_failing_substeps_own_mutation_reaches_the_result`; `test_the_aggregator_has_no_switchover_error_handler`; `test_an_unexpected_exception_propagates_and_never_becomes_a_result`; the seven-case matrices in C, D, and E |
 | Amendment §16 item 12 — the twelve completion-evidence test obligations, in both form factors | §16.2 item 12 | that row, sub-item by sub-item |
 | A8 / July criterion 8 | §17.2 row 8, §17.3 row A8 | as listed in those rows |
-| Strict-read `resource_version` exposure in both form factors (design-resolver obligation, comment `5496000592` item 35) | A1 contract table, A3.0 rule 8, A4 output contract and `RETURN`, A5 revision column, §9.6 rows | A1, A3, A4, A5, A6 tests named in the §9.6 gate mapping |
+| Strict-read `resource_version` exposure in both form factors (design-resolver obligation, comment `5496000592` item 35) | A1 contract table, A3.0 rules 8 and 9, A4 output contract and `RETURN`, A5 revision column and the `inconsistent_continuation_revision` / `named_get_missing_revision` vectors, §9.6 rows | A1, A3, A4, A5, A6 tests named in the §9.6 gate mapping, including the named-GET and continuation-mismatch negatives on both sides |
 
 ---
 
