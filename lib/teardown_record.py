@@ -15,7 +15,6 @@ but written by a later PR, so no producer can persist a shape this reader does
 not already check.
 """
 
-import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, NoReturn, Optional, Tuple
@@ -75,6 +74,10 @@ NAMESPACE_KIND = "Namespace"
 _EVIDENCE_FIELDS = ("observed_at", "resource_versions", "absence_proofs")
 _IDENTITY_FIELDS = ("operator_deployment", "operator_identity_unavailable")
 _ABSENCE_PROOF_FIELDS = frozenset({"proof_type", "resource_key"})
+# The closed top-level field set of a stored record. An unknown field is
+# malformed: the record is mutation authority, so no later producer may write a
+# shape the reader does not check.
+_RECORD_FIELDS = frozenset({"expected_uid", "phase"}) | frozenset(_EVIDENCE_FIELDS) | frozenset(_IDENTITY_FIELDS)
 _OPERATOR_DEPLOYMENT_FIELDS = frozenset(
     {
         "namespace",
@@ -98,12 +101,6 @@ _IDENTITY_UNAVAILABLE_FIELDS = frozenset(
         "mch_expected_uid",
     }
 )
-
-# A recorded revision is the etcd revision the strict read surfaced, which the
-# API server renders as a decimal integer. The check exists to reject a
-# producer that wrote an identity (a namespace or object name) where a revision
-# belongs; it is the only decidable guard on an otherwise opaque value.
-_REVISION = re.compile(r"[0-9]+")
 
 
 @dataclass(frozen=True)
@@ -232,14 +229,18 @@ def _validate_evidence(record: TeardownRecord, kind: str) -> None:
 
 
 def _validate_resource_versions(record: TeardownRecord) -> None:
-    """Section 10.2.1b: a closed label set mapping to real revisions."""
+    """Section 10.2.1b: a closed label set mapping to non-empty string revisions.
+
+    A resourceVersion is opaque and server-defined, so no validator can decide
+    from the value alone that a string is a genuine revision (amendment
+    section 22.1). The two checkable properties are the closed key set and the
+    value type; provenance is bound by the producer-seam tests.
+    """
     for label, value in record.resource_versions.items():
         if label not in RESOURCE_VERSION_LABELS:
             _fail(f"resource_versions carries an unknown label {label!r}")
         if not _non_empty_str(value):
             _fail(f"resource_versions[{label!r}] must be a non-empty string, got {value!r}")
-        if not _REVISION.fullmatch(value):
-            _fail(f"resource_versions[{label!r}] is not a resourceVersion: {value!r}")
 
 
 def _validate_absence_proofs(record: TeardownRecord, kind: str) -> None:
@@ -415,13 +416,16 @@ def to_stored(record: TeardownRecord) -> dict:
 def validate_stored(key: str, stored: Any) -> TeardownRecord:
     """Validate a raw stored mapping and return the record.
 
-    This is the serialization-level entry point: it enforces absent-versus-empty
-    (section 10.2.1a) and the exact absence-proof field set before any value
-    type exists, then delegates every remaining rule to `validate`. Raises
-    MalformedTeardownRecord.
+    This is the serialization-level entry point: it enforces the closed
+    top-level field set, absent-versus-empty (section 10.2.1a), and the exact
+    absence-proof field set before any value type exists, then delegates every
+    remaining rule to `validate`. Raises MalformedTeardownRecord.
     """
     if not isinstance(stored, dict):
         _fail(f"teardown record {key!r} must be a mapping, got {type(stored).__name__}")
+    unknown = set(stored) - _RECORD_FIELDS
+    if unknown:
+        _fail(f"teardown record {key!r} carries unknown fields {sorted(unknown)}")
     record = TeardownRecord(
         key=key,
         expected_uid=stored.get("expected_uid"),

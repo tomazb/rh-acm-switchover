@@ -241,13 +241,6 @@ MALFORMED_COMPLETION_RECORDS = [
     ("rejected_cr_rv_key", _mco(resource_versions={"cr": "88214", "drain_namespace": "1", "drain_pods": "2"})),
     ("rejected_namespace_absent_rv_key", _mco(resource_versions={"drain_namespace": "1", "namespace_absent": "2"})),
     (
-        "namespace_name_used_as_a_revision",
-        _mco(
-            resource_versions={"drain_namespace": "open-cluster-management-observability", "drain_pods": "88219"},
-            absence_proofs={"target_cr": {"proof_type": "object_absent", "resource_key": MCO_KEY}},
-        ),
-    ),
-    (
         "canonical_identity_used_as_an_rv_key",
         _mco(resource_versions={"v1/Namespace//open-cluster-management-observability": "88190"}),
     ),
@@ -381,6 +374,54 @@ def test_malformed_completion_evidence_fails_closed_on_read(state_manager, vecto
     state_manager._set_config("decommission_teardown_records", {key: stored})
     with pytest.raises(MalformedTeardownRecord):
         RunRecord(state_manager).teardown_record(key)
+
+
+# --- §10.2.1b what a reader can and cannot check ----------------------------------
+def test_a_revision_string_the_schema_cannot_disprove_is_accepted(state_manager):
+    """Amendment §22.1: a `resourceVersion` is an opaque, server-defined string.
+
+    No validator can decide from the value alone that a string is a genuine
+    revision, and a numeric-format check would violate that API contract. The
+    reader's only checkable properties are the closed key set (§22.3) and the
+    value type (a non-empty string), so a namespace name written where a
+    revision belongs is accepted here. That is a PRODUCER defect, caught by the
+    producer-seam tests PRs C/D/E own, not by this validator.
+    """
+    record = RunRecord(state_manager)
+    record.record_teardown_phase(
+        _completed(
+            MCO_KEY,
+            resource_versions={"drain_namespace": "open-cluster-management-observability", "drain_pods": "88219"},
+        )
+    )
+    loaded = record.teardown_record(MCO_KEY)
+    assert loaded.resource_versions == {
+        "drain_namespace": "open-cluster-management-observability",
+        "drain_pods": "88219",
+    }
+
+
+# --- closed top-level record shape ------------------------------------------------
+def test_an_unknown_top_level_field_fails_closed(state_manager):
+    """The record is mutation authority: no producer may write a field the reader
+    does not check, so an unrecognized top-level field is malformed."""
+    state_manager._set_config(
+        "decommission_teardown_records",
+        {MCO_KEY: {"expected_uid": "u", "phase": "delete_started", "surprise": 1}},
+    )
+    with pytest.raises(MalformedTeardownRecord):
+        RunRecord(state_manager).teardown_record(MCO_KEY)
+
+
+def test_a_stored_null_evidence_field_is_malformed_not_absent(state_manager):
+    """§10.2.1a: an absent field is omitted entirely. A stored null is a third
+    representation the reader must not silently accept as absence."""
+    state_manager._set_config(
+        "decommission_teardown_records",
+        {MCO_KEY: {"expected_uid": "u", "phase": "delete_started", "resource_versions": None}},
+    )
+    with pytest.raises(MalformedTeardownRecord):
+        RunRecord(state_manager).teardown_record(MCO_KEY)
 
 
 # --- §10.2.1d valid per-family, per-mode records ----------------------------------
