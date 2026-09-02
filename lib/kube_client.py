@@ -25,7 +25,14 @@ from tenacity import (
 from urllib3.exceptions import HTTPError, MaxRetryError, NewConnectionError
 from urllib3.exceptions import TimeoutError as Urllib3TimeoutError
 
-from lib.constants import MANAGED_CLUSTER_API_GROUP, MANAGED_CLUSTER_API_VERSION, MANAGED_CLUSTER_PLURAL
+from lib.constants import (
+    MANAGED_CLUSTER_API_GROUP,
+    MANAGED_CLUSTER_API_VERSION,
+    MANAGED_CLUSTER_PLURAL,
+    STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE,
+    STRICT_READ_REASON_KIND_NOT_SERVED,
+)
+from lib.strict_read import StrictReadOutcome
 from lib.validation import InputValidator, ValidationError
 
 logger = logging.getLogger("acm_switchover")
@@ -260,6 +267,10 @@ class KubeClient:
         self.apps_v1 = client.AppsV1Api(api_client)
         self.custom_api = client.CustomObjectsApi(api_client)
 
+        # Retained so the strict-read discovery prover reuses this exact,
+        # explicitly-selected client rather than resolving a second one.
+        self._api_client = api_client
+
         # Set timeout on API clients
         self.core_v1.api_client.configuration.timeout = request_timeout
         self.apps_v1.api_client.configuration.timeout = request_timeout
@@ -274,6 +285,51 @@ class KubeClient:
     def _request_timeout_kwargs(self, request_timeout: Optional[int] = None) -> Dict[str, int]:
         """Return Kubernetes client kwargs with an explicit per-request timeout."""
         return {"_request_timeout": (request_timeout if request_timeout is not None else self.request_timeout)}
+
+    def _discovery_serves(self, group: str, version: str, resource_name: str) -> StrictReadOutcome:
+        """Positively determine whether one kind is served, or fail closed.
+
+        Kind absence is proven only by a successful, decodable discovery
+        response that does not list the exact canonical `resource_name`. A discovery call that fails,
+        times out, is unauthorized, or returns an unparseable body is an
+        error: an unserved kind and an unreachable API server are not
+        distinguishable by exception type, and the client library's own
+        discovery cache swallows some failures into an empty resource list.
+        """
+        path = f"/apis/{group}/{version}" if group else f"/api/{version}"
+        try:
+            response = self._api_client.call_api(
+                path,
+                "GET",
+                response_type="object",
+                auth_settings=["BearerToken"],
+                _return_http_data_only=True,
+                _request_timeout=self.request_timeout,
+            )
+        except ApiException:
+            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
+        except Exception:
+            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
+
+        if not isinstance(response, dict):
+            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
+        if response.get("kind") != "APIResourceList":
+            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
+        resources = response.get("resources")
+        if not isinstance(resources, list):
+            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
+        for entry in resources:
+            if (
+                not isinstance(entry, dict)
+                or not isinstance(entry.get("name"), str)
+                or not entry["name"]
+                or not isinstance(entry.get("kind"), str)
+                or not entry["kind"]
+            ):
+                return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
+            if entry["name"] == resource_name:
+                return StrictReadOutcome.from_items([])
+        return StrictReadOutcome.crd_absent(STRICT_READ_REASON_KIND_NOT_SERVED)
 
     def _validate_resource_inputs(
         self,

@@ -5,15 +5,29 @@ Tests cover KubeClient initialization, CRUD operations, and dry-run mode.
 """
 
 import errno
+import inspect
 from itertools import chain, repeat
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from kubernetes.client.rest import ApiException
 from kubernetes.config.config_exception import ConfigException
 from tenacity import wait_none
 
+from lib.constants import (
+    STRICT_READ_MAX_PAGES,
+    STRICT_READ_MAX_RESTARTS,
+    STRICT_READ_PAGE_LIMIT,
+    STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE,
+    STRICT_READ_REASON_INVENTORY_INCOMPLETE,
+    STRICT_READ_REASON_KIND_NOT_SERVED,
+    STRICT_READ_REASON_MALFORMED_RESPONSE,
+    STRICT_READ_REASON_NAMESPACE_NOT_FOUND,
+    STRICT_READ_REASON_OBJECT_NOT_FOUND,
+    STRICT_READ_REASON_READ_FAILED,
+)
 from lib.kube_client import KubeClient, api_call, is_retryable_error
+from lib.strict_read import StrictReadOutcome, StrictReadStatus
 
 
 @pytest.fixture
@@ -1625,3 +1639,90 @@ class TestGetPodLogs:
 
         assert result == ""
         mock_k8s_apis["core_api"].read_namespaced_pod_log.assert_not_called()
+
+
+class TestDiscoveryProver:
+    """R4-03: kind absence must come from a successful discovery response."""
+
+    def _client(self, call_api):
+        client = KubeClient.__new__(KubeClient)
+        client.request_timeout = 30
+        client.dry_run = False
+        client._api_client = Mock()
+        client._api_client.call_api = call_api
+        return client
+
+    def test_served_kind_returns_items(self):
+        call = Mock(
+            return_value={
+                "kind": "APIResourceList",
+                "resources": [{"name": "multiclusterhubs", "kind": "MultiClusterHub"}],
+            }
+        )
+        client = self._client(call)
+        outcome = client._discovery_serves("operator.open-cluster-management.io", "v1", "multiclusterhubs")
+        assert outcome.status is StrictReadStatus.ITEMS
+
+    def test_absent_kind_in_a_successful_response_is_crd_absent(self):
+        call = Mock(
+            return_value={
+                "kind": "APIResourceList",
+                "resources": [{"name": "somethingelse", "kind": "SomethingElse"}],
+            }
+        )
+        outcome = self._client(call)._discovery_serves("g", "v1", "multiclusterhubs")
+        assert outcome.status is StrictReadStatus.CRD_ABSENT
+
+    def test_discovery_service_unavailable_is_error_not_absence(self):
+        call = Mock(side_effect=ApiException(status=503, reason="Service Unavailable"))
+        outcome = self._client(call)._discovery_serves("g", "v1", "multiclusterhubs")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE
+
+    def test_discovery_forbidden_is_error_not_absence(self):
+        call = Mock(side_effect=ApiException(status=403, reason="Forbidden"))
+        assert self._client(call)._discovery_serves("g", "v1", "p").status is StrictReadStatus.ERROR
+
+    def test_discovery_timeout_is_error_not_absence(self):
+        call = Mock(side_effect=TimeoutError("deadline exceeded"))
+        assert self._client(call)._discovery_serves("g", "v1", "p").status is StrictReadStatus.ERROR
+
+    def test_undecodable_discovery_body_is_error_not_absence(self):
+        call = Mock(return_value="<html>gateway error</html>")
+        assert self._client(call)._discovery_serves("g", "v1", "p").status is StrictReadStatus.ERROR
+
+    def test_missing_resources_key_is_error_not_absence(self):
+        call = Mock(return_value={"kind": "APIResourceList"})
+        assert self._client(call)._discovery_serves("g", "v1", "p").status is StrictReadStatus.ERROR
+
+    def test_discovery_404_is_error_not_absence(self):
+        call = Mock(side_effect=ApiException(status=404, reason="Not Found"))
+        outcome = self._client(call)._discovery_serves("g", "v1", "p")
+        assert outcome.status is StrictReadStatus.ERROR
+
+    def test_discovery_decode_failure_is_error_not_absence(self):
+        call = Mock(side_effect=ValueError("invalid json"))
+        assert self._client(call)._discovery_serves("g", "v1", "p").status is StrictReadStatus.ERROR
+
+    def test_malformed_api_resource_list_is_error_not_absence(self):
+        call = Mock(return_value={"kind": "APIResourceList", "resources": [{"name": 7}]})
+        assert self._client(call)._discovery_serves("g", "v1", "p").status is StrictReadStatus.ERROR
+
+    def test_irregular_plural_is_matched_by_exact_resource_name(self):
+        call = Mock(
+            return_value={
+                "kind": "APIResourceList",
+                "resources": [
+                    {"name": "multiclusterobservabilities", "kind": "MultiClusterObservability"},
+                ],
+            }
+        )
+        outcome = self._client(call)._discovery_serves(
+            "observability.open-cluster-management.io", "v1beta2", "multiclusterobservabilities"
+        )
+        assert outcome.status is StrictReadStatus.ITEMS
+
+    def test_core_group_uses_the_core_discovery_path(self):
+        call = Mock(return_value={"kind": "APIResourceList", "resources": [{"name": "pods", "kind": "Pod"}]})
+        self._client(call)._discovery_serves("", "v1", "pods")
+        assert call.call_args[0][0] == "/api/v1"
