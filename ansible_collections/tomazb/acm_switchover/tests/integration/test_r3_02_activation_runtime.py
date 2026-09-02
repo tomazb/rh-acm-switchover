@@ -157,6 +157,7 @@ def test_import_and_sync_skips_managed_cluster_work(tmp_path):
     output = _output(completed)
     assert completed.returncode == 0, output
     assert "R302_ACTIVATION=ok APPLY=False" in output
+    assert "RESOURCE_VERSION=1" in output
     assert _managed_cluster_requests(requests) == []
 
 
@@ -212,6 +213,7 @@ def test_transport_failure_stops_before_managed_cluster_work(tmp_path):
             "metadata": {
                 "name": "wrong-name",
                 "namespace": "multicluster-engine",
+                "resourceVersion": "1",
             },
         },
         {
@@ -219,6 +221,7 @@ def test_transport_failure_stops_before_managed_cluster_work(tmp_path):
             "metadata": {
                 "name": "import-controller-config",
                 "namespace": "wrong-namespace",
+                "resourceVersion": "1",
             },
         },
         _configmap(data_marker=["not", "a", "mapping"]),

@@ -30,6 +30,7 @@
     read_mode: get
     api_version: v1
     kind: ConfigMap
+    resource_name: configmaps
     name: import-controller-config
     namespace: multicluster-engine
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"

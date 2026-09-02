@@ -28,4 +28,6 @@
 
     - name: Publish safe completion marker
       ansible.builtin.debug:
-        msg: R302_COMPACTOR_VERIFICATION=ok
+        msg: >-
+          R302_COMPACTOR_VERIFICATION=ok
+          RESOURCE_VERSION={{ acm_primary_compactor_pods_after_scale.resource_version | default('none') }}

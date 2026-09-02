@@ -29,6 +29,7 @@ def _run_module(
     server: str,
     read_mode: str,
     kind: str,
+    resource_name: str,
     name: str = "",
     check_mode: bool = False,
 ) -> subprocess.CompletedProcess[str]:
@@ -48,6 +49,7 @@ def _run_module(
                 "r3_02_context": "r3-02",
                 "r3_02_read_mode": read_mode,
                 "r3_02_kind": kind,
+                "r3_02_resource_name": resource_name,
                 "r3_02_name": name,
             },
             sort_keys=False,
@@ -87,6 +89,7 @@ def test_runtime_list_empty_is_ok(tmp_path):
             server=api.url,
             read_mode="list",
             kind="Pod",
+            resource_name="pods",
         )
     finally:
         api.close()
@@ -104,6 +107,7 @@ def test_runtime_named_get_is_ok(tmp_path):
             server=api.url,
             read_mode="get",
             kind="ConfigMap",
+            resource_name="configmaps",
             name="test-config",
         )
     finally:
@@ -125,6 +129,7 @@ def test_runtime_named_404_is_not_found(tmp_path):
             server=api.url,
             read_mode="get",
             kind="ConfigMap",
+            resource_name="configmaps",
             name="test-config",
         )
     finally:
@@ -146,6 +151,7 @@ def test_runtime_list_404_is_error(tmp_path):
             server=api.url,
             read_mode="list",
             kind="Pod",
+            resource_name="pods",
         )
     finally:
         api.close()
@@ -166,6 +172,7 @@ def test_runtime_bad_request_is_error(tmp_path):
             server=api.url,
             read_mode="list",
             kind="Pod",
+            resource_name="pods",
         )
     finally:
         api.close()
@@ -186,6 +193,7 @@ def test_runtime_forbidden_is_sanitized_error(tmp_path):
             server=api.url,
             read_mode="list",
             kind="Pod",
+            resource_name="pods",
         )
     finally:
         api.close()
@@ -206,6 +214,7 @@ def test_runtime_connection_failure_is_error(tmp_path):
         server=unavailable_url,
         read_mode="list",
         kind="Pod",
+        resource_name="pods",
     )
 
     output = _output(completed)
@@ -213,7 +222,7 @@ def test_runtime_connection_failure_is_error(tmp_path):
     assert "READ_STATUS=error COUNT=0 CHANGED=False" in output
 
 
-def test_runtime_discovery_failure_is_error(tmp_path):
+def test_runtime_discovery_failure_is_kind_not_served(tmp_path):
     api = FakeR302API()
     try:
         completed = _run_module(
@@ -221,13 +230,14 @@ def test_runtime_discovery_failure_is_error(tmp_path):
             server=api.url,
             read_mode="list",
             kind="NotARealKind",
+            resource_name="notarealkinds",
         )
     finally:
         api.close()
 
     output = _output(completed)
     assert completed.returncode == 0, output
-    assert "READ_STATUS=error COUNT=0 CHANGED=False" in output
+    assert "READ_STATUS=kind_not_served COUNT=0 CHANGED=False" in output
 
 
 def test_runtime_check_mode_still_reads_without_writes(tmp_path):
@@ -238,6 +248,7 @@ def test_runtime_check_mode_still_reads_without_writes(tmp_path):
             server=api.url,
             read_mode="list",
             kind="Pod",
+            resource_name="pods",
             check_mode=True,
         )
         requests = api.requests
