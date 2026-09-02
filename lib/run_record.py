@@ -23,6 +23,13 @@ from lib.constants import (
     RESUME_START_PHASE_KEY,
     STATE_KEY_RESUME_SUMMARY,
 )
+from lib.teardown_record import (
+    MalformedTeardownRecord,
+    TeardownRecord,
+    to_stored,
+    validate,
+    validate_stored,
+)
 
 _KEY_PRIMARY_VERSION = "primary_version"
 _KEY_PRIMARY_OBS_DETECTED = "primary_observability_detected"
@@ -39,6 +46,7 @@ _KEY_BACKUP_WATCH_STARTED_AT = "backup_schedule_enabled_at"
 _KEY_NEW_BACKUP_DETECTED = "new_backup_detected"
 _KEY_NEW_BACKUP_NAME = "post_switchover_backup_name"
 _KEY_ARCHIVED_RESTORES = "archived_restores"
+_KEY_TEARDOWN_RECORDS = "decommission_teardown_records"
 
 _UNSET = object()
 
@@ -305,6 +313,45 @@ class RunRecord:
         tooling and the Ansible collection's checkpoint_phase. show_state
         surfaces it only via its generic config listing."""
         self._set(STATE_KEY_RESUME_SUMMARY, {RESUME_START_PHASE_KEY: phase_name})
+
+    # -- decommission teardown records: decommission writes, reads, and resumes --
+
+    def record_teardown_phase(self, record: TeardownRecord) -> None:
+        """Validate and persist one teardown record, forced durable on return.
+
+        Validation runs before the write, so a rejected record leaves the
+        stored one untouched. The flush makes "durable before DELETE" a
+        property of this API rather than of each call site; a failed write
+        propagates and the caller must not proceed to the deletion.
+        """
+        records = self._get(_KEY_TEARDOWN_RECORDS, {}) or {}
+        if not isinstance(records, dict):
+            raise MalformedTeardownRecord(f"{_KEY_TEARDOWN_RECORDS} must be a mapping")
+        stored_previous = records.get(record.key)
+        previous = None if stored_previous is None else validate_stored(record.key, stored_previous)
+        validate(record, previous)
+        self._set(_KEY_TEARDOWN_RECORDS, {**records, record.key: to_stored(record)})
+        self._state.flush_state()
+
+    def teardown_record(self, key: str) -> Optional[TeardownRecord]:
+        """The recorded teardown for `key`, or None if none was ever recorded.
+
+        A stored record that violates the schema raises rather than degrading:
+        a teardown record is mutation authority, not a reporting fact.
+        """
+        records = self._get(_KEY_TEARDOWN_RECORDS, {}) or {}
+        if not isinstance(records, dict):
+            raise MalformedTeardownRecord(f"{_KEY_TEARDOWN_RECORDS} must be a mapping")
+        if key not in records:
+            return None
+        return validate_stored(key, records[key])
+
+    def all_teardown_records(self) -> dict:
+        """Every recorded teardown, keyed by record key. Any malformed member fails the read."""
+        records = self._get(_KEY_TEARDOWN_RECORDS, {}) or {}
+        if not isinstance(records, dict):
+            raise MalformedTeardownRecord(f"{_KEY_TEARDOWN_RECORDS} must be a mapping")
+        return {key: validate_stored(key, stored) for key, stored in records.items()}
 
     # -- lifecycle view: read side for report writers and show_state --
 

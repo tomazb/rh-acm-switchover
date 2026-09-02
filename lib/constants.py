@@ -392,3 +392,18 @@ STRICT_READ_REASON_READ_FAILED = "read_failed"
 STRICT_READ_PAGE_LIMIT = 500
 STRICT_READ_MAX_PAGES = 100
 STRICT_READ_MAX_RESTARTS = 1
+
+# R4-03 decommission teardown records (plan §10.2.2, §10.2.3).
+# The MCH operator identity is discovered through the OLM CSV that owns the
+# MultiClusterHub CRD, then through that CSV's install-strategy Deployment.
+OPERATOR_IDENTITY_DISCOVERY_METHOD = "olm_csv_owned_mch_crd_install_deployment_v1"
+OPERATOR_IDENTITY_UNAVAILABLE_REASONS = (
+    "csv_absent",
+    "csv_ambiguous",
+    "csv_not_succeeded",
+    "csv_owned_crd_mismatch",
+    "install_deployment_absent",
+    "install_deployment_ambiguous",
+    "deployment_read_failed",
+    "deployment_identity_incomplete",
+)
