@@ -319,9 +319,10 @@ class KubeClient:
                 _return_http_data_only=True,
                 _request_timeout=self.request_timeout,
             )
-        except ApiException:
-            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
         except Exception:
+            # Every failure mode is unverifiable discovery: an API error, a timeout, a TLS or
+            # transport failure, and an undecodable body are all indistinguishable from an
+            # unserved kind, so none of them may be reported as absence.
             return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
 
         if not isinstance(response, dict):

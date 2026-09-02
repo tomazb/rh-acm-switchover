@@ -295,8 +295,9 @@ def _drain_list(api_client, resource, params) -> tuple[list[dict] | None, str, s
 def _drain_list_once(api_client, resource, params) -> tuple[list[dict] | None, str, str | None]:
     collected: list[dict] = []
     continue_token = None
-    snapshot_revision = None  # page 1 owns it; a restart re-enters and re-establishes it
-    # and every later page must be served at that same value
+    # Page 1 owns the snapshot revision, every later page must be served at that same value, and
+    # a 410 restart re-enters this function and re-establishes it.
+    snapshot_revision = None
     for _ in range(STRICT_READ_MAX_PAGES):
         page_params = dict(params)
         page_params["limit"] = STRICT_READ_PAGE_LIMIT
