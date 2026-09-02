@@ -59,6 +59,7 @@ EXAMPLES = r"""
     read_mode: list
     api_version: v1
     kind: Pod
+    resource_name: pods
     namespace: open-cluster-management-observability
     label_selectors:
       - app.kubernetes.io/name=thanos-compact
@@ -73,6 +74,7 @@ EXAMPLES = r"""
     read_mode: get
     api_version: v1
     kind: ConfigMap
+    resource_name: configmaps
     namespace: multicluster-engine
     name: import-controller-config
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"

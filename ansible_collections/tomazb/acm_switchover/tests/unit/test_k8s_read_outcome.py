@@ -956,6 +956,29 @@ def test_resource_name_is_required_and_module_reports_no_namespace_probing_mode(
     assert spec["resource_name"]["required"] is True
 
 
+def test_shipped_examples_supply_the_required_resource_name():
+    """Every documented invocation must still run once `resource_name` became required.
+
+    `resource_name` has no default and is never synthesized from `kind`, so an example that
+    omits it fails argument validation before performing any read. The canonical plural is
+    asserted rather than mere presence: `resource_name: pod` would satisfy the argument spec
+    and still never match a discovery entry.
+    """
+    import yaml
+
+    canonical_plural = {"Pod": "pods", "ConfigMap": "configmaps"}
+    invocations = [
+        args
+        for task in yaml.safe_load(acm_k8s_read_outcome.EXAMPLES)
+        for key, args in task.items()
+        if key.endswith("acm_k8s_read_outcome")
+    ]
+    assert invocations, "EXAMPLES must invoke the module"
+    for args in invocations:
+        assert "resource_name" in args, f"example {args['kind']!r} omits the required resource_name"
+        assert args["resource_name"] == canonical_plural[args["kind"]]
+
+
 def test_a_named_get_is_bounded(monkeypatch):
     """§9.1 per-call timeout: the collection bounds EVERY strict request, not just list pages.
 
