@@ -378,3 +378,17 @@ REPORT_ID_PREFIX_PREFLIGHT = "preflight-"
 
 # Release-tooling capture sanitization
 CAPTURE_REDACTION_REJECTED_MESSAGE = "Captured output was rejected by the sanitizer"
+
+# R4-03 strict-read reason codes
+STRICT_READ_REASON_KIND_NOT_SERVED = "kind_not_served"
+STRICT_READ_REASON_NAMESPACE_NOT_FOUND = "namespace_not_found"
+STRICT_READ_REASON_OBJECT_NOT_FOUND = "object_not_found"
+STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE = "discovery_unverifiable"
+STRICT_READ_REASON_INVENTORY_INCOMPLETE = "inventory_incomplete"
+STRICT_READ_REASON_MALFORMED_RESPONSE = "malformed_response"
+STRICT_READ_REASON_READ_FAILED = "read_failed"
+
+# R4-03 strict-read bounds
+STRICT_READ_PAGE_LIMIT = 500
+STRICT_READ_MAX_PAGES = 100
+STRICT_READ_MAX_RESTARTS = 1

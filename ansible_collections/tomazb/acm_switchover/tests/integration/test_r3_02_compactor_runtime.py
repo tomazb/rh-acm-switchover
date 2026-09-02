@@ -142,6 +142,7 @@ def test_verified_empty_compactor_list_succeeds(tmp_path):
     output = _output(completed)
     assert completed.returncode == 0, output
     assert "R302_COMPACTOR_VERIFICATION=ok" in output
+    assert "RESOURCE_VERSION=1" in output
     assert any(request["path"] == POD_PATH for request in requests)
 
 

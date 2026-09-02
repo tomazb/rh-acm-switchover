@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Bound the Collection `acm_k8s_read_outcome` named-GET request with the strict-read request
+  timeout. Its discovery probe and every list page were already bounded, but the named GET was
+  issued with no `_request_timeout`, so a hung API server could block that read indefinitely.
 - Fail closed when Collection compactor drain, hub connectivity, or activation
   ConfigMap reads are failed, malformed, or otherwise unverified. Connectivity
   failures still reach the preflight report, activation stops before
@@ -30,6 +33,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pause.yml`/`resume.yml` task YAML directly.
 
 ### Added
+- Added one shared strict Kubernetes read contract across both form factors (R4-03). The Python CLI
+  gains `lib/strict_read.py` (`StrictReadOutcome`, `StrictReadStatus`) plus six strict `KubeClient`
+  producers — `list_custom_resources_strict`, `get_custom_resource_strict`, `get_namespace_strict`,
+  `list_pods_strict`, `get_deployment_strict`, and `get_replicaset_strict` — and the Collection's
+  `acm_k8s_read_outcome` module is extended to the same algebra. A strict read distinguishes a
+  positively complete inventory from a positive absence proof from an unverifiable error: an error
+  is never absence, absence never carries an inventory, and neither ever synthesizes a
+  `resourceVersion`. Lists paginate completely under a fixed page size and page budget, every page
+  of one read must be served at page 1's snapshot revision, and an expired continuation restarts
+  the whole read exactly once before failing closed. Kind absence is proven only by a successful,
+  decoded, structurally valid `APIResourceList` that lacks the exact canonical resource name, which
+  callers supply explicitly and the code never synthesizes from `kind`.
 - Phase 9 lab readiness checklist separating Tier A physical-identity readiness from Tier B ACM/OADP/GitOps known-state preparation.
 
 - Added the disabled-by-default Phase 9B lab-controller live discovery client for bounded typed read-only physical hub
@@ -43,6 +58,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The Collection `acm_k8s_read_outcome` module now reclassifies a **positive** discovery miss from
+  `read_status: error` to the new `read_status: kind_not_served`, so a caller can tell "this cluster
+  does not serve that kind" from "this read could not be verified". Every unverifiable discovery
+  outcome — HTTP 404, 401/403, 5xx, timeout, TLS or transport failure, decode failure, or a
+  malformed discovery document — remains `error`. The module also always publishes a
+  `resource_version` result key, which is the real revision on `ok` and `null` on every other
+  outcome.
+- **Breaking (collection module interface):** `acm_k8s_read_outcome` now requires a
+  `resource_name` input — the exact canonical Kubernetes APIResource name (plural) for `kind`,
+  never synthesized from `kind`. Both in-repo call sites are updated in this change, but any
+  out-of-tree playbook invoking this module directly must add it; a missing or blank value is
+  rejected as `read_status: error` before any client work.
 - Normal two-hub switchovers now fail closed when the primary and secondary
   contexts are identical or resolve to the same live `kube-system` Namespace
   UID. The distinct physical-hub guard runs before a mutation-capable phase in

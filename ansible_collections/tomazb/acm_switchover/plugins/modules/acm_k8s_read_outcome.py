@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from typing import Any
 
@@ -42,6 +43,12 @@ options:
     type: list
     elements: str
     default: []
+  resource_name:
+    description:
+      - The exact canonical Kubernetes APIResource name (plural) for C(kind); never
+        synthesized from C(kind).
+    type: str
+    required: true
 extends_documentation_fragment:
   - kubernetes.core.k8s_auth_options
 """
@@ -52,6 +59,7 @@ EXAMPLES = r"""
     read_mode: list
     api_version: v1
     kind: Pod
+    resource_name: pods
     namespace: open-cluster-management-observability
     label_selectors:
       - app.kubernetes.io/name=thanos-compact
@@ -66,6 +74,7 @@ EXAMPLES = r"""
     read_mode: get
     api_version: v1
     kind: ConfigMap
+    resource_name: configmaps
     namespace: multicluster-engine
     name: import-controller-config
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
@@ -84,14 +93,26 @@ read_status:
   description:
     - C(ok) when the read completed successfully.
     - C(not_found) only for a named get that received an explicit 404/NotFound.
+    - C(kind_not_served) when the API group/version was read successfully and
+      positively does not serve this kind.
     - C(error) for every other unverifiable outcome.
   type: str
   returned: always
-  choices: [ok, not_found, error]
+  choices: [ok, not_found, kind_not_served, error]
 resources:
   description: Normalized resource dictionaries on C(ok); empty list otherwise.
   type: list
   elements: dict
+  returned: always
+resource_version:
+  description:
+    - The Kubernetes C(metadata.resourceVersion) of the successful read, or C(none).
+    - For C(read_mode=get) this is the returned object's own revision.
+    - For C(read_mode=list) this is the single snapshot revision of the complete paginated
+      read, established by its first page; it is never a per-page value.
+    - Always C(none) on C(not_found), C(kind_not_served), and C(error); an absence proof and a
+      failed read carry no revision, and none is ever synthesized.
+  type: str
   returned: always
 """
 
@@ -101,6 +122,13 @@ from ansible_collections.kubernetes.core.plugins.module_utils.args_common import
 )
 from ansible_collections.kubernetes.core.plugins.module_utils.k8s.client import (  # noqa: E402
     get_api_client,
+)
+
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (  # noqa: E402
+    STRICT_READ_MAX_PAGES,
+    STRICT_READ_MAX_RESTARTS,
+    STRICT_READ_PAGE_LIMIT,
+    STRICT_READ_REQUEST_TIMEOUT,
 )
 
 try:
@@ -124,16 +152,23 @@ def _argument_spec() -> dict[str, Any]:
                 "required": False,
                 "default": [],
             },
+            "resource_name": {"type": "str", "required": True},
         }
     )
     return spec
 
 
-def _exit_outcome(module: AnsibleModule, read_status: str, resources: list[dict] | None = None) -> None:
+def _exit_outcome(
+    module: AnsibleModule,
+    read_status: str,
+    resources: list[dict] | None = None,
+    resource_version: str | None = None,
+) -> None:
     module.exit_json(
         changed=False,
         read_status=read_status,
         resources=list(resources or []),
+        resource_version=resource_version,
     )
 
 
@@ -187,6 +222,132 @@ def _normalize_resources(read_mode: str, raw: Any) -> list[dict] | None:
     return None
 
 
+def _strict_list_page(raw) -> tuple[list[dict] | None, str | None, str | None]:
+    """Return (members, continue_token, revision) for one page, or (None, None, None) if malformed.
+
+    The revision is the page's own `metadata.resourceVersion`. `_drain_list_once` keeps only
+    page 1's, which is the snapshot the whole read belongs to (A3.0 rule 8).
+    """
+    mapping = _to_mapping(raw)
+    if mapping is None:
+        return None, None, None
+    if "items" not in mapping:
+        return None, None, None
+    items = mapping.get("items")
+    if not isinstance(items, list):
+        return None, None, None
+    members: list[dict] = []
+    for item in items:
+        item_mapping = _to_mapping(item)
+        if item_mapping is None:
+            return None, None, None
+        members.append(item_mapping)
+    metadata = mapping.get("metadata")
+    if not isinstance(metadata, dict):
+        return None, None, None
+    revision = metadata.get("resourceVersion")
+    if not isinstance(revision, str) or not revision:
+        # A complete read must be describable by a revision; anything else is malformed.
+        return None, None, None
+    token = metadata.get("continue") or None
+    return members, token, revision
+
+
+def _discovery_serves(api_client, api_version: str, resource_name: str) -> bool | None:
+    """True if served, False if positively absent, None if unverifiable.
+
+    The dynamic client's discovery cache substitutes an empty resource list
+    for some discovery-fetch failures, and the substituted set differs across
+    the supported client range, so a lookup miss alone never proves absence.
+    """
+    path = f"/apis/{api_version}" if "/" in api_version else f"/api/{api_version}"
+    try:
+        response = api_client.client.request("GET", path, serialize=False, _request_timeout=STRICT_READ_REQUEST_TIMEOUT)
+        body = json.loads(response.data.decode("utf8"))
+    except Exception:
+        return None
+    if not isinstance(body, dict) or body.get("kind") != "APIResourceList":
+        return None
+    resources = body.get("resources")
+    if not isinstance(resources, list):
+        return None
+    # The whole document is validated before any verdict. Deciding on the first matching entry
+    # would let one response mean `served` or `unverifiable` purely by server entry order.
+    # Absence was never order-sensitive: it already required the full list to validate.
+    for entry in resources:
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("name"), str)
+            or not entry["name"]
+            or not isinstance(entry.get("kind"), str)
+            or not entry["kind"]
+        ):
+            return None
+    if any(entry["name"] == resource_name for entry in resources):
+        return True
+    return False
+
+
+def _drain_list(api_client, resource, params) -> tuple[list[dict] | None, str, str | None]:
+    """Drain every page of one list, or fail closed. Never returns a partial prefix."""
+    for _ in range(STRICT_READ_MAX_RESTARTS + 1):
+        collected, status, revision = _drain_list_once(api_client, resource, params)
+        if status != "restart":
+            return collected, status, revision
+    return None, "error", None
+
+
+def _drain_list_once(api_client, resource, params) -> tuple[list[dict] | None, str, str | None]:
+    collected: list[dict] = []
+    continue_token = None
+    # Page 1 owns the snapshot revision, every later page must be served at that same value, and
+    # a 410 restart re-enters this function and re-establishes it.
+    snapshot_revision = None
+    for _ in range(STRICT_READ_MAX_PAGES):
+        page_params = dict(params)
+        page_params["limit"] = STRICT_READ_PAGE_LIMIT
+        page_params["_request_timeout"] = STRICT_READ_REQUEST_TIMEOUT
+        if continue_token:
+            page_params["_continue"] = continue_token
+        else:
+            page_params["_continue"] = None
+        try:
+            raw = api_client.get(resource, **page_params)
+        except Exception as exc:
+            if getattr(exc, "status", None) == 410 and continue_token:
+                # Expired continuation: discard everything, including this read's revision.
+                return None, "restart", None
+            return None, "error", None
+        members, token, revision = _strict_list_page(raw)
+        if members is None:
+            return None, "error", None
+        # A3.0 rule 8: every normal continuation page belongs to page 1's snapshot.
+        if snapshot_revision is None:
+            snapshot_revision = revision
+        elif revision != snapshot_revision:
+            return None, "error", None
+        collected.extend(members)
+        continue_token = token
+        if not continue_token:
+            return collected, "ok", snapshot_revision
+    return None, "error", None
+
+
+def _object_revision(resources: list[dict]) -> str | None:
+    """The named object's own revision, or None when the response cannot supply one.
+
+    `None` is not an `ok` value on the `get` path: its only caller classifies it as
+    `error` before any success is published (A3.0 rule 9).
+    """
+    if len(resources) != 1:
+        return None
+    metadata = resources[0].get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    revision = metadata.get("resourceVersion")
+    return revision if isinstance(revision, str) and revision else None
+
+
 def _is_named_not_found(exc: BaseException) -> bool:
     if isinstance(exc, NotFoundError):
         return True
@@ -201,6 +362,11 @@ def run_module(module: AnsibleModule) -> None:
         _exit_outcome(module, "error")
         return
 
+    resource_name = module.params.get("resource_name")
+    if not isinstance(resource_name, str) or not resource_name.strip():
+        _exit_outcome(module, "error")
+        return
+
     try:
         api_client = get_api_client(**module.params)
     except Exception:
@@ -210,7 +376,8 @@ def run_module(module: AnsibleModule) -> None:
     try:
         resource = api_client.resource(module.params["kind"], module.params["api_version"])
     except Exception:
-        _exit_outcome(module, "error")
+        served = _discovery_serves(api_client, module.params["api_version"], resource_name)
+        _exit_outcome(module, "kind_not_served" if served is False else "error")
         return
 
     params: dict[str, Any] = {}
@@ -223,6 +390,19 @@ def run_module(module: AnsibleModule) -> None:
         label_selectors = module.params.get("label_selectors") or []
         if label_selectors:
             params["label_selector"] = ",".join(label_selectors)
+
+    if read_mode == "list":
+        resources, status, revision = _drain_list(api_client, resource, params)
+        if status != "ok":
+            _exit_outcome(module, "error")
+            return
+        _exit_outcome(module, "ok", resources, revision)
+        return
+
+    # Every strict request is bounded, not just the paginated ones: the Python surface bounds
+    # each call with its per-instance request timeout, and the collection has no client instance
+    # to carry one (plan section 9.1, per-call timeout).
+    params["_request_timeout"] = STRICT_READ_REQUEST_TIMEOUT
 
     try:
         raw = api_client.get(resource, **params)
@@ -237,7 +417,14 @@ def run_module(module: AnsibleModule) -> None:
     if resources is None:
         _exit_outcome(module, "error")
         return
-    _exit_outcome(module, "ok", resources)
+    revision = _object_revision(resources)
+    if revision is None:
+        # A3.0 rule 9: a successful named GET must expose the object's own revision.
+        # A response that cannot supply one is a malformed response, not an `ok` with null.
+        _exit_outcome(module, "error")
+        return
+    _exit_outcome(module, "ok", resources, revision)
+    return
 
 
 def main() -> None:

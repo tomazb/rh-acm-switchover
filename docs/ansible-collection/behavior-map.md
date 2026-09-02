@@ -24,7 +24,8 @@ Source: `lib/`, `modules/`, `scripts/`
 | `modules/decommission.py` | `roles/decommission/` | 6 |
 | `lib/rbac_validator.py` | `roles/preflight/` validation behavior | 2 |
 | `lib/validation.py` | centralized collection validation layer | 2 |
-| `lib/kube_client.py` | stock `kubernetes.core` usage plus later helper code | 2-3 |
+| `lib/kube_client.py` legacy readers | stock `kubernetes.core` usage plus later helper code | 2-3 |
+| `lib/strict_read.py` + `lib/kube_client.py` strict producers (`list_custom_resources_strict`, `get_custom_resource_strict`, `get_namespace_strict`, `list_pods_strict`, `get_deployment_strict`, `get_replicaset_strict`) | `plugins/modules/acm_k8s_read_outcome.py` | 3 |
 | `lib/utils.py` checkpoint semantics | `plugins/action/checkpoint_phase.py`, `plugins/module_utils/checkpoint.py` | 4 |
 
 In `validate` mode (`acm_switchover_execution.mode: validate`), the checkpoint

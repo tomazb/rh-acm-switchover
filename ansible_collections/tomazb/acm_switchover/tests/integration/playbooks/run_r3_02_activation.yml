@@ -28,3 +28,4 @@
         msg: >-
           R302_ACTIVATION=ok
           APPLY={{ _apply_immediate_import }}
+          RESOURCE_VERSION={{ _import_cm_for_annotation.resource_version | default('none') }}
