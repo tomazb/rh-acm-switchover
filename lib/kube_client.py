@@ -1049,7 +1049,10 @@ class KubeClient:
 
     def get_namespace_strict(self, name: str) -> StrictReadOutcome:
         """Prove one Namespace present or positively absent, or fail closed."""
-        self._validate_resource_inputs(name=name, resource_type="namespace")
+        # Validated as a namespace, not as a generic resource name: the generic rule is a
+        # DNS-1123 subdomain and would accept a dotted name, whose inevitable 404 would then be
+        # published as a positive absence proof. `get_namespace` and `list_pods_strict` agree.
+        self._validate_resource_inputs(namespace=name)
         try:
             namespace = self.core_v1.read_namespace(name, **self._request_timeout_kwargs())
         except ApiException as exc:

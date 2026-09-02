@@ -2167,6 +2167,21 @@ class TestStrictCoreReads:
         assert outcome.reason == STRICT_READ_REASON_MALFORMED_RESPONSE
         assert outcome.resource_version is None
 
+    @pytest.mark.parametrize("invalid", ["not.a.namespace", "acm.open-cluster-management"])
+    def test_a_dotted_namespace_is_rejected_before_the_read(self, invalid):
+        """A namespace is a DNS-1123 *label*, so a dotted name is invalid input, not an absence.
+
+        `get_namespace` and `list_pods_strict` both validate namespaces as labels. Validating
+        this argument as a generic resource name instead accepts dots, sends the read, and lets
+        a 404 on an impossible name be published as a positive `NAMESPACE_ABSENT` proof.
+        """
+        from lib.validation import ValidationError
+
+        client = self._client(namespace_result=self._namespace("acm"))
+        with pytest.raises(ValidationError):
+            client.get_namespace_strict(invalid)
+        client.core_v1.read_namespace.assert_not_called()
+
     # --- list_pods_strict -----------------------------------------------------
     def test_zero_pods_is_a_proven_empty_inventory(self):
         outcome = self._client(pod_pages=[self._pod_page([])]).list_pods_strict("acm")
