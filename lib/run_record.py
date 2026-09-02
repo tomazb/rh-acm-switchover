@@ -324,9 +324,12 @@ class RunRecord:
         property of this API rather than of each call site; a failed write
         propagates and the caller must not proceed to the deletion.
         """
-        records = self._get(_KEY_TEARDOWN_RECORDS, {}) or {}
+        records = self._get(_KEY_TEARDOWN_RECORDS, {})
         if not isinstance(records, dict):
-            raise MalformedTeardownRecord(f"{_KEY_TEARDOWN_RECORDS} must be a mapping")
+            # An absent key reads as {}. A key that is present but not a mapping --
+            # including a stored null, [] or "" -- is corruption, and treating it as
+            # "no records" would silently skip the expected_uid immutability guard.
+            raise MalformedTeardownRecord(f"{_KEY_TEARDOWN_RECORDS} must be a mapping, got {records!r}")
         stored_previous = records.get(record.key)
         previous = None if stored_previous is None else validate_stored(record.key, stored_previous)
         validate(record, previous)
@@ -339,18 +342,24 @@ class RunRecord:
         A stored record that violates the schema raises rather than degrading:
         a teardown record is mutation authority, not a reporting fact.
         """
-        records = self._get(_KEY_TEARDOWN_RECORDS, {}) or {}
+        records = self._get(_KEY_TEARDOWN_RECORDS, {})
         if not isinstance(records, dict):
-            raise MalformedTeardownRecord(f"{_KEY_TEARDOWN_RECORDS} must be a mapping")
+            # An absent key reads as {}. A key that is present but not a mapping --
+            # including a stored null, [] or "" -- is corruption, and treating it as
+            # "no records" would silently skip the expected_uid immutability guard.
+            raise MalformedTeardownRecord(f"{_KEY_TEARDOWN_RECORDS} must be a mapping, got {records!r}")
         if key not in records:
             return None
         return validate_stored(key, records[key])
 
     def all_teardown_records(self) -> dict:
         """Every recorded teardown, keyed by record key. Any malformed member fails the read."""
-        records = self._get(_KEY_TEARDOWN_RECORDS, {}) or {}
+        records = self._get(_KEY_TEARDOWN_RECORDS, {})
         if not isinstance(records, dict):
-            raise MalformedTeardownRecord(f"{_KEY_TEARDOWN_RECORDS} must be a mapping")
+            # An absent key reads as {}. A key that is present but not a mapping --
+            # including a stored null, [] or "" -- is corruption, and treating it as
+            # "no records" would silently skip the expected_uid immutability guard.
+            raise MalformedTeardownRecord(f"{_KEY_TEARDOWN_RECORDS} must be a mapping, got {records!r}")
         return {key: validate_stored(key, stored) for key, stored in records.items()}
 
     # -- lifecycle view: read side for report writers and show_state --

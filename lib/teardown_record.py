@@ -252,8 +252,6 @@ def _validate_absence_proofs(record: TeardownRecord, kind: str) -> None:
             _fail(f"absence_proofs[{proof_key!r}] must be an AbsenceProof")
         if not _non_empty_str(proof.proof_type) or not _non_empty_str(proof.resource_key):
             _fail(f"absence_proofs[{proof_key!r}] fields must be non-empty strings")
-        if proof.proof_type not in ABSENCE_PROOF_TYPES:
-            _fail(f"absence_proofs[{proof_key!r}] has an unknown proof_type {proof.proof_type!r}")
         if proof.proof_type not in ABSENCE_PROOF_TYPES_BY_KEY[proof_key]:
             _fail(f"proof_type {proof.proof_type!r} is not permitted for absence_proofs[{proof_key!r}]")
         if split_resource_key(proof.resource_key) is None:
@@ -372,7 +370,11 @@ def _validate_identity_backrefs(record: TeardownRecord, shape: dict, label: str)
 
 
 def _validate_immutability(record: TeardownRecord, previous: Optional[TeardownRecord]) -> None:
-    """Section 10.2.4: the first expected_uid stands, and completed evidence is final."""
+    """Section 10.2.4 and amendment section 13: what a later write may not change.
+
+    The first `expected_uid` stands, a captured identity outcome stands for the
+    record's lifetime, and the completion evidence of a completed record stands.
+    """
     if previous is None:
         return
     if previous.expected_uid != record.expected_uid:
@@ -380,11 +382,32 @@ def _validate_immutability(record: TeardownRecord, previous: Optional[TeardownRe
             f"expected_uid for {record.key!r} is already bound to {previous.expected_uid!r} "
             f"and may not be rebound to {record.expected_uid!r}"
         )
+    _validate_identity_immutability(record, previous)
     if previous.phase is not TeardownPhase.COMPLETED:
         return
+    if record.phase is not TeardownPhase.COMPLETED:
+        _fail(f"record {record.key!r} is already completed and may not transition back to " f"{record.phase.value}")
     for name in _EVIDENCE_FIELDS:
         if getattr(previous, name) != getattr(record, name):
             _fail(f"{name} of the completed record {record.key!r} may not be changed")
+
+
+def _validate_identity_immutability(record: TeardownRecord, previous: TeardownRecord) -> None:
+    """Amendment section 13: a captured operator identity outcome is never rebound.
+
+    `operator_deployment` is immutable for the record's lifetime, and
+    `operator_identity_unavailable` is never silently upgraded by rediscovery.
+    Both hold at every phase, not only after completion, so a later write must
+    carry the identical outcome: the same variant with the same content.
+    """
+    if all(getattr(previous, name) is None for name in _IDENTITY_FIELDS):
+        return
+    for name in _IDENTITY_FIELDS:
+        if getattr(previous, name) != getattr(record, name):
+            _fail(
+                f"the operator identity outcome of {record.key!r} is already captured and "
+                f"may not be changed ({name} differs from the recorded one)"
+            )
 
 
 # -- serialization -------------------------------------------------------------

@@ -791,3 +791,105 @@ def test_all_teardown_records_fails_closed_on_any_malformed_member(state_manager
     )
     with pytest.raises(MalformedTeardownRecord):
         RunRecord(state_manager).all_teardown_records()
+
+
+# --- a corrupt record container fails closed, never open --------------------------
+@pytest.mark.parametrize("container", [[], "", 0, None, [1], "x"], ids=repr)
+def test_a_corrupt_record_container_fails_closed_on_read(state_manager, container):
+    """A falsy container must not read as "no record was ever written".
+
+    Reading `[]` or `null` as an empty mapping would skip the expected_uid
+    immutability guard entirely, so a replacement object created after the
+    switchover would be bound fresh and deleted.
+    """
+    state_manager._set_config("decommission_teardown_records", container)
+    record = RunRecord(state_manager)
+    with pytest.raises(MalformedTeardownRecord):
+        record.teardown_record(MCO_KEY)
+    with pytest.raises(MalformedTeardownRecord):
+        record.all_teardown_records()
+
+
+@pytest.mark.parametrize("container", [[], "", 0, None, [1], "x"], ids=repr)
+def test_a_corrupt_record_container_fails_closed_on_write(state_manager, container):
+    """The writer loads `previous` from the same container, so it fails closed too."""
+    state_manager._set_config("decommission_teardown_records", container)
+    with pytest.raises(MalformedTeardownRecord):
+        RunRecord(state_manager).record_teardown_phase(
+            TeardownRecord(key=MCO_KEY, expected_uid="uid-1", phase=TeardownPhase.DELETE_STARTED)
+        )
+
+
+# --- amendment §13: the captured operator identity is immutable at every phase ----
+def test_an_advancing_phase_may_rewrite_the_identical_identity(state_manager):
+    """The phase machine must still be able to progress."""
+    record = RunRecord(state_manager)
+    record.record_teardown_phase(_mch_record())
+    record.record_teardown_phase(_mch_record(phase=TeardownPhase.DRAIN_PENDING))
+    loaded = record.teardown_record(MCH_KEY)
+    assert loaded.phase is TeardownPhase.DRAIN_PENDING
+    assert loaded.operator_deployment["uid"] == "dep-uid-1"
+
+
+def test_operator_deployment_is_never_rebound_by_a_later_write(state_manager):
+    """§13 case A: the recorded Deployment identity may not point somewhere else."""
+    record = RunRecord(state_manager)
+    record.record_teardown_phase(_mch_record())
+    with pytest.raises(MalformedTeardownRecord):
+        record.record_teardown_phase(
+            _mch_record(phase=TeardownPhase.DRAIN_PENDING, operator_deployment=_identity(uid="dep-uid-2"))
+        )
+    assert record.teardown_record(MCH_KEY).operator_deployment["uid"] == "dep-uid-1"
+
+
+def test_identity_unavailable_is_never_upgraded_by_rediscovery(state_manager):
+    """§13 case B: an unavailable outcome is never silently upgraded to an identity."""
+    record = RunRecord(state_manager)
+    record.record_teardown_phase(_mch_record(operator_deployment=None, operator_identity_unavailable=_unavailable()))
+    with pytest.raises(MalformedTeardownRecord):
+        record.record_teardown_phase(_mch_record(phase=TeardownPhase.DRAIN_PENDING, operator_deployment=_identity()))
+
+
+def test_a_captured_identity_is_never_downgraded_to_unavailable(state_manager):
+    """§13 case C: the reverse transition is equally a rebind."""
+    record = RunRecord(state_manager)
+    record.record_teardown_phase(_mch_record())
+    with pytest.raises(MalformedTeardownRecord):
+        record.record_teardown_phase(
+            _mch_record(
+                phase=TeardownPhase.DRAIN_PENDING,
+                operator_deployment=None,
+                operator_identity_unavailable=_unavailable(),
+            )
+        )
+
+
+def test_identity_is_immutable_on_a_completed_record_with_unchanged_evidence(state_manager):
+    """§13 case D: byte-identical evidence does not license a rebound identity.
+
+    The record would otherwise carry `resource_versions.operator_deployment`
+    proving a GET of a Deployment it no longer names.
+    """
+    record = RunRecord(state_manager)
+    completed = {
+        "key": MCH_KEY,
+        "expected_uid": "uid-mch",
+        "phase": TeardownPhase.COMPLETED,
+        "observed_at": OBSERVED_AT,
+        "resource_versions": {"drain_namespace": "88190", "drain_pods": "88219", "operator_deployment": "88203"},
+        "absence_proofs": {"target_cr": _cr_absent(MCH_KEY)},
+    }
+    record.record_teardown_phase(TeardownRecord(operator_deployment=_identity(), **completed))
+    with pytest.raises(MalformedTeardownRecord):
+        record.record_teardown_phase(TeardownRecord(operator_deployment=_identity(uid="dep-uid-2"), **completed))
+    assert record.teardown_record(MCH_KEY).operator_deployment["uid"] == "dep-uid-1"
+
+
+def test_a_completed_record_may_not_regress_to_an_earlier_phase(state_manager):
+    """The rejection message must name the phase transition, not a changed field."""
+    record = RunRecord(state_manager)
+    record.record_teardown_phase(_completed(MCO_KEY, expected_uid="uid-1"))
+    with pytest.raises(MalformedTeardownRecord, match="already completed"):
+        record.record_teardown_phase(
+            TeardownRecord(key=MCO_KEY, expected_uid="uid-1", phase=TeardownPhase.RECOVERY_REQUIRED)
+        )
