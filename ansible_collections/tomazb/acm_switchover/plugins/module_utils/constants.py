@@ -113,3 +113,20 @@ THANOS_COMPACTOR_LABEL_SELECTOR = "app.kubernetes.io/name=thanos-compact"
 # checkpoint state.
 AUTO_IMPORT_MARKER_ANNOTATION = "acm-switchover.open-cluster-management.io/import-strategy-set-by"
 AUTO_IMPORT_MARKER_VALUE = "acm-switchover"
+
+# R4-03 strict-read reason codes
+STRICT_READ_REASON_KIND_NOT_SERVED = "kind_not_served"
+STRICT_READ_REASON_NAMESPACE_NOT_FOUND = "namespace_not_found"
+STRICT_READ_REASON_OBJECT_NOT_FOUND = "object_not_found"
+STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE = "discovery_unverifiable"
+STRICT_READ_REASON_INVENTORY_INCOMPLETE = "inventory_incomplete"
+STRICT_READ_REASON_MALFORMED_RESPONSE = "malformed_response"
+STRICT_READ_REASON_READ_FAILED = "read_failed"
+
+# R4-03 strict-read bounds
+STRICT_READ_PAGE_LIMIT = 500
+STRICT_READ_MAX_PAGES = 100
+STRICT_READ_MAX_RESTARTS = 1
+# Collection-only: the collection module has no client instance carrying a timeout.
+# Value mirrors KubeClient's per-instance request_timeout default (lib/kube_client.py:210).
+STRICT_READ_REQUEST_TIMEOUT = 30
