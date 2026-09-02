@@ -62,9 +62,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `read_status: error` to the new `read_status: kind_not_served`, so a caller can tell "this cluster
   does not serve that kind" from "this read could not be verified". Every unverifiable discovery
   outcome — HTTP 404, 401/403, 5xx, timeout, TLS or transport failure, decode failure, or a
-  malformed discovery document — remains `error`. The module also gains a required `resource_name`
-  input (the exact canonical APIResource name for `kind`) and always publishes a `resource_version`
-  result key, which is the real revision on `ok` and `null` on every other outcome.
+  malformed discovery document — remains `error`. The module also always publishes a
+  `resource_version` result key, which is the real revision on `ok` and `null` on every other
+  outcome.
+- **Breaking (collection module interface):** `acm_k8s_read_outcome` now requires a
+  `resource_name` input — the exact canonical Kubernetes APIResource name (plural) for `kind`,
+  never synthesized from `kind`. Both in-repo call sites are updated in this change, but any
+  out-of-tree playbook invoking this module directly must add it; a missing or blank value is
+  rejected as `read_status: error` before any client work.
 - Normal two-hub switchovers now fail closed when the primary and secondary
   contexts are identical or resolve to the same live `kube-system` Namespace
   UID. The distinct physical-hub guard runs before a mutation-capable phase in
