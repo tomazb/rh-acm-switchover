@@ -29,10 +29,18 @@ from lib.constants import (
     MANAGED_CLUSTER_API_GROUP,
     MANAGED_CLUSTER_API_VERSION,
     MANAGED_CLUSTER_PLURAL,
+    STRICT_READ_MAX_PAGES,
+    STRICT_READ_MAX_RESTARTS,
+    STRICT_READ_PAGE_LIMIT,
     STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE,
+    STRICT_READ_REASON_INVENTORY_INCOMPLETE,
     STRICT_READ_REASON_KIND_NOT_SERVED,
+    STRICT_READ_REASON_MALFORMED_RESPONSE,
+    STRICT_READ_REASON_NAMESPACE_NOT_FOUND,
+    STRICT_READ_REASON_OBJECT_NOT_FOUND,
+    STRICT_READ_REASON_READ_FAILED,
 )
-from lib.strict_read import StrictReadOutcome
+from lib.strict_read import StrictReadOutcome, StrictReadStatus
 from lib.validation import InputValidator, ValidationError
 
 logger = logging.getLogger("acm_switchover")
@@ -140,6 +148,11 @@ def _create_result_matches_requested_body(existing: Dict[str, Any], requested: D
         return requested_value == existing_value
 
     return _is_requested_subset(requested, existing)
+
+
+# Sentinel returned internally by a strict-list drain helper to signal that its
+# whole-read attempt hit an expired continuation and must restart from page 1.
+_RESTART_READ = object()
 
 
 # Standard retry decorator for API calls
@@ -872,6 +885,301 @@ class KubeClient:
             label_selector=label_selector,
             max_items=max_items,
         )
+
+    def list_custom_resources_strict(
+        self,
+        group: str,
+        version: str,
+        plural: str,
+        namespace: Optional[str] = None,
+        label_selector: Optional[str] = None,
+    ) -> StrictReadOutcome:
+        """Strictly list one custom-resource kind, or fail closed.
+
+        Returns ITEMS only for a positively complete inventory. No partial
+        prefix is ever returned, and no failure is ever reported as empty.
+        """
+        self._validate_resource_inputs(namespace=namespace)
+
+        served = self._discovery_serves(group, version, plural)
+        if served.status is not StrictReadStatus.ITEMS:
+            return served
+
+        for _ in range(STRICT_READ_MAX_RESTARTS + 1):
+            outcome = self._drain_strict_list(group, version, plural, namespace, label_selector)
+            if outcome is not _RESTART_READ:
+                return outcome
+        # The restart budget is spent and the continuation is still expiring.
+        return StrictReadOutcome.error(STRICT_READ_REASON_INVENTORY_INCOMPLETE)
+
+    def _drain_strict_list(self, group, version, plural, namespace, label_selector):
+        """One whole-read attempt. Items accumulate here and escape only on success.
+
+        `snapshot_revision` is captured from page 1 and describes the whole read (A3.0 rule 8).
+        Every normal continuation page must be served at that same revision; a mismatch is a
+        malformed response and fails the whole read. A restart after 410 re-enters this method,
+        so the abandoned read's revision is discarded with its prefix.
+        """
+        items: List[Dict[str, Any]] = []
+        continue_token: Optional[str] = None
+        snapshot_revision: Optional[str] = None
+
+        for _ in range(STRICT_READ_MAX_PAGES):
+            try:
+                if namespace:
+                    page = self.custom_api.list_namespaced_custom_object(
+                        group=group,
+                        version=version,
+                        namespace=namespace,
+                        plural=plural,
+                        label_selector=label_selector,
+                        _continue=continue_token,
+                        limit=STRICT_READ_PAGE_LIMIT,
+                        **self._request_timeout_kwargs(),
+                    )
+                else:
+                    page = self.custom_api.list_cluster_custom_object(
+                        group=group,
+                        version=version,
+                        plural=plural,
+                        label_selector=label_selector,
+                        _continue=continue_token,
+                        limit=STRICT_READ_PAGE_LIMIT,
+                        **self._request_timeout_kwargs(),
+                    )
+            except ApiException as exc:
+                # 410 Gone means the continuation expired: discard the prefix and
+                # restart the whole read rather than returning what was collected.
+                if exc.status == 410 and continue_token is not None:
+                    return _RESTART_READ
+                return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
+            except Exception:
+                return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
+
+            if not isinstance(page, dict):
+                return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+            page_items = page.get("items")
+            if not isinstance(page_items, list):
+                return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+            if any(not isinstance(item, dict) for item in page_items):
+                return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+            items.extend(page_items)
+
+            metadata = page.get("metadata")
+            if not isinstance(metadata, dict):
+                return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+            # A3.0 rule 8: page 1 establishes the snapshot, and every normal continuation
+            # page must be served at that same revision or the pages are not one snapshot.
+            revision = metadata.get("resourceVersion")
+            if not isinstance(revision, str) or not revision:
+                return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+            if snapshot_revision is None:
+                snapshot_revision = revision
+            elif revision != snapshot_revision:
+                return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+            continue_token = metadata.get("continue") or None
+            if continue_token is None:
+                return StrictReadOutcome.from_items(items, resource_version=snapshot_revision)
+
+        # Page budget exhausted with a continuation still outstanding.
+        return StrictReadOutcome.error(STRICT_READ_REASON_INVENTORY_INCOMPLETE)
+
+    def get_custom_resource_strict(
+        self,
+        group: str,
+        version: str,
+        plural: str,
+        name: str,
+        namespace: Optional[str] = None,
+    ) -> StrictReadOutcome:
+        """Strictly GET one named custom resource, or fail closed.
+
+        OBJECT_ABSENT is returned only for a 404 that followed a successful
+        discovery determination that the kind is served.
+        """
+        self._validate_resource_inputs(namespace, name, "custom resource")
+
+        served = self._discovery_serves(group, version, plural)
+        if served.status is not StrictReadStatus.ITEMS:
+            return served
+
+        try:
+            if namespace:
+                resource = self.custom_api.get_namespaced_custom_object(
+                    group=group,
+                    version=version,
+                    namespace=namespace,
+                    plural=plural,
+                    name=name,
+                    **self._request_timeout_kwargs(),
+                )
+            else:
+                resource = self.custom_api.get_cluster_custom_object(
+                    group=group,
+                    version=version,
+                    plural=plural,
+                    name=name,
+                    **self._request_timeout_kwargs(),
+                )
+        except ApiException as exc:
+            if exc.status == 404:
+                return StrictReadOutcome.object_absent(STRICT_READ_REASON_OBJECT_NOT_FOUND)
+            return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
+        except Exception:
+            return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
+
+        if not isinstance(resource, dict):
+            return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+        metadata = resource.get("metadata")
+        if not isinstance(metadata, dict):
+            return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+        # A3.0 rule 9: a successful named GET must carry the object's own revision.
+        revision = metadata.get("resourceVersion")
+        if not isinstance(revision, str) or not revision:
+            return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+        return StrictReadOutcome.from_resource(resource, resource_version=revision)
+
+    def get_namespace_strict(self, name: str) -> StrictReadOutcome:
+        """Prove one Namespace present or positively absent, or fail closed."""
+        self._validate_resource_inputs(name=name, resource_type="namespace")
+        try:
+            namespace = self.core_v1.read_namespace(name, **self._request_timeout_kwargs())
+        except ApiException as exc:
+            if exc.status == 404:
+                return StrictReadOutcome.namespace_absent(STRICT_READ_REASON_NAMESPACE_NOT_FOUND)
+            return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
+        except Exception:
+            return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
+
+        metadata = getattr(namespace, "metadata", None)
+        returned_name = getattr(metadata, "name", None)
+        if not isinstance(returned_name, str) or returned_name != name:
+            return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+        # A3.0 rule 9: this revision becomes `resource_versions["drain_namespace"]`.
+        revision = getattr(metadata, "resource_version", None)
+        if not isinstance(revision, str) or not revision:
+            return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+        return StrictReadOutcome.from_resource(
+            {"metadata": {"name": returned_name}},
+            resource_version=revision,
+        )
+
+    def list_pods_strict(self, namespace: str, label_selector: Optional[str] = None) -> StrictReadOutcome:
+        """Strictly list Pods in one namespace, or fail closed.
+
+        A Pod LIST 404 is not zero Pods: it is resolved by a fresh named
+        Namespace GET, and only a positive namespace absence is propagated.
+        """
+        self._validate_resource_inputs(namespace=namespace)
+
+        for _ in range(STRICT_READ_MAX_RESTARTS + 1):
+            outcome = self._drain_strict_pod_list(namespace, label_selector)
+            if outcome is not _RESTART_READ:
+                return outcome
+        return StrictReadOutcome.error(STRICT_READ_REASON_INVENTORY_INCOMPLETE)
+
+    def _drain_strict_pod_list(self, namespace, label_selector):
+        # snapshot_revision is captured from page 1 and describes the whole read (A3.0 rule 8);
+        # every normal continuation page must be served at that same revision.
+        items: List[Dict[str, Any]] = []
+        continue_token: Optional[str] = None
+        snapshot_revision: Optional[str] = None
+
+        for _ in range(STRICT_READ_MAX_PAGES):
+            try:
+                page = self.core_v1.list_namespaced_pod(
+                    namespace=namespace,
+                    label_selector=label_selector,
+                    _continue=continue_token,
+                    limit=STRICT_READ_PAGE_LIMIT,
+                    **self._request_timeout_kwargs(),
+                )
+            except ApiException as exc:
+                if exc.status == 410 and continue_token is not None:
+                    return _RESTART_READ
+                if exc.status == 404:
+                    # Absence of the Pod collection is only meaningful if the
+                    # namespace itself is positively absent; prove that live.
+                    namespace_outcome = self.get_namespace_strict(namespace)
+                    if namespace_outcome.status is StrictReadStatus.NAMESPACE_ABSENT:
+                        return namespace_outcome
+                    return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
+                return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
+            except Exception:
+                return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
+
+            page_items = getattr(page, "items", None)
+            if not isinstance(page_items, list):
+                return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+            for pod in page_items:
+                converted = self._model_to_mapping(pod)
+                if converted is None:
+                    return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+                items.append(converted)
+
+            metadata = getattr(page, "metadata", None)
+            if metadata is None:
+                return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+            # A3.0 rule 8, on the typed CoreV1 page shape.
+            revision = getattr(metadata, "resource_version", None)
+            if not isinstance(revision, str) or not revision:
+                return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+            if snapshot_revision is None:
+                snapshot_revision = revision
+            elif revision != snapshot_revision:
+                return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+            continue_token = getattr(metadata, "_continue", None) or None
+            if continue_token is None:
+                return StrictReadOutcome.from_items(items, resource_version=snapshot_revision)
+
+        return StrictReadOutcome.error(STRICT_READ_REASON_INVENTORY_INCOMPLETE)
+
+    @staticmethod
+    def _model_to_mapping(model) -> Optional[Dict[str, Any]]:
+        """Convert one client model to a mapping, or None when it is not one."""
+        to_dict = getattr(model, "to_dict", None)
+        if not callable(to_dict):
+            return None
+        converted = to_dict()
+        return converted if isinstance(converted, dict) else None
+
+    def get_deployment_strict(self, name: str, namespace: str) -> StrictReadOutcome:
+        """Strictly GET one Deployment with its identity, or fail closed."""
+        return self._get_apps_object_strict(self.apps_v1.read_namespaced_deployment, name, namespace)
+
+    def get_replicaset_strict(self, name: str, namespace: str) -> StrictReadOutcome:
+        """Strictly GET one ReplicaSet with its identity, or fail closed."""
+        return self._get_apps_object_strict(self.apps_v1.read_namespaced_replica_set, name, namespace)
+
+    def _get_apps_object_strict(self, reader, name: str, namespace: str) -> StrictReadOutcome:
+        """One bounded named Apps GET whose success always carries identity."""
+        self._validate_resource_inputs(namespace, name, "apps object")
+        try:
+            model = reader(name=name, namespace=namespace, **self._request_timeout_kwargs())
+        except ApiException as exc:
+            if exc.status == 404:
+                return StrictReadOutcome.object_absent(STRICT_READ_REASON_OBJECT_NOT_FOUND)
+            return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
+        except Exception:
+            return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
+
+        resource = self._model_to_mapping(model)
+        if resource is None:
+            return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+        metadata = resource.get("metadata")
+        if not isinstance(metadata, dict):
+            return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+        if metadata.get("name") != name or metadata.get("namespace") != namespace:
+            return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+        uid = metadata.get("uid")
+        if not isinstance(uid, str) or not uid:
+            return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+        # A3.0 rule 9. The client model's snake_case key is the revision on this shape;
+        # the Deployment case becomes `resource_versions["operator_deployment"]`.
+        revision = metadata.get("resource_version")
+        if not isinstance(revision, str) or not revision:
+            return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+        return StrictReadOutcome.from_resource(resource, resource_version=revision)
 
     @retry_api_call
     def patch_custom_resource(

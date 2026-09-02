@@ -1726,3 +1726,638 @@ class TestDiscoveryProver:
         call = Mock(return_value={"kind": "APIResourceList", "resources": [{"name": "pods", "kind": "Pod"}]})
         self._client(call)._discovery_serves("", "v1", "pods")
         assert call.call_args[0][0] == "/api/v1"
+
+
+class TestStrictCustomResourceReads:
+    """R4-03 July §3 outcome algebra."""
+
+    def _client(self, list_pages=None, discovery_served=True, get_result=None, get_error=None):
+        client = KubeClient.__new__(KubeClient)
+        client.request_timeout = 30
+        client.dry_run = False
+        client.custom_api = Mock()
+        client._discovery_serves = Mock(
+            return_value=(
+                StrictReadOutcome.from_items([])
+                if discovery_served
+                else StrictReadOutcome.crd_absent(STRICT_READ_REASON_KIND_NOT_SERVED)
+            )
+        )
+        if list_pages is not None:
+            client.custom_api.list_cluster_custom_object = Mock(side_effect=list_pages)
+        if get_result is not None or get_error is not None:
+            client.custom_api.get_cluster_custom_object = Mock(return_value=get_result, side_effect=get_error)
+        return client
+
+    def test_true_empty_list_is_a_proven_complete_inventory(self):
+        client = self._client(list_pages=[{"items": [], "metadata": {"resourceVersion": "100"}}])
+        outcome = client.list_custom_resources_strict("g", "v1", "widgets")
+        assert outcome.status is StrictReadStatus.ITEMS
+        assert outcome.items == []
+
+    def test_complete_multi_page_inventory_is_joined(self):
+        pages = [
+            {
+                "items": [{"metadata": {"name": "a"}}],
+                "metadata": {"continue": "tok", "resourceVersion": "100"},
+            },
+            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "100"}},
+        ]
+        outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
+        assert [i["metadata"]["name"] for i in outcome.items] == ["a", "b"]
+
+    def test_every_page_request_carries_the_fixed_page_limit(self):
+        pages = [
+            {
+                "items": [{"metadata": {"name": "a"}}],
+                "metadata": {"continue": "tok", "resourceVersion": "100"},
+            },
+            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "100"}},
+        ]
+        client = self._client(list_pages=pages)
+        client.list_custom_resources_strict("g", "v1", "widgets")
+        calls = client.custom_api.list_cluster_custom_object.call_args_list
+        assert len(calls) == 2
+        assert [call.kwargs["limit"] for call in calls] == [
+            STRICT_READ_PAGE_LIMIT,
+            STRICT_READ_PAGE_LIMIT,
+        ]
+
+    def test_every_page_request_is_bounded_and_follows_the_continuation(self):
+        pages = [
+            {"items": [], "metadata": {"continue": "tok", "resourceVersion": "100"}},
+            {"items": [], "metadata": {"resourceVersion": "100"}},
+        ]
+        client = self._client(list_pages=pages)
+        client.list_custom_resources_strict("g", "v1", "widgets")
+        calls = client.custom_api.list_cluster_custom_object.call_args_list
+        assert [call.kwargs["_continue"] for call in calls] == [None, "tok"]
+        assert all(call.kwargs["_request_timeout"] == 30 for call in calls)
+
+    def test_later_page_failure_fails_the_whole_read(self):
+        pages = [
+            {
+                "items": [{"metadata": {"name": "a"}}],
+                "metadata": {"continue": "tok", "resourceVersion": "100"},
+            },
+            ApiException(status=500, reason="Internal Server Error"),
+        ]
+        outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.items == []
+
+    def test_outstanding_continuation_at_exit_is_incomplete(self):
+        # A server that keeps returning a continue token must not be reported as complete.
+        pages = [{"items": [], "metadata": {"continue": "tok", "resourceVersion": "100"}}] * (
+            STRICT_READ_MAX_PAGES + 5
+        )
+        outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_INVENTORY_INCOMPLETE
+
+    def test_expired_continue_token_restarts_the_whole_read_once(self):
+        pages = [
+            {
+                "items": [{"metadata": {"name": "a"}}],
+                "metadata": {"continue": "tok", "resourceVersion": "100"},
+            },
+            ApiException(status=410, reason="Gone"),
+            {
+                "items": [{"metadata": {"name": "a"}}],
+                "metadata": {"continue": "tok", "resourceVersion": "200"},
+            },
+            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "200"}},
+        ]
+        client = self._client(list_pages=pages)
+        outcome = client.list_custom_resources_strict("g", "v1", "widgets")
+        assert outcome.status is StrictReadStatus.ITEMS
+        # The prefix collected before the 410 is discarded, not carried into the restart.
+        assert [i["metadata"]["name"] for i in outcome.items] == ["a", "b"]
+        restarted = client.custom_api.list_cluster_custom_object.call_args_list[2]
+        assert restarted.kwargs["_continue"] is None
+
+    def test_a_restarted_read_reports_the_restarted_snapshot_revision(self):
+        """A3.0 rule 8: the expired read's revision is discarded with its prefix."""
+        pages = [
+            {
+                "items": [{"metadata": {"name": "a"}}],
+                "metadata": {"continue": "tok", "resourceVersion": "100"},
+            },
+            ApiException(status=410, reason="Gone"),
+            {
+                "items": [{"metadata": {"name": "a"}}],
+                "metadata": {"continue": "tok", "resourceVersion": "200"},
+            },
+            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "200"}},
+        ]
+        outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
+        assert outcome.resource_version == "200", "the restarted read's page 1 owns the snapshot"
+
+    def test_a_coherent_multi_page_read_publishes_its_one_snapshot_revision(self):
+        """A3.0 rule 8: every normal continuation page is served at page 1's revision."""
+        pages = [
+            {
+                "items": [{"metadata": {"name": "a"}}],
+                "metadata": {"continue": "tok", "resourceVersion": "100"},
+            },
+            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "100"}},
+        ]
+        outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
+        assert outcome.status is StrictReadStatus.ITEMS
+        assert outcome.resource_version == "100"
+
+    def test_a_continuation_page_at_a_different_revision_is_malformed(self):
+        """A3.0 rule 8, negative: mismatched pages are not one snapshot, so the read fails."""
+        pages = [
+            {
+                "items": [{"metadata": {"name": "a"}}],
+                "metadata": {"continue": "tok", "resourceVersion": "100"},
+            },
+            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "999"}},
+        ]
+        outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_MALFORMED_RESPONSE
+        assert outcome.items == []
+        assert outcome.resource_version is None
+
+    def test_a_restarted_read_with_an_inconsistent_continuation_is_malformed(self):
+        """The restarted read establishes a new snapshot, and its pages must agree with it."""
+        pages = [
+            {
+                "items": [{"metadata": {"name": "a"}}],
+                "metadata": {"continue": "tok", "resourceVersion": "100"},
+            },
+            ApiException(status=410, reason="Gone"),
+            {
+                "items": [{"metadata": {"name": "a"}}],
+                "metadata": {"continue": "tok", "resourceVersion": "200"},
+            },
+            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "100"}},
+        ]
+        outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_MALFORMED_RESPONSE
+        assert outcome.resource_version is None
+
+    def test_a_page_without_a_readable_revision_is_malformed(self):
+        pages = [{"items": [], "metadata": {}}]
+        outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.resource_version is None
+
+    def test_second_expired_continue_token_fails_closed(self):
+        pages = [
+            {
+                "items": [{"metadata": {"name": "a"}}],
+                "metadata": {"continue": "tok", "resourceVersion": "100"},
+            },
+            ApiException(status=410, reason="Gone"),
+            {
+                "items": [{"metadata": {"name": "a"}}],
+                "metadata": {"continue": "tok", "resourceVersion": "200"},
+            },
+            ApiException(status=410, reason="Gone"),
+        ]
+        outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.items == []
+
+    def test_malformed_items_is_error_not_empty(self):
+        outcome = self._client(list_pages=[{"items": "nope", "metadata": {}}]).list_custom_resources_strict(
+            "g", "v1", "widgets"
+        )
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_MALFORMED_RESPONSE
+
+    def test_missing_items_key_is_error_not_empty(self):
+        outcome = self._client(list_pages=[{"metadata": {}}]).list_custom_resources_strict("g", "v1", "widgets")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_MALFORMED_RESPONSE
+
+    def test_null_items_is_error_not_empty(self):
+        outcome = self._client(list_pages=[{"items": None, "metadata": {}}]).list_custom_resources_strict(
+            "g", "v1", "widgets"
+        )
+        assert outcome.status is StrictReadStatus.ERROR
+
+    def test_malformed_list_metadata_is_error(self):
+        outcome = self._client(list_pages=[{"items": [], "metadata": "nope"}]).list_custom_resources_strict(
+            "g", "v1", "widgets"
+        )
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_MALFORMED_RESPONSE
+
+    def test_non_mapping_member_is_error_not_empty(self):
+        outcome = self._client(list_pages=[{"items": ["x"], "metadata": {}}]).list_custom_resources_strict(
+            "g", "v1", "widgets"
+        )
+        assert outcome.status is StrictReadStatus.ERROR
+
+    def test_authorization_failure_is_error_not_absence(self):
+        outcome = self._client(
+            list_pages=[ApiException(status=403, reason="Forbidden")]
+        ).list_custom_resources_strict("g", "v1", "widgets")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.proves_absence is False
+
+    def test_list_404_on_a_served_kind_is_error_not_absence(self):
+        outcome = self._client(
+            list_pages=[ApiException(status=404, reason="Not Found")]
+        ).list_custom_resources_strict("g", "v1", "widgets")
+        assert outcome.status is StrictReadStatus.ERROR
+
+    def test_unserved_kind_short_circuits_to_crd_absent(self):
+        client = self._client(list_pages=[], discovery_served=False)
+        outcome = client.list_custom_resources_strict("g", "v1", "widgets")
+        assert outcome.status is StrictReadStatus.CRD_ABSENT
+        client.custom_api.list_cluster_custom_object.assert_not_called()
+
+    def test_named_get_returns_the_resource_and_its_resource_version(self):
+        resource = {"metadata": {"name": "mch", "uid": "u-1", "resourceVersion": "77"}}
+        outcome = self._client(get_result=resource).get_custom_resource_strict("g", "v1", "widgets", "mch")
+        assert outcome.status is StrictReadStatus.ITEMS
+        assert outcome.resource is resource
+        assert outcome.resource_version == "77"
+
+    @pytest.mark.parametrize(
+        "metadata",
+        [
+            {"name": "mch", "uid": "u-1"},  # revision missing
+            {"name": "mch", "uid": "u-1", "resourceVersion": ""},  # revision empty
+            {"name": "mch", "uid": "u-1", "resourceVersion": 77},  # revision not a string
+        ],
+        ids=["missing", "empty", "non_string"],
+    )
+    def test_named_get_without_a_usable_revision_is_malformed(self, metadata):
+        """A3.0 rule 9: a successful named GET may never publish a null revision."""
+        outcome = self._client(get_result={"metadata": metadata}).get_custom_resource_strict(
+            "g", "v1", "widgets", "mch"
+        )
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_MALFORMED_RESPONSE
+        assert outcome.resource_version is None
+
+    def test_named_get_is_bounded(self):
+        client = self._client(get_result={"metadata": {"name": "mch", "resourceVersion": "77"}})
+        client.get_custom_resource_strict("g", "v1", "widgets", "mch")
+        assert client.custom_api.get_cluster_custom_object.call_args.kwargs["_request_timeout"] == 30
+
+    def test_named_get_404_after_successful_discovery_is_object_absent(self):
+        outcome = self._client(
+            get_error=ApiException(status=404, reason="Not Found")
+        ).get_custom_resource_strict("g", "v1", "widgets", "mch")
+        assert outcome.status is StrictReadStatus.OBJECT_ABSENT
+
+    def test_named_get_404_without_successful_discovery_is_never_object_absent(self):
+        client = self._client(
+            get_error=ApiException(status=404, reason="Not Found"), discovery_served=False
+        )
+        outcome = client.get_custom_resource_strict("g", "v1", "widgets", "mch")
+        assert outcome.status is StrictReadStatus.CRD_ABSENT
+
+    def test_strict_surface_offers_no_truncation(self):
+        for method in (
+            KubeClient.list_custom_resources_strict,
+            KubeClient.list_pods_strict,
+        ):
+            assert "max_items" not in inspect.signature(method).parameters
+
+    def test_legacy_readers_are_unchanged(self):
+        # The strict surface is additive; existing callers keep the current behavior.
+        assert KubeClient.list_custom_resources.__doc__ is not None
+        assert "max_items" in inspect.signature(KubeClient.list_custom_resources).parameters
+
+
+class TestStrictCoreReads:
+    """R4-03: live namespace absence and complete Pod inventory."""
+
+    def _client(self, namespace_result=None, namespace_error=None, pod_pages=None):
+        client = KubeClient.__new__(KubeClient)
+        client.request_timeout = 30
+        client.dry_run = False
+        client.core_v1 = Mock()
+        if namespace_result is not None or namespace_error is not None:
+            client.core_v1.read_namespace = Mock(return_value=namespace_result, side_effect=namespace_error)
+        if pod_pages is not None:
+            client.core_v1.list_namespaced_pod = Mock(side_effect=pod_pages)
+        return client
+
+    @staticmethod
+    def _namespace(name, resource_version="12"):
+        """Build a V1Namespace-shaped mock.
+
+        `name` cannot be passed as a Mock keyword: `Mock(name=...)` names the
+        mock rather than setting the attribute, so it is assigned explicitly.
+        """
+        namespace = Mock()
+        namespace.metadata = Mock(resource_version=resource_version)
+        namespace.metadata.name = name
+        return namespace
+
+    @staticmethod
+    def _pod_page(names, continue_token=None, resource_version="12"):
+        """Build a V1PodList-shaped page: attribute access, not dict access."""
+        pods = []
+        for pod_name in names:
+            pod = Mock()
+            pod.to_dict = Mock(return_value={"metadata": {"name": pod_name, "owner_references": []}})
+            pods.append(pod)
+        page = Mock()
+        page.items = pods
+        page.metadata = Mock(_continue=continue_token, resource_version=resource_version)
+        return page
+
+    # --- get_namespace_strict -------------------------------------------------
+    def test_present_namespace_is_items(self):
+        outcome = self._client(namespace_result=self._namespace("acm")).get_namespace_strict("acm")
+        assert outcome.status is StrictReadStatus.ITEMS
+        assert outcome.resource_version == "12"
+
+    def test_namespace_get_404_is_namespace_absent(self):
+        outcome = self._client(
+            namespace_error=ApiException(status=404, reason="Not Found")
+        ).get_namespace_strict("acm")
+        assert outcome.status is StrictReadStatus.NAMESPACE_ABSENT
+        assert outcome.reason == STRICT_READ_REASON_NAMESPACE_NOT_FOUND
+
+    @pytest.mark.parametrize("status", [401, 403, 500, 503])
+    def test_namespace_get_failure_is_error_not_absence(self, status):
+        outcome = self._client(
+            namespace_error=ApiException(status=status, reason="failed")
+        ).get_namespace_strict("acm")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.proves_absence is False
+
+    def test_namespace_transport_failure_is_error_not_absence(self):
+        outcome = self._client(namespace_error=TimeoutError("deadline")).get_namespace_strict("acm")
+        assert outcome.status is StrictReadStatus.ERROR
+
+    def test_namespace_with_a_different_returned_name_is_error(self):
+        outcome = self._client(namespace_result=self._namespace("somewhere-else")).get_namespace_strict("acm")
+        assert outcome.status is StrictReadStatus.ERROR
+
+    def test_namespace_get_is_bounded(self):
+        client = self._client(namespace_result=self._namespace("acm"))
+        client.get_namespace_strict("acm")
+        assert client.core_v1.read_namespace.call_args.kwargs["_request_timeout"] == 30
+
+    @pytest.mark.parametrize("revision", [None, "", 12], ids=["missing", "empty", "non_string"])
+    def test_namespace_get_without_a_usable_revision_is_malformed(self, revision):
+        """A3.0 rule 9: `resource_versions["drain_namespace"]` has no null-revision source."""
+        client = self._client(namespace_result=self._namespace("acm", resource_version=revision))
+        outcome = client.get_namespace_strict("acm")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_MALFORMED_RESPONSE
+        assert outcome.resource_version is None
+
+    # --- list_pods_strict -----------------------------------------------------
+    def test_zero_pods_is_a_proven_empty_inventory(self):
+        outcome = self._client(pod_pages=[self._pod_page([])]).list_pods_strict("acm")
+        assert outcome.status is StrictReadStatus.ITEMS
+        assert outcome.items == []
+        assert outcome.resource_version == "12"
+
+    def test_complete_multi_page_pod_inventory_is_joined_and_bounded(self):
+        pages = [self._pod_page(["a"], continue_token="tok"), self._pod_page(["b"])]
+        client = self._client(pod_pages=pages)
+        outcome = client.list_pods_strict("acm")
+        assert [p["metadata"]["name"] for p in outcome.items] == ["a", "b"]
+        calls = client.core_v1.list_namespaced_pod.call_args_list
+        assert [call.kwargs["limit"] for call in calls] == [STRICT_READ_PAGE_LIMIT] * 2
+        assert [call.kwargs["_continue"] for call in calls] == [None, "tok"]
+        assert all(call.kwargs["_request_timeout"] == 30 for call in calls)
+
+    def test_pod_later_page_failure_exposes_no_partial_inventory(self):
+        pages = [self._pod_page(["a"], continue_token="tok"), ApiException(status=500, reason="boom")]
+        outcome = self._client(pod_pages=pages).list_pods_strict("acm")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.items == []
+
+    def test_pod_expired_continuation_restarts_the_whole_read_once(self):
+        pages = [
+            self._pod_page(["a"], continue_token="tok"),
+            ApiException(status=410, reason="Gone"),
+            self._pod_page(["a"], continue_token="tok"),
+            self._pod_page(["b"]),
+        ]
+        client = self._client(pod_pages=pages)
+        outcome = client.list_pods_strict("acm")
+        assert [p["metadata"]["name"] for p in outcome.items] == ["a", "b"]
+        assert client.core_v1.list_namespaced_pod.call_args_list[2].kwargs["_continue"] is None
+
+    def test_pod_snapshot_revision_is_page_one_and_survives_no_restart(self):
+        """A3.0 rule 8, for the read whose revision becomes `resource_versions["drain_pods"]`."""
+        pages = [
+            self._pod_page(["a"], continue_token="tok", resource_version="100"),
+            self._pod_page(["b"], resource_version="100"),
+        ]
+        outcome = self._client(pod_pages=pages).list_pods_strict("acm")
+        assert outcome.status is StrictReadStatus.ITEMS
+        assert outcome.resource_version == "100"
+
+    def test_a_pod_continuation_page_at_a_different_revision_is_malformed(self):
+        """A3.0 rule 8, negative, on the drain read that produces final-proof evidence."""
+        pages = [
+            self._pod_page(["a"], continue_token="tok", resource_version="100"),
+            self._pod_page(["b"], resource_version="999"),
+        ]
+        outcome = self._client(pod_pages=pages).list_pods_strict("acm")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_MALFORMED_RESPONSE
+        assert outcome.items == []
+        assert outcome.resource_version is None
+
+    def test_pod_restarted_read_discards_the_expired_snapshot_revision(self):
+        pages = [
+            self._pod_page(["a"], continue_token="tok", resource_version="100"),
+            ApiException(status=410, reason="Gone"),
+            self._pod_page(["a"], continue_token="tok", resource_version="200"),
+            self._pod_page(["b"], resource_version="200"),
+        ]
+        outcome = self._client(pod_pages=pages).list_pods_strict("acm")
+        assert outcome.resource_version == "200"
+
+    def test_a_failed_pod_read_carries_no_revision(self):
+        pages = [self._pod_page(["a"], continue_token="tok"), ApiException(status=500, reason="boom")]
+        outcome = self._client(pod_pages=pages).list_pods_strict("acm")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.resource_version is None
+
+    def test_pod_second_expiry_fails_closed(self):
+        pages = [
+            self._pod_page(["a"], continue_token="tok"),
+            ApiException(status=410, reason="Gone"),
+            self._pod_page(["a"], continue_token="tok"),
+            ApiException(status=410, reason="Gone"),
+        ]
+        outcome = self._client(pod_pages=pages).list_pods_strict("acm")
+        assert outcome.status is StrictReadStatus.ERROR
+
+    def test_pod_outstanding_continuation_at_exit_is_incomplete(self):
+        pages = [self._pod_page([], continue_token="tok")] * (STRICT_READ_MAX_PAGES + 5)
+        outcome = self._client(pod_pages=pages).list_pods_strict("acm")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_INVENTORY_INCOMPLETE
+
+    def test_pod_page_without_items_is_error_not_empty(self):
+        page = Mock()
+        page.items = None
+        page.metadata = Mock(_continue=None, resource_version="12")
+        outcome = self._client(pod_pages=[page]).list_pods_strict("acm")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_MALFORMED_RESPONSE
+
+    def test_pod_page_with_non_list_items_is_error(self):
+        page = Mock()
+        page.items = "nope"
+        page.metadata = Mock(_continue=None, resource_version="12")
+        outcome = self._client(pod_pages=[page]).list_pods_strict("acm")
+        assert outcome.status is StrictReadStatus.ERROR
+
+    def test_malformed_pod_member_is_error(self):
+        page = Mock()
+        page.items = ["not-a-pod"]
+        page.metadata = Mock(_continue=None, resource_version="12")
+        outcome = self._client(pod_pages=[page]).list_pods_strict("acm")
+        assert outcome.status is StrictReadStatus.ERROR
+
+    def test_pod_page_without_list_metadata_is_error(self):
+        page = Mock()
+        page.items = []
+        page.metadata = None
+        outcome = self._client(pod_pages=[page]).list_pods_strict("acm")
+        assert outcome.status is StrictReadStatus.ERROR
+
+    def test_pod_list_404_with_a_present_namespace_is_error(self):
+        client = self._client(
+            pod_pages=[ApiException(status=404, reason="Not Found")],
+            namespace_result=self._namespace("acm"),
+        )
+        outcome = client.list_pods_strict("acm")
+        assert outcome.status is StrictReadStatus.ERROR
+
+    def test_pod_list_404_with_a_fresh_namespace_404_is_namespace_absent(self):
+        client = self._client(
+            pod_pages=[ApiException(status=404, reason="Not Found")],
+            namespace_error=ApiException(status=404, reason="Not Found"),
+        )
+        outcome = client.list_pods_strict("acm")
+        assert outcome.status is StrictReadStatus.NAMESPACE_ABSENT
+        client.core_v1.read_namespace.assert_called_once()
+
+    def test_pod_list_404_with_an_unreadable_namespace_is_error(self):
+        client = self._client(
+            pod_pages=[ApiException(status=404, reason="Not Found")],
+            namespace_error=ApiException(status=403, reason="Forbidden"),
+        )
+        assert client.list_pods_strict("acm").status is StrictReadStatus.ERROR
+
+    @pytest.mark.parametrize("status", [401, 403, 500, 503])
+    def test_pod_list_failure_is_error_not_empty(self, status):
+        outcome = self._client(pod_pages=[ApiException(status=status, reason="failed")]).list_pods_strict("acm")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.items == []
+
+
+class TestStrictAppsReads:
+    """R4-03: identity-bearing Apps reads for the owner chain."""
+
+    def _client(self, result=None, error=None, kind="deployment"):
+        client = KubeClient.__new__(KubeClient)
+        client.request_timeout = 30
+        client.dry_run = False
+        client.apps_v1 = Mock()
+        reader = Mock(return_value=result, side_effect=error)
+        if kind == "deployment":
+            client.apps_v1.read_namespaced_deployment = reader
+        else:
+            client.apps_v1.read_namespaced_replica_set = reader
+        return client
+
+    @staticmethod
+    def _object(
+        name="multiclusterhub-operator",
+        namespace="open-cluster-management",
+        uid="u-1",
+        resource_version="7",
+    ):
+        """A V1Deployment/V1ReplicaSet-shaped mock.
+
+        `to_dict()` produces the client's snake_case mapping, so the revision key is
+        `resource_version`. It is explicit here because A3.0 rule 9 makes a successful
+        Apps GET impossible without one.
+        """
+        model = Mock()
+        model.to_dict = Mock(
+            return_value={
+                "metadata": {
+                    "name": name,
+                    "namespace": namespace,
+                    "uid": uid,
+                    "resource_version": resource_version,
+                }
+            }
+        )
+        return model
+
+    @pytest.mark.parametrize(
+        "kind, method",
+        [("deployment", "get_deployment_strict"), ("replicaset", "get_replicaset_strict")],
+    )
+    def test_present_object_carries_identity(self, kind, method):
+        client = self._client(result=self._object(), kind=kind)
+        outcome = getattr(client, method)("multiclusterhub-operator", "open-cluster-management")
+        assert outcome.status is StrictReadStatus.ITEMS
+        assert outcome.resource["metadata"]["uid"] == "u-1"
+        assert outcome.resource_version == "7"
+
+    @pytest.mark.parametrize(
+        "kind, method",
+        [("deployment", "get_deployment_strict"), ("replicaset", "get_replicaset_strict")],
+    )
+    def test_explicit_404_is_object_absent(self, kind, method):
+        client = self._client(error=ApiException(status=404, reason="Not Found"), kind=kind)
+        outcome = getattr(client, method)("multiclusterhub-operator", "open-cluster-management")
+        assert outcome.status is StrictReadStatus.OBJECT_ABSENT
+
+    @pytest.mark.parametrize("status", [401, 403, 500, 503])
+    def test_api_failure_is_error_not_absence(self, status):
+        client = self._client(error=ApiException(status=status, reason="failed"))
+        outcome = client.get_deployment_strict("d", "ns")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.proves_absence is False
+
+    def test_missing_uid_is_error(self):
+        client = self._client(result=self._object(uid=""))
+        assert (
+            client.get_deployment_strict("multiclusterhub-operator", "open-cluster-management").status
+            is StrictReadStatus.ERROR
+        )
+
+    def test_mismatched_identity_is_error(self):
+        client = self._client(result=self._object(name="something-else"))
+        assert (
+            client.get_deployment_strict("multiclusterhub-operator", "open-cluster-management").status
+            is StrictReadStatus.ERROR
+        )
+
+    def test_malformed_object_is_error(self):
+        model = Mock()
+        model.to_dict = Mock(return_value="nope")
+        client = self._client(result=model)
+        assert client.get_deployment_strict("d", "ns").status is StrictReadStatus.ERROR
+
+    @pytest.mark.parametrize("revision", [None, "", 7], ids=["missing", "empty", "non_string"])
+    def test_apps_get_without_a_usable_revision_is_malformed(self, revision):
+        """A3.0 rule 9: `resource_versions["operator_deployment"]` has no null-revision source."""
+        client = self._client(result=self._object(resource_version=revision))
+        outcome = client.get_deployment_strict("multiclusterhub-operator", "open-cluster-management")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_MALFORMED_RESPONSE
+        assert outcome.resource_version is None
+
+    def test_apps_get_is_bounded(self):
+        client = self._client(result=self._object())
+        client.get_deployment_strict("multiclusterhub-operator", "open-cluster-management")
+        assert client.apps_v1.read_namespaced_deployment.call_args.kwargs["_request_timeout"] == 30
