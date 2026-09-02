@@ -277,6 +277,44 @@ This layer centralizes Kubernetes interaction so workflow modules can stay focus
 request timeout is 30 seconds. Tenacity remains the retry layer for wrapped helpers, while urllib3 client retries stay
 disabled to avoid multiplying retry attempts below the workflow code.
 
+### `lib/strict_read.py` and the strict read surface on `lib/kube_client.py`
+
+`lib/strict_read.py` owns one small outcome algebra shared, by mirrored implementation rather than
+by import, with the Ansible Collection. A `StrictReadOutcome` carries exactly one
+`StrictReadStatus` — `ITEMS`, `CRD_ABSENT`, `NAMESPACE_ABSENT`, `OBJECT_ABSENT`, or `ERROR` — and
+the value type itself enforces the rules the decommission and migration-evidence slices depend on:
+
+- an error is never an absence proof, and an absence proof is never an error;
+- neither an error nor an absence proof may carry an inventory;
+- neither may carry a `resourceVersion`, so no producer can synthesize provenance.
+
+`lib/kube_client.py` keeps its existing readers unchanged and adds six strict producers beside
+them: `list_custom_resources_strict`, `get_custom_resource_strict`, `get_namespace_strict`,
+`list_pods_strict`, `get_deployment_strict`, and `get_replicaset_strict`. They are a closed
+surface — no caller composes its own strict read — and each one either publishes a real revision
+or does not succeed. A strict list drains every page under a fixed page size and a page budget,
+requires every page of one read to be served at the revision its first page established, and
+restarts the whole read exactly once when a continuation expires, discarding both the accumulated
+prefix and the abandoned revision. A partial prefix never escapes; an incomplete read is an error.
+
+**Kind absence needs its own proof.** The dynamic client's discovery cache substitutes an empty
+resource list for some discovery-fetch failures, and the substituted set is not stable across the
+supported client range, so a lookup miss cannot distinguish an unserved kind from an unreachable
+API server. `KubeClient._discovery_serves` therefore issues its own bounded discovery request and
+returns `CRD_ABSENT` only for a successful, decoded, structurally valid `APIResourceList` that
+lacks the requested resource. Every other discovery outcome is an error.
+
+**The canonical resource name flows from the caller.** Both form factors take the exact canonical
+Kubernetes APIResource name (for example `multiclusterobservabilities`) as an explicit input and
+never derive it from `kind`. There is no inflector, no suffix rule, and no fallback, because a
+synthesized plural would miss a discovery entry and turn a served kind into a false absence.
+
+**Both form factors, one contract.** The Collection's `acm_k8s_read_outcome` module implements the
+same algebra independently: `kind_not_served` maps to `CRD_ABSENT`, a complete `resources` list to
+`ITEMS`, and its `resource_version` result key to `StrictReadOutcome.resource_version` with
+identical semantics on every outcome. The two runtimes share no code; `tests/test_strict_read_parity.py`
+drives one declared vector set through both implementations and is what keeps them equal.
+
 ### `lib/waiter.py`
 
 Provides explicit polling contracts through `WaitConditionResult`. Polling sleeps are capped to the remaining timeout

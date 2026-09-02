@@ -1808,9 +1808,7 @@ class TestStrictCustomResourceReads:
 
     def test_outstanding_continuation_at_exit_is_incomplete(self):
         # A server that keeps returning a continue token must not be reported as complete.
-        pages = [{"items": [], "metadata": {"continue": "tok", "resourceVersion": "100"}}] * (
-            STRICT_READ_MAX_PAGES + 5
-        )
+        pages = [{"items": [], "metadata": {"continue": "tok", "resourceVersion": "100"}}] * (STRICT_READ_MAX_PAGES + 5)
         outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
         assert outcome.status is StrictReadStatus.ERROR
         assert outcome.reason == STRICT_READ_REASON_INVENTORY_INCOMPLETE
@@ -1955,16 +1953,16 @@ class TestStrictCustomResourceReads:
         assert outcome.status is StrictReadStatus.ERROR
 
     def test_authorization_failure_is_error_not_absence(self):
-        outcome = self._client(
-            list_pages=[ApiException(status=403, reason="Forbidden")]
-        ).list_custom_resources_strict("g", "v1", "widgets")
+        outcome = self._client(list_pages=[ApiException(status=403, reason="Forbidden")]).list_custom_resources_strict(
+            "g", "v1", "widgets"
+        )
         assert outcome.status is StrictReadStatus.ERROR
         assert outcome.proves_absence is False
 
     def test_list_404_on_a_served_kind_is_error_not_absence(self):
-        outcome = self._client(
-            list_pages=[ApiException(status=404, reason="Not Found")]
-        ).list_custom_resources_strict("g", "v1", "widgets")
+        outcome = self._client(list_pages=[ApiException(status=404, reason="Not Found")]).list_custom_resources_strict(
+            "g", "v1", "widgets"
+        )
         assert outcome.status is StrictReadStatus.ERROR
 
     def test_unserved_kind_short_circuits_to_crd_absent(self):
@@ -2004,15 +2002,13 @@ class TestStrictCustomResourceReads:
         assert client.custom_api.get_cluster_custom_object.call_args.kwargs["_request_timeout"] == 30
 
     def test_named_get_404_after_successful_discovery_is_object_absent(self):
-        outcome = self._client(
-            get_error=ApiException(status=404, reason="Not Found")
-        ).get_custom_resource_strict("g", "v1", "widgets", "mch")
+        outcome = self._client(get_error=ApiException(status=404, reason="Not Found")).get_custom_resource_strict(
+            "g", "v1", "widgets", "mch"
+        )
         assert outcome.status is StrictReadStatus.OBJECT_ABSENT
 
     def test_named_get_404_without_successful_discovery_is_never_object_absent(self):
-        client = self._client(
-            get_error=ApiException(status=404, reason="Not Found"), discovery_served=False
-        )
+        client = self._client(get_error=ApiException(status=404, reason="Not Found"), discovery_served=False)
         outcome = client.get_custom_resource_strict("g", "v1", "widgets", "mch")
         assert outcome.status is StrictReadStatus.CRD_ABSENT
 
@@ -2075,17 +2071,13 @@ class TestStrictCoreReads:
         assert outcome.resource_version == "12"
 
     def test_namespace_get_404_is_namespace_absent(self):
-        outcome = self._client(
-            namespace_error=ApiException(status=404, reason="Not Found")
-        ).get_namespace_strict("acm")
+        outcome = self._client(namespace_error=ApiException(status=404, reason="Not Found")).get_namespace_strict("acm")
         assert outcome.status is StrictReadStatus.NAMESPACE_ABSENT
         assert outcome.reason == STRICT_READ_REASON_NAMESPACE_NOT_FOUND
 
     @pytest.mark.parametrize("status", [401, 403, 500, 503])
     def test_namespace_get_failure_is_error_not_absence(self, status):
-        outcome = self._client(
-            namespace_error=ApiException(status=status, reason="failed")
-        ).get_namespace_strict("acm")
+        outcome = self._client(namespace_error=ApiException(status=status, reason="failed")).get_namespace_strict("acm")
         assert outcome.status is StrictReadStatus.ERROR
         assert outcome.proves_absence is False
 
