@@ -3,7 +3,24 @@
 
 from __future__ import annotations
 
+import copy
 from datetime import datetime, timezone
+from typing import NoReturn
+
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    ABSENCE_PROOF_KEYS,
+    ABSENCE_PROOF_TYPES_BY_KEY,
+    DRAIN_NAMESPACE_BY_KIND,
+    DRAIN_SCOPED_KINDS,
+    IDENTITY_BEARING_KINDS,
+    MCH_OWNED_CRD,
+    NAMESPACE_API_VERSION,
+    NAMESPACE_KIND,
+    OPERATOR_IDENTITY_DISCOVERY_METHOD,
+    OPERATOR_IDENTITY_UNAVAILABLE_REASONS,
+    RESOURCE_VERSION_LABELS,
+    TEARDOWN_PHASES,
+)
 
 SCHEMA_VERSION = "2.0"
 KNOWN_PHASES = (
@@ -210,3 +227,437 @@ def record_resume_start_phase(checkpoint: dict, phase: str) -> None:
         data = {}
         checkpoint["operational_data"] = data
     data[KEY_RESUME_SUMMARY] = {KEY_RESUME_START_PHASE: phase}
+
+
+# -- R4-03 durable decommission teardown records (plan §10.2) ------------------
+#
+# The independent collection-side implementation of the schema lib/teardown_record.py
+# owns on the Python side. No runtime code is shared between the two: they are held
+# equal by tests/test_checkpoint_state_parity.py and tests/test_constants_parity.py.
+#
+# A teardown record is mutation authority, so every rule fails closed by raising
+# MalformedTeardownRecord. Nothing here repairs, defaults, or degrades a stored shape
+# — the deliberate opposite of checkpoint_facts, which is only a reporting view.
+#
+# `operator_deployment` and `operator_identity_unavailable` are validated here but
+# written by a later PR, so no producer can persist a shape this reader does not check.
+#
+# Durability is the caller's: this module only edits the checkpoint mapping. The
+# checkpoint action plugin owns the write to disk, which is where "forced durable
+# before DELETE" is discharged.
+
+KEY_DECOMMISSION_TEARDOWN_RECORDS = "decommission_teardown_records"
+
+_EVIDENCE_FIELDS = ("observed_at", "resource_versions", "absence_proofs")
+_IDENTITY_FIELDS = ("operator_deployment", "operator_identity_unavailable")
+_ABSENCE_PROOF_FIELDS = frozenset({"proof_type", "resource_key"})
+# The closed top-level field set of a stored record. An unknown field is malformed:
+# the record is mutation authority, so no later producer may write a shape the reader
+# does not check.
+_RECORD_FIELDS = frozenset({"expected_uid", "phase"}) | frozenset(_EVIDENCE_FIELDS) | frozenset(_IDENTITY_FIELDS)
+_OPTIONAL_FIELDS = _EVIDENCE_FIELDS + _IDENTITY_FIELDS
+_OPERATOR_DEPLOYMENT_FIELDS = frozenset(
+    {
+        "namespace",
+        "name",
+        "uid",
+        "discovery_method",
+        "captured_at",
+        "csv",
+        "mch_teardown_key",
+        "mch_expected_uid",
+    }
+)
+_CSV_FIELDS = frozenset({"namespace", "name", "uid", "owned_crd"})
+_IDENTITY_UNAVAILABLE_FIELDS = frozenset(
+    {
+        "reason",
+        "discovery_method",
+        "captured_at",
+        "evidence_summary",
+        "mch_teardown_key",
+        "mch_expected_uid",
+    }
+)
+
+
+class MalformedTeardownRecord(ValueError):
+    """A teardown record violates plan §10.2. Fail closed."""
+
+
+def teardown_key(api_version: str, kind: str, namespace, name: str) -> str:
+    """Build a canonical `<apiVersion>/<kind>/<namespace>/<name>` record key.
+
+    The namespace segment is empty for a cluster-scoped object.
+    """
+    return "/".join((api_version, kind, namespace or "", name))
+
+
+def split_resource_key(key):
+    """Right-split a resource key into (api_version, kind, namespace, name).
+
+    Returns None when the key is malformed: the right-split must yield exactly
+    four segments; api_version must be non-empty and carry at most one "/";
+    kind and name must be non-empty. The namespace segment may be empty, which
+    denotes a cluster-scoped object. This is the only implementation of the
+    grammar — every other rule that parses a key calls it.
+    """
+    if not isinstance(key, str):
+        return None
+    parts = key.rsplit("/", 3)
+    if len(parts) != 4:
+        return None
+    api_version, kind, namespace, name = parts
+    if not api_version or api_version.count("/") > 1:
+        return None
+    if not kind or not name:
+        return None
+    return api_version, kind, namespace, name
+
+
+def _fail(message: str) -> NoReturn:
+    raise MalformedTeardownRecord(message)
+
+
+def _non_empty_str(value) -> bool:
+    return isinstance(value, str) and value != ""
+
+
+def _require_non_empty_strings(shape: dict, fields, label: str) -> None:
+    for name in sorted(fields):
+        if not _non_empty_str(shape.get(name)):
+            _fail(f"{label}.{name} must be a non-empty string")
+
+
+def validate_stored(key: str, stored, previous=None) -> dict:
+    """Validate one stored teardown record against plan §10.2.1a-§10.2.4.
+
+    This is the single collection-side rule set: both the reader and the writer
+    call it, so a hand-edited checkpoint fails exactly where a bad write would.
+    `previous` is the currently stored record, if any — the writer passes it so
+    the immutability rules are checked in the same place as everything else, and
+    it is validated in its own right before anything is compared against it.
+
+    Returns a deep copy of the validated record. Raises MalformedTeardownRecord.
+    """
+    if not isinstance(stored, dict):
+        _fail(f"teardown record {key!r} must be a mapping, got {type(stored).__name__}")
+    unknown = set(stored) - _RECORD_FIELDS
+    if unknown:
+        _fail(f"teardown record {key!r} carries unknown fields {sorted(unknown)}")
+    for name in _OPTIONAL_FIELDS:
+        # An omitted key means ABSENT. A stored null is a third representation the
+        # reader must not silently accept as absence (§10.2.1a).
+        if name in stored and stored[name] is None:
+            _fail(f"teardown record {key!r} stores {name} as null; an absent field is not a null one")
+
+    parts = split_resource_key(key)
+    if parts is None:
+        _fail(f"malformed teardown record key: {key!r}")
+    kind = parts[1]
+    if not _non_empty_str(stored.get("expected_uid")):
+        _fail(f"teardown record {key!r} needs a non-empty expected_uid")
+    phase = stored.get("phase")
+    if not isinstance(phase, str) or phase not in TEARDOWN_PHASES:
+        _fail(f"teardown record {key!r} has an unknown phase: {phase!r}")
+
+    _validate_identity(key, stored, kind)
+    _validate_evidence(key, stored, kind)
+    _validate_immutability(key, stored, previous)
+    return copy.deepcopy(stored)
+
+
+def _validate_evidence(key: str, stored: dict, kind: str) -> None:
+    """§10.2.1a-§10.2.1e: completion evidence exists only at `completed`."""
+    present = [name for name in _EVIDENCE_FIELDS if name in stored]
+    if stored["phase"] != "completed":
+        if present:
+            _fail(f"completion evidence {sorted(present)} is not permitted at phase {stored['phase']}")
+        return
+
+    missing = [name for name in _EVIDENCE_FIELDS if name not in stored]
+    if missing:
+        _fail(f"completed record {key!r} is missing completion evidence {sorted(missing)}")
+    observed_at = stored["observed_at"]
+    resource_versions = stored["resource_versions"]
+    absence_proofs = stored["absence_proofs"]
+    if not _non_empty_str(observed_at):
+        _fail(f"observed_at must be a non-empty string, got {observed_at!r}")
+    if not isinstance(resource_versions, dict):
+        _fail(f"resource_versions must be a mapping, got {type(resource_versions).__name__}")
+    if not isinstance(absence_proofs, dict):
+        _fail(f"absence_proofs must be a mapping, got {type(absence_proofs).__name__}")
+    _validate_resource_versions(resource_versions)
+    _validate_absence_proofs(key, absence_proofs, kind)
+    _validate_evidence_key_sets(key, stored, kind)
+
+
+def _validate_resource_versions(resource_versions: dict) -> None:
+    """§10.2.1b: a closed label set mapping to non-empty string revisions.
+
+    A resourceVersion is opaque and server-defined, so no validator can decide
+    from the value alone that a string is a genuine revision (amendment §22.1).
+    The two checkable properties are the closed key set and the value type;
+    provenance is bound by the producer-seam tests.
+    """
+    for label, value in resource_versions.items():
+        if label not in RESOURCE_VERSION_LABELS:
+            _fail(f"resource_versions carries an unknown label {label!r}")
+        if not _non_empty_str(value):
+            _fail(f"resource_versions[{label!r}] must be a non-empty string, got {value!r}")
+
+
+def _validate_absence_proofs(key: str, absence_proofs: dict, kind: str) -> None:
+    """§10.2.1c: typed positive-absence evidence with a required resource key."""
+    for proof_key, proof in absence_proofs.items():
+        if proof_key not in ABSENCE_PROOF_KEYS:
+            _fail(f"absence_proofs carries an unknown key {proof_key!r}")
+        if not isinstance(proof, dict) or set(proof) != _ABSENCE_PROOF_FIELDS:
+            _fail(f"absence_proofs[{proof_key!r}] fields must be exactly {sorted(_ABSENCE_PROOF_FIELDS)}")
+        if not _non_empty_str(proof["proof_type"]) or not _non_empty_str(proof["resource_key"]):
+            _fail(f"absence_proofs[{proof_key!r}] fields must be non-empty strings")
+        if proof["proof_type"] not in ABSENCE_PROOF_TYPES_BY_KEY[proof_key]:
+            _fail(f"proof_type {proof['proof_type']!r} is not permitted for absence_proofs[{proof_key!r}]")
+        if split_resource_key(proof["resource_key"]) is None:
+            _fail(f"absence_proofs[{proof_key!r}] resource_key is malformed: {proof['resource_key']!r}")
+        required = _required_absence_resource_key(key, kind, proof_key)
+        if proof["resource_key"] != required:
+            _fail(f"absence_proofs[{proof_key!r}] resource_key must be {required!r}, got {proof['resource_key']!r}")
+
+
+def _required_absence_resource_key(key: str, kind: str, proof_key: str) -> str:
+    if proof_key == "target_cr":
+        return key
+    drain_namespace = DRAIN_NAMESPACE_BY_KIND.get(kind)
+    if drain_namespace is None:
+        _fail(f"kind {kind!r} has no drain scope, so it may not carry a drain_namespace proof")
+    return teardown_key(NAMESPACE_API_VERSION, NAMESPACE_KIND, None, drain_namespace)
+
+
+def _validate_evidence_key_sets(key: str, stored: dict, kind: str) -> None:
+    """§10.2.1d: the recorded evidence key set, per family and proof mode."""
+    revisions = set(stored["resource_versions"])
+    proofs = set(stored["absence_proofs"])
+    if "target_cr" not in proofs:
+        _fail(f"completed record {key!r} must carry a target_cr absence proof")
+
+    if kind not in DRAIN_SCOPED_KINDS:
+        expected_revisions = set()
+        expected_proofs = {"target_cr"}
+    else:
+        namespace_present = "drain_namespace" in revisions
+        namespace_absent = "drain_namespace" in proofs
+        if namespace_present == namespace_absent:
+            _fail(
+                f"completed record {key!r} must record drain_namespace in exactly one of "
+                "resource_versions (namespace present) or absence_proofs (namespace absent)"
+            )
+        if namespace_present:
+            expected_revisions = {"drain_namespace", "drain_pods"}
+            if "operator_deployment" in stored:
+                expected_revisions.add("operator_deployment")
+            expected_proofs = {"target_cr"}
+        else:
+            expected_revisions = set()
+            expected_proofs = {"target_cr", "drain_namespace"}
+
+    if revisions != expected_revisions:
+        _fail(f"resource_versions keys must be {sorted(expected_revisions)}, got {sorted(revisions)}")
+    if proofs != expected_proofs:
+        _fail(f"absence_proofs keys must be {sorted(expected_proofs)}, got {sorted(proofs)}")
+
+
+def _validate_identity(key: str, stored: dict, kind: str) -> None:
+    """§10.2.2-§10.2.4: exactly one identity outcome, and only on an MCH record."""
+    deployment = stored.get("operator_deployment")
+    unavailable = stored.get("operator_identity_unavailable")
+    if kind not in IDENTITY_BEARING_KINDS:
+        if deployment is not None or unavailable is not None:
+            _fail(f"kind {kind!r} may not carry an operator identity field")
+        return
+    if (deployment is None) == (unavailable is None):
+        _fail(f"record {key!r} must carry exactly one of operator_deployment / operator_identity_unavailable")
+    if deployment is not None:
+        _validate_operator_deployment(key, stored, deployment)
+    else:
+        _validate_identity_unavailable(key, stored, unavailable)
+
+
+def _validate_operator_deployment(key: str, stored: dict, identity) -> None:
+    """§10.2.2 exact nested schema."""
+    if not isinstance(identity, dict):
+        _fail(f"operator_deployment must be a mapping, got {type(identity).__name__}")
+    if set(identity) != _OPERATOR_DEPLOYMENT_FIELDS:
+        _fail(f"operator_deployment fields must be exactly {sorted(_OPERATOR_DEPLOYMENT_FIELDS)}")
+    _require_non_empty_strings(identity, {"namespace", "name", "uid", "captured_at"}, "operator_deployment")
+    if identity["discovery_method"] != OPERATOR_IDENTITY_DISCOVERY_METHOD:
+        _fail(f"operator_deployment.discovery_method must be {OPERATOR_IDENTITY_DISCOVERY_METHOD!r}")
+
+    csv = identity["csv"]
+    if not isinstance(csv, dict):
+        _fail(f"operator_deployment.csv must be a mapping, got {type(csv).__name__}")
+    if set(csv) != _CSV_FIELDS:
+        _fail(f"operator_deployment.csv fields must be exactly {sorted(_CSV_FIELDS)}")
+    _require_non_empty_strings(csv, _CSV_FIELDS, "operator_deployment.csv")
+    if csv["namespace"] != identity["namespace"]:
+        _fail("operator_deployment.csv.namespace must equal operator_deployment.namespace")
+    if csv["owned_crd"] != MCH_OWNED_CRD:
+        _fail(f"operator_deployment.csv.owned_crd must be {MCH_OWNED_CRD!r}")
+
+    _validate_identity_backrefs(key, stored, identity, "operator_deployment")
+
+
+def _validate_identity_unavailable(key: str, stored: dict, unavailable) -> None:
+    """§10.2.3 exact nested schema."""
+    if not isinstance(unavailable, dict):
+        _fail(f"operator_identity_unavailable must be a mapping, got {type(unavailable).__name__}")
+    if set(unavailable) != _IDENTITY_UNAVAILABLE_FIELDS:
+        _fail(f"operator_identity_unavailable fields must be exactly {sorted(_IDENTITY_UNAVAILABLE_FIELDS)}")
+    _require_non_empty_strings(
+        unavailable,
+        {"reason", "captured_at", "evidence_summary"},
+        "operator_identity_unavailable",
+    )
+    if unavailable["reason"] not in OPERATOR_IDENTITY_UNAVAILABLE_REASONS:
+        _fail(f"operator_identity_unavailable.reason {unavailable['reason']!r} is not an enumerated reason")
+    if unavailable["discovery_method"] != OPERATOR_IDENTITY_DISCOVERY_METHOD:
+        _fail(f"operator_identity_unavailable.discovery_method must be {OPERATOR_IDENTITY_DISCOVERY_METHOD!r}")
+
+    _validate_identity_backrefs(key, stored, unavailable, "operator_identity_unavailable")
+
+
+def _validate_identity_backrefs(key: str, stored: dict, shape: dict, label: str) -> None:
+    if shape["mch_teardown_key"] != key:
+        _fail(f"{label}.mch_teardown_key must equal the record key {key!r}")
+    if shape["mch_expected_uid"] != stored["expected_uid"]:
+        _fail(f"{label}.mch_expected_uid must equal the record expected_uid {stored['expected_uid']!r}")
+
+
+def _validate_immutability(key: str, stored: dict, previous) -> None:
+    """§10.2.4 and amendment §13: what a later write may not change.
+
+    The first `expected_uid` stands, a captured identity outcome stands for the
+    record's lifetime, and the completion evidence of a completed record stands.
+    """
+    if previous is None:
+        return
+    # A corrupt stored record is never laundered by being compared against.
+    validate_stored(key, previous)
+    if previous["expected_uid"] != stored["expected_uid"]:
+        _fail(
+            f"expected_uid for {key!r} is already bound to {previous['expected_uid']!r} "
+            f"and may not be rebound to {stored['expected_uid']!r}"
+        )
+    _validate_identity_immutability(key, stored, previous)
+    if previous["phase"] != "completed":
+        return
+    if stored["phase"] != "completed":
+        _fail(f"record {key!r} is already completed and may not transition back to {stored['phase']}")
+    for name in _EVIDENCE_FIELDS:
+        if previous.get(name) != stored.get(name):
+            _fail(f"{name} of the completed record {key!r} may not be changed")
+
+
+def _validate_identity_immutability(key: str, stored: dict, previous: dict) -> None:
+    """Amendment §13: a captured operator identity outcome is never rebound.
+
+    `operator_deployment` is immutable for the record's lifetime, and
+    `operator_identity_unavailable` is never silently upgraded by rediscovery.
+    Both hold at every phase, not only after completion, so a later write must
+    carry the identical outcome: the same variant with the same content, compared
+    by value — over-rejecting would deadlock the phase machine.
+    """
+    if all(name not in previous for name in _IDENTITY_FIELDS):
+        return
+    for name in _IDENTITY_FIELDS:
+        if previous.get(name) != stored.get(name):
+            _fail(
+                f"the operator identity outcome of {key!r} is already captured and "
+                f"may not be changed ({name} differs from the recorded one)"
+            )
+
+
+def _stored_records(checkpoint) -> dict:
+    """The raw stored records mapping, or `{}` when none was ever written.
+
+    An absent key reads as `{}`. A container that is present but not a mapping —
+    including a stored null, `[]`, `""` or `0` — is corruption, and treating it
+    as "no records" would silently skip the expected_uid immutability guard, so
+    it fails closed. checkpoint_facts' degrade-to-defaults tolerance deliberately
+    does not apply here: these records are mutation authority, not a report.
+    """
+    if not isinstance(checkpoint, dict):
+        _fail(f"checkpoint must be a mapping, got {type(checkpoint).__name__}")
+    if "operational_data" not in checkpoint:
+        return {}
+    data = checkpoint["operational_data"]
+    if not isinstance(data, dict):
+        # A stored null is corruption here too, not "no operational data yet".
+        _fail(f"operational_data must be a mapping, got {data!r}")
+    if KEY_DECOMMISSION_TEARDOWN_RECORDS not in data:
+        return {}
+    records = data[KEY_DECOMMISSION_TEARDOWN_RECORDS]
+    if not isinstance(records, dict):
+        _fail(f"{KEY_DECOMMISSION_TEARDOWN_RECORDS} must be a mapping, got {records!r}")
+    return records
+
+
+def teardown_record(checkpoint, key: str):
+    """The recorded teardown for `key`, or None if none was ever recorded.
+
+    A stored record that violates the schema raises rather than degrading: a
+    teardown record is mutation authority, not a reporting fact.
+    """
+    records = _stored_records(checkpoint)
+    if key not in records:
+        return None
+    return validate_stored(key, records[key])
+
+
+def teardown_records(checkpoint) -> dict:
+    """Every recorded teardown, keyed by record key. Any malformed member fails the read."""
+    records = _stored_records(checkpoint)
+    return {key: validate_stored(key, stored) for key, stored in records.items()}
+
+
+def record_teardown_phase(
+    checkpoint,
+    key: str,
+    expected_uid: str,
+    phase: str,
+    *,
+    observed_at=None,
+    resource_versions=None,
+    absence_proofs=None,
+    operator_deployment=None,
+    operator_identity_unavailable=None,
+) -> None:
+    """Validate and store one teardown record in the checkpoint's operational_data.
+
+    A `None` argument means the field is ABSENT and is omitted from the stored
+    mapping; an empty mapping is stored as `{}` (§10.2.1a). Validation runs
+    before the write, so a rejected record leaves the stored one untouched.
+    Persisting the checkpoint is the caller's (the action plugin's) job — this
+    function only edits the mapping.
+    """
+    records = _stored_records(checkpoint)
+    stored = {"expected_uid": expected_uid, "phase": phase}
+    for name, value in (
+        ("observed_at", observed_at),
+        ("resource_versions", resource_versions),
+        ("absence_proofs", absence_proofs),
+        ("operator_deployment", operator_deployment),
+        ("operator_identity_unavailable", operator_identity_unavailable),
+    ):
+        if value is not None:
+            # Copied, so a caller mutating its own mapping afterwards cannot edit
+            # a durable record behind the validator's back.
+            stored[name] = copy.deepcopy(value)
+
+    validate_stored(key, stored, previous=records.get(key))
+
+    data = checkpoint.get("operational_data")
+    if not isinstance(data, dict):
+        data = {}
+        checkpoint["operational_data"] = data
+    data[KEY_DECOMMISSION_TEARDOWN_RECORDS] = {**records, key: stored}
