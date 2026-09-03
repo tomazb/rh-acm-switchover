@@ -646,108 +646,113 @@ def test_a_non_mch_record_may_not_carry_operator_identity(state_manager):
         )
 
 
-@pytest.mark.parametrize(
-    "identity",
-    [
-        _identity(namespace=None),
-        _identity(namespace=""),
-        _identity(name=None),
-        _identity(uid=None),
-        _identity(uid=""),
-        _identity(captured_at=None),
-        _identity(discovery_method=None),
-        _identity(discovery_method="guessed_by_name_prefix"),
-        _identity(csv=None),
-        _identity(
-            csv={
-                "namespace": "open-cluster-management",
-                "uid": "csv-uid-1",
-                "owned_crd": "multiclusterhubs.operator.open-cluster-management.io",
-            }
-        ),
-        _identity(
-            csv={
-                "namespace": "open-cluster-management",
-                "name": "acm.v2.13.0",
-                "owned_crd": "multiclusterhubs.operator.open-cluster-management.io",
-            }
-        ),
-        _identity(
-            csv={
-                "namespace": "elsewhere",
-                "name": "acm.v2.13.0",
-                "uid": "csv-uid-1",
-                "owned_crd": "multiclusterhubs.operator.open-cluster-management.io",
-            }
-        ),
-        _identity(
-            csv={
-                "namespace": "open-cluster-management",
-                "name": "acm.v2.13.0",
-                "uid": "csv-uid-1",
-                "owned_crd": "somethingelse.example.com",
-            }
-        ),
-        _identity(mch_teardown_key="operator.open-cluster-management.io/v1/MultiClusterHub//other"),
-        _identity(mch_expected_uid="uid-other"),
-        _identity(uid=7),
-        {"uid": "dep-uid-1"},  # partial shape
-    ],
+# The authoritative §10.2.2 malformed payload set, at module scope so the cross-runtime
+# parity test in tests/test_checkpoint_state_parity.py consumes exactly these objects
+# instead of a second hand-written copy. JSON-compatible by construction.
+MALFORMED_OPERATOR_DEPLOYMENTS = (
+    _identity(namespace=None),
+    _identity(namespace=""),
+    _identity(name=None),
+    _identity(uid=None),
+    _identity(uid=""),
+    _identity(captured_at=None),
+    _identity(discovery_method=None),
+    _identity(discovery_method="guessed_by_name_prefix"),
+    _identity(csv=None),
+    _identity(
+        csv={
+            "namespace": "open-cluster-management",
+            "uid": "csv-uid-1",
+            "owned_crd": "multiclusterhubs.operator.open-cluster-management.io",
+        }
+    ),
+    _identity(
+        csv={
+            "namespace": "open-cluster-management",
+            "name": "acm.v2.13.0",
+            "owned_crd": "multiclusterhubs.operator.open-cluster-management.io",
+        }
+    ),
+    _identity(
+        csv={
+            "namespace": "elsewhere",
+            "name": "acm.v2.13.0",
+            "uid": "csv-uid-1",
+            "owned_crd": "multiclusterhubs.operator.open-cluster-management.io",
+        }
+    ),
+    _identity(
+        csv={
+            "namespace": "open-cluster-management",
+            "name": "acm.v2.13.0",
+            "uid": "csv-uid-1",
+            "owned_crd": "somethingelse.example.com",
+        }
+    ),
+    _identity(mch_teardown_key="operator.open-cluster-management.io/v1/MultiClusterHub//other"),
+    _identity(mch_expected_uid="uid-other"),
+    _identity(uid=7),
+    {"uid": "dep-uid-1"},  # partial shape
 )
+
+
+@pytest.mark.parametrize("identity", MALFORMED_OPERATOR_DEPLOYMENTS)
 def test_malformed_operator_deployment_fails_closed(state_manager, identity):
     with pytest.raises(MalformedTeardownRecord):
         RunRecord(state_manager).record_teardown_phase(_mch_record(operator_deployment=identity))
 
 
-@pytest.mark.parametrize(
-    "unavailable",
-    [
-        {
-            "reason": "not_a_known_reason",
-            "discovery_method": "olm_csv_owned_mch_crd_install_deployment_v1",
-            "captured_at": "2026-09-04T10:09:00Z",
-            "evidence_summary": "no candidate CSV",
-            "mch_teardown_key": MCH_KEY,
-            "mch_expected_uid": "uid-mch",
-        },
-        {
-            "reason": "csv_absent",
-            "captured_at": "2026-09-04T10:09:00Z",
-            "evidence_summary": "no candidate CSV",
-            "mch_teardown_key": MCH_KEY,
-            "mch_expected_uid": "uid-mch",
-        },  # missing discovery_method
-        {
-            "reason": "csv_absent",
-            "discovery_method": "olm_csv_owned_mch_crd_install_deployment_v1",
-            "evidence_summary": "no candidate CSV",
-            "mch_teardown_key": MCH_KEY,
-            "mch_expected_uid": "uid-mch",
-        },  # missing captured_at
-        {
-            "reason": "csv_absent",
-            "discovery_method": "olm_csv_owned_mch_crd_install_deployment_v1",
-            "captured_at": "2026-09-04T10:09:00Z",
-            "mch_teardown_key": MCH_KEY,
-            "mch_expected_uid": "uid-mch",
-        },  # missing evidence_summary
-        {
-            "reason": "csv_absent",
-            "discovery_method": "olm_csv_owned_mch_crd_install_deployment_v1",
-            "captured_at": "2026-09-04T10:09:00Z",
-            "evidence_summary": "x",
-            "mch_expected_uid": "uid-mch",
-        },  # missing teardown key
-        {
-            "reason": "csv_absent",
-            "discovery_method": "olm_csv_owned_mch_crd_install_deployment_v1",
-            "captured_at": "2026-09-04T10:09:00Z",
-            "evidence_summary": "x",
-            "mch_teardown_key": MCH_KEY,
-            "mch_expected_uid": "uid-other",
-        },  # mismatched UID
-    ],
+# The authoritative §10.2.3 malformed payload set. Same contract as
+# MALFORMED_OPERATOR_DEPLOYMENTS above.
+MALFORMED_OPERATOR_IDENTITY_UNAVAILABLE = (
+    {
+        "reason": "not_a_known_reason",
+        "discovery_method": "olm_csv_owned_mch_crd_install_deployment_v1",
+        "captured_at": "2026-09-04T10:09:00Z",
+        "evidence_summary": "no candidate CSV",
+        "mch_teardown_key": MCH_KEY,
+        "mch_expected_uid": "uid-mch",
+    },
+    {
+        "reason": "csv_absent",
+        "captured_at": "2026-09-04T10:09:00Z",
+        "evidence_summary": "no candidate CSV",
+        "mch_teardown_key": MCH_KEY,
+        "mch_expected_uid": "uid-mch",
+    },  # missing discovery_method
+    {
+        "reason": "csv_absent",
+        "discovery_method": "olm_csv_owned_mch_crd_install_deployment_v1",
+        "evidence_summary": "no candidate CSV",
+        "mch_teardown_key": MCH_KEY,
+        "mch_expected_uid": "uid-mch",
+    },  # missing captured_at
+    {
+        "reason": "csv_absent",
+        "discovery_method": "olm_csv_owned_mch_crd_install_deployment_v1",
+        "captured_at": "2026-09-04T10:09:00Z",
+        "mch_teardown_key": MCH_KEY,
+        "mch_expected_uid": "uid-mch",
+    },  # missing evidence_summary
+    {
+        "reason": "csv_absent",
+        "discovery_method": "olm_csv_owned_mch_crd_install_deployment_v1",
+        "captured_at": "2026-09-04T10:09:00Z",
+        "evidence_summary": "x",
+        "mch_expected_uid": "uid-mch",
+    },  # missing teardown key
+    {
+        "reason": "csv_absent",
+        "discovery_method": "olm_csv_owned_mch_crd_install_deployment_v1",
+        "captured_at": "2026-09-04T10:09:00Z",
+        "evidence_summary": "x",
+        "mch_teardown_key": MCH_KEY,
+        "mch_expected_uid": "uid-other",
+    },  # mismatched UID
 )
+
+
+@pytest.mark.parametrize("unavailable", MALFORMED_OPERATOR_IDENTITY_UNAVAILABLE)
 def test_malformed_operator_identity_unavailable_fails_closed(state_manager, unavailable):
     with pytest.raises(MalformedTeardownRecord):
         RunRecord(state_manager).record_teardown_phase(

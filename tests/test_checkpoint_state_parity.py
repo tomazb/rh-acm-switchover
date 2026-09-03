@@ -111,13 +111,23 @@ def test_every_malformed_completion_record_is_rejected_by_both_implementations()
 def _nested_identity_vectors():
     """Malformed payloads the shared completion-evidence vector set does not cover.
 
-    B1 declares its §10.2.2/§10.2.3 payloads inline in parametrize decorators rather
-    than as an exported list, so they are restated here — as stored mappings — to keep
-    the nested-identity rules and the four B1 decisions that no vector encodes under
-    the same both-sides comparison. Writer-side rules (identity immutability across two
-    writes) are read-only here and are covered by each side's own unit tests.
+    The §10.2.2/§10.2.3 members are generated from the two authoritative tuples in
+    tests/test_teardown_record.py — the very objects that file's own parametrize
+    consumes — so this fixture cannot drift from the Python side, and every one of
+    those payloads is checked against BOTH implementations rather than only Python.
+    The remaining members are the §10.2.4 record-level rules and the B1 decisions no
+    vector encodes. Writer-side rules (identity immutability across two writes) are
+    read-only here and are covered by each side's own unit tests.
     """
-    from tests.test_teardown_record import MCH_KEY, MCO_KEY, OBSERVED_AT, _identity, _unavailable
+    from tests.test_teardown_record import (
+        MALFORMED_OPERATOR_DEPLOYMENTS,
+        MALFORMED_OPERATOR_IDENTITY_UNAVAILABLE,
+        MCH_KEY,
+        MCO_KEY,
+        OBSERVED_AT,
+        _identity,
+        _unavailable,
+    )
 
     acm_namespace_key = "v1/Namespace//open-cluster-management"
 
@@ -126,7 +136,8 @@ def _nested_identity_vectors():
         stored.update(overrides)
         return stored
 
-    return [
+    vectors = [
+        # --- B1 decisions and §10.2.4 record rules that no vector list encodes ------
         (
             "unknown_top_level_field",
             MCO_KEY,
@@ -165,7 +176,6 @@ def _nested_identity_vectors():
                 },
             },
         ),
-        ("partial_nested_identity", MCH_KEY, _mch(operator_deployment={"uid": "dep-uid-1"})),
         (
             "both_identity_outcomes",
             MCH_KEY,
@@ -177,53 +187,18 @@ def _nested_identity_vectors():
             MCO_KEY,
             {"expected_uid": "u", "phase": "delete_started", "operator_deployment": _identity()},
         ),
-        ("identity_wrong_discovery_method", MCH_KEY, _mch(operator_deployment=_identity(discovery_method="guessed"))),
-        ("identity_empty_uid", MCH_KEY, _mch(operator_deployment=_identity(uid=""))),
-        ("identity_non_string_uid", MCH_KEY, _mch(operator_deployment=_identity(uid=7))),
-        (
-            "identity_csv_namespace_mismatch",
-            MCH_KEY,
-            _mch(
-                operator_deployment=_identity(
-                    csv={
-                        "namespace": "elsewhere",
-                        "name": "acm.v2.13.0",
-                        "uid": "csv-uid-1",
-                        "owned_crd": "multiclusterhubs.operator.open-cluster-management.io",
-                    }
-                )
-            ),
-        ),
-        (
-            "identity_wrong_owned_crd",
-            MCH_KEY,
-            _mch(
-                operator_deployment=_identity(
-                    csv={
-                        "namespace": "open-cluster-management",
-                        "name": "acm.v2.13.0",
-                        "uid": "csv-uid-1",
-                        "owned_crd": "somethingelse.example.com",
-                    }
-                )
-            ),
-        ),
-        ("identity_backref_uid_mismatch", MCH_KEY, _mch(operator_deployment=_identity(mch_expected_uid="uid-other"))),
-        (
-            "unavailable_reason_not_enumerated",
-            MCH_KEY,
-            _mch(operator_identity_unavailable=_unavailable("not_a_known_reason")),
-        ),
-        (
-            "unavailable_missing_evidence_summary",
-            MCH_KEY,
-            _mch(
-                operator_identity_unavailable={
-                    key: value for key, value in _unavailable().items() if key != "evidence_summary"
-                }
-            ),
-        ),
     ]
+
+    # --- the authoritative §10.2.2 / §10.2.3 payloads, member for member ------------
+    vectors.extend(
+        (f"malformed_operator_deployment_{index}", MCH_KEY, _mch(operator_deployment=identity))
+        for index, identity in enumerate(MALFORMED_OPERATOR_DEPLOYMENTS)
+    )
+    vectors.extend(
+        (f"malformed_operator_identity_unavailable_{index}", MCH_KEY, _mch(operator_identity_unavailable=unavailable))
+        for index, unavailable in enumerate(MALFORMED_OPERATOR_IDENTITY_UNAVAILABLE)
+    )
+    return vectors
 
 
 def test_every_nested_identity_payload_is_rejected_by_both_implementations():
