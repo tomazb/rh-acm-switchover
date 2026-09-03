@@ -12,6 +12,7 @@ runs every member through this implementation as well.
 """
 
 import copy
+from typing import Any
 
 import pytest
 
@@ -72,7 +73,9 @@ def _ns_absent(namespace_key):
 
 def _record_completed(checkpoint, key, **overrides):
     """Write a valid completed record, defaulting to the MCO namespace-present mode."""
-    fields = {
+    # Annotated because the literal mixes strings with mappings: without it the popped
+    # expected_uid/phase infer as Collection[str] and fail the repository mypy gate.
+    fields: dict[str, Any] = {
         "expected_uid": "u",
         "phase": "completed",
         "observed_at": OBSERVED_AT,
@@ -86,7 +89,7 @@ def _record_completed(checkpoint, key, **overrides):
 
 
 def _identity(**overrides):
-    identity = {
+    identity: dict[str, Any] = {
         "namespace": "open-cluster-management",
         "name": "multiclusterhub-operator",
         "uid": "dep-uid-1",
@@ -118,7 +121,7 @@ def _unavailable(reason="csv_absent"):
 
 def _record_mch(checkpoint, **overrides):
     # A non-completed record carries NO completion evidence at all (10.2.1a).
-    fields = {"phase": "delete_started", "operator_deployment": _identity()}
+    fields: dict[str, Any] = {"phase": "delete_started", "operator_deployment": _identity()}
     fields.update(overrides)
     phase = fields.pop("phase")
     record_teardown_phase(checkpoint, MCH_KEY, "uid-mch", phase, **fields)
@@ -150,7 +153,7 @@ def test_record_is_written_under_the_named_key_only():
 
 
 def test_missing_operational_data_is_created_by_the_writer():
-    checkpoint = {}
+    checkpoint: dict = {}
     record_teardown_phase(checkpoint, MCO_KEY, "uid-1", "delete_started")
     assert teardown_record(checkpoint, MCO_KEY)["expected_uid"] == "uid-1"
 
@@ -984,7 +987,7 @@ def test_a_captured_identity_is_never_downgraded_to_unavailable():
 def test_identity_is_immutable_on_a_completed_record_with_unchanged_evidence():
     """13 case D: byte-identical evidence does not license a rebound identity."""
     checkpoint = _checkpoint()
-    completed = {
+    completed: dict[str, Any] = {
         "observed_at": OBSERVED_AT,
         "resource_versions": {"drain_namespace": "88190", "drain_pods": "88219", "operator_deployment": "88203"},
         "absence_proofs": {"target_cr": _cr_absent(MCH_KEY)},
