@@ -132,10 +132,24 @@ def _nested_identity_vectors():
             MCO_KEY,
             {"expected_uid": "u", "phase": "delete_started", "surprise": 1},
         ),
+        # A stored null is a third representation of "absent" that neither side may
+        # accept. The payloads are identity fields, not evidence fields, because the
+        # evidence fields are additionally type-checked: `resource_versions: None`
+        # fails for a second, unrelated reason and so proves nothing about this rule.
         (
-            "stored_null_evidence_field",
+            "stored_null_identity_field",
+            MCH_KEY,
+            {
+                "expected_uid": "uid-mch",
+                "phase": "delete_started",
+                "operator_deployment": None,
+                "operator_identity_unavailable": _unavailable(),
+            },
+        ),
+        (
+            "stored_null_identity_field_on_a_non_identity_kind",
             MCO_KEY,
-            {"expected_uid": "u", "phase": "delete_started", "resource_versions": None},
+            {"expected_uid": "u", "phase": "delete_started", "operator_deployment": None},
         ),
         (
             "drain_namespace_proof_naming_another_familys_namespace",

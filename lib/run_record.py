@@ -330,8 +330,11 @@ class RunRecord:
             # including a stored null, [] or "" -- is corruption, and treating it as
             # "no records" would silently skip the expected_uid immutability guard.
             raise MalformedTeardownRecord(f"{_KEY_TEARDOWN_RECORDS} must be a mapping, got {records!r}")
-        stored_previous = records.get(record.key)
-        previous = None if stored_previous is None else validate_stored(record.key, stored_previous)
+        # Presence, not the value, decides whether a previous record exists: a slot
+        # stored as null is corruption, and reading it as "no previous" would skip the
+        # expected_uid immutability guard on the write path while the reader refuses to
+        # load it (controller ruling C14). validate_stored rejects the null itself.
+        previous = validate_stored(record.key, records[record.key]) if record.key in records else None
         validate(record, previous)
         self._set(_KEY_TEARDOWN_RECORDS, {**records, record.key: to_stored(record)})
         self._state.flush_state()

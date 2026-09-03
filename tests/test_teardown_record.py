@@ -810,6 +810,22 @@ def test_a_corrupt_record_container_fails_closed_on_read(state_manager, containe
         record.all_teardown_records()
 
 
+def test_a_null_record_slot_fails_the_write_not_only_the_read(state_manager):
+    """A record slot stored as null is corruption, not "no record yet".
+
+    `records.get(key)` would read it as absent, so the writer would rebind
+    expected_uid over a slot the reader refuses to load. Presence decides.
+    """
+    state_manager._set_config("decommission_teardown_records", {MCO_KEY: None})
+    record = RunRecord(state_manager)
+    with pytest.raises(MalformedTeardownRecord):
+        record.teardown_record(MCO_KEY)
+    with pytest.raises(MalformedTeardownRecord):
+        record.record_teardown_phase(
+            TeardownRecord(key=MCO_KEY, expected_uid="uid-1", phase=TeardownPhase.DELETE_STARTED)
+        )
+
+
 @pytest.mark.parametrize("container", [[], "", 0, None, [1], "x"], ids=repr)
 def test_a_corrupt_record_container_fails_closed_on_write(state_manager, container):
     """The writer loads `previous` from the same container, so it fails closed too."""

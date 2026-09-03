@@ -654,7 +654,14 @@ def record_teardown_phase(
             # a durable record behind the validator's back.
             stored[name] = copy.deepcopy(value)
 
-    validate_stored(key, stored, previous=records.get(key))
+    # A record slot present but stored as null is corruption, not "no previous"
+    # (controller ruling C14): `records.get(key)` would read it as absent and the
+    # expected_uid immutability guard would be skipped on the write path, while the
+    # reader refuses to load it. Presence, not the value, decides.
+    previous = records[key] if key in records else None
+    if key in records and previous is None:
+        _fail(f"teardown record {key!r} must be a mapping, got None")
+    validate_stored(key, stored, previous=previous)
 
     data = checkpoint.get("operational_data")
     if not isinstance(data, dict):

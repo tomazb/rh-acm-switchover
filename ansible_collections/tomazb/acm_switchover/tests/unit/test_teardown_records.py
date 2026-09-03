@@ -489,13 +489,65 @@ def test_an_unknown_top_level_field_fails_closed():
         )
 
 
-def test_a_stored_null_evidence_field_is_malformed_not_absent():
+@pytest.mark.parametrize(
+    "key, stored",
+    [
+        # An identity field stored as null. Remove the null rule and the
+        # exactly-one-outcome check reads `operator_deployment` as ABSENT, so this
+        # record is accepted here while lib/teardown_record.py rejects it. No other
+        # rule covers it: the evidence fields are additionally type-checked, but the
+        # identity fields are tested for presence with `is not None`, which is
+        # precisely what a stored null subverts.
+        (
+            MCH_KEY,
+            {
+                "expected_uid": "uid-mch",
+                "phase": "delete_started",
+                "operator_deployment": None,
+                "operator_identity_unavailable": _unavailable(),
+            },
+        ),
+        # The same hole on a kind that may carry no identity field at all.
+        (MCO_KEY, {"expected_uid": "u", "phase": "delete_started", "operator_deployment": None}),
+        # The other identity field, so neither name is protected by accident.
+        (
+            MCH_KEY,
+            {
+                "expected_uid": "uid-mch",
+                "phase": "delete_started",
+                "operator_deployment": _identity(),
+                "operator_identity_unavailable": None,
+            },
+        ),
+    ],
+    ids=["deployment_null_beside_an_unavailable", "deployment_null_on_a_non_identity_kind", "unavailable_null"],
+)
+def test_a_stored_null_field_is_malformed_not_absent(key, stored):
     """10.2.1a: an absent field is omitted entirely. A stored null is a third
-    representation the reader must not silently accept as absence."""
+    representation the reader must not silently accept as absence.
+
+    Every payload here is one the rest of the rule set ACCEPTS once the null rule is
+    removed, so this test actually discriminates (verified by mutation). Two shapes
+    deliberately do not appear, because they prove nothing about this rule: a null in
+    a completion-evidence field, which the evidence type checks reject anyway, and a
+    null identity field at `completed`, which the §10.2.1d key-set check rejects via
+    its own `"operator_deployment" in stored` presence test.
+    """
     with pytest.raises(MalformedTeardownRecord):
-        teardown_record(
-            _checkpoint({MCO_KEY: {"expected_uid": "u", "phase": "delete_started", "resource_versions": None}}), MCO_KEY
-        )
+        teardown_record(_checkpoint({key: stored}), key)
+
+
+def test_a_null_record_slot_fails_the_write_not_only_the_read():
+    """Controller ruling C14: `{key: null}` inside a valid container is corruption.
+
+    Reading `records.get(key)` as "no previous" would let the writer rebind
+    expected_uid over a record slot the reader refuses to load.
+    """
+    checkpoint = _checkpoint({MCO_KEY: None})
+    with pytest.raises(MalformedTeardownRecord):
+        teardown_record(checkpoint, MCO_KEY)
+    with pytest.raises(MalformedTeardownRecord):
+        record_teardown_phase(checkpoint, MCO_KEY, "uid-1", "delete_started")
 
 
 # --- 10.2.1d valid per-family, per-mode records -----------------------------------

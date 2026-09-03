@@ -75,9 +75,12 @@ def test_teardown_record_key_is_never_named_in_role_or_playbook_yaml():
     """
     offenders = []
     for directory in (ROLES_DIR, PLAYBOOKS_DIR):
-        for path in sorted(directory.rglob("*.yml")):
-            if KEY_DECOMMISSION_TEARDOWN_RECORDS in path.read_text(encoding="utf-8"):
-                offenders.append(str(path.relative_to(COLLECTION_ROOT)))
+        # Both suffixes: roles/**/*.yaml files exist, so a tasks/main.yaml would
+        # otherwise evade this scan (controller ruling C15).
+        for pattern in ("*.yml", "*.yaml"):
+            for path in sorted(directory.rglob(pattern)):
+                if KEY_DECOMMISSION_TEARDOWN_RECORDS in path.read_text(encoding="utf-8"):
+                    offenders.append(str(path.relative_to(COLLECTION_ROOT)))
     assert not offenders, (
         f"The '{KEY_DECOMMISSION_TEARDOWN_RECORDS}' operational_data key is owned by "
         f"module_utils/checkpoint.py and must not be named in YAML. Offenders: {offenders}"
