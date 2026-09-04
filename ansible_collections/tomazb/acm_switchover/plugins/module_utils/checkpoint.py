@@ -29,6 +29,11 @@ KNOWN_PHASES = (
     "activation",
     "post_activation",
     "finalization",
+    # Decommission is a separate entry point, not a switchover phase, but it needs a
+    # durable phase so the identity map is persisted before the first DELETE. LAST is
+    # semantically required: reset_completed_phases_from prunes the named phase and
+    # everything downstream of it, and decommission is downstream of finalization.
+    "decommission",
 )
 
 CHECKPOINT_VALID_STATUSES = frozenset({"enter", "pass", "fail", "reset"})

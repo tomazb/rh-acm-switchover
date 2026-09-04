@@ -65,6 +65,37 @@
     - _acm_decommission_records_outcomes | bool
     - not (acm_switchover_decommission_effective_has_observability | bool)
 
+# The identity map must be durable BEFORE the first DELETE. PR B establishes the
+# phase and the availability requirement only; PRs C, D and E write teardown records
+# inside it, which is why neither transition carries operational_data.
+- name: Enter the decommission checkpoint phase
+  tomazb.acm_switchover.checkpoint_phase:
+    phase: decommission
+    checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+    status: enter
+  register: _acm_decommission_checkpoint_enter
+  when:
+    - not ansible_check_mode
+    - acm_switchover_execution.checkpoint.enabled | default(false) | bool
+
+# Fail closed: an execute-mode run that cannot persist its identity map issues no
+# DELETE at all. A dry run and a native check-mode run require no durable state and
+# write none, so neither is gated here.
+- name: Require durable checkpoint state before the first decommission delete
+  ansible.builtin.assert:
+    that:
+      - acm_switchover_execution.checkpoint.enabled | default(false) | bool
+      # Tied to the enter having actually run, not merely to the config being set, so
+      # a later extra condition on that task's `when` cannot reopen the hole.
+      - not ((_acm_decommission_checkpoint_enter | default({})).skipped | default(false))
+    fail_msg: >-
+      Execute-mode decommission requires durable checkpoint state before the first
+      delete: set acm_switchover_execution.checkpoint (enabled: true, backend: file,
+      path: <file>), or run with acm_switchover_execution.mode set to dry_run.
+  when:
+    - not ansible_check_mode
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+
 - name: Execute decommission substeps
   block:
     - name: Run the Observability decommission substep
@@ -196,3 +227,15 @@
       when:
         - not ansible_check_mode
         - _acm_decommission_summary_path | default('') | length > 0
+
+# Deliberately at top level AFTER the block, not inside its `always`: a failed substep
+# propagates out of the block and must leave the phase incomplete. `always` would mark
+# a failed teardown as a passed phase.
+- name: Exit the decommission checkpoint phase
+  tomazb.acm_switchover.checkpoint_phase:
+    phase: decommission
+    checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+    status: pass
+  when:
+    - not ansible_check_mode
+    - acm_switchover_execution.checkpoint.enabled | default(false) | bool

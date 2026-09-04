@@ -158,8 +158,13 @@ def _run_checkpoint_enter(tmp_path: pathlib.Path, checkpoint_config: dict) -> su
 def test_full_checkpoint_reset_drops_the_decommission_teardown_records(tmp_path):
     """Documented R4-05 behaviour: a full reset discards the durable teardown records.
 
-    A rerun then finds no record for the resource key and takes the clean-skip
-    path on a CR that is already absent. This is asserted, not mitigated.
+    What is asserted here is the record side: after a full reset no record exists
+    for the resource key, so a rerun has no completion evidence to consult and
+    treats an already-absent CR as a clean skip. The rerun's own behaviour is NOT
+    asserted here -- at the B stage the decommission role reads no teardown record
+    (PRs C, D and E add the readers), so the causal second half is PR C's to pin.
+    This is documented, not mitigated: no new reset mechanism is introduced and the
+    accepted R4-05 reset-laundering limitation is unchanged.
     """
     checkpoint_path = tmp_path / "checkpoint.json"
     _seed_checkpoint(checkpoint_path, _VALID_RECORD)

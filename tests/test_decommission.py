@@ -4,6 +4,7 @@ Tests cover Decommission class for removing ACM from old primary hub.
 """
 
 import inspect
+import json
 import logging
 import sys
 from pathlib import Path
@@ -972,6 +973,40 @@ class TestActualChangeTruth:
         assert isinstance(result.would_change, bool)
         assert decommission_dry_run.run_record.all_teardown_records() == {}
         mock_primary_client.delete_custom_resource.assert_not_called()
+
+    def test_decommission_requires_a_run_record(self, mock_primary_client):
+        """``run_record`` is keyword-only and required.
+
+        A default would let a caller silently opt out of the durable channel, and a
+        decommission without durable state cannot satisfy the deletion boundary.
+        Kill condition: giving ``run_record`` a default, or making it positional.
+        """
+        with pytest.raises(TypeError):
+            Decommission(mock_primary_client, True)
+
+    def test_dry_run_writes_nothing_to_state(self, decommission_dry_run, state_manager):
+        """A preview writes NOTHING durable -- not only no teardown record.
+
+        Broader than ``test_dry_run_records_no_outcome_and_never_reports_actual_change``,
+        which only inspects the teardown-record channel. Kill condition: any state write
+        on the dry-run path, through ``RunRecord`` or around it.
+        """
+        before = json.dumps(state_manager.capture_state_snapshot(), sort_keys=True)
+        decommission_dry_run.decommission(interactive=False)
+        assert json.dumps(state_manager.capture_state_snapshot(), sort_keys=True) == before
+
+    def test_a_live_run_after_a_dry_run_reads_fresh_and_trusts_nothing(
+        self, decommission_dry_run, decommission_with_obs, state_manager, mock_primary_client
+    ):
+        """The live run performs its own reads instead of reusing preview observations.
+
+        Kill condition: caching a preview observation (on the shared state, or on the
+        RunRecord) and short-circuiting the live run's reads from it.
+        """
+        decommission_dry_run.decommission(interactive=False)
+        mock_primary_client.reset_mock()
+        decommission_with_obs.decommission(interactive=False)
+        assert mock_primary_client.method_calls, "the live run must perform its own reads"
 
     def test_dry_run_prediction_is_separate_from_actual_change(self, decommission_dry_run, monkeypatch):
         monkeypatch.setattr(decommission_dry_run, "_preview_substep", lambda substep: True)

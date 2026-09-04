@@ -23,6 +23,11 @@ from urllib.parse import unquote, urlsplit
 import yaml
 from yaml_contract_helpers import _flatten_tasks, _when_text
 
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
+    KNOWN_PHASES,
+    build_operation_identity,
+    reset_completed_phases_from,
+)
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
     DECOMMISSION_SUBSTEP_OUTCOMES,
 )
@@ -72,6 +77,9 @@ _READ_ONLY_ACTIONS = frozenset(
 
 #: The action that enters, exits, or writes checkpoint ``operational_data``.
 _CHECKPOINT_WRITER_MODULE = "tomazb.acm_switchover.checkpoint_phase"
+
+#: The task that refuses an execute-mode decommission without durable checkpoint state.
+_CHECKPOINT_GATE_TASK_NAME = "Require durable checkpoint state before the first decommission delete"
 
 
 def _include_file(task: dict) -> str:
@@ -187,14 +195,13 @@ def mutating_tasks(task_files: dict) -> list:
     ``_READ_ONLY_ACTIONS``. Block/rescue/always wrappers invoke no action and are skipped.
 
     The inversion widens the old denylist on purpose, so read the return value as
-    "everything that persists something". It already returns ``acm_report_artifact``
-    (a controller-side file write, which is why that task carries a check-mode guard),
-    and it WILL return ``tomazb.acm_switchover.checkpoint_phase`` the moment Task B5
-    wires it in -- the retired ``_MUTATING_MODULES`` denylist explicitly excluded that
-    module. B5 must therefore either guard its checkpoint tasks with
-    ``not ansible_check_mode`` or classify the action here deliberately; being surprised
-    by ``test_every_mutating_task_is_check_mode_guarded`` is not the intended outcome,
-    but neither is a checkpoint write slipping past it.
+    "everything that persists something". It returns ``acm_report_artifact``
+    (a controller-side file write, which is why that task carries a check-mode guard)
+    and, since Task B5 wired it in, ``tomazb.acm_switchover.checkpoint_phase`` -- the
+    retired ``_MUTATING_MODULES`` denylist explicitly excluded that module. It is NOT
+    in ``_READ_ONLY_ACTIONS``: it writes durable state, so classifying it read-only to
+    quiet ``test_every_mutating_task_is_check_mode_guarded`` would be a lie. B5's two
+    transitions satisfy that guardrail by carrying ``not ansible_check_mode``.
     """
     return [
         task
@@ -1114,13 +1121,32 @@ def run_decommission_role(
         checkpoint_path = workspace / "checkpoint.json"
         seeded_operational_data = {"harness_seed": "unchanged"}
         if checkpoint_available:
+            # Schema 2.0 with an established operation identity, NOT the schema 1.0
+            # record this harness first seeded. Once Task B5 wired `checkpoint_phase`
+            # into the role, `is_unsafe_legacy_checkpoint` refused a 1.0 record that
+            # carries completed phases, so every execute run failed on the enter. The
+            # identity is canonical (`_canonical_established_operation_identity`
+            # requires all nine fields, with only `collection_version` allowed empty),
+            # so the enter adopts it instead of demanding the preflight barrier.
             checkpoint_path.write_text(
                 json.dumps(
                     {
-                        "schema_version": "1.0",
+                        "schema_version": "2.0",
                         "phase": "finalization",
                         "completed_phases": ["preflight"],
                         "operational_data": seeded_operational_data,
+                        "operation_identity": build_operation_identity(
+                            hubs={
+                                "primary": {"context": "primary-hub"},
+                                "secondary": {"context": "secondary-hub"},
+                            },
+                            operation={},
+                            collection_version="",
+                            hub_identities={
+                                "primary": {"cluster_uid": "harness-primary-uid"},
+                                "secondary": {"cluster_uid": "harness-secondary-uid"},
+                            },
+                        ),
                         "errors": [],
                         "report_refs": [],
                         "created_at": "2026-01-01T00:00:00+00:00",
@@ -1241,7 +1267,16 @@ def run_decommission_role(
             "checkpoint": {
                 "operational_data": _read_operational_data(checkpoint_path),
                 "before_operational_data": before_operational_data,
-                "phases": [entry for entry in records if entry["module"] == "tomazb.acm_switchover.checkpoint_phase"],
+                "completed_phases": _read_completed_phases(checkpoint_path),
+                # SKIPPED entries are excluded on purpose: the harness callback emits a
+                # record for a skipped task too, so an unfiltered list would report the
+                # check-mode-guarded enter/exit as "phases that ran". `phases` means
+                # "checkpoint transitions this run actually performed".
+                "phases": [
+                    entry
+                    for entry in records
+                    if entry["module"] == "tomazb.acm_switchover.checkpoint_phase" and not entry["skipped"]
+                ],
             },
             "delete_calls": api.delete_calls,
             "gate": None,
@@ -1261,6 +1296,15 @@ def _read_operational_data(checkpoint_path) -> dict:
         return json.loads(checkpoint_path.read_text(encoding="utf-8")).get("operational_data", {})
     except ValueError:
         return {}
+
+
+def _read_completed_phases(checkpoint_path) -> list:
+    if not checkpoint_path.exists():
+        return []
+    try:
+        return json.loads(checkpoint_path.read_text(encoding="utf-8")).get("completed_phases", [])
+    except ValueError:
+        return []
 
 
 def test_every_substep_publishes_an_outcome():
@@ -1346,9 +1390,179 @@ def test_summary_artifact_writer_is_check_mode_guarded():
     assert "not ansible_check_mode" in _when_text(writer)
 
 
-def test_no_checkpoint_writer_exists_at_the_b_stage():
-    """PR B adds no checkpoint phase to the role; Task B5 owns that wiring."""
-    assert checkpoint_writer_tasks(decommission_task_files) == []
+def test_decommission_is_the_last_known_checkpoint_phase():
+    """The role can only enter a phase the action plugin accepts.
+
+    ``checkpoint_phase`` hard-rejects any phase outside ``KNOWN_PHASES``, so the
+    role's ``phase: decommission`` depends on this membership. LAST is load-bearing
+    too: ``reset_completed_phases_from`` prunes the named phase and everything after
+    it, and decommission is downstream of finalization -- inserting it anywhere else
+    would make a ``reset_from: finalization`` retain a completed decommission.
+
+    Kill condition: removing ``decommission`` from ``KNOWN_PHASES``, or moving it
+    ahead of ``finalization``.
+    """
+    assert KNOWN_PHASES[-1] == "decommission"
+    assert "decommission" not in reset_completed_phases_from(list(KNOWN_PHASES), "finalization")
+    assert reset_completed_phases_from(list(KNOWN_PHASES), "decommission") == list(KNOWN_PHASES[:-1])
+
+
+def test_the_role_has_exactly_two_checkpoint_transitions_and_records_nothing():
+    """B5 wires the phase and nothing else: an enter, an exit, no record write.
+
+    PRs C, D and E write teardown records INSIDE this phase. Until then a task
+    carrying ``operational_data`` would be a record write smuggled into B.
+
+    Kill condition: adding a third transition, changing either status, or attaching
+    ``operational_data`` to either task.
+    """
+    writers = checkpoint_writer_tasks(decommission_task_files)
+    assert [task["tomazb.acm_switchover.checkpoint_phase"]["status"] for task in writers] == ["enter", "pass"]
+    assert [task["tomazb.acm_switchover.checkpoint_phase"]["phase"] for task in writers] == [
+        "decommission",
+        "decommission",
+    ]
+    assert checkpoint_writer_tasks({"main": decommission_task_files["main"]}) == writers
+    for task in writers:
+        assert "operational_data" not in task["tomazb.acm_switchover.checkpoint_phase"]
+
+
+def test_role_enters_a_checkpoint_phase_before_the_first_teardown_include():
+    """The identity map must be durable BEFORE the first DELETE.
+
+    Kill condition: moving the enter task below any ``delete_*.yml`` include.
+    """
+    tasks = decommission_task_files["main"]
+    phase_index = index_of_task_using(tasks, _CHECKPOINT_WRITER_MODULE)
+    first_teardown_index = index_of_first_include(tasks, "delete_")
+    assert phase_index >= 0, "the decommission role must enter a checkpoint phase"
+    assert first_teardown_index >= 0
+    assert phase_index < first_teardown_index
+
+
+def test_the_checkpoint_availability_gate_precedes_the_first_teardown_include():
+    """The fail-closed gate is worthless if it runs after a delete.
+
+    Kill condition: moving the gate below any ``delete_*.yml`` include, or deleting it.
+    """
+    tasks = decommission_task_files["main"]
+    gate = task_named(tasks, _CHECKPOINT_GATE_TASK_NAME)
+    assert tasks.index(gate) < index_of_first_include(tasks, "delete_")
+    when = _when_text(gate)
+    assert "not ansible_check_mode" in when
+    assert "execute" in when
+
+
+def test_every_checkpoint_writer_task_is_guarded_by_check_mode():
+    """Check mode must persist NO checkpoint state.
+
+    Kill condition: dropping ``not ansible_check_mode`` from either transition.
+    """
+    writers = checkpoint_writer_tasks(decommission_task_files)
+    assert writers, "the decommission role must have checkpoint transitions to guard"
+    for task in writers:
+        assert "not ansible_check_mode" in _when_text(task)
+
+
+def test_execute_mode_fails_closed_when_checkpointing_is_unavailable():
+    """Execute mode without durable state issues NO delete and fails the play.
+
+    The brief asked for ``result["...decommission_result"]["status"] == "fail"``. The
+    gate fires BEFORE the substep block, so the block's ``always`` never publishes the
+    result fact and that key does not exist -- exactly as the pre-existing confirmed
+    gate behaves. Moving the gate inside the block to obtain a status would be worse:
+    B4's status derivation would publish ``pass`` for a play that failed. The failure
+    is therefore asserted on the channels that do exist.
+
+    Kill condition: deleting the gate, or weakening it so a missing checkpoint config
+    still reaches the deletes.
+    """
+    result = run_decommission_role(checkpoint_available=False, execution_mode="execute")
+
+    assert result["returncode"] != 0
+    assert result["delete_calls"] == []
+    assert result["checkpoint"]["phases"] == []
+    assert result["acm_switchover_decommission_result"] == {}
+    failed = [task for task in result["tasks"] if task["failed"]]
+    assert [task["name"] for task in failed] == [_CHECKPOINT_GATE_TASK_NAME]
+    assert "checkpoint" in json.dumps(failed[0]["result"]).lower()
+
+
+def test_check_mode_does_not_require_checkpointing_and_writes_nothing():
+    """A preview needs no durable state and leaves none.
+
+    Kill condition: dropping ``not ansible_check_mode`` from the gate (the preview
+    would fail), or from a transition (the preview would write checkpoint state).
+    """
+    result = run_decommission_role(checkpoint_available=False, check_mode=True)
+    checkpoint = result["checkpoint"]
+    assert result["returncode"] == 0
+    assert checkpoint["operational_data"] == checkpoint["before_operational_data"]
+    assert checkpoint["phases"] == []
+    assert result["delete_calls"] == []
+    assert result["acm_switchover_decommission_result"]["changed"] is False
+
+
+def test_dry_run_execution_mode_does_not_require_checkpointing():
+    """A dry run needs no durable state either.
+
+    Kill condition: gating on ``mode != 'dry_run'`` instead of ``mode == 'execute'``,
+    which would fail-close the validate mode too, or dropping the mode condition,
+    which would fail-close every dry run.
+    """
+    result = run_decommission_role(checkpoint_available=False, execution_mode="dry_run")
+    assert result["returncode"] == 0
+    assert result["acm_switchover_decommission_result"]["status"] != "fail"
+    assert result["delete_calls"] == []
+
+
+def test_a_dry_run_with_checkpointing_available_still_writes_no_checkpoint_state():
+    """The transitions run in dry-run mode but the action plugin persists nothing.
+
+    Kill condition: making either transition mutate durable state in a non-mutating
+    execution mode.
+    """
+    result = run_decommission_role(execution_mode="dry_run")
+    checkpoint = result["checkpoint"]
+    assert checkpoint["operational_data"] == checkpoint["before_operational_data"]
+    assert "decommission" not in checkpoint["completed_phases"]
+    assert result["delete_calls"] == []
+
+
+def test_a_clean_execute_run_completes_the_decommission_phase_durably():
+    """The phase is entered before the deletes and marked complete after them.
+
+    Kill condition: removing the exit transition, or removing ``decommission`` from
+    ``KNOWN_PHASES`` (the enter is then rejected and the play fails).
+    """
+    result = run_decommission_role()
+    checkpoint = result["checkpoint"]
+
+    assert result["returncode"] == 0
+    assert result["acm_switchover_decommission_result"]["status"] == "pass"
+    assert result["delete_calls"], "the clean execute run must actually delete something"
+    assert [entry["result"].get("checkpoint", {}).get("phase_status") for entry in checkpoint["phases"]] == [
+        None,
+        "pass",
+    ]
+    assert "decommission" in checkpoint["completed_phases"]
+    # The enter must not clobber operational_data written by earlier phases.
+    assert checkpoint["operational_data"]["harness_seed"] == "unchanged"
+
+
+def test_a_failed_substep_leaves_the_decommission_phase_incomplete():
+    """A failed teardown must never be recorded as a completed phase.
+
+    Kill condition: moving the exit transition inside the block's ``always``, where it
+    would run after a failed substep and mark the phase passed.
+    """
+    result = run_decommission_role(observability_outcome="failed")
+    checkpoint = result["checkpoint"]
+
+    assert result["returncode"] != 0
+    assert result["acm_switchover_decommission_result"]["status"] == "fail"
+    assert "decommission" not in checkpoint["completed_phases"]
+    assert [entry["result"].get("checkpoint", {}).get("phase_status") for entry in checkpoint["phases"]] == [None]
 
 
 def test_actual_change_is_never_derived_from_check_mode():
@@ -1495,14 +1709,13 @@ def test_b_stage_check_mode_reports_no_actual_or_speculative_change():
 
 
 def test_b_stage_check_mode_writes_no_checkpoint_or_outcome():
-    """At the B stage only the ``substeps == {}`` conjunct discriminates.
+    """All three conjuncts discriminate now that Task B5 wired the checkpoint phase.
 
-    The role contains no checkpoint writer yet (Task B5 adds one), so an execute run
-    and a failed run also leave ``operational_data`` untouched and ``phases`` empty.
-    Those two conjuncts are kept as the assertion B5 inherits -- once the writer exists
-    they become real -- but they must not be read as coverage today.
-    ``test_no_checkpoint_writer_exists_at_the_b_stage`` is what actually pins their
-    premise, and the discriminating rule here is that check mode records no outcome.
+    The role has two ``checkpoint_phase`` transitions, and
+    ``test_a_clean_execute_run_completes_the_decommission_phase_durably`` proves an
+    execute run does write ``completed_phases`` and does run them. So an unguarded
+    transition really would show up here as a non-empty ``phases`` -- this is no
+    longer the inherited placeholder it was at the start of the B stage.
     """
     result = run_decommission_role(check_mode=True)
     checkpoint = result["checkpoint"]
