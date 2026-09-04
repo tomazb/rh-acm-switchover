@@ -16,7 +16,7 @@ from kubernetes.client.exceptions import ApiException
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import modules.decommission as decommission_module
-from lib.constants import ACM_NAMESPACE, OBSERVABILITY_NAMESPACE
+from lib.constants import ACM_NAMESPACE, LOCAL_CLUSTER_NAME, OBSERVABILITY_NAMESPACE
 from lib.decommission_outcome import DecommissionResult, SubstepExecution, SubstepOutcome
 from lib.exceptions import SwitchoverError
 from lib.run_record import RunRecord
@@ -59,6 +59,25 @@ def decommission_no_obs(mock_primary_client, state_manager):
         has_observability=False,
         run_record=RunRecord(state_manager),
     )
+
+
+@pytest.fixture
+def primary_with_all_resources(mock_primary_client):
+    """Primary hub mock where every decommission target still exists."""
+
+    def _list_custom_resources(*args, **kwargs):
+        if kwargs.get("plural") == "multiclusterobservabilities":
+            return [{"metadata": {"name": "observability"}}]
+        if kwargs.get("plural") == "multiclusterhubs":
+            return [{"metadata": {"name": "multiclusterhub", "namespace": ACM_NAMESPACE}}]
+        return []
+
+    mock_primary_client.list_custom_resources.side_effect = _list_custom_resources
+    mock_primary_client.list_managed_clusters.return_value = [
+        {"metadata": {"name": "cluster1"}},
+        {"metadata": {"name": LOCAL_CLUSTER_NAME}},
+    ]
+    return mock_primary_client
 
 
 @pytest.fixture
@@ -970,6 +989,215 @@ class TestActualChangeTruth:
             annotation = inspect.signature(getattr(Decommission, name)).return_annotation
             assert annotation not in (SubstepOutcome, "SubstepOutcome")
             assert "tuple" not in str(annotation).lower()
+
+
+@pytest.mark.unit
+class TestDeleteApiErrorsReachTheResult:
+    """A rejected DELETE is an expected operational failure, not an escaping exception.
+
+    Before this conversion a non-404 ApiException escaped ``decommission()``, so the
+    DecommissionResult was never constructed and the aggregated ``changed`` flag died
+    with the stack frame: an operator whose MCO had already been destroyed was told
+    only "Unexpected error: (409)". Converting at the raise site keeps the failure on
+    the one execution-result channel.
+    """
+
+    @staticmethod
+    def _api_error(status, reason, body='{"message":"raw body must never be shown"}'):
+        exc = ApiException(status=status, reason=reason)
+        exc.body = body
+        return exc
+
+    @patch("modules.decommission.wait_for_condition")
+    def test_observability_delete_rejection_fails_with_the_earlier_delete_reported(
+        self, mock_wait, decommission_with_obs, mock_primary_client, caplog
+    ):
+        """The first MCO was destroyed; the second is rejected. Both facts must survive."""
+        mock_wait.return_value = True
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "obs-one"}},
+            {"metadata": {"name": "obs-two"}},
+        ]
+        mock_primary_client.delete_custom_resource.side_effect = [True, self._api_error(403, "Forbidden")]
+
+        with caplog.at_level(logging.ERROR):
+            execution = decommission_with_obs._delete_observability()
+
+        assert execution.outcome is SubstepOutcome.FAILED
+        assert execution.changed is True
+        assert "403" in caplog.text and "Forbidden" in caplog.text
+        assert "raw body must never be shown" not in caplog.text
+
+    def test_observability_delete_rejection_with_no_prior_delete_reports_no_change(
+        self, decommission_with_obs, mock_primary_client, caplog
+    ):
+        mock_primary_client.list_custom_resources.return_value = [{"metadata": {"name": "obs-one"}}]
+        mock_primary_client.delete_custom_resource.side_effect = self._api_error(409, "Conflict")
+
+        with caplog.at_level(logging.ERROR):
+            execution = decommission_with_obs._delete_observability()
+
+        assert execution.outcome is SubstepOutcome.FAILED
+        assert execution.changed is False
+        assert "409" in caplog.text and "Conflict" in caplog.text
+
+    @patch("modules.decommission.wait_for_condition")
+    def test_managed_cluster_delete_rejection_reports_the_earlier_delete(
+        self, mock_wait, decommission_with_obs, mock_primary_client, caplog
+    ):
+        mock_wait.return_value = True
+        mock_primary_client.list_managed_clusters.return_value = [
+            {"metadata": {"name": "cluster1"}},
+            {"metadata": {"name": "cluster2"}},
+        ]
+        mock_primary_client.list_custom_resources.return_value = []  # no Hive ClusterDeployments
+        mock_primary_client.delete_custom_resource.side_effect = [True, self._api_error(403, "Forbidden")]
+
+        with caplog.at_level(logging.ERROR):
+            execution = decommission_with_obs._delete_managed_clusters()
+
+        assert execution.outcome is SubstepOutcome.FAILED
+        assert execution.changed is True
+        assert "403" in caplog.text and "Forbidden" in caplog.text
+        assert "raw body must never be shown" not in caplog.text
+
+    def test_managed_cluster_delete_rejection_with_no_prior_delete_reports_no_change(
+        self, decommission_with_obs, mock_primary_client, caplog
+    ):
+        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1"}}]
+        mock_primary_client.list_custom_resources.return_value = []
+        mock_primary_client.delete_custom_resource.side_effect = self._api_error(409, "Conflict")
+
+        with caplog.at_level(logging.ERROR):
+            execution = decommission_with_obs._delete_managed_clusters()
+
+        assert execution.outcome is SubstepOutcome.FAILED
+        assert execution.changed is False
+
+    @patch("modules.decommission.wait_for_condition")
+    def test_multiclusterhub_delete_rejection_reports_the_earlier_delete(
+        self, mock_wait, decommission_with_obs, mock_primary_client, caplog
+    ):
+        mock_wait.return_value = True
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "mch-one", "namespace": ACM_NAMESPACE}},
+            {"metadata": {"name": "mch-two", "namespace": ACM_NAMESPACE}},
+        ]
+        mock_primary_client.delete_custom_resource.side_effect = [True, self._api_error(403, "Forbidden")]
+
+        with caplog.at_level(logging.ERROR):
+            execution = decommission_with_obs._delete_multiclusterhub()
+
+        assert execution.outcome is SubstepOutcome.FAILED
+        assert execution.changed is True
+        assert "403" in caplog.text and "Forbidden" in caplog.text
+        assert "raw body must never be shown" not in caplog.text
+
+    def test_multiclusterhub_delete_rejection_with_no_prior_delete_reports_no_change(
+        self, decommission_with_obs, mock_primary_client, caplog
+    ):
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "mch-one", "namespace": ACM_NAMESPACE}}
+        ]
+        mock_primary_client.delete_custom_resource.side_effect = self._api_error(409, "Conflict")
+
+        with caplog.at_level(logging.ERROR):
+            execution = decommission_with_obs._delete_multiclusterhub()
+
+        assert execution.outcome is SubstepOutcome.FAILED
+        assert execution.changed is False
+
+    @patch("modules.decommission.wait_for_condition")
+    def test_a_rejected_delete_never_escapes_the_aggregator(
+        self, mock_wait, decommission_with_obs, mock_primary_client
+    ):
+        """The probed scenario: MCO destroyed, then a ManagedCluster DELETE is rejected.
+
+        The operator must be told the MCO is gone, which is only possible if the
+        DecommissionResult is constructed at all.
+        """
+        mock_wait.return_value = True
+        mock_primary_client.list_custom_resources.side_effect = [
+            [{"metadata": {"name": "observability"}}],  # MCO
+            [],  # Hive ClusterDeployments
+        ]
+        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1"}}]
+        mock_primary_client.get_pods.return_value = []
+        mock_primary_client.delete_custom_resource.side_effect = [True, self._api_error(409, "Conflict")]
+
+        result = decommission_with_obs.decommission(interactive=False)
+
+        assert result.succeeded is False
+        assert result.changed is True, "the destroyed MCO must be reported despite the later rejection"
+        assert result.substeps["observability"] is SubstepOutcome.COMPLETED
+        assert result.substeps["managed_clusters"] is SubstepOutcome.FAILED
+        assert result.not_attempted == ("multiclusterhub",)
+        assert "observability" in "\n".join(result.summary_lines())
+
+    @patch("modules.decommission.wait_for_condition")
+    def test_a_404_from_the_real_client_is_indistinguishable_and_reports_change(
+        self, mock_wait, decommission_with_obs, mock_primary_client
+    ):
+        """Pin the REAL client behaviour, which PR B cannot make exact.
+
+        ``KubeClient.delete_custom_resource`` is declared
+        ``@api_call(not_found_value=True)``, so on a 404 it RETURNS ``True`` -- exactly
+        what it returns for a delete the API performed. The call site cannot tell the
+        two apart, so an already-absent object reports ``changed=True``. PR C's
+        UID-preconditioned guarded delete is the explicit failing point for this
+        assertion.
+
+        Note that ``test_delete_observability_ignores_404_delete_errors`` models a 404
+        as a RAISED ApiException; the production client never raises on 404, so that
+        path is mock-only.
+        """
+        mock_wait.return_value = True
+        mock_primary_client.list_custom_resources.return_value = [{"metadata": {"name": "observability"}}]
+        mock_primary_client.delete_custom_resource.return_value = True  # real client's 404 answer
+
+        execution = decommission_with_obs._delete_observability()
+
+        assert execution.outcome is SubstepOutcome.COMPLETED
+        assert execution.changed is True
+
+
+@pytest.mark.unit
+class TestDryRunPrediction:
+    """The read-only predictor must actually predict, not merely return False."""
+
+    @pytest.mark.parametrize("substep", ["observability", "managed_clusters", "multiclusterhub"])
+    def test_preview_reports_true_when_the_resource_is_present(
+        self, decommission_dry_run, primary_with_all_resources, substep
+    ):
+        assert decommission_dry_run._preview_substep(substep) is True
+
+    def test_preview_ignores_local_cluster(self, decommission_dry_run, mock_primary_client):
+        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": LOCAL_CLUSTER_NAME}}]
+
+        assert decommission_dry_run._preview_substep("managed_clusters") is False
+
+    def test_preview_reports_false_when_nothing_is_present(self, decommission_dry_run):
+        for substep in ("observability", "managed_clusters", "multiclusterhub"):
+            assert decommission_dry_run._preview_substep(substep) is False
+
+    def test_preview_rejects_an_unknown_substep(self, decommission_dry_run):
+        with pytest.raises(KeyError):
+            decommission_dry_run._preview_substep("not_a_substep")
+
+    @patch("modules.decommission.wait_for_condition")
+    def test_dry_run_predicts_change_without_making_any(
+        self, mock_wait, decommission_dry_run, primary_with_all_resources
+    ):
+        result = decommission_dry_run.decommission(interactive=False)
+
+        assert result.would_change is True
+        assert result.changed is False
+        assert result.succeeded is True
+        assert result.substeps == {}
+        assert result.not_attempted == ("observability", "managed_clusters", "multiclusterhub")
+        primary_with_all_resources.delete_custom_resource.assert_not_called()
+        primary_with_all_resources.get_pods.assert_not_called()
+        mock_wait.assert_not_called()
 
 
 @pytest.mark.integration

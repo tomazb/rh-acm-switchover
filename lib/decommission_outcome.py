@@ -43,8 +43,16 @@ class SubstepExecution:
 
     ``changed`` is accepted mutation performed during THIS invocation -- never
     requested work, predicted work, a resumed obligation, a precondition noop,
-    an already-absent resource, check mode, or dry run. A DELETE the API
-    answered with 404 is not a change.
+    check mode, or dry run.
+
+    At the B stage ``changed`` means the delete call was accepted by the client,
+    which is as exact as the current primitive allows: ``delete_custom_resource``
+    is declared ``@api_call(not_found_value=True)``, so it returns ``True`` both
+    for a delete the API performed and for a 404 on an already-absent object,
+    and the two are indistinguishable at the call site. A resource someone else
+    removed concurrently can therefore report ``changed=True``. PR C's
+    UID-preconditioned guarded delete reports the precise outcome and closes
+    this; adding that primitive is out of scope for PR B.
     """
 
     outcome: SubstepOutcome

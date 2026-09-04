@@ -257,10 +257,6 @@ class Decommission:
             for mco in mcos:
                 mco_name = mco.get("metadata", {}).get("name")
 
-                if self.dry_run:
-                    logger.info("[DRY-RUN] Would delete MultiClusterObservability: %s", mco_name)
-                    continue
-
                 logger.info("Deleting MultiClusterObservability: %s", mco_name)
 
                 try:
@@ -277,13 +273,14 @@ class Decommission:
                         # Already gone: no mutation was performed by this invocation.
                         logger.info("MultiClusterObservability %s already gone (404), treating as success", mco_name)
                     else:
-                        raise
-
-            if self.dry_run:
-                # Unreachable through decommission(), which previews instead of
-                # dispatching in dry-run. It claims no completion either way.
-                logger.info("[DRY-RUN] Skipping wait for observability termination")
-                return SubstepExecution(SubstepOutcome.NOT_REQUESTED)
+                        # Convert at the raise site so the failure travels the one
+                        # execution-result channel and this invocation's aggregated
+                        # `changed` reaches the caller. Status and reason only: the
+                        # raw HTTP body must never reach a log or the state file.
+                        raise SwitchoverError(
+                            f"Failed to delete MultiClusterObservability {mco_name}: "
+                            f"API error {exc.status} {exc.reason}"
+                        ) from exc
 
             def _observability_terminated():
                 pods = self.primary.get_pods(namespace=OBSERVABILITY_NAMESPACE)
@@ -340,35 +337,30 @@ class Decommission:
 
                 delete_targets.append(mc_name)
 
-            if delete_targets and not self.dry_run:
+            if delete_targets:
                 self._verify_managed_cluster_delete_safety(delete_targets)
 
             deleted_count = 0
             for mc_name in delete_targets:
-
-                if self.dry_run:
-                    logger.info("[DRY-RUN] Would delete ManagedCluster: %s", mc_name)
-                    deleted_count += 1
-                    continue
-
                 logger.info("Deleting ManagedCluster: %s", mc_name)
 
-                self.primary.delete_custom_resource(
-                    group=MANAGED_CLUSTER_API_GROUP,
-                    version=MANAGED_CLUSTER_API_VERSION,
-                    plural=MANAGED_CLUSTER_PLURAL,
-                    name=mc_name,
-                    timeout_seconds=DELETE_REQUEST_TIMEOUT,
-                )
+                try:
+                    self.primary.delete_custom_resource(
+                        group=MANAGED_CLUSTER_API_GROUP,
+                        version=MANAGED_CLUSTER_API_VERSION,
+                        plural=MANAGED_CLUSTER_PLURAL,
+                        name=mc_name,
+                        timeout_seconds=DELETE_REQUEST_TIMEOUT,
+                    )
+                except ApiException as exc:
+                    # Status and reason only, converted here so the deletes already
+                    # accepted in this invocation are still reported.
+                    raise SwitchoverError(
+                        f"Failed to delete ManagedCluster {mc_name}: API error {exc.status} {exc.reason}"
+                    ) from exc
                 changed = True
 
                 deleted_count += 1
-
-            if self.dry_run:
-                # Unreachable through decommission(), which previews instead of
-                # dispatching in dry-run. It claims no completion either way.
-                logger.info("[DRY-RUN] Would delete %s ManagedCluster(s)", deleted_count)
-                return SubstepExecution(SubstepOutcome.NOT_REQUESTED)
 
             logger.info("Deleted %s ManagedCluster(s)", deleted_count)
 
@@ -539,10 +531,10 @@ class Decommission:
     def _delete_multiclusterhub(self) -> SubstepExecution:
         """Delete the MultiClusterHub resource.
 
-        Family method on the one execution-result channel. Its pod-removal wait
-        only warns on timeout, so today it has no SwitchoverError path; the
-        boundary is kept so this family behaves like the other two and a future
-        failure cannot escape past the handler-free aggregator.
+        Family method on the one execution-result channel: an expected
+        SwitchoverError-class failure -- a rejected delete -- becomes a FAILED
+        execution here, carrying whatever this invocation actually deleted. The
+        pod-removal wait only warns on timeout and does not fail the substep.
         """
         logger.info("Deleting MultiClusterHub resource...")
         changed = False
@@ -570,28 +562,25 @@ class Decommission:
             for mch in mchs:
                 mch_name = mch.get("metadata", {}).get("name")
 
-                if self.dry_run:
-                    logger.info("[DRY-RUN] Would delete MultiClusterHub: %s", mch_name)
-                    continue
-
                 logger.info("Deleting MultiClusterHub: %s", mch_name)
                 logger.info("This may take up to 20 minutes...")
 
-                self.primary.delete_custom_resource(
-                    group="operator.open-cluster-management.io",
-                    version="v1",
-                    plural="multiclusterhubs",
-                    name=mch_name,
-                    namespace=ACM_NAMESPACE,
-                    timeout_seconds=DELETE_REQUEST_TIMEOUT,
-                )
+                try:
+                    self.primary.delete_custom_resource(
+                        group="operator.open-cluster-management.io",
+                        version="v1",
+                        plural="multiclusterhubs",
+                        name=mch_name,
+                        namespace=ACM_NAMESPACE,
+                        timeout_seconds=DELETE_REQUEST_TIMEOUT,
+                    )
+                except ApiException as exc:
+                    # Status and reason only, converted here so the deletes already
+                    # accepted in this invocation are still reported.
+                    raise SwitchoverError(
+                        f"Failed to delete MultiClusterHub {mch_name}: API error {exc.status} {exc.reason}"
+                    ) from exc
                 changed = True
-
-            if self.dry_run:
-                # Unreachable through decommission(), which previews instead of
-                # dispatching in dry-run. It claims no completion either way.
-                logger.info("[DRY-RUN] Skipping wait for ACM pod removal")
-                return SubstepExecution(SubstepOutcome.NOT_REQUESTED)
 
             def _acm_pods_removed():
                 """Check if ACM pods are removed (excluding operator pods which remain)."""
