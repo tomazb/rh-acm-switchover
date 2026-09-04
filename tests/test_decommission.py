@@ -19,6 +19,7 @@ import modules.decommission as decommission_module
 from lib.constants import ACM_NAMESPACE, LOCAL_CLUSTER_NAME, OBSERVABILITY_NAMESPACE
 from lib.decommission_outcome import DecommissionResult, SubstepExecution, SubstepOutcome
 from lib.exceptions import SwitchoverError
+from lib.kube_client import KubeClient
 from lib.run_record import RunRecord
 from lib.utils import StateManager
 from lib.waiter import WaitConditionResult
@@ -1000,6 +1001,12 @@ class TestDeleteApiErrorsReachTheResult:
     with the stack frame: an operator whose MCO had already been destroyed was told
     only "Unexpected error: (409)". Converting at the raise site keeps the failure on
     the one execution-result channel.
+
+    **Scope of the sanitization assertions below.** These drive a Mock client, which
+    bypasses ``lib.kube_client.api_call`` entirely. They therefore prove exactly one
+    thing: the failure message *this module constructs* carries status and reason only
+    and never the HTTP response body. They say nothing about the shared API decorator's
+    own logging, which is a separate layer with its own (out-of-scope) behaviour.
     """
 
     @staticmethod
@@ -1012,7 +1019,11 @@ class TestDeleteApiErrorsReachTheResult:
     def test_observability_delete_rejection_fails_with_the_earlier_delete_reported(
         self, mock_wait, decommission_with_obs, mock_primary_client, caplog
     ):
-        """The first MCO was destroyed; the second is rejected. Both facts must survive."""
+        """The first MCO was destroyed; the second is rejected. Both facts must survive.
+
+        The body assertion covers the message this module builds, not the shared
+        ``api_call`` decorator's logging -- the Mock client never reaches it.
+        """
         mock_wait.return_value = True
         mock_primary_client.list_custom_resources.return_value = [
             {"metadata": {"name": "obs-one"}},
@@ -1045,6 +1056,11 @@ class TestDeleteApiErrorsReachTheResult:
     def test_managed_cluster_delete_rejection_reports_the_earlier_delete(
         self, mock_wait, decommission_with_obs, mock_primary_client, caplog
     ):
+        """The first ManagedCluster was deleted; the second is rejected.
+
+        The body assertion covers the message this module builds, not the shared
+        ``api_call`` decorator's logging -- the Mock client never reaches it.
+        """
         mock_wait.return_value = True
         mock_primary_client.list_managed_clusters.return_value = [
             {"metadata": {"name": "cluster1"}},
@@ -1078,6 +1094,11 @@ class TestDeleteApiErrorsReachTheResult:
     def test_multiclusterhub_delete_rejection_reports_the_earlier_delete(
         self, mock_wait, decommission_with_obs, mock_primary_client, caplog
     ):
+        """The first MultiClusterHub was deleted; the second is rejected.
+
+        The body assertion covers the message this module builds, not the shared
+        ``api_call`` decorator's logging -- the Mock client never reaches it.
+        """
         mock_wait.return_value = True
         mock_primary_client.list_custom_resources.return_value = [
             {"metadata": {"name": "mch-one", "namespace": ACM_NAMESPACE}},
@@ -1135,30 +1156,59 @@ class TestDeleteApiErrorsReachTheResult:
         assert "observability" in "\n".join(result.summary_lines())
 
     @patch("modules.decommission.wait_for_condition")
-    def test_a_404_from_the_real_client_is_indistinguishable_and_reports_change(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
+    def test_a_404_from_the_real_client_is_indistinguishable_and_reports_change(self, mock_wait, state_manager):
         """Pin the REAL client behaviour, which PR B cannot make exact.
 
-        ``KubeClient.delete_custom_resource`` is declared
-        ``@api_call(not_found_value=True)``, so on a 404 it RETURNS ``True`` -- exactly
-        what it returns for a delete the API performed. The call site cannot tell the
-        two apart, so an already-absent object reports ``changed=True``. PR C's
-        UID-preconditioned guarded delete is the explicit failing point for this
-        assertion.
+        This drives an actual ``KubeClient`` -- not a Mock standing in for one -- so the
+        ``@api_call(not_found_value=True)`` decorator on ``delete_custom_resource``
+        really runs: the underlying ``custom_api`` raises ``ApiException(404)`` and the
+        decorator converts it to ``True``, exactly what it returns for a delete the API
+        performed. The call site cannot tell the two apart, so an already-absent object
+        reports ``changed=True``. Flipping ``not_found_value`` to ``False`` fails this
+        test, which is what makes it a pin rather than a restatement.
+
+        ``tests/test_kube_client.py::test_delete_custom_resource_404_returns_true`` is
+        the existing pin for the decorator behaviour itself; this one pins the
+        consequence the decommission layer inherits from it, and PR C's
+        UID-preconditioned guarded delete is what removes the ambiguity.
 
         Note that ``test_delete_observability_ignores_404_delete_errors`` models a 404
-        as a RAISED ApiException; the production client never raises on 404, so that
-        path is mock-only.
+        as a RAISED ApiException. The production client never raises on 404 -- the
+        decorator absorbs it -- so that path is reachable only through a Mock.
         """
         mock_wait.return_value = True
-        mock_primary_client.list_custom_resources.return_value = [{"metadata": {"name": "observability"}}]
-        mock_primary_client.delete_custom_resource.return_value = True  # real client's 404 answer
 
-        execution = decommission_with_obs._delete_observability()
+        client = object.__new__(KubeClient)  # bypass cluster config; this is a real KubeClient
+        client.dry_run = False
+        client.custom_api = Mock()
+        client.custom_api.delete_cluster_custom_object.side_effect = ApiException(status=404)
+
+        # 1. The real decorator path: a 404 from the API server becomes True.
+        assert (
+            client.delete_custom_resource(
+                group="observability.open-cluster-management.io",
+                version="v1beta2",
+                plural="multiclusterobservabilities",
+                name="observability",
+            )
+            is True
+        )
+
+        # 2. The B-stage consequence on that same client: an object that was already
+        #    gone is still reported as an accepted mutation.
+        client.list_custom_resources = Mock(return_value=[{"metadata": {"name": "observability"}}])
+        client.get_pods = Mock(return_value=[])
+        decommission = Decommission(
+            primary_client=client,
+            has_observability=True,
+            run_record=RunRecord(state_manager),
+        )
+
+        execution = decommission._delete_observability()
 
         assert execution.outcome is SubstepOutcome.COMPLETED
         assert execution.changed is True
+        assert client.custom_api.delete_cluster_custom_object.call_count == 2
 
 
 @pytest.mark.unit
