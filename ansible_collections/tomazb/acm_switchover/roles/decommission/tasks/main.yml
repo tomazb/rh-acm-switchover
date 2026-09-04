@@ -79,22 +79,50 @@
     - acm_switchover_execution.checkpoint.enabled | default(false) | bool
 
 # Fail closed: an execute-mode run that cannot persist its identity map issues no
-# DELETE at all. A dry run and a native check-mode run require no durable state and
-# write none, so neither is gated here.
+# DELETE at all, and a validate-mode run never reaches the teardown here. A dry run
+# and a native check-mode run require no durable state and write none, so neither is
+# gated.
 - name: Require durable checkpoint state before the first decommission delete
   ansible.builtin.assert:
     that:
+      # Validate is REFUSED, not merely required to checkpoint. Every delete guard in
+      # this role fires on `mode != dry_run` (delete_observability.yml,
+      # delete_managed_clusters.yml, delete_multiclusterhub.yml), while
+      # checkpoint_phase treats validate as non-mutating and records no phase. So a
+      # validate run would delete MultiClusterObservability, every non-local
+      # ManagedCluster and MultiClusterHub while leaving no durable identity map, and
+      # publish that as a passed validation. Requiring checkpointing here instead of
+      # refusing would be worse: the phase would still never be recorded.
+      - (acm_switchover_execution.mode | default('dry_run')) != 'validate'
       - acm_switchover_execution.checkpoint.enabled | default(false) | bool
       # Tied to the enter having actually run, not merely to the config being set, so
       # a later extra condition on that task's `when` cannot reopen the hole.
       - not ((_acm_decommission_checkpoint_enter | default({})).skipped | default(false))
     fail_msg: >-
-      Execute-mode decommission requires durable checkpoint state before the first
-      delete: set acm_switchover_execution.checkpoint (enabled: true, backend: file,
-      path: <file>), or run with acm_switchover_execution.mode set to dry_run.
+      {{
+        _acm_decommission_validate_refusal
+        if (acm_switchover_execution.mode | default('dry_run')) == 'validate'
+        else _acm_decommission_checkpoint_refusal
+      }}
+  vars:
+    _acm_decommission_validate_refusal: >-
+      Refusing decommission in validate mode: this role has no non-mutating validate
+      path. Its delete guards fire in any mode other than dry_run, so a validate run
+      would really delete MultiClusterObservability, every non-local ManagedCluster
+      and MultiClusterHub, while the checkpoint action treats validate as
+      non-mutating and records no phase at all. Preview with
+      acm_switchover_execution.mode set to dry_run, or decommission for real with
+      acm_switchover_execution.mode set to execute and
+      acm_switchover_execution.checkpoint.enabled set to true.
+    _acm_decommission_checkpoint_refusal: >-
+      Refusing decommission in execute mode without durable checkpoint state: the
+      identity map must be persisted BEFORE the first delete. Set
+      acm_switchover_execution.checkpoint.enabled to true (with backend file and a
+      writable path) -- the shipped examples/group_vars/all.yml sets it to false --
+      or preview with acm_switchover_execution.mode set to dry_run.
   when:
     - not ansible_check_mode
-    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - (acm_switchover_execution.mode | default('dry_run')) in ['execute', 'validate']
 
 - name: Execute decommission substeps
   block:

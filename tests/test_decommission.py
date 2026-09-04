@@ -998,15 +998,32 @@ class TestActualChangeTruth:
     def test_a_live_run_after_a_dry_run_reads_fresh_and_trusts_nothing(
         self, decommission_dry_run, decommission_with_obs, state_manager, mock_primary_client
     ):
-        """The live run performs its own reads instead of reusing preview observations.
+        """The live run performs EVERY one of its own reads, not merely some read.
 
-        Kill condition: caching a preview observation (on the shared state, or on the
-        RunRecord) and short-circuiting the live run's reads from it.
+        The two fixtures share one ``state_manager``, so a dry run that cached an
+        observation where a live run could find it would be visible here. A bare
+        ``assert mock_primary_client.method_calls`` was too weak: it passed for a run
+        that reused a cached MultiClusterObservability decision and only read the
+        remaining two families. The whole per-family read sequence is pinned instead.
+
+        Kill condition: short-circuiting ANY of the three live reads from a preview
+        observation (or from anything else the dry run left behind).
         """
         decommission_dry_run.decommission(interactive=False)
         mock_primary_client.reset_mock()
         decommission_with_obs.decommission(interactive=False)
-        assert mock_primary_client.method_calls, "the live run must perform its own reads"
+
+        calls = mock_primary_client.method_calls
+        assert [name for name, _, _ in calls] == [
+            "list_custom_resources",
+            "list_managed_clusters",
+            "list_custom_resources",
+        ]
+        assert [kwargs.get("plural") for _, _, kwargs in calls] == [
+            "multiclusterobservabilities",
+            None,
+            "multiclusterhubs",
+        ]
 
     def test_dry_run_prediction_is_separate_from_actual_change(self, decommission_dry_run, monkeypatch):
         monkeypatch.setattr(decommission_dry_run, "_preview_substep", lambda substep: True)

@@ -1485,30 +1485,93 @@ def test_execute_mode_fails_closed_when_checkpointing_is_unavailable():
     assert result["acm_switchover_decommission_result"] == {}
     failed = [task for task in result["tasks"] if task["failed"]]
     assert [task["name"] for task in failed] == [_CHECKPOINT_GATE_TASK_NAME]
-    assert "checkpoint" in json.dumps(failed[0]["result"]).lower()
+    # `result["msg"]` ONLY, never the whole result dict: an assert result also carries
+    # `assertion: "acm_switchover_execution.checkpoint.enabled | ..."`, which contains
+    # the word "checkpoint", so a substring search over json.dumps(result) passed even
+    # with `fail_msg` deleted outright. The operator-facing text is `msg`.
+    message = failed[0]["result"]["msg"]
+    assert "durable checkpoint state" in message
+    assert "acm_switchover_execution.checkpoint.enabled" in message
+    # The shipped file that sets it to false, named so an operator hitting this cold
+    # knows what to change.
+    assert "examples/group_vars/all.yml" in message
+
+
+def test_validate_mode_is_refused_and_issues_no_delete():
+    """Validate mode has no non-mutating path in this role, so it is refused outright.
+
+    Probed before this fix: ``execution_mode="validate"`` with no checkpointing issued
+    THREE real DELETEs (MultiClusterObservability, ManagedCluster, MultiClusterHub),
+    exited 0, recorded no checkpoint phase, and published ``status: pass`` with
+    ``changed: true`` -- a full teardown reported as a passed validation with no
+    durable identity map. The cause is a mode-vocabulary mismatch: the gate keyed on
+    ``mode == 'execute'`` while every delete guard in the role keys on
+    ``mode != 'dry_run'``.
+
+    Kill condition: dropping the ``!= 'validate'`` conjunct from the gate, or
+    narrowing the gate's ``when`` back to ``mode == 'execute'``.
+    """
+    result = run_decommission_role(execution_mode="validate", checkpoint_available=False)
+
+    assert result["returncode"] != 0
+    assert result["delete_calls"] == []
+    assert result["checkpoint"]["phases"] == []
+    failed = [task for task in result["tasks"] if task["failed"]]
+    assert [task["name"] for task in failed] == [_CHECKPOINT_GATE_TASK_NAME]
+    assert "validate mode" in failed[0]["result"]["msg"]
+
+
+def test_validate_mode_is_refused_even_when_checkpointing_is_available():
+    """The refusal is about the MODE, not about the checkpoint configuration.
+
+    This is the configuration that rules out the tempting alternative fix. Widening
+    the gate to ``mode != 'dry_run'`` rather than refusing validate would let this run
+    straight through -- both transitions execute, but ``checkpoint_phase`` classifies
+    validate as non-mutating, so ``completed_phases`` never gains the phase while the
+    deletes go ahead. That is strictly worse than the bug it would replace.
+
+    Kill condition: replacing the ``!= 'validate'`` conjunct with a checkpoint
+    availability requirement.
+    """
+    result = run_decommission_role(execution_mode="validate")
+
+    assert result["returncode"] != 0
+    assert result["delete_calls"] == []
+    assert "decommission" not in result["checkpoint"]["completed_phases"]
+    failed = [task for task in result["tasks"] if task["failed"]]
+    assert [task["name"] for task in failed] == [_CHECKPOINT_GATE_TASK_NAME]
+    assert "validate mode" in failed[0]["result"]["msg"]
 
 
 def test_check_mode_does_not_require_checkpointing_and_writes_nothing():
-    """A preview needs no durable state and leaves none.
+    """A preview is never refused by the gate.
 
-    Kill condition: dropping ``not ansible_check_mode`` from the gate (the preview
-    would fail), or from a transition (the preview would write checkpoint state).
+    ONE conjunct discriminates here: ``returncode == 0``, which fails if the gate
+    loses its ``not ansible_check_mode`` guard. The ``phases`` and ``operational_data``
+    conjuncts do NOT discriminate in this configuration -- with
+    ``checkpoint_available=False`` the transitions are skipped by their ``enabled``
+    conjunct whatever the mode, so they would stay empty even with the check-mode
+    guards removed. ``test_b_stage_check_mode_writes_no_checkpoint_or_outcome`` is the
+    test that actually pins "check mode writes no checkpoint state", because it runs
+    WITH checkpointing available; it was the one that fired under that mutation.
+
+    Kill condition: dropping ``not ansible_check_mode`` from the gate.
     """
     result = run_decommission_role(checkpoint_available=False, check_mode=True)
     checkpoint = result["checkpoint"]
     assert result["returncode"] == 0
-    assert checkpoint["operational_data"] == checkpoint["before_operational_data"]
-    assert checkpoint["phases"] == []
     assert result["delete_calls"] == []
     assert result["acm_switchover_decommission_result"]["changed"] is False
+    # Kept as consistency checks, not as coverage; see the docstring.
+    assert checkpoint["operational_data"] == checkpoint["before_operational_data"]
+    assert checkpoint["phases"] == []
 
 
 def test_dry_run_execution_mode_does_not_require_checkpointing():
     """A dry run needs no durable state either.
 
-    Kill condition: gating on ``mode != 'dry_run'`` instead of ``mode == 'execute'``,
-    which would fail-close the validate mode too, or dropping the mode condition,
-    which would fail-close every dry run.
+    Kill condition: adding ``dry_run`` to the gate's mode list, or dropping the mode
+    condition from its ``when`` entirely -- either fail-closes every dry run.
     """
     result = run_decommission_role(checkpoint_available=False, execution_mode="dry_run")
     assert result["returncode"] == 0
@@ -1519,11 +1582,17 @@ def test_dry_run_execution_mode_does_not_require_checkpointing():
 def test_a_dry_run_with_checkpointing_available_still_writes_no_checkpoint_state():
     """The transitions run in dry-run mode but the action plugin persists nothing.
 
+    Unlike ``test_check_mode_does_not_require_checkpointing_and_writes_nothing``, the
+    transitions really DO run here, and the first assertion proves it -- so "nothing
+    was persisted" is a statement about the action plugin's ``is_non_mutating``
+    contract as this role consumes it, not an artefact of skipped tasks.
+
     Kill condition: making either transition mutate durable state in a non-mutating
     execution mode.
     """
     result = run_decommission_role(execution_mode="dry_run")
     checkpoint = result["checkpoint"]
+    assert len(checkpoint["phases"]) == 2, "both transitions must actually run in dry-run mode"
     assert checkpoint["operational_data"] == checkpoint["before_operational_data"]
     assert "decommission" not in checkpoint["completed_phases"]
     assert result["delete_calls"] == []
