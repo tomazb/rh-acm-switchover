@@ -4,6 +4,7 @@ Tests cover Finalization class for completing the switchover.
 """
 
 import copy
+import inspect
 import logging
 import sys
 from contextlib import contextmanager
@@ -19,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import modules.finalization as finalization_module
 from lib.constants import BACKUP_SCHEDULE_DEFAULT_NAME
+from lib.decommission_outcome import DecommissionResult, SubstepOutcome
 from lib.exceptions import SwitchoverError
 from lib.run_record import RunRecord
 from lib.waiter import WaitConditionResult
@@ -215,10 +217,69 @@ class TestFinalization:
         )
 
         with patch("modules.finalization.Decommission") as decommission_class:
-            decommission_class.return_value.decommission.return_value = False
+            decommission_class.return_value.decommission.return_value = DecommissionResult(
+                substeps={"multiclusterhub": SubstepOutcome.FAILED},
+                not_attempted=(),
+            )
 
             with pytest.raises(SwitchoverError, match="decommission failed"):
                 fin._decommission_old_hub()
+
+    def test_integrated_decommission_failure_keeps_its_own_message_context(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        """The caller-specific message context survives the outcome-algebra rewrite."""
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=primary,
+            primary_has_observability=True,
+            old_hub_action="decommission",
+        )
+
+        with patch("modules.finalization.Decommission") as decommission_class:
+            decommission_class.return_value.decommission.return_value = DecommissionResult(
+                substeps={"observability": SubstepOutcome.FAILED},
+                not_attempted=("managed_clusters",),
+            )
+
+            with pytest.raises(SwitchoverError) as excinfo:
+                fin._decommission_old_hub()
+
+        assert "Manual cleanup is required" in str(excinfo.value)
+        assert "observability" in str(excinfo.value)
+
+    def test_integrated_decommission_passes_its_own_run_record(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        """The integrated path opens the durable channel with finalization's own RunRecord."""
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=primary,
+            primary_has_observability=True,
+            old_hub_action="decommission",
+        )
+
+        with patch("modules.finalization.Decommission") as decommission_class:
+            decommission_class.return_value.decommission.return_value = DecommissionResult(
+                substeps={"observability": SubstepOutcome.COMPLETED},
+                not_attempted=(),
+            )
+
+            fin._decommission_old_hub()
+
+        assert decommission_class.call_args.kwargs["run_record"] is fin.run_record
+        decommission_class.return_value.decommission.assert_called_once_with(interactive=False)
+
+    def test_finalization_maps_succeeded_explicitly_not_object_truthiness(self):
+        source = inspect.getsource(Finalization._decommission_old_hub)
+        assert ".succeeded" in source
+        assert "if result:" not in source
 
     @patch("modules.finalization.time")
     def test_verify_new_backups_success(self, mock_time, finalization, mock_secondary_client):

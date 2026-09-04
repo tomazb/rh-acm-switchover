@@ -965,6 +965,7 @@ def run_decommission(
     decom = Decommission(
         primary,
         has_observability,
+        run_record=RunRecord(state),
         dry_run=args.dry_run,
     )
 
@@ -973,7 +974,13 @@ def run_decommission(
     else:
         logger.info("Starting decommission workflow")
 
-    return decom.decommission(interactive=not args.non_interactive)
+    result = decom.decommission(interactive=not args.non_interactive)
+    for line in result.summary_lines():
+        logger.info("Decommission summary - %s", line)
+
+    # Explicit .succeeded, never dataclass truthiness. The existing CLI exit path
+    # turns False into a non-zero exit, so a refusal now fails the run.
+    return result.succeeded
 
 
 def _report_target(args: argparse.Namespace) -> tuple[str, str]:

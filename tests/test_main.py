@@ -70,6 +70,7 @@ from lib.constants import (
     SWITCHOVER_COMPLETED_SUCCESS_MESSAGE,
     TOKEN_DURATION_DEFAULT,
 )
+from lib.decommission_outcome import DecommissionResult, SubstepOutcome
 from lib.exceptions import SwitchoverError
 from lib.utils import StateIdentityMismatch, StateManager
 from lib.validation import ValidationError
@@ -2575,7 +2576,14 @@ class TestDecommissionAndSetupHelpers:
             "acm_switchover.validate_decommission_permissions"
         ) as validate_decommission:
             instance = Decom.return_value
-            instance.decommission.return_value = True
+            instance.decommission.return_value = DecommissionResult(
+                substeps={
+                    "observability": SubstepOutcome.COMPLETED,
+                    "managed_clusters": SubstepOutcome.COMPLETED,
+                    "multiclusterhub": SubstepOutcome.COMPLETED,
+                },
+                not_attempted=(),
+            )
 
             result = run_decommission(args, primary, state, logger)
 
@@ -2600,7 +2608,10 @@ class TestDecommissionAndSetupHelpers:
             "acm_switchover.validate_decommission_permissions"
         ) as validate_decommission:
             instance = Decom.return_value
-            instance.decommission.return_value = False
+            instance.decommission.return_value = DecommissionResult(
+                substeps={"observability": SubstepOutcome.FAILED},
+                not_attempted=("managed_clusters", "multiclusterhub"),
+            )
 
             result = run_decommission(args, primary, state, logger)
 
@@ -2642,13 +2653,53 @@ class TestDecommissionAndSetupHelpers:
             "acm_switchover.validate_decommission_permissions"
         ) as validate_decommission:
             instance = Decom.return_value
-            instance.decommission.return_value = True
+            instance.decommission.return_value = DecommissionResult(
+                substeps={
+                    "observability": SubstepOutcome.COMPLETED,
+                    "managed_clusters": SubstepOutcome.COMPLETED,
+                    "multiclusterhub": SubstepOutcome.COMPLETED,
+                },
+                not_attempted=(),
+            )
 
             result = run_decommission(args, primary, state, logger)
 
         assert result is True
         validate_decommission.assert_not_called()
         instance.decommission.assert_called_once_with(interactive=True)
+
+    def test_run_decommission_returns_false_on_refusal(self):
+        from acm_switchover import run_decommission
+
+        args = SimpleNamespace(dry_run=False, non_interactive=True, skip_rbac_validation=True)
+        primary = Mock()
+        primary.namespace_exists.return_value = True
+        state = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.Decommission") as Decom:
+            Decom.return_value.decommission.return_value = DecommissionResult(
+                substeps={"observability": SubstepOutcome.REFUSED},
+                not_attempted=("multiclusterhub",),
+            )
+            assert run_decommission(args, primary, state, logger) is False
+
+    def test_run_decommission_preserves_false_cli_result_on_banner_cancel(self):
+        from acm_switchover import run_decommission
+
+        args = SimpleNamespace(dry_run=False, non_interactive=False, skip_rbac_validation=True)
+        primary = Mock()
+        primary.namespace_exists.return_value = True
+        state = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.Decommission") as Decom:
+            Decom.return_value.decommission.return_value = DecommissionResult(
+                substeps={},
+                not_attempted=("observability", "managed_clusters", "multiclusterhub"),
+                cancelled=True,
+            )
+            assert run_decommission(args, primary, state, logger) is False
 
     def test_run_setup_successful_execution(self, monkeypatch: pytest.MonkeyPatch, tmp_path):
         from acm_switchover import run_setup
