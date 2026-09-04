@@ -148,6 +148,17 @@ OPERATOR_IDENTITY_UNAVAILABLE_REASONS = (
     "deployment_identity_incomplete",
 )
 
+# How one decommission substep ended in this invocation. Mirrors the FIVE values
+# of lib/decommission_outcome.SubstepOutcome; the root parity test
+# tests/test_constants_parity.py compares the enum values against this tuple.
+DECOMMISSION_SUBSTEP_OUTCOMES = (
+    "not_requested",
+    "precondition_noop",
+    "completed",
+    "refused",
+    "failed",
+)
+
 # The teardown lifecycle of one deleted object (lib/teardown_record.TeardownPhase).
 TEARDOWN_PHASES = frozenset(
     {

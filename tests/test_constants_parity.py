@@ -152,3 +152,15 @@ def test_teardown_phase_vocabulary_is_mirrored():
 
 
 _MISSING = object()
+
+
+def test_decommission_outcome_vocabulary_parity():
+    """The collection's mirrored outcome tuple must equal SubstepOutcome's values.
+
+    Compares ENUM VALUES ONLY. The derived convenience UNSUCCESSFUL_OUTCOMES in
+    lib/decommission_outcome.py is not part of the vocabulary and must never
+    enter this comparison.
+    """
+    from lib.decommission_outcome import SubstepOutcome
+
+    assert {o.value for o in SubstepOutcome} == set(ans_constants.DECOMMISSION_SUBSTEP_OUTCOMES)

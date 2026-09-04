@@ -26,7 +26,9 @@
   loop_control:
     label: "{{ item.metadata.name }}"
   register: _multiclusterobservability_delete_results
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - not ansible_check_mode
 
 - name: Wait for observability pods to terminate
   kubernetes.core.k8s_info:
@@ -53,4 +55,21 @@
     )
   when:
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - not ansible_check_mode
     - (_multiclusterobservability_resources.resources | default([]) | length) > 0
+
+- name: Record the Observability substep outcome
+  ansible.builtin.set_fact:
+    acm_switchover_decommission_outcomes: >-
+      {{
+        acm_switchover_decommission_outcomes
+        | default({})
+        | combine({
+            'observability': (
+              'completed'
+              if ((_multiclusterobservability_resources.resources | default([])) | length) > 0
+              else 'precondition_noop'
+            )
+          })
+      }}
+  when: _acm_decommission_records_outcomes | default(false) | bool
