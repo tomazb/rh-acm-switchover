@@ -24,6 +24,10 @@
 - name: Initialize decommission substep outcome recording
   ansible.builtin.set_fact:
     acm_switchover_decommission_outcomes: {}
+    # Set by every rescue, in EVERY mode, including check mode and dry run where no
+    # outcome is recorded. Without it a check-mode read failure would rescue, record
+    # nothing, and let `always` derive `pass` from an empty outcome map.
+    _acm_decommission_substep_rescued: false
     _acm_decommission_records_outcomes: >-
       {{
         (not ansible_check_mode)
@@ -69,6 +73,10 @@
           ansible.builtin.include_tasks: delete_observability.yml
           when: acm_switchover_decommission_effective_has_observability | bool
       rescue:
+        - name: Record that the Observability decommission substep was rescued
+          ansible.builtin.set_fact:
+            _acm_decommission_substep_rescued: true
+
         - name: Record the failed Observability substep outcome
           ansible.builtin.set_fact:
             acm_switchover_decommission_outcomes: >-
@@ -86,6 +94,10 @@
         - name: Delete non-local ManagedCluster resources
           ansible.builtin.include_tasks: delete_managed_clusters.yml
       rescue:
+        - name: Record that the ManagedCluster decommission substep was rescued
+          ansible.builtin.set_fact:
+            _acm_decommission_substep_rescued: true
+
         - name: Record the failed ManagedCluster substep outcome
           ansible.builtin.set_fact:
             acm_switchover_decommission_outcomes: >-
@@ -103,6 +115,10 @@
         - name: Delete MultiClusterHub
           ansible.builtin.include_tasks: delete_multiclusterhub.yml
       rescue:
+        - name: Record that the MultiClusterHub decommission substep was rescued
+          ansible.builtin.set_fact:
+            _acm_decommission_substep_rescued: true
+
         - name: Record the failed MultiClusterHub substep outcome
           ansible.builtin.set_fact:
             acm_switchover_decommission_outcomes: >-
@@ -122,11 +138,16 @@
         acm_switchover_decommission_result:
           phase: decommission
           mode: "{{ acm_switchover_execution.mode | default('dry_run') }}"
+          # `pass` only when nothing was rescued AND no substep recorded `failed`.
+          # The rescue arm covers the modes that record no outcome at all.
           status: >-
             {{
               'fail'
-              if 'failed' in (
-                acm_switchover_decommission_outcomes | default({}) | dict2items | map(attribute='value') | list
+              if (
+                (_acm_decommission_substep_rescued | default(false) | bool)
+                or ('failed' in (
+                  acm_switchover_decommission_outcomes | default({}) | dict2items | map(attribute='value') | list
+                ))
               )
               else 'pass'
             }}

@@ -13,6 +13,7 @@ These tests verify the structural safety contracts of decommission role tasks:
 import copy
 import json
 import pathlib
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
@@ -31,23 +32,40 @@ DECOMMISSION_MAIN = ROLES_DIR / "decommission" / "tasks" / "main.yml"
 DELETE_OBSERVABILITY = ROLES_DIR / "decommission" / "tasks" / "delete_observability.yml"
 DELETE_MANAGED_CLUSTERS = ROLES_DIR / "decommission" / "tasks" / "delete_managed_clusters.yml"
 DELETE_MCH = ROLES_DIR / "decommission" / "tasks" / "delete_multiclusterhub.yml"
+VALIDATE_RBAC = ROLES_DIR / "decommission" / "tasks" / "validate_rbac.yml"
 
-#: The collection modules that implement native check mode. PR E adds
-#: ``acm_pod_owner_classify`` to this set together with the module itself.
-CHECK_MODE_NATIVE_MODULES = frozenset(
+#: The collection modules that implement native check mode, as verified by a test in
+#: THIS repository. ``acm_uid_guarded_delete`` is deliberately ABSENT: it does not
+#: exist yet, and "native check mode" cannot be assumed -- with the role's three
+#: ``not ansible_check_mode`` guards removed, ``kubernetes.core.k8s`` under ``--check``
+#: issued three real DELETEs to the fake API. PR C must add the module, this exemption,
+#: and a module-level test proving it issues no DELETE in check mode, in the same PR --
+#: the same rule as the harness raising on an unrecognised keyword. PR E adds
+#: ``acm_pod_owner_classify`` on the same terms.
+CHECK_MODE_NATIVE_MODULES = frozenset({"tomazb.acm_switchover.acm_k8s_read_outcome"})
+
+#: The ONLY actions the decommission role may run without a check-mode guard, each
+#: read-only (or, for the RBAC expander, a pure controller-side computation).
+#:
+#: This is deliberately an allowlist rather than a list of mutating modules: a NEW
+#: module added by PR C, D or E -- ``command``, ``shell``, ``uri``, ``helm``,
+#: ``k8s_scale``, ``k8s_exec``, ``k8s_drain``, or anything else -- is treated as
+#: mutating by default and fails ``test_every_mutating_task_is_check_mode_guarded``
+#: until it is classified here deliberately. A denylist would have let all of those
+#: through unchallenged.
+_READ_ONLY_ACTIONS = frozenset(
     {
-        "tomazb.acm_switchover.acm_uid_guarded_delete",
+        "ansible.builtin.assert",
+        "ansible.builtin.debug",
+        "ansible.builtin.fail",
+        "ansible.builtin.include_tasks",
+        "ansible.builtin.set_fact",
+        "kubernetes.core.k8s_info",
+        # Expands/summarises the required permission set on the controller; the live
+        # SelfSubjectAccessReviews live in preflight/tasks/run_ssar.yml.
+        "tomazb.acm_switchover.acm_rbac_validate",
+        # Read-only by module contract, and it must keep running in check mode.
         "tomazb.acm_switchover.acm_k8s_read_outcome",
-    }
-)
-
-#: Modules that can mutate the CLUSTER. Controller-side persistence is a separate
-#: concern owned by ``checkpoint_writer_tasks``, so ``checkpoint_phase`` is not here.
-_MUTATING_MODULES = frozenset(
-    {
-        "kubernetes.core.k8s",
-        "kubernetes.core.k8s_json_patch",
-        "tomazb.acm_switchover.acm_uid_guarded_delete",
     }
 )
 
@@ -68,13 +86,21 @@ def _load_tasks(path: pathlib.Path) -> list:
     return _flatten_tasks(yaml.safe_load(path.read_text()) or [])
 
 
-#: Every decommission role task file, parsed and flattened once.
+#: EVERY decommission role task file, parsed and flattened once. ``validate_rbac``
+#: is included so a mutating task added there cannot evade the guardrails.
 decommission_task_files = {
     "main": _load_tasks(DECOMMISSION_MAIN),
     "observability": _load_tasks(DELETE_OBSERVABILITY),
     "managed_clusters": _load_tasks(DELETE_MANAGED_CLUSTERS),
     "multiclusterhub": _load_tasks(DELETE_MCH),
+    "validate_rbac": _load_tasks(VALIDATE_RBAC),
 }
+
+#: The parsed set must be exactly the files on disk, so a task file added later is not
+#: silently excluded from every guardrail above.
+_ROLE_TASK_FILE_NAMES = frozenset(
+    path.name for path in (ROLES_DIR / "decommission" / "tasks").iterdir() if path.suffix == ".yml"
+)
 
 
 def _task_actions(task: dict) -> list:
@@ -139,10 +165,39 @@ def checkpoint_writer_tasks(task_files: dict) -> list:
 
 
 def mutating_tasks(task_files: dict) -> list:
-    """Every parsed task in ``task_files`` whose module can mutate the cluster."""
+    """Every parsed task in ``task_files`` whose module can mutate the cluster.
+
+    Inverted allowlist: a task counts as mutating unless every action it invokes is in
+    ``_READ_ONLY_ACTIONS``. Block/rescue/always wrappers invoke no action and are skipped.
+    """
     return [
-        task for tasks in task_files.values() for task in tasks if _MUTATING_MODULES.intersection(_task_actions(task))
+        task
+        for tasks in task_files.values()
+        for task in tasks
+        if _task_actions(task) and not set(_task_actions(task)).issubset(_READ_ONLY_ACTIONS)
     ]
+
+
+#: The families that own a substep outcome. Used to tell an outcome VALUE apart from
+#: the family KEY inside a recorded ``combine`` expression.
+_OUTCOME_FAMILIES = ("observability", "managed_clusters", "multiclusterhub")
+
+
+def outcome_recording_tasks(task_files: dict) -> list:
+    """Every task in ``task_files`` that writes the shared substep outcome mapping."""
+    return [
+        task
+        for tasks in task_files.values()
+        for task in tasks
+        if "acm_switchover_decommission_outcomes" in (task.get("ansible.builtin.set_fact") or {})
+        and str(task["ansible.builtin.set_fact"]["acm_switchover_decommission_outcomes"]).strip() != "{}"
+    ]
+
+
+def recorded_outcome_values(task: dict) -> set:
+    """Every outcome VALUE literal one recording task can write, family keys removed."""
+    recorded = str(task["ansible.builtin.set_fact"]["acm_switchover_decommission_outcomes"])
+    return set(re.findall(r"'([a-z_]+)'", recorded)) - set(_OUTCOME_FAMILIES)
 
 
 class TestDecommissionMain:
@@ -622,6 +677,7 @@ class FakeDecommissionAPI:
         managedclusters: list,
         namespaces: list,
         delete_status_by_plural: dict,
+        read_status_by_plural: dict,
     ):
         self.store: Dict[str, List[dict]] = {
             "multiclusterobservabilities": copy.deepcopy(multiclusterobservabilities),
@@ -632,6 +688,7 @@ class FakeDecommissionAPI:
             "pods": [],
         }
         self.delete_status_by_plural = dict(delete_status_by_plural)
+        self.read_status_by_plural = dict(read_status_by_plural)
         self._requests: List[dict] = []
         self._lock = threading.Lock()
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
@@ -736,6 +793,13 @@ class FakeDecommissionAPI:
                 plural, namespace, name = parsed
                 if plural not in api.store:
                     self._write_json(_status_body(404, f"unknown resource {plural}"), status=404)
+                    return
+                read_status = api.read_status_by_plural.get(plural, 200)
+                if read_status != 200:
+                    self._write_json(
+                        _status_body(read_status, f"fixture refused GET of {plural}"),
+                        status=read_status,
+                    )
                     return
                 selected = api._select(plural, namespace, name)
                 if name is not None:
@@ -895,6 +959,7 @@ def run_decommission_role(
     mch_present: Optional[bool] = None,
     managed_clusters: Optional[List[str]] = None,
     observability_namespace: str = "present",
+    observability_read_status: int = 200,
     checkpoint_available: bool = True,
 ) -> dict:
     """Run the decommission role against declared fakes and return one canonical result.
@@ -916,6 +981,11 @@ def run_decommission_role(
         raise ValueError(f"execution_mode={execution_mode!r} is not one of ('execute', 'validate', 'dry_run')")
     if observability_namespace not in ("present", "absent"):
         raise ValueError(f"observability_namespace={observability_namespace!r} must be 'present' or 'absent'")
+    if observability_read_status != 200 and observability_outcome is not None:
+        raise ValueError(
+            f"observability_read_status={observability_read_status!r} conflicts with "
+            f"observability_outcome={observability_outcome!r}: a failed read never reaches an outcome"
+        )
 
     # --- observability family -------------------------------------------------
     obs_delete_status = 200
@@ -1006,6 +1076,7 @@ def run_decommission_role(
             "managedclusters": managed_clusters_delete_status,
             "multiclusterhubs": mch_delete_status,
         },
+        read_status_by_plural={"multiclusterobservabilities": observability_read_status},
     )
     try:
         kubeconfig = workspace / "primary.kubeconfig"
@@ -1146,6 +1217,9 @@ def run_decommission_role(
             },
             "delete_calls": api.delete_calls,
             "gate": None,
+            # Not in the B4.1 mapping. Without it "the play still fails" is asserted
+            # nowhere, and a refactor that swallowed the failure would go unnoticed.
+            "returncode": completed.returncode,
         }
     finally:
         api.close()
@@ -1168,18 +1242,36 @@ def test_every_substep_publishes_an_outcome():
     names the fact; this requires a real ``set_fact`` whose target key is the
     outcome mapping, which is what the aggregation actually reads.
     """
-    for substep in ("observability", "managed_clusters", "multiclusterhub"):
-        publishers = [
-            task
-            for task in decommission_task_files[substep]
-            if "acm_switchover_decommission_outcomes" in (task.get("ansible.builtin.set_fact") or {})
-        ]
+    for substep in _OUTCOME_FAMILIES:
+        publishers = outcome_recording_tasks({substep: decommission_task_files[substep]})
         assert publishers, f"{substep} must publish an outcome into acm_switchover_decommission_outcomes"
-        for task in publishers:
-            recorded = str(task["ansible.builtin.set_fact"]["acm_switchover_decommission_outcomes"])
-            assert any(
-                f"'{outcome}'" in recorded for outcome in DECOMMISSION_SUBSTEP_OUTCOMES
-            ), f"{substep} must record a value from the mirrored outcome vocabulary"
+
+
+def test_every_recorded_outcome_value_is_in_the_vocabulary():
+    """EVERY branch of EVERY recording task, not just one branch per task.
+
+    An earlier version checked "does this task mention any vocabulary member", which a
+    single mistyped branch survived: changing ``'completed'`` to ``'complete'`` in
+    delete_observability.yml left it green because ``'precondition_noop'`` still matched.
+    """
+    recorders = outcome_recording_tasks(decommission_task_files)
+    assert len(recorders) >= 5, "expected one recorder per family plus not_requested and the three rescues"
+    for task in recorders:
+        values = recorded_outcome_values(task)
+        assert values, f"{task.get('name')!r} records no outcome value at all"
+        unknown = values - set(DECOMMISSION_SUBSTEP_OUTCOMES)
+        assert not unknown, f"{task.get('name')!r} records {sorted(unknown)}, which is outside the vocabulary"
+
+
+def test_every_role_task_file_is_covered_by_the_guardrails():
+    """A task file added later must not sit outside every contract test in this module."""
+    assert _ROLE_TASK_FILE_NAMES == {
+        DECOMMISSION_MAIN.name,
+        DELETE_OBSERVABILITY.name,
+        DELETE_MANAGED_CLUSTERS.name,
+        DELETE_MCH.name,
+        VALIDATE_RBAC.name,
+    }, "a decommission role task file exists that decommission_task_files does not parse"
 
 
 def test_no_substep_records_the_refused_outcome():
@@ -1255,6 +1347,7 @@ def test_run_decommission_role_rejects_unrecognised_options():
 def test_a_failed_substep_produces_a_failed_status():
     result = run_decommission_role(observability_outcome="failed")
     assert result["acm_switchover_decommission_result"]["status"] == "fail"
+    assert result["returncode"] != 0, "a failed substep must still fail the play"
 
 
 def test_a_failed_substep_stops_the_remaining_substeps():
@@ -1263,9 +1356,52 @@ def test_a_failed_substep_stops_the_remaining_substeps():
     substeps = result["acm_switchover_decommission_result"]["substeps"]
     assert substeps == {"observability": "failed"}
     assert [task for task in result["tasks"] if task["failed"]], "the failure must reach the task record"
+    assert result["returncode"] != 0
     assert [call for call in result["delete_calls"] if "multiclusterobservabilities" in call["path"]]
     assert not [call for call in result["delete_calls"] if "managedclusters" in call["path"]]
     assert not [call for call in result["delete_calls"] if "multiclusterhubs" in call["path"]]
+
+
+def test_a_failed_managed_cluster_substep_fails_the_run():
+    """The MC rescue must behave like the observability one, including partial change."""
+    result = run_decommission_role(managed_clusters_outcome="failed")
+    summary = result["acm_switchover_decommission_result"]
+    assert summary["status"] == "fail"
+    assert summary["substeps"] == {"observability": "completed", "managed_clusters": "failed"}
+    # The observability delete really happened: a partially torn-down hub is `changed`
+    # AND unsuccessful, and the artifact must say both.
+    assert summary["changed"] is True
+    assert result["returncode"] != 0
+    assert not [call for call in result["delete_calls"] if "multiclusterhubs" in call["path"]]
+
+
+def test_a_failed_multiclusterhub_substep_fails_the_run():
+    result = run_decommission_role(multiclusterhub_outcome="failed")
+    summary = result["acm_switchover_decommission_result"]
+    assert summary["status"] == "fail"
+    assert summary["substeps"] == {
+        "observability": "completed",
+        "managed_clusters": "completed",
+        "multiclusterhub": "failed",
+    }
+    assert summary["changed"] is True
+    assert result["returncode"] != 0
+
+
+def test_a_check_mode_read_failure_is_never_published_as_pass():
+    """The honesty bug B4 exists to fix, in the mode that records no outcome.
+
+    A 403 listing MultiClusterObservability rescues the family. Check mode records no
+    outcome, so the outcome map stays empty -- and an aggregation that read only that
+    map would publish `status: pass` for a preview that actually failed.
+    """
+    result = run_decommission_role(check_mode=True, observability_read_status=403)
+    summary = result["acm_switchover_decommission_result"]
+    assert summary["substeps"] == {}
+    assert summary["status"] == "fail"
+    assert summary["changed"] is False
+    assert result["returncode"] != 0
+    assert result["delete_calls"] == []
 
 
 def test_outcome_values_come_from_the_collection_constants():
@@ -1283,6 +1419,7 @@ def test_a_clean_execute_run_reports_the_real_completed_outcomes():
     """The honest positive case: every family really ran and the artifact says so."""
     result = run_decommission_role()
     summary = result["acm_switchover_decommission_result"]
+    assert result["returncode"] == 0
     assert summary["status"] == "pass"
     assert summary["substeps"] == {
         "observability": "completed",
@@ -1311,6 +1448,15 @@ def test_b_stage_check_mode_reports_no_actual_or_speculative_change():
 
 
 def test_b_stage_check_mode_writes_no_checkpoint_or_outcome():
+    """At the B stage only the ``substeps == {}`` conjunct discriminates.
+
+    The role contains no checkpoint writer yet (Task B5 adds one), so an execute run
+    and a failed run also leave ``operational_data`` untouched and ``phases`` empty.
+    Those two conjuncts are kept as the assertion B5 inherits -- once the writer exists
+    they become real -- but they must not be read as coverage today.
+    ``test_no_checkpoint_writer_exists_at_the_b_stage`` is what actually pins their
+    premise, and the discriminating rule here is that check mode records no outcome.
+    """
     result = run_decommission_role(check_mode=True)
     checkpoint = result["checkpoint"]
     assert checkpoint["operational_data"] == checkpoint["before_operational_data"]
