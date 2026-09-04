@@ -33,6 +33,7 @@ DELETE_OBSERVABILITY = ROLES_DIR / "decommission" / "tasks" / "delete_observabil
 DELETE_MANAGED_CLUSTERS = ROLES_DIR / "decommission" / "tasks" / "delete_managed_clusters.yml"
 DELETE_MCH = ROLES_DIR / "decommission" / "tasks" / "delete_multiclusterhub.yml"
 VALIDATE_RBAC = ROLES_DIR / "decommission" / "tasks" / "validate_rbac.yml"
+DECOMMISSION_TASKS_DIR = ROLES_DIR / "decommission" / "tasks"
 
 #: The collection modules that implement native check mode, as verified by a test in
 #: THIS repository. ``acm_uid_guarded_delete`` is deliberately ABSENT: it does not
@@ -86,21 +87,36 @@ def _load_tasks(path: pathlib.Path) -> list:
     return _flatten_tasks(yaml.safe_load(path.read_text()) or [])
 
 
-#: EVERY decommission role task file, parsed and flattened once. ``validate_rbac``
-#: is included so a mutating task added there cannot evade the guardrails.
-decommission_task_files = {
-    "main": _load_tasks(DECOMMISSION_MAIN),
-    "observability": _load_tasks(DELETE_OBSERVABILITY),
-    "managed_clusters": _load_tasks(DELETE_MANAGED_CLUSTERS),
-    "multiclusterhub": _load_tasks(DELETE_MCH),
-    "validate_rbac": _load_tasks(VALIDATE_RBAC),
+#: The task files B4.1 names, under the keys B4.1 gives them.
+_NAMED_TASK_FILES = {
+    "main": DECOMMISSION_MAIN,
+    "observability": DELETE_OBSERVABILITY,
+    "managed_clusters": DELETE_MANAGED_CLUSTERS,
+    "multiclusterhub": DELETE_MCH,
+    "validate_rbac": VALIDATE_RBAC,
 }
 
-#: The parsed set must be exactly the files on disk, so a task file added later is not
-#: silently excluded from every guardrail above.
-_ROLE_TASK_FILE_NAMES = frozenset(
-    path.name for path in (ROLES_DIR / "decommission" / "tasks").iterdir() if path.suffix == ".yml"
-)
+
+def _role_task_file_paths() -> list:
+    """Every YAML task file in the role, at any depth and with either YAML suffix.
+
+    ``rglob`` and both suffixes are deliberate: an ``iterdir``/``*.yml`` form let a
+    ``probe_new.yaml`` and a ``tasks/sub/foo.yml`` pass the whole suite. Ruling C15
+    closed the identical hole in the Task B2 checkpoint guardrail; this is the same
+    hole class, fixed in the same general form.
+    """
+    return sorted(path for path in DECOMMISSION_TASKS_DIR.rglob("*") if path.suffix in {".yml", ".yaml"})
+
+
+#: EVERY decommission role task file, parsed and flattened once. ``validate_rbac`` is
+#: included so a mutating task added there cannot evade the guardrails, and any file
+#: not named by B4.1 is parsed under its path relative to ``tasks/`` -- so a task file
+#: added later is inside every guardrail from the moment it exists, not from the moment
+#: someone remembers to register it here.
+decommission_task_files = {name: _load_tasks(path) for name, path in _NAMED_TASK_FILES.items()}
+for _extra_path in _role_task_file_paths():
+    if _extra_path not in _NAMED_TASK_FILES.values():
+        decommission_task_files[str(_extra_path.relative_to(DECOMMISSION_TASKS_DIR))] = _load_tasks(_extra_path)
 
 
 def _task_actions(task: dict) -> list:
@@ -165,10 +181,20 @@ def checkpoint_writer_tasks(task_files: dict) -> list:
 
 
 def mutating_tasks(task_files: dict) -> list:
-    """Every parsed task in ``task_files`` whose module can mutate the cluster.
+    """Every parsed task that can mutate the cluster OR the controller filesystem.
 
     Inverted allowlist: a task counts as mutating unless every action it invokes is in
     ``_READ_ONLY_ACTIONS``. Block/rescue/always wrappers invoke no action and are skipped.
+
+    The inversion widens the old denylist on purpose, so read the return value as
+    "everything that persists something". It already returns ``acm_report_artifact``
+    (a controller-side file write, which is why that task carries a check-mode guard),
+    and it WILL return ``tomazb.acm_switchover.checkpoint_phase`` the moment Task B5
+    wires it in -- the retired ``_MUTATING_MODULES`` denylist explicitly excluded that
+    module. B5 must therefore either guard its checkpoint tasks with
+    ``not ansible_check_mode`` or classify the action here deliberately; being surprised
+    by ``test_every_mutating_task_is_check_mode_guarded`` is not the intended outcome,
+    but neither is a checkpoint write slipping past it.
     """
     return [
         task
@@ -197,7 +223,9 @@ def outcome_recording_tasks(task_files: dict) -> list:
 def recorded_outcome_values(task: dict) -> set:
     """Every outcome VALUE literal one recording task can write, family keys removed."""
     recorded = str(task["ansible.builtin.set_fact"]["acm_switchover_decommission_outcomes"])
-    return set(re.findall(r"'([a-z_]+)'", recorded)) - set(_OUTCOME_FAMILIES)
+    # Case-sensitive vocabulary: a lowercase-only pattern let 'Completed' through,
+    # because the task's other branch kept the captured set non-empty and in-vocabulary.
+    return set(re.findall(r"'([A-Za-z_][A-Za-z0-9_]*)'", recorded)) - set(_OUTCOME_FAMILIES)
 
 
 class TestDecommissionMain:
@@ -1264,14 +1292,17 @@ def test_every_recorded_outcome_value_is_in_the_vocabulary():
 
 
 def test_every_role_task_file_is_covered_by_the_guardrails():
-    """A task file added later must not sit outside every contract test in this module."""
-    assert _ROLE_TASK_FILE_NAMES == {
-        DECOMMISSION_MAIN.name,
-        DELETE_OBSERVABILITY.name,
-        DELETE_MANAGED_CLUSTERS.name,
-        DELETE_MCH.name,
-        VALIDATE_RBAC.name,
-    }, "a decommission role task file exists that decommission_task_files does not parse"
+    """A task file added later is auto-parsed AND must be classified deliberately.
+
+    Auto-parsing puts a new file inside the guards immediately; this assertion then
+    fails so the addition is noticed rather than absorbed silently. It covers ``.yml``
+    and ``.yaml`` at any depth -- an ``iterdir``/``*.yml`` form let both a
+    ``probe_new.yaml`` and a ``tasks/sub/foo.yml`` evade the entire suite.
+    """
+    assert set(_role_task_file_paths()) == set(_NAMED_TASK_FILES.values()), (
+        "an unregistered decommission role task file exists; it is already parsed into "
+        "decommission_task_files, but add it to _NAMED_TASK_FILES so its role is explicit"
+    )
 
 
 def test_no_substep_records_the_refused_outcome():
@@ -1282,13 +1313,19 @@ def test_no_substep_records_the_refused_outcome():
 
 
 def test_every_mutating_task_is_check_mode_guarded():
-    """Native check mode must issue no cluster mutation (amendment section 14).
+    """Native check mode must persist nothing (amendment section 14).
 
-    A module in CHECK_MODE_NATIVE_MODULES is exempt: section 14.2 requires
-    ``acm_uid_guarded_delete`` to RUN in check mode, stopping after the live read
-    and UID validation and returning ``changed: false`` with an explicit
-    ``would_change``. Guarding it with ``not ansible_check_mode`` would defeat the
-    prediction PR C is required to produce.
+    A module in ``CHECK_MODE_NATIVE_MODULES`` is exempt, because section 14.2 requires
+    a natively check-mode-safe module to keep RUNNING under ``--check`` rather than be
+    skipped. Today that set holds only ``acm_k8s_read_outcome``, which is read-only by
+    contract and therefore already in ``_READ_ONLY_ACTIONS`` -- so **the exemption is
+    currently a no-op**, and it is kept as the seam PR C and PR E extend.
+
+    Extending it is not free: ``acm_uid_guarded_delete`` is deliberately NOT exempt
+    here, because it does not exist yet and native check-mode safety is not assumable.
+    Removing this role's three guards put three real DELETEs on the fake API under
+    ``--check``. PR C adds the module, its exemption, and a module-level test proving it
+    issues no DELETE in check mode, in one PR.
     """
     mutators = [
         task
@@ -1440,8 +1477,18 @@ def test_a_skipped_observability_family_is_recorded_as_not_requested():
 
 
 def test_b_stage_check_mode_reports_no_actual_or_speculative_change():
+    """A CLEAN preview must report `pass` and exit zero.
+
+    The other direction of the F4 honesty rule: an artifact that cries failure on every
+    preview is as dishonest as one that always says pass. Without these two assertions,
+    initialising `_acm_decommission_substep_rescued` to `ansible_check_mode` instead of
+    `false` left the whole suite green while every operator preview published
+    `status: fail` with a non-zero return code.
+    """
     result = run_decommission_role(check_mode=True)
     summary = result["acm_switchover_decommission_result"]
+    assert summary["status"] == "pass"
+    assert result["returncode"] == 0
     assert summary["changed"] is False
     assert summary["would_change"] is False
     assert not [task for task in result["tasks"] if task["changed"]]
@@ -1470,10 +1517,15 @@ def test_b_stage_check_mode_issues_no_delete():
 
 
 def test_dry_run_records_no_substep_outcome():
-    """A dry run previews; a later live run must trust nothing it observed."""
+    """A dry run previews; a later live run must trust nothing it observed.
+
+    `status == "pass"` and `returncode == 0` also pin the over-correction direction: a
+    clean dry run must not be published as a failure.
+    """
     result = run_decommission_role(execution_mode="dry_run")
     summary = result["acm_switchover_decommission_result"]
     assert summary["substeps"] == {}
     assert summary["status"] == "pass"
+    assert result["returncode"] == 0
     assert summary["changed"] is False
     assert result["delete_calls"] == []
