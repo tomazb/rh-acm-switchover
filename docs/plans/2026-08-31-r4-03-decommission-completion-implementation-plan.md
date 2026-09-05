@@ -3795,7 +3795,17 @@ and keeps its current rule (`phase: preflight`, `status: enter`, two-hub or rest
 - `status` is any member of `CHECKPOINT_VALID_STATUSES` — `enter`, `pass`, `fail`, or `reset`.
 
 Illegal, and failing closed, for: any other phase (including `preflight`); any status outside that
-set; and any combination with `identity_barrier: true`. It is never inferred automatically (§10.3.1).
+set; any combination with `identity_barrier: true`; and **any transition where
+`checkpoint.reset` or `checkpoint.reset_from` is set**. It is never inferred automatically (§10.3.1).
+
+That last exclusion is load-bearing, not defensive. The reset configuration bypasses identity
+validation: `_build_reset_from_checkpoint` overwrites `operation_identity` with the supplied value
+unconditionally (`checkpoint_phase.py:750`) and returns before validation, and `:704` skips
+`validate_operation_identity` whenever `has_explicit_reset` (`:375`) is true — which the shared
+`acm_switchover_execution.checkpoint` makes possible on `pass` and `fail` as well. Standalone is the
+first caller that both supplies a primary-only identity and is legal off `preflight`/`enter`, so
+without this exclusion a standalone transition could silently overwrite an established two-hub
+identity.
 
 **There is no `exit` status.** `CHECKPOINT_VALID_STATUSES` is
 `frozenset({"enter", "pass", "fail", "reset"})` (`module_utils/checkpoint.py:17`), and existing roles
@@ -4005,6 +4015,7 @@ TDD is required for this blocker. Every case below is a behavioural test, not a 
 | 19 | existing barrier isolation | `identity_barrier: true` remains invalid with `phase: decommission` |
 | 20 | integrated finalization isolation | exercise the real `roles/finalization/tasks/handle_old_hub.yml` path and prove it includes the shared decommission role, sets no `standalone_decommission_identity`, enters no standalone `decommission` phase, and keeps its two-hub checkpoint identity valid |
 | 21 | direct action ambient-context guard | call the standalone action path directly with an absent or empty primary kubeconfig; require failure **before** any Kubernetes client routing. Do not rely on the role's earlier assert, which a direct action call bypasses |
+| 22 | standalone argument with `checkpoint.reset: true`, and again with `checkpoint.reset_from` set | **fails closed** on every status. Then prove the hole it guards is real: with the exclusion removed, a standalone transition against a checkpoint holding an established **two-hub** identity overwrites it with the primary-only one and no `CheckpointIdentityMismatch` is raised (`checkpoint_phase.py:750`, and `:704` skipping validation when `has_explicit_reset`). A test that only asserts the refusal, without demonstrating the bypass it prevents, does not close this row |
 
 ### 10.3.8 Non-live modes
 
@@ -5917,7 +5928,7 @@ identity, and a fresh standalone run has none: this is the
 `B5_STANDALONE_CHECKPOINT_IDENTITY_BLOCKER` that stopped the first runtime attempt. §10.3 defines
 the contract this task must implement — the explicit primary-only identity-barrier mode, the live
 `kube-system` UID read, persistence into the existing operation-identity schema, and the resume
-rule. Implementing the checkpoint enter/exit without §10.3 produces a role that cannot run at all
+rule. Implementing the checkpoint `enter`/`pass` transitions without §10.3 produces a workflow that cannot run at all
 in execute mode, because `checkpoint.enabled: false` is refused by this task's own gate and
 `checkpoint.enabled: true` is refused by the action plugin.
 
@@ -6111,27 +6122,38 @@ using it starts from a state a real operator cannot reach — which is exactly h
 attempt reached B6 before the blocker surfaced. Task B5 must ALSO add a test that drives the
 **real** `checkpoint_phase` action for a fresh standalone execute-mode run with no pre-existing
 checkpoint, and prove the `decommission` phase enters. §10.3.7 items 14-15 are the acceptance gate; the
-harness is supplemental. The full behavioural matrix that must pass is §10.3.7 items 1-13.
+harness is supplemental. The full behavioural matrix that must pass is §10.3.7 items 1-22; items 15-22 are the ones this correction added, and none of them is optional.
 
 - [ ] **Step 7: Implement the collection wiring**
 
-Add to `roles/decommission/tasks/main.yml`, after the confirmed-gate and before the first
-`delete_*.yml` include:
+Ownership is split, and getting it wrong is what the independent validator rejected. Read §10.3.5a
+and §10.3.5b before writing anything.
 
-1. a `checkpoint_phase` **enter** task for the `decommission` phase, carrying
-   `when: not ansible_check_mode`;
-2. an assertion, evaluated only when `execution_mode` is `execute` and not in check mode, that the
-   checkpoint is available, failing the play with an explicit message when it is not;
-3. a matching `checkpoint_phase` completion task after the last include, with the same guard.
-   **Note the status name:** there is no `exit` status. `CHECKPOINT_VALID_STATUSES` is
-   `{enter, pass, fail, reset}`, and existing roles express completion as `status: pass`
-   (`roles/finalization/tasks/main.yml:131`).
+**7a — `playbooks/decommission.yml` owns the standalone phase lifecycle.** All checkpoint
+transitions live here, never unconditionally in the role, because
+`roles/finalization/tasks/handle_old_hub.yml:83-90` includes this same role from inside integrated
+finalization — already under a two-hub `finalization` checkpoint — when
+`old_hub_action == 'decommission'` and the mode is not dry-run. Each transition carries
+`standalone_decommission_identity: true`:
 
-**Ownership correction — read §10.3.5a before implementing the above.** The `enter`/`pass`/`fail`
-lifecycle belongs to `playbooks/decommission.yml`, **not** unconditionally to the role, because
-`roles/finalization/tasks/handle_old_hub.yml:83-89` includes this same role from inside integrated
-finalization, already under a two-hub `finalization` checkpoint. The role keeps only the mode
-gating, the availability refusal, and result publication.
+1. `checkpoint_phase` `status: enter` before the role runs;
+2. `status: pass` after the role succeeds;
+3. `status: fail` in a `rescue`, followed by re-raising the original role failure.
+
+There is **no** `exit` status: `CHECKPOINT_VALID_STATUSES` is `{enter, pass, fail, reset}`
+(`module_utils/checkpoint.py:17`), and existing roles express completion as `status: pass`
+(`roles/finalization/tasks/main.yml:134`).
+
+**Note the playbook's current shape.** `playbooks/decommission.yml:16-17` uses a bare `roles:` list.
+The block/rescue flow below requires converting it to `tasks:` with `include_role`; that conversion
+is in scope for this task.
+
+**7b — `roles/decommission/tasks/main.yml` owns no phase lifecycle.** It keeps only what it already
+owns: the execute/validate mode gating, the checkpoint-availability refusal (evaluated when the mode
+is `execute` and not in check mode, failing the play with an explicit message), and result
+publication. It MUST NOT add a `checkpoint_phase` task, and it MUST NOT infer standalone mode from a
+missing secondary, from its caller, from checkpoint shape, or from a failed identity validation
+(§10.3.1, §10.3.5a).
 
 The standalone playbook flow is:
 
@@ -6166,22 +6188,37 @@ finalization checkpoint (two-hub identity)
   -> finalization pass/fail
 ```
 
-Also add `"decommission"` as the last element of `KNOWN_PHASES`, and implement the §10.3 standalone
-identity bootstrap — the explicit primary-only identity-barrier mode gated to
-`phase: decommission, status: enter`, the live primary `kube-system` UID read, and persistence into
-the existing operation-identity schema. Without it the wiring above cannot run in execute mode at
-all (§10.3).
+**7c — `module_utils/checkpoint.py` and `plugins/action/checkpoint_phase.py`.** Add `"decommission"`
+as the last element of `KNOWN_PHASES`, and implement the §10.3 standalone identity bootstrap: the
+explicit `standalone_decommission_identity: true` argument, legal for `phase: decommission` with
+**any** of the four statuses `enter`/`pass`/`fail`/`reset` (§10.3.2), mutually exclusive with
+`identity_barrier`, performing the live primary `kube-system` UID read and supplying the primary-only
+identity as an explicit `expected_operation_identity` on every one of those transitions (§10.3.5c).
+Without it the wiring above cannot run in execute mode at all.
 
-Two traps, both observed in the first runtime attempt:
+Three traps, the first two observed in the first runtime attempt and the third found by review:
 
-- The **exit** task must not be placed in an `always`. Doing so records a *failed* teardown as a
-  completed phase, which lets a later rerun skip work it never did.
+- The completion (`status: pass`) task must not be placed in an `always`. Doing so records a
+  *failed* teardown as a completed phase, which lets a later rerun skip work it never did.
 - The availability gate fires on `mode == 'execute'` while every delete guard in this role fires on
   `mode != 'dry_run'`. `validate` therefore falls between them and would delete with no durable
   identity while publishing a passed validation. The gate must refuse `validate` explicitly.
   Widening it to `!= 'dry_run'` is **not** the fix: `checkpoint_phase.py:328` treats `validate` as
   non-mutating, so the phase would never be recorded and the run would delete anyway. The
   collection-wide `validate` audit stays deferred to issue #284.
+- **The standalone mode must fail closed when `checkpoint.reset` or `checkpoint.reset_from` is set.**
+  Permitting the mode on all four statuses is required for the run to complete (§10.3.2), but the
+  reset *configuration* bypasses the identity check the whole design rests on, and standalone is the
+  first caller that both supplies a primary-only identity and is legal off `preflight`/`enter`.
+  Verified in source: `_build_reset_from_checkpoint` assigns
+  `normalized_checkpoint["operation_identity"] = expected_operation_identity` unconditionally at
+  `checkpoint_phase.py:750` and returns **before** validation; and `:704` runs
+  `validate_operation_identity` only `if ... and not has_explicit_reset`, where `has_explicit_reset`
+  (`:375`) is true whenever `checkpoint.reset` or `reset_from` is set — including on `pass` and
+  `fail`, since that flag lives in the shared `acm_switchover_execution.checkpoint`. Left unguarded,
+  a standalone transition could overwrite an established two-hub identity with a primary-only one
+  with no validation, which is exactly the downgrade §10.3.4 and §10.3.7 item 10 forbid, and would
+  make §10.3.5's "a mismatch fails the play" and item 16's fail-closed rule untrue.
 
 No teardown-record writes are added here: PR B only establishes the phase, the identity, and the
 availability requirement, and C, D, and E write records inside it.
@@ -6218,7 +6255,7 @@ python -m pytest tests/test_teardown_record.py tests/test_decommission.py \
 ```
 
 Also run the collection teardown-record tests, the checkpoint vocabulary guardrail, the
-decommission role-contract tests, the real-action standalone identity tests (§10.3.7 items 14-21), the
+decommission role-contract tests, the real-action standalone identity tests (§10.3.7 items 14-22), the
 decommission scenario tests, and the checkpoint action tests affected by the new `decommission`
 phase.
 
@@ -6253,7 +6290,7 @@ Record evidence for each, from the real action path rather than a harness fixtur
 - standalone **`reset`** prunes correctly and rebinds nothing (item 17);
 - **integrated finalization** runs the shared role with no `standalone_decommission_identity`, enters
   no `decommission` phase, and keeps its two-hub identity (item 20);
-- argument-misuse negatives all fail closed (items 18-19), and the direct-action ambient-context
+- argument-misuse negatives all fail closed (items 18-19, 22), and the direct-action ambient-context
   guard fails before client routing (item 21);
 - the **exact runtime file audit**: only the four Collection files named in Task B5 are touched, and
   the shared role owns no standalone phase lifecycle — no hidden caller inference anywhere.
