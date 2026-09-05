@@ -5902,8 +5902,11 @@ the July deletion boundary, and a default would let a caller silently opt out.
 
 **Intended behavior.** `run_decommission` constructs `RunRecord(state)` and passes it.
 `Finalization` passes the `RunRecord` it already holds at `modules/finalization.py:107`. The
-collection role enters and exits a `decommission` checkpoint phase through the existing
-`checkpoint_phase` action plugin, so `operational_data` is durable before the first DELETE.
+standalone collection **playbook** — `playbooks/decommission.yml`, not the shared role — drives the
+`decommission` checkpoint phase through the existing `checkpoint_phase` action plugin, so
+`operational_data` is durable before the first DELETE. See §10.3.5a for why the role must not own
+that lifecycle: `roles/finalization/tasks/handle_old_hub.yml` includes the same role from inside a
+two-hub `finalization` checkpoint.
 
 **The `decommission` phase does not exist yet.** `KNOWN_PHASES` in
 `plugins/module_utils/checkpoint.py` is `("preflight", "primary_prep", "activation",
@@ -6069,11 +6072,43 @@ python -m pytest tests/test_main.py tests/test_finalization.py tests/test_decomm
 Add to `tests/unit/test_decommission_role_contracts.py`, using the B4.1 contract:
 
 ```python
-def test_role_enters_a_checkpoint_phase_before_the_first_teardown_include():
-    tasks = decommission_task_files["main"]
-    phase_index = index_of_task_using(tasks, "checkpoint_phase")
-    first_teardown_index = index_of_first_include(tasks, "delete_")
-    assert phase_index < first_teardown_index
+# The standalone lifecycle is asserted against the PLAYBOOK, which owns it (§10.3.5a).
+# `decommission_playbook_tasks` is a new parsed surface alongside B4.1's
+# `decommission_task_files`: it yaml.safe_load()s playbooks/decommission.yml and returns the
+# play's task list. The role is NOT the lifecycle owner and must contain no checkpoint_phase.
+
+def test_playbook_enters_the_decommission_phase_before_including_the_role():
+    tasks = decommission_playbook_tasks()
+    enter = index_of_task_using(tasks, "checkpoint_phase")
+    include = index_of_task_using(tasks, "include_role")
+    assert enter != -1 and include != -1 and enter < include
+
+
+def test_playbook_passes_the_phase_after_the_role_succeeds():
+    tasks = decommission_playbook_tasks()
+    statuses = [t for t in all_checkpoint_phase_tasks(tasks) if _status_of(t) == "pass"]
+    assert statuses, "a successful standalone run must record status: pass"
+
+
+def test_playbook_fails_the_phase_from_a_rescue():
+    rescue = rescue_tasks_of(decommission_playbook_tasks())
+    assert [t for t in all_checkpoint_phase_tasks(rescue) if _status_of(t) == "fail"]
+
+
+def test_every_standalone_transition_carries_the_explicit_identity_argument():
+    for task in all_checkpoint_phase_tasks(decommission_playbook_tasks()):
+        args = task["tomazb.acm_switchover.checkpoint_phase"]
+        assert args.get("standalone_decommission_identity") is True
+        assert args.get("phase") == "decommission"
+
+
+def test_the_shared_role_owns_no_checkpoint_phase_lifecycle():
+    """Architecture, not an oversight: roles/finalization/tasks/handle_old_hub.yml includes
+    this same role from inside a two-hub finalization checkpoint (§10.3.5a/§10.3.5b)."""
+    for name, tasks in decommission_task_files.items():
+        assert index_of_task_using(tasks, "checkpoint_phase") == -1, (
+            f"{name} must not own the standalone phase lifecycle"
+        )
 
 
 def test_execute_mode_fails_closed_when_checkpointing_is_unavailable():
@@ -6098,12 +6133,24 @@ def test_dry_run_execution_mode_does_not_require_checkpointing():
 
 
 def test_every_checkpoint_writer_task_is_guarded_by_check_mode():
-    for task in checkpoint_writer_tasks(decommission_task_files):
+    """Scans the PLAYBOOK, which is where the writers now live. Scanning
+    `decommission_task_files` here would iterate an empty list and pass vacuously,
+    because the role owns no checkpoint writer by design."""
+    writers = all_checkpoint_phase_tasks(decommission_playbook_tasks())
+    assert writers, "the standalone playbook must own at least one checkpoint transition"
+    for task in writers:
         assert "not ansible_check_mode" in str(task.get("when", ""))
 ```
 
 `index_of_task_using`, `index_of_first_include`, and `checkpoint_writer_tasks` are small parsing
-helpers added next to `decommission_task_files` in the same file (B4.1).
+helpers added next to `decommission_task_files` in the same file (B4.1). This task adds four more
+beside them, all plain module-level names: `decommission_playbook_tasks()` (the `yaml.safe_load` of
+`playbooks/decommission.yml`, returning the play's task list), `all_checkpoint_phase_tasks(tasks)`,
+`rescue_tasks_of(tasks)`, and `_status_of(task)`. The playbook is a **distinct parsed surface** from
+`decommission_task_files`, which stays scoped to the role.
+
+The role-level tests below cover only what the role still owns: execute/validate mode gating, the
+checkpoint-availability refusal, and result publication. None of them asserts a lifecycle.
 
 - [ ] **Step 6: Run the collection tests and observe the expected failure**
 
@@ -6112,9 +6159,17 @@ PYTHONPATH=. python -m pytest \
   ansible_collections/tomazb/acm_switchover/tests/unit/test_decommission_role_contracts.py -q
 ```
 
-Expected: FAIL — `roles/decommission/tasks/main.yml` contains no `checkpoint_phase` task at all
-(amendment §4: "the decommission role never touches checkpoint or `operational_data`"), so
-`index_of_task_using` returns no index and the execute-mode fail-closed test finds `status == "pass"`.
+Expected RED, and it is about the **playbook**, not the role: `playbooks/decommission.yml` is still
+in its bare `roles:` form (`:16-17`) with no `tasks:` list, so `decommission_playbook_tasks()` finds
+no tasks and all four playbook lifecycle tests fail — no `enter` before the include, no `pass`, no
+`rescue`/`fail`, and no `standalone_decommission_identity` argument anywhere. The execute-mode
+fail-closed test additionally finds `status == "pass"`.
+
+`test_the_shared_role_owns_no_checkpoint_phase_lifecycle` is expected to **pass from the start**, and
+that is correct rather than a missing RED: the role's absence of `checkpoint_phase` is the required
+architecture (§10.3.5a), not a defect to fix. It is a regression guard against a later change putting
+the lifecycle back into the shared role, and amendment §4 — "the decommission role never touches
+checkpoint or `operational_data`" — remains accurate for the role.
 
 **The role-contract harness alone cannot close this task.** Its `checkpoint_available=True` option
 seeds a checkpoint that already carries a `build_operation_identity(...)` payload, so every test
@@ -6237,8 +6292,14 @@ PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/sc
 The wiring must add no second construction path for `Decommission` and no conditional
 `RunRecord`. Rerun the two commands in Steps 4 and 8, then:
 
+Stage every file the corrected scope names — all four mandatory Collection runtime files, not just
+the role. Never `git add .`:
+
 ```bash
 git add acm_switchover.py modules/decommission.py modules/finalization.py \
+  ansible_collections/tomazb/acm_switchover/plugins/action/checkpoint_phase.py \
+  ansible_collections/tomazb/acm_switchover/plugins/module_utils/checkpoint.py \
+  ansible_collections/tomazb/acm_switchover/playbooks/decommission.yml \
   ansible_collections/tomazb/acm_switchover/roles/decommission/tasks/main.yml \
   tests/ ansible_collections/tomazb/acm_switchover/tests/
 git commit -m "feat: give both decommission entry points durable state"
@@ -6323,6 +6384,49 @@ result and durable-state interfaces become true here; do not defer those descrip
   it is shared switchover configuration and flipping it would alter unrelated workflows.
 
 Do not claim collection-wide `validate` safety anywhere; reference issue #284 instead.
+
+**The reset contract must be published, and it has three distinct meanings that operator docs must
+not blur.**
+
+1. **`checkpoint.reset: true` and non-empty `checkpoint.reset_from` are REFUSED** on any transition
+   carrying `standalone_decommission_identity: true`. Document this as the fail-closed guard it is,
+   with the reason: those configuration flags bypass identity validation
+   (`_build_reset_from_checkpoint` overwrites `operation_identity` unconditionally at
+   `checkpoint_phase.py:750` and returns before validation; `:704` skips
+   `validate_operation_identity` whenever `has_explicit_reset` at `:375`), so honouring them would
+   let a standalone transition overwrite an established two-hub identity. State the refusal and the
+   consequence; do not print internal line numbers in operator docs.
+2. **`status: reset` is a checkpoint transition status, not an operator variable.** Under the
+   explicit standalone identity path, with the configuration reset flags unset, it performs a fresh
+   identity proof and prunes the `decommission` phase without rebinding operation identity. Do NOT
+   present it as something an operator sets: no supported interface exposes a transition status.
+   `acm_switchover_execution.checkpoint` exposes `enabled`, `backend`, `path`, `reset` and
+   `reset_from` — and the first two of those five are the ones this section refuses.
+3. **Generic checkpoint semantics are unchanged and must be documented separately.** An ordinary
+   full `checkpoint.reset` rebuilds state and destroys teardown `operational_data`; an ordinary
+   `reset_from` retains and revalidates it; integrated decommission continues under normal two-hub
+   `finalization` checkpoint semantics. The B2/B4 generic reset tests exercise those paths and do
+   **not** grant the standalone identity path permission to accept the flags.
+
+**The supported way to start a standalone decommission completely fresh** — name it exactly, and
+introduce no new flag, API, action mode, or state mechanism, because none is needed:
+
+> Remove, rename, or repoint the operator-owned checkpoint file at
+> `acm_switchover_execution.checkpoint.path`.
+
+This is an existing supported interface, verified against current source: the backend is restricted
+to `file` (`checkpoint_phase.py:353-356`), the path is an operator-supplied validated variable
+(`:360`), and a run against an absent file builds a fresh record rather than failing
+(`_load_checkpoint`, `:756-757`) — which is exactly the empty-state condition §10.3.7 item 15
+requires the acceptance test to start from. Document that this discards the teardown obligations the
+record carried, with the same consequence the existing full-reset limitation already carries
+(amendment §13): a post-wipe rerun that finds a CR absent cannot distinguish "already torn down"
+from "never attempted".
+
+**Retry is not reset, and docs must say so.** An ordinary rerun of a failed standalone decommission
+resumes the retained checkpoint and re-proves physical identity on every transition. It does not need
+— and must not use — the refused reset flags. Reach for the file-level wipe above only when
+deliberately abandoning the recorded obligations.
 
 ```bash
 python -m pytest tests/test_documentation_guardrails.py -q
