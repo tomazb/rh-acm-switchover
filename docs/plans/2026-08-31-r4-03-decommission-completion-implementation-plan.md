@@ -293,29 +293,32 @@ task requires is discharged below.
 | PR | Title | Form factors | New API calls | RBAC change |
 | --- | --- | --- | --- | --- |
 | A | Shared strict-read contract | both | discovery probe (no new verb) | none |
-| B | Durable teardown state, outcome algebra, refusal abort | both | none | none |
+| B | Durable teardown state, outcome algebra, refusal abort | both | none new *in kind*; standalone collection decommission makes one existing read-only operation newly reachable — primary `namespaces get` on `kube-system` for checkpoint physical identity (§10.3) | none — the permission already exists on every surface |
 | C | Guarded deletion, MCO teardown, GLM-H6, destination gate | both | MCO CR `get`, destination MCO/Namespace reads | yes |
 | D | ManagedCluster teardown | both | `managedclusters get` | yes |
 | E | MCH identity and completion | both | `multiclusterhubs get`, Deployments `get`, ReplicaSets `get`, CSVs `get`/`list` | yes |
 | F | Integrated proof and consistency closure | both | none | none |
 
 **Independent reviewability.** A is a read algebra with no destructive caller. B is a state and
-result-vocabulary change with no new API call. C, D, and E each own exactly one resource family's
-teardown. F changes no teardown algorithm.
+result-vocabulary change with no new *mutating* API call; its one read-only expansion is the
+already-granted standalone identity read of §10.3. C, D, and E each own exactly one resource
+family's teardown. F changes no teardown algorithm.
 
 **Every intermediate merged state is fail-closed.**
 
 | After | State |
 | --- | --- |
 | A | A closed strict-read algebra exists in both form factors: exact-resource discovery, custom list/GET, live Namespace absence, complete Pod LIST, and strict Deployment/ReplicaSet GET producers. Outcomes that were silently empty or partial become `error`; both merged R3-02 consumers already fail closed on non-`ok`. |
-| B | Refusal now aborts and exits non-zero; top-level cancellation remains unsuccessful; the collection artifact reports actual `changed: false` in check mode and an independent B-stage `would_change: false`. Python dry-run writes no result or state authority. Teardown records exist but no teardown yet writes one. |
+| B | Refusal now aborts and exits non-zero; top-level cancellation remains unsuccessful; the collection artifact reports actual `changed: false` in check mode and an independent B-stage `would_change: false`. Python dry-run writes no result or state authority. Teardown records exist but no teardown yet writes one. Standalone collection execute-mode decommission establishes physical hub identity before the first DELETE (§10.3) and fails closed without it; `validate` is refused for this role. |
 | C | MCO teardown is guarded and proven. Every C writer and DELETE is check-mode/dry-run-safe, prediction is separate, and the reset-laundering limitation is already operator-visible. The destination gate blocks. ManagedCluster and MCH teardown remain as today — R4-C1 stays open and is not represented as closed. |
 | D | ManagedCluster inventory and deletion are strict, guarded, and independently preview-safe: no DELETE, record write, or actual change in check mode/dry-run. MCH remains as today. |
 | E | MCH identity and completion are proven and independently preview-safe; R4-C1 closes. |
 | F | Integrated scenarios and cross-PR assertions prove the safety already delivered by B/C/D/E. F adds no missing check-mode branch, Python dry-run branch, writer guard, delete guard, result semantic, or first-publication documentation. |
 
 **No API call lands before its RBAC requirement.** C, D, and E each carry the complete RBAC
-cross-surface change for the calls they introduce, in the same PR (§14).
+cross-surface change for the calls they introduce, in the same PR (§14). B's one newly-reachable
+read needs no change because the permission is already granted on every surface — verified, not
+assumed (§10.3.6, §14 row 0).
 
 **No stale evidence becomes mutation authority.** The destination gate result is never persisted
 (C). Teardown records carry obligations, and every destructive decision re-proves live (B, C, D, E).
@@ -3353,9 +3356,23 @@ behavior is not implemented here (§19.1).
 **Branch:** `feature/r4-03-state-outcomes` · **Worktree:** `.claude/worktrees/r4-03-state-outcomes`
 
 **Purpose.** Introduce the durable teardown schema and the decommission outcome vocabulary in both
-form factors, and make an interactive refusal abort the run. This PR adds **no new Kubernetes API
-call**, so it carries no RBAC change; that is exactly why it is separated from the teardown
-mechanics in PR C. Closes R4-C2 and amendment criteria A3 and A5.
+form factors, and make an interactive refusal abort the run. Closes R4-C2 and amendment criteria
+A3 and A5.
+
+**API boundary — corrected.** An earlier revision of this section stated that PR B adds "no new
+Kubernetes API call". That absolute is **false** and blocked the runtime slice: see §10.3. The
+precise rule is:
+
+- PR B adds **no new destructive or mutating** Kubernetes API operation. That is still what
+  separates it from the teardown mechanics in PR C.
+- PR B does make **one existing read-only operation newly reachable**: standalone collection
+  decommission must read the primary hub's `kube-system` Namespace UID to establish checkpoint
+  physical identity before any teardown. The operation is not new in kind — the preflight identity
+  barrier already performs exactly this read (`plugins/action/checkpoint_phase.py`
+  `_read_live_namespace_uid`) — it is newly reachable from an entry point that previously never
+  established identity.
+- PR B therefore still carries **no RBAC change**: `namespaces get` is already granted on every
+  surface (§10.3.6).
 
 **Prerequisite:** PR A merged.
 
@@ -3372,6 +3389,9 @@ mechanics in PR C. Closes R4-C2 and amendment criteria A3 and A5.
 | Caller mapping | CLI maps to exit status; `Finalization` maps to `SwitchoverError` with its own message context | Amendment §11 item 2 — caller-distinct failure text is caller-supplied context |
 | Substep enablement | `not_requested` when configuration disables the substep | Amendment §7 table |
 | Refusal persistence | never persisted | Amendment §13 "deliberately not persisted" |
+| Standalone checkpoint identity | explicit primary-only identity barrier mode, live `kube-system` UID, persisted into the **existing** operation-identity schema | §10.3; amendment §13 requires durable state before the first DELETE, and `AGENTS.md` requires execution-time discovery |
+| Standalone identity inference | **forbidden** — the mode is explicit and never inferred from a missing secondary, an empty context, a role invocation, checkpoint shape, or a failed lookup | §10.3.1; a malformed two-hub configuration must fail, not silently degrade to one-hub semantics |
+| Standalone API/RBAC | one newly-reachable read-only `namespaces get`; no RBAC delta | §10.3.6 verified against all four RBAC surfaces |
 
 ## 10.2 Durable schema
 
@@ -3700,6 +3720,165 @@ Enforced by `RunRecord` on read and write, and by `checkpoint.py` on read and wr
 `operator_deployment` and `operator_identity_unavailable` are **written by PR E**, which owns MCH
 identity. PR B introduces their validation so no later PR can write a shape the reader does not
 check, and Task B1/B2 test every malformed nested case listed above on both sides.
+
+## 10.3 Standalone decommission checkpoint identity
+
+**Why this section exists.** The first runtime attempt at PR B reached B6 and stopped with
+`B5_STANDALONE_CHECKPOINT_IDENTITY_BLOCKER`. Reproduced against the real action plugin, with no
+role and no test harness — a playbook invoking only
+`checkpoint_phase: {phase: decommission, status: enter}` with `mode: execute`,
+`checkpoint.enabled: true` and an empty state directory:
+
+```
+fatal: [localhost]: FAILED! => {"changed": false,
+  "msg": "Checkpoint has no established operation identity;
+          run the preflight identity barrier first."}
+```
+
+Both configurations fail, so standalone execute-mode collection decommission is impossible
+without this section:
+
+| `checkpoint.enabled` | Outcome before this repair |
+| --- | --- |
+| `false` | B5's own gate refuses: execute mode requires durable checkpoint state |
+| `true` | `checkpoint_phase` refuses: no established operation identity |
+
+**Verified cause**, `plugins/action/checkpoint_phase.py:396-411`. With
+`expected_operation_identity` `None` (the decommission role supplies none) and a fresh record whose
+`operation_identity` is `None`: not an unsafe legacy checkpoint; schema 2.0 but `completed_phases`
+empty, so the more specific refusal does not apply; falls to `elif established_identity is None:`
+and, because enabled ∧ `execute` ∧ not check mode, returns `_missing_operation_identity_failure()`
+(`:558`). Identity is only ever built by `_run_identity_barrier` (`:95-212`), which is gated to
+`phase=preflight, status=enter` (`:85`) and which `playbooks/decommission.yml` never runs — that
+playbook invokes the role directly (`roles:` at `:16-17`).
+
+**Why the earlier evidence missed it.** The B4.1 harness seeded a schema-2.0 checkpoint already
+carrying a `build_operation_identity(...)` payload, so every "checkpointing available" test started
+from a state a real operator cannot reach. A harness flag such as `checkpoint_available=True` is
+**supplemental only** and cannot satisfy this gate (§10.3.7 item 14).
+
+### 10.3.0 Alternatives considered
+
+| Alternative | Disposition | Reason |
+| --- | --- | --- |
+| A — allow a standalone checkpoint with no physical-hub UID | **Reject** | Mutation authority would stop binding to a physical cluster. A context later repointed at another cluster would resume a teardown against the wrong hub — the exact failure the identity barrier exists to prevent. No higher-rank authority permits it. |
+| B — accept `cluster_uid` from variables, prior facts, or a previous checkpoint | **Reject** | Violates `AGENTS.md` execution-time discovery. A stale or caller-supplied UID would authorise deletion against a cluster nobody verified at execution time. |
+| C — explicit primary-only live standalone identity barrier | **Adopt** | Reuses the existing mechanism and its fresh-read semantics, adds no new *kind* of operation, needs no RBAC change, and keeps identity bound to a physical cluster. |
+| D — run full preflight, or the current two-hub barrier, from standalone decommission | **Reject** | Requires a secondary hub standalone decommission does not have, and imports the two-hub distinctness predicate that explicitly does not apply to a one-hub workflow. Existing code is not a reason to adopt it. |
+
+### 10.3.1 Explicit mode, never inferred
+
+The standalone path is entered only through an **explicit** identity-barrier mode on the checkpoint
+action. It MUST NOT be inferred from any of: a missing `secondary` hub; an empty or absent context;
+which role or playbook invoked the transition; the shape of an existing checkpoint; or a failed
+normal identity lookup. A malformed normal switchover configuration **fails**; it never degrades
+into one-hub semantics.
+
+### 10.3.2 Invocation constraints
+
+Legal only for the standalone decommission entry point and only for that phase transition:
+
+- `phase: decommission`
+- `status: enter`
+- the explicit standalone-decommission identity mode
+
+Any other combination — the mode on `phase: preflight`, on a `pass`/`fail`/`reset` status, or on any
+other phase — **fails closed**. This mirrors the existing barrier's own gate, which already refuses
+anything but `phase=preflight, status=enter` (`checkpoint_phase.py:85`).
+
+### 10.3.3 Physical identity read
+
+In execute mode the transition MUST freshly read:
+
+| Property | Value |
+| --- | --- |
+| Hub | the primary/source hub selected by the standalone decommission configuration |
+| Resource | `v1/Namespace` |
+| Name | `kube-system` |
+| Field | `metadata.uid` |
+
+The read MUST be routed by the explicit primary `kubeconfig` and `context`. **No ambient or default
+Kubernetes context fallback.** A missing, malformed, unreadable, ambiguous, transport-failed,
+authorization-failed, or empty UID is **fatal before any teardown**. The existing
+`_validated_namespace_uid` (`:263-279`) already enforces exactly this shape — exactly one resource,
+a mapping `metadata`, a non-empty string `uid` — and is the validator to reuse rather than
+reimplement.
+
+### 10.3.4 One-hub semantics
+
+Standalone decommission establishes only the **primary** context and the **primary** physical
+cluster UID. It does not require secondary identity, does not read a secondary hub, and does not
+apply the two-hub distinctness predicate (neither the context inequality at `:145` nor the UID
+inequality at `:176`). None of this weakens the normal switchover or restore-only rules, which keep
+their existing `required_roles` behaviour unchanged.
+
+### 10.3.5 Durable operation identity
+
+Use the **existing** operation-identity schema; add no new checkpoint schema and no new durable key.
+`build_operation_identity` already produces every field needed, and
+`_canonical_established_operation_identity` (`:565`) already tolerates the one-hub shape: it treats a
+record as canonical when `primary_context` and `primary_cluster_uid` are non-empty, and it already
+defaults the secondary and operation fields. The persisted standalone record therefore carries a
+non-empty `primary_context` and `primary_cluster_uid`, with the secondary fields empty, which makes
+standalone decommission unambiguous on resume.
+
+If implementation proves the existing helper cannot represent this without change, that is a
+finding to raise — not a licence to add a second durable key.
+
+### 10.3.6 API and RBAC — verified, no delta
+
+`NEW_KUBERNETES_API_OPERATIONS`: one newly-reachable read-only operation, primary
+`GET v1/namespaces/kube-system`. Not new in kind — the preflight barrier already issues it.
+
+`RBAC_PERMISSION_DELTA_REQUIRED`: **no**, verified against current base on all four surfaces:
+
+| Surface | Evidence |
+| --- | --- |
+| Collection RBAC validator | `plugins/modules/acm_rbac_validate.py:251` — `DECOMMISSION_CLUSTER_PERMISSIONS` already contains `("", "namespaces", ["get"])` |
+| Root manifests | `deploy/rbac/clusterrole.yaml` grants `namespaces ["get", "list"]` for the operator **and** validator roles |
+| Helm chart | `deploy/helm/acm-switchover-rbac/templates/clusterrole.yaml:16,108` — identical grant |
+| Python validator | decommission permission set pairs with the same cluster-read grant (amendment §15) |
+
+The collection-bundled manifests are the shared `deploy/rbac/*.yaml` assets referenced by
+`RBAC_BASE_ASSETS`, so they inherit the root grant. **No RBAC artifact may be edited for this
+change.** If implementation finds a permission that must actually change, stop and report
+`RBAC_DESIGN_CONFLICT`.
+
+### 10.3.7 Required behaviour, and the tests that must prove it
+
+TDD is required for this blocker. Every case below is a behavioural test, not a YAML assertion:
+
+| # | Case | Required outcome |
+| --- | --- | --- |
+| 1 | fresh standalone execute, checkpoint enabled | the live primary UID read occurs; identity is persisted **before** teardown; the `decommission` phase enters |
+| 2 | checkpoint disabled in execute | fail **before any delete** |
+| 3 | UID read 404 / malformed / error / authorization / transport failure | fail before any delete |
+| 4 | empty or malformed UID | fail before any delete |
+| 5 | resume, same context and same UID | accepted, subject to the normal teardown obligations |
+| 6 | resume, same context but different UID | fail **before any mutation** |
+| 7 | changed context | fail unless the persisted operation-identity contract explicitly permits an equivalent identity |
+| 8 | standalone path | no secondary context required; **no secondary UID request is issued** |
+| 9 | normal two-hub path | retains its existing two-hub identity behaviour; standalone mode cannot weaken it |
+| 10 | established two-hub checkpoint | cannot be downgraded or rebound into standalone identity |
+| 11 | native check mode, `dry_run`, `validate` | no checkpoint identity or state mutation, no DELETE, `changed: false` |
+| 12 | API-operation audit | the sole PR-B API expansion is the primary `kube-system` Namespace GET |
+| 13 | RBAC | the existing permission suffices; base-relative RBAC permission sets are unchanged |
+| 14 | real-action acceptance | the gate is satisfied only by exercising the **actual checkpoint action path**. A harness pre-seeding `build_operation_identity()` is supplemental and cannot satisfy it |
+
+### 10.3.8 Non-live modes
+
+Native Ansible check mode, `execution.mode=dry_run`, and `execution.mode=validate` remain
+non-mutating and MUST NOT persist authoritative standalone teardown identity or state.
+
+The existing test-override contract stays exactly where it is: `non_live_hub_identities` is already
+gated to `execution_mode in {"validate", "dry_run"}` (`checkpoint_phase.py:151`), and that gating
+MUST NOT be widened to execute mode. Execute mode always performs the live read.
+
+Note for the implementer: PR B's runtime slice separately made `validate` mode **refused** for the
+decommission role (its delete guards fire on `mode != 'dry_run'` while the state gate fires on
+`mode == 'execute'`, so `validate` would otherwise delete with no durable identity). That refusal
+and this section must agree: a refused mode performs no identity read and persists nothing. The
+collection-wide `validate` audit remains deferred to issue #284 and is **not** in scope here.
 
 ## Task B1: Python durable teardown record API
 
@@ -5529,8 +5708,15 @@ git commit -m "fix: report the real decommission outcome in the collection artif
 
 **Files:** Modify `acm_switchover.py`; modify `modules/decommission.py`; modify
 `modules/finalization.py`; modify `roles/decommission/tasks/main.yml`; modify
+`plugins/action/checkpoint_phase.py` and, only if its operation-identity helper genuinely needs
+it, `plugins/module_utils/checkpoint.py` (§10.3.5); modify
 `tests/test_main.py`, `tests/test_finalization.py`, `tests/test_decommission.py`, and
-`tests/unit/test_decommission_role_contracts.py`.
+`tests/unit/test_decommission_role_contracts.py`, plus the directly affected checkpoint
+unit/scenario/integration tests.
+
+**Runtime scope limit.** Those are the *only* runtime files a later authorized correction may
+touch for the standalone identity bootstrap. This task does **not** authorize general preflight
+refactoring, a new runtime module, or any RBAC edit — the permission already exists (§10.3.6).
 
 **Purpose:** `Decommission` cannot own durable records it has no access to. `run_decommission`
 already receives `state` and never uses it (`acm_switchover.py:933-976`); the collection role has no
@@ -5551,6 +5737,24 @@ the July deletion boundary, and a default would let a caller silently opt out.
 `Finalization` passes the `RunRecord` it already holds at `modules/finalization.py:107`. The
 collection role enters and exits a `decommission` checkpoint phase through the existing
 `checkpoint_phase` action plugin, so `operational_data` is durable before the first DELETE.
+
+**The `decommission` phase does not exist yet.** `KNOWN_PHASES` in
+`plugins/module_utils/checkpoint.py` is `("preflight", "primary_prep", "activation",
+"post_activation", "finalization")`, and `checkpoint_phase.py:346` hard-rejects any phase outside
+it. Append `"decommission"` as the **last** element: last position is what makes
+`reset_completed_phases_from` correct, since decommission is downstream of finalization. No test
+pins `KNOWN_PHASES` against the Python `Phase` enum — `tests/test_checkpoint_state_parity.py` pins
+key names only, and the property tests sample the tuple generically — so this is not a parity break.
+
+**Standalone identity is a prerequisite of this wiring, not a detail of it.** Entering the
+`decommission` phase in execute mode with checkpointing enabled REQUIRES an established operation
+identity, and a fresh standalone run has none: this is the
+`B5_STANDALONE_CHECKPOINT_IDENTITY_BLOCKER` that stopped the first runtime attempt. §10.3 defines
+the contract this task must implement — the explicit primary-only identity-barrier mode, the live
+`kube-system` UID read, persistence into the existing operation-identity schema, and the resume
+rule. Implementing the checkpoint enter/exit without §10.3 produces a role that cannot run at all
+in execute mode, because `checkpoint.enabled: false` is refused by this task's own gate and
+`checkpoint.enabled: true` is refused by the action plugin.
 
 **Failure behavior.** Execute-mode collection decommission without checkpointing available fails
 closed — the July deletion boundary requires the identity map to be durable before the first
@@ -5736,6 +5940,14 @@ Expected: FAIL — `roles/decommission/tasks/main.yml` contains no `checkpoint_p
 (amendment §4: "the decommission role never touches checkpoint or `operational_data`"), so
 `index_of_task_using` returns no index and the execute-mode fail-closed test finds `status == "pass"`.
 
+**The role-contract harness alone cannot close this task.** Its `checkpoint_available=True` option
+seeds a checkpoint that already carries a `build_operation_identity(...)` payload, so every test
+using it starts from a state a real operator cannot reach — which is exactly how the first runtime
+attempt reached B6 before the blocker surfaced. Task B5 must ALSO add a test that drives the
+**real** `checkpoint_phase` action for a fresh standalone execute-mode run with no pre-existing
+checkpoint, and prove the `decommission` phase enters. §10.3.7 item 14 is the acceptance gate; the
+harness is supplemental. The full behavioural matrix that must pass is §10.3.7 items 1-13.
+
 - [ ] **Step 7: Implement the collection wiring**
 
 Add to `roles/decommission/tasks/main.yml`, after the confirmed-gate and before the first
@@ -5747,8 +5959,25 @@ Add to `roles/decommission/tasks/main.yml`, after the confirmed-gate and before 
    checkpoint is available, failing the play with an explicit message when it is not;
 3. a matching `checkpoint_phase` **exit** task after the last include, with the same guard.
 
-No teardown-record writes are added here: PR B only establishes the phase and the availability
-requirement, and C, D, and E write records inside it.
+Also add `"decommission"` as the last element of `KNOWN_PHASES`, and implement the §10.3 standalone
+identity bootstrap — the explicit primary-only identity-barrier mode gated to
+`phase: decommission, status: enter`, the live primary `kube-system` UID read, and persistence into
+the existing operation-identity schema. Without it the wiring above cannot run in execute mode at
+all (§10.3).
+
+Two traps, both observed in the first runtime attempt:
+
+- The **exit** task must not be placed in an `always`. Doing so records a *failed* teardown as a
+  completed phase, which lets a later rerun skip work it never did.
+- The availability gate fires on `mode == 'execute'` while every delete guard in this role fires on
+  `mode != 'dry_run'`. `validate` therefore falls between them and would delete with no durable
+  identity while publishing a passed validation. The gate must refuse `validate` explicitly.
+  Widening it to `!= 'dry_run'` is **not** the fix: `checkpoint_phase.py:328` treats `validate` as
+  non-mutating, so the phase would never be recorded and the run would delete anyway. The
+  collection-wide `validate` audit stays deferred to issue #284.
+
+No teardown-record writes are added here: PR B only establishes the phase, the identity, and the
+availability requirement, and C, D, and E write records inside it.
 
 - [ ] **Step 8: Run the collection tests and observe them pass, then run the scenario lane**
 
@@ -5781,8 +6010,29 @@ python -m pytest tests/test_teardown_record.py tests/test_decommission.py \
   tests/test_checkpoint_state_parity.py tests/test_constants_parity.py -q
 ```
 
+Also run the collection teardown-record tests, the checkpoint vocabulary guardrail, the
+decommission role-contract tests, the real-action standalone identity test (§10.3.7 item 14), the
+decommission scenario tests, and the checkpoint action tests affected by the new `decommission`
+phase.
+
 - [ ] **Step 2: Root surface, collection surfaces 3 through 7 in both lanes, quality and security
 gates, scope and protected-file check** — the same command set as Task A6 steps 2 through 5.
+
+- [ ] **Step 2a: API and RBAC audit — corrected wording**
+
+Re-derive base→candidate rather than trusting the task ledger, and record:
+
+- `NEW_KUBERNETES_API_OPERATIONS`: **one newly-reachable read-only operation** — primary
+  `GET v1/namespaces/kube-system` for standalone checkpoint identity (§10.3.3). Do **not** record
+  "none": that was the false claim that blocked the first runtime attempt. Confirm no new
+  destructive or mutating operation, and confirm no *other* read was added.
+- `RBAC_CHANGE_REQUIRED`: **no**. Prove it by showing an empty base-relative diff for the Python
+  RBAC validator, the collection RBAC validator, root manifests, collection-bundled manifests,
+  Helm templates, and RBAC documentation — and by citing the existing grants listed in §10.3.6.
+  If any permission must actually change, stop and report `RBAC_DESIGN_CONFLICT`; do not edit RBAC.
+- Confirm the standalone identity mode cannot be entered implicitly (§10.3.1), that the test
+  override remains gated out of execute mode (§10.3.8), and that no ambient kube context can route
+  the identity read (§10.3.3).
 
 - [ ] **Step 3: Documentation**
 
@@ -5795,6 +6045,23 @@ separate actual `changed` versus `would_change` semantics. Update
 [`docs/ansible-collection/parity-matrix.md`](../ansible-collection/parity-matrix.md), and
 [`docs/ansible-collection/behavior-map.md`](../ansible-collection/behavior-map.md) in B because the
 result and durable-state interfaces become true here; do not defer those descriptions to F.
+
+`docs/operations/usage.md` must ALSO state, because §10.3 changes what an operator must configure:
+
+- standalone collection execute-mode decommission **requires** durable checkpointing
+  (`acm_switchover_execution.checkpoint.enabled: true`), and shows the setting;
+- execute mode **fails closed before any teardown** when the required checkpoint is unavailable;
+- a fresh standalone run establishes physical identity from the primary hub before teardown, and a
+  resume revalidates that identity;
+- a context repointed at a different physical cluster is **refused**;
+- standalone decommission does **not** require a secondary hub;
+- `validate` is refused for decommission, and check mode / dry-run establish no authoritative
+  teardown identity and publish no destructive completion authority;
+- the shared generic example `examples/group_vars/all.yml` ships `checkpoint.enabled: false` and is
+  therefore **not** a complete standalone-decommission configuration. Do not change that file:
+  it is shared switchover configuration and flipping it would alter unrelated workflows.
+
+Do not claim collection-wide `validate` safety anywhere; reference issue #284 instead.
 
 ```bash
 python -m pytest tests/test_documentation_guardrails.py -q
@@ -7380,6 +7647,7 @@ resource, verb, whether the permission exists today, and the PR that introduces 
 
 | # | Form factor | Caller | Hub | Namespace | Group | Resource | Verb | Exists today | PR |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | collection | standalone decommission checkpoint physical identity (§10.3.3) | source | cluster | core | `namespaces` | `get` | **yes** — collection `DECOMMISSION_CLUSTER_PERMISSIONS` already lists `("", "namespaces", ["get"])`; `deploy/rbac/clusterrole.yaml` and the Helm chart grant `get, list` | B |
 | 1 | both | strict read discovery probe | source and destination | n/a | n/a | discovery endpoints | none | n/a — no verb required | A |
 | 2 | both | MCO strict named GET, final absence proof | source | cluster | `observability.open-cluster-management.io` | `multiclusterobservabilities` | `get` | operator `ClusterRole` yes; decommission extension **no** | C |
 | 3 | both | MCO drain strict Pod list | source | `open-cluster-management-observability` | core | `pods` | `list` | **yes** | C |
@@ -7607,6 +7875,13 @@ Every runtime task above follows red-green-refactor without exception:
 Safety tests assert behavior, not implementation detail. The decorator-bypassing mock pattern at
 `tests/test_decommission.py:190-204` is not carried forward: behavior that the real seam owns is
 asserted against the real seam.
+
+**A fixture that pre-establishes the state under test is not evidence.** The first PR-B runtime
+attempt reached its final verification task before the standalone-identity blocker surfaced,
+because the role harness seeded a checkpoint that already carried an operation identity — so every
+"checkpointing available" test began from a state no operator can reach. Where a task's whole point
+is that some state gets *established*, at least one test must drive the real action from the real
+starting condition; a harness flag asserting the end state is supplemental (§10.3.7 item 14).
 
 ## 16.2 Amendment §16 matrix mapped to executable tests
 
@@ -7856,7 +8131,7 @@ and the workflow files under `.github/workflows/` are ground truth.
 | PR | Changed surface | Gates |
 | --- | --- | --- |
 | A | dual-supported, parity-sensitive | root suite; collection surfaces 3–7 in both lanes; parity and static-contract tests; quality and security gates; documentation guardrails |
-| B | dual-supported, parity-sensitive | same as A |
+| B | dual-supported, parity-sensitive | same as A, plus the §10.3.7 standalone-identity matrix and an RBAC *verification* pass proving the already-granted `namespaces get` needs no change (no RBAC edit) |
 | C | dual-supported, parity-sensitive, **RBAC** | same as A, plus the complete RBAC cross-surface gate |
 | D | dual-supported, parity-sensitive, **RBAC** | same as C |
 | E | dual-supported, parity-sensitive, **RBAC** | same as C |
