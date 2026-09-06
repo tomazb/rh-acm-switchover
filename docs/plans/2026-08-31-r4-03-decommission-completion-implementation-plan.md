@@ -5874,7 +5874,7 @@ git commit -m "fix: report the real decommission outcome in the collection artif
 | --- | --- |
 | `plugins/action/checkpoint_phase.py` | owns `ActionModule.run()` dispatch and must learn `standalone_decommission_identity` (§10.3.5c) |
 | `plugins/module_utils/checkpoint.py` | owns `KNOWN_PHASES`, which must gain `"decommission"` — the phase does not exist today |
-| `playbooks/decommission.yml` | owns the standalone `decommission` phase lifecycle: `enter`, role invocation, `pass`, `fail`, `reset` (§10.3.5a) |
+| `playbooks/decommission.yml` | owns the standalone `decommission` phase lifecycle: `enter`, role invocation, `pass`, and `fail` (§10.3.5a). It emits **no** `reset` transition — the action must *accept* `status: reset` on the standalone path (§10.3.2), but PR B wires no task that issues one, and none may be added here |
 | `roles/decommission/tasks/main.yml` | in scope **only** for the PR-B execute/validate gating, checkpoint-availability refusal, and result wiring it already owns — it must **not** own the standalone phase lifecycle |
 
 Plus the directly affected checkpoint and decommission unit, scenario and integration tests.
@@ -6096,7 +6096,9 @@ def test_playbook_fails_the_phase_from_a_rescue():
 
 
 def test_every_standalone_transition_carries_the_explicit_identity_argument():
-    for task in all_checkpoint_phase_tasks(decommission_playbook_tasks()):
+    transitions = all_checkpoint_phase_tasks(decommission_playbook_tasks())
+    assert transitions, "the standalone playbook must own its checkpoint transitions"
+    for task in transitions:
         args = task["tomazb.acm_switchover.checkpoint_phase"]
         assert args.get("standalone_decommission_identity") is True
         assert args.get("phase") == "decommission"
@@ -6144,10 +6146,27 @@ def test_every_checkpoint_writer_task_is_guarded_by_check_mode():
 
 `index_of_task_using`, `index_of_first_include`, and `checkpoint_writer_tasks` are small parsing
 helpers added next to `decommission_task_files` in the same file (B4.1). This task adds four more
-beside them, all plain module-level names: `decommission_playbook_tasks()` (the `yaml.safe_load` of
-`playbooks/decommission.yml`, returning the play's task list), `all_checkpoint_phase_tasks(tasks)`,
-`rescue_tasks_of(tasks)`, and `_status_of(task)`. The playbook is a **distinct parsed surface** from
-`decommission_task_files`, which stays scoped to the role.
+beside them, all plain module-level names:
+
+| Helper | Contract |
+| --- | --- |
+| `decommission_playbook_tasks()` | `yaml.safe_load` of `playbooks/decommission.yml`, returning `play.get("tasks", [])` for the single play — **`.get`, not `play["tasks"]`**, because the current playbook has only `pre_tasks` and `roles`, and a `KeyError` would turn the expected RED into an ERROR |
+| `all_checkpoint_phase_tasks(tasks)` | every `tomazb.acm_switchover.checkpoint_phase` task, **descending into `block`, `rescue` and `always`** |
+| `rescue_tasks_of(tasks)` | the flattened task list of every `rescue:` in the given tasks |
+| `_status_of(task)` | that task's `status` argument |
+
+**Traversal is load-bearing, not a detail.** Step 7a's prescribed playbook nests `include_role` and
+the `pass` transition inside a `block:` and the `fail` transition inside a `rescue:`. B4.1's
+`index_of_task_using` walks a flat list, so a flat-only implementation of these helpers would make
+`test_playbook_enters_the_decommission_phase_before_including_the_role` and
+`test_playbook_passes_the_phase_after_the_role_succeeds` **impossible to turn green against the very
+playbook this task prescribes**. Use B4's existing depth-first `_flatten_tasks` (already imported in
+`tests/unit/test_ansible_resilience_contracts.py`) or an equivalent that preserves document order,
+and have the playbook tests index against the flattened list. Ordering must remain meaningful:
+`enter` is a top-level task before the block, so it precedes the flattened `include_role`.
+
+The playbook is a **distinct parsed surface** from `decommission_task_files`, which stays scoped to
+the role.
 
 The role-level tests below cover only what the role still owns: execute/validate mode gating, the
 checkpoint-availability refusal, and result publication. None of them asserts a lifecycle.
@@ -6160,10 +6179,18 @@ PYTHONPATH=. python -m pytest \
 ```
 
 Expected RED, and it is about the **playbook**, not the role: `playbooks/decommission.yml` is still
-in its bare `roles:` form (`:16-17`) with no `tasks:` list, so `decommission_playbook_tasks()` finds
-no tasks and all four playbook lifecycle tests fail — no `enter` before the include, no `pass`, no
-`rescue`/`fail`, and no `standalone_decommission_identity` argument anywhere. The execute-mode
-fail-closed test additionally finds `status == "pass"`.
+in its bare `roles:` form (`:16-17`) with no `tasks:` list, so `decommission_playbook_tasks()`
+returns an empty list. Expect **five** failures, and check the count — a different number means one
+of the tests is not discriminating:
+
+- `test_playbook_enters_the_decommission_phase_before_including_the_role` — no `enter`, no include;
+- `test_playbook_passes_the_phase_after_the_role_succeeds` — no `pass`;
+- `test_playbook_fails_the_phase_from_a_rescue` — no `rescue`;
+- `test_every_standalone_transition_carries_the_explicit_identity_argument` — fails on its
+  non-empty assertion, which is exactly why that assertion is there;
+- `test_every_checkpoint_writer_task_is_guarded_by_check_mode` — same, on `assert writers`.
+
+The execute-mode fail-closed test additionally finds `status == "pass"`.
 
 `test_the_shared_role_owns_no_checkpoint_phase_lifecycle` is expected to **pass from the start**, and
 that is correct rather than a missing RED: the role's absence of `checkpoint_phase` is the required
@@ -6401,7 +6428,8 @@ not blur.**
    identity proof and prunes the `decommission` phase without rebinding operation identity. Do NOT
    present it as something an operator sets: no supported interface exposes a transition status.
    `acm_switchover_execution.checkpoint` exposes `enabled`, `backend`, `path`, `reset` and
-   `reset_from` — and the first two of those five are the ones this section refuses.
+   `reset_from` — and it is the last two of those five, `reset` and `reset_from`, that this section
+   refuses. `enabled`, `backend` and `path` are unaffected.
 3. **Generic checkpoint semantics are unchanged and must be documented separately.** An ordinary
    full `checkpoint.reset` rebuilds state and destroys teardown `operational_data`; an ordinary
    `reset_from` retains and revalidates it; integrated decommission continues under normal two-hub
