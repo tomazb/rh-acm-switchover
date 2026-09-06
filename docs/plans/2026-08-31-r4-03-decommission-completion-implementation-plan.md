@@ -6078,9 +6078,14 @@ Add to `tests/unit/test_decommission_role_contracts.py`, using the B4.1 contract
 # play's task list. The role is NOT the lifecycle owner and must contain no checkpoint_phase.
 
 def test_playbook_enters_the_decommission_phase_before_including_the_role():
-    tasks = decommission_playbook_tasks()
-    enter = index_of_task_using(tasks, "checkpoint_phase")
-    include = index_of_task_using(tasks, "include_role")
+    # Flatten first: Step 7a nests `include_role` inside a `block:`, so the raw play task
+    # list is [enter, block-parent] and a flat walk returns -1 for the include.
+    # Match the EXACT task key: index_of_task_using tests `action in _task_actions(task)`
+    # and `_task_actions` returns the task's raw mapping keys (B4.1), so the short names
+    # "checkpoint_phase" / "include_role" never match. Use the FQCN the YAML writes.
+    tasks = _flatten_tasks(decommission_playbook_tasks())
+    enter = index_of_task_using(tasks, "tomazb.acm_switchover.checkpoint_phase")
+    include = index_of_task_using(tasks, "ansible.builtin.include_role")
     assert enter != -1 and include != -1 and enter < include
 
 
@@ -6106,9 +6111,14 @@ def test_every_standalone_transition_carries_the_explicit_identity_argument():
 
 def test_the_shared_role_owns_no_checkpoint_phase_lifecycle():
     """Architecture, not an oversight: roles/finalization/tasks/handle_old_hub.yml includes
-    this same role from inside a two-hub finalization checkpoint (§10.3.5a/§10.3.5b)."""
+    this same role from inside a two-hub finalization checkpoint (§10.3.5a/§10.3.5b).
+
+    Uses `all_checkpoint_phase_tasks`, which matches the FQCN and descends into
+    `block`/`rescue`/`always`. `index_of_task_using(tasks, "checkpoint_phase") == -1` would be
+    a vacuous guard twice over: exact-key matching never matches the short name, so it holds
+    against ANY role content, and a flat walk would miss a transition nested in a block."""
     for name, tasks in decommission_task_files.items():
-        assert index_of_task_using(tasks, "checkpoint_phase") == -1, (
+        assert not all_checkpoint_phase_tasks(tasks), (
             f"{name} must not own the standalone phase lifecycle"
         )
 
@@ -6160,10 +6170,19 @@ the `pass` transition inside a `block:` and the `fail` transition inside a `resc
 `index_of_task_using` walks a flat list, so a flat-only implementation of these helpers would make
 `test_playbook_enters_the_decommission_phase_before_including_the_role` and
 `test_playbook_passes_the_phase_after_the_role_succeeds` **impossible to turn green against the very
-playbook this task prescribes**. Use B4's existing depth-first `_flatten_tasks` (already imported in
-`tests/unit/test_ansible_resilience_contracts.py`) or an equivalent that preserves document order,
-and have the playbook tests index against the flattened list. Ordering must remain meaningful:
-`enter` is a top-level task before the block, so it precedes the flattened `include_role`.
+playbook this task prescribes**. Use B4's existing depth-first `_flatten_tasks` from
+`tests/unit/yaml_contract_helpers.py` — already imported at the top of
+`tests/unit/test_decommission_role_contracts.py` itself as of Task B4, so no new import is needed —
+or an equivalent that preserves document order. The samples above flatten explicitly, and that is
+the requirement: surrounding prose never repairs a sample that omits it. Ordering stays meaningful
+because `enter` is a top-level task before the block, so it precedes the flattened `include_role`.
+
+**Match the exact task key.** `index_of_task_using` tests `action in _task_actions(task)`, and
+`_task_actions` returns the task's raw mapping keys, so matching is exact, not suffix-aware. Pass
+the FQCN the YAML actually writes — `tomazb.acm_switchover.checkpoint_phase` and
+`ansible.builtin.include_role`, matching the repository's FQCN convention. A short module name never
+matches, which silently turns a positive assertion into a false failure and a negative assertion
+into a vacuous pass.
 
 The playbook is a **distinct parsed surface** from `decommission_task_files`, which stays scoped to
 the role.
