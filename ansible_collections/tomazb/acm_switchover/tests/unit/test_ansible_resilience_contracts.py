@@ -112,7 +112,9 @@ def test_decommission_validates_rbac_before_destructive_steps():
         DECOMMISSION_TASKS / "validate_rbac.yml"
     ).exists(), "decommission must define a dedicated RBAC validation task file"
 
-    main_tasks = _load_yaml(DECOMMISSION_TASKS / "main.yml")
+    # Flattened: the delete includes live inside the substep block whose rescue
+    # records the failed outcome and whose always publishes the summary artifact.
+    main_tasks = _flatten_tasks(_load_yaml(DECOMMISSION_TASKS / "main.yml"))
     includes = [task.get("ansible.builtin.include_tasks", "") for task in main_tasks]
 
     assert "validate_rbac.yml" in includes, "decommission/main.yml must include validate_rbac.yml"
@@ -159,7 +161,7 @@ def test_decommission_autodetects_observability_by_default_before_rbac():
     """Decommission should derive observability from the namespace unless explicitly overridden."""
     defaults = yaml.safe_load((ROLES_DIR / "decommission" / "defaults" / "main.yml").read_text())
     main_text = (DECOMMISSION_TASKS / "main.yml").read_text()
-    main_tasks = _load_yaml(DECOMMISSION_TASKS / "main.yml")
+    main_tasks = _flatten_tasks(_load_yaml(DECOMMISSION_TASKS / "main.yml"))
     includes = [task.get("ansible.builtin.include_tasks", "") for task in main_tasks]
 
     assert defaults["acm_switchover_decommission"]["has_observability"] == "auto"
@@ -195,9 +197,20 @@ def test_decommission_observability_autodetection_fails_closed():
 
 
 def test_decommission_playbook_exposes_precheck_role_path():
-    """decommission playbook must still run through the decommission role entrypoint."""
-    playbook = (PLAYBOOKS_DIR / "decommission.yml").read_text()
-    assert "role: tomazb.acm_switchover.decommission" in playbook
+    """decommission playbook must still run through the decommission role entrypoint.
+
+    The playbook moved from a bare ``roles:`` list to ``tasks:`` so it can own the
+    standalone checkpoint lifecycle around the role (enter, then the include and pass
+    in a block, with fail in a rescue). The entrypoint contract this test exists for
+    is unchanged: the shared role is still what performs the teardown.
+    """
+    playbook = yaml.safe_load((PLAYBOOKS_DIR / "decommission.yml").read_text())
+    included = [
+        task["ansible.builtin.include_role"]["name"]
+        for task in _flatten_tasks(playbook[0].get("tasks", []))
+        if "ansible.builtin.include_role" in task
+    ]
+    assert "tomazb.acm_switchover.decommission" in included
 
 
 def test_decommission_defaults_missing_execution_mode_to_dry_run_for_destructive_tasks():
@@ -218,7 +231,7 @@ def test_decommission_defaults_missing_execution_mode_to_dry_run_for_destructive
 
 def test_decommission_summary_uses_report_artifact_safe_path_policy():
     """Optional decommission summaries must use the shared report artifact writer."""
-    main_tasks = _load_yaml(DECOMMISSION_TASKS / "main.yml")
+    main_tasks = _flatten_tasks(_load_yaml(DECOMMISSION_TASKS / "main.yml"))
     summary_tasks = [task for task in main_tasks if task.get("name") == "Write decommission summary when requested"]
 
     assert summary_tasks, "decommission/main.yml must write the optional summary"
@@ -228,7 +241,12 @@ def test_decommission_summary_uses_report_artifact_safe_path_policy():
     assert artifact_args["path"] == "{{ _acm_summary_path_abs }}"
     assert artifact_args["report"] == "{{ acm_switchover_decommission_result }}"
     assert artifact_args["mode"] == "0644"
-    assert summary_task["when"] == "_acm_decommission_summary_path | default('') | length > 0"
+    summary_when = _when_text(summary_task)
+    assert "_acm_decommission_summary_path | default('') | length > 0" in summary_when
+    assert "not ansible_check_mode" in summary_when, (
+        "the summary writer must be skipped in check mode: acm_report_artifact reports a "
+        "prospective changed=true, and check mode may report no change at all"
+    )
     assert not any(
         task.get("ansible.builtin.copy", {}).get("dest") == "{{ _acm_summary_path_abs }}" for task in main_tasks
     ), "decommission summary writes must not bypass artifact path validation"

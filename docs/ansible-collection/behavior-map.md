@@ -21,7 +21,7 @@ Source: `lib/`, `modules/`, `scripts/`
 | `modules/post_activation.py` | `roles/post_activation/` | 3 |
 | `modules/finalization.py` | `roles/finalization/` | 3 |
 | `modules/backup_schedule.py` | `roles/finalization/tasks/enable_backups.yml`, `roles/finalization/tasks/repair_backup_schedule_collision.yml` | 3 |
-| `modules/decommission.py` | `roles/decommission/` | 6 |
+| `modules/decommission.py` | `roles/decommission/`, with the standalone phase lifecycle in `playbooks/decommission.yml` | 6 |
 | `lib/rbac_validator.py` | `roles/preflight/` validation behavior | 2 |
 | `lib/validation.py` | centralized collection validation layer | 2 |
 | `lib/kube_client.py` legacy readers | stock `kubernetes.core` usage plus later helper code | 2-3 |
@@ -42,6 +42,20 @@ checkpoint validation; Python keeps the order collect, compare, then bind to
 state. Restore-only and standalone decommission remain outside the two-hub
 comparison. This distinct physical-hub decision preserves operator parity
 without sharing production runtime code.
+
+Standalone decommission is one-hub, and it is entered only through an explicit
+`standalone_decommission_identity: true` argument on `checkpoint_phase` — never
+inferred from a missing secondary, from the calling role or playbook, or from the
+shape of an existing checkpoint. `playbooks/decommission.yml` owns that lifecycle
+(`enter`, then the role include and `pass` in a block, with `fail` in a rescue);
+the shared `decommission` role owns none of it, because integrated finalization
+includes that same role from inside an established two-hub `finalization`
+checkpoint. Each standalone transition freshly reads the primary `kube-system`
+Namespace UID and supplies a primary-only operation identity explicitly, so the
+canonical two-hub reader is never consulted and an established two-hub checkpoint
+cannot be downgraded. The `checkpoint.reset` and `checkpoint.reset_from`
+configuration flags are refused on that path, because they bypass identity
+validation.
 
 Observability RBAC permissions are skipped when MCO is verifiably absent: when
 preflight detection finds no `MultiClusterObservability` resources on the hub

@@ -15,6 +15,10 @@ way to consume that data and are excluded from the playbook scan below.
 
 import pathlib
 
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
+    KEY_DECOMMISSION_TEARDOWN_RECORDS,
+)
+
 COLLECTION_ROOT = pathlib.Path(__file__).resolve().parents[2]
 ROLES_DIR = COLLECTION_ROOT / "roles"
 PLAYBOOKS_DIR = COLLECTION_ROOT / "playbooks"
@@ -59,6 +63,27 @@ def test_roles_do_not_read_operational_data_directly():
     assert not offenders, (
         "Role YAML must read checkpoint state via _checkpoint_enter.facts, "
         f"not raw operational_data chains. Offenders: {offenders}"
+    )
+
+
+def test_teardown_record_key_is_never_named_in_role_or_playbook_yaml():
+    """R4-03 teardown records are mutation authority, not a role-readable fact.
+
+    The `.get('operational_data'` patterns above do not catch bracket access, so
+    the raw key literal is forbidden outright: roles and playbooks reach these
+    records only through module_utils, never by naming the key themselves.
+    """
+    offenders = []
+    for directory in (ROLES_DIR, PLAYBOOKS_DIR):
+        # Both suffixes: roles/**/*.yaml files exist, so a tasks/main.yaml would
+        # otherwise evade this scan (controller ruling C15).
+        for pattern in ("*.yml", "*.yaml"):
+            for path in sorted(directory.rglob(pattern)):
+                if KEY_DECOMMISSION_TEARDOWN_RECORDS in path.read_text(encoding="utf-8"):
+                    offenders.append(str(path.relative_to(COLLECTION_ROOT)))
+    assert not offenders, (
+        f"The '{KEY_DECOMMISSION_TEARDOWN_RECORDS}' operational_data key is owned by "
+        f"module_utils/checkpoint.py and must not be named in YAML. Offenders: {offenders}"
     )
 
 

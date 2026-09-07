@@ -19,6 +19,21 @@
       Decommission requires non-empty acm_switchover_hubs.primary.kubeconfig and
       acm_switchover_hubs.primary.context. Refusing to use an implicit/default kube context.
 
+# A dry run and an Ansible check-mode run record NO substep outcome at all, so a
+# later live run trusts nothing a preview observed (amendment sections 7 and 14).
+- name: Initialize decommission substep outcome recording
+  ansible.builtin.set_fact:
+    acm_switchover_decommission_outcomes: {}
+    # Set by every rescue, in EVERY mode, including check mode and dry run where no
+    # outcome is recorded. Without it a check-mode read failure would rescue, record
+    # nothing, and let `always` derive `pass` from an empty outcome map.
+    _acm_decommission_substep_rescued: false
+    _acm_decommission_records_outcomes: >-
+      {{
+        (not ansible_check_mode)
+        and (acm_switchover_execution.mode | default('dry_run') != 'dry_run')
+      }}
+
 - name: Detect observability namespace when configured for auto
   kubernetes.core.k8s_info:
     kind: Namespace
@@ -42,52 +57,197 @@
   ansible.builtin.include_tasks: validate_rbac.yml
   when: not (acm_switchover_features.skip_rbac_validation | default(false))
 
-- name: Delete Observability resources
-  ansible.builtin.include_tasks: delete_observability.yml
-  when: acm_switchover_decommission_effective_has_observability | bool
-
-- name: Delete non-local ManagedCluster resources
-  ansible.builtin.include_tasks: delete_managed_clusters.yml
-
-- name: Delete MultiClusterHub
-  ansible.builtin.include_tasks: delete_multiclusterhub.yml
-
-- name: Publish decommission result
+- name: Record the not-requested Observability substep outcome
   ansible.builtin.set_fact:
-    acm_switchover_decommission_result:
-      phase: decommission
-      mode: "{{ acm_switchover_execution.mode | default('dry_run') }}"
-      status: pass
-      has_observability: "{{ acm_switchover_decommission_effective_has_observability | bool }}"
-      changed: >-
-        {{
-          (
-            ((_managed_cluster_delete_results | default({})).results | default([])
-            | selectattr('changed') | list | length) > 0
-          )
-          or (
-            ((_multiclusterobservability_delete_results | default({})).results | default([])
-            | selectattr('changed') | list | length) > 0
-          )
-          or (
-            ((_multiclusterhub_delete_results | default({})).results | default([])
-            | selectattr('changed') | list | length) > 0
-          )
-        }}
+    acm_switchover_decommission_outcomes: >-
+      {{ acm_switchover_decommission_outcomes | combine({'observability': 'not_requested'}) }}
+  when:
+    - _acm_decommission_records_outcomes | bool
+    - not (acm_switchover_decommission_effective_has_observability | bool)
 
-- name: Normalize summary path input
-  ansible.builtin.set_fact:
-    _acm_decommission_summary_path: "{{ summary_path | default(acm_switchover_summary_path | default(''), true) }}"
-  when: summary_path is defined or acm_switchover_summary_path is defined
 
-- name: Resolve summary path to absolute
-  ansible.builtin.set_fact:
-    _acm_summary_path_abs: "{{ _acm_decommission_summary_path | tomazb.acm_switchover.acm_abs_path(lookup('env', 'PWD')) }}"
-  when: _acm_decommission_summary_path | default('') | length > 0
+# Fail closed: an execute-mode run that cannot persist its identity map issues no
+# DELETE at all, and a validate-mode run never reaches the teardown here. A dry run
+# and a native check-mode run require no durable state and write none, so neither is
+# gated.
+- name: Require durable checkpoint state before the first decommission delete
+  ansible.builtin.assert:
+    that:
+      # Validate is REFUSED, not merely required to checkpoint. Every delete guard in
+      # this role fires on `mode != dry_run` (delete_observability.yml,
+      # delete_managed_clusters.yml, delete_multiclusterhub.yml), while
+      # checkpoint_phase treats validate as non-mutating and records no phase. So a
+      # validate run would delete MultiClusterObservability, every non-local
+      # ManagedCluster and MultiClusterHub while leaving no durable identity map, and
+      # publish that as a passed validation. Requiring checkpointing here instead of
+      # refusing would be worse: the phase would still never be recorded.
+      #
+      # This gate is CONFIG-ONLY, and deliberately so. The standalone phase lifecycle
+      # belongs to playbooks/decommission.yml, not to this role: finalization's
+      # handle_old_hub.yml includes this same role from inside an established two-hub
+      # `finalization` checkpoint, so a role-owned standalone lifecycle would either
+      # apply one-hub semantics to an integrated switchover or force this role to
+      # infer its caller. The role MUST NOT infer standalone mode -- not from a
+      # missing secondary, not from the caller, and not by reading checkpoint shape.
+      # That the standalone `enter` actually ran before the first delete is guaranteed
+      # by the playbook's task order and pinned by
+      # test_playbook_enters_the_decommission_phase_before_including_the_role.
+      - (acm_switchover_execution.mode | default('dry_run')) != 'validate'
+      - acm_switchover_execution.checkpoint.enabled | default(false) | bool
+    fail_msg: >-
+      {{
+        _acm_decommission_validate_refusal
+        if (acm_switchover_execution.mode | default('dry_run')) == 'validate'
+        else _acm_decommission_checkpoint_refusal
+      }}
+  vars:
+    _acm_decommission_validate_refusal: >-
+      Refusing decommission in validate mode: this role has no non-mutating validate
+      path. Its delete guards fire in any mode other than dry_run, so a validate run
+      would really delete MultiClusterObservability, every non-local ManagedCluster
+      and MultiClusterHub, while the checkpoint action treats validate as
+      non-mutating and records no phase at all. Preview with
+      acm_switchover_execution.mode set to dry_run, or decommission for real with
+      acm_switchover_execution.mode set to execute and
+      acm_switchover_execution.checkpoint.enabled set to true.
+    _acm_decommission_checkpoint_refusal: >-
+      Refusing decommission in execute mode without durable checkpoint state: the
+      identity map must be persisted BEFORE the first delete. Set
+      acm_switchover_execution.checkpoint.enabled to true (with backend file and a
+      writable path) -- the shipped examples/group_vars/all.yml sets it to false --
+      or preview with acm_switchover_execution.mode set to dry_run.
+  when:
+    - not ansible_check_mode
+    - (acm_switchover_execution.mode | default('dry_run')) in ['execute', 'validate']
 
-- name: Write decommission summary when requested
-  tomazb.acm_switchover.acm_report_artifact:
-    path: "{{ _acm_summary_path_abs }}"
-    report: "{{ acm_switchover_decommission_result }}"
-    mode: "0644"
-  when: _acm_decommission_summary_path | default('') | length > 0
+- name: Execute decommission substeps
+  block:
+    - name: Run the Observability decommission substep
+      block:
+        - name: Delete Observability resources
+          ansible.builtin.include_tasks: delete_observability.yml
+          when: acm_switchover_decommission_effective_has_observability | bool
+      rescue:
+        - name: Record that the Observability decommission substep was rescued
+          ansible.builtin.set_fact:
+            _acm_decommission_substep_rescued: true
+
+        - name: Record the failed Observability substep outcome
+          ansible.builtin.set_fact:
+            acm_switchover_decommission_outcomes: >-
+              {{ acm_switchover_decommission_outcomes | combine({'observability': 'failed'}) }}
+          when: _acm_decommission_records_outcomes | bool
+
+        - name: Fail after the Observability decommission substep failed
+          ansible.builtin.fail:
+            msg: >-
+              Observability decommission substep failed:
+              {{ ansible_failed_result.msg | default('unknown error') }}
+
+    - name: Run the ManagedCluster decommission substep
+      block:
+        - name: Delete non-local ManagedCluster resources
+          ansible.builtin.include_tasks: delete_managed_clusters.yml
+      rescue:
+        - name: Record that the ManagedCluster decommission substep was rescued
+          ansible.builtin.set_fact:
+            _acm_decommission_substep_rescued: true
+
+        - name: Record the failed ManagedCluster substep outcome
+          ansible.builtin.set_fact:
+            acm_switchover_decommission_outcomes: >-
+              {{ acm_switchover_decommission_outcomes | combine({'managed_clusters': 'failed'}) }}
+          when: _acm_decommission_records_outcomes | bool
+
+        - name: Fail after the ManagedCluster decommission substep failed
+          ansible.builtin.fail:
+            msg: >-
+              ManagedCluster decommission substep failed:
+              {{ ansible_failed_result.msg | default('unknown error') }}
+
+    - name: Run the MultiClusterHub decommission substep
+      block:
+        - name: Delete MultiClusterHub
+          ansible.builtin.include_tasks: delete_multiclusterhub.yml
+      rescue:
+        - name: Record that the MultiClusterHub decommission substep was rescued
+          ansible.builtin.set_fact:
+            _acm_decommission_substep_rescued: true
+
+        - name: Record the failed MultiClusterHub substep outcome
+          ansible.builtin.set_fact:
+            acm_switchover_decommission_outcomes: >-
+              {{ acm_switchover_decommission_outcomes | combine({'multiclusterhub': 'failed'}) }}
+          when: _acm_decommission_records_outcomes | bool
+
+        - name: Fail after the MultiClusterHub decommission substep failed
+          ansible.builtin.fail:
+            msg: >-
+              MultiClusterHub decommission substep failed:
+              {{ ansible_failed_result.msg | default('unknown error') }}
+  always:
+    # Published from inside `always` so a failed substep still reports the real
+    # aggregated outcome. The block failure then propagates and fails the play.
+    - name: Publish decommission result
+      ansible.builtin.set_fact:
+        acm_switchover_decommission_result:
+          phase: decommission
+          mode: "{{ acm_switchover_execution.mode | default('dry_run') }}"
+          # `pass` only when nothing was rescued AND no substep recorded `failed`.
+          # The rescue arm covers the modes that record no outcome at all.
+          status: >-
+            {{
+              'fail'
+              if (
+                (_acm_decommission_substep_rescued | default(false) | bool)
+                or ('failed' in (
+                  acm_switchover_decommission_outcomes | default({}) | dict2items | map(attribute='value') | list
+                ))
+              )
+              else 'pass'
+            }}
+          substeps: "{{ acm_switchover_decommission_outcomes | default({}) }}"
+          has_observability: "{{ acm_switchover_decommission_effective_has_observability | default(false) | bool }}"
+          # Actual mutation performed by THIS run. Never a prospective check-mode
+          # `changed`: check mode issues no delete, so it can never be true here.
+          changed: >-
+            {{
+              (not ansible_check_mode)
+              and (
+                (
+                  ((_managed_cluster_delete_results | default({})).results | default([])
+                  | selectattr('changed') | list | length) > 0
+                )
+                or (
+                  ((_multiclusterobservability_delete_results | default({})).results | default([])
+                  | selectattr('changed') | list | length) > 0
+                )
+                or (
+                  ((_multiclusterhub_delete_results | default({})).results | default([])
+                  | selectattr('changed') | list | length) > 0
+                )
+              )
+            }}
+          # PR B publishes no prediction. A debug announcement and a check-mode
+          # module's prospective `changed` are not a fresh per-family prediction;
+          # PRs C, D and E add real ones alongside each mutation.
+          would_change: false
+
+    - name: Normalize summary path input
+      ansible.builtin.set_fact:
+        _acm_decommission_summary_path: "{{ summary_path | default(acm_switchover_summary_path | default(''), true) }}"
+      when: summary_path is defined or acm_switchover_summary_path is defined
+
+    - name: Resolve summary path to absolute
+      ansible.builtin.set_fact:
+        _acm_summary_path_abs: "{{ _acm_decommission_summary_path | tomazb.acm_switchover.acm_abs_path(lookup('env', 'PWD')) }}"
+      when: _acm_decommission_summary_path | default('') | length > 0
+
+    - name: Write decommission summary when requested
+      tomazb.acm_switchover.acm_report_artifact:
+        path: "{{ _acm_summary_path_abs }}"
+        report: "{{ acm_switchover_decommission_result }}"
+        mode: "0644"
+      when:
+        - not ansible_check_mode
+        - _acm_decommission_summary_path | default('') | length > 0

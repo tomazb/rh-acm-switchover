@@ -1135,15 +1135,27 @@ class Finalization:
         logger.warning("This will remove ACM components from the old hub!")
         logger.warning("=" * 60)
 
-        decom = Decommission(self.primary, self.primary_has_observability, dry_run=self.dry_run)
+        decom = Decommission(
+            self.primary,
+            self.primary_has_observability,
+            run_record=self.run_record,
+            dry_run=self.dry_run,
+        )
 
         # Run decommission non-interactively since we're in automated mode
-        if decom.decommission(interactive=False):
+        result = decom.decommission(interactive=False)
+        for line in result.summary_lines():
+            logger.info("Decommission summary - %s", line)
+
+        # Explicit .succeeded, never dataclass truthiness: a partially mutated run
+        # is both changed and unsuccessful, and truthiness cannot express that.
+        if result.succeeded:
             logger.info("Old hub decommissioned successfully")
         else:
             raise SwitchoverError(
                 "Old hub decommission failed or completed incompletely. "
-                "Manual cleanup is required before considering switchover finalized."
+                "Manual cleanup is required before considering switchover finalized. "
+                f"Substep outcomes: {'; '.join(result.summary_lines())}"
             )
 
     @dry_run_skip(message="Would set up old primary as secondary with passive sync")

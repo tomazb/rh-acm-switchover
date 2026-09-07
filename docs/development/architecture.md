@@ -410,6 +410,38 @@ removes ACM components — Observability resources, non-local `ManagedCluster` r
 `MultiClusterHub` — from the old primary. It is a real teardown performed inside the switchover
 run without a further prompt, not a preparation step.
 
+### Who owns the decommission phase lifecycle
+
+Decommission has two callers, and only one of them is standalone.
+
+The Collection's shared `decommission` role is included from **two** places: the
+standalone entry point `playbooks/decommission.yml`, and integrated finalization via
+`roles/finalization/tasks/handle_old_hub.yml` when `old_hub_action == 'decommission'`.
+The integrated caller is already inside an established two-hub `finalization`
+checkpoint.
+
+The **standalone playbook owns the `decommission` checkpoint lifecycle**; the shared
+role owns none of it. Putting the lifecycle in the role would either apply one-hub
+standalone semantics during a two-hub switchover, or require the role to infer which
+caller it has — and inferring the workflow is exactly what is forbidden. This follows
+the general rule above that phase eligibility and durable transition verification
+belong to the orchestration layer, not to a resource-specific handler.
+
+The role keeps what it genuinely owns: the teardown implementation, execute/validate
+mode gating, the checkpoint-availability refusal, and result publication. Its
+availability gate is deliberately config-only — that the standalone `enter` ran before
+the first delete is guaranteed by the playbook's task order and pinned by contract
+tests, not re-derived by the role from checkpoint shape.
+
+Standalone mode is carried by one explicit boolean argument on the `checkpoint_phase`
+action, `standalone_decommission_identity`, mutually exclusive with the two-hub
+`identity_barrier`. Because a standalone run has no secondary hub, it builds a
+**primary-only** operation identity from a fresh live `kube-system` Namespace UID read
+and passes it explicitly on every transition. The canonical established-identity reader
+admits only two-hub and secondary-only shapes; supplying the identity explicitly means
+that reader is never consulted and needs no relaxation, which is what keeps an
+established two-hub checkpoint from being silently downgraded.
+
 BackupSchedule collision repair deletes and recreates the schedule to refresh backup ownership. After delete, it polls
 for schedule absence with a 30-second timeout and 2-second interval before recreating the schedule, preserving UID
 change safety checks without relying on a fixed sleep.

@@ -130,3 +130,69 @@ STRICT_READ_MAX_RESTARTS = 1
 # Collection-only: the collection module has no client instance carrying a timeout.
 # Value mirrors KubeClient's per-instance request_timeout default (lib/kube_client.py:210).
 STRICT_READ_REQUEST_TIMEOUT = 30
+
+# R4-03 decommission teardown records (plan §10.2). These mirror lib/teardown_record.py
+# and lib/constants.py; the collection shares no runtime code with the Python CLI, so
+# tests/test_constants_parity.py holds every one of them equal to its Python owner.
+# The MCH operator identity is discovered through the OLM CSV that owns the
+# MultiClusterHub CRD, then through that CSV's install-strategy Deployment.
+OPERATOR_IDENTITY_DISCOVERY_METHOD = "olm_csv_owned_mch_crd_install_deployment_v1"
+OPERATOR_IDENTITY_UNAVAILABLE_REASONS = (
+    "csv_absent",
+    "csv_ambiguous",
+    "csv_not_succeeded",
+    "csv_owned_crd_mismatch",
+    "install_deployment_absent",
+    "install_deployment_ambiguous",
+    "deployment_read_failed",
+    "deployment_identity_incomplete",
+)
+
+# How one decommission substep ended in this invocation. Mirrors the FIVE values
+# of lib/decommission_outcome.SubstepOutcome; the root parity test
+# tests/test_constants_parity.py compares the enum values against this tuple.
+DECOMMISSION_SUBSTEP_OUTCOMES = (
+    "not_requested",
+    "precondition_noop",
+    "completed",
+    "refused",
+    "failed",
+)
+
+# The teardown lifecycle of one deleted object (lib/teardown_record.TeardownPhase).
+TEARDOWN_PHASES = frozenset(
+    {
+        "delete_started",
+        "cr_absent",
+        "drain_pending",
+        "drained",
+        "completed",
+        "recovery_required",
+    }
+)
+
+# Kinds whose teardown has a drain scope, and kinds that carry operator identity.
+DRAIN_SCOPED_KINDS = frozenset({"MultiClusterObservability", "MultiClusterHub"})
+IDENTITY_BEARING_KINDS = frozenset({"MultiClusterHub"})
+
+# Section 10.2.1c closed vocabularies.
+RESOURCE_VERSION_LABELS = frozenset({"drain_namespace", "drain_pods", "operator_deployment"})
+ABSENCE_PROOF_KEYS = frozenset({"target_cr", "drain_namespace"})
+ABSENCE_PROOF_TYPES = frozenset({"object_absent", "crd_absent", "namespace_absent"})
+ABSENCE_PROOF_TYPES_BY_KEY = {
+    "target_cr": frozenset({"object_absent", "crd_absent"}),
+    "drain_namespace": frozenset({"namespace_absent"}),
+}
+
+# The fixed drain namespace each drain-scoped family tears down. A
+# `drain_namespace` absence proof must name exactly this namespace.
+DRAIN_NAMESPACE_BY_KIND = {
+    "MultiClusterObservability": OBSERVABILITY_NAMESPACE,
+    "MultiClusterHub": ACM_NAMESPACE,
+}
+
+# The CRD whose owning CSV identifies the MultiClusterHub operator Deployment.
+MCH_OWNED_CRD = "multiclusterhubs.operator.open-cluster-management.io"
+
+NAMESPACE_API_VERSION = "v1"
+NAMESPACE_KIND = "Namespace"

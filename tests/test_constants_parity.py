@@ -2,6 +2,7 @@
 
 import ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants as ans_constants
 import lib.constants as py_constants
+import lib.teardown_record as py_teardown_record
 
 # Explicit contract map: Python constant name → Ansible constant name.
 # Only constants that MUST stay in sync are listed here.
@@ -58,6 +59,11 @@ CONSTANT_PAIRS = {
     "STRICT_READ_PAGE_LIMIT": "STRICT_READ_PAGE_LIMIT",
     "STRICT_READ_MAX_PAGES": "STRICT_READ_MAX_PAGES",
     "STRICT_READ_MAX_RESTARTS": "STRICT_READ_MAX_RESTARTS",
+    # R4-03 decommission teardown records (plan §10.2.2, §10.2.3). Both are defined in
+    # lib/constants.py, so the generic helper resolves them; the closed vocabularies whose
+    # Python owner is lib/teardown_record.py are compared by the two tests below instead.
+    "OPERATOR_IDENTITY_DISCOVERY_METHOD": "OPERATOR_IDENTITY_DISCOVERY_METHOD",
+    "OPERATOR_IDENTITY_UNAVAILABLE_REASONS": "OPERATOR_IDENTITY_UNAVAILABLE_REASONS",
 }
 
 
@@ -78,4 +84,83 @@ def test_shared_constants_parity():
     assert not mismatches, "Constants drift detected:\n  " + "\n  ".join(mismatches)
 
 
+# Closed vocabularies whose Python owner is lib/teardown_record.py, not lib/constants.py.
+TEARDOWN_VOCABULARY_NAMES = (
+    "DRAIN_SCOPED_KINDS",
+    "IDENTITY_BEARING_KINDS",
+    "RESOURCE_VERSION_LABELS",
+    "ABSENCE_PROOF_KEYS",
+    "ABSENCE_PROOF_TYPES",
+    "ABSENCE_PROOF_TYPES_BY_KEY",
+)
+
+# Teardown shape constants with the same Python owner. These are NOT vocabularies, and the
+# shared malformed-vector set cannot catch drift in them: DRAIN_NAMESPACE_BY_KIND decides
+# which namespace a `drain_namespace` absence proof must name (§10.2.1c), MCH_OWNED_CRD
+# decides which owned CRD identifies the operator CSV (§10.2.2), and NAMESPACE_API_VERSION /
+# NAMESPACE_KIND build the namespace resource_key both sides require.
+TEARDOWN_SHAPE_NAMES = (
+    "DRAIN_NAMESPACE_BY_KIND",
+    "MCH_OWNED_CRD",
+    "NAMESPACE_API_VERSION",
+    "NAMESPACE_KIND",
+)
+
+
+def test_teardown_vocabularies_are_mirrored():
+    """R4-03 §10.2.1c closed vocabularies: one authoritative definition per form factor.
+
+    CONSTANT_PAIRS resolves Python names from lib.constants; these live in
+    lib.teardown_record, so they are compared directly against the collection's
+    module_utils/constants.py rather than duplicated to fit the generic helper.
+    """
+    mismatches = []
+    for name in TEARDOWN_VOCABULARY_NAMES:
+        py_val = getattr(py_teardown_record, name, _MISSING)
+        ans_val = getattr(ans_constants, name, _MISSING)
+        if py_val is _MISSING:
+            mismatches.append(f"Python missing: lib.teardown_record.{name}")
+        elif ans_val is _MISSING:
+            mismatches.append(f"Ansible missing: {name}")
+        elif py_val != ans_val:
+            mismatches.append(f"{name}={py_val!r} (Python) != {ans_val!r} (Ansible)")
+
+    assert not mismatches, "Teardown vocabulary drift detected:\n  " + "\n  ".join(mismatches)
+
+
+def test_teardown_shape_constants_are_mirrored():
+    """The non-vocabulary teardown constants owned by lib/teardown_record.py."""
+    mismatches = []
+    for name in TEARDOWN_SHAPE_NAMES:
+        py_val = getattr(py_teardown_record, name, _MISSING)
+        ans_val = getattr(ans_constants, name, _MISSING)
+        if py_val is _MISSING:
+            mismatches.append(f"Python missing: lib.teardown_record.{name}")
+        elif ans_val is _MISSING:
+            mismatches.append(f"Ansible missing: {name}")
+        elif py_val != ans_val:
+            mismatches.append(f"{name}={py_val!r} (Python) != {ans_val!r} (Ansible)")
+
+    assert not mismatches, "Teardown shape drift detected:\n  " + "\n  ".join(mismatches)
+
+
+def test_teardown_phase_vocabulary_is_mirrored():
+    """The phase set itself. The shared "unknown phase" vector only proves the set is not
+    too permissive; a phase silently dropped from one side would go unnoticed without this."""
+    python_phases = frozenset(phase.value for phase in py_teardown_record.TeardownPhase)
+    assert ans_constants.TEARDOWN_PHASES == python_phases
+
+
 _MISSING = object()
+
+
+def test_decommission_outcome_vocabulary_parity():
+    """The collection's mirrored outcome tuple must equal SubstepOutcome's values.
+
+    Compares ENUM VALUES ONLY. The derived convenience UNSUCCESSFUL_OUTCOMES in
+    lib/decommission_outcome.py is not part of the vocabulary and must never
+    enter this comparison.
+    """
+    from lib.decommission_outcome import SubstepOutcome
+
+    assert {o.value for o in SubstepOutcome} == set(ans_constants.DECOMMISSION_SUBSTEP_OUTCOMES)

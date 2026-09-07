@@ -7,6 +7,7 @@ import pytest
 import yaml
 from jinja2 import Environment
 from preflight_task_text import validate_backups_text
+from yaml_contract_helpers import _flatten_tasks
 
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 PREFLIGHT_TASKS = ROLES_DIR / "preflight" / "tasks"
@@ -330,8 +331,30 @@ def test_collection_static_boundary_excludes_obsolete_discovery_and_single_hub_w
         COLLECTION_ROOT / "plugins" / "action" / "checkpoint_phase.py",
         "_run_identity_barrier",
     )
-    assert "checkpoint_phase" not in decommission_text
+    # The standalone decommission playbook now legitimately owns checkpoint
+    # transitions, so a blanket "checkpoint_phase not in" assertion no longer says
+    # what this test means. What it always meant is that the ONE-HUB decommission
+    # entry point must not reach for the TWO-HUB barrier machinery -- and that is
+    # asserted directly here rather than through a proxy, which makes it strictly
+    # stronger than the string check it replaces.
+    assert "identity_barrier" not in decommission_text
     assert "tomazb.acm_switchover.preflight" not in decommission_text
+    decommission_playbook = yaml.safe_load(decommission_text)
+    # Every play, and pre_tasks/post_tasks as well as tasks: a plain non-standalone
+    # transition dropped into pre_tasks would otherwise escape this guard entirely,
+    # which the blunt "checkpoint_phase not in text" check it replaced did catch.
+    decommission_sections: list = []
+    for play in decommission_playbook:
+        for section in ("pre_tasks", "tasks", "post_tasks"):
+            decommission_sections.extend(play.get(section) or [])
+    decommission_transitions = [
+        task for task in _flatten_tasks(decommission_sections) if "tomazb.acm_switchover.checkpoint_phase" in task
+    ]
+    assert decommission_transitions, "the standalone playbook must own its own lifecycle"
+    for task in decommission_transitions:
+        args = task["tomazb.acm_switchover.checkpoint_phase"]
+        assert args.get("standalone_decommission_identity") is True
+        assert args.get("phase") == "decommission"
 
 
 def test_validate_kubeconfigs_uses_direct_api_probe():
