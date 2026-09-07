@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A top-level cancellation or a refused decommission substep now fails the run and
+  exits non-zero instead of reporting success, and the Collection decommission
+  artifact reports its real status rather than an optimistic one. The published
+  `changed` reflects actual mutation and is kept separate from the `would_change`
+  prediction a preview publishes.
+- Moved the standalone decommission checkpoint lifecycle out of the shared
+  `decommission` role and into `playbooks/decommission.yml`. Integrated finalization
+  includes that same role from inside an established two-hub `finalization`
+  checkpoint, so a role-owned lifecycle would have applied one-hub semantics to a
+  full switchover. Standalone collection decommission in execute mode now
+  establishes a primary-only operation identity from a live `kube-system` Namespace
+  UID read before the first delete, re-proves it on every later transition, refuses a
+  kube context repointed at a different physical cluster, and refuses the
+  `checkpoint.reset` / `checkpoint.reset_from` flags that would bypass identity
+  validation. Standalone execute mode without durable checkpointing, and `validate`
+  mode for this role, both fail closed before any teardown.
+
 - Bound the Collection `acm_k8s_read_outcome` named-GET request with the strict-read request
   timeout. Its discovery probe and every list page were already bounded, but the named GET was
   issued with no `_request_timeout`, so a hung API server could block that read indefinitely.

@@ -533,6 +533,70 @@ In the Ansible collection, decommission additionally requires an **explicit**
 primary hub input (`acm_switchover_hubs.primary`) — it will not infer the
 old-hub target from defaults or secondary-only configuration.
 
+### Standalone collection decommission: durable state and physical identity
+
+Running `playbooks/decommission.yml` on its own — outside a full switchover — is a
+one-hub workflow with its own requirements.
+
+**Execute mode requires durable checkpointing.** The identity map must be persisted
+before the first delete, so execute mode **fails closed before any teardown** when
+checkpointing is unavailable:
+
+```yaml
+acm_switchover_execution:
+  mode: execute
+  checkpoint:
+    enabled: true
+    backend: file
+    path: .state/switchover.json
+```
+
+The shipped generic example `examples/group_vars/all.yml` sets
+`checkpoint.enabled: false`. It is shared switchover configuration, so it is **not**
+a complete standalone-decommission configuration — set `enabled: true` in your own
+inventory or group vars rather than editing the shared example, which would alter
+unrelated workflows.
+
+**Physical identity is established before teardown and revalidated on resume.** A
+fresh standalone run reads the primary hub's `kube-system` Namespace UID and records
+it before the first delete. Every later transition re-reads it and compares.
+Consequences worth planning for:
+
+- a kube context **repointed at a different physical cluster is refused**, even
+  though its name is unchanged — the recorded cluster UID no longer matches;
+- an ordinary **retry resumes** the retained checkpoint and re-proves identity; it
+  needs no special flags;
+- standalone decommission does **not** require a secondary hub, and reads none.
+
+**Modes.** `validate` is **refused** for decommission — it is not a preview: the
+role's delete guards fire in any mode other than `dry_run`, so a validate run would
+really delete while recording no durable identity. Preview with `mode: dry_run`, or
+use native check mode (`--check`). Neither establishes authoritative teardown
+identity, neither writes checkpoint state, and neither publishes destructive
+completion authority. Collection-wide `validate` behaviour outside this role is
+tracked separately in issue #284.
+
+**Reset flags are refused on the standalone path.** `checkpoint.reset: true` and a
+non-empty `checkpoint.reset_from` are rejected on every standalone decommission
+transition. Those flags bypass operation-identity validation, so honouring them
+would let a standalone run overwrite an identity established by a full two-hub
+switchover. This is a fail-closed guard, not a limitation to work around.
+
+Note that `acm_switchover_execution.checkpoint` exposes five keys — `enabled`,
+`backend`, `path`, `reset`, `reset_from` — and only the last two are refused here.
+Generic checkpoint semantics elsewhere are unchanged: a full `checkpoint.reset`
+still rebuilds state and discards teardown data, `reset_from` still retains and
+revalidates it, and integrated decommission (as part of a switchover) continues
+under normal two-hub `finalization` checkpoint semantics.
+
+**Starting completely fresh.** To abandon a standalone decommission and begin from
+empty state, remove, rename, or repoint the operator-owned checkpoint file at
+`acm_switchover_execution.checkpoint.path`. A run against an absent file builds a
+fresh record. ⚠️ This **discards the teardown obligations the record carried**: a
+rerun that then finds a resource absent cannot distinguish "already deleted" from
+"never attempted". Retry — which resumes retained state — is the normal path;
+reach for the wipe only when deliberately abandoning those obligations.
+
 **Decommission RBAC bootstrap filtering:**
 When bootstrapping decommission RBAC, the tool applies a **label-positive**
 filter — manifests are included only when they explicitly carry the
