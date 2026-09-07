@@ -54,6 +54,7 @@ from lib.constants import (
     VELERO_BACKUP_LATEST,
     VELERO_BACKUP_SKIP,
 )
+from lib.decommission_outcome import UNSUCCESSFUL_OUTCOMES
 from lib.exceptions import FatalError, SwitchoverError, TransientError
 from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient, is_retryable_error
@@ -1001,7 +1002,18 @@ class Finalization:
             time.sleep(interval)
 
     def _disable_observability_on_old_hub(self) -> None:
-        """Delete MultiClusterObservability on old hub (optional)."""
+        """Delete MultiClusterObservability on the old hub through the shared machine.
+
+        GLM-H6: this method owns **no** MCO deletion logic. It keeps only the
+        caller-specific concerns amendment section 11 item 2 assigns to Finalization --
+        the gating below, the GitOps marker opt-in, and finalization-specific failure
+        text -- and delegates the algorithm to ``Decommission.teardown_observability``.
+
+        Expected failures arrive on the return channel, so this never catches an
+        exception from the teardown; it inspects the outcome and raises its own
+        ``SwitchoverError`` with finalization's message context. That is the
+        documented adapter, not a second channel.
+        """
         if not self.primary:
             logger.info("No primary client available, skipping observability disablement")
             return
@@ -1014,78 +1026,20 @@ class Finalization:
 
         logger.info("Disabling observability on old hub by deleting MultiClusterObservability...")
 
-        mcos = self.primary.list_custom_resources(
-            group="observability.open-cluster-management.io",
-            version="v1beta2",
-            plural="multiclusterobservabilities",
+        decommission = Decommission(
+            self.primary,
+            self.primary_has_observability,
+            run_record=self.run_record,
+            dry_run=self.dry_run,
         )
+        execution = decommission.teardown_observability(record_gitops_markers=True)
 
-        if not mcos:
-            logger.info("No MultiClusterObservability resources found on old hub")
-            return
-
-        for mco in mcos:
-            metadata = mco.get("metadata", {})
-            mco_name = metadata.get("name", "unknown")
-            markers = safe_record_gitops_markers(
-                logger=logger,
-                context="primary",
-                namespace="",  # MCO is cluster-scoped
-                kind="MultiClusterObservability",
-                name=mco_name,
-                metadata=metadata,
+        if execution.outcome in UNSUCCESSFUL_OUTCOMES:
+            raise SwitchoverError(
+                "Failed to disable observability on the old hub: the MultiClusterObservability "
+                f"teardown reported {execution.outcome.value}. The old hub was not left in the "
+                "expected secondary state."
             )
-            if markers:
-                logger.warning(
-                    "MultiClusterObservability %s appears GitOps-managed (%s). Coordinate deletion to avoid drift.",
-                    mco_name,
-                    ", ".join(markers),
-                )
-            if self.dry_run:
-                logger.info("[DRY-RUN] Would delete MultiClusterObservability: %s", mco_name)
-                continue
-
-            logger.info("Deleting MultiClusterObservability: %s", mco_name)
-            try:
-                self.primary.delete_custom_resource(
-                    group="observability.open-cluster-management.io",
-                    version="v1beta2",
-                    plural="multiclusterobservabilities",
-                    name=mco_name,
-                    timeout_seconds=DELETE_REQUEST_TIMEOUT,
-                )
-            except ApiException as e:
-                if getattr(e, "status", None) == 404:
-                    logger.info("MultiClusterObservability %s already deleted", mco_name)
-                else:
-                    raise
-
-        if self.dry_run:
-            logger.info("[DRY-RUN] Skipping observability termination check")
-            return
-
-        def _observability_terminated():
-            pods = self.primary.get_pods(namespace=OBSERVABILITY_NAMESPACE)
-            if not pods:
-                return WaitConditionResult.complete("no observability pods remaining")
-            return WaitConditionResult.pending(f"{len(pods)} pod(s) remaining")
-
-        success = wait_for_condition(
-            "observability pod termination on old hub",
-            _observability_terminated,
-            timeout=OBSERVABILITY_TERMINATE_TIMEOUT,
-            interval=OBSERVABILITY_TERMINATE_INTERVAL,
-            logger=logger,
-        )
-
-        if not success:
-            remaining = self.primary.get_pods(namespace=OBSERVABILITY_NAMESPACE)
-            if remaining:
-                raise SwitchoverError(
-                    "Observability pods still running after MCO deletion "
-                    f"({len(remaining)} pods). If GitOps is not recreating MCO, "
-                    "this may indicate a product bug."
-                )
 
     def _handle_old_hub(self):
         """

@@ -174,6 +174,9 @@ RESTORE_PLURAL = "restores"
 
 # MultiClusterObservability API identifiers
 OBSERVABILITY_API_GROUP = "observability.open-cluster-management.io"
+# Promoted from the literal at modules/post_activation.py:569 so the drain scope has
+# one owner. Mirrored in the collection; a parity test holds the two equal.
+OBSERVABILITY_POD_LABEL_SELECTOR = "observability.open-cluster-management.io/name=observability"
 MULTICLUSTEROBSERVABILITIES_PLURAL = "multiclusterobservabilities"
 
 # Hive ClusterDeployment API identifiers

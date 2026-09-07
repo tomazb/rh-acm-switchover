@@ -8,7 +8,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import pytest
 from kubernetes.client.exceptions import ApiException
@@ -17,7 +17,7 @@ from kubernetes.client.exceptions import ApiException
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import modules.decommission as decommission_module
-from lib.constants import ACM_NAMESPACE, LOCAL_CLUSTER_NAME, OBSERVABILITY_NAMESPACE
+from lib.constants import ACM_NAMESPACE, DELETE_REQUEST_TIMEOUT, LOCAL_CLUSTER_NAME, OBSERVABILITY_NAMESPACE
 from lib.decommission_outcome import DecommissionResult, SubstepExecution, SubstepOutcome
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
@@ -30,10 +30,39 @@ Decommission = decommission_module.Decommission
 
 @pytest.fixture
 def mock_primary_client():
-    """Create a mock KubeClient for primary hub."""
+    """Create a mock KubeClient for primary hub.
+
+    Carries the strict-read seam the C3 phase machine reads through, defaulted to the
+    ordinary success path: the MCO is present and is the proved object, its delete is
+    accepted, and the drain namespace is positively absent (verified-empty under the
+    fixed-namespace scope rule). Tests that need another shape override these.
+    """
+    from lib.strict_read import StrictReadOutcome, StrictReadStatus
+
     client = Mock()
     client.list_managed_clusters = Mock(return_value=[])
     client.list_custom_resources = Mock(return_value=[])
+
+    mco = {
+        "apiVersion": "observability.open-cluster-management.io/v1beta2",
+        "kind": "MultiClusterObservability",
+        "metadata": {"name": "observability", "uid": "uid-1", "resourceVersion": "7"},
+    }
+    client.get_custom_resource_strict = Mock(
+        side_effect=lambda *a, **k: (
+            StrictReadOutcome(status=StrictReadStatus.ITEMS, resource=mco)
+            if client.get_custom_resource_strict.call_count == 1
+            else StrictReadOutcome(status=StrictReadStatus.OBJECT_ABSENT)
+        )
+    )
+    client.list_custom_resources_strict = Mock(
+        return_value=StrictReadOutcome(status=StrictReadStatus.ITEMS, items=[mco], resource_version="1")
+    )
+    client.delete_custom_resource_preconditioned = Mock(return_value=None)
+    client.get_namespace_strict = Mock(return_value=StrictReadOutcome(status=StrictReadStatus.NAMESPACE_ABSENT))
+    client.list_pods_strict = Mock(
+        return_value=StrictReadOutcome(status=StrictReadStatus.ITEMS, items=[], resource_version="pods-1")
+    )
     return client
 
 
@@ -186,81 +215,32 @@ class TestDecommission:
 
         assert result.succeeded is True
 
-    @patch("modules.decommission.wait_for_condition")
-    def test_delete_observability_with_resources(self, mock_wait, decommission_with_obs, mock_primary_client):
-        """Test deleting observability resources."""
-        mock_wait.return_value = True
+    def test_delete_observability_with_resources(self, decommission_with_obs, mock_primary_client):
+        """Delete the observed MCO with its UID and report the accepted mutation."""
+        execution = decommission_with_obs.teardown_observability()
 
-        mock_primary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {
-                    "name": "observability",
-                    "namespace": OBSERVABILITY_NAMESPACE,
-                }
-            }
-        ]
-
-        decommission_with_obs._delete_observability()
-
-        mock_primary_client.delete_custom_resource.assert_called_once()
-
-    @patch("modules.decommission.wait_for_condition")
-    def test_delete_observability_not_found(self, mock_wait, decommission_with_obs, mock_primary_client):
-        """Test when no observability resources exist."""
-        mock_primary_client.list_custom_resources.return_value = []
-
-        # Should handle gracefully
-        decommission_with_obs._delete_observability()
-
+        assert execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
+        mock_primary_client.delete_custom_resource_preconditioned.assert_called_once_with(
+            "observability.open-cluster-management.io",
+            "v1beta2",
+            "multiclusterobservabilities",
+            "observability",
+            uid="uid-1",
+            namespace=None,
+            timeout_seconds=DELETE_REQUEST_TIMEOUT,
+        )
         mock_primary_client.delete_custom_resource.assert_not_called()
 
-    @patch("modules.decommission.wait_for_condition")
-    def test_delete_observability_ignores_404_delete_errors(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
-        """Observability delete 404 should be treated as already-gone and still complete idempotently."""
-        mock_wait.return_value = True
-        mock_primary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "observability", "namespace": OBSERVABILITY_NAMESPACE}}
-        ]
-        mock_primary_client.delete_custom_resource.side_effect = ApiException(status=404, reason="Not Found")
-        mock_primary_client.get_pods.return_value = []
+    def test_delete_observability_not_found(self, decommission_with_obs, mock_primary_client):
+        """Positive object and namespace absence skips every delete."""
+        mock_primary_client.get_custom_resource_strict.side_effect = None
+        mock_primary_client.get_custom_resource_strict.return_value = _strict("OBJECT_ABSENT")
 
-        decommission_with_obs._delete_observability()
+        execution = decommission_with_obs.teardown_observability()
 
-        mock_primary_client.delete_custom_resource.assert_called_once()
-        mock_wait.assert_called_once()
-
-    @patch("modules.decommission.wait_for_condition")
-    def test_delete_observability_timeout_blocks(self, mock_wait, decommission_with_obs, mock_primary_client, caplog):
-        """Observability pods remaining after MCO deletion should block decommission."""
-        mock_wait.return_value = False
-        mock_primary_client.list_custom_resources.return_value = [{"metadata": {"name": "observability"}}]
-        mock_primary_client.get_pods.return_value = [{"metadata": {"name": "obs-pod"}}]
-
-        with caplog.at_level(logging.ERROR):
-            execution = decommission_with_obs._delete_observability()
-
-        # IV-R403-01: the MCO delete was accepted before the proof failed, so the
-        # failing execution must still report its own mutation.
-        assert execution.outcome is SubstepOutcome.FAILED
-        assert execution.changed is True
-        assert "Observability pods still running" in caplog.text
-        mock_primary_client.delete_custom_resource.assert_called_once()
-
-    @patch("modules.decommission.wait_for_condition")
-    def test_delete_observability_timeout_rechecks_before_failing(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
-        """A boundary timeout should not fail decommission if pods are gone on the final read."""
-        mock_wait.return_value = False
-        mock_primary_client.list_custom_resources.return_value = [{"metadata": {"name": "observability"}}]
-        mock_primary_client.get_pods.return_value = []
-
-        decommission_with_obs._delete_observability()
-
-        mock_primary_client.delete_custom_resource.assert_called_once()
-        mock_primary_client.get_pods.assert_called()
+        assert execution == SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
+        mock_primary_client.delete_custom_resource_preconditioned.assert_not_called()
+        mock_primary_client.delete_custom_resource.assert_not_called()
 
     @patch("modules.decommission.wait_for_condition")
     def test_delete_managed_clusters_excludes_local(self, mock_wait, decommission_with_obs, mock_primary_client):
@@ -716,7 +696,7 @@ class TestDecommission:
 
         with patch.object(
             decomm,
-            "_delete_observability",
+            "teardown_observability",
             return_value=SubstepExecution(SubstepOutcome.PRECONDITION_NOOP),
         ) as mock_delete_obs:
             decomm.decommission(interactive=False)
@@ -1006,23 +986,45 @@ class TestActualChangeTruth:
         that reused a cached MultiClusterObservability decision and only read the
         remaining two families. The whole per-family read sequence is pinned instead.
 
-        Kill condition: short-circuiting ANY of the three live reads from a preview
+        Kill condition: short-circuiting ANY of the live reads from a preview
         observation (or from anything else the dry run left behind).
         """
         decommission_dry_run.decommission(interactive=False)
         mock_primary_client.reset_mock()
-        decommission_with_obs.decommission(interactive=False)
+        result = decommission_with_obs.decommission(interactive=False)
+        assert result.succeeded is True
+        assert result.changed is True, "live MCO presence must override the empty preview"
 
         calls = mock_primary_client.method_calls
-        assert [name for name, _, _ in calls] == [
-            "list_custom_resources",
-            "list_managed_clusters",
-            "list_custom_resources",
-        ]
-        assert [kwargs.get("plural") for _, _, kwargs in calls] == [
-            "multiclusterobservabilities",
-            None,
-            "multiclusterhubs",
+        mco_read = call.get_custom_resource_strict(
+            group="observability.open-cluster-management.io",
+            version="v1beta2",
+            plural="multiclusterobservabilities",
+            name="observability",
+            namespace=None,
+        )
+        assert calls == [
+            mco_read,
+            call.delete_custom_resource_preconditioned(
+                "observability.open-cluster-management.io",
+                "v1beta2",
+                "multiclusterobservabilities",
+                "observability",
+                uid="uid-1",
+                namespace=None,
+                timeout_seconds=DELETE_REQUEST_TIMEOUT,
+            ),
+            mco_read,
+            call.get_namespace_strict(OBSERVABILITY_NAMESPACE),
+            mco_read,
+            call.get_namespace_strict(OBSERVABILITY_NAMESPACE),
+            call.list_managed_clusters(),
+            call.list_custom_resources(
+                group="operator.open-cluster-management.io",
+                version="v1",
+                plural="multiclusterhubs",
+                namespace=ACM_NAMESPACE,
+            ),
         ]
 
     def test_dry_run_prediction_is_separate_from_actual_change(self, decommission_dry_run, monkeypatch):
@@ -1067,42 +1069,57 @@ class TestDeleteApiErrorsReachTheResult:
         exc.body = body
         return exc
 
-    @patch("modules.decommission.wait_for_condition")
-    def test_observability_delete_rejection_fails_with_the_earlier_delete_reported(
-        self, mock_wait, decommission_with_obs, mock_primary_client, caplog
-    ):
-        """The first MCO was destroyed; the second is rejected. Both facts must survive.
-
-        The body assertion covers the message this module builds, not the shared
-        ``api_call`` decorator's logging -- the Mock client never reaches it.
-        """
-        mock_wait.return_value = True
-        mock_primary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "obs-one"}},
-            {"metadata": {"name": "obs-two"}},
-        ]
-        mock_primary_client.delete_custom_resource.side_effect = [True, self._api_error(403, "Forbidden")]
-
-        with caplog.at_level(logging.ERROR):
-            execution = decommission_with_obs._delete_observability()
-
-        assert execution.outcome is SubstepOutcome.FAILED
-        assert execution.changed is True
-        assert "403" in caplog.text and "Forbidden" in caplog.text
-        assert "raw body must never be shown" not in caplog.text
-
-    def test_observability_delete_rejection_with_no_prior_delete_reports_no_change(
+    def test_a_delete_accepted_then_a_failed_drain_still_reports_the_change(
         self, decommission_with_obs, mock_primary_client, caplog
     ):
-        mock_primary_client.list_custom_resources.return_value = [{"metadata": {"name": "obs-one"}}]
-        mock_primary_client.delete_custom_resource.side_effect = self._api_error(409, "Conflict")
+        """The DELETE landed; a later stage failed. Both facts must survive.
+
+        C3 changed the mechanism -- one named resource through the guarded primitive,
+        not a list of them -- but not this contract: an operator whose MCO has already
+        been destroyed must not be told nothing changed.
+        """
+        from lib.strict_read import StrictReadOutcome, StrictReadStatus
+
+        # The drain namespace is present but unreadable, so the run fails AFTER the
+        # accepted delete.
+        mock_primary_client.get_namespace_strict = Mock(return_value=StrictReadOutcome(status=StrictReadStatus.ERROR))
 
         with caplog.at_level(logging.ERROR):
-            execution = decommission_with_obs._delete_observability()
+            execution = decommission_with_obs.teardown_observability()
+
+        assert execution.outcome is SubstepOutcome.FAILED
+        assert execution.changed is True, "this invocation destroyed the MCO"
+        mock_primary_client.delete_custom_resource_preconditioned.assert_called_once()
+
+    def test_a_rejected_delete_reports_no_change(self, decommission_with_obs, mock_primary_client, caplog):
+        """Nothing was accepted, so nothing changed."""
+        from lib.exceptions import PreconditionConflict
+
+        mock_primary_client.delete_custom_resource_preconditioned = Mock(
+            side_effect=PreconditionConflict("the live object is not the proved one")
+        )
+
+        with caplog.at_level(logging.ERROR):
+            execution = decommission_with_obs.teardown_observability()
 
         assert execution.outcome is SubstepOutcome.FAILED
         assert execution.changed is False
-        assert "409" in caplog.text and "Conflict" in caplog.text
+
+    def test_a_failure_message_never_carries_a_raw_response_body(
+        self, decommission_with_obs, mock_primary_client, caplog
+    ):
+        """Status and reason only. Scope note: the Mock client bypasses
+        ``lib.kube_client.api_call``, so this proves what THIS module logs, not the
+        shared decorator's own behaviour."""
+        mock_primary_client.delete_custom_resource_preconditioned = Mock(
+            side_effect=SwitchoverError("API error 403 Forbidden")
+        )
+
+        with caplog.at_level(logging.ERROR):
+            decommission_with_obs.teardown_observability()
+
+        assert "403" in caplog.text and "Forbidden" in caplog.text
+        assert "raw body must never be shown" not in caplog.text
 
     @patch("modules.decommission.wait_for_condition")
     def test_managed_cluster_delete_rejection_reports_the_earlier_delete(
@@ -1190,13 +1207,9 @@ class TestDeleteApiErrorsReachTheResult:
         DecommissionResult is constructed at all.
         """
         mock_wait.return_value = True
-        mock_primary_client.list_custom_resources.side_effect = [
-            [{"metadata": {"name": "observability"}}],  # MCO
-            [],  # Hive ClusterDeployments
-        ]
+        mock_primary_client.list_custom_resources.return_value = []  # Hive ClusterDeployments
         mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1"}}]
-        mock_primary_client.get_pods.return_value = []
-        mock_primary_client.delete_custom_resource.side_effect = [True, self._api_error(409, "Conflict")]
+        mock_primary_client.delete_custom_resource.side_effect = self._api_error(409, "Conflict")
 
         result = decommission_with_obs.decommission(interactive=False)
 
@@ -1206,61 +1219,35 @@ class TestDeleteApiErrorsReachTheResult:
         assert result.substeps["managed_clusters"] is SubstepOutcome.FAILED
         assert result.not_attempted == ("multiclusterhub",)
         assert "observability" in "\n".join(result.summary_lines())
+        mock_primary_client.delete_custom_resource_preconditioned.assert_called_once()
+        mock_primary_client.delete_custom_resource.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1",
+            plural="managedclusters",
+            name="cluster1",
+            timeout_seconds=DELETE_REQUEST_TIMEOUT,
+        )
 
-    @patch("modules.decommission.wait_for_condition")
-    def test_a_404_from_the_real_client_is_indistinguishable_and_reports_change(self, mock_wait, state_manager):
-        """Pin the REAL client behaviour, which PR B cannot make exact.
+    def test_a_404_at_delete_time_is_no_longer_reported_as_an_accepted_delete(
+        self, decommission_with_obs, mock_primary_client
+    ):
+        """This replaces a test that pinned the ambiguity PR C removed.
 
-        This drives an actual ``KubeClient`` -- not a Mock standing in for one -- so the
-        ``@api_call(not_found_value=True)`` decorator on ``delete_custom_resource``
-        really runs: the underlying ``custom_api`` raises ``ApiException(404)`` and the
-        decorator converts it to ``True``, exactly what it returns for a delete the API
-        performed. The call site cannot tell the two apart, so an already-absent object
-        reports ``changed=True``. Flipping ``not_found_value`` to ``False`` fails this
-        test, which is what makes it a pin rather than a restatement.
-
-        ``tests/test_kube_client.py::test_delete_custom_resource_404_returns_true`` is
-        the existing pin for the decorator behaviour itself; this one pins the
-        consequence the decommission layer inherits from it, and PR C's
-        UID-preconditioned guarded delete is what removes the ambiguity.
-
-        Note that ``test_delete_observability_ignores_404_delete_errors`` models a 404
-        as a RAISED ApiException. The production client never raises on 404 -- the
-        decorator absorbs it -- so that path is reachable only through a Mock.
+        The old caller-side arm treated a 404 from the delete as success, so an
+        accepted delete and an already-absent object were indistinguishable and both
+        reported ``changed``. The guarded primitive now raises ``TargetDisappeared``,
+        and this invocation must report that it changed nothing -- it did not.
         """
-        mock_wait.return_value = True
+        from lib.exceptions import TargetDisappeared
 
-        client = object.__new__(KubeClient)  # bypass cluster config; this is a real KubeClient
-        client.dry_run = False
-        client.custom_api = Mock()
-        client.custom_api.delete_cluster_custom_object.side_effect = ApiException(status=404)
-
-        # 1. The real decorator path: a 404 from the API server becomes True.
-        assert (
-            client.delete_custom_resource(
-                group="observability.open-cluster-management.io",
-                version="v1beta2",
-                plural="multiclusterobservabilities",
-                name="observability",
-            )
-            is True
+        mock_primary_client.delete_custom_resource_preconditioned = Mock(
+            side_effect=TargetDisappeared("already absent at delete time")
         )
 
-        # 2. The B-stage consequence on that same client: an object that was already
-        #    gone is still reported as an accepted mutation.
-        client.list_custom_resources = Mock(return_value=[{"metadata": {"name": "observability"}}])
-        client.get_pods = Mock(return_value=[])
-        decommission = Decommission(
-            primary_client=client,
-            has_observability=True,
-            run_record=RunRecord(state_manager),
-        )
+        execution = decommission_with_obs.teardown_observability()
 
-        execution = decommission._delete_observability()
-
-        assert execution.outcome is SubstepOutcome.COMPLETED
-        assert execution.changed is True
-        assert client.custom_api.delete_cluster_custom_object.call_count == 2
+        assert execution.outcome is SubstepOutcome.FAILED
+        assert execution.changed is False, "an object that was already gone is not this run's change"
 
 
 @pytest.mark.unit
@@ -1382,7 +1369,6 @@ class TestDecommissionIntegration:
 
         # Mock all resources
         mock_primary_client.list_custom_resources.side_effect = [
-            [{"metadata": {"name": "observability"}}],  # MCO
             [],  # Hive ClusterDeployments
             [{"metadata": {"name": "multiclusterhub"}}],  # MCH
         ]
@@ -1392,5 +1378,407 @@ class TestDecommissionIntegration:
         result = decomm.decommission(interactive=False)
 
         assert result.succeeded is True
-        # Verify resources were deleted
-        assert mock_primary_client.delete_custom_resource.call_count >= 3
+        assert result.changed is True
+        assert result.substeps == {
+            "observability": SubstepOutcome.COMPLETED,
+            "managed_clusters": SubstepOutcome.COMPLETED,
+            "multiclusterhub": SubstepOutcome.COMPLETED,
+        }
+        mock_primary_client.delete_custom_resource_preconditioned.assert_called_once_with(
+            "observability.open-cluster-management.io",
+            "v1beta2",
+            "multiclusterobservabilities",
+            "observability",
+            uid="uid-1",
+            namespace=None,
+            timeout_seconds=DELETE_REQUEST_TIMEOUT,
+        )
+        assert mock_primary_client.delete_custom_resource.call_args_list == [
+            call(
+                group="cluster.open-cluster-management.io",
+                version="v1",
+                plural="managedclusters",
+                name="cluster1",
+                timeout_seconds=DELETE_REQUEST_TIMEOUT,
+            ),
+            call(
+                group="operator.open-cluster-management.io",
+                version="v1",
+                plural="multiclusterhubs",
+                name="multiclusterhub",
+                namespace=ACM_NAMESPACE,
+                timeout_seconds=DELETE_REQUEST_TIMEOUT,
+            ),
+        ]
+
+
+def _strict(status, items=None, resource=None, resource_version=None):
+    from lib.strict_read import StrictReadOutcome, StrictReadStatus
+
+    return StrictReadOutcome(
+        status=getattr(StrictReadStatus, status),
+        items=items or [],
+        resource=resource,
+        resource_version=resource_version,
+    )
+
+
+def _mco(uid="uid-1", resource_version="7"):
+    return {
+        "apiVersion": "observability.open-cluster-management.io/v1beta2",
+        "kind": "MultiClusterObservability",
+        "metadata": {"name": "observability", "uid": uid, "resourceVersion": resource_version},
+    }
+
+
+def _arrange(dec, *, cr=None, pods=None, namespace=None, record=None):
+    """Arrange the whole seam the phase machine reads through.
+
+    Every test below sets up the reads it depends on. A test that asserted an
+    outcome without arranging these would pass or fail on the fixture's defaults
+    rather than on the behaviour it names.
+    """
+    client = dec.primary
+    # Sequential: the initial guarded read, then the final verification pass. A single
+    # return_value would make the final pass see the object still present, so a
+    # successful teardown could never be arranged.
+    initial = cr if cr is not None else _strict("ITEMS", resource=_mco())
+    final = _strict("OBJECT_ABSENT") if initial.status.name == "ITEMS" else initial
+    client.get_custom_resource_strict = Mock(side_effect=[initial, final, final, final])
+    client.list_custom_resources_strict = Mock(return_value=cr if cr is not None else _strict("ITEMS", items=[_mco()]))
+    client.delete_custom_resource_preconditioned = Mock(return_value=None)
+    client.list_pods_strict = Mock(
+        return_value=pods if pods is not None else _strict("ITEMS", items=[], resource_version="pods-1")
+    )
+    client.get_namespace_strict = Mock(return_value=namespace if namespace is not None else _strict("NAMESPACE_ABSENT"))
+    dec.run_record.teardown_record = Mock(return_value=record)
+    dec.run_record.record_teardown_phase = Mock()
+    return client
+
+
+@pytest.mark.unit
+class TestSharedTeardownPhaseMachine:
+    """C3: one phase machine in ``Decommission``, consumed by both callers.
+
+    GLM-H6 is closed only when ``modules/finalization.py`` owns zero MCO deletion
+    logic and calls ``Decommission.teardown_observability`` instead.
+    """
+
+    # ---------------------------------------------------------------- interface
+
+    def test_teardown_observability_returns_the_one_execution_result_type(self, decommission_with_obs):
+        """No tuple form and no side channel anywhere in C, D or E."""
+        _arrange(decommission_with_obs)
+        assert isinstance(decommission_with_obs.teardown_observability(), SubstepExecution)
+
+    def test_the_gitops_marker_flag_is_keyword_only_and_defaults_off(self, decommission_with_obs):
+        import inspect as _inspect
+
+        marker = _inspect.signature(decommission_with_obs.teardown_observability).parameters["record_gitops_markers"]
+        assert marker.kind is _inspect.Parameter.KEYWORD_ONLY
+        assert marker.default is False, "markers are opt-in; only Finalization asks for them"
+
+    # ---------------------------------------------------------------- ordering
+
+    def test_expected_uid_and_delete_started_are_durable_before_the_delete(self, decommission_with_obs):
+        """The identity map must be persisted BEFORE the first DELETE: a crash
+        mid-delete must not leave the run with no record of what it was removing."""
+        order = []
+        client = _arrange(decommission_with_obs)
+        decommission_with_obs.run_record.record_teardown_phase = Mock(
+            side_effect=lambda record: order.append(("record", record.phase.value, record.expected_uid))
+        )
+        client.delete_custom_resource_preconditioned = Mock(
+            side_effect=lambda *a, **k: order.append(("delete", k.get("uid"), None))
+        )
+
+        decommission_with_obs.teardown_observability()
+
+        assert ("delete", "uid-1", None) in order, "the guarded delete must be issued"
+        before = order[: order.index(("delete", "uid-1", None))]
+        assert ("record", "delete_started", "uid-1") in before
+
+    # ---------------------------------------------------------------- changed
+
+    def test_changed_is_true_when_this_invocation_had_its_delete_accepted(self, decommission_with_obs):
+        _arrange(decommission_with_obs)
+        assert decommission_with_obs.teardown_observability().changed is True
+
+    def test_a_resumed_record_whose_delete_landed_earlier_reports_changed_false(self, decommission_with_obs):
+        """The path a fresh-run test cannot reach. Resuming a record already past the
+        DELETE and completing only the drain must NOT report changed: this invocation
+        mutated nothing, even though it writes ``completed``."""
+        from lib.teardown_record import TeardownPhase, TeardownRecord, teardown_key
+
+        resumed = TeardownRecord(
+            key=teardown_key(
+                "observability.open-cluster-management.io/v1beta2",
+                "MultiClusterObservability",
+                None,
+                "observability",
+            ),
+            expected_uid="uid-1",
+            phase=TeardownPhase.CR_ABSENT,
+        )
+        client = _arrange(decommission_with_obs, cr=_strict("OBJECT_ABSENT"), record=resumed)
+
+        execution = decommission_with_obs.teardown_observability()
+
+        assert execution.changed is False, "an earlier invocation's delete is not this one's change"
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    # ---------------------------------------------------------------- preconditions
+
+    def test_no_record_with_crd_and_namespace_both_proven_absent_is_a_precondition_noop(self, decommission_with_obs):
+        _arrange(
+            decommission_with_obs,
+            cr=_strict("CRD_ABSENT"),
+            namespace=_strict("NAMESPACE_ABSENT"),
+            record=None,
+        )
+        execution = decommission_with_obs.teardown_observability()
+        assert execution.outcome is SubstepOutcome.PRECONDITION_NOOP
+        assert execution.changed is False
+
+    def test_crd_absent_but_observability_namespace_present_is_fatal(self, decommission_with_obs):
+        """Half-removed observability is not a clean skip: something is still there."""
+        _arrange(
+            decommission_with_obs,
+            cr=_strict("CRD_ABSENT"),
+            namespace=_strict("ITEMS", resource_version="ns-1"),
+            record=None,
+        )
+        assert decommission_with_obs.teardown_observability().outcome is SubstepOutcome.FAILED
+
+    def test_a_strict_read_error_is_fatal_never_treated_as_absent(self, decommission_with_obs):
+        _arrange(decommission_with_obs, cr=_strict("ERROR"), record=None)
+        assert decommission_with_obs.teardown_observability().outcome is SubstepOutcome.FAILED
+
+    def test_a_same_name_different_uid_cr_is_fatal_and_left_intact(self, decommission_with_obs):
+        from lib.teardown_record import TeardownPhase, TeardownRecord, teardown_key
+
+        existing = TeardownRecord(
+            key=teardown_key(
+                "observability.open-cluster-management.io/v1beta2",
+                "MultiClusterObservability",
+                None,
+                "observability",
+            ),
+            expected_uid="uid-1",
+            phase=TeardownPhase.DELETE_STARTED,
+        )
+        client = _arrange(
+            decommission_with_obs,
+            cr=_strict("ITEMS", resource=_mco(uid="uid-REPLACEMENT")),
+            record=existing,
+        )
+        execution = decommission_with_obs.teardown_observability()
+        assert execution.outcome is SubstepOutcome.FAILED
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    # ---------------------------------------------------------------- exception boundary
+
+    def test_an_expected_operational_failure_is_returned_not_raised(self, decommission_with_obs):
+        """IV-R403-01: expected SwitchoverError-class failures arrive on the return
+        channel so ``decommission()`` can aggregate them."""
+        client = _arrange(decommission_with_obs)
+        client.delete_custom_resource_preconditioned = Mock(side_effect=SwitchoverError("boom"))
+        assert decommission_with_obs.teardown_observability().outcome is SubstepOutcome.FAILED
+
+    def test_a_precondition_conflict_is_expected_and_is_returned(self, decommission_with_obs):
+        """C1 raises PreconditionConflict when the live object is not the proved one:
+        an expected operational outcome here, not a crash."""
+        from lib.exceptions import PreconditionConflict
+
+        client = _arrange(decommission_with_obs)
+        client.delete_custom_resource_preconditioned = Mock(side_effect=PreconditionConflict("mismatch"))
+        assert decommission_with_obs.teardown_observability().outcome is SubstepOutcome.FAILED
+
+    def test_a_target_disappeared_is_expected_and_is_returned(self, decommission_with_obs):
+        from lib.exceptions import TargetDisappeared
+
+        client = _arrange(decommission_with_obs)
+        client.delete_custom_resource_preconditioned = Mock(side_effect=TargetDisappeared("gone"))
+        assert decommission_with_obs.teardown_observability().outcome is SubstepOutcome.FAILED
+
+    def test_a_programmer_error_from_the_delete_primitive_propagates(self, decommission_with_obs):
+        """The primitive raises ValidationError on an empty uid, which means the
+        caller failed to supply a proved identity. Converting that into a FAILED
+        result would hide a bug behind an operational-looking outcome."""
+        from lib.validation import ValidationError
+
+        client = _arrange(decommission_with_obs)
+        client.delete_custom_resource_preconditioned = Mock(side_effect=ValidationError("empty uid"))
+        with pytest.raises(ValidationError):
+            decommission_with_obs.teardown_observability()
+
+    def test_an_unexpected_exception_propagates_uncaught(self, decommission_with_obs):
+        client = _arrange(decommission_with_obs)
+        client.delete_custom_resource_preconditioned = Mock(side_effect=RuntimeError("bug"))
+        with pytest.raises(RuntimeError):
+            decommission_with_obs.teardown_observability()
+
+    @pytest.mark.parametrize("stage", ["cr", "pods"])
+    def test_teardown_waits_for_asynchronous_removal(self, stage, decommission_with_obs, monkeypatch):
+        """A pending first read must not fail an ordinary asynchronous deletion."""
+        client = _arrange(decommission_with_obs, namespace=_strict("ITEMS", resource_version="ns-1"))
+        if stage == "cr":
+            client.get_custom_resource_strict.side_effect = [
+                _strict("ITEMS", resource=_mco()),
+                _strict("ITEMS", resource=_mco()),
+                _strict("OBJECT_ABSENT"),
+                _strict("OBJECT_ABSENT"),
+            ]
+        else:
+            client.list_pods_strict.side_effect = [
+                _strict("ITEMS", items=[{"metadata": {"name": "obs-pod"}}], resource_version="pods-1"),
+                _strict("ITEMS", resource_version="pods-2"),
+                _strict("ITEMS", resource_version="pods-final"),
+            ]
+        monkeypatch.setattr("lib.waiter.time.sleep", lambda _: None)
+
+        execution = decommission_with_obs.teardown_observability()
+
+        assert execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
+        phases = [c.args[0].phase.value for c in decommission_with_obs.run_record.record_teardown_phase.call_args_list]
+        assert phases == ["delete_started", "cr_absent", "drain_pending", "drained", "completed"]
+
+    @pytest.mark.parametrize("stage", ["cr", "pods"])
+    def test_timeout_blocks_without_losing_the_accepted_delete(self, stage, decommission_with_obs, monkeypatch, caplog):
+        """A stuck CR or pod must leave durable unfinished work and changed=True."""
+        client = _arrange(decommission_with_obs, namespace=_strict("ITEMS", resource_version="ns-1"))
+        if stage == "cr":
+            client.get_custom_resource_strict.side_effect = None
+            client.get_custom_resource_strict.return_value = _strict("ITEMS", resource=_mco())
+        else:
+            client.list_pods_strict.return_value = _strict(
+                "ITEMS", items=[{"metadata": {"name": "obs-pod"}}], resource_version="pods-1"
+            )
+        # Exercise the real waiter's deadline without spending the production window.
+        monkeypatch.setattr(decommission_module, "OBSERVABILITY_TERMINATE_TIMEOUT", 0)
+
+        with caplog.at_level(logging.ERROR):
+            execution = decommission_with_obs.teardown_observability()
+
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        client.delete_custom_resource_preconditioned.assert_called_once()
+        phases = [c.args[0].phase.value for c in decommission_with_obs.run_record.record_teardown_phase.call_args_list]
+        assert phases == (["delete_started"] if stage == "cr" else ["delete_started", "cr_absent", "drain_pending"])
+        assert "timeout" in caplog.text.lower()
+
+    def test_drain_timeout_rechecks_before_failing(self, decommission_with_obs, monkeypatch):
+        """Pods gone at the deadline still complete, with a separate final proof."""
+        client = _arrange(decommission_with_obs, namespace=_strict("ITEMS", resource_version="ns-1"))
+        client.list_pods_strict.side_effect = [
+            _strict("ITEMS", items=[{"metadata": {"name": "obs-pod"}}], resource_version="pods-1"),
+            _strict("ITEMS", resource_version="pods-boundary"),
+            _strict("ITEMS", resource_version="pods-final"),
+        ]
+        # CR wait completes at t=0; the pending drain read consumes its deadline.
+        times = iter([0, 0, 0, 0, 300, 300])
+        monkeypatch.setattr("lib.waiter.time", Mock(time=lambda: next(times, 300), sleep=Mock()))
+
+        execution = decommission_with_obs.teardown_observability()
+
+        assert execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
+        assert client.list_pods_strict.call_count == 3
+        completed = decommission_with_obs.run_record.record_teardown_phase.call_args.args[0]
+        assert completed.resource_versions["drain_pods"] == "pods-final"
+
+    @pytest.mark.parametrize("failure", ["cr_error", "replacement", "namespace_error", "pods_error", "final_pods"])
+    def test_poll_and_final_proof_failures_never_complete(self, failure, decommission_with_obs):
+        """Read errors, replacements, and pods reappearing cannot certify completion."""
+        client = _arrange(decommission_with_obs, namespace=_strict("ITEMS", resource_version="ns-1"))
+        if failure in ("cr_error", "replacement"):
+            observed = _strict("ERROR") if failure == "cr_error" else _strict("ITEMS", resource=_mco(uid="replacement"))
+            client.get_custom_resource_strict.side_effect = [_strict("ITEMS", resource=_mco()), observed]
+        elif failure == "namespace_error":
+            client.get_namespace_strict.return_value = _strict("ERROR")
+        elif failure == "pods_error":
+            client.list_pods_strict.return_value = _strict("ERROR")
+        else:
+            client.list_pods_strict.side_effect = [
+                _strict("ITEMS", resource_version="pods-drained"),
+                _strict("ITEMS", items=[{"metadata": {"name": "new-pod"}}], resource_version="pods-final"),
+            ]
+
+        execution = decommission_with_obs.teardown_observability()
+
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        client.delete_custom_resource_preconditioned.assert_called_once()
+        assert "completed" not in [
+            c.args[0].phase.value for c in decommission_with_obs.run_record.record_teardown_phase.call_args_list
+        ]
+
+    # ---------------------------------------------------------------- evidence
+
+    def test_completion_evidence_comes_only_from_the_final_verification_pass(self, decommission_with_obs):
+        """Evidence copied from an earlier phase, a pre-DELETE read or a previous
+        invocation would certify something this run never re-proved."""
+        _arrange(
+            decommission_with_obs,
+            namespace=_strict("ITEMS", resource_version="ns-final"),
+            pods=_strict("ITEMS", items=[], resource_version="pods-final"),
+        )
+        decommission_with_obs.teardown_observability()
+
+        completed = [
+            call.args[0]
+            for call in decommission_with_obs.run_record.record_teardown_phase.call_args_list
+            if call.args[0].phase.value == "completed"
+        ]
+        assert completed, "a successful teardown must write a completed record"
+        record = completed[-1]
+        assert record.resource_versions["drain_pods"] == "pods-final"
+        assert record.resource_versions["drain_namespace"] == "ns-final"
+        assert "cr" not in record.resource_versions, "no pre-DELETE revision is carried forward"
+
+    def test_the_namespace_absent_drain_mode_records_a_proof_and_an_empty_revision_map(self, decommission_with_obs):
+        """The two drain modes are mutually exclusive; resource_versions is present
+        and empty in the namespace-absent mode, never omitted."""
+        _arrange(decommission_with_obs, namespace=_strict("NAMESPACE_ABSENT"))
+        decommission_with_obs.teardown_observability()
+
+        completed = [
+            call.args[0]
+            for call in decommission_with_obs.run_record.record_teardown_phase.call_args_list
+            if call.args[0].phase.value == "completed"
+        ]
+        record = completed[-1]
+        assert record.resource_versions == {}
+        assert record.absence_proofs["drain_namespace"].proof_type == "namespace_absent"
+
+    # ---------------------------------------------------------------- dry run
+
+    def test_dry_run_writes_no_record_and_issues_no_delete(self, decommission_with_obs):
+        client = _arrange(decommission_with_obs)
+        decommission_with_obs.dry_run = True
+        decommission_with_obs.teardown_observability()
+        decommission_with_obs.run_record.record_teardown_phase.assert_not_called()
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    # ---------------------------------------------------------------- gitops markers
+
+    def test_markers_are_recorded_only_when_explicitly_requested(self, decommission_with_obs):
+        """Both directions. Asserting only the True case would let a True default slip
+        in and make Finalization's opt-in meaningless."""
+        with patch.object(decommission_module, "safe_record_gitops_markers") as recorder:
+            _arrange(decommission_with_obs)
+            decommission_with_obs.teardown_observability(record_gitops_markers=False)
+            recorder.assert_not_called()
+
+            _arrange(decommission_with_obs)
+            decommission_with_obs.teardown_observability(record_gitops_markers=True)
+            recorder.assert_called()
+
+    # ---------------------------------------------------------------- GLM-H6
+
+    def test_the_duplicate_decommission_copy_is_gone(self):
+        """GLM-H6 kill condition, half one."""
+        assert not hasattr(decommission_module.Decommission, "_delete_observability")
+
+    def test_the_dead_caller_side_404_arm_is_gone(self):
+        """Deleted with the call site it guarded; its behaviour is re-asserted against
+        the real seam instead of decorator-bypassing mocks."""
+        source = inspect.getsource(decommission_module.Decommission)
+        assert "already gone (404), treating as success" not in source

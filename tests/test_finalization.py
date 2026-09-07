@@ -23,6 +23,7 @@ from lib.constants import BACKUP_SCHEDULE_DEFAULT_NAME
 from lib.decommission_outcome import DecommissionResult, SubstepOutcome
 from lib.exceptions import SwitchoverError
 from lib.run_record import RunRecord
+from lib.strict_read import StrictReadOutcome, StrictReadStatus
 from lib.waiter import WaitConditionResult
 
 Finalization = finalization_module.Finalization
@@ -49,6 +50,25 @@ def create_mock_step_context(is_step_completed_func, mark_step_completed_func):
 def mock_secondary_client():
     """Create a mock KubeClient for secondary hub."""
     return Mock()
+
+
+@pytest.fixture
+def mock_mco_primary():
+    """Strict MCO reads for the shared teardown reached through Finalization."""
+    primary = Mock()
+    primary.get_custom_resource_strict.side_effect = [
+        StrictReadOutcome(
+            status=StrictReadStatus.ITEMS,
+            resource={
+                "metadata": {"name": "observability", "uid": "uid-1", "labels": {}},
+            },
+        ),
+        StrictReadOutcome(status=StrictReadStatus.OBJECT_ABSENT),
+        StrictReadOutcome(status=StrictReadStatus.OBJECT_ABSENT),
+    ]
+    primary.get_namespace_strict.return_value = StrictReadOutcome(status=StrictReadStatus.NAMESPACE_ABSENT)
+    primary.delete_custom_resource_preconditioned.return_value = None
+    return primary
 
 
 @pytest.fixture
@@ -1373,12 +1393,12 @@ class TestFinalization:
 
         assert "already exists during recreation" in caplog.text
 
-    @patch("modules.finalization.wait_for_condition")
+    @patch("modules.decommission.wait_for_condition")
     def test_disable_observability_on_old_hub_deletes_mco(
-        self, mock_wait, mock_secondary_client, mock_state_manager, mock_backup_manager
+        self, mock_wait, mock_secondary_client, mock_state_manager, mock_backup_manager, mock_mco_primary
     ):
         """Optional MCO deletion should remove observability on old hub."""
-        primary = Mock()
+        primary = mock_mco_primary
         fin = Finalization(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
@@ -1386,43 +1406,47 @@ class TestFinalization:
             primary_client=primary,
             old_hub_action="secondary",
         )
-        primary.list_custom_resources.return_value = [{"metadata": {"name": "observability", "labels": {}}}]
-        primary.get_pods.return_value = []
 
         def capture_wait(_description, condition_fn, **_kwargs):
             result = condition_fn()
             assert isinstance(result, WaitConditionResult)
             assert result.done is True
-            assert result.public_detail == "no observability pods remaining"
             return True
 
         mock_wait.side_effect = capture_wait
 
         fin._disable_observability_on_old_hub()
 
-        primary.list_custom_resources.assert_called_once_with(
-            group="observability.open-cluster-management.io",
-            version="v1beta2",
-            plural="multiclusterobservabilities",
-        )
-        primary.delete_custom_resource.assert_called_once_with(
+        assert primary.get_custom_resource_strict.call_count == 3
+        primary.get_custom_resource_strict.assert_called_with(
             group="observability.open-cluster-management.io",
             version="v1beta2",
             plural="multiclusterobservabilities",
             name="observability",
+            namespace=None,
+        )
+        primary.delete_custom_resource_preconditioned.assert_called_once_with(
+            "observability.open-cluster-management.io",
+            "v1beta2",
+            "multiclusterobservabilities",
+            "observability",
+            uid="uid-1",
+            namespace=None,
             timeout_seconds=finalization_module.DELETE_REQUEST_TIMEOUT,
         )
-        primary.get_pods.assert_called_once_with(namespace=finalization_module.OBSERVABILITY_NAMESPACE)
-        mock_wait.assert_called_once_with(
-            "observability pod termination on old hub",
-            ANY,
-            timeout=finalization_module.OBSERVABILITY_TERMINATE_TIMEOUT,
-            interval=finalization_module.OBSERVABILITY_TERMINATE_INTERVAL,
-            logger=finalization_module.logger,
-        )
+        assert primary.get_namespace_strict.call_args_list == [
+            call(finalization_module.OBSERVABILITY_NAMESPACE),
+            call(finalization_module.OBSERVABILITY_NAMESPACE),
+        ]
+        assert mock_wait.call_count == 2
+        for wait_call in mock_wait.call_args_list:
+            assert wait_call.kwargs["timeout"] == finalization_module.OBSERVABILITY_TERMINATE_TIMEOUT
+            assert wait_call.kwargs["interval"] == finalization_module.OBSERVABILITY_TERMINATE_INTERVAL
+            assert wait_call.kwargs["allow_success_after_timeout"] is True
+        primary.delete_custom_resource.assert_not_called()
 
     @patch("lib.gitops_detector.record_gitops_markers")
-    @patch("modules.finalization.wait_for_condition")
+    @patch("modules.decommission.wait_for_condition")
     def test_disable_observability_on_old_hub_warns_for_gitops_managed_mco(
         self,
         mock_wait,
@@ -1430,12 +1454,13 @@ class TestFinalization:
         mock_secondary_client,
         mock_state_manager,
         mock_backup_manager,
+        mock_mco_primary,
         caplog,
     ):
         """MCO deletion should emit immediate warning when GitOps markers are detected."""
         mock_wait.return_value = True
         mock_record_markers.return_value = ["label:app.kubernetes.io/managed-by"]
-        primary = Mock()
+        primary = mock_mco_primary
         fin = Finalization(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
@@ -1443,18 +1468,23 @@ class TestFinalization:
             primary_client=primary,
             old_hub_action="secondary",
         )
-        primary.list_custom_resources.return_value = [{"metadata": {"name": "observability", "labels": {}}}]
-        primary.get_pods.return_value = []
 
         with caplog.at_level(logging.WARNING, logger="acm_switchover"):
             fin._disable_observability_on_old_hub()
 
         assert "appears GitOps-managed" in caplog.text
         assert "observability" in caplog.text
-        primary.delete_custom_resource.assert_called_once()
+        mock_record_markers.assert_called_once_with(
+            context="primary",
+            namespace="",
+            kind="MultiClusterObservability",
+            name="observability",
+            metadata={"name": "observability", "uid": "uid-1", "labels": {}},
+        )
+        primary.delete_custom_resource_preconditioned.assert_called_once()
 
     @patch("lib.gitops_detector.record_gitops_markers")
-    @patch("modules.finalization.wait_for_condition")
+    @patch("modules.decommission.wait_for_condition")
     def test_disable_observability_on_old_hub_no_gitops_warning_without_markers(
         self,
         mock_wait,
@@ -1462,12 +1492,13 @@ class TestFinalization:
         mock_secondary_client,
         mock_state_manager,
         mock_backup_manager,
+        mock_mco_primary,
         caplog,
     ):
         """MCO deletion should not emit GitOps warning when no markers are detected."""
         mock_wait.return_value = True
         mock_record_markers.return_value = []
-        primary = Mock()
+        primary = mock_mco_primary
         fin = Finalization(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
@@ -1475,17 +1506,15 @@ class TestFinalization:
             primary_client=primary,
             old_hub_action="secondary",
         )
-        primary.list_custom_resources.return_value = [{"metadata": {"name": "observability", "labels": {}}}]
-        primary.get_pods.return_value = []
 
         with caplog.at_level(logging.WARNING, logger="acm_switchover"):
             fin._disable_observability_on_old_hub()
 
         assert "appears GitOps-managed" not in caplog.text
-        primary.delete_custom_resource.assert_called_once()
+        primary.delete_custom_resource_preconditioned.assert_called_once()
 
     @patch("lib.gitops_detector.record_gitops_markers")
-    @patch("modules.finalization.wait_for_condition")
+    @patch("modules.decommission.wait_for_condition")
     def test_disable_observability_on_old_hub_continues_when_marker_recording_fails(
         self,
         mock_wait,
@@ -1493,12 +1522,13 @@ class TestFinalization:
         mock_secondary_client,
         mock_state_manager,
         mock_backup_manager,
+        mock_mco_primary,
         caplog,
     ):
         """Marker recording failures must not abort optional MCO deletion flow."""
         mock_wait.return_value = True
         mock_record_markers.side_effect = RuntimeError("marker failure")
-        primary = Mock()
+        primary = mock_mco_primary
         fin = Finalization(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
@@ -1506,14 +1536,12 @@ class TestFinalization:
             primary_client=primary,
             old_hub_action="secondary",
         )
-        primary.list_custom_resources.return_value = [{"metadata": {"name": "observability", "labels": {}}}]
-        primary.get_pods.return_value = []
 
         with caplog.at_level(logging.WARNING, logger="acm_switchover"):
             fin._disable_observability_on_old_hub()
 
         assert "marker recording failed" in caplog.text.lower()
-        primary.delete_custom_resource.assert_called_once()
+        primary.delete_custom_resource_preconditioned.assert_called_once()
 
     def test_finalize_failure_handling(self, finalization, mock_backup_manager):
         """Test finalization failure handling."""
@@ -1599,12 +1627,12 @@ class TestFinalization:
         assert primary.list_custom_resources.call_count == 2
         primary.get_pods.assert_not_called()
 
-    @patch("modules.finalization.wait_for_condition", return_value=False)
+    @patch("modules.decommission.OBSERVABILITY_TERMINATE_TIMEOUT", 0)
     def test_disable_observability_on_old_hub_blocks_when_pods_remain_after_mco_deletion(
-        self, mock_wait, mock_secondary_client, mock_state_manager, mock_backup_manager, caplog
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager, mock_mco_primary, caplog
     ):
         """MCO deletion should block when observability pods remain after the wait window."""
-        primary = Mock()
+        primary = mock_mco_primary
         fin = Finalization(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
@@ -1612,8 +1640,12 @@ class TestFinalization:
             primary_client=primary,
             old_hub_action="secondary",
         )
-        primary.list_custom_resources.return_value = [{"metadata": {"name": "observability", "labels": {}}}]
-        primary.get_pods.return_value = [{"metadata": {"name": "obs-pod"}}]
+        primary.get_namespace_strict.return_value = StrictReadOutcome(
+            status=StrictReadStatus.ITEMS, resource_version="ns-1"
+        )
+        primary.list_pods_strict.return_value = StrictReadOutcome(
+            status=StrictReadStatus.ITEMS, items=[{"metadata": {"name": "obs-pod"}}], resource_version="pods-1"
+        )
 
         with (
             caplog.at_level(logging.ERROR, logger="acm_switchover"),
@@ -1621,14 +1653,16 @@ class TestFinalization:
         ):
             fin._disable_observability_on_old_hub()
 
-        mock_wait.assert_called_once()
-        assert "Observability pods still running after MCO deletion" in str(exc_info.value)
+        primary.delete_custom_resource_preconditioned.assert_called_once()
+        assert "Failed to disable observability on the old hub" in str(exc_info.value)
+        assert "teardown reported failed" in str(exc_info.value)
+        assert "pods still running" in caplog.text
 
     def test_disable_observability_on_old_hub_dry_run_only_reports_delete_intent(
-        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager, mock_mco_primary
     ):
         """Dry-run observability disablement should report MCO deletion intent without mutating the cluster."""
-        primary = Mock()
+        primary = mock_mco_primary
         fin = Finalization(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
@@ -1637,19 +1671,22 @@ class TestFinalization:
             old_hub_action="secondary",
             dry_run=True,
         )
-        primary.list_custom_resources.return_value = [{"metadata": {"name": "observability", "labels": {}}}]
 
-        with patch.object(finalization_module, "logger") as logger:
+        with patch("modules.decommission.logger") as logger:
             fin._disable_observability_on_old_hub()
 
-        primary.list_custom_resources.assert_called_once_with(
+        primary.get_custom_resource_strict.assert_called_once_with(
             group="observability.open-cluster-management.io",
             version="v1beta2",
             plural="multiclusterobservabilities",
+            name="observability",
+            namespace=None,
         )
+        primary.delete_custom_resource_preconditioned.assert_not_called()
         primary.delete_custom_resource.assert_not_called()
-        primary.get_pods.assert_not_called()
-        logger.info.assert_any_call("[DRY-RUN] Would delete MultiClusterObservability: %s", "observability")
+        primary.list_pods_strict.assert_not_called()
+        mock_state_manager._set_config.assert_not_called()
+        logger.info.assert_any_call("[DRY-RUN] Would delete %s %s", "MultiClusterObservability", "observability")
 
     @patch("modules.finalization.time")
     def test_finalize_skips_verify_old_hub_state_when_action_none(
