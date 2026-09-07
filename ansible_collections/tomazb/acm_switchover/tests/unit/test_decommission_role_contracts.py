@@ -1031,6 +1031,23 @@ def _managed_cluster_object(name: str) -> dict:
     }
 
 
+#: The canonical TWO-HUB operation identity the harness seeds. Built through the real
+#: ``build_operation_identity`` contract rather than hand-written, so a change to the
+#: identity schema is reflected here instead of silently drifting. Named at module
+#: scope so a test can compare the stored record against it as a whole object after a
+#: run, which is what section 10.3.7 item 20's "keeps its two-hub checkpoint identity
+#: valid" clause actually requires.
+_HARNESS_TWO_HUB_IDENTITY = build_operation_identity(
+    hubs={"primary": {"context": "primary-hub"}, "secondary": {"context": "secondary-hub"}},
+    operation={},
+    collection_version="",
+    hub_identities={
+        "primary": {"cluster_uid": "harness-primary-uid"},
+        "secondary": {"cluster_uid": "harness-secondary-uid"},
+    },
+)
+
+
 def _namespace_object(name: str, uid: Optional[str] = None) -> dict:
     metadata: Dict[str, Any] = {"name": name, "resourceVersion": "1"}
     if uid is not None:
@@ -1052,6 +1069,7 @@ def run_decommission_role(
     observability_read_status: int = 200,
     checkpoint_available: bool = True,
     standalone_playbook: bool = False,
+    integrated_finalization: bool = False,
     primary_cluster_uid: Optional[str] = "harness-standalone-primary-uid",
     seeded_operation_identity: Optional[dict] = None,
 ) -> dict:
@@ -1072,6 +1090,8 @@ def run_decommission_role(
 
     if execution_mode not in ("execute", "validate", "dry_run"):
         raise ValueError(f"execution_mode={execution_mode!r} is not one of ('execute', 'validate', 'dry_run')")
+    if standalone_playbook and integrated_finalization:
+        raise ValueError("standalone_playbook and integrated_finalization are different entry points; pick one")
     if observability_namespace not in ("present", "absent"):
         raise ValueError(f"observability_namespace={observability_namespace!r} must be 'present' or 'absent'")
     if observability_read_status != 200 and observability_outcome is not None:
@@ -1223,18 +1243,7 @@ def run_decommission_role(
                         "phase": "finalization",
                         "completed_phases": ["preflight"],
                         "operational_data": seeded_operational_data,
-                        "operation_identity": build_operation_identity(
-                            hubs={
-                                "primary": {"context": "primary-hub"},
-                                "secondary": {"context": "secondary-hub"},
-                            },
-                            operation={},
-                            collection_version="",
-                            hub_identities={
-                                "primary": {"cluster_uid": "harness-primary-uid"},
-                                "secondary": {"cluster_uid": "harness-secondary-uid"},
-                            },
-                        ),
+                        "operation_identity": _HARNESS_TWO_HUB_IDENTITY,
                         "errors": [],
                         "report_refs": [],
                         "created_at": "2026-01-01T00:00:00+00:00",
@@ -1258,11 +1267,48 @@ def run_decommission_role(
                 "has_observability": has_observability,
             },
         }
+        if integrated_finalization:
+            # This is what routes handle_old_hub.yml into its decommission branch.
+            # The finalization role's own defaults say `secondary`; extra vars win.
+            vars_payload["acm_switchover_operation"] = {
+                "restore_only": False,
+                "method": "passive",
+                "old_hub_action": "decommission",
+                "activation_method": "patch",
+            }
         vars_file = workspace / "vars.yml"
         vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False), encoding="utf-8")
 
         playbook_path = workspace / "decommission-harness.yml"
-        if standalone_playbook:
+        if integrated_finalization:
+            # Section 10.3.7 item 20 requires the REAL integrated path to execute:
+            # finalization -> handle_old_hub.yml -> include_role decommission. This
+            # loads the repository's actual task file through the real finalization
+            # role via `tasks_from`; nothing from that file is copied here, so the
+            # test tracks the shipped file rather than a snapshot of it.
+            playbook_path.write_text(
+                yaml.safe_dump(
+                    [
+                        {
+                            "hosts": "localhost",
+                            "connection": "local",
+                            "gather_facts": False,
+                            "tasks": [
+                                {
+                                    "name": f"{_HARNESS_TASK_PREFIX}run the real handle_old_hub path",
+                                    "ansible.builtin.include_role": {
+                                        "name": "tomazb.acm_switchover.finalization",
+                                        "tasks_from": "handle_old_hub.yml",
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+        elif standalone_playbook:
             # The REAL entry point, not a synthetic include. Section 10.3.7 items 14/15
             # are satisfied only by exercising the actual action path this playbook
             # drives; a harness that includes the role alone cannot prove the
@@ -1378,6 +1424,11 @@ def run_decommission_role(
             # and before the first delete" is assertable rather than assumed.
             "requests": api.requests,
             "operation_identity": _read_operation_identity(checkpoint_path),
+            "seeded_operation_identity": (
+                seeded_operation_identity
+                if seeded_operation_identity is not None
+                else (_HARNESS_TWO_HUB_IDENTITY if checkpoint_available and not standalone_playbook else None)
+            ),
             "gate": None,
             # Not in the B4.1 mapping. Without it "the play still fails" is asserted
             # nowhere, and a refactor that swallowed the failure would go unnoticed.
@@ -1962,6 +2013,106 @@ def test_the_decommission_permission_set_already_grants_the_namespace_read():
     assert ("", "namespaces", ["get"]) in [
         (group, resource, list(verbs)) for group, resource, verbs in DECOMMISSION_CLUSTER_PERMISSIONS
     ]
+
+
+#: Task names that exist ONLY in roles/finalization/tasks/handle_old_hub.yml. Their
+#: presence in the callback record is what proves the real integrated task file
+#: executed, as opposed to the decommission role being included directly.
+_HANDLE_OLD_HUB_TASK_NAMES = (
+    "Build embedded decommission settings",
+    "Decommission old hub",
+    "Determine old hub decommission completion",
+    "Determine old hub disposition",
+)
+
+
+def test_the_real_integrated_finalization_path_runs_decommission_without_standalone_identity():
+    """Section 10.3.7 item 20, executed rather than parsed.
+
+    Drives the REAL path -- finalization -> handle_old_hub.yml -> include_role
+    decommission -- by loading the repository's actual task file through the real
+    finalization role with ``tasks_from``. Nothing from that file is copied into the
+    harness, so this test tracks the shipped file rather than a snapshot of it.
+
+    Item 20 is the one case a role-only run cannot close: the shared role is included
+    from TWO places, and the risk being tested is that the integrated caller
+    accidentally acquires standalone one-hub semantics. Proving the role alone
+    behaves is necessary but not sufficient -- the caller has to be exercised.
+
+    The checkpoint is seeded with a canonical TWO-HUB identity and checkpointing is
+    enabled, so "the identity survived" is a meaningful statement rather than a
+    vacuous one about an absent record.
+
+    Kill condition, proven by experiment rather than asserted: bypass
+    handle_old_hub.yml and include the decommission role directly, and the
+    handle-old-hub-specific task records and disposition fact disappear, so this test
+    fails. DELETE calls alone cannot satisfy it -- the role-only harness produces
+    those too.
+    """
+    result = run_decommission_role(integrated_finalization=True)
+    checkpoint = result["checkpoint"]
+    # RAN, not merely recorded: the harness callback emits a record for a SKIPPED
+    # task too, so asserting mere presence would pass against a handle_old_hub.yml
+    # whose decommission branch was skipped entirely.
+    ran = {task["name"] for task in result["tasks"] if not task["skipped"]}
+
+    # 1. the play succeeds
+    assert result["returncode"] == 0, result.get("stderr", "")
+
+    # 2. the REAL handle_old_hub.yml executed -- not the role on its own. These task
+    #    names exist nowhere else in the collection.
+    for name in _HANDLE_OLD_HUB_TASK_NAMES:
+        assert name in ran, f"{name!r} did not RUN: the real handle_old_hub.yml decommission branch was not taken"
+
+    # 3. the shared decommission role was actually reached THROUGH it, and did work
+    assert result["delete_calls"], "the integrated path must actually perform the teardown"
+    assert result["acm_switchover_decommission_result"]["status"] == "pass"
+
+    # 4. the disposition fact handle_old_hub.yml owns
+    disposition = result["facts"]["acm_switchover_old_hub_disposition"]
+    assert disposition["action"] == "decommission"
+
+    # 5. integrated completion facts are produced
+    assert result["facts"]["_old_hub_decommission_completed"] is True
+    assert result["facts"]["_acm_switchover_embedded_decommission"]["confirmed"] is True
+
+    # 6/7. NO standalone identity read is issued by the integrated path. The primary
+    #      kube-system GET belongs to the standalone playbook only.
+    assert _kube_system_reads(result["requests"]) == [], "the integrated path must read no standalone identity"
+
+    # 8/9/10. no standalone decommission phase, and no checkpoint transition at all
+    assert checkpoint["phases"] == [], "the integrated path must record no standalone transition"
+    assert "decommission" not in checkpoint["completed_phases"]
+
+    # 11. whole-object identity equality, not a single field
+    seeded = result["seeded_operation_identity"]
+    assert seeded is not None
+    assert result["operation_identity"] == seeded, "the two-hub identity must survive byte-identical"
+
+    # 12. and the secondary half is genuinely still there
+    assert result["operation_identity"]["secondary_context"] == "secondary-hub"
+    assert result["operation_identity"]["secondary_cluster_uid"] == "harness-secondary-uid"
+
+
+def test_a_direct_role_include_cannot_satisfy_the_integrated_path_evidence():
+    """The discriminator for the test above.
+
+    A role-only run performs the same deletes and leaves the same two-hub identity
+    intact, so those facts alone cannot prove the integrated caller ran. This pins
+    that the handle-old-hub-specific evidence is absent without it -- which is why
+    the item 20 test asserts on that evidence rather than on DELETE calls.
+
+    Kill condition: if these task names ever appear in a role-only run, the item 20
+    test has stopped discriminating and its evidence must be re-chosen.
+    """
+    result = run_decommission_role()
+    task_names = {task["name"] for task in result["tasks"]}
+
+    assert result["delete_calls"], "the role-only run still deletes -- which is the point"
+    for name in _HANDLE_OLD_HUB_TASK_NAMES:
+        assert name not in task_names, f"{name!r} must come from handle_old_hub.yml, not the role"
+    # Not even as a skipped record: the file is never loaded on this path.
+    assert "acm_switchover_old_hub_disposition" not in result["facts"]
 
 
 def test_the_shared_role_alone_reads_no_identity_and_leaves_a_two_hub_checkpoint_intact():
