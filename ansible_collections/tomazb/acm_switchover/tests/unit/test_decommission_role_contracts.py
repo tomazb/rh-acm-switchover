@@ -1964,6 +1964,43 @@ def test_the_decommission_permission_set_already_grants_the_namespace_read():
     ]
 
 
+def test_the_shared_role_alone_reads_no_identity_and_leaves_a_two_hub_checkpoint_intact():
+    """Section 10.3.7 item 20, behaviourally.
+
+    Integrated finalization includes the shared decommission role directly, from
+    inside an established two-hub `finalization` checkpoint. This runs the role that
+    same way -- a plain include, no standalone playbook -- against a checkpoint the
+    harness seeds with a REAL two-hub operation identity, and proves the role in
+    isolation:
+
+    - performs no primary kube-system identity read (that belongs to the standalone
+      playbook, which the integrated path never invokes);
+    - records no checkpoint transition of its own;
+    - enters no `decommission` phase;
+    - leaves the established two-hub identity byte-identical.
+
+    The last assertion is the one that matters: it is the difference between "the
+    integrated path is probably unaffected" and evidence that a two-hub identity
+    survives a decommission run untouched.
+
+    Kill condition: putting any checkpoint transition or identity read back into the
+    shared role, where it would fire for the integrated caller too.
+    """
+    result = run_decommission_role()
+    checkpoint = result["checkpoint"]
+
+    assert result["returncode"] == 0
+    assert result["delete_calls"], "the integrated-style run must still perform the teardown"
+    assert _kube_system_reads(result["requests"]) == [], "the role must not perform the standalone identity read"
+    assert checkpoint["phases"] == [], "the role must own no checkpoint transition"
+    assert "decommission" not in checkpoint["completed_phases"]
+
+    identity = result["operation_identity"]
+    assert identity["primary_cluster_uid"] == "harness-primary-uid"
+    assert identity["secondary_cluster_uid"] == "harness-secondary-uid", "the two-hub identity must survive intact"
+    assert identity["secondary_context"] == "secondary-hub"
+
+
 def test_integrated_finalization_never_uses_the_standalone_identity_mode():
     """Section 10.3.7 item 20: the integrated path stays two-hub.
 
