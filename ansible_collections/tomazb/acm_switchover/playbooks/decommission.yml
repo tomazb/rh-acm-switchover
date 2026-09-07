@@ -13,5 +13,60 @@
         fail_msg: >-
           Decommission requires non-empty acm_switchover_hubs.primary.kubeconfig and
           acm_switchover_hubs.primary.context. Refusing to use an implicit/default kube context.
-  roles:
-    - role: tomazb.acm_switchover.decommission
+
+  # This playbook -- NOT the shared role -- owns the standalone decommission phase
+  # lifecycle. roles/finalization/tasks/handle_old_hub.yml includes the same
+  # decommission role from inside an already-established two-hub `finalization`
+  # checkpoint, so a role-owned lifecycle would either apply one-hub standalone
+  # semantics to an integrated switchover or force the role to infer its caller.
+  # Standalone mode is therefore explicit on every transition here and is never
+  # inferred anywhere.
+  #
+  # There is no `exit` status: CHECKPOINT_VALID_STATUSES is {enter, pass, fail, reset}
+  # and completion is expressed as `status: pass`, exactly as finalization does.
+  # PR B issues no `reset` transition -- the action accepts one on the standalone
+  # path, but nothing here may emit it.
+  tasks:
+    - name: Enter the standalone decommission checkpoint phase
+      tomazb.acm_switchover.checkpoint_phase:
+        phase: decommission
+        checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+        status: enter
+        standalone_decommission_identity: true
+      when:
+        - not ansible_check_mode
+        - acm_switchover_execution.checkpoint.enabled | default(false) | bool
+
+    - name: Decommission the old hub under the standalone checkpoint phase
+      block:
+        - name: Run the decommission role
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.decommission
+
+        # Inside the block and after the include, never in an `always`: an `always`
+        # would record a FAILED teardown as a completed phase, which lets a later
+        # rerun skip work it never did.
+        - name: Pass the standalone decommission checkpoint phase
+          tomazb.acm_switchover.checkpoint_phase:
+            phase: decommission
+            checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+            status: pass
+            standalone_decommission_identity: true
+          when:
+            - not ansible_check_mode
+            - acm_switchover_execution.checkpoint.enabled | default(false) | bool
+      rescue:
+        - name: Fail the standalone decommission checkpoint phase
+          tomazb.acm_switchover.checkpoint_phase:
+            phase: decommission
+            checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+            status: fail
+            error: "{{ ansible_failed_result.msg | default('unknown decommission failure') }}"
+            standalone_decommission_identity: true
+          when:
+            - not ansible_check_mode
+            - acm_switchover_execution.checkpoint.enabled | default(false) | bool
+
+        - name: Re-raise the original decommission failure
+          ansible.builtin.fail:
+            msg: "{{ ansible_failed_result.msg | default('Decommission failed') }}"

@@ -33,6 +33,8 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
 )
 
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
+PLAYBOOKS_DIR = pathlib.Path(__file__).resolve().parents[2] / "playbooks"
+DECOMMISSION_PLAYBOOK = PLAYBOOKS_DIR / "decommission.yml"
 DECOMMISSION_MAIN = ROLES_DIR / "decommission" / "tasks" / "main.yml"
 DELETE_OBSERVABILITY = ROLES_DIR / "decommission" / "tasks" / "delete_observability.yml"
 DELETE_MANAGED_CLUSTERS = ROLES_DIR / "decommission" / "tasks" / "delete_managed_clusters.yml"
@@ -125,6 +127,45 @@ decommission_task_files = {name: _load_tasks(path) for name, path in _NAMED_TASK
 for _extra_path in _role_task_file_paths():
     if _extra_path not in _NAMED_TASK_FILES.values():
         decommission_task_files[str(_extra_path.relative_to(DECOMMISSION_TASKS_DIR))] = _load_tasks(_extra_path)
+
+
+def decommission_playbook_tasks() -> list:
+    """The standalone playbook's own task list, RAW -- nested blocks not expanded.
+
+    ``.get("tasks", [])`` rather than ``play["tasks"]`` is deliberate: a playbook
+    still in the bare ``roles:`` form has no ``tasks`` key, and a ``KeyError`` would
+    turn an expected assertion failure into a collection ERROR.
+
+    This is a DISTINCT parsed surface from ``decommission_task_files``, which stays
+    scoped to the shared role. The playbook owns the standalone phase lifecycle
+    (section 10.3.5a); the role owns none of it.
+    """
+    plays = yaml.safe_load(DECOMMISSION_PLAYBOOK.read_text()) or []
+    return plays[0].get("tasks", []) if plays else []
+
+
+def all_checkpoint_phase_tasks(tasks: list) -> list:
+    """Every ``checkpoint_phase`` task, descending into block/rescue/always.
+
+    Matches the FQCN, because ``index_of_task_using`` compares raw task keys exactly
+    (``_task_actions`` returns ``task`` keys, and membership is ``in`` on that list).
+    A short-name match would silently find nothing.
+    """
+    return [task for task in _flatten_tasks(tasks) if _CHECKPOINT_WRITER_MODULE in _task_actions(task)]
+
+
+def rescue_tasks_of(tasks: list) -> list:
+    """The flattened task list of every ``rescue:`` in ``tasks``."""
+    rescued: list = []
+    for task in _flatten_tasks(tasks):
+        if "rescue" in task:
+            rescued.extend(_flatten_tasks(task["rescue"]))
+    return rescued
+
+
+def _status_of(task: dict) -> str:
+    """The ``status`` argument of a ``checkpoint_phase`` task."""
+    return task.get(_CHECKPOINT_WRITER_MODULE, {}).get("status", "")
 
 
 def _task_actions(task: dict) -> list:
@@ -979,8 +1020,11 @@ def _managed_cluster_object(name: str) -> dict:
     }
 
 
-def _namespace_object(name: str) -> dict:
-    return {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": name, "resourceVersion": "1"}}
+def _namespace_object(name: str, uid: Optional[str] = None) -> dict:
+    metadata: Dict[str, Any] = {"name": name, "resourceVersion": "1"}
+    if uid is not None:
+        metadata["uid"] = uid
+    return {"apiVersion": "v1", "kind": "Namespace", "metadata": metadata}
 
 
 def run_decommission_role(
@@ -996,6 +1040,9 @@ def run_decommission_role(
     observability_namespace: str = "present",
     observability_read_status: int = 200,
     checkpoint_available: bool = True,
+    standalone_playbook: bool = False,
+    primary_cluster_uid: Optional[str] = "harness-standalone-primary-uid",
+    seeded_operation_identity: Optional[dict] = None,
 ) -> dict:
     """Run the decommission role against declared fakes and return one canonical result.
 
@@ -1097,6 +1144,12 @@ def run_decommission_role(
     namespaces = [_namespace_object("open-cluster-management")]
     if observability_namespace == "present":
         namespaces.append(_namespace_object("open-cluster-management-observability"))
+    # The standalone identity read is a real GET of v1/Namespace kube-system. Serving
+    # it unconditionally keeps the fake API honest for role-only runs too: if the role
+    # ever starts issuing that read, the request log shows it rather than a 404.
+    # ``primary_cluster_uid=None`` deliberately serves the namespace WITHOUT a uid, so
+    # the empty/malformed-uid refusal can be exercised against a real response.
+    namespaces.append(_namespace_object("kube-system", uid=primary_cluster_uid))
 
     repo_root = ROLES_DIR.parents[3]
     workspace = pathlib.Path(tempfile.mkdtemp(prefix="acm-decommission-harness-"))
@@ -1120,7 +1173,31 @@ def run_decommission_role(
         summary_path = workspace / "decommission-summary.json"
         checkpoint_path = workspace / "checkpoint.json"
         seeded_operational_data = {"harness_seed": "unchanged"}
-        if checkpoint_available:
+        # A standalone run must establish its own primary-only identity from empty
+        # state -- that is the whole acceptance case, and a pre-seeded
+        # ``build_operation_identity`` payload is exactly the supplemental-only
+        # evidence that let the first runtime attempt reach B6 with the blocker
+        # undetected. ``seeded_operation_identity`` exists only so the two-hub
+        # downgrade and reset-bypass rows can seed a DELIBERATE established identity.
+        if seeded_operation_identity is not None:
+            checkpoint_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "2.0",
+                        "phase": "finalization",
+                        "completed_phases": ["preflight"],
+                        "operational_data": seeded_operational_data,
+                        "operation_identity": seeded_operation_identity,
+                        "errors": [],
+                        "report_refs": [],
+                        "created_at": "2026-01-01T00:00:00+00:00",
+                        "updated_at": "2026-01-01T00:00:00+00:00",
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        elif checkpoint_available and not standalone_playbook:
             # Schema 2.0 with an established operation identity, NOT the schema 1.0
             # record this harness first seeded. Once Task B5 wired `checkpoint_phase`
             # into the role, `is_unsafe_legacy_checkpoint` refused a 1.0 record that
@@ -1174,25 +1251,32 @@ def run_decommission_role(
         vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False), encoding="utf-8")
 
         playbook_path = workspace / "decommission-harness.yml"
-        playbook_path.write_text(
-            yaml.safe_dump(
-                [
-                    {
-                        "hosts": "localhost",
-                        "connection": "local",
-                        "gather_facts": False,
-                        "tasks": [
-                            {
-                                "name": f"{_HARNESS_TASK_PREFIX}run the decommission role",
-                                "ansible.builtin.include_role": {"name": "tomazb.acm_switchover.decommission"},
-                            }
-                        ],
-                    }
-                ],
-                sort_keys=False,
-            ),
-            encoding="utf-8",
-        )
+        if standalone_playbook:
+            # The REAL entry point, not a synthetic include. Section 10.3.7 items 14/15
+            # are satisfied only by exercising the actual action path this playbook
+            # drives; a harness that includes the role alone cannot prove the
+            # lifecycle, because the role deliberately owns none of it.
+            playbook_path = DECOMMISSION_PLAYBOOK
+        else:
+            playbook_path.write_text(
+                yaml.safe_dump(
+                    [
+                        {
+                            "hosts": "localhost",
+                            "connection": "local",
+                            "gather_facts": False,
+                            "tasks": [
+                                {
+                                    "name": f"{_HARNESS_TASK_PREFIX}run the decommission role",
+                                    "ansible.builtin.include_role": {"name": "tomazb.acm_switchover.decommission"},
+                                }
+                            ],
+                        }
+                    ],
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
 
         callback_dir = workspace / "callback_plugins"
         callback_dir.mkdir(parents=True, exist_ok=True)
@@ -1279,6 +1363,10 @@ def run_decommission_role(
                 ],
             },
             "delete_calls": api.delete_calls,
+            # The whole request log, so "the identity read happened, exactly N times,
+            # and before the first delete" is assertable rather than assumed.
+            "requests": api.requests,
+            "operation_identity": _read_operation_identity(checkpoint_path),
             "gate": None,
             # Not in the B4.1 mapping. Without it "the play still fails" is asserted
             # nowhere, and a refactor that swallowed the failure would go unnoticed.
@@ -1296,6 +1384,20 @@ def _read_operational_data(checkpoint_path) -> dict:
         return json.loads(checkpoint_path.read_text(encoding="utf-8")).get("operational_data", {})
     except ValueError:
         return {}
+
+
+def _read_operation_identity(checkpoint_path) -> dict:
+    if not checkpoint_path.exists():
+        return {}
+    try:
+        return json.loads(checkpoint_path.read_text(encoding="utf-8")).get("operation_identity") or {}
+    except ValueError:
+        return {}
+
+
+def _kube_system_reads(requests: list) -> list:
+    """Every live primary identity read: GET of the kube-system Namespace."""
+    return [r for r in requests if r["method"] == "GET" and "namespaces/kube-system" in r["path"]]
 
 
 def _read_completed_phases(checkpoint_path) -> list:
@@ -1407,37 +1509,115 @@ def test_decommission_is_the_last_known_checkpoint_phase():
     assert reset_completed_phases_from(list(KNOWN_PHASES), "decommission") == list(KNOWN_PHASES[:-1])
 
 
-def test_the_role_has_exactly_two_checkpoint_transitions_and_records_nothing():
-    """B5 wires the phase and nothing else: an enter, an exit, no record write.
+def test_the_playbook_has_exactly_three_checkpoint_transitions_and_records_nothing():
+    """B5 wires the standalone phase and nothing else: enter, pass, fail.
 
     PRs C, D and E write teardown records INSIDE this phase. Until then a task
     carrying ``operational_data`` would be a record write smuggled into B.
 
-    Kill condition: adding a third transition, changing either status, or attaching
-    ``operational_data`` to either task.
+    There is deliberately no ``reset`` transition. The action must ACCEPT
+    ``status: reset`` on the standalone path (section 10.3.2), but PR B wires no task
+    that issues one, and the B5 Files table forbids adding one here.
+
+    Kill condition: adding a fourth transition, adding a ``reset`` task, changing any
+    status, or attaching ``operational_data`` to any of them.
     """
-    writers = checkpoint_writer_tasks(decommission_task_files)
-    assert [task["tomazb.acm_switchover.checkpoint_phase"]["status"] for task in writers] == ["enter", "pass"]
-    assert [task["tomazb.acm_switchover.checkpoint_phase"]["phase"] for task in writers] == [
-        "decommission",
-        "decommission",
-    ]
-    assert checkpoint_writer_tasks({"main": decommission_task_files["main"]}) == writers
-    for task in writers:
-        assert "operational_data" not in task["tomazb.acm_switchover.checkpoint_phase"]
+    transitions = all_checkpoint_phase_tasks(decommission_playbook_tasks())
+    assert [_status_of(task) for task in transitions] == ["enter", "pass", "fail"]
+    assert {task[_CHECKPOINT_WRITER_MODULE]["phase"] for task in transitions} == {"decommission"}
+    for task in transitions:
+        assert "operational_data" not in task[_CHECKPOINT_WRITER_MODULE]
 
 
-def test_role_enters_a_checkpoint_phase_before_the_first_teardown_include():
-    """The identity map must be durable BEFORE the first DELETE.
+def test_playbook_enters_the_decommission_phase_before_including_the_role():
+    """The identity map must be durable BEFORE the first DELETE, and the role's
+    deletes are only reachable through the include.
 
-    Kill condition: moving the enter task below any ``delete_*.yml`` include.
+    Flatten first: section 10.3.5a's playbook nests ``include_role`` inside a
+    ``block:``, so the raw play task list is ``[enter, block-parent]`` and a flat walk
+    returns -1 for the include. Match the EXACT task key: ``index_of_task_using``
+    tests ``action in _task_actions(task)`` and ``_task_actions`` returns the task's
+    raw mapping keys, so the short names never match.
+
+    Kill condition: moving the enter below the include, or dropping either.
     """
-    tasks = decommission_task_files["main"]
-    phase_index = index_of_task_using(tasks, _CHECKPOINT_WRITER_MODULE)
-    first_teardown_index = index_of_first_include(tasks, "delete_")
-    assert phase_index >= 0, "the decommission role must enter a checkpoint phase"
-    assert first_teardown_index >= 0
-    assert phase_index < first_teardown_index
+    tasks = _flatten_tasks(decommission_playbook_tasks())
+    enter = index_of_task_using(tasks, "tomazb.acm_switchover.checkpoint_phase")
+    include = index_of_task_using(tasks, "ansible.builtin.include_role")
+    assert enter != -1 and include != -1 and enter < include
+
+
+def test_playbook_passes_the_phase_only_after_the_role_succeeds():
+    """A successful standalone run records ``status: pass``, and it must sit AFTER
+    the include so a failed teardown cannot reach it.
+
+    Kill condition: dropping the pass, or hoisting it above the include.
+    """
+    tasks = _flatten_tasks(decommission_playbook_tasks())
+    passes = [task for task in all_checkpoint_phase_tasks(tasks) if _status_of(task) == "pass"]
+    assert passes, "a successful standalone run must record status: pass"
+    include = index_of_task_using(tasks, "ansible.builtin.include_role")
+    assert include != -1
+    assert all(tasks.index(task) > include for task in passes)
+
+
+def test_playbook_fails_the_phase_from_a_rescue():
+    """A failed teardown records ``status: fail`` from a rescue, never a pass.
+
+    Kill condition: moving the fail out of the rescue, or replacing the rescue with
+    an ``always`` -- which would record a FAILED teardown as a completed phase.
+    """
+    rescue = rescue_tasks_of(decommission_playbook_tasks())
+    assert [task for task in all_checkpoint_phase_tasks(rescue) if _status_of(task) == "fail"]
+    assert not [task for task in all_checkpoint_phase_tasks(rescue) if _status_of(task) == "pass"]
+
+
+def test_the_playbook_has_no_always_block():
+    """An ``always`` completion task records a failed teardown as a completed phase.
+
+    This is the trap the first runtime attempt hit; section 10.3.5a names it.
+
+    Kill condition: adding an ``always:`` to the lifecycle block.
+    """
+    tasks = _flatten_tasks(decommission_playbook_tasks())
+    # Without this the test passes vacuously against a playbook that has no
+    # lifecycle at all, which is exactly the state this task must not be green in.
+    assert all_checkpoint_phase_tasks(tasks), "the playbook must own a lifecycle to guard"
+    assert not [task for task in tasks if "always" in task]
+
+
+def test_every_standalone_transition_carries_the_explicit_identity_argument():
+    """Standalone identity is EXPLICIT, never inferred (section 10.3.1).
+
+    Kill condition: dropping the argument from any transition, or relying on the
+    action to infer standalone mode from a missing secondary or from the caller.
+    """
+    transitions = all_checkpoint_phase_tasks(decommission_playbook_tasks())
+    assert transitions, "the standalone playbook must own its checkpoint transitions"
+    for task in transitions:
+        args = task[_CHECKPOINT_WRITER_MODULE]
+        assert args.get("standalone_decommission_identity") is True
+        assert args.get("phase") == "decommission"
+        assert "identity_barrier" not in args
+
+
+def test_the_shared_role_owns_no_checkpoint_phase_lifecycle():
+    """Architecture, not an oversight: roles/finalization/tasks/handle_old_hub.yml
+    includes this same role from inside a two-hub finalization checkpoint
+    (sections 10.3.5a/10.3.5b), so a role-owned standalone lifecycle would either
+    apply one-hub semantics during an integrated switchover or require the role to
+    infer its caller -- which section 10.3.1 forbids.
+
+    Uses ``all_checkpoint_phase_tasks``, which matches the FQCN and descends into
+    block/rescue/always. ``index_of_task_using(tasks, "checkpoint_phase") == -1``
+    would be a vacuous guard twice over: exact-key matching never matches the short
+    name, so it holds against ANY role content, and a flat walk would miss a
+    transition nested in a block.
+
+    Kill condition: putting any checkpoint_phase task back into the shared role.
+    """
+    for name, tasks in decommission_task_files.items():
+        assert not all_checkpoint_phase_tasks(tasks), f"{name} must not own the standalone phase lifecycle"
 
 
 def test_the_checkpoint_availability_gate_precedes_the_first_teardown_include():
@@ -1456,10 +1636,14 @@ def test_the_checkpoint_availability_gate_precedes_the_first_teardown_include():
 def test_every_checkpoint_writer_task_is_guarded_by_check_mode():
     """Check mode must persist NO checkpoint state.
 
-    Kill condition: dropping ``not ansible_check_mode`` from either transition.
+    Scans the PLAYBOOK, which is where the writers now live. Scanning
+    ``decommission_task_files`` here would iterate an empty list and pass vacuously,
+    because the role owns no checkpoint writer by design.
+
+    Kill condition: dropping ``not ansible_check_mode`` from any transition.
     """
-    writers = checkpoint_writer_tasks(decommission_task_files)
-    assert writers, "the decommission role must have checkpoint transitions to guard"
+    writers = all_checkpoint_phase_tasks(decommission_playbook_tasks())
+    assert writers, "the standalone playbook must own at least one checkpoint transition"
     for task in writers:
         assert "not ansible_check_mode" in _when_text(task)
 
@@ -1579,32 +1763,45 @@ def test_dry_run_execution_mode_does_not_require_checkpointing():
     assert result["delete_calls"] == []
 
 
-def test_a_dry_run_with_checkpointing_available_still_writes_no_checkpoint_state():
-    """The transitions run in dry-run mode but the action plugin persists nothing.
+def test_a_standalone_dry_run_writes_no_checkpoint_state_and_reads_no_identity():
+    """Section 10.3.7 item 11: dry-run persists nothing and performs NO identity read.
 
     Unlike ``test_check_mode_does_not_require_checkpointing_and_writes_nothing``, the
     transitions really DO run here, and the first assertion proves it -- so "nothing
-    was persisted" is a statement about the action plugin's ``is_non_mutating``
-    contract as this role consumes it, not an artefact of skipped tasks.
+    was persisted" is a statement about the action plugin's non-mutating contract, not
+    an artefact of skipped tasks.
 
-    Kill condition: making either transition mutate durable state in a non-mutating
-    execution mode.
+    Kill condition: making a transition mutate durable state in a non-mutating mode,
+    or performing the live identity read outside execute mode.
     """
-    result = run_decommission_role(execution_mode="dry_run")
+    result = run_decommission_role(standalone_playbook=True, execution_mode="dry_run")
     checkpoint = result["checkpoint"]
-    assert len(checkpoint["phases"]) == 2, "both transitions must actually run in dry-run mode"
+    assert len(checkpoint["phases"]) == 2, "enter and pass must actually run in dry-run mode"
     assert checkpoint["operational_data"] == checkpoint["before_operational_data"]
     assert "decommission" not in checkpoint["completed_phases"]
     assert result["delete_calls"] == []
+    assert _kube_system_reads(result["requests"]) == [], "dry-run must perform no identity read"
 
 
-def test_a_clean_execute_run_completes_the_decommission_phase_durably():
-    """The phase is entered before the deletes and marked complete after them.
+def test_a_clean_standalone_execute_run_completes_the_phase_durably_from_empty_state():
+    """Section 10.3.7 items 1, 14 and 15 -- the mandatory acceptance case.
 
-    Kill condition: removing the exit transition, or removing ``decommission`` from
-    ``KNOWN_PHASES`` (the enter is then rejected and the play fails).
+    Runs the REAL playbooks/decommission.yml against the REAL checkpoint action with
+    NO pre-seeded operation identity, which is what the first runtime attempt never
+    did. Proves the whole same-run lifecycle: standalone enter -> live kube-system UID
+    read -> primary-only identity persisted BEFORE the first delete -> role succeeds ->
+    standalone pass -> a SECOND fresh UID read -> stored identity matches -> the
+    decommission phase is completed.
+
+    The second read is what proves the enter-only contradiction is gone: the
+    completion transition re-proves physical identity rather than trusting the value
+    stored at enter.
+
+    Kill condition: removing the pass transition; removing ``decommission`` from
+    ``KNOWN_PHASES``; making the completion transition reuse the enter-time identity
+    instead of re-reading; or persisting identity after the first delete.
     """
-    result = run_decommission_role()
+    result = run_decommission_role(standalone_playbook=True)
     checkpoint = result["checkpoint"]
 
     assert result["returncode"] == 0
@@ -1615,23 +1812,37 @@ def test_a_clean_execute_run_completes_the_decommission_phase_durably():
         "pass",
     ]
     assert "decommission" in checkpoint["completed_phases"]
-    # The enter must not clobber operational_data written by earlier phases.
-    assert checkpoint["operational_data"]["harness_seed"] == "unchanged"
+
+    reads = _kube_system_reads(result["requests"])
+    assert len(reads) == 2, "enter and pass must each re-prove physical identity"
+
+    # Identity is durable BEFORE the first delete, not merely by the end of the run.
+    first_delete = result["requests"].index(result["delete_calls"][0])
+    assert result["requests"].index(reads[0]) < first_delete
+
+    identity = result["operation_identity"]
+    assert identity["primary_cluster_uid"] == "harness-standalone-primary-uid"
+    assert identity["primary_context"] == "primary-hub"
+    # One-hub semantics: no secondary is required, requested, or recorded.
+    assert identity["secondary_cluster_uid"] == ""
+    assert identity["secondary_context"] == ""
 
 
-def test_a_failed_substep_leaves_the_decommission_phase_incomplete():
-    """A failed teardown must never be recorded as a completed phase.
+def test_a_failed_standalone_substep_records_fail_and_leaves_the_phase_incomplete():
+    """Section 10.3.7 item 16: a failed teardown is never a completed phase.
 
-    Kill condition: moving the exit transition inside the block's ``always``, where it
-    would run after a failed substep and mark the phase passed.
+    The rescue records ``status: fail`` and re-raises. Kill condition: moving the pass
+    transition into an ``always``, where it would run after a failed substep and mark
+    the phase passed.
     """
-    result = run_decommission_role(observability_outcome="failed")
+    result = run_decommission_role(standalone_playbook=True, observability_outcome="failed")
     checkpoint = result["checkpoint"]
 
     assert result["returncode"] != 0
     assert result["acm_switchover_decommission_result"]["status"] == "fail"
     assert "decommission" not in checkpoint["completed_phases"]
-    assert [entry["result"].get("checkpoint", {}).get("phase_status") for entry in checkpoint["phases"]] == [None]
+    statuses = [entry["result"].get("checkpoint", {}).get("phase_status") for entry in checkpoint["phases"]]
+    assert statuses == [None, "fail"], "the rescue must record a fail, and no pass"
 
 
 def test_actual_change_is_never_derived_from_check_mode():

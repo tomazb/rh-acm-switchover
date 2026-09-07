@@ -65,18 +65,6 @@
     - _acm_decommission_records_outcomes | bool
     - not (acm_switchover_decommission_effective_has_observability | bool)
 
-# The identity map must be durable BEFORE the first DELETE. PR B establishes the
-# phase and the availability requirement only; PRs C, D and E write teardown records
-# inside it, which is why neither transition carries operational_data.
-- name: Enter the decommission checkpoint phase
-  tomazb.acm_switchover.checkpoint_phase:
-    phase: decommission
-    checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
-    status: enter
-  register: _acm_decommission_checkpoint_enter
-  when:
-    - not ansible_check_mode
-    - acm_switchover_execution.checkpoint.enabled | default(false) | bool
 
 # Fail closed: an execute-mode run that cannot persist its identity map issues no
 # DELETE at all, and a validate-mode run never reaches the teardown here. A dry run
@@ -93,11 +81,19 @@
       # ManagedCluster and MultiClusterHub while leaving no durable identity map, and
       # publish that as a passed validation. Requiring checkpointing here instead of
       # refusing would be worse: the phase would still never be recorded.
+      #
+      # This gate is CONFIG-ONLY, and deliberately so. The standalone phase lifecycle
+      # belongs to playbooks/decommission.yml, not to this role: finalization's
+      # handle_old_hub.yml includes this same role from inside an established two-hub
+      # `finalization` checkpoint, so a role-owned standalone lifecycle would either
+      # apply one-hub semantics to an integrated switchover or force this role to
+      # infer its caller. The role MUST NOT infer standalone mode -- not from a
+      # missing secondary, not from the caller, and not by reading checkpoint shape.
+      # That the standalone `enter` actually ran before the first delete is guaranteed
+      # by the playbook's task order and pinned by
+      # test_playbook_enters_the_decommission_phase_before_including_the_role.
       - (acm_switchover_execution.mode | default('dry_run')) != 'validate'
       - acm_switchover_execution.checkpoint.enabled | default(false) | bool
-      # Tied to the enter having actually run, not merely to the config being set, so
-      # a later extra condition on that task's `when` cannot reopen the hole.
-      - not ((_acm_decommission_checkpoint_enter | default({})).skipped | default(false))
     fail_msg: >-
       {{
         _acm_decommission_validate_refusal
@@ -255,15 +251,3 @@
       when:
         - not ansible_check_mode
         - _acm_decommission_summary_path | default('') | length > 0
-
-# Deliberately at top level AFTER the block, not inside its `always`: a failed substep
-# propagates out of the block and must leave the phase incomplete. `always` would mark
-# a failed teardown as a passed phase.
-- name: Exit the decommission checkpoint phase
-  tomazb.acm_switchover.checkpoint_phase:
-    phase: decommission
-    checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
-    status: pass
-  when:
-    - not ansible_check_mode
-    - acm_switchover_execution.checkpoint.enabled | default(false) | bool
