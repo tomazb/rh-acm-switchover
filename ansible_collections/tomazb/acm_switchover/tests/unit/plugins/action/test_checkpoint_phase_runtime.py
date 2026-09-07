@@ -3,6 +3,7 @@
 
 import json
 import os
+import pathlib
 import sys
 from datetime import datetime, timezone
 from typing import Any
@@ -3126,3 +3127,321 @@ def test_ordinary_execute_transition_rejects_malformed_persisted_identity_withou
     assert result["failed"] is True
     assert "operation identity" in result["msg"].lower()
     assert checkpoint_path.read_bytes() == original_bytes
+
+
+# ---------------------------------------------------------------------------
+# Standalone decommission identity (section 10.3, and the 10.3.7 matrix rows a
+# direct action call is the right surface for).
+#
+# These call the ACTION, not a role or playbook, because section 10.3.7 item 21
+# is explicitly about a direct call bypassing the playbook's own assert.
+#
+# Every checkpoint path is a per-test tmp_path. A shared repo-relative path is not
+# merely untidy here: the action PERSISTS an identity, so one execute-mode test
+# would seed a record that a later dry-run test then reads back, and the second
+# test would be asserting on the first test's leftovers.
+# ---------------------------------------------------------------------------
+
+_STANDALONE_HUBS = {
+    "primary": {"context": "primary-hub", "kubeconfig": "./kubeconfigs/primary"},
+}
+
+
+def _standalone_task_vars(mode="execute", hubs=None):
+    return {
+        "acm_switchover_execution": {"mode": mode},
+        "acm_switchover_hubs": _STANDALONE_HUBS if hubs is None else hubs,
+    }
+
+
+@pytest.fixture
+def standalone_args(tmp_path):
+    """Build standalone task args against an isolated checkpoint file."""
+
+    def _make(*, checkpoint_extra=None, **overrides):
+        checkpoint = {
+            "enabled": True,
+            "backend": "file",
+            "path": str(tmp_path / "checkpoint.json"),
+        }
+        if checkpoint_extra:
+            checkpoint.update(checkpoint_extra)
+        args = {
+            "phase": "decommission",
+            "status": "enter",
+            "standalone_decommission_identity": True,
+            "checkpoint": checkpoint,
+        }
+        args.update(overrides)
+        return args
+
+    return _make
+
+
+def _run_standalone(task_args, task_vars=None):
+    """Run the action with the live Kubernetes read stubbed out.
+
+    ``_execute_module`` is replaced rather than allowed to run, so every refusal
+    below can also assert that NO client was ever routed.
+    """
+    action = _make_checkpoint_action(task_args)
+    action._execute_module = MagicMock(return_value={"resources": [{"metadata": {"uid": "primary-uid"}}]})
+    result = action.run(task_vars=task_vars if task_vars is not None else _standalone_task_vars())
+    return result, action._execute_module
+
+
+@pytest.mark.parametrize("phase", ["preflight", "finalization", "activation", ""])
+def test_standalone_identity_is_refused_outside_the_decommission_phase(standalone_args, phase):
+    """Section 10.3.7 item 18: the mode is legal ONLY for phase=decommission."""
+    result, execute_module = _run_standalone(standalone_args(phase=phase))
+    assert result["failed"] is True
+    assert "requires phase=decommission" in result["msg"]
+    execute_module.assert_not_called()
+
+
+@pytest.mark.parametrize("status", ["exit", "start", "complete", "", "ENTER"])
+def test_standalone_identity_is_refused_for_a_status_outside_the_valid_set(standalone_args, status):
+    """Section 10.3.7 item 18: only enter/pass/fail/reset are real statuses.
+
+    ``exit`` is in this list deliberately: prose has repeatedly called the
+    completion transition an "exit", and no such status exists.
+    """
+    result, execute_module = _run_standalone(standalone_args(status=status))
+    assert result["failed"] is True
+    assert "Invalid checkpoint status" in result["msg"]
+    execute_module.assert_not_called()
+
+
+@pytest.mark.parametrize("status", ["enter", "pass", "fail", "reset"])
+def test_standalone_identity_accepts_every_real_status(standalone_args, status):
+    """Section 10.3.7 item 18, the half that must NOT be asserted invalid.
+
+    Restricting the mode to ``enter`` is the rejected contract: it let a run enter
+    the phase, tear the hub down, and then fail its own completion transition.
+    These four must all reach the live identity read.
+    """
+    result, execute_module = _run_standalone(standalone_args(status=status))
+    assert execute_module.called, f"status={status} must reach the live identity read"
+    assert "Invalid checkpoint status" not in result.get("msg", "")
+
+
+def test_standalone_identity_and_identity_barrier_are_mutually_exclusive(standalone_args):
+    """Section 10.3.7 item 18: two different identity shapes, so fail closed."""
+    result, execute_module = _run_standalone(standalone_args(identity_barrier=True))
+    assert result["failed"] is True
+    assert "mutually exclusive" in result["msg"]
+    execute_module.assert_not_called()
+
+
+def test_the_two_hub_identity_barrier_remains_invalid_for_the_decommission_phase():
+    """Section 10.3.7 item 19: the existing barrier keeps its preflight-only rule."""
+    action = _make_checkpoint_action({"phase": "decommission", "status": "enter", "identity_barrier": True})
+    action._execute_module = MagicMock()
+    result = action.run(task_vars=_standalone_task_vars())
+    assert result["failed"] is True
+    assert "identity_barrier requires phase=preflight and status=enter" in result["msg"]
+    action._execute_module.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "hubs",
+    [
+        {},
+        {"primary": {}},
+        {"primary": {"context": "primary-hub"}},
+        {"primary": {"context": "primary-hub", "kubeconfig": ""}},
+        {"primary": {"context": "primary-hub", "kubeconfig": "   "}},
+        {"primary": {"context": "", "kubeconfig": "./kubeconfigs/primary"}},
+        {"primary": {"kubeconfig": "./kubeconfigs/primary"}},
+        {"primary": "not-a-mapping"},
+    ],
+)
+def test_standalone_identity_refuses_an_implicit_kube_context(standalone_args, hubs):
+    """Section 10.3.7 items 11b and 21: no ambient or default context fallback.
+
+    Asserted on the DIRECT action call, because the playbook's own assert is
+    bypassed by one -- which is exactly what item 21 requires. The refusal must
+    land before any Kubernetes client is routed, not after a failed lookup.
+    """
+    result, execute_module = _run_standalone(standalone_args(), task_vars=_standalone_task_vars(hubs=hubs))
+    assert result["failed"] is True
+    assert "Refusing to use an implicit or default Kubernetes context" in result["msg"]
+    execute_module.assert_not_called()
+
+
+@pytest.mark.parametrize("status", ["enter", "pass", "fail", "reset"])
+@pytest.mark.parametrize(
+    "checkpoint_extra",
+    [{"reset": True}, {"reset_from": "finalization"}, {"reset": True, "reset_from": "activation"}],
+)
+def test_standalone_identity_is_refused_while_reset_is_configured(standalone_args, status, checkpoint_extra):
+    """Section 10.3.7 item 22, the refusal half -- on EVERY status.
+
+    The demonstration that this guards a real hole is the test below.
+    """
+    result, execute_module = _run_standalone(standalone_args(status=status, checkpoint_extra=checkpoint_extra))
+    assert result["failed"] is True
+    assert "bypasses operation identity validation" in result["msg"]
+    execute_module.assert_not_called()
+
+
+def test_the_reset_path_really_does_rebind_an_established_identity(standalone_args):
+    """Section 10.3.7 item 22, the half that proves the hole is real.
+
+    A test that only asserts the refusal does not close this row. This calls
+    ``_build_reset_from_checkpoint`` directly -- the code the refusal above keeps
+    the standalone path away from -- with a stored TWO-HUB identity and a supplied
+    PRIMARY-ONLY one, and shows the two-hub identity is silently overwritten with
+    no CheckpointIdentityMismatch raised.
+
+    Kill condition: if this ever stops overwriting, the standalone refusal is
+    guarding nothing and its justification must be revisited rather than kept out
+    of habit.
+    """
+    established_two_hub = build_operation_identity(
+        hubs={"primary": {"context": "primary-hub"}, "secondary": {"context": "secondary-hub"}},
+        operation={},
+        collection_version="",
+        hub_identities={
+            "primary": {"cluster_uid": "real-primary-uid"},
+            "secondary": {"cluster_uid": "real-secondary-uid"},
+        },
+    )
+    standalone_primary_only = build_operation_identity(
+        hubs={"primary": {"context": "primary-hub"}},
+        operation={},
+        collection_version="",
+        hub_identities={"primary": {"cluster_uid": "real-primary-uid"}},
+    )
+    assert established_two_hub != standalone_primary_only
+    assert established_two_hub["secondary_cluster_uid"] == "real-secondary-uid"
+
+    stored = {
+        "schema_version": "2.0",
+        "phase": "finalization",
+        "completed_phases": ["preflight", "finalization"],
+        "operational_data": {"keep": "me"},
+        "operation_identity": established_two_hub,
+        "errors": [],
+        "report_refs": [],
+    }
+
+    action = _make_checkpoint_action(standalone_args())
+    rebuilt = action._build_reset_from_checkpoint(stored, "finalization", standalone_primary_only)
+
+    # No exception, no mismatch -- the established two-hub identity is simply gone.
+    assert rebuilt["operation_identity"] == standalone_primary_only
+    assert rebuilt["operation_identity"]["secondary_cluster_uid"] == ""
+    assert rebuilt["operation_identity"] != established_two_hub
+
+
+@pytest.mark.parametrize("mode", ["dry_run", "validate"])
+def test_standalone_identity_performs_no_live_read_outside_execute_mode(standalone_args, mode):
+    """Sections 10.3.7 item 11 and 10.3.8: non-mutating modes read nothing.
+
+    Kill condition: performing the identity read in dry_run or validate, which
+    would make a preview issue a live API call.
+    """
+    result, execute_module = _run_standalone(standalone_args(), task_vars=_standalone_task_vars(mode=mode))
+    execute_module.assert_not_called()
+    assert result.get("failed") is not True, f"mode={mode} must pass through, not fail"
+
+
+def test_standalone_identity_performs_no_live_read_in_check_mode(standalone_args):
+    """Section 10.3.7 item 11: native check mode reads nothing and persists nothing."""
+    action = _make_checkpoint_action(standalone_args())
+    action._play_context.check_mode = True
+    action._execute_module = MagicMock()
+    action.run(task_vars=_standalone_task_vars())
+    action._execute_module.assert_not_called()
+
+
+def test_standalone_identity_requests_no_secondary_hub(standalone_args):
+    """Section 10.3.7 item 8: one-hub semantics issue no secondary UID request."""
+    task_vars = _standalone_task_vars(
+        hubs={
+            "primary": {"context": "primary-hub", "kubeconfig": "./kubeconfigs/primary"},
+            "secondary": {"context": "secondary-hub", "kubeconfig": "./kubeconfigs/secondary"},
+        }
+    )
+    _result, execute_module = _run_standalone(standalone_args(), task_vars=task_vars)
+    routed = [call_args.kwargs.get("module_args", {}) for call_args in execute_module.call_args_list]
+    assert routed, "execute mode must perform the primary identity read"
+    assert all(args.get("context") == "primary-hub" for args in routed), routed
+    assert not any(args.get("context") == "secondary-hub" for args in routed), routed
+
+
+def test_standalone_identity_builds_a_primary_only_identity_that_cannot_match_a_two_hub_record(standalone_args):
+    """Sections 10.3.7 items 9 and 10: an established two-hub checkpoint cannot be
+    downgraded into standalone identity.
+
+    Exact normalized equality is what refuses the pair, so the two shapes must
+    genuinely differ in the secondary fields.
+    """
+    action = _make_checkpoint_action(standalone_args())
+    primary_only = action._build_trusted_operation_identity(
+        hubs={"primary": {"context": "primary-hub", "kubeconfig": "./kubeconfigs/primary"}},
+        operation={},
+        collection_version=None,
+        trusted_uids={"primary": "uid-primary"},
+    )
+    assert primary_only["primary_cluster_uid"] == "uid-primary"
+    assert primary_only["secondary_cluster_uid"] == ""
+    assert primary_only["secondary_context"] == ""
+
+    two_hub = action._build_trusted_operation_identity(
+        hubs={
+            "primary": {"context": "primary-hub", "kubeconfig": "./kubeconfigs/primary"},
+            "secondary": {"context": "secondary-hub", "kubeconfig": "./kubeconfigs/secondary"},
+        },
+        operation={},
+        collection_version=None,
+        trusted_uids={"primary": "uid-primary", "secondary": "uid-secondary"},
+    )
+    assert primary_only != two_hub
+
+
+@pytest.mark.parametrize(
+    "read_result",
+    [
+        {"failed": True, "msg": "boom"},
+        {"resources": []},
+        {"resources": [{"metadata": {"uid": ""}}]},
+        {"resources": [{"metadata": {"uid": "   "}}]},
+        {"resources": [{"metadata": {}}]},
+        {"resources": [{"metadata": {"uid": 17}}]},
+        {"resources": [{}, {}]},
+        {},
+    ],
+)
+def test_standalone_identity_fails_closed_on_a_bad_uid_read(standalone_args, read_result):
+    """Section 10.3.7 items 3 and 4: a bad identity read is fatal before teardown."""
+    action = _make_checkpoint_action(standalone_args())
+    action._execute_module = MagicMock(return_value=read_result)
+    result = action.run(task_vars=_standalone_task_vars())
+    assert result["failed"] is True
+    assert "physical identity" in result["msg"]
+
+
+def test_standalone_identity_fails_closed_when_the_read_raises(standalone_args):
+    """Section 10.3.7 item 3: a transport failure is fatal, never a soft pass."""
+    action = _make_checkpoint_action(standalone_args())
+    action._execute_module = MagicMock(side_effect=RuntimeError("connection refused"))
+    result = action.run(task_vars=_standalone_task_vars())
+    assert result["failed"] is True
+    assert "physical identity" in result["msg"]
+
+
+def test_standalone_identity_writes_nothing_outside_the_configured_checkpoint_path(standalone_args, tmp_path):
+    """Regression guard for this suite itself.
+
+    An execute-mode standalone transition PERSISTS. If any test in this file used a
+    repo-relative checkpoint path, it would leave a real file in the working tree
+    that later tests would read back as if it were their own state.
+    """
+    args = standalone_args()
+    configured = pathlib.Path(args["checkpoint"]["path"])
+    result, _ = _run_standalone(args)
+    assert result.get("failed") is not True
+    assert configured.exists(), "the execute transition must persist to the configured path"
+    assert configured.parent == tmp_path

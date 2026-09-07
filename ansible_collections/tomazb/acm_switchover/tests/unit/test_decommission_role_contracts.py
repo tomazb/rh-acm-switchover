@@ -1828,6 +1828,180 @@ def test_a_clean_standalone_execute_run_completes_the_phase_durably_from_empty_s
     assert identity["secondary_context"] == ""
 
 
+def _standalone_identity(primary_uid, primary_context="primary-hub"):
+    return build_operation_identity(
+        hubs={"primary": {"context": primary_context}},
+        operation={},
+        collection_version="",
+        hub_identities={"primary": {"cluster_uid": primary_uid}},
+    )
+
+
+def test_a_standalone_resume_with_the_same_context_and_uid_is_accepted():
+    """Section 10.3.7 item 5: resume against unchanged live truth proceeds."""
+    result = run_decommission_role(
+        standalone_playbook=True,
+        seeded_operation_identity=_standalone_identity("harness-standalone-primary-uid"),
+    )
+    assert result["returncode"] == 0
+    assert "decommission" in result["checkpoint"]["completed_phases"]
+    assert result["delete_calls"], "an accepted resume still performs the teardown"
+
+
+def test_a_standalone_resume_against_a_different_cluster_uid_fails_before_any_mutation():
+    """Section 10.3.7 item 6: the SAME context now pointing at a DIFFERENT physical
+    cluster must fail before any delete.
+
+    This is the whole reason identity is bound to a live kube-system UID rather than
+    to a context name: a repointed kubeconfig keeps the name and changes the cluster.
+    """
+    result = run_decommission_role(
+        standalone_playbook=True,
+        seeded_operation_identity=_standalone_identity("a-different-cluster-uid"),
+    )
+    assert result["returncode"] != 0
+    assert result["delete_calls"] == [], "a mismatched identity must delete nothing"
+    assert "decommission" not in result["checkpoint"]["completed_phases"]
+
+
+def test_a_standalone_resume_from_a_different_context_fails_before_any_mutation():
+    """Section 10.3.7 item 7: a changed context is a changed identity."""
+    result = run_decommission_role(
+        standalone_playbook=True,
+        seeded_operation_identity=_standalone_identity(
+            "harness-standalone-primary-uid", primary_context="some-other-hub"
+        ),
+    )
+    assert result["returncode"] != 0
+    assert result["delete_calls"] == []
+    assert "decommission" not in result["checkpoint"]["completed_phases"]
+
+
+def test_an_established_two_hub_checkpoint_cannot_be_downgraded_into_standalone_identity():
+    """Section 10.3.7 item 10, end to end.
+
+    A checkpoint carrying a real two-hub identity must not be silently rebound to a
+    primary-only one. Exact normalized equality refuses the pair, and nothing is
+    deleted.
+    """
+    two_hub = build_operation_identity(
+        hubs={"primary": {"context": "primary-hub"}, "secondary": {"context": "secondary-hub"}},
+        operation={},
+        collection_version="",
+        hub_identities={
+            "primary": {"cluster_uid": "harness-standalone-primary-uid"},
+            "secondary": {"cluster_uid": "harness-secondary-uid"},
+        },
+    )
+    result = run_decommission_role(standalone_playbook=True, seeded_operation_identity=two_hub)
+    assert result["returncode"] != 0
+    assert result["delete_calls"] == []
+    assert "decommission" not in result["checkpoint"]["completed_phases"]
+    # The stored two-hub identity survives untouched.
+    assert result["operation_identity"] == two_hub
+
+
+def test_a_standalone_validate_run_is_refused_and_touches_nothing():
+    """Section 10.3.7 item 11a, asserted on the FULL playbook.
+
+    The playbook's enter runs BEFORE the role's validate refusal, so the role-only
+    harness is the wrong surface for this row: it cannot show what the enter did.
+    Validate must perform no identity read, write no checkpoint, and issue no DELETE.
+    """
+    result = run_decommission_role(standalone_playbook=True, execution_mode="validate")
+    checkpoint = result["checkpoint"]
+
+    assert result["returncode"] != 0, "validate must be refused, not previewed"
+    assert result["delete_calls"] == []
+    assert _kube_system_reads(result["requests"]) == [], "a refused mode reads no identity"
+    assert checkpoint["completed_phases"] == []
+    assert checkpoint["operational_data"] == checkpoint["before_operational_data"]
+
+
+def test_the_only_new_api_operation_is_the_primary_kube_system_namespace_get():
+    """Section 10.3.7 item 12: audit the actual API expansion, do not assert it.
+
+    Diffs the real request log of a standalone playbook run against a role-only run.
+    Anything the standalone lifecycle adds beyond the kube-system Namespace GET --
+    a new kind, a new verb, a secondary read -- shows up here as an unexplained
+    request.
+
+    Kill condition: adding any other API call to the standalone path.
+    """
+    role_only = run_decommission_role()
+    standalone = run_decommission_role(standalone_playbook=True)
+
+    def _shape(requests):
+        return {(r["method"], r["path"].split("?")[0]) for r in requests}
+
+    added = _shape(standalone["requests"]) - _shape(role_only["requests"])
+    assert added == {("GET", "/api/v1/namespaces/kube-system")}, added
+
+
+def test_the_decommission_permission_set_already_grants_the_namespace_read():
+    """Section 10.3.7 item 13: the existing RBAC permission suffices.
+
+    No RBAC artifact is authorized to change for this work, so this pins that none
+    needs to: the namespace read the identity barrier performs is already granted.
+    """
+    from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_validate import (
+        DECOMMISSION_CLUSTER_PERMISSIONS,
+    )
+
+    assert ("", "namespaces", ["get"]) in [
+        (group, resource, list(verbs)) for group, resource, verbs in DECOMMISSION_CLUSTER_PERMISSIONS
+    ]
+
+
+def test_integrated_finalization_never_uses_the_standalone_identity_mode():
+    """Section 10.3.7 item 20: the integrated path stays two-hub.
+
+    handle_old_hub.yml includes the SAME decommission role from inside an established
+    two-hub finalization checkpoint. It must include the role, set no standalone
+    argument, and enter no standalone decommission phase.
+
+    Kill condition: adding standalone_decommission_identity anywhere on the
+    integrated path, or entering a decommission phase from finalization.
+    """
+    handle_old_hub = _load_tasks(ROLES_DIR / "finalization" / "tasks" / "handle_old_hub.yml")
+
+    includes = [
+        task
+        for task in handle_old_hub
+        if task.get("ansible.builtin.include_role", {}).get("name") == "tomazb.acm_switchover.decommission"
+    ]
+    assert includes, "the integrated path must still include the shared decommission role"
+
+    for task in all_checkpoint_phase_tasks(handle_old_hub):
+        args = task[_CHECKPOINT_WRITER_MODULE]
+        assert "standalone_decommission_identity" not in args
+        assert args.get("phase") != "decommission"
+
+    # And no OTHER role may quietly adopt the standalone mode either: the standalone
+    # playbook is the single owner.
+    for path in sorted(ROLES_DIR.rglob("*.yml")):
+        assert "standalone_decommission_identity" not in path.read_text(encoding="utf-8"), path
+
+
+def test_a_standalone_reset_transition_prunes_without_rebinding_identity():
+    """Section 10.3.7 item 17: reset as a STATUS is legal and must not rebind.
+
+    Distinct from the refused reset CONFIGURATION (checkpoint.reset /
+    checkpoint.reset_from), which bypasses identity validation. PR B wires no task
+    that issues this status, so it is asserted against the action directly.
+    """
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
+        reset_completed_phases_from,
+    )
+
+    established = _standalone_identity("harness-standalone-primary-uid")
+    pruned = reset_completed_phases_from(["preflight", "finalization", "decommission"], "decommission")
+    assert pruned == ["preflight", "finalization"], pruned
+    # Identity is an input to the transition, never rewritten by pruning.
+    assert established["primary_cluster_uid"] == "harness-standalone-primary-uid"
+    assert established["secondary_cluster_uid"] == ""
+
+
 def test_a_failed_standalone_substep_records_fail_and_leaves_the_phase_incomplete():
     """Section 10.3.7 item 16: a failed teardown is never a completed phase.
 
