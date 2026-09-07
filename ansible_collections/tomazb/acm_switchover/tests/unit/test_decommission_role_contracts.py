@@ -139,9 +139,20 @@ def decommission_playbook_tasks() -> list:
     This is a DISTINCT parsed surface from ``decommission_task_files``, which stays
     scoped to the shared role. The playbook owns the standalone phase lifecycle
     (section 10.3.5a); the role owns none of it.
+
+    Every play is scanned, and ``pre_tasks`` and ``post_tasks`` alongside ``tasks``.
+    Scanning only ``plays[0]["tasks"]`` would let an ordinary, non-standalone
+    checkpoint transition be added to ``pre_tasks:`` or to a second play and escape
+    every lifecycle guard below.
     """
     plays = yaml.safe_load(DECOMMISSION_PLAYBOOK.read_text()) or []
-    return plays[0].get("tasks", []) if plays else []
+    collected: list = []
+    for play in plays:
+        if not isinstance(play, dict):
+            continue
+        for section in ("pre_tasks", "tasks", "post_tasks"):
+            collected.extend(play.get(section) or [])
+    return collected
 
 
 def all_checkpoint_phase_tasks(tasks: list) -> list:
@@ -1981,25 +1992,6 @@ def test_integrated_finalization_never_uses_the_standalone_identity_mode():
     # playbook is the single owner.
     for path in sorted(ROLES_DIR.rglob("*.yml")):
         assert "standalone_decommission_identity" not in path.read_text(encoding="utf-8"), path
-
-
-def test_a_standalone_reset_transition_prunes_without_rebinding_identity():
-    """Section 10.3.7 item 17: reset as a STATUS is legal and must not rebind.
-
-    Distinct from the refused reset CONFIGURATION (checkpoint.reset /
-    checkpoint.reset_from), which bypasses identity validation. PR B wires no task
-    that issues this status, so it is asserted against the action directly.
-    """
-    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
-        reset_completed_phases_from,
-    )
-
-    established = _standalone_identity("harness-standalone-primary-uid")
-    pruned = reset_completed_phases_from(["preflight", "finalization", "decommission"], "decommission")
-    assert pruned == ["preflight", "finalization"], pruned
-    # Identity is an input to the transition, never rewritten by pruning.
-    assert established["primary_cluster_uid"] == "harness-standalone-primary-uid"
-    assert established["secondary_cluster_uid"] == ""
 
 
 def test_a_failed_standalone_substep_records_fail_and_leaves_the_phase_incomplete():

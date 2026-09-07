@@ -7,6 +7,7 @@ import pytest
 import yaml
 from jinja2 import Environment
 from preflight_task_text import validate_backups_text
+from yaml_contract_helpers import _flatten_tasks
 
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 PREFLIGHT_TASKS = ROLES_DIR / "preflight" / "tasks"
@@ -296,17 +297,6 @@ def test_collection_preflight_keeps_checkpoint_control_outside_identity_evidence
     assert "operation_identity" not in post_text
 
 
-def _flatten_decommission_tasks(tasks: list) -> list:
-    """Depth-first walk over block/rescue/always, preserving document order."""
-    flat = []
-    for task in tasks or []:
-        flat.append(task)
-        for key in ("block", "rescue", "always"):
-            if key in task:
-                flat.extend(_flatten_decommission_tasks(task[key]))
-    return flat
-
-
 def test_collection_static_boundary_excludes_obsolete_discovery_and_single_hub_workflows() -> None:
     """Only normal flows use the cross-role barrier and post-barrier recovery boundary."""
     playbooks = COLLECTION_ROOT / "playbooks"
@@ -350,10 +340,15 @@ def test_collection_static_boundary_excludes_obsolete_discovery_and_single_hub_w
     assert "identity_barrier" not in decommission_text
     assert "tomazb.acm_switchover.preflight" not in decommission_text
     decommission_playbook = yaml.safe_load(decommission_text)
+    # Every play, and pre_tasks/post_tasks as well as tasks: a plain non-standalone
+    # transition dropped into pre_tasks would otherwise escape this guard entirely,
+    # which the blunt "checkpoint_phase not in text" check it replaced did catch.
+    decommission_sections: list = []
+    for play in decommission_playbook:
+        for section in ("pre_tasks", "tasks", "post_tasks"):
+            decommission_sections.extend(play.get(section) or [])
     decommission_transitions = [
-        task
-        for task in _flatten_decommission_tasks(decommission_playbook[0].get("tasks", []))
-        if "tomazb.acm_switchover.checkpoint_phase" in task
+        task for task in _flatten_tasks(decommission_sections) if "tomazb.acm_switchover.checkpoint_phase" in task
     ]
     assert decommission_transitions, "the standalone playbook must own its own lifecycle"
     for task in decommission_transitions:

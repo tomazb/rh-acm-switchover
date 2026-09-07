@@ -238,6 +238,10 @@ class ActionModule(ActionBase):
 
     STANDALONE_PHASE = "decommission"
 
+    #: The execution modes a standalone decommission transition understands. Anything
+    #: else is refused rather than silently treated as a preview.
+    STANDALONE_KNOWN_MODES = frozenset({"execute", "dry_run", "validate"})
+
     def _run_standalone_decommission_transition(self, *, phase: str, status: str, tmp, task_vars: dict) -> dict:
         """Establish and re-prove a PRIMARY-ONLY operation identity for standalone decommission.
 
@@ -285,8 +289,10 @@ class ActionModule(ActionBase):
                 "msg": (
                     "Refusing a standalone decommission checkpoint transition while checkpoint.reset "
                     "or checkpoint.reset_from is set: the reset configuration bypasses operation "
-                    "identity validation and could rebind an established identity. Clear both, or "
-                    "reset the checkpoint through a workflow that owns it."
+                    "identity validation and could rebind an established identity. Clear both. To "
+                    "start a standalone decommission from empty state, remove, rename or repoint "
+                    "the checkpoint file at acm_switchover_execution.checkpoint.path -- which "
+                    "discards the teardown obligations that record carried."
                 ),
             }
 
@@ -317,24 +323,61 @@ class ActionModule(ActionBase):
         execution_mode = execution.get("mode", "dry_run") if isinstance(execution, Mapping) else "dry_run"
         is_check_mode = getattr(self._play_context, "check_mode", False) is True
 
+        # An unrecognised mode is refused rather than treated as non-execute. Only
+        # `execute` performs the identity read, but every mode other than `dry_run`
+        # is treated as mutating downstream -- the role's delete guards fire on
+        # `mode != 'dry_run'` -- so a typo such as `Execute` would otherwise skip the
+        # identity read, skip the role's own gate, and still delete while persisting
+        # an empty operation identity.
+        if execution_mode not in self.STANDALONE_KNOWN_MODES:
+            known = ", ".join(sorted(self.STANDALONE_KNOWN_MODES))
+            return {
+                "failed": True,
+                "msg": (
+                    f"Unknown execution mode '{execution_mode}' for a standalone decommission "
+                    f"checkpoint transition. Expected one of: {known}."
+                ),
+            }
+
         # Non-mutating modes persist no authoritative identity and perform NO
         # identity read at all. Execute mode always reads live; the
         # non_live_hub_identities override stays gated to validate/dry_run on the
         # two-hub barrier and is deliberately not honoured here.
-        expected_operation_identity = None
-        identity_summary = None
-        if execution_mode == "execute" and not is_check_mode:
-            try:
-                primary_uid = self._read_live_namespace_uid("primary", validated_primary, task_vars, tmp)
-            except ValidationError:
-                return self._identity_failure("primary")
-            expected_operation_identity = self._build_trusted_operation_identity(
-                hubs={"primary": validated_primary},
-                operation=task_vars.get("acm_switchover_operation") or {},
-                collection_version=args.get("collection_version"),
-                trusted_uids={"primary": primary_uid},
-            )
-            identity_summary = {"primary": {"cluster_uid": primary_uid}}
+        if execution_mode != "execute" or is_check_mode:
+            # Return WITHOUT descending into the transition, mirroring the two-hub
+            # barrier's own non-mutating exit.
+            #
+            # This path must never call _run_checkpoint_transition with
+            # expected_operation_identity=None. Doing so consults
+            # _canonical_established_operation_identity, which admits only two-hub and
+            # secondary-only records and therefore rejects the primary-only identity a
+            # real standalone execute run persists -- so a preview of a partially
+            # completed standalone decommission would hard-fail, advising the operator
+            # to "run the preflight identity barrier first", which a one-hub workflow
+            # has no way to run. Passing an empty identity instead is not a fix either:
+            # validate_operation_identity would then compare {} against the stored
+            # record and raise a mismatch.
+            #
+            # There is nothing to verify here in any case: verification means proving
+            # physical identity, and section 10.3.8 forbids the live read outside
+            # execute mode.
+            return {
+                "changed": False,
+                "skipped_phase": False,
+                "facts": {},
+            }
+
+        try:
+            primary_uid = self._read_live_namespace_uid("primary", validated_primary, task_vars, tmp)
+        except ValidationError:
+            return self._standalone_identity_failure()
+        expected_operation_identity = self._build_trusted_operation_identity(
+            hubs={"primary": validated_primary},
+            operation=task_vars.get("acm_switchover_operation") or {},
+            collection_version=args.get("collection_version"),
+            trusted_uids={"primary": primary_uid},
+        )
+        identity_summary = {"primary": {"cluster_uid": primary_uid}}
 
         return self._run_checkpoint_transition(
             phase=phase,
@@ -349,6 +392,18 @@ class ActionModule(ActionBase):
             expected_operation_identity=expected_operation_identity,
             hub_identities=identity_summary,
         )
+
+    @staticmethod
+    def _standalone_identity_failure() -> dict:
+        """One-hub wording. _identity_failure speaks of "the normal two-hub switchover",
+        which is actively misleading for an operator decommissioning a single hub."""
+        return {
+            "failed": True,
+            "msg": (
+                "Unable to verify the primary hub physical identity from the live kube-system "
+                "Namespace UID. Refusing the standalone decommission before any teardown."
+            ),
+        }
 
     @staticmethod
     def _standalone_routing_failure(field: str) -> dict:

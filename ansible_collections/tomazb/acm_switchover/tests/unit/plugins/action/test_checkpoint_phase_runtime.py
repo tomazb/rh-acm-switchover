@@ -3348,12 +3348,108 @@ def test_standalone_identity_performs_no_live_read_outside_execute_mode(standalo
 
 
 def test_standalone_identity_performs_no_live_read_in_check_mode(standalone_args):
-    """Section 10.3.7 item 11: native check mode reads nothing and persists nothing."""
-    action = _make_checkpoint_action(standalone_args())
+    """Section 10.3.7 item 11: native check mode reads nothing and persists nothing.
+
+    Both halves are asserted. Asserting only "no read" would still pass if check
+    mode began writing the checkpoint.
+    """
+    args = standalone_args()
+    configured = pathlib.Path(args["checkpoint"]["path"])
+    action = _make_checkpoint_action(args)
     action._play_context.check_mode = True
     action._execute_module = MagicMock()
     action.run(task_vars=_standalone_task_vars())
     action._execute_module.assert_not_called()
+    assert not configured.exists(), "check mode must persist nothing"
+
+
+@pytest.mark.parametrize("preview_mode", ["dry_run", "validate"])
+def test_a_preview_after_a_real_standalone_run_is_not_refused(standalone_args, preview_mode):
+    """Regression: previewing a partially completed standalone decommission must work.
+
+    A real execute run persists a PRIMARY-ONLY operation identity. If a later
+    non-execute transition descends into the generic path with no identity, the
+    canonical reader -- which admits only two-hub and secondary-only records --
+    rejects that stored record, and the operator is told to "run the preflight
+    identity barrier first". A one-hub decommission has no such barrier to run, and
+    the operator documentation tells them to preview with dry_run after a failure.
+
+    Kill condition: passing expected_operation_identity=None (or {}) from the
+    standalone path into _run_checkpoint_transition outside execute mode. Both
+    reintroduce the refusal -- {} by raising an identity mismatch instead.
+    """
+    args = standalone_args()
+    established = _make_checkpoint_action(args)
+    established._execute_module = MagicMock(return_value={"resources": [{"metadata": {"uid": "primary-uid"}}]})
+    first = established.run(task_vars=_standalone_task_vars())
+    assert first.get("failed") is not True
+    stored = json.loads(pathlib.Path(args["checkpoint"]["path"]).read_text())
+    assert stored["operation_identity"]["primary_cluster_uid"] == "primary-uid"
+    assert stored["operation_identity"]["secondary_cluster_uid"] == ""
+
+    result, execute_module = _run_standalone(
+        standalone_args(**{"checkpoint": args["checkpoint"]}),
+        task_vars=_standalone_task_vars(mode=preview_mode),
+    )
+    assert result.get("failed") is not True, result.get("msg")
+    execute_module.assert_not_called()
+    # And the preview left the established record exactly as it found it.
+    assert json.loads(pathlib.Path(args["checkpoint"]["path"]).read_text()) == stored
+
+
+@pytest.mark.parametrize("mode", ["Execute", "EXECUTE", "exec", "live", "", "run"])
+def test_an_unknown_execution_mode_is_refused_before_any_read_or_write(standalone_args, mode):
+    """An unrecognised mode must not be silently treated as a preview.
+
+    Only ``execute`` performs the identity read, but every mode other than
+    ``dry_run`` is treated as mutating downstream -- the role's delete guards fire on
+    ``mode != 'dry_run'``. So a typo like ``Execute`` would otherwise skip the
+    identity read AND skip the role's own gate while the deletes still ran, leaving a
+    checkpoint carrying an empty operation identity.
+
+    Kill condition: falling back to non-execute handling for an unknown mode.
+    """
+    args = standalone_args(**{})
+    configured = pathlib.Path(args["checkpoint"]["path"])
+    result, execute_module = _run_standalone(args, task_vars=_standalone_task_vars(mode=mode))
+    assert result["failed"] is True
+    assert "Unknown execution mode" in result["msg"]
+    execute_module.assert_not_called()
+    assert not configured.exists(), "a refused mode must persist nothing"
+
+
+def test_a_standalone_reset_status_prunes_the_phase_without_rebinding_identity(standalone_args):
+    """Section 10.3.7 item 17, against the REAL action rather than a pure function.
+
+    ``status: reset`` is a transition status, distinct from the refused reset
+    CONFIGURATION. Under the explicit standalone path it must re-prove identity
+    freshly, prune the decommission phase, and leave the stored identity untouched.
+
+    Kill condition: rebinding operation_identity on a reset transition, or failing
+    to prune.
+    """
+    args = standalone_args()
+    path = pathlib.Path(args["checkpoint"]["path"])
+
+    entered = _make_checkpoint_action(args)
+    entered._execute_module = MagicMock(return_value={"resources": [{"metadata": {"uid": "primary-uid"}}]})
+    entered.run(task_vars=_standalone_task_vars())
+
+    passed = _make_checkpoint_action(standalone_args(status="pass", **{"checkpoint": args["checkpoint"]}))
+    passed._execute_module = MagicMock(return_value={"resources": [{"metadata": {"uid": "primary-uid"}}]})
+    passed.run(task_vars=_standalone_task_vars())
+    after_pass = json.loads(path.read_text())
+    assert "decommission" in after_pass["completed_phases"]
+    identity_before = after_pass["operation_identity"]
+
+    reset = _make_checkpoint_action(standalone_args(status="reset", **{"checkpoint": args["checkpoint"]}))
+    reset._execute_module = MagicMock(return_value={"resources": [{"metadata": {"uid": "primary-uid"}}]})
+    result = reset.run(task_vars=_standalone_task_vars())
+
+    assert result.get("failed") is not True, result.get("msg")
+    after_reset = json.loads(path.read_text())
+    assert "decommission" not in after_reset["completed_phases"], "reset must prune the phase"
+    assert after_reset["operation_identity"] == identity_before, "reset must not rebind identity"
 
 
 def test_standalone_identity_requests_no_secondary_hub(standalone_args):
