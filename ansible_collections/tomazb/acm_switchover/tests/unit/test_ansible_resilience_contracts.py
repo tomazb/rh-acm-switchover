@@ -197,9 +197,20 @@ def test_decommission_observability_autodetection_fails_closed():
 
 
 def test_decommission_playbook_exposes_precheck_role_path():
-    """decommission playbook must still run through the decommission role entrypoint."""
-    playbook = (PLAYBOOKS_DIR / "decommission.yml").read_text()
-    assert "role: tomazb.acm_switchover.decommission" in playbook
+    """decommission playbook must still run through the decommission role entrypoint.
+
+    The playbook moved from a bare ``roles:`` list to ``tasks:`` so it can own the
+    standalone checkpoint lifecycle around the role (enter, then the include and pass
+    in a block, with fail in a rescue). The entrypoint contract this test exists for
+    is unchanged: the shared role is still what performs the teardown.
+    """
+    playbook = yaml.safe_load((PLAYBOOKS_DIR / "decommission.yml").read_text())
+    included = [
+        task["ansible.builtin.include_role"]["name"]
+        for task in _flatten_tasks(playbook[0].get("tasks", []))
+        if "ansible.builtin.include_role" in task
+    ]
+    assert "tomazb.acm_switchover.decommission" in included
 
 
 def test_decommission_defaults_missing_execution_mode_to_dry_run_for_destructive_tasks():

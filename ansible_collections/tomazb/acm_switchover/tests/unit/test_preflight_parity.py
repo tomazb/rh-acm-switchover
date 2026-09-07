@@ -296,6 +296,17 @@ def test_collection_preflight_keeps_checkpoint_control_outside_identity_evidence
     assert "operation_identity" not in post_text
 
 
+def _flatten_decommission_tasks(tasks: list) -> list:
+    """Depth-first walk over block/rescue/always, preserving document order."""
+    flat = []
+    for task in tasks or []:
+        flat.append(task)
+        for key in ("block", "rescue", "always"):
+            if key in task:
+                flat.extend(_flatten_decommission_tasks(task[key]))
+    return flat
+
+
 def test_collection_static_boundary_excludes_obsolete_discovery_and_single_hub_workflows() -> None:
     """Only normal flows use the cross-role barrier and post-barrier recovery boundary."""
     playbooks = COLLECTION_ROOT / "playbooks"
@@ -330,8 +341,25 @@ def test_collection_static_boundary_excludes_obsolete_discovery_and_single_hub_w
         COLLECTION_ROOT / "plugins" / "action" / "checkpoint_phase.py",
         "_run_identity_barrier",
     )
-    assert "checkpoint_phase" not in decommission_text
+    # The standalone decommission playbook now legitimately owns checkpoint
+    # transitions, so a blanket "checkpoint_phase not in" assertion no longer says
+    # what this test means. What it always meant is that the ONE-HUB decommission
+    # entry point must not reach for the TWO-HUB barrier machinery -- and that is
+    # asserted directly here rather than through a proxy, which makes it strictly
+    # stronger than the string check it replaces.
+    assert "identity_barrier" not in decommission_text
     assert "tomazb.acm_switchover.preflight" not in decommission_text
+    decommission_playbook = yaml.safe_load(decommission_text)
+    decommission_transitions = [
+        task
+        for task in _flatten_decommission_tasks(decommission_playbook[0].get("tasks", []))
+        if "tomazb.acm_switchover.checkpoint_phase" in task
+    ]
+    assert decommission_transitions, "the standalone playbook must own its own lifecycle"
+    for task in decommission_transitions:
+        args = task["tomazb.acm_switchover.checkpoint_phase"]
+        assert args.get("standalone_decommission_identity") is True
+        assert args.get("phase") == "decommission"
 
 
 def test_validate_kubeconfigs_uses_direct_api_probe():
