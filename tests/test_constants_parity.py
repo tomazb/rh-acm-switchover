@@ -45,6 +45,7 @@ CONSTANT_PAIRS = {
     "OBSERVATORIUM_API_DEPLOYMENT": "OBSERVATORIUM_API_DEPLOYMENT",
     "THANOS_COMPACTOR_STATEFULSET": "THANOS_COMPACTOR_STATEFULSET",
     "THANOS_COMPACTOR_LABEL_SELECTOR": "THANOS_COMPACTOR_LABEL_SELECTOR",
+    "OBSERVABILITY_POD_LABEL_SELECTOR": "OBSERVABILITY_POD_LABEL_SELECTOR",
     # R4-03 strict-read reason codes
     "STRICT_READ_REASON_KIND_NOT_SERVED": "STRICT_READ_REASON_KIND_NOT_SERVED",
     "STRICT_READ_REASON_NAMESPACE_NOT_FOUND": "STRICT_READ_REASON_NAMESPACE_NOT_FOUND",
@@ -146,7 +147,8 @@ def test_teardown_shape_constants_are_mirrored():
 
 def test_teardown_phase_vocabulary_is_mirrored():
     """The phase set itself. The shared "unknown phase" vector only proves the set is not
-    too permissive; a phase silently dropped from one side would go unnoticed without this."""
+    too permissive; a phase silently dropped from one side would go unnoticed without this.
+    """
     python_phases = frozenset(phase.value for phase in py_teardown_record.TeardownPhase)
     assert ans_constants.TEARDOWN_PHASES == python_phases
 

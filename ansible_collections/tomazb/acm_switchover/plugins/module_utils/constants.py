@@ -106,6 +106,7 @@ DISABLE_AUTO_IMPORT_ANNOTATION = "import.open-cluster-management.io/disable-auto
 OBSERVATORIUM_API_DEPLOYMENT = "observability-observatorium-api"
 THANOS_COMPACTOR_STATEFULSET = "observability-thanos-compact"
 THANOS_COMPACTOR_LABEL_SELECTOR = "app.kubernetes.io/name=thanos-compact"
+OBSERVABILITY_POD_LABEL_SELECTOR = "observability.open-cluster-management.io/name=observability"
 
 # Ownership marker written atomically with the ImportAndSync ConfigMap patch
 # (issue #214, audit C3). The cluster is the collection's register: finalization

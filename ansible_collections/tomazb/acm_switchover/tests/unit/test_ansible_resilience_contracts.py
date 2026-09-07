@@ -459,23 +459,25 @@ def test_decommission_missing_clusterdeployment_api_fails_before_delete():
     )
 
 
-def test_decommission_deletes_all_discovered_observability_and_mch_resources():
-    """Decommission must enumerate CRs instead of assuming conventional resource names."""
-    for filename, kind, fixed_name in (
-        ("delete_observability.yml", "MultiClusterObservability", "observability"),
-        ("delete_multiclusterhub.yml", "MultiClusterHub", "multiclusterhub"),
-    ):
-        tasks = _load_yaml(DECOMMISSION_TASKS / filename)
-        text = (DECOMMISSION_TASKS / filename).read_text()
+def test_decommission_uses_fixed_guarded_mco_and_discovered_mch_targets():
+    """MCO has one canonical identity; the older MCH path still enumerates resources."""
+    mco_tasks = _load_yaml(DECOMMISSION_TASKS / "delete_observability.yml")
+    guarded = [task for task in mco_tasks if "tomazb.acm_switchover.acm_uid_guarded_delete" in task]
+    assert len(guarded) == 1
+    guarded_args = guarded[0]["tomazb.acm_switchover.acm_uid_guarded_delete"]
+    assert guarded_args["name"] == "observability"
+    assert guarded_args["resource_name"] == "multiclusterobservabilities"
+    assert "loop" not in guarded[0]
 
-        discovery_tasks = [task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == kind]
-        delete_tasks = [task for task in tasks if task.get("kubernetes.core.k8s", {}).get("kind") == kind]
-
-        assert discovery_tasks, f"{filename} must list {kind} resources before deletion"
-        assert delete_tasks, f"{filename} must delete discovered {kind} resources"
-        assert "{{ item.metadata.name }}" in str(delete_tasks[0].get("kubernetes.core.k8s", {}).get("name"))
-        assert "loop" in delete_tasks[0]
-        assert f"name: {fixed_name}" not in text
+    mch_tasks = _load_yaml(DECOMMISSION_TASKS / "delete_multiclusterhub.yml")
+    discovery_tasks = [
+        task for task in mch_tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "MultiClusterHub"
+    ]
+    delete_tasks = [task for task in mch_tasks if task.get("kubernetes.core.k8s", {}).get("kind") == "MultiClusterHub"]
+    assert discovery_tasks
+    assert delete_tasks
+    assert "{{ item.metadata.name }}" in str(delete_tasks[0]["kubernetes.core.k8s"]["name"])
+    assert "loop" in delete_tasks[0]
 
 
 def test_decommission_waits_for_observability_and_acm_workload_pods():
@@ -486,9 +488,8 @@ def test_decommission_waits_for_observability_and_acm_workload_pods():
 
     assert "kind: Pod" in obs_text
     assert "until" in obs_text
-    assert "failed_when" in obs_text
-    assert "NotFound" in obs_text
-    assert "not found" in obs_text
+    assert "failed_when: false" not in obs_text
+    assert "Fail closed when the scoped observability pod inventory is unverifiable" in obs_text
     assert "open-cluster-management-observability" in obs_text
     assert "kind: Pod" in mch_text
     assert "until" in mch_text
@@ -513,7 +514,6 @@ def test_decommission_result_reports_actual_delete_changes():
     assert "changed:" in main_text
     for result_name in (
         "_managed_cluster_delete_results",
-        "_multiclusterobservability_delete_results",
         "_multiclusterhub_delete_results",
     ):
         assert result_name in main_text
@@ -521,7 +521,8 @@ def test_decommission_result_reports_actual_delete_changes():
         assert "| selectattr('changed')" in main_text
 
     assert "register: _managed_cluster_delete_results" in managed_text
-    assert "register: _multiclusterobservability_delete_results" in obs_text
+    assert "register: acm_switchover_mco_delete" in obs_text
+    assert "acm_switchover_mco_delete.changed | default(false) | bool" in main_text
     assert "register: _multiclusterhub_delete_results" in mch_text
 
 

@@ -144,6 +144,7 @@ KEY_SAVED_BACKUP_SCHEDULE = "saved_backup_schedule"
 KEY_BACKUP_SCHEDULE_ENABLED_AT = "backup_schedule_enabled_at"
 KEY_RESUME_SUMMARY = "resume_summary"
 KEY_RESUME_START_PHASE = "resume_start_phase"
+FACT_TEARDOWN_RECORDS = "teardown_records"
 
 
 def _operational_data(checkpoint) -> dict:
@@ -203,9 +204,14 @@ def checkpoint_facts(checkpoint) -> dict:
     count = data.get(KEY_EXPECTED_MANAGED_CLUSTER_COUNT)
     primary_obs = data.get(KEY_PRIMARY_HAS_OBSERVABILITY)
     secondary_obs = data.get(KEY_SECONDARY_HAS_OBSERVABILITY)
+    validated_teardown_records = (
+        teardown_records(checkpoint)
+        if isinstance(checkpoint, dict) and isinstance(checkpoint.get("operational_data", {}), dict)
+        else {}
+    )
     return {
         KEY_ARGOCD_RUN_ID: data.get(KEY_ARGOCD_RUN_ID) or "",
-        KEY_ARGOCD_DISCOVERY_NAMESPACES: namespaces if isinstance(namespaces, dict) else {},
+        KEY_ARGOCD_DISCOVERY_NAMESPACES: (namespaces if isinstance(namespaces, dict) else {}),
         # Ansible's own boolean vocabulary coerces; anything else — e.g. a
         # hand-edited "banana" — degrades to False, never truthy: this flag
         # feeds finalization's legacy discharge branch, which deletes the
@@ -218,9 +224,12 @@ def checkpoint_facts(checkpoint) -> dict:
         KEY_EXPECTED_MANAGED_CLUSTER_COUNT: _coerce_count(count),
         KEY_PRIMARY_HAS_OBSERVABILITY: _coerce_bool(primary_obs),
         KEY_SECONDARY_HAS_OBSERVABILITY: _coerce_bool(secondary_obs),
-        KEY_SAVED_BACKUP_SCHEDULE: saved_schedule if isinstance(saved_schedule, dict) else None,
+        KEY_SAVED_BACKUP_SCHEDULE: (saved_schedule if isinstance(saved_schedule, dict) else None),
         KEY_BACKUP_SCHEDULE_ENABLED_AT: data.get(KEY_BACKUP_SCHEDULE_ENABLED_AT) or "",
         KEY_RESUME_START_PHASE: resume_summary.get(KEY_RESUME_START_PHASE) or "",
+        # Teardown records are mutation authority. Unlike the reporting values above,
+        # malformed state must fail closed through the shared record validator.
+        FACT_TEARDOWN_RECORDS: validated_teardown_records,
     }
 
 

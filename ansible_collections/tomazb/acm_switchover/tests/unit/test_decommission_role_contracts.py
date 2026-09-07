@@ -50,7 +50,12 @@ DECOMMISSION_TASKS_DIR = ROLES_DIR / "decommission" / "tasks"
 #: and a module-level test proving it issues no DELETE in check mode, in the same PR --
 #: the same rule as the harness raising on an unrecognised keyword. PR E adds
 #: ``acm_pod_owner_classify`` on the same terms.
-CHECK_MODE_NATIVE_MODULES = frozenset({"tomazb.acm_switchover.acm_k8s_read_outcome"})
+CHECK_MODE_NATIVE_MODULES = frozenset(
+    {
+        "tomazb.acm_switchover.acm_k8s_read_outcome",
+        "tomazb.acm_switchover.acm_uid_guarded_delete",
+    }
+)
 
 #: The ONLY actions the decommission role may run without a check-mode guard, each
 #: read-only (or, for the RBAC expander, a pure controller-side computation).
@@ -237,7 +242,13 @@ def read_outcome_tasks(tasks: list) -> list:
 
 def checkpoint_writer_tasks(task_files: dict) -> list:
     """Every task in ``task_files`` that enters, exits, or writes checkpoint operational_data."""
-    return [task for tasks in task_files.values() for task in tasks if _CHECKPOINT_WRITER_MODULE in _task_actions(task)]
+    return [
+        task
+        for tasks in task_files.values()
+        for task in tasks
+        if _CHECKPOINT_WRITER_MODULE in _task_actions(task)
+        and not task[_CHECKPOINT_WRITER_MODULE].get("read_facts", False)
+    ]
 
 
 def mutating_tasks(task_files: dict) -> list:
@@ -259,7 +270,9 @@ def mutating_tasks(task_files: dict) -> list:
         task
         for tasks in task_files.values()
         for task in tasks
-        if _task_actions(task) and not set(_task_actions(task)).issubset(_READ_ONLY_ACTIONS)
+        if _task_actions(task)
+        and not set(_task_actions(task)).issubset(_READ_ONLY_ACTIONS)
+        and not (_CHECKPOINT_WRITER_MODULE in task and task[_CHECKPOINT_WRITER_MODULE].get("read_facts") is True)
     ]
 
 
@@ -378,23 +391,13 @@ class TestDecommissionMain:
                 f"{delete_file} (position {delete_idx})"
             )
 
-    def test_observability_deletion_is_conditional(self):
-        """delete_observability.yml must be conditionally included, not always run.
-
-        Not all ACM installations have MultiClusterObservability. Running the delete
-        unconditionally would fail when the namespace does not exist.
-        """
+    def test_observability_substep_always_loads_its_durable_record(self):
+        """A stale discovery flag cannot hide a pending recorded obligation."""
         include_tasks = [t for t in self.tasks if "ansible.builtin.include_tasks" in t]
         obs_includes = [t for t in include_tasks if _include_file(t) == "delete_observability.yml"]
         assert obs_includes, "decommission/tasks/main.yml must include delete_observability.yml"
         for task in obs_includes:
-            assert "when" in task, (
-                "delete_observability.yml include must have a 'when' condition — "
-                "it should only run when observability is present"
-            )
-            assert "has_observability" in _when_text(
-                task
-            ), "delete_observability.yml include must be gated on the effective has_observability flag"
+            assert "when" not in task
 
     def test_managed_clusters_and_mch_are_unconditional_includes(self):
         """delete_managed_clusters.yml and delete_multiclusterhub.yml must always be included."""
@@ -421,79 +424,78 @@ class TestDeleteObservability:
     def test_file_exists(self):
         assert DELETE_OBSERVABILITY.exists(), "decommission/tasks/delete_observability.yml must exist"
 
-    def test_dry_run_announces_without_acting(self):
-        """In dry-run mode, a debug message must announce what would be deleted — no live ops."""
-        debug_tasks = [t for t in self.tasks if "ansible.builtin.debug" in t]
-        dry_run_announce = [t for t in debug_tasks if "dry_run" in _when_text(t) and "==" in _when_text(t)]
-        assert dry_run_announce, (
-            "delete_observability.yml must have a dry-run debug task that announces the deletion "
-            "that would occur without actually running it"
+    def test_delete_goes_through_one_uid_guarded_module(self):
+        """A name-only delete can remove a replacement object under the same name."""
+        guarded = [task for task in self.tasks if "tomazb.acm_switchover.acm_uid_guarded_delete" in task]
+        assert len(guarded) == 1
+        assert not [task for task in self.tasks if task.get("kubernetes.core.k8s", {}).get("state") == "absent"]
+
+    def test_guarded_delete_binds_identity_routing_and_bounds(self):
+        task = next(task for task in self.tasks if "tomazb.acm_switchover.acm_uid_guarded_delete" in task)
+        args = task["tomazb.acm_switchover.acm_uid_guarded_delete"]
+        assert args["api_version"] == "observability.open-cluster-management.io/v1beta2"
+        assert args["kind"] == "MultiClusterObservability"
+        assert args["resource_name"] == "multiclusterobservabilities"
+        assert args["name"] == "observability"
+        assert "expected_uid" in args
+        assert "primary.kubeconfig" in str(args["kubeconfig"])
+        assert "primary.context" in str(args["context"])
+        for timeout in ("request_timeout", "wait_timeout", "wait_sleep"):
+            assert timeout in args
+            assert str(args[timeout]).strip()
+        assert task.get("no_log") is True
+        assert "ansible_check_mode" in str(task.get("check_mode", ""))
+        assert "dry_run" in str(task.get("check_mode", ""))
+
+    def test_every_discovery_backed_read_supplies_a_canonical_resource_name(self):
+        reads = read_outcome_tasks(self.tasks)
+        assert reads
+        allowed = {"multiclusterobservabilities", "pods", "namespaces"}
+        for task in reads:
+            args = task["tomazb.acm_switchover.acm_k8s_read_outcome"]
+            assert args.get("resource_name") in allowed
+
+    def test_mco_inventory_read_fails_closed(self):
+        read = task_named(self.tasks, "Read the source MultiClusterObservability inventory")
+        assert read["tomazb.acm_switchover.acm_k8s_read_outcome"]["read_mode"] == "list"
+        failure = task_named(self.tasks, "Fail closed when the source MCO inventory is unverifiable")
+        when = _when_text(failure)
+        assert "read_status" in when
+        assert "ok" in when
+        assert "kind_not_served" in when
+        assert "not in" in when
+
+    def test_drain_wait_is_selector_scoped_bounded_and_absorbs_no_failure(self):
+        wait = task_named(self.tasks, "Wait for observability pods to terminate")
+        args = wait["tomazb.acm_switchover.acm_k8s_read_outcome"]
+        assert args["read_mode"] == "list"
+        assert args["resource_name"] == "pods"
+        assert args["label_selectors"] == ["{{ _acm_mco_pod_selector }}"]
+        identity = task_named(self.tasks, "Define the fixed MultiClusterObservability teardown identity")
+        assert (
+            identity["ansible.builtin.set_fact"]["_acm_mco_pod_selector"]
+            == "observability.open-cluster-management.io/name=observability"
         )
+        assert "retries" in wait and "delay" in wait and "until" in wait
+        assert wait.get("failed_when") is not False
+        assert "ignore_errors" not in wait
+        assert "default([])" not in str(wait.get("until", ""))
 
-    def test_list_task_skipped_in_dry_run(self):
-        """MultiClusterObservability list (k8s_info) must be guarded by execute mode."""
-        k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        mco_list_tasks = [
-            t
-            for t in k8s_info_tasks
-            if t.get("kubernetes.core.k8s_info", {}).get("kind") == "MultiClusterObservability"
-        ]
-        assert mco_list_tasks, "delete_observability.yml must list MultiClusterObservability resources"
-        for task in mco_list_tasks:
+    def test_every_mco_checkpoint_writer_is_execute_and_check_mode_guarded(self):
+        writers = checkpoint_writer_tasks({"observability": self.tasks})
+        assert writers
+        for task in writers:
             when = _when_text(task)
-            assert (
-                "!= 'dry_run'" in when
-            ), "MCO list task must be guarded by execute-mode check to skip live reads in dry-run"
+            assert "not ansible_check_mode" in when
+            assert "execute" in when
 
-    def test_delete_task_guarded_by_execute_mode(self):
-        """k8s state:absent delete task must not run in dry-run mode."""
-        k8s_tasks = [t for t in self.tasks if "kubernetes.core.k8s" in t and "kubernetes.core.k8s_info" not in t]
-        delete_tasks = [t for t in k8s_tasks if t.get("kubernetes.core.k8s", {}).get("state") == "absent"]
-        assert delete_tasks, "delete_observability.yml must have a delete task (state: absent)"
-        for task in delete_tasks:
-            when = _when_text(task)
-            assert "!= 'dry_run'" in when, (
-                "Delete task must be guarded by execute-mode check — "
-                "accidentally running in dry-run would destroy observability"
-            )
-
-    def test_delete_task_uses_loop(self):
-        """Delete task must use a loop to delete all discovered resources."""
-        k8s_tasks = [t for t in self.tasks if "kubernetes.core.k8s" in t and "kubernetes.core.k8s_info" not in t]
-        delete_tasks = [t for t in k8s_tasks if t.get("kubernetes.core.k8s", {}).get("state") == "absent"]
-        assert delete_tasks
-        for task in delete_tasks:
-            assert "loop" in task, "Delete task must use 'loop' to handle all discovered MCO instances"
-
-    def test_wait_task_has_retries_delay_until(self):
-        """Pod wait task must use polling with retries and delay."""
-        k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        wait_tasks = [t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Pod"]
-        assert wait_tasks, "delete_observability.yml must have a Pod wait task"
-        for task in wait_tasks:
-            assert "retries" in task, "Pod wait must have retries"
-            assert "delay" in task, "Pod wait must have delay"
-            assert "until" in task, "Pod wait must have until condition"
-
-    def test_wait_task_handles_notfound_gracefully(self):
-        """Pod wait task's failed_when must handle NotFound so pod termination is idempotent.
-
-        Pods may be gone before the wait poll runs. A bare failed=true check would cause the
-        wait to fail even when pods are already cleanly terminated (404 = success, not error).
-        """
-        k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        wait_tasks = [t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Pod"]
-        assert wait_tasks
-        for task in wait_tasks:
-            failed_when = task.get("failed_when", "")
-            assert failed_when, "Pod wait task must have a failed_when condition"
-            failed_when_text = (
-                " ".join(str(c) for c in failed_when) if isinstance(failed_when, list) else str(failed_when)
-            )
-            assert "NotFound" in failed_when_text or "not found" in failed_when_text.lower(), (
-                "Pod wait failed_when must allow NotFound responses to be treated as success "
-                "(pods already gone = namespace/resource already cleaned up)"
-            )
+    def test_mco_checkpoint_calls_do_not_own_a_phase_lifecycle(self):
+        calls = checkpoint_writer_tasks({"observability": self.tasks})
+        assert calls
+        for task in calls:
+            args = task[_CHECKPOINT_WRITER_MODULE]
+            assert "phase" not in args
+            assert "status" not in args
 
 
 class TestDeleteManagedClusters:
@@ -639,7 +641,13 @@ def test_summary_status_is_not_hardcoded():
 _HARNESS_TASK_PREFIX = "HARNESS "
 
 _CORE_API_RESOURCES = [
-    {"name": "pods", "singularName": "pod", "namespaced": True, "kind": "Pod", "verbs": ["get", "list", "delete"]},
+    {
+        "name": "pods",
+        "singularName": "pod",
+        "namespaced": True,
+        "kind": "Pod",
+        "verbs": ["get", "list", "delete"],
+    },
     {
         "name": "namespaces",
         "singularName": "namespace",
@@ -765,6 +773,11 @@ class FakeDecommissionAPI:
         namespaces: list,
         delete_status_by_plural: dict,
         read_status_by_plural: dict,
+        pods: Optional[list] = None,
+        named_read_status_by_plural: Optional[dict] = None,
+        retain_after_delete_by_plural: Optional[dict] = None,
+        post_delete_read_status_by_plural: Optional[dict] = None,
+        read_status_sequences_by_plural: Optional[dict] = None,
     ):
         self.store: Dict[str, List[dict]] = {
             "multiclusterobservabilities": copy.deepcopy(multiclusterobservabilities),
@@ -772,10 +785,16 @@ class FakeDecommissionAPI:
             "managedclusters": copy.deepcopy(managedclusters),
             "namespaces": copy.deepcopy(namespaces),
             "clusterdeployments": [],
-            "pods": [],
+            "pods": copy.deepcopy(pods or []),
         }
         self.delete_status_by_plural = dict(delete_status_by_plural)
         self.read_status_by_plural = dict(read_status_by_plural)
+        self.named_read_status_by_plural = dict(named_read_status_by_plural or {})
+        self.retain_after_delete_by_plural = dict(retain_after_delete_by_plural or {})
+        self.post_delete_read_status_by_plural = dict(post_delete_read_status_by_plural or {})
+        self.read_status_sequences_by_plural = {
+            plural: list(statuses) for plural, statuses in (read_status_sequences_by_plural or {}).items()
+        }
         self._requests: List[dict] = []
         self._lock = threading.Lock()
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
@@ -800,9 +819,9 @@ class FakeDecommissionAPI:
         self._server.server_close()
         self._thread.join(timeout=5)
 
-    def _record(self, method: str, path: str) -> None:
+    def _record(self, method: str, path: str, **details) -> None:
         with self._lock:
-            self._requests.append({"method": method, "path": path})
+            self._requests.append({"method": method, "path": path, **details})
 
     def _select(self, plural: str, namespace, name):
         items = self.store.get(plural, [])
@@ -820,7 +839,11 @@ class FakeDecommissionAPI:
         if path == "/version":
             return {"major": "1", "minor": "28", "gitVersion": "v1.28.0"}
         if path == "/api":
-            return {"kind": "APIVersions", "versions": ["v1"], "serverAddressByClientCIDRs": []}
+            return {
+                "kind": "APIVersions",
+                "versions": ["v1"],
+                "serverAddressByClientCIDRs": [],
+            }
         if path == "/api/v1":
             return {
                 "kind": "APIResourceList",
@@ -834,7 +857,10 @@ class FakeDecommissionAPI:
                     {
                         "name": group,
                         "versions": [{"groupVersion": f"{group}/{version}", "version": version}],
-                        "preferredVersion": {"groupVersion": f"{group}/{version}", "version": version},
+                        "preferredVersion": {
+                            "groupVersion": f"{group}/{version}",
+                            "version": version,
+                        },
                     }
                     for group, (version, _) in _GROUP_API_RESOURCES.items()
                 ],
@@ -868,7 +894,7 @@ class FakeDecommissionAPI:
 
             def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler API
                 path = self._path()
-                api._record("GET", path)
+                api._record("GET", path, query=urlsplit(self.path).query)
                 payload = api._discovery_payload(path)
                 if payload is not None:
                     self._write_json(payload)
@@ -881,7 +907,14 @@ class FakeDecommissionAPI:
                 if plural not in api.store:
                     self._write_json(_status_body(404, f"unknown resource {plural}"), status=404)
                     return
-                read_status = api.read_status_by_plural.get(plural, 200)
+                if name is None and api.read_status_sequences_by_plural.get(plural):
+                    read_status = api.read_status_sequences_by_plural[plural].pop(0)
+                else:
+                    read_status = (
+                        api.named_read_status_by_plural.get(plural, 200)
+                        if name is not None
+                        else api.read_status_by_plural.get(plural, 200)
+                    )
                 if read_status != 200:
                     self._write_json(
                         _status_body(read_status, f"fixture refused GET of {plural}"),
@@ -906,7 +939,18 @@ class FakeDecommissionAPI:
 
             def do_DELETE(self):  # noqa: N802 - BaseHTTPRequestHandler API
                 path = self._path()
-                api._record("DELETE", path)
+                length = int(self.headers.get("Content-Length", "0"))
+                raw_body = self.rfile.read(length) if length else b"{}"
+                try:
+                    body = json.loads(raw_body.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    body = None
+                expected_uid = (
+                    body.get("preconditions", {}).get("uid")
+                    if isinstance(body, dict) and isinstance(body.get("preconditions"), dict)
+                    else None
+                )
+                api._record("DELETE", path, body=body, expected_uid=expected_uid)
                 parsed = _split_resource_path(path)
                 if parsed is None:
                     self._write_json(_status_body(404, f"unhandled path {path}"), status=404)
@@ -914,15 +958,31 @@ class FakeDecommissionAPI:
                 plural, namespace, name = parsed
                 status = api.delete_status_by_plural.get(plural, 200)
                 if status != 200:
-                    self._write_json(_status_body(status, f"fixture refused DELETE of {plural}/{name}"), status=status)
+                    self._write_json(
+                        _status_body(status, f"fixture refused DELETE of {plural}/{name}"),
+                        status=status,
+                    )
                     return
                 selected = api._select(plural, namespace, name)
                 if not selected:
                     self._write_json(_status_body(404, f"{plural} {name} not found"), status=404)
                     return
                 victim = selected[0]
-                with api._lock:
-                    api.store[plural] = [item for item in api.store[plural] if item is not victim]
+                actual_uid = victim.get("metadata", {}).get("uid")
+                if expected_uid != actual_uid:
+                    self._write_json(
+                        _status_body(
+                            409,
+                            f"UID precondition {expected_uid!r} did not match {actual_uid!r}",
+                        ),
+                        status=409,
+                    )
+                    return
+                if not api.retain_after_delete_by_plural.get(plural, False):
+                    with api._lock:
+                        api.store[plural] = [item for item in api.store[plural] if item is not victim]
+                if plural in api.post_delete_read_status_by_plural:
+                    api.named_read_status_by_plural[plural] = api.post_delete_read_status_by_plural[plural]
                 self._write_json(copy.deepcopy(victim))
 
         return Handler
@@ -965,6 +1025,7 @@ class CallbackModule(CallbackBase):
         entry = {
             "name": task.name or task.action,
             "module": getattr(task, "resolved_action", None) or task.action,
+            "task_args": task.args,
             "changed": bool(changed),
             "skipped": bool(skipped),
             "failed": bool(failed),
@@ -986,7 +1047,13 @@ class CallbackModule(CallbackBase):
         self._emit(result, False, False, True)
 '''
 
-_VALID_OUTCOMES = ("not_requested", "precondition_noop", "completed", "refused", "failed")
+_VALID_OUTCOMES = (
+    "not_requested",
+    "precondition_noop",
+    "completed",
+    "refused",
+    "failed",
+)
 
 
 def _reject_refused(family: str, outcome: str) -> None:
@@ -1007,11 +1074,11 @@ def _conflict(option: str, outcome: str, wanted) -> None:
     raise ValueError(f"{option}={wanted!r} conflicts with the requested outcome {outcome!r}")
 
 
-def _mco_object(name: str) -> dict:
+def _mco_object(name: str, uid: str = "mco-uid-1") -> dict:
     return {
         "apiVersion": "observability.open-cluster-management.io/v1beta2",
         "kind": "MultiClusterObservability",
-        "metadata": {"name": name, "resourceVersion": "1"},
+        "metadata": {"name": name, "uid": uid, "resourceVersion": "1"},
     }
 
 
@@ -1019,7 +1086,11 @@ def _mch_object(name: str) -> dict:
     return {
         "apiVersion": "operator.open-cluster-management.io/v1",
         "kind": "MultiClusterHub",
-        "metadata": {"name": name, "namespace": "open-cluster-management", "resourceVersion": "1"},
+        "metadata": {
+            "name": name,
+            "namespace": "open-cluster-management",
+            "resourceVersion": "1",
+        },
     }
 
 
@@ -1031,6 +1102,19 @@ def _managed_cluster_object(name: str) -> dict:
     }
 
 
+def _observability_pod_object(name: str) -> dict:
+    return {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+            "name": name,
+            "namespace": "open-cluster-management-observability",
+            "resourceVersion": "1",
+            "labels": {"observability.open-cluster-management.io/name": "observability"},
+        },
+    }
+
+
 #: The canonical TWO-HUB operation identity the harness seeds. Built through the real
 #: ``build_operation_identity`` contract rather than hand-written, so a change to the
 #: identity schema is reflected here instead of silently drifting. Named at module
@@ -1038,7 +1122,10 @@ def _managed_cluster_object(name: str) -> dict:
 #: run, which is what section 10.3.7 item 20's "keeps its two-hub checkpoint identity
 #: valid" clause actually requires.
 _HARNESS_TWO_HUB_IDENTITY = build_operation_identity(
-    hubs={"primary": {"context": "primary-hub"}, "secondary": {"context": "secondary-hub"}},
+    hubs={
+        "primary": {"context": "primary-hub"},
+        "secondary": {"context": "secondary-hub"},
+    },
     operation={},
     collection_version="",
     hub_identities={
@@ -1067,6 +1154,14 @@ def run_decommission_role(
     managed_clusters: Optional[List[str]] = None,
     observability_namespace: str = "present",
     observability_read_status: int = 200,
+    mco_inventory: Optional[List[dict]] = None,
+    mco_record: Optional[dict] = None,
+    mco_named_read_status: int = 200,
+    mco_retain_after_delete: bool = False,
+    mco_post_delete_read_status: Optional[int] = None,
+    observability_pods: Optional[List[str]] = None,
+    pod_read_statuses: Optional[List[int]] = None,
+    configured_has_observability: Optional[Union[bool, str]] = None,
     checkpoint_available: bool = True,
     standalone_playbook: bool = False,
     integrated_finalization: bool = False,
@@ -1113,19 +1208,26 @@ def run_decommission_role(
         elif observability_outcome == "precondition_noop":
             if mco_present:
                 _conflict("mco_present", observability_outcome, mco_present)
-            if observability_namespace == "absent":
-                _conflict("observability_namespace", observability_outcome, observability_namespace)
             mco_present = False
+            observability_namespace = "absent"
         else:
             if mco_present is False:
                 _conflict("mco_present", observability_outcome, mco_present)
             if observability_namespace == "absent":
-                _conflict("observability_namespace", observability_outcome, observability_namespace)
+                _conflict(
+                    "observability_namespace",
+                    observability_outcome,
+                    observability_namespace,
+                )
             mco_present = True
             if observability_outcome == "failed":
                 obs_delete_status = 500
     if mco_present is None:
         mco_present = True
+    if configured_has_observability is not None:
+        has_observability = configured_has_observability
+    if mco_inventory is not None and mco_present is not True:
+        raise ValueError("mco_inventory supplies the inventory and requires mco_present=True")
 
     # --- managed cluster family ----------------------------------------------
     managed_clusters_delete_status = 200
@@ -1185,17 +1287,30 @@ def run_decommission_role(
     repo_root = ROLES_DIR.parents[3]
     workspace = pathlib.Path(tempfile.mkdtemp(prefix="acm-decommission-harness-"))
     api = FakeDecommissionAPI(
-        multiclusterobservabilities=[_mco_object("observability")] if mco_present else [],
+        multiclusterobservabilities=(
+            copy.deepcopy(mco_inventory)
+            if mco_inventory is not None
+            else ([_mco_object("observability")] if mco_present else [])
+        ),
         multiclusterhubs=[_mch_object("multiclusterhub")] if mch_present else [],
         managedclusters=[_managed_cluster_object("local-cluster")]
         + [_managed_cluster_object(name) for name in managed_clusters],
         namespaces=namespaces,
+        pods=[_observability_pod_object(name) for name in (observability_pods or [])],
         delete_status_by_plural={
             "multiclusterobservabilities": obs_delete_status,
             "managedclusters": managed_clusters_delete_status,
             "multiclusterhubs": mch_delete_status,
         },
         read_status_by_plural={"multiclusterobservabilities": observability_read_status},
+        named_read_status_by_plural={"multiclusterobservabilities": mco_named_read_status},
+        retain_after_delete_by_plural={"multiclusterobservabilities": mco_retain_after_delete},
+        post_delete_read_status_by_plural=(
+            {"multiclusterobservabilities": mco_post_delete_read_status}
+            if mco_post_delete_read_status is not None
+            else {}
+        ),
+        read_status_sequences_by_plural={"pods": pod_read_statuses or []},
     )
     try:
         kubeconfig = workspace / "primary.kubeconfig"
@@ -1203,7 +1318,13 @@ def run_decommission_role(
 
         summary_path = workspace / "decommission-summary.json"
         checkpoint_path = workspace / "checkpoint.json"
-        seeded_operational_data = {"harness_seed": "unchanged"}
+        seeded_operational_data: Dict[str, Any] = {"harness_seed": "unchanged"}
+        if mco_record is not None:
+            seeded_operational_data["decommission_teardown_records"] = {
+                "observability.open-cluster-management.io/v1beta2/MultiClusterObservability//observability": copy.deepcopy(
+                    mco_record
+                )
+            }
         # A standalone run must establish its own primary-only identity from empty
         # state -- that is the whole acceptance case, and a pre-seeded
         # ``build_operation_identity`` payload is exactly the supplemental-only
@@ -1254,9 +1375,16 @@ def run_decommission_role(
                 encoding="utf-8",
             )
 
-        execution: Dict[str, Any] = {"mode": execution_mode, "report_dir": str(workspace / "artifacts")}
+        execution: Dict[str, Any] = {
+            "mode": execution_mode,
+            "report_dir": str(workspace / "artifacts"),
+        }
         if checkpoint_available:
-            execution["checkpoint"] = {"enabled": True, "backend": "file", "path": str(checkpoint_path)}
+            execution["checkpoint"] = {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_path),
+            }
         vars_payload = {
             "acm_switchover_hubs": {"primary": {"context": "primary-hub", "kubeconfig": str(kubeconfig)}},
             "acm_switchover_execution": execution,
@@ -1435,7 +1563,12 @@ def run_decommission_role(
                 "phases": [
                     entry
                     for entry in records
-                    if entry["module"] == "tomazb.acm_switchover.checkpoint_phase" and not entry["skipped"]
+                    if entry["module"] == "tomazb.acm_switchover.checkpoint_phase"
+                    and not entry["skipped"]
+                    and not {
+                        "read_facts",
+                        "teardown_record",
+                    }.intersection(entry.get("task_args", {}))
                 ],
             },
             "delete_calls": api.delete_calls,
@@ -1683,22 +1816,20 @@ def test_every_standalone_transition_carries_the_explicit_identity_argument():
 
 
 def test_the_shared_role_owns_no_checkpoint_phase_lifecycle():
-    """Architecture, not an oversight: roles/finalization/tasks/handle_old_hub.yml
-    includes this same role from inside a two-hub finalization checkpoint
-    (sections 10.3.5a/10.3.5b), so a role-owned standalone lifecycle would either
-    apply one-hub semantics during an integrated switchover or require the role to
-    infer its caller -- which section 10.3.1 forbids.
-
-    Uses ``all_checkpoint_phase_tasks``, which matches the FQCN and descends into
-    block/rescue/always. ``index_of_task_using(tasks, "checkpoint_phase") == -1``
-    would be a vacuous guard twice over: exact-key matching never matches the short
-    name, so it holds against ANY role content, and a flat walk would miss a
-    transition nested in a block.
-
-    Kill condition: putting any checkpoint_phase task back into the shared role.
-    """
+    """The shared role may write teardown data but owns no caller lifecycle."""
+    calls = []
     for name, tasks in decommission_task_files.items():
-        assert not all_checkpoint_phase_tasks(tasks), f"{name} must not own the standalone phase lifecycle"
+        for task in all_checkpoint_phase_tasks(tasks):
+            calls.append(task)
+            args = task[_CHECKPOINT_WRITER_MODULE]
+            assert args.get("read_facts") is True or "teardown_record" in args, name
+            assert not {
+                "phase",
+                "status",
+                "standalone_decommission_identity",
+                "identity_barrier",
+            }.intersection(args)
+    assert calls, "the MCO teardown must use the existing checkpoint facade for durable data"
 
 
 def test_the_checkpoint_availability_gate_precedes_the_first_teardown_include():
@@ -1966,7 +2097,10 @@ def test_an_established_two_hub_checkpoint_cannot_be_downgraded_into_standalone_
     deleted.
     """
     two_hub = build_operation_identity(
-        hubs={"primary": {"context": "primary-hub"}, "secondary": {"context": "secondary-hub"}},
+        hubs={
+            "primary": {"context": "primary-hub"},
+            "secondary": {"context": "secondary-hub"},
+        },
         operation={},
         collection_version="",
         hub_identities={
@@ -2225,18 +2359,26 @@ def test_actual_change_is_never_derived_from_check_mode():
     assert "not ansible_check_mode" in changed
 
 
-def test_b_stage_publishes_no_prediction():
-    """`would_change` is a separate key and is explicitly false at the B stage."""
+def test_mco_prediction_is_aggregated_separately_from_actual_change():
+    """C4 contributes its fresh per-family prediction to the shared result."""
     publish = task_named(decommission_task_files["main"], "Publish decommission result")
     result = publish["ansible.builtin.set_fact"]["acm_switchover_decommission_result"]
-    assert result["would_change"] is False
+    assert "_acm_mco_would_change" in str(result["would_change"])
 
 
 def test_summary_keeps_its_published_artifact_keys():
     """`phase`, `mode` and `has_observability` are consumed by existing integration tests."""
     publish = task_named(decommission_task_files["main"], "Publish decommission result")
     result = publish["ansible.builtin.set_fact"]["acm_switchover_decommission_result"]
-    for key in ("phase", "mode", "has_observability", "status", "substeps", "changed", "would_change"):
+    for key in (
+        "phase",
+        "mode",
+        "has_observability",
+        "status",
+        "substeps",
+        "changed",
+        "would_change",
+    ):
         assert key in result, f"the published artifact must carry {key!r}"
 
 
@@ -2271,7 +2413,10 @@ def test_a_failed_managed_cluster_substep_fails_the_run():
     result = run_decommission_role(managed_clusters_outcome="failed")
     summary = result["acm_switchover_decommission_result"]
     assert summary["status"] == "fail"
-    assert summary["substeps"] == {"observability": "completed", "managed_clusters": "failed"}
+    assert summary["substeps"] == {
+        "observability": "completed",
+        "managed_clusters": "failed",
+    }
     # The observability delete really happened: a partially torn-down hub is `changed`
     # AND unsuccessful, and the artifact must say both.
     assert summary["changed"] is True
@@ -2343,7 +2488,7 @@ def test_a_skipped_observability_family_is_recorded_as_not_requested():
     assert not [call for call in result["delete_calls"] if "multiclusterobservabilities" in call["path"]]
 
 
-def test_b_stage_check_mode_reports_no_actual_or_speculative_change():
+def test_check_mode_reports_no_actual_change_and_fresh_mco_prediction():
     """A CLEAN preview must report `pass` and exit zero.
 
     The other direction of the F4 honesty rule: an artifact that cries failure on every
@@ -2357,23 +2502,15 @@ def test_b_stage_check_mode_reports_no_actual_or_speculative_change():
     assert summary["status"] == "pass"
     assert result["returncode"] == 0
     assert summary["changed"] is False
-    assert summary["would_change"] is False
+    assert summary["would_change"] is True
     assert not [task for task in result["tasks"] if task["changed"]]
 
 
-def test_b_stage_check_mode_writes_no_checkpoint_or_outcome():
-    """All three conjuncts discriminate now that Task B5 wired the checkpoint phase.
-
-    The role has two ``checkpoint_phase`` transitions, and
-    ``test_a_clean_execute_run_completes_the_decommission_phase_durably`` proves an
-    execute run does write ``completed_phases`` and does run them. So an unguarded
-    transition really would show up here as a non-empty ``phases`` -- this is no
-    longer the inherited placeholder it was at the start of the B stage.
-    """
+def test_check_mode_preserves_operational_data_and_records_no_outcome():
+    """C4 reads durable data in check mode but writes neither records nor outcomes."""
     result = run_decommission_role(check_mode=True)
     checkpoint = result["checkpoint"]
     assert checkpoint["operational_data"] == checkpoint["before_operational_data"]
-    assert checkpoint["phases"] == []
     assert result["acm_switchover_decommission_result"]["substeps"] == {}
 
 

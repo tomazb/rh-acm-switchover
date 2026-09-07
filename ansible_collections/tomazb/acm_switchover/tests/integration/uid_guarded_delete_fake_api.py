@@ -113,6 +113,16 @@ class FakeGuardedDeleteAPI:
                             ],
                         },
                     )
+                if path == f"/apis/{GROUP}/{VERSION}/{PLURAL}":
+                    return self._send(
+                        200,
+                        {
+                            "apiVersion": f"{GROUP}/{VERSION}",
+                            "kind": f"{KIND}List",
+                            "metadata": {"resourceVersion": "1"},
+                            "items": [copy.deepcopy(api.obj)] if api.obj is not None else [],
+                        },
+                    )
                 if path == f"/apis/{GROUP}/{VERSION}/{PLURAL}/observability":
                     if api.obj is None:
                         return self._send(404, {"kind": "Status", "code": 404, "reason": "NotFound"})

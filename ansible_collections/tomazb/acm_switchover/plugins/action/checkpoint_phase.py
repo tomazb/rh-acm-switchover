@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from collections.abc import Mapping
+from copy import deepcopy
 from datetime import datetime, timezone
 
 from ansible.plugins.action import ActionBase
@@ -25,8 +26,10 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint i
     is_unsafe_legacy_checkpoint,
     normalize_operation_identity,
     record_resume_start_phase,
+    record_teardown_phase,
     reset_completed_phases_from,
     should_resume_phase,
+    teardown_records,
     validate_operation_identity,
 )
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (
@@ -79,10 +82,14 @@ class ActionModule(ActionBase):
         super().run(tmp, task_vars)
         task_vars = task_vars or {}
 
-        phase = self._task.args.get("phase", "")
-        status = self._task.args.get("status", "enter")
-        identity_barrier = self._task.args.get("identity_barrier") is True
-        standalone = self._task.args.get("standalone_decommission_identity") is True
+        args = self._task.args
+        if args.get("read_facts") is True or "teardown_record" in args:
+            return self._run_teardown_record_data(task_vars=task_vars)
+
+        phase = args.get("phase", "")
+        status = args.get("status", "enter")
+        identity_barrier = args.get("identity_barrier") is True
+        standalone = args.get("standalone_decommission_identity") is True
 
         # Mutual exclusion is checked before either mode runs: the two establish
         # different identity shapes (two-hub vs primary-only), so a task asking for
@@ -128,6 +135,121 @@ class ActionModule(ActionBase):
             expected_operation_identity=None,
             hub_identities=None,
         )
+
+    def _run_teardown_record_data(self, *, task_vars: dict) -> dict:
+        """Read checkpoint facts or persist one validated teardown record.
+
+        This path owns no phase transition. It preserves the caller's phase,
+        completion list, phase status, and operation identity byte for byte.
+        """
+        args = self._task.args
+        read_facts = args.get("read_facts") is True
+        has_record = "teardown_record" in args
+        if read_facts and has_record:
+            return {
+                "failed": True,
+                "msg": "read_facts and teardown_record are mutually exclusive.",
+            }
+        if any(name in args for name in ("phase", "status", "operational_data")):
+            return {
+                "failed": True,
+                "msg": "Checkpoint fact and teardown-record operations do not accept phase, status, or operational_data.",
+            }
+
+        checkpoint_config = args.get("checkpoint")
+        if not isinstance(checkpoint_config, Mapping):
+            checkpoint_config = {}
+        enabled = bool(checkpoint_config.get("enabled", False))
+        execution = task_vars.get("acm_switchover_execution") or {}
+        execution_mode = execution.get("mode", "dry_run") if isinstance(execution, Mapping) else "dry_run"
+        is_check_mode = getattr(self._play_context, "check_mode", False) is True
+        is_non_mutating = is_check_mode or execution_mode in {"dry_run", "validate"}
+
+        if not enabled:
+            if has_record and not is_non_mutating:
+                return self._missing_operation_identity_failure()
+            return {"changed": False, "checkpoint": {}, "facts": checkpoint_facts({})}
+
+        backend = checkpoint_config.get("backend", CHECKPOINT_BACKEND_FILE)
+        path = checkpoint_config.get("path", CHECKPOINT_DEFAULT_PATH)
+        if backend != CHECKPOINT_BACKEND_FILE:
+            return {
+                "failed": True,
+                "msg": f"Invalid checkpoint backend '{backend}'. Expected: file.",
+            }
+        try:
+            validate_report_artifact_path(path)
+        except ValidationError as exc:
+            return {"failed": True, "msg": str(exc)}
+
+        checkpoint_data = self._load_checkpoint(path, quarantine_corrupt=False)
+        if checkpoint_data.get("failed"):
+            return checkpoint_data
+        try:
+            # This data route supplies mutation authority. Keep the general facts
+            # facade tolerant for reporting callers, but reject malformed persisted
+            # operational_data before exposing an empty record map here.
+            teardown_records(checkpoint_data)
+            facts = checkpoint_facts(checkpoint_data)
+        except ValueError as exc:
+            return {"failed": True, "msg": str(exc)}
+        if read_facts or is_non_mutating:
+            return {"changed": False, "checkpoint": checkpoint_data, "facts": facts}
+
+        if not checkpoint_data.get("operation_identity"):
+            return self._missing_operation_identity_failure()
+        record = args.get("teardown_record")
+        if not isinstance(record, Mapping):
+            return {"failed": True, "msg": "teardown_record must be a mapping."}
+        allowed = {
+            "key",
+            "expected_uid",
+            "phase",
+            "observed_at",
+            "resource_versions",
+            "absence_proofs",
+            "operator_deployment",
+            "operator_identity_unavailable",
+        }
+        unknown = set(record) - allowed
+        if unknown:
+            return {
+                "failed": True,
+                "msg": f"teardown_record carries unknown fields {sorted(unknown)}.",
+            }
+        if any(name not in record for name in ("key", "expected_uid", "phase")):
+            return {
+                "failed": True,
+                "msg": "teardown_record requires key, expected_uid, and phase.",
+            }
+
+        before_operational_data = deepcopy(checkpoint_data.get("operational_data"))
+        try:
+            record_teardown_phase(
+                checkpoint_data,
+                record["key"],
+                record["expected_uid"],
+                record["phase"],
+                observed_at=record.get("observed_at"),
+                resource_versions=record.get("resource_versions"),
+                absence_proofs=record.get("absence_proofs"),
+                operator_deployment=record.get("operator_deployment"),
+                operator_identity_unavailable=record.get("operator_identity_unavailable"),
+            )
+        except ValueError as exc:
+            return {"failed": True, "msg": str(exc)}
+
+        changed = checkpoint_data.get("operational_data") != before_operational_data
+        if changed:
+            checkpoint_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+            save_result = self._save_checkpoint(path, checkpoint_data)
+            if save_result is not None and save_result.get("failed"):
+                return save_result
+        return {
+            "changed": changed,
+            "checkpoint": checkpoint_data,
+            "facts": checkpoint_facts(checkpoint_data),
+        }
 
     def _run_identity_barrier(self, *, tmp, task_vars: dict) -> dict:
         args = self._task.args
@@ -789,7 +911,13 @@ class ActionModule(ActionBase):
             return None
         if any(
             not normalized_identity[field].strip()
-            for field in ("secondary_context", "secondary_cluster_uid", "method", "activation_method", "old_hub_action")
+            for field in (
+                "secondary_context",
+                "secondary_cluster_uid",
+                "method",
+                "activation_method",
+                "old_hub_action",
+            )
         ):
             return None
         if normalized_identity["restore_only"]:

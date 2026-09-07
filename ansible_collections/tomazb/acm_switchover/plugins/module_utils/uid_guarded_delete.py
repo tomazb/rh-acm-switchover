@@ -54,11 +54,12 @@ class GuardedDeleteError(Exception):
     Nothing from the originating exception is interpolated -- see ``safe_api_reason``.
     """
 
-    def __init__(self, reason: str, message: str, stage: str) -> None:
+    def __init__(self, reason: str, message: str, stage: str, *, changed: bool = False) -> None:
         super().__init__(message)
         self.reason = reason
         self.message = message
         self.stage = stage
+        self.changed = changed
 
 
 def normalize_timeout(value: Any, field_name: str, default: int | float) -> int | float:
@@ -95,6 +96,18 @@ def build_dynamic_client(kubeconfig: str, context: str, request_timeout: int | f
         context=context,
     )
     api_client.configuration.timeout = request_timeout
+    original_call_api = api_client.call_api
+
+    def bounded_call_api(*args, **kwargs):
+        # kubernetes-client does not propagate Configuration.timeout through the
+        # dynamic client. Apply the default at this ApiClient instance boundary so
+        # discovery, GET, DELETE, and the absence polls all bound connect and read.
+        # Keep a caller's explicit override intact.
+        if kwargs.get("_request_timeout") is None:
+            kwargs["_request_timeout"] = (request_timeout, request_timeout)
+        return original_call_api(*args, **kwargs)
+
+    api_client.call_api = bounded_call_api
     return DynamicClient(api_client)
 
 
@@ -242,9 +255,11 @@ def run_guarded_delete(
 ) -> dict:
     """The whole state machine: one stage per step, no stage re-deriving another's work.
 
-    ``changed`` is true only after this invocation's DELETE was accepted for the
-    intended UID **and** the bounded absence poll **and** an independent final live
-    absence proof all succeeded. Anything less reports ``changed: false``.
+    A successful result reports ``changed`` only after this invocation's DELETE was
+    accepted for the intended UID, the bounded absence poll completed, and an
+    independent final live proof succeeded. If a later proof fails after the API
+    accepted the DELETE, the raised error carries ``changed=True`` so the caller can
+    report the mutation that already happened.
     """
     if not isinstance(expected_uid, str) or not expected_uid.strip():
         raise GuardedDeleteError(
@@ -285,26 +300,32 @@ def run_guarded_delete(
         }
 
     delete_object(resource, name, namespace, expected_uid)
-    await_absence(
-        resource,
-        name,
-        namespace,
-        expected_uid,
-        wait_timeout,
-        wait_sleep,
-        monotonic=monotonic,
-        sleep=sleep,
-    )
-
-    # One independent live proof. The poll already observed absence, but that is the
-    # poll's own evidence; the deletion boundary requires a separate confirmation
-    # before any completion is recorded.
-    if read_object(resource, name, namespace, stage=STAGE_COMPLETED) is not None:
-        raise GuardedDeleteError(
-            REASON_UNVERIFIABLE,
-            f"{name} reappeared after its absence was observed; completion is unproven.",
-            STAGE_COMPLETED,
+    try:
+        await_absence(
+            resource,
+            name,
+            namespace,
+            expected_uid,
+            wait_timeout,
+            wait_sleep,
+            monotonic=monotonic,
+            sleep=sleep,
         )
+
+        # One independent live proof. The poll already observed absence, but that is the
+        # poll's own evidence; the deletion boundary requires a separate confirmation
+        # before any completion is recorded.
+        if read_object(resource, name, namespace, stage=STAGE_COMPLETED) is not None:
+            raise GuardedDeleteError(
+                REASON_UNVERIFIABLE,
+                f"{name} reappeared after its absence was observed; completion is unproven.",
+                STAGE_COMPLETED,
+            )
+    except GuardedDeleteError as exc:
+        # The API server already accepted this invocation's UID-preconditioned DELETE.
+        # A later proof failure still fails the module, but it cannot erase that change.
+        exc.changed = True
+        raise
 
     return {
         "changed": True,

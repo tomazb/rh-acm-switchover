@@ -96,9 +96,10 @@ EXAMPLES = r"""
 RETURN = r"""
 changed:
   description:
-    - True only after this invocation's delete was accepted for the intended UID and
-      both the bounded absence poll and an independent final live absence proof
-      succeeded. Anything less is false.
+    - A successful result is true only after the intended-UID delete was accepted and
+      both absence proofs succeeded.
+    - A failed result is true when the intended-UID delete was accepted before a later
+      poll or proof failure, so callers can report the mutation that already happened.
   returned: always
   type: bool
 would_change:
@@ -152,7 +153,14 @@ def _argument_spec() -> dict:
     }
 
 
-def _resolve_resource(kubeconfig: str, context: str, request_timeout, api_version: str, kind: str, resource_name: str):
+def _resolve_resource(
+    kubeconfig: str,
+    context: str,
+    request_timeout,
+    api_version: str,
+    kind: str,
+    resource_name: str,
+):
     """Build the explicitly routed client and resolve the target resource.
 
     Kept as its own seam so a resolution failure is classified by the caller rather
@@ -207,7 +215,7 @@ def run_module(module: AnsibleModule) -> None:
             wait_sleep=wait_sleep,
         )
     except GuardedDeleteError as exc:
-        module.fail_json(msg=exc.message, changed=False, reason=exc.reason, stage=exc.stage)
+        module.fail_json(msg=exc.message, changed=exc.changed, reason=exc.reason, stage=exc.stage)
         return
 
     module.exit_json(**result)

@@ -21,6 +21,10 @@ from ansible_collections.tomazb.acm_switchover.tests.integration.argocd_fake_api
     FakeArgoCDHub,
     write_kubeconfig,
 )
+from ansible_collections.tomazb.acm_switchover.tests.integration.uid_guarded_delete_fake_api import (
+    FakeGuardedDeleteAPI,
+    mco_object,
+)
 
 
 @dataclass(frozen=True)
@@ -536,6 +540,19 @@ def run_noncore_fixture(tmp_path):
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
 
+        mco_api = None
+        if fixture_name == "decommission_dry_run.yml":
+            mco_api = FakeGuardedDeleteAPI(mco_object("fixture-mco-uid"))
+            primary = vars_payload["acm_switchover_hubs"]["primary"]
+            kubeconfig_path = tmp_path / "decommission-primary.kubeconfig"
+            write_kubeconfig(
+                kubeconfig_path,
+                context=primary["context"],
+                server=mco_api.url,
+                token="fixture-token",
+            )
+            primary["kubeconfig"] = str(kubeconfig_path)
+
         vars_file = tmp_path / "vars.yml"
         vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))
 
@@ -543,24 +560,28 @@ def run_noncore_fixture(tmp_path):
 
         summary_path = tmp_path / "summary.json"
 
-        completed = subprocess.run(
-            [
-                "ansible-playbook",
-                f"ansible_collections/tomazb/acm_switchover/playbooks/{playbook_name}.yml",
-                "-i",
-                "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
-                "-e",
-                f"@{vars_file}",
-                "-e",
-                f"summary_path={summary_path}",
-            ],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=False,
-            env=env,
-            timeout=300,
-        )
+        try:
+            completed = subprocess.run(
+                [
+                    "ansible-playbook",
+                    f"ansible_collections/tomazb/acm_switchover/playbooks/{playbook_name}.yml",
+                    "-i",
+                    "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
+                    "-e",
+                    f"@{vars_file}",
+                    "-e",
+                    f"summary_path={summary_path}",
+                ],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+                timeout=300,
+            )
+        finally:
+            if mco_api is not None:
+                mco_api.close()
 
         summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
         return completed, summary

@@ -13,10 +13,14 @@ rules run through every case:
 
 from __future__ import annotations
 
+import json
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
+from kubernetes.client import ApiClient, Configuration
 from kubernetes.client.exceptions import ApiException
+from urllib3.response import HTTPResponse
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.uid_guarded_delete import (
     REASON_NOT_FOUND,
@@ -35,7 +39,13 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.uid_guarded_
 
 
 def _obj(uid: str, resource_version: str = "1") -> dict:
-    return {"metadata": {"name": "observability", "uid": uid, "resourceVersion": resource_version}}
+    return {
+        "metadata": {
+            "name": "observability",
+            "uid": uid,
+            "resourceVersion": resource_version,
+        }
+    }
 
 
 class FakeResource:
@@ -144,6 +154,7 @@ def test_a_reappearance_after_observed_absence_is_not_a_completion():
     with pytest.raises(GuardedDeleteError) as exc:
         _run(resource)
     assert exc.value.reason == REASON_UNVERIFIABLE
+    assert exc.value.changed is True
 
 
 # --------------------------------------------------------------------------- identity
@@ -172,7 +183,9 @@ def test_a_replacement_appearing_during_polling_is_fatal_and_survives():
 
 
 @pytest.mark.parametrize("status", [409, 412])
-def test_precondition_failure_is_fatal_and_never_falls_back_to_a_name_only_delete(status):
+def test_precondition_failure_is_fatal_and_never_falls_back_to_a_name_only_delete(
+    status,
+):
     """The server refused because the live object is not the proved one. A retry
     without the precondition would delete whatever is there now -- the exact failure
     the precondition exists to prevent."""
@@ -281,7 +294,11 @@ def test_a_same_uid_object_that_never_disappears_fails_on_a_bounded_budget():
         delete_result={},
     )
     with pytest.raises(GuardedDeleteError) as exc:
-        _run(resource, monotonic=iter([0.0, 0.0, 10.0, 20.0, 30.0, 40.0]).__next__, wait_timeout=10)
+        _run(
+            resource,
+            monotonic=iter([0.0, 0.0, 10.0, 20.0, 30.0, 40.0]).__next__,
+            wait_timeout=10,
+        )
     assert exc.value.reason == REASON_TIMEOUT
 
 
@@ -290,7 +307,9 @@ def test_the_absence_budget_uses_a_monotonic_clock_not_wall_time():
     bounding a destructive operation. Pinned by injecting a clock the test controls."""
     import inspect
 
-    from ansible_collections.tomazb.acm_switchover.plugins.module_utils import uid_guarded_delete
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils import (
+        uid_guarded_delete,
+    )
 
     source = inspect.getsource(uid_guarded_delete.await_absence)
     assert "time.time(" not in source
@@ -302,7 +321,14 @@ def test_the_absence_budget_uses_a_monotonic_clock_not_wall_time():
 
 @pytest.mark.parametrize(
     "kubeconfig,context",
-    [("", "ctx"), ("   ", "ctx"), (None, "ctx"), ("/kc", ""), ("/kc", None), ("/kc", "   ")],
+    [
+        ("", "ctx"),
+        ("   ", "ctx"),
+        (None, "ctx"),
+        ("/kc", ""),
+        ("/kc", None),
+        ("/kc", "   "),
+    ],
 )
 def test_client_construction_refuses_implicit_routing(kubeconfig, context):
     """An ambient fallback would route a delete at whatever cluster the environment
@@ -320,6 +346,9 @@ def test_explicit_kubeconfig_and_context_reach_client_construction(monkeypatch):
     class _ApiClient:
         configuration = _Cfg()
 
+        def call_api(self, *_args, **_kwargs):
+            return {}
+
     def _fake_new_client(**kwargs):
         seen.update(kwargs)
         return _ApiClient()
@@ -334,6 +363,116 @@ def test_explicit_kubeconfig_and_context_reach_client_construction(monkeypatch):
     assert seen["config_file"] == "/tmp/kc"
     assert seen["context"] == "primary-hub"
     assert seen["persist_config"] is False
+
+
+def test_request_timeout_bounds_real_sdk_discovery_get_and_delete(monkeypatch, tmp_path):
+    """The real SDK transport must receive both connect and read timeouts."""
+    api_version = "observability.open-cluster-management.io/v1beta2"
+    group, version = api_version.split("/")
+    resource_path = f"/apis/{api_version}"
+    name_path = f"{resource_path}/multiclusterobservabilities/observability"
+    routes = {
+        "/version": {"major": "1", "minor": "35", "gitVersion": "v1.35.0"},
+        "/apis": {
+            "kind": "APIGroupList",
+            "groups": [
+                {
+                    "name": group,
+                    "versions": [{"groupVersion": api_version, "version": version}],
+                    "preferredVersion": {
+                        "groupVersion": api_version,
+                        "version": version,
+                    },
+                }
+            ],
+        },
+        resource_path: {
+            "kind": "APIResourceList",
+            "groupVersion": api_version,
+            "resources": [
+                {
+                    "name": "multiclusterobservabilities",
+                    "kind": "MultiClusterObservability",
+                    "namespaced": False,
+                    "verbs": ["get", "delete"],
+                }
+            ],
+        },
+        name_path: {
+            "apiVersion": api_version,
+            "kind": "MultiClusterObservability",
+            "metadata": {
+                "name": "observability",
+                "uid": "uid-1",
+                "resourceVersion": "1",
+            },
+        },
+    }
+    configuration = Configuration()
+    configuration.host = "https://timeout.invalid"
+    configuration.verify_ssl = False
+    api_client = ApiClient(configuration)
+    seen = []
+
+    def transport(method, url, **kwargs):
+        path = urlsplit(url).path
+        seen.append(kwargs.get("timeout"))
+        return HTTPResponse(
+            body=json.dumps(routes[path]).encode(),
+            status=200,
+            headers={"Content-Type": "application/json"},
+        )
+
+    import tempfile
+
+    import kubernetes.config as k8s_config
+
+    monkeypatch.setattr(k8s_config, "new_client_from_config", lambda **_kwargs: api_client)
+    monkeypatch.setattr(api_client.rest_client.pool_manager, "request", transport)
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+
+    dynamic = build_dynamic_client("/tmp/kc", "primary-hub", request_timeout=0.5)
+    resource = dynamic.resources.get(
+        api_version=api_version,
+        kind="MultiClusterObservability",
+        name="multiclusterobservabilities",
+    )
+    resource.get(name="observability")
+    resource.delete(
+        name="observability",
+        body={
+            "apiVersion": "v1",
+            "kind": "DeleteOptions",
+            "preconditions": {"uid": "uid-1"},
+        },
+    )
+
+    assert seen
+    assert all(timeout.connect_timeout == 0.5 and timeout.read_timeout == 0.5 for timeout in seen)
+
+
+def test_request_timeout_wrapper_preserves_explicit_sdk_override(monkeypatch):
+    seen = {}
+
+    class _Cfg:
+        timeout = None
+
+    class _ApiClient:
+        configuration = _Cfg()
+
+        def call_api(self, *args, **kwargs):
+            seen["timeout"] = kwargs.get("_request_timeout")
+            return {}
+
+    api_client = _ApiClient()
+    import kubernetes.config as k8s_config
+    import kubernetes.dynamic as k8s_dynamic
+
+    monkeypatch.setattr(k8s_config, "new_client_from_config", lambda **_kwargs: api_client)
+    monkeypatch.setattr(k8s_dynamic, "DynamicClient", lambda client: client)
+    bounded = build_dynamic_client("/tmp/kc", "primary-hub", request_timeout=0.5)
+    bounded.call_api("/version", "GET", _request_timeout=(3, 4))
+    assert seen["timeout"] == (3, 4)
 
 
 # --------------------------------------------------------------------------- redaction
@@ -367,7 +506,12 @@ def test_injected_api_error_content_never_reaches_the_result_or_message(secret):
 
     rendered = f"{exc.value.message} {exc.value.reason} {exc.value.stage} {exc.value}"
     assert secret not in rendered
-    for fragment in ("BEGIN RSA PRIVATE KEY", "Bearer ", "secret-payload-value", "eyJhbGci"):
+    for fragment in (
+        "BEGIN RSA PRIVATE KEY",
+        "Bearer ",
+        "secret-payload-value",
+        "eyJhbGci",
+    ):
         assert fragment not in rendered
 
 
@@ -378,7 +522,13 @@ def test_a_successful_result_carries_only_the_closed_vocabulary():
         delete_result={},
     )
     result = _run(resource)
-    assert set(result) == {"changed", "would_change", "stage", "reason", "resource_version"}
+    assert set(result) == {
+        "changed",
+        "would_change",
+        "stage",
+        "reason",
+        "resource_version",
+    }
 
 
 # --------------------------------------------------------------------------- module wrapper
@@ -438,7 +588,15 @@ def test_routing_and_plural_options_are_required():
     """
     module = _load_module()
     spec = module._argument_spec()
-    for option in ("kubeconfig", "context", "resource_name", "api_version", "kind", "name", "expected_uid"):
+    for option in (
+        "kubeconfig",
+        "context",
+        "resource_name",
+        "api_version",
+        "kind",
+        "name",
+        "expected_uid",
+    ):
         assert spec[option]["required"] is True, f"{option} must be required"
     assert "default" not in spec["kubeconfig"]
     assert "default" not in spec["context"]
@@ -448,7 +606,11 @@ def test_the_module_supports_check_mode(monkeypatch):
     module = _load_module()
     captured: dict = {}
     monkeypatch.setattr(module, "AnsibleModule", _fake_ansible_module(_base_params(), captured))
-    monkeypatch.setattr(module, "_resolve_resource", lambda *a, **k: FakeResource([ApiException(status=404)]))
+    monkeypatch.setattr(
+        module,
+        "_resolve_resource",
+        lambda *a, **k: FakeResource([ApiException(status=404)]),
+    )
     with pytest.raises(SystemExit):
         module.main()
     assert captured["supports_check_mode"] is True
@@ -465,7 +627,13 @@ def test_a_successful_run_exits_with_only_the_closed_result_vocabulary(monkeypat
     monkeypatch.setattr(module, "_resolve_resource", lambda *a, **k: resource)
     with pytest.raises(SystemExit):
         module.main()
-    assert set(captured["exit"]) == {"changed", "would_change", "stage", "reason", "resource_version"}
+    assert set(captured["exit"]) == {
+        "changed",
+        "would_change",
+        "stage",
+        "reason",
+        "resource_version",
+    }
     assert captured["exit"]["changed"] is True
 
 
@@ -481,6 +649,28 @@ def test_a_guarded_delete_failure_fails_the_module_with_the_safe_message(monkeyp
     assert failure["reason"] == REASON_UID_MISMATCH
     assert failure["changed"] is False
     assert "left intact" in failure["msg"]
+
+
+def test_a_failure_after_an_accepted_delete_reports_the_real_change(monkeypatch):
+    """A later proof failure cannot erase the DELETE this invocation accepted."""
+    module = _load_module()
+    captured: dict = {}
+    resource = FakeResource(
+        get_results=[
+            _obj("uid-1"),
+            ApiException(status=404),
+            _obj("uid-1"),
+        ],
+        delete_result={},
+    )
+    monkeypatch.setattr(module, "AnsibleModule", _fake_ansible_module(_base_params(), captured))
+    monkeypatch.setattr(module, "_resolve_resource", lambda *a, **k: resource)
+
+    with pytest.raises(SystemExit):
+        module.main()
+
+    assert captured["fail"]["changed"] is True
+    assert resource.calls == ["get", "delete", "get", "get"]
 
 
 @pytest.mark.parametrize("secret", _SECRETS)
@@ -525,7 +715,11 @@ def test_a_zero_or_negative_poll_interval_is_refused(monkeypatch):
     for bad in (0, -1):
         captured: dict = {}
         resource = FakeResource(get_results=[])
-        monkeypatch.setattr(module, "AnsibleModule", _fake_ansible_module(_base_params(wait_sleep=bad), captured))
+        monkeypatch.setattr(
+            module,
+            "AnsibleModule",
+            _fake_ansible_module(_base_params(wait_sleep=bad), captured),
+        )
         monkeypatch.setattr(module, "_resolve_resource", lambda *a, **k: resource)
         with pytest.raises(SystemExit):
             module.main()

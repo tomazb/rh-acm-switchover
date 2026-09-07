@@ -3,9 +3,13 @@
 
 def test_decommission_dry_run_fixture(run_noncore_fixture):
     completed, summary = run_noncore_fixture("decommission_dry_run.yml", "decommission")
-    assert completed.returncode == 0
+    assert completed.returncode == 0, completed.stdout + completed.stderr
     assert summary["phase"] == "decommission"
     assert summary["mode"] == "dry_run"
+    assert summary["status"] == "pass"
+    assert summary["changed"] is False
+    assert summary["would_change"] is True
+    assert summary["substeps"] == {}
 
 
 def test_discovery_bridge_fixture(run_noncore_fixture):

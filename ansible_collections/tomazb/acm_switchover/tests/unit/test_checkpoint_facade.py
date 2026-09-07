@@ -1,8 +1,19 @@
 """Tests for the named-operation facade over checkpoint dicts (issue #214)."""
 
+import pytest
+
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
+    MalformedTeardownRecord,
     checkpoint_facts,
     record_resume_start_phase,
+    teardown_key,
+)
+
+_MCO_KEY = teardown_key(
+    "observability.open-cluster-management.io/v1beta2",
+    "MultiClusterObservability",
+    None,
+    "observability",
 )
 
 
@@ -34,8 +45,35 @@ def test_checkpoint_facts_reads_named_values():
     assert facts["resume_start_phase"] == "activation"
 
 
+def test_checkpoint_facts_returns_validated_teardown_records():
+    record = {"expected_uid": "mco-uid-1", "phase": "delete_started"}
+    facts = checkpoint_facts({"operational_data": {"decommission_teardown_records": {_MCO_KEY: record}}})
+    assert facts["teardown_records"] == {_MCO_KEY: record}
+
+
+def test_checkpoint_facts_publishes_an_explicit_empty_teardown_record_alias():
+    assert checkpoint_facts({})["teardown_records"] == {}
+
+
+def test_checkpoint_facts_fails_closed_on_a_malformed_teardown_record():
+    with pytest.raises(MalformedTeardownRecord):
+        checkpoint_facts(
+            {
+                "operational_data": {
+                    "decommission_teardown_records": {_MCO_KEY: {"expected_uid": "mco-uid-1", "phase": "banana"}}
+                }
+            }
+        )
+
+
 def test_checkpoint_facts_degrades_malformed_shapes_to_defaults():
-    malformed: tuple = (None, [], {}, {"operational_data": "bogus"}, {"operational_data": {"resume_summary": "bogus"}})
+    malformed: tuple = (
+        None,
+        [],
+        {},
+        {"operational_data": "bogus"},
+        {"operational_data": {"resume_summary": "bogus"}},
+    )
     for checkpoint in malformed:
         facts = checkpoint_facts(checkpoint)
         assert facts["argocd_run_id"] == ""
@@ -60,7 +98,20 @@ def test_auto_import_flag_coerces_ansible_bool_vocabulary_only():
     for truthy in (True, "true", "True", "TRUE", "yes", "on", "1"):
         facts = checkpoint_facts({"operational_data": {"auto_import_strategy_changed": truthy}})
         assert facts["auto_import_strategy_changed"] is True, repr(truthy)
-    for falsy in (False, "false", "False", "no", "off", "0", "banana", 1, 2, [True], {"v": True}, None):
+    for falsy in (
+        False,
+        "false",
+        "False",
+        "no",
+        "off",
+        "0",
+        "banana",
+        1,
+        2,
+        [True],
+        {"v": True},
+        None,
+    ):
         facts = checkpoint_facts({"operational_data": {"auto_import_strategy_changed": falsy}})
         assert facts["auto_import_strategy_changed"] is False, repr(falsy)
 
