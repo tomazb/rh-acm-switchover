@@ -2453,3 +2453,114 @@ class TestStrictAppsReads:
         client = self._client(result=self._object())
         client.get_deployment_strict("multiclusterhub-operator", "open-cluster-management")
         assert client.apps_v1.read_namespaced_deployment.call_args.kwargs["_request_timeout"] == 30
+
+
+@pytest.mark.unit
+class TestPreconditionedDelete:
+    """UID-preconditioned delete: the API server evaluates the UID atomically with the
+    deletion, so the object read and the object deleted cannot diverge.
+
+    This primitive deliberately carries NO ``@api_call`` decorator. The ordinary
+    ``delete_custom_resource`` uses ``@api_call(not_found_value=True)``, which makes an
+    accepted delete and a 404 indistinguishable to the caller -- the imprecision PR B
+    documented and could not fix without this primitive. Here the 404 must be
+    classified, so it must not be swallowed.
+    """
+
+    def test_uid_precondition_is_sent_in_the_delete_body(self, kube_client):
+        kube_client.custom_api.delete_cluster_custom_object = Mock(return_value={})
+        kube_client.delete_custom_resource_preconditioned(
+            "observability.open-cluster-management.io",
+            "v1beta2",
+            "multiclusterobservabilities",
+            "observability",
+            uid="uid-1",
+        )
+        body = kube_client.custom_api.delete_cluster_custom_object.call_args.kwargs["body"]
+        assert body.preconditions.uid == "uid-1"
+        assert body.preconditions.resource_version is None
+
+    def test_resource_version_is_optional_and_omitted_for_r4_03_callers(self, kube_client):
+        kube_client.custom_api.delete_cluster_custom_object = Mock(return_value={})
+        kube_client.delete_custom_resource_preconditioned("g", "v1", "widgets", "w", uid="uid-1", resource_version="77")
+        body = kube_client.custom_api.delete_cluster_custom_object.call_args.kwargs["body"]
+        assert body.preconditions.resource_version == "77"
+
+    def test_namespaced_delete_routes_through_the_namespaced_api_with_the_same_body(self, kube_client):
+        kube_client.custom_api.delete_namespaced_custom_object = Mock(return_value={})
+        kube_client.custom_api.delete_cluster_custom_object = Mock()
+        kube_client.delete_custom_resource_preconditioned("g", "v1", "widgets", "w", uid="uid-1", namespace="ns-1")
+        kube_client.custom_api.delete_cluster_custom_object.assert_not_called()
+        call = kube_client.custom_api.delete_namespaced_custom_object.call_args
+        assert call.kwargs["namespace"] == "ns-1"
+        assert call.kwargs["body"].preconditions.uid == "uid-1"
+
+    @pytest.mark.parametrize("status", [409, 412])
+    def test_precondition_conflict_is_fatal_and_never_retried_unconditionally(self, kube_client, status):
+        """A conflict means the live object is not the one we proved. Retrying without
+        the precondition would delete whatever is there now -- the exact failure the
+        precondition exists to prevent."""
+        from lib.exceptions import PreconditionConflict
+
+        kube_client.custom_api.delete_cluster_custom_object = Mock(
+            side_effect=ApiException(status=status, reason="Conflict")
+        )
+        with pytest.raises(PreconditionConflict):
+            kube_client.delete_custom_resource_preconditioned("g", "v1", "w", "n", uid="uid-1")
+        assert kube_client.custom_api.delete_cluster_custom_object.call_count == 1
+
+    def test_404_at_delete_time_is_surfaced_not_swallowed(self, kube_client):
+        """The caller must run its final live verification rather than assume success."""
+        from lib.exceptions import TargetDisappeared
+
+        kube_client.custom_api.delete_cluster_custom_object = Mock(
+            side_effect=ApiException(status=404, reason="Not Found")
+        )
+        with pytest.raises(TargetDisappeared):
+            kube_client.delete_custom_resource_preconditioned("g", "v1", "w", "n", uid="uid-1")
+
+    def test_other_api_errors_propagate_unchanged(self, kube_client):
+        kube_client.custom_api.delete_cluster_custom_object = Mock(
+            side_effect=ApiException(status=500, reason="Server Error")
+        )
+        with pytest.raises(ApiException):
+            kube_client.delete_custom_resource_preconditioned("g", "v1", "w", "n", uid="uid-1")
+
+    @pytest.mark.parametrize("uid", ["", "   ", None])
+    def test_empty_uid_is_rejected_before_any_request(self, kube_client, uid):
+        from lib.validation import ValidationError
+
+        kube_client.custom_api.delete_cluster_custom_object = Mock()
+        with pytest.raises(ValidationError):
+            kube_client.delete_custom_resource_preconditioned("g", "v1", "w", "n", uid=uid)
+        kube_client.custom_api.delete_cluster_custom_object.assert_not_called()
+
+    def test_dry_run_client_refuses_the_primitive(self, kube_client):
+        """A preview must never reach a delete primitive at all. This raises rather
+        than logging a would-delete line, unlike ``delete_custom_resource``: PR C's
+        callers branch before this point, so arriving here in dry-run is a bug."""
+        from lib.exceptions import FatalError
+
+        kube_client.dry_run = True
+        kube_client.custom_api.delete_cluster_custom_object = Mock()
+        with pytest.raises(FatalError):
+            kube_client.delete_custom_resource_preconditioned("g", "v1", "w", "n", uid="uid-1")
+        kube_client.custom_api.delete_cluster_custom_object.assert_not_called()
+
+    def test_the_primitive_is_undecorated_so_a_404_can_never_be_swallowed(self, kube_client):
+        """Kill condition for the whole class.
+
+        Wrapping this in ``@api_call(not_found_value=True)`` would turn the 404 into a
+        ``True`` return, silently restoring the ambiguity PR B documented. Asserted on
+        the actual decoration rather than on source text: an earlier version of this
+        test grepped the source and failed against its own docstring, which mentions
+        the decorator by name in explaining why it is absent.
+
+        ``api_call`` wraps via ``functools.wraps`` and therefore sets ``__wrapped__``;
+        the decorated neighbour is asserted alongside so this test fails if that
+        detection stops working rather than passing for the wrong reason.
+        """
+        assert not hasattr(KubeClient.delete_custom_resource_preconditioned, "__wrapped__")
+        assert hasattr(
+            KubeClient.delete_custom_resource, "__wrapped__"
+        ), "the decorated neighbour must be detectable, or this guard proves nothing"
