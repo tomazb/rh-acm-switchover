@@ -327,6 +327,9 @@ class Decommission:
                 if noop is not None:
                     return noop
 
+            if record is not None and record.phase is TeardownPhase.COMPLETED:
+                return self._reprove_completed(spec, cr, record)
+
             expected_uid = record.expected_uid if record is not None else self._live_uid(spec, cr)
 
             if cr.status is StrictReadStatus.ITEMS:
@@ -496,6 +499,26 @@ class Decommission:
             # raw body, header, token or client configuration.
             logger.error("%s teardown failed: %s", spec.kind, exc)
             return SubstepExecution(SubstepOutcome.FAILED, changed=changed)
+
+    def _reprove_completed(self, spec: TeardownSpec, cr, record: TeardownRecord) -> SubstepExecution:
+        """Revalidate a completed record without rewriting its immutable evidence."""
+        if cr.status is StrictReadStatus.ITEMS:
+            if self._live_uid(spec, cr) != record.expected_uid:
+                raise SwitchoverError(f"{spec.kind} {spec.name} was replaced; it was left intact")
+            raise SwitchoverError(f"{spec.kind} {spec.name} is still present after its completed teardown")
+
+        namespace = self.primary.get_namespace_strict(spec.drain_namespace)
+        if namespace.status is StrictReadStatus.NAMESPACE_ABSENT:
+            return SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+        if namespace.status is not StrictReadStatus.ITEMS:
+            raise SwitchoverError(f"The {spec.drain_namespace} namespace state is ambiguous")
+
+        pods = self.primary.list_pods_strict(spec.drain_namespace, label_selector=spec.drain_label_selector)
+        if pods.status is not StrictReadStatus.ITEMS:
+            raise SwitchoverError(f"Cannot verify the {spec.drain_namespace} drain")
+        if pods.items:
+            raise SwitchoverError(f"{len(pods.items)} pod(s) still running in {spec.drain_namespace}")
+        return SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
 
     def _precondition_noop(self, spec: TeardownSpec, cr) -> Optional[SubstepExecution]:
         """A clean skip, available only when there is no record at all.
