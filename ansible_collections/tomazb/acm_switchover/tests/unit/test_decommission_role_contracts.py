@@ -1335,6 +1335,9 @@ def run_decommission_role(
                 encoding="utf-8",
             )
 
+        discovery_cache_dir = workspace / "discovery-cache"
+        discovery_cache_dir.mkdir(parents=True, exist_ok=True)
+
         callback_dir = workspace / "callback_plugins"
         callback_dir.mkdir(parents=True, exist_ok=True)
         (callback_dir / "harness_record.py").write_text(_HARNESS_CALLBACK_SOURCE, encoding="utf-8")
@@ -1350,6 +1353,22 @@ def run_decommission_role(
                 "ACM_HARNESS_RECORD_PATH": str(record_path),
                 "ANSIBLE_RETRY_FILES_ENABLED": "0",
                 "PWD": str(repo_root),
+                # Isolate the dynamic client's API discovery cache to THIS run.
+                #
+                # kubernetes.dynamic caches discovery at
+                # `<tempdir>/osrcp-<md5(host)>.json`, keyed by API-server host:port.
+                # The fake API binds an ephemeral port, and when the OS recycles a
+                # port an earlier test used, the new run finds that earlier run's
+                # stale cache in the shared /tmp and skips its `GET /api/v1`
+                # discovery request. That silently changes the recorded API
+                # footprint, which made
+                # `test_the_only_new_api_operation_is_the_primary_kube_system_namespace_get`
+                # pass alone and fail in the full lane.
+                #
+                # An audit that measures real requests has to control what makes
+                # those requests vary; filtering discovery out of the comparison
+                # would defeat the point of measuring it.
+                "TMPDIR": str(discovery_cache_dir),
             }
         )
 
