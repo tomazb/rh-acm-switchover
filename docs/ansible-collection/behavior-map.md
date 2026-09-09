@@ -21,7 +21,7 @@ Source: `lib/`, `modules/`, `scripts/`
 | `modules/post_activation.py` | `roles/post_activation/` | 3 |
 | `modules/finalization.py` | `roles/finalization/` | 3 |
 | `modules/backup_schedule.py` | `roles/finalization/tasks/enable_backups.yml`, `roles/finalization/tasks/repair_backup_schedule_collision.yml` | 3 |
-| `modules/decommission.py` | `roles/decommission/`, with the standalone phase lifecycle in `playbooks/decommission.yml`. The MultiClusterObservability substep's shared phase machine, UID-preconditioned guarded delete, durable per-resource phase records, and destination-observability gate are each mirrored independently — see the guarded-delete row below and the narrative after this table | 6 |
+| `modules/decommission.py` | `roles/decommission/`, with the standalone phase lifecycle in `playbooks/decommission.yml`. The MultiClusterObservability substep's shared phase machine, UID-preconditioned guarded delete, durable per-resource phase records, and destination-observability gate are each mirrored independently — see the guarded-delete row below and the *MultiClusterObservability teardown boundary* paragraph later in [Current-to-Collection Mapping](#current-to-collection-mapping) | 6 |
 | `lib/rbac_validator.py` | `roles/preflight/` validation behavior | 2 |
 | `lib/validation.py` | centralized collection validation layer | 2 |
 | `lib/kube_client.py` legacy readers | stock `kubernetes.core` usage plus later helper code | 2-3 |

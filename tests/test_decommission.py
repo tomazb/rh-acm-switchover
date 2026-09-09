@@ -2572,3 +2572,133 @@ class TestGateCallSiteInThePhaseMachine:
         source = inspect.getsource(decommission_module.Decommission._teardown_resource)
         assert "OBSERVABILITY_TEARDOWN" in source
         assert '"MultiClusterObservability"' not in source
+
+
+@pytest.mark.unit
+class TestARecordedObligationSurvivesStaleDetection:
+    """F1: a persisted MCO teardown record requests the substep on its own.
+
+    Standalone ``--decommission`` re-detects ``has_observability`` live on every run
+    (``acm_switchover.run_decommission``: does the observability namespace exist),
+    and deleting the MultiClusterObservability is exactly what makes that namespace
+    go away. A resume whose DELETE already landed therefore arrives with
+    ``has_observability=False`` and an outstanding drain and final-proof obligation.
+    The collection already ORs the persisted record into ``_acm_mco_requested``
+    (``roles/decommission/tasks/delete_observability.yml``); these pin the Python
+    half of that parity contract, and the last one pins that live detection still
+    governs when there is no record.
+    """
+
+    @staticmethod
+    def _resumed(client, run_record):
+        return Decommission(primary_client=client, has_observability=False, run_record=run_record)
+
+    def test_a_delete_started_record_reloaded_from_disk_finishes_the_obligation(self, tmp_path, mock_primary_client):
+        """The reported defect: run 1 deleted the CR, run 2 sees no observability namespace."""
+        state_path = tmp_path / "resume-state.json"
+        state = StateManager(str(state_path))
+        RunRecord(state).record_teardown_phase(
+            TeardownRecord(key=MCO_KEY, expected_uid="uid-1", phase=TeardownPhase.DELETE_STARTED)
+        )
+        state.flush_state()
+        state._release_run_lock()
+
+        run_record = RunRecord(StateManager(str(state_path)))
+        assert run_record.teardown_record(MCO_KEY).phase is TeardownPhase.DELETE_STARTED
+        client = mock_primary_client
+        client.get_custom_resource_strict = Mock(return_value=_strict("OBJECT_ABSENT"))
+        client.get_namespace_strict = Mock(return_value=_strict("NAMESPACE_ABSENT"))
+
+        result = self._resumed(client, run_record).decommission(interactive=False)
+
+        assert result.substeps["observability"] is SubstepOutcome.COMPLETED
+        assert result.changed is False, "an earlier invocation's delete is not this one's change"
+        assert result.not_attempted == ()
+        client.delete_custom_resource_preconditioned.assert_not_called()
+        record = run_record.teardown_record(MCO_KEY)
+        assert record.phase is TeardownPhase.COMPLETED
+        assert set(record.absence_proofs) == {"target_cr", "drain_namespace"}
+
+    def test_a_drain_pending_record_drains_a_still_present_namespace(self, mock_primary_client, state_manager):
+        """The mid-drain resume: the CR is already gone, the namespace is still there."""
+        run_record = RunRecord(state_manager)
+        run_record.record_teardown_phase(
+            TeardownRecord(key=MCO_KEY, expected_uid="uid-1", phase=TeardownPhase.DRAIN_PENDING)
+        )
+        client = mock_primary_client
+        client.get_custom_resource_strict = Mock(return_value=_strict("OBJECT_ABSENT"))
+        client.get_namespace_strict = Mock(
+            return_value=_strict(
+                "ITEMS",
+                resource={"metadata": {"name": OBSERVABILITY_NAMESPACE}},
+                resource_version="ns-9",
+            )
+        )
+        client.list_pods_strict = Mock(return_value=_strict("ITEMS", items=[], resource_version="pods-9"))
+
+        result = self._resumed(client, run_record).decommission(interactive=False)
+
+        assert result.substeps["observability"] is SubstepOutcome.COMPLETED
+        assert result.changed is False
+        assert result.not_attempted == ()
+        client.delete_custom_resource_preconditioned.assert_not_called()
+        record = run_record.teardown_record(MCO_KEY)
+        assert record.phase is TeardownPhase.COMPLETED
+        assert record.resource_versions == {"drain_namespace": "ns-9", "drain_pods": "pods-9"}
+
+    def test_a_completed_record_is_reproved_live_and_never_rewritten(self, tmp_path, mock_primary_client):
+        """A completed record still requests the substep, and its reproof reads live."""
+        state_path = tmp_path / "completed-state.json"
+        state = StateManager(str(state_path))
+        completed = TeardownRecord(
+            key=MCO_KEY,
+            expected_uid="uid-1",
+            phase=TeardownPhase.COMPLETED,
+            observed_at="2026-09-09T00:00:00+00:00",
+            resource_versions={},
+            absence_proofs={
+                "target_cr": AbsenceProof(proof_type="object_absent", resource_key=MCO_KEY),
+                "drain_namespace": AbsenceProof(
+                    proof_type="namespace_absent",
+                    resource_key=f"v1/Namespace//{OBSERVABILITY_NAMESPACE}",
+                ),
+            },
+        )
+        RunRecord(state).record_teardown_phase(completed)
+        state.flush_state()
+        state._release_run_lock()
+
+        reloaded_state = StateManager(str(state_path))
+        run_record = RunRecord(reloaded_state)
+        before = state_path.read_bytes()
+        client = mock_primary_client
+        client.get_custom_resource_strict = Mock(return_value=_strict("OBJECT_ABSENT"))
+        client.get_namespace_strict = Mock(return_value=_strict("NAMESPACE_ABSENT"))
+        writer = Mock(wraps=run_record.record_teardown_phase)
+        run_record.record_teardown_phase = writer
+
+        result = self._resumed(client, run_record).decommission(interactive=False)
+
+        assert result.substeps["observability"] is SubstepOutcome.COMPLETED
+        assert result.changed is False
+        # `_reprove_completed` proves the absence live rather than trusting the record.
+        assert client.get_custom_resource_strict.call_count == 1
+        assert client.get_namespace_strict.call_count == 1
+        client.delete_custom_resource_preconditioned.assert_not_called()
+        writer.assert_not_called()
+        assert run_record.teardown_record(MCO_KEY) == completed
+        reloaded_state.save_state()
+        assert state_path.read_bytes() == before
+
+    def test_without_a_record_live_detection_still_governs_and_reads_nothing(self, decommission_no_obs):
+        """The pre-existing behaviour must survive: no record means no obligation."""
+        client = decommission_no_obs.primary
+
+        result = decommission_no_obs.decommission(interactive=False)
+
+        assert result.substeps["observability"] is SubstepOutcome.NOT_REQUESTED
+        assert result.succeeded is True
+        client.get_custom_resource_strict.assert_not_called()
+        client.get_namespace_strict.assert_not_called()
+        client.list_pods_strict.assert_not_called()
+        client.delete_custom_resource_preconditioned.assert_not_called()

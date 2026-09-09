@@ -46,14 +46,16 @@ class SubstepExecution:
     requested work, predicted work, a resumed obligation, a precondition noop,
     check mode, or dry run.
 
-    At the B stage ``changed`` means the delete call was accepted by the client,
-    which is as exact as the current primitive allows: ``delete_custom_resource``
-    is declared ``@api_call(not_found_value=True)``, so it returns ``True`` both
-    for a delete the API performed and for a 404 on an already-absent object,
-    and the two are indistinguishable at the call site. A resource someone else
-    removed concurrently can therefore report ``changed=True``. PR C's
-    UID-preconditioned guarded delete reports the precise outcome and closes
-    this; adding that primitive is out of scope for PR B.
+    For the MultiClusterObservability substep ``changed`` is derived from the
+    UID-preconditioned guarded delete's acceptance in THIS invocation: a 404 at the
+    DELETE arrives as ``TargetDisappeared`` and reports ``changed=False``, so a
+    resumed obligation whose delete landed in an earlier run contributes no change
+    even when this one writes ``completed``. The ManagedCluster and
+    MultiClusterHub substeps still call ``delete_custom_resource``, declared
+    ``@api_call(not_found_value=True)``, which returns ``True`` both for a delete
+    the API performed and for a 404 on an already-absent object; for those two the
+    outcomes stay indistinguishable at the call site until PRs D and E move them
+    onto the guarded primitive.
     """
 
     outcome: SubstepOutcome

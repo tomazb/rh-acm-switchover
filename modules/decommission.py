@@ -222,10 +222,36 @@ class Decommission:
         logger.warning("=" * 60)
 
     def _substep_requested(self, substep: str) -> bool:
-        """Whether configuration asks for this substep at all."""
+        """Whether configuration or a durable record asks for this substep at all.
+
+        A persisted teardown record is a request in its own right. Standalone
+        ``--decommission`` re-detects ``has_observability`` live on every run, and the
+        DELETE this machine issues is exactly what makes that detection answer false,
+        so a resume of an interrupted teardown would otherwise skip the drain and the
+        final absence proof it still owes. The collection's ``_acm_mco_requested``
+        carries the same clause (``roles/decommission/tasks/delete_observability.yml``).
+        A completed record counts too: it is re-proved read-only rather than trusted,
+        which is what the collection does for any mapping record.
+        """
         if substep == "observability":
-            return self.has_observability
+            return self.has_observability or self._has_teardown_record(OBSERVABILITY_TEARDOWN)
         return True
+
+    @staticmethod
+    def _teardown_key(spec: TeardownSpec) -> str:
+        """The canonical record key for ``spec``'s fixed identity, derived once.
+
+        The request question and the phase machine both go through this, so they
+        cannot disagree about which record they mean.
+        """
+        return teardown_key(spec.api_version, spec.kind, spec.namespace, spec.name)
+
+    def _has_teardown_record(self, spec: TeardownSpec) -> bool:
+        """Whether a durable teardown record already exists for ``spec``.
+
+        Read-only: nothing here writes, defaults or repairs a record.
+        """
+        return self.run_record.teardown_record(self._teardown_key(spec)) is not None
 
     def _requested_substeps(self) -> tuple[str, ...]:
         return tuple(substep for substep in self._SUBSTEPS if self._substep_requested(substep))
@@ -428,13 +454,16 @@ class Decommission:
         never cleared, so a resumed record whose delete landed earlier contributes
         ``changed=False`` even when this invocation writes ``completed``.
 
-        Unexpected exceptions are deliberately NOT caught. A ``ValidationError`` from
-        the delete primitive means the caller failed to supply a proved identity, and
-        its dry-run refusal means a preview reached a delete primitive; both are bugs,
-        and converting them into a FAILED result would hide a defect behind an
-        operational-looking outcome.
+        A ``ValidationError`` from the delete primitive is deliberately NOT caught: it
+        means the caller failed to supply a proved identity, which is a bug here, and
+        converting it into a FAILED result would hide a defect behind an
+        operational-looking outcome. The primitive's own dry-run refusal is a
+        ``FatalError`` and therefore a ``SwitchoverError``, so the general arm below
+        would report it as FAILED rather than let it propagate. Nothing relies on that:
+        this machine never calls the primitive in a dry run, because the dry-run branch
+        returns before the DELETE.
         """
-        key = teardown_key(spec.api_version, spec.kind, spec.namespace, spec.name)
+        key = self._teardown_key(spec)
         record = self.run_record.teardown_record(key)
         changed = False
 
