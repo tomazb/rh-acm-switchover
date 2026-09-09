@@ -263,7 +263,7 @@ class RBACValidator:
         (
             "observability.open-cluster-management.io",
             "multiclusterobservabilities",
-            ["list", "delete"],
+            ["get", "list", "delete"],
         ),
     ]
 

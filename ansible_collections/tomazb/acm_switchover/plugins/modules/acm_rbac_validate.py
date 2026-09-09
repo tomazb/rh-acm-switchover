@@ -256,7 +256,7 @@ DECOMMISSION_CLUSTER_PERMISSIONS = [
     (
         OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO,
         "multiclusterobservabilities",
-        ["list", "delete"],
+        ["get", "list", "delete"],
     ),
 ]
 

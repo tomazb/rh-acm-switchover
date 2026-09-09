@@ -257,6 +257,7 @@ These resources require ClusterRole and ClusterRoleBinding:
 ### Optional Decommission Extension
 
 Most delete permissions for old-hub teardown are intentionally separated from the default operator role. The baseline operator role includes `delete` on `multiclusterobservabilities` because normal finalization deletes old-hub MCO when observability was detected and the old hub is kept as secondary.
+A standalone decommission run does not carry the baseline operator ClusterRole, so the extension also has to carry the `multiclusterobservabilities` read that the standalone teardown performs.
 
 - **ClusterRole**: `acm-switchover-decommission`
 - **ClusterRoleBinding**: `acm-switchover-decommission`
@@ -264,7 +265,7 @@ Most delete permissions for old-hub teardown are intentionally separated from th
   - `list` on `clusterdeployments` for the just-in-time `preserveOnDelete` decommission safety check
   - `delete` on `managedclusters`
   - `delete` on cluster-scoped `multiclusterhubs`
-  - `delete` on `multiclusterobservabilities` (also present in the baseline operator role for normal finalization)
+  - `get`, `delete` on `multiclusterobservabilities`. `delete` is also present in the baseline operator role for normal finalization. `get` is the strict named read the standalone teardown performs before deletion and again for the final absence proof, and a standalone run has only this extension to satisfy it.
 
 The baseline operator Role includes only `list` on namespaced `multiclusterhubs` in `open-cluster-management`.
 ManagedCluster and MultiClusterHub delete access remains in the opt-in decommission extension so ordinary switchover operators do not receive hub teardown privileges.

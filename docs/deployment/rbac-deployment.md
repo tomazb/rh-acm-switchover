@@ -213,7 +213,10 @@ namespaced `multiclusterhubs` list rule. The baseline ClusterRole includes
 `delete` on `multiclusterobservabilities` for normal finalization cleanup, and
 the optional extension also carries the Hive `clusterdeployments` read used by
 the decommission `preserveOnDelete` safety gate as `list` plus the cluster-scoped delete
-permissions needed to complete decommission.
+permissions needed to complete decommission. The extension grants `get` as well as
+`delete` on `multiclusterobservabilities`: a standalone decommission run does not carry
+the baseline operator ClusterRole, and the observability teardown reads the named
+MultiClusterObservability before deleting it and again for its final absence proof.
 
 #### Step 4: Verify
 
