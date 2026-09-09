@@ -79,6 +79,7 @@ class Finalization:
         manage_auto_import_strategy: bool = False,
         disable_observability_on_secondary: bool = False,  # deprecated, no-op
         restore_only: bool = False,
+        acknowledge_observability_not_migrated: bool = False,
     ):
         # `disable_observability_on_secondary` is deprecated and intentionally
         # unused: old-hub observability cleanup is now driven by detected
@@ -94,6 +95,10 @@ class Finalization:
         self.old_hub_action = old_hub_action  # "secondary", "decommission", or "none"
         self.manage_auto_import_strategy = manage_auto_import_strategy
         self.restore_only = restore_only
+        # Operator acknowledgement that destination observability was never migrated.
+        # CLI validation restricts it to old_hub_action=decommission; it converts one
+        # proven-absent destination block and nothing else.
+        self.acknowledge_observability_not_migrated = acknowledge_observability_not_migrated
         self.backup_manager = BackupScheduleManager(
             secondary_client,
             state_manager,
@@ -1027,6 +1032,8 @@ class Finalization:
             self.primary_has_observability,
             run_record=self.run_record,
             dry_run=self.dry_run,
+            secondary_client=self.secondary,
+            acknowledge_observability_not_migrated=self.acknowledge_observability_not_migrated,
         )
         execution = decommission.teardown_observability(record_gitops_markers=True)
 
@@ -1090,6 +1097,8 @@ class Finalization:
             self.primary_has_observability,
             run_record=self.run_record,
             dry_run=self.dry_run,
+            secondary_client=self.secondary,
+            acknowledge_observability_not_migrated=self.acknowledge_observability_not_migrated,
         )
 
         # Run decommission non-interactively since we're in automated mode

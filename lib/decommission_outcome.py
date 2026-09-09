@@ -19,6 +19,7 @@ Three values make up the contract:
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Optional
 
 
 class SubstepOutcome(Enum):
@@ -57,6 +58,37 @@ class SubstepExecution:
 
     outcome: SubstepOutcome
     changed: bool = False
+
+
+class ObservabilityGateDecision(Enum):
+    """What the destination-observability gate authorizes for THIS invocation."""
+
+    #: The destination is positively present, or its proven absence was acknowledged.
+    PROCEED = "proceed"
+    #: The source is positively absent: there is nothing to delete, so nothing to gate.
+    NOT_APPLICABLE = "not_applicable"
+    BLOCKED = "blocked"
+
+
+@dataclass(frozen=True)
+class ObservabilityGateResult:
+    """One gate evaluation. Never persisted, never cached, never resumed.
+
+    ``reason`` is a stable reason code mirrored into the collection, not a
+    message: it is the only part of the gate that reaches a log or an operator
+    contract, so it can carry no cluster response text.
+    """
+
+    decision: ObservabilityGateDecision
+    reason: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        # A block with no reason is indistinguishable from a bug that blocked
+        # everything, and the two destination reasons must never collapse.
+        if self.decision is ObservabilityGateDecision.BLOCKED and not self.reason:
+            raise ValueError("a blocked gate result must carry a reason code")
+        if self.decision is not ObservabilityGateDecision.BLOCKED and self.reason is not None:
+            raise ValueError(f"{self.decision.value} outcome must not carry a reason code")
 
 
 @dataclass(frozen=True)

@@ -1395,3 +1395,59 @@ class TestErrorHandling:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
+
+
+class TestAcknowledgeObservabilityNotMigratedFlag:
+    """C5: the acknowledgement is only meaningful where a destination hub exists
+    and the old hub is actually being torn down."""
+
+    @staticmethod
+    def _args(**overrides):
+        base = dict(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            activation_method="patch",
+            old_hub_action="decommission",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+            setup=False,
+            restore_only=False,
+            validate_only=False,
+            acknowledge_observability_not_migrated=True,
+        )
+        base.update(overrides)
+        return MockArgs(**base)
+
+    def test_accepted_for_an_integrated_decommission(self):
+        InputValidator.validate_all_cli_args(self._args())
+
+    @pytest.mark.parametrize("old_hub_action", ["secondary", "none"])
+    def test_rejected_for_any_other_old_hub_action(self, old_hub_action):
+        with pytest.raises(ValidationError) as excinfo:
+            InputValidator.validate_all_cli_args(self._args(old_hub_action=old_hub_action))
+        assert "--acknowledge-observability-not-migrated" in str(excinfo.value)
+        assert "--old-hub-action decommission" in str(excinfo.value)
+
+    def test_rejected_for_standalone_decommission_which_has_no_destination(self):
+        with pytest.raises(ValidationError) as excinfo:
+            InputValidator.validate_all_cli_args(self._args(decommission=True))
+        assert "--decommission" in str(excinfo.value)
+
+    def test_rejected_in_validate_only_mode(self):
+        with pytest.raises(ValidationError) as excinfo:
+            InputValidator.validate_all_cli_args(self._args(validate_only=True))
+        assert "--validate-only" in str(excinfo.value)
+
+    def test_rejected_with_restore_only(self):
+        with pytest.raises(ValidationError) as excinfo:
+            InputValidator.validate_all_cli_args(
+                self._args(restore_only=True, primary_context=None, method="full", old_hub_action=None)
+            )
+        assert "--acknowledge-observability-not-migrated" in str(excinfo.value)
+
+    def test_absent_flag_constrains_nothing(self):
+        InputValidator.validate_all_cli_args(
+            self._args(acknowledge_observability_not_migrated=False, old_hub_action="secondary")
+        )

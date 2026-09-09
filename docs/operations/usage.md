@@ -96,6 +96,16 @@ python acm_switchover.py \
 - `decommission`: Remove ACM components from old hub automatically
 - `none`: Leave unchanged for manual handling
 
+**Destination-observability gate.** Before observability is deleted on the old hub, the tool
+re-reads both hubs live and refuses the deletion when the destination hub has no observability
+(metrics continuity would end) or when the destination cannot be read at all. The two refusals are
+never conflated. `--acknowledge-observability-not-migrated` converts only the first one — a
+destination positively proven to have no observability — and is valid only with
+`--old-hub-action decommission`; it is rejected with `--decommission`, `--validate-only`,
+`--restore-only`, and when the gate would pass anyway. It never overrides an unverifiable or
+partially present destination. The gate result is never persisted: every run, including every
+resume and every dry run, re-proves it live.
+
 **Timeline (typical execution):**
 - Pre-flight validation: 2-3 minutes
 - Primary preparation: 1-2 minutes

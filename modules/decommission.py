@@ -19,6 +19,11 @@ from lib.constants import (
     DECOMMISSION_POD_INTERVAL,
     DECOMMISSION_POD_TIMEOUT,
     DELETE_REQUEST_TIMEOUT,
+    GATE_REASON_ACK_NOT_APPLICABLE,
+    GATE_REASON_DESTINATION_ABSENT,
+    GATE_REASON_DESTINATION_UNVERIFIABLE,
+    GATE_REASON_SOURCE_AMBIGUOUS,
+    GATE_REASON_SOURCE_UNVERIFIABLE,
     HIVE_CLUSTERDEPLOYMENT_API_GROUP,
     HIVE_CLUSTERDEPLOYMENT_API_VERSION,
     HIVE_CLUSTERDEPLOYMENT_PLURAL,
@@ -36,6 +41,8 @@ from lib.constants import (
 from lib.decommission_outcome import (
     UNSUCCESSFUL_OUTCOMES,
     DecommissionResult,
+    ObservabilityGateDecision,
+    ObservabilityGateResult,
     SubstepExecution,
     SubstepOutcome,
 )
@@ -114,9 +121,16 @@ class Decommission:
         *,
         run_record: RunRecord,
         dry_run: bool = False,
+        secondary_client: Optional[KubeClient] = None,
+        acknowledge_observability_not_migrated: bool = False,
     ) -> None:
         self.primary = primary_client
         self.has_observability = has_observability
+        # The destination hub, present only for an integrated switchover. Standalone
+        # decommission has no destination, so the July section 4 gate is not called at
+        # all rather than called and defaulted.
+        self.secondary = secondary_client
+        self.acknowledge_observability_not_migrated = acknowledge_observability_not_migrated
         # Keyword-only and required on purpose: a default would let a caller
         # silently opt out of the durable channel. This task opens the channel;
         # it writes no teardown record through it yet.
@@ -299,6 +313,98 @@ class Decommission:
         """
         return self._teardown_resource(OBSERVABILITY_TEARDOWN, record_gitops_markers=record_gitops_markers)
 
+    def destination_observability_gate(self) -> ObservabilityGateResult:
+        """July section 4: may source observability be deleted at all right now?
+
+        Takes no arguments and reads nothing from state. Every input is a fresh
+        live read on both hubs, because the preflight ``primary_has_observability``
+        boolean and any earlier gate answer describe a cluster as it was, and this
+        decision authorizes a deletion happening now. The result is returned, never
+        persisted and never cached, so a resume re-proves it (section 13).
+
+        Called only for the MCO spec and only when a destination client exists.
+        """
+        spec = OBSERVABILITY_TEARDOWN
+        source_cr = self.primary.get_custom_resource_strict(
+            group=spec.group,
+            version=spec.version,
+            plural=spec.plural,
+            name=spec.name,
+            namespace=spec.namespace,
+        )
+        source_namespace = self.primary.get_namespace_strict(spec.drain_namespace)
+
+        if StrictReadStatus.ERROR in (source_cr.status, source_namespace.status):
+            # An unverifiable source is never read as "nothing to delete".
+            return self._blocked(GATE_REASON_SOURCE_UNVERIFIABLE, "the source hub's observability state")
+
+        if source_cr.proves_absence and source_namespace.status is StrictReadStatus.NAMESPACE_ABSENT:
+            logger.info(
+                "No %s and no %s namespace on the source hub: the destination gate does not apply",
+                spec.kind,
+                spec.drain_namespace,
+            )
+            return ObservabilityGateResult(decision=ObservabilityGateDecision.NOT_APPLICABLE)
+
+        if not (source_cr.status is StrictReadStatus.ITEMS and source_namespace.status is StrictReadStatus.ITEMS):
+            # Half-removed: an absent CRD with a live namespace, or the reverse.
+            return self._blocked(GATE_REASON_SOURCE_AMBIGUOUS, "the source hub's observability state")
+
+        destination_cr = self.secondary.list_custom_resources_strict(
+            group=spec.group,
+            version=spec.version,
+            plural=spec.plural,
+        )
+        destination_namespace = self.secondary.get_namespace_strict(spec.drain_namespace)
+
+        if StrictReadStatus.ERROR in (destination_cr.status, destination_namespace.status):
+            return self._blocked(GATE_REASON_DESTINATION_UNVERIFIABLE, "the destination hub could not be read")
+
+        namespace_present = destination_namespace.status is StrictReadStatus.ITEMS
+        namespace_absent = destination_namespace.status is StrictReadStatus.NAMESPACE_ABSENT
+        # A complete inventory with no items is a positive absence proof; the source's
+        # clean-skip rule is deliberately NOT reused, so nothing here treats a missing
+        # CRD or namespace as harmless.
+        cr_present = destination_cr.status is StrictReadStatus.ITEMS and bool(destination_cr.items)
+        cr_absent = destination_cr.proves_absence or (
+            destination_cr.status is StrictReadStatus.ITEMS and not destination_cr.items
+        )
+
+        if cr_present and namespace_present:
+            if self.acknowledge_observability_not_migrated:
+                return self._blocked(
+                    GATE_REASON_ACK_NOT_APPLICABLE,
+                    "the destination hub already has observability, so there is nothing to acknowledge",
+                )
+            return ObservabilityGateResult(decision=ObservabilityGateDecision.PROCEED)
+
+        if cr_absent and namespace_absent:
+            if self.acknowledge_observability_not_migrated:
+                logger.warning(
+                    "Destination observability is proven absent and the operator acknowledged it: "
+                    "metrics continuity ends with this deletion"
+                )
+                return ObservabilityGateResult(decision=ObservabilityGateDecision.PROCEED)
+            return self._blocked(
+                GATE_REASON_DESTINATION_ABSENT,
+                "the destination hub has no observability, so metrics continuity ends here",
+            )
+
+        # Readable but mixed: this proves neither coherent presence nor complete
+        # absence, so there is no fact to acknowledge. Reported as unverifiable
+        # because nothing about the destination has been established -- the message
+        # says inconsistent state, never a transport failure.
+        return self._blocked(
+            GATE_REASON_DESTINATION_UNVERIFIABLE,
+            "the destination hub's observability is in an inconsistent, partially present state",
+        )
+
+    @staticmethod
+    def _blocked(reason: str, detail: str) -> ObservabilityGateResult:
+        """One blocked result. The code is the contract; the detail is for the log."""
+        logger.error("Destination observability gate blocked the teardown (%s): %s", reason, detail)
+        return ObservabilityGateResult(decision=ObservabilityGateDecision.BLOCKED, reason=reason)
+
     def _teardown_resource(  # noqa: C901 - one linear phase table; splitting it hides the order
         self, spec: TeardownSpec, *, record_gitops_markers: bool
     ) -> SubstepExecution:
@@ -339,6 +445,24 @@ class Decommission:
 
             if record is not None and record.phase is TeardownPhase.COMPLETED:
                 return self._reprove_completed(spec, cr, record)
+
+            # July section 4, at the ruled position: after the clean-skip check and
+            # after the completed dispatch (a completed record has no DELETE to
+            # authorize), and before `expected_uid` -- therefore before any durable
+            # write and before the DELETE, with no mutation in between. Selected by
+            # the spec object, so PRs D and E reuse this machine ungated.
+            if spec is OBSERVABILITY_TEARDOWN and self.secondary is not None:
+                gate = self.destination_observability_gate()
+                if gate.decision is ObservabilityGateDecision.BLOCKED:
+                    # No write has happened yet, in a live run or a preview, so
+                    # `changed` is necessarily false. A predicted blocker is a real
+                    # preview result, which is why dry run takes this path too.
+                    return SubstepExecution(SubstepOutcome.FAILED, changed=False)
+                if gate.decision is ObservabilityGateDecision.NOT_APPLICABLE and record is None:
+                    # The object disappeared between the machine's read and the gate's.
+                    # With a record, NOT_APPLICABLE keeps the record's remaining
+                    # read-only obligations instead: it is not a clean no-op.
+                    return SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
 
             expected_uid = record.expected_uid if record is not None else self._live_uid(spec, cr)
 

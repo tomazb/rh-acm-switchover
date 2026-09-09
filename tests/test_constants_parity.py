@@ -54,6 +54,14 @@ CONSTANT_PAIRS = {
     "STRICT_READ_REASON_INVENTORY_INCOMPLETE": "STRICT_READ_REASON_INVENTORY_INCOMPLETE",
     "STRICT_READ_REASON_MALFORMED_RESPONSE": "STRICT_READ_REASON_MALFORMED_RESPONSE",
     "STRICT_READ_REASON_READ_FAILED": "STRICT_READ_REASON_READ_FAILED",
+    # R4-03 destination-observability gate reason codes (July section 4). Both sides
+    # publish these to operators, so a drift here would make one form factor report a
+    # blocker the other cannot name.
+    "GATE_REASON_DESTINATION_ABSENT": "GATE_REASON_DESTINATION_ABSENT",
+    "GATE_REASON_DESTINATION_UNVERIFIABLE": "GATE_REASON_DESTINATION_UNVERIFIABLE",
+    "GATE_REASON_SOURCE_UNVERIFIABLE": "GATE_REASON_SOURCE_UNVERIFIABLE",
+    "GATE_REASON_SOURCE_AMBIGUOUS": "GATE_REASON_SOURCE_AMBIGUOUS",
+    "GATE_REASON_ACK_NOT_APPLICABLE": "GATE_REASON_ACK_NOT_APPLICABLE",
     # R4-03 strict-read bounds. STRICT_READ_REQUEST_TIMEOUT is deliberately absent: it is
     # collection-only, and its equality with the Python per-instance default is asserted by
     # test_strict_read_bounds_are_mirrored in tests/test_strict_read_parity.py.

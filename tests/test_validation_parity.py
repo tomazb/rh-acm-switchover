@@ -96,6 +96,7 @@ def _python_args(case_input: dict) -> MockArgs:
         argocd_resume_on_failure=bool(argocd.get("resume_on_failure", False)),
         argocd_resume_only=bool(argocd.get("resume_only", False)),
         admin_kubeconfig=operation.get("admin_kubeconfig"),
+        acknowledge_observability_not_migrated=bool(features.get("acknowledge_observability_not_migrated", False)),
     )
 
 

@@ -1034,3 +1034,76 @@ class TestRestoreOnlyFlow:
             "Expected 'RESTORE ALREADY COMPLETED' in log output; got: " + caplog.text
         )
         assert "SWITCHOVER ALREADY COMPLETED" not in caplog.text
+
+
+@pytest.mark.unit
+class TestObservabilityAcknowledgementCliPlumbing:
+    """C5: the acknowledgement flag exists on the CLI and reaches Finalization.
+
+    A flag that parsed but never reached the constructor would silently leave the
+    July section 4 gate unacknowledgeable while appearing supported.
+    """
+
+    _BASE_ARGV = [
+        "script.py",
+        "--primary-context",
+        "p1",
+        "--secondary-context",
+        "p2",
+        "--method",
+        "passive",
+        "--old-hub-action",
+        "decommission",
+    ]
+
+    def test_the_flag_defaults_off(self):
+        from acm_switchover import parse_args
+
+        with patch("sys.argv", self._BASE_ARGV):
+            assert parse_args().acknowledge_observability_not_migrated is False
+
+    def test_the_flag_is_a_store_true_switch(self):
+        from acm_switchover import parse_args
+
+        with patch("sys.argv", self._BASE_ARGV + ["--acknowledge-observability-not-migrated"]):
+            assert parse_args().acknowledge_observability_not_migrated is True
+
+    def test_finalization_receives_the_acknowledgement(self):
+        from argparse import Namespace
+
+        args = Namespace(
+            method="full",
+            dry_run=False,
+            old_hub_action="decommission",
+            restore_only=False,
+            min_managed_clusters=1,
+            acknowledge_observability_not_migrated=True,
+        )
+        state = Mock()
+        state._get_config = Mock(side_effect=lambda key, default=None: default)
+
+        with patch("acm_switchover.Finalization") as finalization_class:
+            finalization_class.return_value.finalize.return_value = True
+            assert _run_phase_finalization(args, state, None, Mock(), Mock()) is True
+
+        assert finalization_class.call_args.kwargs["acknowledge_observability_not_migrated"] is True
+
+    def test_a_missing_attribute_falls_back_to_not_acknowledged(self):
+        """The fallback for a destructive acknowledgement must be the safe direction."""
+        from argparse import Namespace
+
+        args = Namespace(
+            method="full",
+            dry_run=False,
+            old_hub_action="decommission",
+            restore_only=False,
+            min_managed_clusters=1,
+        )
+        state = Mock()
+        state._get_config = Mock(side_effect=lambda key, default=None: default)
+
+        with patch("acm_switchover.Finalization") as finalization_class:
+            finalization_class.return_value.finalize.return_value = True
+            _run_phase_finalization(args, state, None, Mock(), Mock())
+
+        assert finalization_class.call_args.kwargs["acknowledge_observability_not_migrated"] is False

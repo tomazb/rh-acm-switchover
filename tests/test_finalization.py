@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import modules.decommission as decommission_module
 import modules.finalization as finalization_module
 from lib.constants import BACKUP_SCHEDULE_DEFAULT_NAME
-from lib.decommission_outcome import DecommissionResult, SubstepOutcome
+from lib.decommission_outcome import DecommissionResult, SubstepExecution, SubstepOutcome
 from lib.exceptions import SwitchoverError
 from lib.run_record import RunRecord
 from lib.strict_read import StrictReadOutcome, StrictReadStatus
@@ -49,25 +49,56 @@ def create_mock_step_context(is_step_completed_func, mark_step_completed_func):
 
 @pytest.fixture
 def mock_secondary_client():
-    """Create a mock KubeClient for secondary hub."""
-    return Mock()
+    """Create a mock KubeClient for secondary hub.
+
+    Carries the destination-observability reads the integrated teardown's July
+    section 4 gate makes, defaulted to a migrated destination so the gate passes.
+    Tests that need a blocked gate override them.
+    """
+    secondary = Mock()
+    secondary.list_custom_resources_strict.return_value = StrictReadOutcome(
+        status=StrictReadStatus.ITEMS,
+        items=[{"metadata": {"name": "observability", "uid": "destination-uid"}}],
+        resource_version="dest-1",
+    )
+    secondary.get_namespace_strict.return_value = StrictReadOutcome(
+        status=StrictReadStatus.ITEMS,
+        resource={"metadata": {"name": decommission_module.OBSERVABILITY_NAMESPACE}},
+        resource_version="dest-ns-1",
+    )
+    return secondary
 
 
 @pytest.fixture
 def mock_mco_primary():
-    """Strict MCO reads for the shared teardown reached through Finalization."""
+    """Strict MCO reads for the shared teardown reached through Finalization.
+
+    One coherent source hub across the whole sequence: observability is present
+    when the gate re-reads it, and both the CR and its namespace are gone once the
+    delete lands.
+    """
     primary = Mock()
+    mco = StrictReadOutcome(
+        status=StrictReadStatus.ITEMS,
+        resource={
+            "metadata": {"name": "observability", "uid": "uid-1", "labels": {}},
+        },
+    )
     primary.get_custom_resource_strict.side_effect = [
-        StrictReadOutcome(
-            status=StrictReadStatus.ITEMS,
-            resource={
-                "metadata": {"name": "observability", "uid": "uid-1", "labels": {}},
-            },
-        ),
-        StrictReadOutcome(status=StrictReadStatus.OBJECT_ABSENT),
-        StrictReadOutcome(status=StrictReadStatus.OBJECT_ABSENT),
+        mco,  # the phase machine's guarded read
+        mco,  # the destination gate's own fresh source read
+        StrictReadOutcome(status=StrictReadStatus.OBJECT_ABSENT),  # absence poll
+        StrictReadOutcome(status=StrictReadStatus.OBJECT_ABSENT),  # final verification
     ]
-    primary.get_namespace_strict.return_value = StrictReadOutcome(status=StrictReadStatus.NAMESPACE_ABSENT)
+    primary.get_namespace_strict.side_effect = [
+        StrictReadOutcome(  # the gate: source observability is present
+            status=StrictReadStatus.ITEMS,
+            resource={"metadata": {"name": decommission_module.OBSERVABILITY_NAMESPACE}},
+            resource_version="source-ns-1",
+        ),
+        StrictReadOutcome(status=StrictReadStatus.NAMESPACE_ABSENT),  # drain
+        StrictReadOutcome(status=StrictReadStatus.NAMESPACE_ABSENT),  # final verification
+    ]
     primary.delete_custom_resource_preconditioned.return_value = None
     return primary
 
@@ -1473,7 +1504,9 @@ class TestFinalization:
 
         fin._disable_observability_on_old_hub()
 
-        assert primary.get_custom_resource_strict.call_count == 3
+        # Guarded read, the destination gate's own fresh source read, the absence
+        # poll and the final verification.
+        assert primary.get_custom_resource_strict.call_count == 4
         primary.get_custom_resource_strict.assert_called_with(
             group="observability.open-cluster-management.io",
             version="v1beta2",
@@ -1490,10 +1523,16 @@ class TestFinalization:
             namespace=None,
             timeout_seconds=finalization_module.DELETE_REQUEST_TIMEOUT,
         )
+        # The gate's source-namespace read, the drain, and the final verification --
+        # all against the one fixed drain namespace.
         assert primary.get_namespace_strict.call_args_list == [
             call(decommission_module.OBSERVABILITY_NAMESPACE),
             call(decommission_module.OBSERVABILITY_NAMESPACE),
+            call(decommission_module.OBSERVABILITY_NAMESPACE),
         ]
+        # The destination hub is read fresh, through the secondary client only.
+        mock_secondary_client.list_custom_resources_strict.assert_called_once()
+        mock_secondary_client.get_namespace_strict.assert_called_once_with(decommission_module.OBSERVABILITY_NAMESPACE)
         assert mock_wait.call_count == 2
         for wait_call in mock_wait.call_args_list:
             assert wait_call.kwargs["timeout"] == decommission_module.OBSERVABILITY_TERMINATE_TIMEOUT
@@ -1696,6 +1735,9 @@ class TestFinalization:
             primary_client=primary,
             old_hub_action="secondary",
         )
+        # Replace the fixture's staged sequence: here the namespace survives every
+        # read, including the destination gate's source check.
+        primary.get_namespace_strict.side_effect = None
         primary.get_namespace_strict.return_value = StrictReadOutcome(
             status=StrictReadStatus.ITEMS, resource_version="ns-1"
         )
@@ -1731,7 +1773,10 @@ class TestFinalization:
         with patch("modules.decommission.logger") as logger:
             fin._disable_observability_on_old_hub()
 
-        primary.get_custom_resource_strict.assert_called_once_with(
+        # The guarded read plus the destination gate's own source read: a preview
+        # runs the gate for real, because a predicted blocker is a real result.
+        assert primary.get_custom_resource_strict.call_count == 2
+        primary.get_custom_resource_strict.assert_called_with(
             group="observability.open-cluster-management.io",
             version="v1beta2",
             plural="multiclusterobservabilities",
@@ -2312,3 +2357,94 @@ class TestFinalizationBackupOwnershipFallbackIntegration:
         fin._verify_new_backups(timeout=10)
 
         assert RunRecord(state).new_backup() == "acm-managed-clusters-schedule-20260306100000"
+
+
+@pytest.mark.unit
+class TestIntegratedDestinationGateWiring:
+    """C5: both integrated ``Decommission`` constructions carry the destination hub.
+
+    Without the destination client the shared teardown silently degrades to the
+    standalone path, which never runs the July section 4 gate -- the exact failure
+    the gate exists to prevent.
+    """
+
+    def _finalization(self, secondary, state, *, old_hub_action, acknowledge):
+        return Finalization(
+            secondary_client=secondary,
+            state_manager=state,
+            acm_version="2.12.0",
+            primary_client=Mock(),
+            primary_has_observability=True,
+            old_hub_action=old_hub_action,
+            acknowledge_observability_not_migrated=acknowledge,
+        )
+
+    def test_decommission_old_hub_passes_the_destination_client_and_the_acknowledgement(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        fin = self._finalization(
+            mock_secondary_client, mock_state_manager, old_hub_action="decommission", acknowledge=True
+        )
+
+        with patch("modules.finalization.Decommission") as decommission_class:
+            decommission_class.return_value.decommission.return_value = DecommissionResult(
+                substeps={"observability": SubstepOutcome.COMPLETED},
+                not_attempted=(),
+            )
+            fin._decommission_old_hub()
+
+        kwargs = decommission_class.call_args.kwargs
+        assert kwargs["secondary_client"] is mock_secondary_client
+        assert kwargs["acknowledge_observability_not_migrated"] is True
+
+    def test_disable_observability_on_old_hub_passes_the_destination_client_and_the_acknowledgement(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        fin = self._finalization(
+            mock_secondary_client, mock_state_manager, old_hub_action="secondary", acknowledge=False
+        )
+
+        with patch("modules.finalization.Decommission") as decommission_class:
+            decommission_class.return_value.teardown_observability.return_value = SubstepExecution(
+                SubstepOutcome.COMPLETED, changed=True
+            )
+            fin._disable_observability_on_old_hub()
+
+        kwargs = decommission_class.call_args.kwargs
+        assert kwargs["secondary_client"] is mock_secondary_client
+        assert kwargs["acknowledge_observability_not_migrated"] is False
+
+    def test_the_acknowledgement_defaults_off(self, mock_secondary_client, mock_state_manager, mock_backup_manager):
+        """A destructive acknowledgement that defaulted on would gate nothing."""
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=Mock(),
+            old_hub_action="decommission",
+        )
+        assert fin.acknowledge_observability_not_migrated is False
+
+    def test_a_blocked_destination_gate_fails_the_secondary_action_teardown(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager, mock_mco_primary
+    ):
+        """End to end through the real shared teardown: no destination observability
+        means finalization refuses, with its own message context."""
+        mock_secondary_client.list_custom_resources_strict.return_value = StrictReadOutcome.crd_absent(
+            "kind_not_served"
+        )
+        mock_secondary_client.get_namespace_strict.return_value = StrictReadOutcome.namespace_absent(
+            "namespace_not_found"
+        )
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.14.0",
+            primary_client=mock_mco_primary,
+            old_hub_action="secondary",
+        )
+
+        with pytest.raises(SwitchoverError, match="Failed to disable observability on the old hub"):
+            fin._disable_observability_on_old_hub()
+
+        mock_mco_primary.delete_custom_resource_preconditioned.assert_not_called()

@@ -17,12 +17,29 @@ from kubernetes.client.exceptions import ApiException
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import modules.decommission as decommission_module
-from lib.constants import ACM_NAMESPACE, DELETE_REQUEST_TIMEOUT, LOCAL_CLUSTER_NAME, OBSERVABILITY_NAMESPACE
-from lib.decommission_outcome import DecommissionResult, SubstepExecution, SubstepOutcome
+from lib.constants import (
+    ACM_NAMESPACE,
+    DELETE_REQUEST_TIMEOUT,
+    GATE_REASON_ACK_NOT_APPLICABLE,
+    GATE_REASON_DESTINATION_ABSENT,
+    GATE_REASON_DESTINATION_UNVERIFIABLE,
+    GATE_REASON_SOURCE_AMBIGUOUS,
+    GATE_REASON_SOURCE_UNVERIFIABLE,
+    LOCAL_CLUSTER_NAME,
+    OBSERVABILITY_NAMESPACE,
+)
+from lib.decommission_outcome import (
+    DecommissionResult,
+    ObservabilityGateDecision,
+    ObservabilityGateResult,
+    SubstepExecution,
+    SubstepOutcome,
+)
 from lib.exceptions import SwitchoverError, TargetDisappeared
 from lib.kube_client import KubeClient
-from lib.run_record import RunRecord
-from lib.teardown_record import TeardownPhase, TeardownRecord, teardown_key
+from lib.run_record import HubFacts, RunRecord
+from lib.strict_read import StrictReadOutcome
+from lib.teardown_record import AbsenceProof, TeardownPhase, TeardownRecord, teardown_key
 from lib.utils import StateManager
 from lib.waiter import WaitConditionResult
 
@@ -1960,3 +1977,485 @@ class TestSharedTeardownPhaseMachine:
         the real seam instead of decorator-bypassing mocks."""
         source = inspect.getsource(decommission_module.Decommission)
         assert "already gone (404), treating as success" not in source
+
+
+# --------------------------------------------------------------------------- C5 gate
+
+
+class _GateHarness(Decommission):
+    """A ``Decommission`` whose two hubs' strict reads are programmable per test.
+
+    The gate reads four things live; a test that did not program all four would
+    assert against ``Mock`` sentinels rather than against a modeled cluster, so
+    every case below arranges both hubs explicitly.
+    """
+
+    def source(self, *, mco, namespace):
+        self.primary.get_custom_resource_strict = Mock(return_value=mco)
+        self.primary.get_namespace_strict = Mock(return_value=namespace)
+
+    def destination(self, *, mco, namespace):
+        self.secondary.list_custom_resources_strict = Mock(return_value=mco)
+        self.secondary.get_namespace_strict = Mock(return_value=namespace)
+
+    @property
+    def primary_client(self):
+        return self.primary
+
+    @property
+    def secondary_client(self):
+        return self.secondary
+
+
+@pytest.fixture
+def integrated(state_manager):
+    """Integrated teardown: a real RunRecord over a tmp_path StateManager, both hubs."""
+    return _GateHarness(
+        primary_client=Mock(),
+        has_observability=True,
+        run_record=RunRecord(state_manager),
+        secondary_client=Mock(),
+        acknowledge_observability_not_migrated=False,
+    )
+
+
+@pytest.fixture
+def standalone(state_manager):
+    """Standalone decommission: no destination client at all."""
+    return _GateHarness(
+        primary_client=Mock(),
+        has_observability=True,
+        run_record=RunRecord(state_manager),
+    )
+
+
+def _present_source(dec):
+    dec.source(
+        mco=StrictReadOutcome.from_resource(_mco()),
+        namespace=StrictReadOutcome.from_resource({"metadata": {"name": OBSERVABILITY_NAMESPACE}}),
+    )
+
+
+def _present_destination(dec):
+    dec.destination(
+        mco=StrictReadOutcome.from_items([{"metadata": {"uid": "d"}}]),
+        namespace=StrictReadOutcome.from_resource({"metadata": {"name": OBSERVABILITY_NAMESPACE}}),
+    )
+
+
+def _absent_destination(dec):
+    dec.destination(
+        mco=StrictReadOutcome.crd_absent("kind_not_served"),
+        namespace=StrictReadOutcome.namespace_absent("namespace_not_found"),
+    )
+
+
+@pytest.mark.unit
+class TestDestinationObservabilityGate:
+    """July section 4 / plan C5: the fresh, stateless destination gate."""
+
+    def test_destination_present_passes_without_the_flag(self, integrated):
+        integrated.source(
+            mco=StrictReadOutcome.from_items([{"metadata": {"uid": "u"}}]),
+            namespace=StrictReadOutcome.from_resource({"metadata": {"name": "ns"}}),
+        )
+        integrated.destination(
+            mco=StrictReadOutcome.from_items([{"metadata": {"uid": "d"}}]),
+            namespace=StrictReadOutcome.from_resource({"metadata": {"name": "ns"}}),
+        )
+        assert integrated.destination_observability_gate().decision is ObservabilityGateDecision.PROCEED
+
+    def test_destination_positively_absent_blocks_without_the_flag(self, integrated):
+        integrated.source(
+            mco=StrictReadOutcome.from_items([{"metadata": {"uid": "u"}}]),
+            namespace=StrictReadOutcome.from_resource({"metadata": {"name": "ns"}}),
+        )
+        integrated.destination(
+            mco=StrictReadOutcome.crd_absent("kind_not_served"),
+            namespace=StrictReadOutcome.namespace_absent("namespace_not_found"),
+        )
+        result = integrated.destination_observability_gate()
+        assert result.decision is ObservabilityGateDecision.BLOCKED
+        assert result.reason == GATE_REASON_DESTINATION_ABSENT
+
+    def test_destination_positively_absent_proceeds_with_the_flag(self, integrated):
+        integrated.acknowledge_observability_not_migrated = True
+        integrated.source(
+            mco=StrictReadOutcome.from_items([{"metadata": {"uid": "u"}}]),
+            namespace=StrictReadOutcome.from_resource({"metadata": {"name": "ns"}}),
+        )
+        integrated.destination(
+            mco=StrictReadOutcome.crd_absent("kind_not_served"),
+            namespace=StrictReadOutcome.namespace_absent("namespace_not_found"),
+        )
+        assert integrated.destination_observability_gate().decision is ObservabilityGateDecision.PROCEED
+
+    def test_destination_unverifiable_blocks_even_with_the_flag(self, integrated):
+        integrated.acknowledge_observability_not_migrated = True
+        integrated.source(
+            mco=StrictReadOutcome.from_items([{"metadata": {"uid": "u"}}]),
+            namespace=StrictReadOutcome.from_resource({"metadata": {"name": "ns"}}),
+        )
+        integrated.destination(
+            mco=StrictReadOutcome.error("read_failed"),
+            namespace=StrictReadOutcome.error("read_failed"),
+        )
+        result = integrated.destination_observability_gate()
+        assert result.decision is ObservabilityGateDecision.BLOCKED
+        assert result.reason == GATE_REASON_DESTINATION_UNVERIFIABLE
+
+    def test_the_two_blocking_reasons_are_distinguishable(self, integrated):
+        integrated.source(
+            mco=StrictReadOutcome.from_items([{"metadata": {"uid": "u"}}]),
+            namespace=StrictReadOutcome.from_resource({"metadata": {"name": "ns"}}),
+        )
+        integrated.destination(
+            mco=StrictReadOutcome.crd_absent("kind_not_served"),
+            namespace=StrictReadOutcome.namespace_absent("namespace_not_found"),
+        )
+        absent = integrated.destination_observability_gate().reason
+        integrated.destination(
+            mco=StrictReadOutcome.error("read_failed"),
+            namespace=StrictReadOutcome.error("read_failed"),
+        )
+        unverifiable = integrated.destination_observability_gate().reason
+        assert absent != unverifiable
+
+    def test_flag_is_rejected_when_the_gate_would_pass_anyway(self, integrated):
+        integrated.acknowledge_observability_not_migrated = True
+        integrated.source(
+            mco=StrictReadOutcome.from_items([{"metadata": {"uid": "u"}}]),
+            namespace=StrictReadOutcome.from_resource({"metadata": {"name": "ns"}}),
+        )
+        integrated.destination(
+            mco=StrictReadOutcome.from_items([{"metadata": {"uid": "d"}}]),
+            namespace=StrictReadOutcome.from_resource({"metadata": {"name": "ns"}}),
+        )
+        result = integrated.destination_observability_gate()
+        assert result.decision is ObservabilityGateDecision.BLOCKED
+        assert result.reason == GATE_REASON_ACK_NOT_APPLICABLE
+
+    def test_source_is_re_read_fresh_and_the_preflight_boolean_is_not_consulted(self, integrated):
+        integrated.run_record.record_hub_facts(HubFacts(primary_has_observability=False))
+        integrated.source(
+            mco=StrictReadOutcome.from_items([{"metadata": {"uid": "u"}}]),
+            namespace=StrictReadOutcome.from_resource({"metadata": {"name": "ns"}}),
+        )
+        integrated.destination(
+            mco=StrictReadOutcome.from_items([{"metadata": {"uid": "d"}}]),
+            namespace=StrictReadOutcome.from_resource({"metadata": {"name": "ns"}}),
+        )
+        assert integrated.destination_observability_gate().decision is ObservabilityGateDecision.PROCEED
+        assert integrated.primary_client.get_namespace_strict.called
+
+    def test_mixed_source_state_absent_crd_present_namespace_blocks(self, integrated):
+        integrated.source(
+            mco=StrictReadOutcome.crd_absent("kind_not_served"),
+            namespace=StrictReadOutcome.from_resource({"metadata": {"name": "ns"}}),
+        )
+        result = integrated.destination_observability_gate()
+        assert result.decision is ObservabilityGateDecision.BLOCKED
+        assert result.reason == GATE_REASON_SOURCE_AMBIGUOUS
+
+    def test_source_error_never_reads_as_nothing_to_delete(self, integrated):
+        integrated.source(
+            mco=StrictReadOutcome.error("read_failed"),
+            namespace=StrictReadOutcome.error("read_failed"),
+        )
+        result = integrated.destination_observability_gate()
+        assert result.decision is ObservabilityGateDecision.BLOCKED
+        assert result.reason == GATE_REASON_SOURCE_UNVERIFIABLE
+
+    def test_source_positively_absent_is_not_applicable(self, integrated):
+        integrated.source(
+            mco=StrictReadOutcome.crd_absent("kind_not_served"),
+            namespace=StrictReadOutcome.namespace_absent("namespace_not_found"),
+        )
+        assert integrated.destination_observability_gate().decision is ObservabilityGateDecision.NOT_APPLICABLE
+
+    def test_gate_result_is_not_persisted(self, integrated, state_manager, tmp_path):
+        integrated.source(
+            mco=StrictReadOutcome.from_items([{"metadata": {"uid": "u"}}]),
+            namespace=StrictReadOutcome.from_resource({"metadata": {"name": "ns"}}),
+        )
+        integrated.destination(
+            mco=StrictReadOutcome.from_items([{"metadata": {"uid": "d"}}]),
+            namespace=StrictReadOutcome.from_resource({"metadata": {"name": "ns"}}),
+        )
+        integrated.destination_observability_gate()
+
+        snapshot = json.dumps(state_manager.capture_state_snapshot())
+        assert "observability_gate" not in snapshot
+        assert "destination_observability" not in snapshot
+        # The snapshot is an in-memory view; the file is what a later run reads.
+        state_manager.flush_state()
+        persisted = (tmp_path / "state.json").read_text(encoding="utf-8")
+        assert "observability_gate" not in persisted
+        assert "destination_observability" not in persisted
+
+    def test_resume_reruns_the_gate_against_fresh_reads(self, integrated):
+        integrated.source(
+            mco=StrictReadOutcome.from_items([{"metadata": {"uid": "u"}}]),
+            namespace=StrictReadOutcome.from_resource({"metadata": {"name": "ns"}}),
+        )
+        integrated.destination(
+            mco=StrictReadOutcome.from_items([{"metadata": {"uid": "d"}}]),
+            namespace=StrictReadOutcome.from_resource({"metadata": {"name": "ns"}}),
+        )
+        integrated.destination_observability_gate()
+        calls_after_first = integrated.secondary_client.list_custom_resources_strict.call_count
+        integrated.destination_observability_gate()
+        assert integrated.secondary_client.list_custom_resources_strict.call_count > calls_after_first
+
+    def test_standalone_decommission_has_no_destination_gate(self, standalone):
+        """Request level, not just a null client: the gate is never entered at all."""
+        standalone.source(
+            mco=StrictReadOutcome.from_items([{"metadata": {"uid": "u"}}]),
+            namespace=StrictReadOutcome.from_resource({"metadata": {"name": "ns"}}),
+        )
+        with patch.object(
+            standalone,
+            "destination_observability_gate",
+            wraps=standalone.destination_observability_gate,
+        ) as gate, patch.object(decommission_module, "wait_for_condition", return_value=True):
+            standalone.teardown_observability()
+
+        gate.assert_not_called()
+        assert standalone.secondary_client is None
+
+    # ------------------------------------------------------------ decision table
+
+    def test_the_destination_list_uses_the_canonical_mco_plural(self, integrated):
+        _present_source(integrated)
+        _present_destination(integrated)
+        integrated.destination_observability_gate()
+        kwargs = integrated.secondary_client.list_custom_resources_strict.call_args.kwargs
+        assert kwargs["plural"] == "multiclusterobservabilities"
+        assert kwargs["group"] == "observability.open-cluster-management.io"
+        assert kwargs["version"] == "v1beta2"
+
+    def test_an_empty_destination_inventory_is_positive_absence(self, integrated):
+        """An ITEMS list with no items is a complete inventory proving absence."""
+        _present_source(integrated)
+        integrated.destination(
+            mco=StrictReadOutcome.from_items([], resource_version="1"),
+            namespace=StrictReadOutcome.namespace_absent("namespace_not_found"),
+        )
+        result = integrated.destination_observability_gate()
+        assert result.decision is ObservabilityGateDecision.BLOCKED
+        assert result.reason == GATE_REASON_DESTINATION_ABSENT
+
+    @pytest.mark.parametrize(
+        ("dest_mco", "dest_namespace"),
+        [
+            (
+                StrictReadOutcome.from_items([{"metadata": {"uid": "d"}}]),
+                StrictReadOutcome.namespace_absent("namespace_not_found"),
+            ),
+            (
+                StrictReadOutcome.crd_absent("kind_not_served"),
+                StrictReadOutcome.from_resource({"metadata": {"name": "ns"}}),
+            ),
+        ],
+        ids=["cr-present-namespace-absent", "cr-absent-namespace-present"],
+    )
+    def test_a_readable_but_mixed_destination_blocks_as_unverifiable(self, integrated, dest_mco, dest_namespace):
+        """Ruled: mixed proves neither coherent presence nor complete absence, and
+        the acknowledgement has no fact to acknowledge."""
+        integrated.acknowledge_observability_not_migrated = True
+        _present_source(integrated)
+        integrated.destination(mco=dest_mco, namespace=dest_namespace)
+        result = integrated.destination_observability_gate()
+        assert result.decision is ObservabilityGateDecision.BLOCKED
+        assert result.reason == GATE_REASON_DESTINATION_UNVERIFIABLE
+
+    def test_the_ack_never_converts_a_source_block(self, integrated):
+        integrated.acknowledge_observability_not_migrated = True
+        integrated.source(
+            mco=StrictReadOutcome.error("read_failed"),
+            namespace=StrictReadOutcome.error("read_failed"),
+        )
+        result = integrated.destination_observability_gate()
+        assert result.decision is ObservabilityGateDecision.BLOCKED
+        assert result.reason == GATE_REASON_SOURCE_UNVERIFIABLE
+        integrated.secondary_client.list_custom_resources_strict.assert_not_called()
+
+    def test_a_source_block_reads_no_destination(self, integrated):
+        integrated.source(
+            mco=StrictReadOutcome.crd_absent("kind_not_served"),
+            namespace=StrictReadOutcome.from_resource({"metadata": {"name": "ns"}}),
+        )
+        integrated.destination_observability_gate()
+        integrated.secondary_client.list_custom_resources_strict.assert_not_called()
+        integrated.secondary_client.get_namespace_strict.assert_not_called()
+
+    def test_a_blocked_result_always_carries_a_reason(self):
+        with pytest.raises(ValueError):
+            ObservabilityGateResult(decision=ObservabilityGateDecision.BLOCKED)
+
+    def test_the_gate_takes_no_arguments(self):
+        parameters = inspect.signature(Decommission.destination_observability_gate).parameters
+        assert list(parameters) == ["self"]
+
+
+@pytest.mark.unit
+class TestGateCallSiteInThePhaseMachine:
+    """Where the gate sits in ``_teardown_resource``: after the completed dispatch,
+    before ``expected_uid`` and therefore before any write or DELETE."""
+
+    def test_a_blocked_gate_fails_the_substep_before_any_write_or_delete(self, integrated):
+        _present_source(integrated)
+        _absent_destination(integrated)
+        writer = Mock(wraps=integrated.run_record.record_teardown_phase)
+        integrated.run_record.record_teardown_phase = writer
+        integrated.primary.delete_custom_resource_preconditioned = Mock()
+
+        execution = integrated.teardown_observability()
+
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        integrated.primary.delete_custom_resource_preconditioned.assert_not_called()
+        writer.assert_not_called()
+
+    def test_a_blocked_gate_logs_only_the_sanitized_reason_code(self, integrated, caplog):
+        _present_source(integrated)
+        _absent_destination(integrated)
+        with caplog.at_level(logging.ERROR):
+            integrated.teardown_observability()
+        assert GATE_REASON_DESTINATION_ABSENT in caplog.text
+
+    def test_a_passing_gate_lets_the_delete_proceed(self, integrated):
+        integrated.primary.get_custom_resource_strict = Mock(
+            side_effect=[
+                _strict("ITEMS", resource=_mco()),  # phase machine's guarded read
+                _strict("ITEMS", resource=_mco()),  # gate's own fresh source read
+                _strict("OBJECT_ABSENT"),  # absence poll
+                _strict("OBJECT_ABSENT"),  # final verification
+            ]
+        )
+        integrated.primary.get_namespace_strict = Mock(
+            side_effect=[
+                _strict("ITEMS", resource={"metadata": {"name": OBSERVABILITY_NAMESPACE}}),  # gate
+                _strict("NAMESPACE_ABSENT"),  # drain
+                _strict("NAMESPACE_ABSENT"),  # final
+            ]
+        )
+        integrated.primary.delete_custom_resource_preconditioned = Mock(return_value=None)
+        _present_destination(integrated)
+
+        execution = integrated.teardown_observability()
+
+        assert execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
+        integrated.primary.delete_custom_resource_preconditioned.assert_called_once()
+
+    def test_a_nonterminal_record_with_an_absent_source_keeps_its_obligations(self, integrated):
+        """NOT_APPLICABLE is not a clean no-op: the drain and final proof still run,
+        no destination is read, and nothing is deleted."""
+        _seed_record(integrated, phase=TeardownPhase.DELETE_STARTED)
+        integrated.source(
+            mco=StrictReadOutcome.object_absent("object_not_found"),
+            namespace=StrictReadOutcome.namespace_absent("namespace_not_found"),
+        )
+        integrated.primary.delete_custom_resource_preconditioned = Mock()
+        writer = Mock(wraps=integrated.run_record.record_teardown_phase)
+        integrated.run_record.record_teardown_phase = writer
+
+        execution = integrated.teardown_observability()
+
+        assert execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+        integrated.primary.delete_custom_resource_preconditioned.assert_not_called()
+        integrated.secondary_client.list_custom_resources_strict.assert_not_called()
+        integrated.secondary_client.get_namespace_strict.assert_not_called()
+        phases = [written.args[0].phase for written in writer.call_args_list]
+        assert TeardownPhase.CR_ABSENT in phases
+        assert TeardownPhase.DRAINED in phases
+        assert phases[-1] is TeardownPhase.COMPLETED
+
+    def test_a_completed_record_never_reaches_the_gate(self, integrated):
+        """A completed record has no DELETE to authorize, so an unreadable or absent
+        destination cannot change its reproof."""
+        integrated.run_record.record_teardown_phase(
+            TeardownRecord(
+                key=MCO_KEY,
+                expected_uid="uid-1",
+                phase=TeardownPhase.COMPLETED,
+                observed_at="2026-09-09T00:00:00+00:00",
+                resource_versions={},
+                absence_proofs={
+                    "target_cr": AbsenceProof(proof_type="object_absent", resource_key=MCO_KEY),
+                    "drain_namespace": AbsenceProof(
+                        proof_type="namespace_absent",
+                        resource_key=f"v1/Namespace//{OBSERVABILITY_NAMESPACE}",
+                    ),
+                },
+            )
+        )
+        integrated.source(
+            mco=StrictReadOutcome.object_absent("object_not_found"),
+            namespace=StrictReadOutcome.namespace_absent("namespace_not_found"),
+        )
+        _absent_destination(integrated)
+
+        # Request level: the gate must not run at all, not merely reach no
+        # destination read. Moving the call above the completed dispatch is
+        # exactly the edit this catches.
+        with patch.object(
+            integrated,
+            "destination_observability_gate",
+            wraps=integrated.destination_observability_gate,
+        ) as gate:
+            execution = integrated.teardown_observability()
+
+        assert execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+        gate.assert_not_called()
+        integrated.secondary_client.list_custom_resources_strict.assert_not_called()
+        integrated.secondary_client.get_namespace_strict.assert_not_called()
+
+    def test_dry_run_blocked_reports_the_blocker_and_writes_nothing(self, integrated):
+        integrated.dry_run = True
+        _present_source(integrated)
+        _absent_destination(integrated)
+        writer = Mock(wraps=integrated.run_record.record_teardown_phase)
+        integrated.run_record.record_teardown_phase = writer
+        integrated.primary.delete_custom_resource_preconditioned = Mock()
+
+        execution = integrated.teardown_observability()
+
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        writer.assert_not_called()
+        integrated.primary.delete_custom_resource_preconditioned.assert_not_called()
+
+    def test_the_gate_reruns_against_a_record_reloaded_from_disk(self, tmp_path):
+        """A resume reads its obligations from the file, and re-proves the gate live."""
+        state_path = tmp_path / "resume-state.json"
+        state = StateManager(str(state_path))
+        RunRecord(state).record_teardown_phase(
+            TeardownRecord(key=MCO_KEY, expected_uid="uid-1", phase=TeardownPhase.DELETE_STARTED)
+        )
+        state.flush_state()
+        state._release_run_lock()
+
+        reloaded = StateManager(str(state_path))
+        run_record = RunRecord(reloaded)
+        assert run_record.teardown_record(MCO_KEY).phase is TeardownPhase.DELETE_STARTED
+
+        resumed = _GateHarness(
+            primary_client=Mock(),
+            has_observability=True,
+            run_record=run_record,
+            secondary_client=Mock(),
+        )
+        _present_source(resumed)
+        _absent_destination(resumed)
+        resumed.primary.delete_custom_resource_preconditioned = Mock()
+
+        execution = resumed.teardown_observability()
+
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        resumed.primary.delete_custom_resource_preconditioned.assert_not_called()
+        assert run_record.teardown_record(MCO_KEY).phase is TeardownPhase.DELETE_STARTED
+
+    def test_the_gate_is_selected_by_the_teardown_spec_not_a_kind_string(self):
+        """PRs D and E reuse ``_teardown_resource``; only the MCO spec is gated."""
+        source = inspect.getsource(decommission_module.Decommission._teardown_resource)
+        assert "OBSERVABILITY_TEARDOWN" in source
+        assert '"MultiClusterObservability"' not in source
