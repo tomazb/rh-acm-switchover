@@ -31,6 +31,14 @@ options:
     description: Feature flags including Argo CD mode and observability skip.
     required: true
     type: dict
+  decommission:
+    description:
+      - Decommission settings, including
+        C(acknowledge_observability_not_migrated). Optional; an omitted or empty
+        dict validates as if no acknowledgement were set.
+    required: false
+    type: dict
+    default: {}
 """
 
 EXAMPLES = r"""
@@ -40,6 +48,7 @@ EXAMPLES = r"""
     operation: "{{ acm_switchover_operation }}"
     execution: "{{ acm_switchover_execution }}"
     features: "{{ acm_switchover_features }}"
+    decommission: "{{ acm_switchover_decommission | default({}) }}"
   register: validation_result
 """
 
@@ -82,6 +91,7 @@ def build_input_validation_results(params: dict) -> list[dict]:
     operation = params.get("operation", {})
     execution = params.get("execution", {})
     features = params.get("features", {})
+    decommission = params.get("decommission", {})
 
     results: list[dict] = []
 
@@ -237,7 +247,12 @@ def build_input_validation_results(params: dict) -> list[dict]:
 
     # --- Operation combination validation ---
     try:
-        normalized_operation = validate_operation_inputs(operation=operation, features=features, execution=execution)
+        normalized_operation = validate_operation_inputs(
+            operation=operation,
+            features=features,
+            execution=execution,
+            decommission=decommission,
+        )
         results.append(
             _pass_result(
                 "preflight-input-operation",
@@ -275,6 +290,7 @@ def main() -> None:
             "operation": {"type": "dict", "required": True},
             "execution": {"type": "dict", "required": True},
             "features": {"type": "dict", "required": True},
+            "decommission": {"type": "dict", "required": False, "default": {}},
         },
         supports_check_mode=True,
     )

@@ -8,3 +8,7 @@ acm_switchover_decommission:
   confirmed: false
   interactive: false
   has_observability: auto
+  # July section 4. Converts a PROVEN-absent destination observability install into
+  # a proceed, and nothing else: it never overrides an unverifiable or partially
+  # present destination, and it is refused when the gate would pass anyway.
+  acknowledge_observability_not_migrated: false

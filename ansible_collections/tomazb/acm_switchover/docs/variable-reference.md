@@ -211,6 +211,7 @@ Observability will be handled separately.
 | `confirmed` | bool | `false` | Must be `true` to proceed outside `dry_run` mode |
 | `interactive` | bool | `false` | Reserved for future interactive prompting |
 | `has_observability` | `auto`, `true`, `false` | `auto` | Auto-detect `open-cluster-management-observability` by default; `true`/`false` force the observability deletion path on or off. Auto-detection fails closed on API errors; only a successful lookup with no namespace disables Observability deletion/checks. |
+| `acknowledge_observability_not_migrated` | bool | `false` | Converts a *proven absent* destination-hub Observability install into a proceed for the MultiClusterObservability teardown, and nothing else. It never overrides an unverifiable or partially present destination, and it is refused when the gate would pass anyway. Valid only for an integrated switchover with `old_hub_action: decommission`; rejected in validate mode, with `restore_only`, and for the standalone decommission playbook. |
 
 Decommission always re-checks matching Hive `ClusterDeployment` resources before
 live non-local `ManagedCluster` deletion. Matching ClusterDeployments must have

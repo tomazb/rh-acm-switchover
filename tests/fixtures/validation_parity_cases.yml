@@ -353,7 +353,7 @@
       old_hub_action: decommission
     execution:
       mode: execute
-    features:
+    decommission:
       acknowledge_observability_not_migrated: true
   expected:
     passed: true
@@ -368,7 +368,7 @@
       old_hub_action: secondary
     execution:
       mode: execute
-    features:
+    decommission:
       acknowledge_observability_not_migrated: true
   expected:
     passed: false
@@ -384,7 +384,7 @@
       old_hub_action: "none"
     execution:
       mode: execute
-    features:
+    decommission:
       acknowledge_observability_not_migrated: true
   expected:
     passed: false
@@ -400,7 +400,7 @@
       old_hub_action: decommission
     execution:
       mode: validate
-    features:
+    decommission:
       acknowledge_observability_not_migrated: true
   expected:
     passed: false
@@ -416,7 +416,24 @@
       old_hub_action: null
     execution:
       mode: execute
-    features:
+    decommission:
+      acknowledge_observability_not_migrated: true
+  expected:
+    passed: false
+    contains: "acknowledge"
+
+- name: observability acknowledgement rejected for standalone decommission
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: decommission
+      decommission: true
+    execution:
+      mode: execute
+    decommission:
       acknowledge_observability_not_migrated: true
   expected:
     passed: false
@@ -432,7 +449,7 @@
       old_hub_action: secondary
     execution:
       mode: execute
-    features:
+    decommission:
       acknowledge_observability_not_migrated: false
   expected:
     passed: true

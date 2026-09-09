@@ -150,6 +150,36 @@
     - acm_switchover_mco_record is not mapping
     - _acm_mco_initial_namespace.read_status == 'not_found'
 
+# July section 4 at the ruled position: after the no-record clean-skip
+# classification, before the delete_started writer and the guarded delete, so a
+# blocked gate can never follow a durable write or a DELETE. Skipped without a
+# destination hub (standalone decommission) and for a substep that deletes nothing,
+# exactly as Python skips it when `self.secondary is None` or the observability
+# substep is NOT_REQUESTED.
+- name: Gate the teardown on destination observability
+  ansible.builtin.include_tasks: destination_observability_gate.yml
+  when:
+    - acm_switchover_hubs.secondary is defined
+    - _acm_mco_requested | bool
+
+# Finalization's secondary-disposition adapter warns before the delete, mirroring the
+# Python `record_gitops_markers` flag. The standalone decommission role passes
+# nothing, so it warns about nothing.
+- name: Warn that GitOps-managed MultiClusterObservability deletion must be coordinated
+  ansible.builtin.debug:
+    msg: >-
+      MultiClusterObservability {{ item.metadata.name | default('observability') }}
+      may be managed declaratively. Coordinate deletion to avoid GitOps drift if
+      Argo CD or Flux recreates it on the old hub.
+  loop: "{{ acm_switchover_mco_read.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name | default('observability') }}"
+  when:
+    - _acm_mco_warn_gitops | default(false) | bool
+    - not (acm_switchover_features.skip_gitops_check | default(false) | bool)
+    - _acm_mco_requested | bool
+    - _acm_mco_present | bool
+
 - name: Record MultiClusterObservability delete_started
   tomazb.acm_switchover.checkpoint_phase:
     checkpoint: "{{ acm_switchover_execution.checkpoint }}"

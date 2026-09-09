@@ -1,4 +1,20 @@
 ---
+# The secondary-disposition adapter for the old hub's Observability teardown.
+#
+# It owns NO MultiClusterObservability logic of its own: no read, no delete, no drain
+# wait. It delegates to the ONE shared teardown task -- the same phase machine, the
+# same UID-preconditioned guarded delete, the same destination-observability gate --
+# and republishes that task's outcome under the name finalization/main.yml consumes.
+# This is the collection's mirror of Finalization reaching Decommission.teardown_observability().
+#
+# It deliberately does NOT include decommission/tasks/main.yml: that file owns the
+# standalone confirmation gate, the substep dispatch, the summary artifact and the
+# validate-mode refusal, none of which belong inside a finalization phase this role
+# has already entered. `include_role` with `tasks_from` is what makes the decommission
+# role's defaults (including acknowledge_observability_not_migrated) available without
+# running its entry point. The acknowledgement is NOT valid for old_hub_action=secondary
+# and this adapter passes none: validation refuses it outside old_hub_action=decommission.
+
 - name: Initialize old hub observability disable result
   ansible.builtin.set_fact:
     acm_switchover_disable_old_hub_observability_result:
@@ -13,117 +29,47 @@
       for observability pods to terminate.
   when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
 
-- name: Read old hub MultiClusterObservability resources safely
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-  block:
-    - name: Read old hub MultiClusterObservability resources
-      kubernetes.core.k8s_info:
-        api_version: observability.open-cluster-management.io/v1beta2
-        kind: MultiClusterObservability
-        kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-        context: "{{ acm_switchover_hubs.primary.context }}"
-      register: _acm_old_hub_mco_info
-  rescue:
-    - name: Capture old hub MCO read error
-      ansible.builtin.set_fact:
-        _acm_old_hub_mco_read_error: >-
-          {{ ansible_failed_result.msg | default(ansible_failed_result | string) | default('') }}
-
-    - name: Treat absent old hub MCO API as no resources
-      ansible.builtin.set_fact:
-        _acm_old_hub_mco_info:
-          resources: []
-      when: >-
-        'the server doesn\'t have a resource type' in (_acm_old_hub_mco_read_error | lower)
-        or 'could not find the requested resource' in (_acm_old_hub_mco_read_error | lower)
-        or
-        'no matches for kind "multiclusterobservability" in group "observability.open-cluster-management.io"'
-        in (_acm_old_hub_mco_read_error | lower)
-
-    - name: Fail on unexpected old hub MCO read error
-      ansible.builtin.fail:
-        msg: >-
-          Unable to inspect MultiClusterObservability resources on the old hub during finalization:
-          {{ _acm_old_hub_mco_read_error }}
-      when: >-
-        'the server doesn\'t have a resource type' not in (_acm_old_hub_mco_read_error | lower)
-        and 'could not find the requested resource' not in (_acm_old_hub_mco_read_error | lower)
-        and
-        'no matches for kind "multiclusterobservability" in group "observability.open-cluster-management.io"'
-        not in (_acm_old_hub_mco_read_error | lower)
-
-- name: Warn that GitOps-managed MCO deletion must be coordinated
-  ansible.builtin.debug:
-    msg: >-
-      MultiClusterObservability {{ item.metadata.name | default('observability') }}
-      may be managed declaratively. Coordinate deletion to avoid GitOps drift if
-      Argo CD or Flux recreates it on the old secondary hub.
-  loop: "{{ _acm_old_hub_mco_info.resources | default([]) }}"
-  loop_control:
-    label: "{{ item.metadata.name | default('observability') }}"
+# The shared teardown persists its phase records BEFORE it deletes, and its writers
+# refuse without a durable identity map. Saying so here turns an opaque mid-teardown
+# refusal into a configuration error raised before anything is read or deleted.
+- name: Require durable checkpoint state before the old hub observability teardown
+  ansible.builtin.assert:
+    that:
+      - acm_switchover_execution.checkpoint.enabled | default(false) | bool
+    fail_msg: >-
+      Refusing to tear down old hub Observability in execute mode without durable
+      checkpoint state: the MultiClusterObservability identity map must be persisted
+      before the delete. Set acm_switchover_execution.checkpoint.enabled to true
+      (with backend file and a writable path), or preview with
+      acm_switchover_execution.mode set to dry_run.
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-    - not (acm_switchover_features.skip_gitops_check | default(false))
+    - not ansible_check_mode
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
 
-- name: Delete old hub MultiClusterObservability resources
-  kubernetes.core.k8s:
-    api_version: observability.open-cluster-management.io/v1beta2
-    kind: MultiClusterObservability
-    name: "{{ item.metadata.name }}"
-    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.primary.context }}"
-    state: absent
-  loop: "{{ _acm_old_hub_mco_info.resources | default([]) }}"
-  loop_control:
-    label: "{{ item.metadata.name | default('observability') }}"
-  register: _acm_old_hub_mco_delete_result
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+# Exactly what decommission/tasks/main.yml seeds for the same task, and nothing more:
+# the shared teardown reads `_acm_decommission_records_outcomes` and combines into
+# `acm_switchover_decommission_outcomes`. A preview records no outcome at all.
+- name: Initialize the shared teardown's outcome recording
+  ansible.builtin.set_fact:
+    acm_switchover_decommission_outcomes: {}
+    _acm_decommission_records_outcomes: >-
+      {{
+        (not ansible_check_mode)
+        and (acm_switchover_execution.mode | default('dry_run') != 'dry_run')
+      }}
 
-- name: Wait for old hub observability pods to terminate
-  kubernetes.core.k8s_info:
-    api_version: v1
-    kind: Pod
-    namespace: open-cluster-management-observability
-    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.primary.context }}"
-  register: _acm_old_hub_observability_pods_info
-  retries: 30
-  delay: 10
-  until: (_acm_old_hub_observability_pods_info.resources | default([]) | length) == 0
-  failed_when: false
-  changed_when: false
-  when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-    - (_acm_old_hub_mco_info.resources | default([]) | length) > 0
-
-- name: Fail when observability pods remain after MCO deletion
-  ansible.builtin.fail:
-    msg: >-
-      Observability pods are still running on the old hub after deleting
-      MultiClusterObservability. If GitOps is not recreating MCO, this may
-      indicate a product bug.
-  when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-    - (_acm_old_hub_mco_info.resources | default([]) | length) > 0
-    - _acm_old_hub_observability_pods_info is defined
-    - (_acm_old_hub_observability_pods_info.resources | default([]) | length) > 0
+- name: Delete the old hub MultiClusterObservability through the shared teardown
+  ansible.builtin.include_role:
+    name: tomazb.acm_switchover.decommission
+    tasks_from: delete_observability.yml
+  vars:
+    # Mirrors Python's `record_gitops_markers=True` on the finalization call site: the
+    # shared task warns about declaratively managed objects before it deletes them.
+    _acm_mco_warn_gitops: true
 
 - name: Publish old hub observability disable result
   ansible.builtin.set_fact:
     acm_switchover_disable_old_hub_observability_result:
-      changed: >-
-        {{
-          (_acm_old_hub_mco_delete_result.results | default([])
-          | selectattr('changed')
-          | list
-          | length) > 0
-        }}
-      deleted_mcos: >-
-        {%- set deleted = [] -%}
-        {%- for result in (_acm_old_hub_mco_delete_result.results | default([])) -%}
-        {%- if result.changed | default(false) and result.item is defined -%}
-        {%- set _ = deleted.append(result.item.metadata.name) -%}
-        {%- endif -%}
-        {%- endfor -%}
-        {{ deleted }}
+      changed: "{{ _acm_mco_changed | default(false) | bool }}"
+      deleted_mcos: "{{ ['observability'] if (_acm_mco_changed | default(false) | bool) else [] }}"
       status: "{{ 'skipped' if acm_switchover_execution.mode | default('dry_run') == 'dry_run' else 'pass' }}"

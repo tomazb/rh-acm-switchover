@@ -1,7 +1,11 @@
 """Tests for the acm_input_validate collection module."""
 
+import pathlib
 from typing import Any
 
+import yaml
+
+from ansible_collections.tomazb.acm_switchover.plugins.modules import acm_input_validate
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_input_validate import (
     build_input_validation_results,
     summarize_input_validation,
@@ -572,3 +576,97 @@ def test_invalid_execution_mode_rejected():
     op_result = next(item for item in results if item["id"] == "preflight-input-operation")
     assert op_result["status"] == "fail"
     assert "Invalid execution.mode 'dry-run'" in op_result["message"]
+
+
+def _ack_case(**overrides: Any) -> dict:
+    """One acm_input_validate params payload for the acknowledgement rule."""
+    params: dict[str, Any] = {
+        "hubs": {
+            "primary": {"context": "primary-hub", "kubeconfig": "./kubeconfigs/hub.kubeconfig"},
+            "secondary": {"context": "secondary-hub", "kubeconfig": "./kubeconfigs/hub.kubeconfig"},
+        },
+        "operation": {
+            "restore_only": False,
+            "method": "passive",
+            "activation_method": "patch",
+            "old_hub_action": "secondary",
+        },
+        "execution": {"mode": "execute", "checkpoint": {"path": ".state/run.json"}},
+        "features": {"argocd": {"manage": False}},
+        "decommission": {},
+    }
+    params.update(overrides)
+    return params
+
+
+def _operation_result(params: dict) -> dict:
+    results = build_input_validation_results(params)
+    return next(item for item in results if item["id"] == "preflight-input-operation")
+
+
+def test_acknowledgement_is_read_from_the_decommission_variable():
+    """The plan names the collection knob acm_switchover_decommission.*, so that is the key."""
+    result = _operation_result(_ack_case(decommission={"acknowledge_observability_not_migrated": True}))
+
+    assert result["status"] == "fail"
+    assert "acknowledge_observability_not_migrated" in result["message"]
+
+
+def test_acknowledgement_in_features_is_no_longer_a_validation_surface():
+    """One key only: a stray features entry must not silently keep enforcing the rule."""
+    result = _operation_result(_ack_case(features={"acknowledge_observability_not_migrated": True}))
+
+    assert result["status"] == "pass"
+
+
+def test_acknowledgement_accepted_for_an_integrated_decommission():
+    params = _ack_case(decommission={"acknowledge_observability_not_migrated": True})
+    params["operation"]["old_hub_action"] = "decommission"
+
+    assert _operation_result(params)["status"] == "pass"
+
+
+def test_decommission_params_must_be_a_dictionary():
+    result = _operation_result(_ack_case(decommission="yes"))
+
+    assert result["status"] == "fail"
+    assert "decommission must be a dictionary" in result["message"]
+
+
+def test_missing_decommission_key_is_accepted_as_empty():
+    """A caller that passes no decommission dict validates as if the ack were unset."""
+    params = _ack_case()
+    params.pop("decommission")
+
+    assert _operation_result(params)["status"] == "pass"
+
+
+def test_input_validate_module_declares_the_decommission_option():
+    """The module cannot pass through what its argument_spec refuses to accept."""
+    module_path = pathlib.Path(acm_input_validate.__file__)
+    source = module_path.read_text(encoding="utf-8")
+    documentation = yaml.safe_load(acm_input_validate.DOCUMENTATION)
+
+    assert '"decommission": {"type": "dict", "required": False, "default": {}}' in source
+    assert "decommission" in documentation["options"]
+    assert documentation["options"]["decommission"]["type"] == "dict"
+
+
+def test_preflight_validation_task_passes_the_decommission_variable():
+    """The role task is the only production caller; an unpassed dict validates nothing."""
+    tasks = yaml.safe_load(
+        (
+            pathlib.Path(acm_input_validate.__file__).parents[2]
+            / "roles"
+            / "preflight"
+            / "tasks"
+            / "validate_inputs.yml"
+        ).read_text(encoding="utf-8")
+    )
+    args = next(
+        task["tomazb.acm_switchover.acm_input_validate"]
+        for task in tasks
+        if "tomazb.acm_switchover.acm_input_validate" in task
+    )
+
+    assert args["decommission"] == "{{ acm_switchover_decommission | default({}) }}"

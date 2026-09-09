@@ -14,6 +14,16 @@
           Decommission requires non-empty acm_switchover_hubs.primary.kubeconfig and
           acm_switchover_hubs.primary.context. Refusing to use an implicit/default kube context.
 
+    # The standalone entry point declares itself, so every validation surface in this
+    # run can tell it apart from an integrated switchover's decommission disposition.
+    # This is the collection's equivalent of the Python CLI's `--decommission`, and
+    # it is what makes `acm_switchover_decommission.acknowledge_observability_not_migrated`
+    # refusable here: a standalone run has no destination hub to acknowledge.
+    - name: Declare the standalone decommission entry point
+      ansible.builtin.set_fact:
+        acm_switchover_operation: >-
+          {{ (acm_switchover_operation | default({}, true)) | combine({'decommission': true}) }}
+
   # This playbook -- NOT the shared role -- owns the standalone decommission phase
   # lifecycle. roles/finalization/tasks/handle_old_hub.yml includes the same
   # decommission role from inside an already-established two-hub `finalization`
