@@ -328,7 +328,7 @@ python acm_switchover.py --restore-only \
      - `secondary`: Set up passive sync restore (**recommended** - enables reverse switchover)
      - `decommission`: Remove ACM components automatically
      - `none`: Leave unchanged for manual handling
-   - When `--old-hub-action secondary` is used, delete MultiClusterObservability on the old hub automatically; termination failures block unless `--skip-observability-checks` is set
+   - When `--old-hub-action secondary` is used, delete MultiClusterObservability on the old hub automatically; `--skip-observability-checks` skips this whole step instead (no MCO delete is attempted, and old-hub MCO is left in place), rather than tolerating a failure inside it
    - Both `secondary` and `decommission` gate that MultiClusterObservability delete on fresh proof of the
      destination hub's observability state; `--acknowledge-observability-not-migrated` overrides only a
      destination proven to have none, and is valid only with `--old-hub-action decommission`

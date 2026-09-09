@@ -472,6 +472,15 @@ shared phase machine, `_teardown_resource`, for any UID-preconditioned resource 
 - **UID-preconditioned delete.** The DELETE carries the expected UID read moments earlier (or the resumed
   record's `expected_uid`); the primitive is `KubeClient.delete_custom_resource_preconditioned`. A live UID
   mismatch or a post-delete replacement is fatal and leaves the object intact.
+- **`changed` semantics.** `SubstepExecution.changed` is true only when *this invocation's own* DELETE was
+  accepted; it is never derived from the phase record or the final outcome. Absence polling, drain, the final
+  proof, and a resumed or `completed`-record reproof all report `changed=False`, even when they write a phase
+  transition — a resumed record whose delete already landed in an earlier invocation therefore contributes
+  `changed=False` even when this invocation writes `completed`. Once the DELETE is accepted, `changed` stays
+  true for the rest of the invocation: a failure afterward (drain timeout, unreadable final proof) still
+  returns `FAILED` with `changed=True`, because a real mutation happened even though the substep did not
+  complete. The collection mirrors this from the guarded-delete module's own `changed` result
+  (`_acm_mco_changed` in `delete_observability.yml`), not from the checkpoint phase written.
 - **Fail-closed completion proof.** The final verification pass re-reads the resource and the drain
   namespace fresh — never reusing a pre-delete read — and records `resource_versions`/`absence_proofs`
   evidence only from that pass. An unreadable pre-delete inventory, an unreadable final proof, or pods still

@@ -134,9 +134,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`Decommission.teardown_observability` / `_teardown_resource`); `Finalization` delegates to it instead of
   carrying a second copy, and the collection's `delete_observability.yml` routes through the same guarded
   delete with checkpoint-backed teardown records.
-- Python `--decommission`/`--old-hub-action decommission` and `--old-hub-action secondary` dry-run/preview
-  reads for MultiClusterObservability are now strict: an unreadable API now fails the preview instead of
-  predicting "nothing to delete".
+- Python's standalone `--decommission` and integrated `--old-hub-action secondary` dry-run/preview reads for
+  MultiClusterObservability are now strict: an unreadable API now fails the preview instead of predicting
+  "nothing to delete". Integrated `--old-hub-action decommission --dry-run` does not reach this preview at
+  all — see the `Known Constraints` note in `docs/development/architecture.md`.
 - A completed MultiClusterObservability teardown record now re-proves the resource's absence live on every
   resume instead of trusting the stored `completed` phase; the immutable completion evidence itself is never
   rewritten.
