@@ -403,12 +403,19 @@ Important activation-related flags:
 
 The old-hub dispositions are not equivalent in blast radius. `secondary` sets up passive sync
 for failback. `none` leaves the hub untouched. `decommission` is **destructive**: finalization
-calls `_decommission_old_hub` (`modules/finalization.py:1115`, inside `_handle_old_hub` at
-`modules/finalization.py:1090`), which runs the full
-`Decommission.decommission(interactive=False)` teardown (`modules/finalization.py:1141`) and
+calls `_decommission_old_hub` (inside `_handle_old_hub`), which runs the full
+`Decommission.decommission(interactive=False)` teardown and
 removes ACM components — Observability resources, non-local `ManagedCluster` resources, and the
 `MultiClusterHub` — from the old primary. It is a real teardown performed inside the switchover
 run without a further prompt, not a preparation step.
+
+Both integrated `Decommission` construction sites (`_disable_observability_on_old_hub` for
+`old_hub_action=secondary`, `_decommission_old_hub` for `old_hub_action=decommission`) pass the
+switchover's secondary client and `--acknowledge-observability-not-migrated` flag through, so the
+destination-observability gate described under [Decommission](#decommission) runs on both paths before
+their MultiClusterObservability delete. `_decommission_old_hub` is dry-run-skipped as a whole
+(`@dry_run_skip`), so an integrated `--old-hub-action decommission --dry-run` never reaches the gate or the
+phase machine; only the `secondary` path's preview evaluates the gate.
 
 ### Who owns the decommission phase lifecycle
 
@@ -453,7 +460,40 @@ Important finalization-related flags:
 
 ### Decommission
 
-`modules/decommission.py` performs the separate old-hub teardown flow with explicit confirmation and verification.
+`modules/decommission.py` performs the separate old-hub teardown flow with explicit confirmation and
+verification. Its MultiClusterObservability substep (`Decommission.teardown_observability`, delegated to
+by `Finalization._disable_observability_on_old_hub` and `Finalization._decommission_old_hub`) runs the one
+shared phase machine, `_teardown_resource`, for any UID-preconditioned resource family:
+
+- **Phase table** (durable, per resource, keyed `apiVersion/kind/namespace/name`):
+  `delete_started` → `cr_absent` → `drain_pending` → `drained` → `completed`, with `recovery_required` on
+  an ambiguous drain-namespace read. A no-record clean-skip and a `completed`-record reproof are read-only
+  and never enter the phase table.
+- **UID-preconditioned delete.** The DELETE carries the expected UID read moments earlier (or the resumed
+  record's `expected_uid`); the primitive is `KubeClient.delete_custom_resource_preconditioned`. A live UID
+  mismatch or a post-delete replacement is fatal and leaves the object intact.
+- **Fail-closed completion proof.** The final verification pass re-reads the resource and the drain
+  namespace fresh — never reusing a pre-delete read — and records `resource_versions`/`absence_proofs`
+  evidence only from that pass. An unreadable pre-delete inventory, an unreadable final proof, or pods still
+  present in the drain namespace fails the substep; nothing is a passive warning on this path.
+- **Completed-record resume re-proves live.** A `completed` record does not short-circuit a later run: it
+  re-reads the resource and drain namespace and fails if the resource is present again or the state is
+  unverifiable, without rewriting the immutable evidence already recorded.
+- **Destination-observability gate.** For the MultiClusterObservability family only, on an integrated
+  switchover (a destination client configured) and only when this invocation's own fresh read found the
+  target present — i.e. only when a delete is pending — `Decommission.destination_observability_gate()` runs
+  before the durable `delete_started` write and before the DELETE. It re-reads both hubs live, never persists
+  its result, and blocks with one of `source_observability_unverifiable`, `source_observability_ambiguous`,
+  `destination_observability_unverifiable`, `destination_observability_absent`, or
+  `acknowledgement_not_applicable`. `--acknowledge-observability-not-migrated` converts only a destination
+  proven to have no observability at all (`destination_observability_absent`); it never overrides an
+  unverifiable or partially present destination, and is valid only with `--old-hub-action decommission`. A
+  nonterminal record whose target has already disappeared, and a `completed`-record reproof, continue their
+  remaining obligations without ever calling the gate.
+
+The Ansible Collection mirrors this machine independently through `acm_uid_guarded_delete` (guarded delete)
+and the `decommission` role's `delete_observability.yml` / `destination_observability_gate.yml` task files —
+see the [behavior map](../ansible-collection/behavior-map.md) and [parity matrix](../ansible-collection/parity-matrix.md).
 
 ## Switchover Interaction Model
 
@@ -485,7 +525,9 @@ sequenceDiagram
     Mods->>S: patch restore or create full restore
     CLI->>Mods: run post-activation verification
     CLI->>Mods: run finalization
-    Mods->>P: delete MultiClusterObservability when old hub remains secondary
+    Mods->>S: destination-observability gate (fresh source+destination reads)
+    Mods->>P: UID-preconditioned MultiClusterObservability delete
+    Mods->>P: absence poll, pod drain, final completion proof
     Mods->>State: persist completion and config
     opt --dry-run
         CLI->>State: restore pre-run state snapshot
@@ -527,6 +569,12 @@ Important state categories:
 - `current_phase`
 - `completed_steps`
 - `hub_identities` — per-role `{context, cluster_uid}` recorded from each hub's `kube-system` namespace UID; resume re-reads live UIDs and fails closed before mutation if a recorded UID no longer matches the cluster behind the same context name, if hub identities are missing for an in-progress switchover, or if the live UID is unreadable. Operators must use `--reset-state` (different cluster on purpose) or `--force` (legacy state, after manual verification) to recover.
+- durable MultiClusterObservability teardown records, read and written through the `RunRecord` facade — one
+  per resource key, carrying `{expected_uid, phase}` plus `{observed_at, resource_versions, absence_proofs}`
+  once `phase == completed`; forced-durable before the guarded DELETE and at every phase transition, and the
+  only source of truth for "already deleted" versus "never attempted" on resume. **`--reset-state` destroys
+  these records along with the rest of the state file** — see [Operator usage](../operations/usage.md) for
+  the full warning.
 - detected run facts such as ACM version and observability presence, read and written through
   the `RunRecord` facade (`lib/run_record.py`) rather than as raw persisted keys
 - saved resources needed for version-specific restore/unpause behavior
@@ -610,6 +658,14 @@ Current phase status is owned by the GitHub issue tracker, not by this document.
 - Normal switchover assumes the old primary hub is reachable
 - The runbook remains the authoritative manual/operational fallback
 - GitOps support is advisory plus targeted Argo CD coordination, not full drift reconciliation
+- Integrated `--dry-run` does not evaluate the destination-observability gate on the
+  `--old-hub-action decommission` path: `_decommission_old_hub` is dry-run-skipped as a whole, so that
+  preview never reaches the gate or the MultiClusterObservability phase machine. Only the
+  `--old-hub-action secondary` preview evaluates the gate. Follow-up tracked for a future slice.
+- No dry-run or check-mode path exercises `--acknowledge-observability-not-migrated` converting a proven-absent
+  destination into a proceed: the integrated decommission preview is skipped entirely (previous bullet), and
+  the `--old-hub-action secondary` / collection secondary-action dry run has no acknowledgement override to
+  exercise.
 
 ## Ansible Collection
 

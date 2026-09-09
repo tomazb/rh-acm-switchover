@@ -21,11 +21,12 @@ Source: `lib/`, `modules/`, `scripts/`
 | `modules/post_activation.py` | `roles/post_activation/` | 3 |
 | `modules/finalization.py` | `roles/finalization/` | 3 |
 | `modules/backup_schedule.py` | `roles/finalization/tasks/enable_backups.yml`, `roles/finalization/tasks/repair_backup_schedule_collision.yml` | 3 |
-| `modules/decommission.py` | `roles/decommission/`, with the standalone phase lifecycle in `playbooks/decommission.yml` | 6 |
+| `modules/decommission.py` | `roles/decommission/`, with the standalone phase lifecycle in `playbooks/decommission.yml`. The MultiClusterObservability substep's shared phase machine, UID-preconditioned guarded delete, durable per-resource phase records, and destination-observability gate are each mirrored independently — see the guarded-delete row below and the narrative after this table | 6 |
 | `lib/rbac_validator.py` | `roles/preflight/` validation behavior | 2 |
 | `lib/validation.py` | centralized collection validation layer | 2 |
 | `lib/kube_client.py` legacy readers | stock `kubernetes.core` usage plus later helper code | 2-3 |
 | `lib/strict_read.py` + `lib/kube_client.py` strict producers (`list_custom_resources_strict`, `get_custom_resource_strict`, `get_namespace_strict`, `list_pods_strict`, `get_deployment_strict`, `get_replicaset_strict`) | `plugins/modules/acm_k8s_read_outcome.py` | 3 |
+| `lib/kube_client.py` `delete_custom_resource_preconditioned` (UID-preconditioned guarded delete used by the MultiClusterObservability phase machine) | `plugins/modules/acm_uid_guarded_delete.py`, `plugins/module_utils/uid_guarded_delete.py` | 6 |
 | `lib/utils.py` checkpoint semantics | `plugins/action/checkpoint_phase.py`, `plugins/module_utils/checkpoint.py` | 4 |
 
 In `validate` mode (`acm_switchover_execution.mode: validate`), the checkpoint
@@ -63,6 +64,21 @@ preflight detection finds no `MultiClusterObservability` resources on the hub
 (including the baseline `MultiClusterObservability` delete validation) are
 skipped because they are not required for that workflow. Detection failure
 (API/auth errors) still fails closed.
+
+The MultiClusterObservability teardown boundary held equal by parity vectors, independently implemented on
+each side: a UID-preconditioned guarded delete (Python `KubeClient.delete_custom_resource_preconditioned`,
+collection `acm_uid_guarded_delete`), the durable per-resource phase vocabulary `delete_started` →
+`cr_absent` → `drain_pending` → `drained` → `completed` (Python `RunRecord` teardown records, collection
+`decommission` checkpoint `operational_data`), and a fresh live completion proof required before
+`completed` and re-proved — never trusted — on every resume of a `completed` record. On an integrated
+switchover only, and only when this invocation's own fresh read found the target present, that delete is
+additionally gated on fresh destination-observability proof: Python `destination_observability_gate()`
+(`modules/decommission.py`), collection `roles/decommission/tasks/destination_observability_gate.yml`.
+Both classify the same five outcomes (`source_observability_unverifiable`, `source_observability_ambiguous`,
+`destination_observability_unverifiable`, `destination_observability_absent`,
+`acknowledgement_not_applicable`) and both accept the override only for a destination proven to have no
+observability: Python `--acknowledge-observability-not-migrated`, collection
+`acm_switchover_decommission.acknowledge_observability_not_migrated`.
 
 | `lib/argocd.py` | `roles/argocd_manage/`, preflight read-only advisory discovery, and deferred playbook | 5 |
 | `lib/gitops_detector.py` | preflight detection and warnings, including non-blocking Argo CD ACM-touching Application advisory output | 5 |

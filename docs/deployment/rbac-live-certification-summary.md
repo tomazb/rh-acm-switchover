@@ -46,7 +46,8 @@ Successfully implemented a live RBAC bootstrap certification scenario that valid
 **Decommission extensions:**
 - ManagedCluster delete
 - MultiClusterHub delete
-- MultiClusterObservability delete (also for old-hub finalization)
+- MultiClusterObservability get and delete (also for old-hub finalization; `get` because the standalone
+  teardown reads the named resource before deleting it and again for the final absence proof)
 
 ### Opt-In Control
 

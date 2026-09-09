@@ -284,6 +284,7 @@ python acm_switchover.py --restore-only \
 | `--manage-auto-import-strategy` | Temporarily set ImportAndSync on destination hub (ACM 2.14+) |
 | `--skip-observability-checks` | Explicitly bypass Observability-related steps even if detected |
 | `--disable-observability-on-secondary` | Deprecated compatibility flag; `--old-hub-action secondary` now deletes MCO automatically |
+| `--acknowledge-observability-not-migrated` | Proceed with deleting old-hub observability even though the destination hub is proven to have none (metrics continuity ends). Only valid with `--old-hub-action decommission`; never overrides an unverifiable destination |
 | `--skip-rbac-validation` | Skip RBAC permission validation during pre-flight checks |
 | `--argocd-manage` | Pause ACM-touching ArgoCD Applications during switchover (left paused by default) |
 | `--argocd-resume-only` | Resume previously paused ArgoCD Applications (standalone; after updating Git for the new hub) |
@@ -328,6 +329,9 @@ python acm_switchover.py --restore-only \
      - `decommission`: Remove ACM components automatically
      - `none`: Leave unchanged for manual handling
    - When `--old-hub-action secondary` is used, delete MultiClusterObservability on the old hub automatically; termination failures block unless `--skip-observability-checks` is set
+   - Both `secondary` and `decommission` gate that MultiClusterObservability delete on fresh proof of the
+     destination hub's observability state; `--acknowledge-observability-not-migrated` overrides only a
+     destination proven to have none, and is valid only with `--old-hub-action decommission`
    - Generate completion report
 
 ### Restore-Only Flow

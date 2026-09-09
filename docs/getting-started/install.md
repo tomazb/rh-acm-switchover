@@ -258,7 +258,10 @@ rules:
   verbs: ["delete"]
 - apiGroups: ["observability.open-cluster-management.io"]
   resources: ["multiclusterobservabilities"]
-  verbs: ["delete"]
+  # `get` is required because the standalone teardown reads the named
+  # MultiClusterObservability before deleting it and again for the final
+  # absence proof; see deploy/rbac/extensions/decommission/clusterrole.yaml.
+  verbs: ["get", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

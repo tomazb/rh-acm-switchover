@@ -72,6 +72,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `tests/release/checks/rbac_certification.py` module that validates operator and validator role permissions, including MCO delete permission for old-hub finalization and full decommission delete permissions.
 - Added `docs/deployment/rbac-live-certification.md` guide explaining live certification setup, execution flow, artifacts, and comparison to static RBAC parity checks.
 - Added example release profile `tests/release/profiles/full-release-with-rbac-cert.example.yaml` demonstrating live RBAC certification scenario configuration.
+- Added UID-preconditioned MultiClusterObservability deletion with a durable per-resource phase record and a
+  fresh completion proof on every path that deletes it: Python `KubeClient.delete_custom_resource_preconditioned`
+  plus the shared `Decommission._teardown_resource` phase machine, and the collection's
+  `acm_uid_guarded_delete` module.
+- Added the destination-observability gate that runs before that MultiClusterObservability delete on an
+  integrated switchover, with its override `--acknowledge-observability-not-migrated` (Python) /
+  `acm_switchover_decommission.acknowledge_observability_not_migrated` (collection), valid only for an
+  integrated switchover with `old_hub_action: decommission`.
+- Added cluster-scoped `get` on `multiclusterobservabilities` to the standalone decommission RBAC extension
+  (`deploy/rbac/extensions/decommission/clusterrole.yaml` and its collection-bundled and Helm-rendered copies)
+  and to the Python/collection standalone permission tables, because the standalone teardown reads the named
+  MultiClusterObservability before deleting it and again for the final absence proof, and a standalone run does
+  not carry the baseline operator ClusterRole.
 
 ### Changed
 
@@ -117,6 +130,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Realigned `CONTRIBUTING.md`, `docs/development/testing.md`, `docs/development/architecture.md`, and
   `docs/development/lab-role-controller-spec.md` with current source, CI, and `AGENTS.md` policy, and locked
   the corrected contracts with new `tests/test_documentation_guardrails.py` guardrail tests (#246).
+- Consolidated the MultiClusterObservability teardown into one shared phase machine
+  (`Decommission.teardown_observability` / `_teardown_resource`); `Finalization` delegates to it instead of
+  carrying a second copy, and the collection's `delete_observability.yml` routes through the same guarded
+  delete with checkpoint-backed teardown records.
+- Python `--decommission`/`--old-hub-action decommission` and `--old-hub-action secondary` dry-run/preview
+  reads for MultiClusterObservability are now strict: an unreadable API now fails the preview instead of
+  predicting "nothing to delete".
+- A completed MultiClusterObservability teardown record now re-proves the resource's absence live on every
+  resume instead of trusting the stored `completed` phase; the immutable completion evidence itself is never
+  rewritten.
+- The collection's finalization adapter for `old_hub_action: secondary`
+  (`roles/finalization/tasks/disable_old_hub_observability.yml`) now requires
+  `acm_switchover_execution.checkpoint.enabled` in execute mode and refuses `mode: validate`; both refusals
+  fire before any read or delete.
+- The standalone `playbooks/decommission.yml` playbook now declares
+  `acm_switchover_standalone_decommission: true` and refuses a truthy
+  `acm_switchover_decommission.acknowledge_observability_not_migrated` in `pre_tasks`, before any read —
+  parity with the Python CLI rejecting `--acknowledge-observability-not-migrated` alongside `--decommission`.
+  A standalone decommission run never evaluates the destination-observability gate.
+- `--old-hub-action secondary`'s MultiClusterObservability teardown is gated on destination-observability
+  proof with no acknowledgement override available on that path.
 
 ### Fixed
 

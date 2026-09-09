@@ -57,6 +57,11 @@ Each scenario records:
 - decommission confirmed or dry-run
 - expected effective observability: auto-detected from namespace unless explicitly set
 - expected artifact: `decommission-report.json`
+- MultiClusterObservability deletion runs through the UID-preconditioned guarded delete
+  (`acm_uid_guarded_delete`) with a durable per-resource phase record and a fresh completion proof
+- on an integrated switchover, the destination-observability gate must pass, block (each of the five
+  reason codes), or accept `acknowledge_observability_not_migrated` for a proven-absent destination before
+  the delete; the standalone playbook never evaluates the gate and refuses a truthy acknowledgement
 
 ### SCENARIO-008 Argo CD pause and failure recovery
 

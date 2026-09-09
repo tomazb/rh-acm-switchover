@@ -106,6 +106,9 @@ destination positively proven to have no observability — and is valid only wit
 partially present destination. The gate result is never persisted: every run and every resume
 re-proves it live. A dry run evaluates the gate on the `--old-hub-action secondary` observability
 teardown; the `--old-hub-action decommission` preview is skipped, so it does not evaluate the gate.
+`--old-hub-action secondary`'s observability teardown is gated the same way as decommission's, with no
+`--acknowledge-observability-not-migrated` override available on that path — the flag is valid only with
+`--old-hub-action decommission`.
 
 **Timeline (typical execution):**
 - Pre-flight validation: 2-3 minutes
@@ -215,6 +218,19 @@ Recovery options:
 
 This protects against silently resuming a partially completed switchover on
 the wrong cluster when contexts are reused.
+
+⚠️ **`--reset-state` also destroys durable MultiClusterObservability teardown
+records.** `--reset-state` removes the whole state file, including the durable
+per-resource teardown records (`delete_started` → `cr_absent` → `drain_pending`
+→ `drained` → `completed`) that back the guarded MultiClusterObservability
+delete. Resetting state between a failed drain and its rerun forfeits the
+remembered drain obligation: a post-reset run that finds the resource absent
+cannot distinguish "already deleted" from "never attempted" and takes the
+clean-skip path. Retry — which resumes the retained record — is the normal
+recovery path; reach for `--reset-state` only when deliberately abandoning
+those obligations — the same discard the collection's own full
+`checkpoint.reset` warning describes later in this document. `--force` does
+not discard teardown records.
 
 ## Method Comparison
 
