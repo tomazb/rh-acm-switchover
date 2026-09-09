@@ -35,6 +35,11 @@ class FakeGuardedDeleteAPI:
         self.delete_status = delete_status
         self.on_delete = on_delete
         self.requests: list[dict] = []
+        #: The ``preconditions.uid`` of every DELETE body the server received, in order,
+        #: with None for a body that carried none. Recorded because the *outcome* of a
+        #: delete cannot distinguish a preconditioned request from an unconditional one:
+        #: this fake, like a real API server, honours both.
+        self.delete_preconditions: list[str | None] = []
         self._lock = threading.Lock()
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = Thread(target=self._server.serve_forever, daemon=True)
@@ -138,6 +143,8 @@ class FakeGuardedDeleteAPI:
                     body = json.loads(raw or b"{}")
                 except ValueError:
                     body = {}
+                with api._lock:
+                    api.delete_preconditions.append((body.get("preconditions") or {}).get("uid"))
 
                 if api.on_delete is not None:
                     api.on_delete(api)

@@ -82,6 +82,19 @@ def _run(tmp_path: Path, api: FakeGuardedDeleteAPI, *, expected_uid: str, check_
     return json.loads(result_path.read_text()), completed
 
 
+def test_the_invoking_fixture_task_declares_no_log():
+    """The fixture must invoke the module the way the contract requires it to be
+    invoked. Its task arguments carry a kubeconfig path, and a fixture that renders
+    them through the callback is not exercising the shipped invocation at all -- it is
+    exercising a variant nobody is allowed to run.
+    """
+    playbook = yaml.safe_load(
+        (Path(__file__).parent / "playbooks" / "run_uid_guarded_delete.yml").read_text(encoding="utf-8")
+    )
+    task = next(task for task in playbook[0]["tasks"] if "tomazb.acm_switchover.acm_uid_guarded_delete" in task)
+    assert task.get("no_log") is True
+
+
 def test_the_proved_object_is_deleted_and_reported_changed(tmp_path):
     api = FakeGuardedDeleteAPI(mco_object("uid-1"))
     try:
@@ -140,6 +153,62 @@ def test_an_already_absent_object_reports_no_change(tmp_path):
         api.close()
 
 
+def test_a_disappearance_before_the_delete_lands_is_proved_and_reported_unchanged(tmp_path):
+    """The object goes away between the guarded read and the DELETE, so the server
+    answers the DELETE with a 404. Against a real server the module proves that answer
+    with one more live read and reports an idempotent unchanged success -- it did not
+    delete anything, and it does not claim to have."""
+
+    def _vanish(api_self):
+        api_self.obj = None
+
+    api = FakeGuardedDeleteAPI(mco_object("uid-1"), on_delete=_vanish)
+    try:
+        result, _ = _run(tmp_path, api, expected_uid="uid-1")
+        assert result.get("failed") is not True, result
+        assert result["changed"] is False
+        assert result["stage"] == "absent"
+        assert result["reason"] == "not_found"
+        assert len(api.delete_calls) == 1
+    finally:
+        api.close()
+
+
+def test_a_delete_404_contradicted_by_the_live_object_is_not_a_completion(tmp_path):
+    """The server reports the object missing on DELETE and then serves it on the very
+    next read. Nothing can be concluded from two contradicting answers, so the run
+    fails rather than reporting a teardown."""
+    api = FakeGuardedDeleteAPI(mco_object("uid-1"), delete_status=404)
+    try:
+        result, _ = _run(tmp_path, api, expected_uid="uid-1")
+        assert result["failed"] is True
+        assert result["reason"] == "unverifiable"
+        assert result["stage"] == "completed"
+        assert result["changed"] is False
+        assert api.obj is not None, "nothing was deleted"
+    finally:
+        api.close()
+
+
+def test_a_replacement_found_after_a_delete_404_is_refused_at_runtime(tmp_path):
+    """A 404 on DELETE followed by a different-UID object at that name: the name is
+    back under a new identity and the replacement is left intact."""
+
+    def _replace(api_self):
+        api_self.obj = mco_object("uid-REPLACEMENT", resource_version="9")
+
+    api = FakeGuardedDeleteAPI(mco_object("uid-1"), delete_status=404, on_delete=_replace)
+    try:
+        result, _ = _run(tmp_path, api, expected_uid="uid-1")
+        assert result["failed"] is True
+        assert result["reason"] == "uid_mismatch"
+        assert result["changed"] is False
+        assert api.obj is not None and api.obj["metadata"]["uid"] == "uid-REPLACEMENT"
+        assert len(api.delete_calls) == 1, "the replacement must never be deleted"
+    finally:
+        api.close()
+
+
 def test_check_mode_issues_no_delete_and_predicts_the_change(tmp_path):
     api = FakeGuardedDeleteAPI(mco_object("uid-1"))
     try:
@@ -167,20 +236,17 @@ def test_a_server_precondition_failure_is_fatal_and_leaves_the_object(tmp_path, 
 
 
 def test_the_delete_request_actually_carries_a_uid_precondition(tmp_path):
-    """Measured at the wire, not asserted from the client side: without this, a module
-    that silently dropped the precondition would still pass every outcome test against
-    a permissive server."""
-    seen: dict = {}
+    """Read off the wire: the exact ``preconditions.uid`` the server received.
 
-    def _capture(api_self):
-        seen["obj_uid"] = (api_self.obj or {}).get("metadata", {}).get("uid")
-
-    api = FakeGuardedDeleteAPI(mco_object("uid-1"), on_delete=_capture)
+    The outcome cannot stand in for this. A real API server -- and this fake, on
+    purpose -- accepts an unconditional DELETE and removes the object, so a module that
+    dropped the precondition would still delete it and still look successful. Only the
+    received body distinguishes the two, so the received body is what is asserted.
+    """
+    api = FakeGuardedDeleteAPI(mco_object("uid-1"))
     try:
         _run(tmp_path, api, expected_uid="uid-1")
-        # The fake API only deletes when the precondition matches the live uid, so a
-        # successful removal is itself proof the precondition was sent and correct.
+        assert api.delete_preconditions == ["uid-1"], "the UID must reach the server, on this exact delete"
         assert api.obj is None
-        assert seen["obj_uid"] == "uid-1"
     finally:
         api.close()

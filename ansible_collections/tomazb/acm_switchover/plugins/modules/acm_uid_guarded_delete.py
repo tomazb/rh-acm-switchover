@@ -19,6 +19,12 @@ description:
     different object; this module refuses that case and leaves the replacement intact.
   - Only an API 404 means absent. Discovery, authorization, TLS, timeout, transport and
     decode failures are unverifiable and fail closed, never reported as an absent object.
+  - Resource discovery is performed live on every invocation; a cached discovery result
+    from an earlier run is never allowed to stand in for it.
+  - When the API server answers the delete itself with a 404 the object went away before
+    this invocation acted. That answer is proved with one further live read. A confirmed
+    absence is an idempotent result with C(changed=false), while a replacement or an
+    unverifiable read fails.
 options:
   kubeconfig:
     description:
@@ -47,7 +53,11 @@ options:
     type: str
     required: true
   namespace:
-    description: Namespace of the target, or omitted for a cluster-scoped object.
+    description:
+      - Namespace of the target. Required for a namespaced kind and rejected for a
+        cluster-scoped one, validated against the scope reported by discovery before any
+        object is read. The client routes by the discovered scope, so a mismatch would
+        silently act on the wrong object or read a route whose 404 means nothing.
     type: str
     required: false
   name:
@@ -61,19 +71,25 @@ options:
     type: str
     required: true
   request_timeout:
-    description: Per-request timeout in seconds.
+    description:
+      - Per-request timeout in seconds. Must be a positive finite number; NaN and
+        infinity are rejected.
     type: float
     required: false
   wait_timeout:
-    description: Total bounded budget, in seconds, for the object to disappear.
+    description:
+      - Total bounded budget, in seconds, for the object to disappear. Must be a positive
+        finite number, since a non-finite budget defeats the deadline it exists to
+        enforce. Individual poll delays are capped to the remaining budget.
     type: float
     required: false
   wait_sleep:
-    description: Delay in seconds between absence polls.
+    description:
+      - Delay in seconds between absence polls. Must be a positive finite number.
     type: float
     required: false
 notes:
-  - Invoking tasks should set no_log on the task. Module output carries only a stable
+  - Invoking tasks must set no_log on the task. Module output carries only a stable
     stage, a status classification and the non-secret resource identity, but the task
     arguments include a kubeconfig path.
 author:
@@ -98,13 +114,15 @@ changed:
   description:
     - A successful result is true only after the intended-UID delete was accepted and
       both absence proofs succeeded.
+    - An object that was already absent, or that a proved final read shows absent after
+      the delete itself returned 404, reports false; this invocation deleted nothing.
     - A failed result is true when the intended-UID delete was accepted before a later
       poll or proof failure, so callers can report the mutation that already happened.
   returned: always
   type: bool
 would_change:
   description: In check mode, whether a real run would delete the proved object.
-  returned: always
+  returned: success
   type: bool
 stage:
   description: How far the state machine got.
@@ -117,8 +135,10 @@ reason:
   type: str
   sample: ok
 resource_version:
-  description: The resourceVersion observed at the guarded read, or none.
-  returned: always
+  description:
+    - The resourceVersion observed at the guarded read, or none when the object was
+      already absent. Failures report stage and reason only.
+  returned: success
   type: str
 """
 
@@ -134,6 +154,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.uid_guarded_
     build_dynamic_client,
     normalize_timeout,
     run_guarded_delete,
+    validate_namespace_scope,
 )
 
 
@@ -205,6 +226,7 @@ def run_module(module: AnsibleModule) -> None:
         return
 
     try:
+        validate_namespace_scope(resource, params.get("namespace"))
         result = run_guarded_delete(
             resource,
             name=params["name"],

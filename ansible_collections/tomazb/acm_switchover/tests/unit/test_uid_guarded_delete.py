@@ -57,9 +57,13 @@ class FakeResource:
     right.
     """
 
-    def __init__(self, get_results: list[Any], delete_result: Any = None) -> None:
+    def __init__(self, get_results: list[Any], delete_result: Any = None, *, namespaced: bool = False) -> None:
         self.get_results = list(get_results)
         self.delete_result = delete_result
+        # The discovered scope the module validates ``namespace`` against. Cluster-scoped
+        # by default because the object this boundary exists for -- MultiClusterObservability
+        # -- is cluster-scoped.
+        self.namespaced = namespaced
         self.calls: list[str] = []
 
     def get(self, name: str, namespace: str | None = None):
@@ -218,13 +222,69 @@ def test_an_already_absent_object_reports_not_changed_without_deleting():
     assert "delete" not in resource.calls
 
 
-def test_disappearance_between_read_and_delete_is_not_reported_as_changed():
-    """The object went away before this invocation's delete landed. This invocation
-    did not change anything, and must not claim it did."""
-    resource = FakeResource(get_results=[_obj("uid-1")], delete_result=ApiException(status=404))
+def test_a_delete_404_is_resolved_by_a_final_live_proof_not_by_assumption():
+    """The object went away between the guarded read and this invocation's delete.
+
+    A DELETE 404 on its own proves nothing about the name: it says the object was not
+    there *at that instant*, which is equally consistent with a genuine disappearance
+    and with a replacement created a moment later. The boundary therefore resolves it
+    with one more live read, exactly as it does after an accepted delete. Confirmed
+    absence is idempotent success -- unchanged, because this invocation deleted
+    nothing.
+    """
+    resource = FakeResource(
+        get_results=[_obj("uid-1"), ApiException(status=404)],
+        delete_result=ApiException(status=404),
+    )
+    result = _run(resource)
+    assert result == {
+        "changed": False,
+        "would_change": False,
+        "stage": STAGE_ABSENT,
+        "reason": REASON_NOT_FOUND,
+        "resource_version": None,
+    }
+    assert resource.calls == ["get", "delete", "get"], "the 404 is proved, not assumed"
+
+
+def test_a_replacement_found_after_a_delete_404_is_fatal_and_survives():
+    """The name is back under a different identity. Reporting the teardown complete
+    would claim an object was removed that is standing right there."""
+    resource = FakeResource(
+        get_results=[_obj("uid-1"), _obj("uid-REPLACEMENT")],
+        delete_result=ApiException(status=404),
+    )
     with pytest.raises(GuardedDeleteError) as exc:
         _run(resource)
-    assert exc.value.reason == REASON_NOT_FOUND
+    assert exc.value.reason == REASON_UID_MISMATCH
+    assert exc.value.stage == STAGE_COMPLETED
+    assert exc.value.changed is False, "this invocation deleted nothing"
+    assert resource.calls.count("delete") == 1, "the replacement must not be deleted"
+
+
+def test_the_proved_object_still_present_after_a_delete_404_is_unverifiable():
+    """The server said the object was not there and the very next read finds it, with
+    the proved UID. The two statements cannot both be right, so nothing is concluded."""
+    resource = FakeResource(
+        get_results=[_obj("uid-1"), _obj("uid-1")],
+        delete_result=ApiException(status=404),
+    )
+    with pytest.raises(GuardedDeleteError) as exc:
+        _run(resource)
+    assert exc.value.reason == REASON_UNVERIFIABLE
+    assert exc.value.stage == STAGE_COMPLETED
+    assert exc.value.changed is False
+
+
+@pytest.mark.parametrize("failure", [ApiException(status=403), ApiException(status=500), TimeoutError("boom")])
+def test_an_unverifiable_proof_after_a_delete_404_is_never_reported_as_absent(failure):
+    """The final proof did not complete, so absence is unproven -- the same fail-closed
+    rule that governs every other read at this boundary."""
+    resource = FakeResource(get_results=[_obj("uid-1"), failure], delete_result=ApiException(status=404))
+    with pytest.raises(GuardedDeleteError) as exc:
+        _run(resource)
+    assert exc.value.reason == REASON_UNVERIFIABLE
+    assert exc.value.changed is False
 
 
 @pytest.mark.parametrize(
@@ -337,6 +397,41 @@ def test_client_construction_refuses_implicit_routing(kubeconfig, context):
         build_dynamic_client(kubeconfig, context, request_timeout=5)
 
 
+class _RecordingDiscoverer:
+    """Stands in for the SDK discoverer, counting cache invalidations."""
+
+    def __init__(self) -> None:
+        self.invalidations = 0
+
+    def invalidate_cache(self) -> None:
+        self.invalidations += 1
+
+
+def test_client_construction_discards_any_inherited_discovery_cache(monkeypatch):
+    """The SDK's discoverer reads a cache file keyed only by host, shared with every
+    other process that ever talked to that cluster. A mutation target resolved from it
+    is a claim about the past, so the factory forces a fresh discovery."""
+    discoverer = _RecordingDiscoverer()
+
+    class _Cfg:
+        timeout = None
+
+    class _ApiClient:
+        configuration = _Cfg()
+        resources = discoverer
+
+        def call_api(self, *_args, **_kwargs):
+            return {}
+
+    import kubernetes.config as k8s_config
+    import kubernetes.dynamic as k8s_dynamic
+
+    monkeypatch.setattr(k8s_config, "new_client_from_config", lambda **_kwargs: _ApiClient())
+    monkeypatch.setattr(k8s_dynamic, "DynamicClient", lambda api_client: api_client)
+    build_dynamic_client("/tmp/kc", "primary-hub", request_timeout=5)
+    assert discoverer.invalidations == 1
+
+
 def test_explicit_kubeconfig_and_context_reach_client_construction(monkeypatch):
     seen: dict = {}
 
@@ -345,6 +440,7 @@ def test_explicit_kubeconfig_and_context_reach_client_construction(monkeypatch):
 
     class _ApiClient:
         configuration = _Cfg()
+        resources = _RecordingDiscoverer()
 
         def call_api(self, *_args, **_kwargs):
             return {}
@@ -459,6 +555,7 @@ def test_request_timeout_wrapper_preserves_explicit_sdk_override(monkeypatch):
 
     class _ApiClient:
         configuration = _Cfg()
+        resources = _RecordingDiscoverer()
 
         def call_api(self, *args, **kwargs):
             seen["timeout"] = kwargs.get("_request_timeout")
@@ -726,3 +823,306 @@ def test_a_zero_or_negative_poll_interval_is_refused(monkeypatch):
         assert captured["fail"]["changed"] is False
         assert "positive number" in captured["fail"]["msg"]
         assert resource.calls == []
+
+
+# --------------------------------------------------------------------------- scope
+
+
+def _refusing_resolver(*_a, **_k):
+    raise AssertionError("no client may be built once the scope is known to be wrong")
+
+
+@pytest.mark.parametrize(
+    "namespaced,namespace,expected_text",
+    [
+        (True, None, "namespace is required for the namespaced kind"),
+        (True, "", "namespace is required for the namespaced kind"),
+        (True, "   ", "namespace is required for the namespaced kind"),
+        (False, "some-namespace", "namespace must not be set for the cluster-scoped kind"),
+    ],
+)
+def test_a_namespace_that_contradicts_the_discovered_scope_is_refused_before_any_object_request(
+    monkeypatch, namespaced, namespace, expected_text
+):
+    """The SDK routes by the *discovered* scope, not by what the caller supplied.
+
+    A namespace handed to a cluster-scoped kind is silently dropped and the cluster
+    object is deleted; a namespaced kind with no namespace is read through a
+    cluster-style route whose 404 would be reported as an absent object. Both are
+    refused before a single object request is issued.
+    """
+    module = _load_module()
+    captured: dict = {}
+    resource = FakeResource(get_results=[_obj("uid-1")], delete_result={}, namespaced=namespaced)
+    monkeypatch.setattr(
+        module,
+        "AnsibleModule",
+        _fake_ansible_module(_base_params(namespace=namespace), captured),
+    )
+    monkeypatch.setattr(module, "_resolve_resource", lambda *a, **k: resource)
+    with pytest.raises(SystemExit):
+        module.main()
+    failure = captured["fail"]
+    assert failure["reason"] == REASON_UNVERIFIABLE
+    assert failure["stage"] == "read"
+    assert failure["changed"] is False
+    assert expected_text in failure["msg"]
+    assert resource.calls == [], "no object may be read or deleted on a contradicted scope"
+
+
+@pytest.mark.parametrize("namespaced,namespace", [(False, "wrong-namespace"), (True, None)])
+def test_the_scope_check_precedes_real_sdk_routing(monkeypatch, namespaced, namespace):
+    """Measured against a real ``Resource`` and the real routing layer.
+
+    Without the check the cluster-scoped case issues DELETE at
+    ``/apis/g/v1/widgets/observability`` while claiming to act on a namespace, and the
+    namespaced case reports ``absent`` from a route 404. Here the wire stays silent.
+    """
+    from kubernetes.dynamic import DynamicClient
+    from kubernetes.dynamic.resource import Resource
+
+    module = _load_module()
+    configuration = Configuration()
+    configuration.host = "https://scope.invalid"
+    api_client = ApiClient(configuration)
+    dynamic = DynamicClient(api_client, discoverer=lambda *_a: None)
+    resource = Resource(
+        prefix="apis",
+        group="g",
+        api_version="v1",
+        kind="Widget",
+        name="widgets",
+        namespaced=namespaced,
+        client=dynamic,
+    )
+    wire: list = []
+
+    def transport(method, url, **_kwargs):
+        wire.append((method, url))
+        raise AssertionError("no request may reach the API on a contradicted scope")
+
+    monkeypatch.setattr(api_client.rest_client.pool_manager, "request", transport)
+    captured: dict = {}
+    monkeypatch.setattr(
+        module,
+        "AnsibleModule",
+        _fake_ansible_module(_base_params(namespace=namespace), captured),
+    )
+    monkeypatch.setattr(module, "_resolve_resource", lambda *a, **k: resource)
+    with pytest.raises(SystemExit):
+        module.main()
+    assert captured["fail"]["reason"] == REASON_UNVERIFIABLE
+    assert captured["fail"]["stage"] == "read"
+    assert wire == [], "the whole point is that nothing reaches the cluster"
+
+
+# --------------------------------------------------------------------------- finite budgets
+
+
+@pytest.mark.parametrize("field", ["request_timeout", "wait_timeout", "wait_sleep"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), "nan", "inf"])
+def test_a_non_finite_budget_is_refused_before_a_client_is_built(monkeypatch, field, value):
+    """NaN and infinity are numbers that pass ``> 0`` and then defeat every deadline.
+
+    ``wait_timeout=nan`` makes the poll's ``monotonic() >= deadline`` comparison always
+    false, so a persistent object waits forever; ``wait_sleep=nan`` reaches ``time.sleep``
+    *after* an accepted DELETE, where the generic handler would then report that nothing
+    was deleted. Both are refused before any client exists.
+    """
+    module = _load_module()
+    captured: dict = {}
+    monkeypatch.setattr(
+        module,
+        "AnsibleModule",
+        _fake_ansible_module(_base_params(**{field: value}), captured),
+    )
+    monkeypatch.setattr(module, "_resolve_resource", _refusing_resolver)
+    with pytest.raises(SystemExit):
+        module.main()
+    failure = captured["fail"]
+    assert failure["changed"] is False
+    assert failure["stage"] == "read"
+    assert failure["reason"] == REASON_UNVERIFIABLE
+    assert failure["msg"] == f"{field} must be a positive number"
+
+
+class _Clock:
+    """A monotonic clock that only advances when the code under test sleeps.
+
+    Makes "the wait stayed inside its budget" an arithmetic fact rather than a timing
+    measurement, so the assertion cannot pass by being lucky on a fast machine.
+    """
+
+    def __init__(self, start: float = 0.0) -> None:
+        self.now = start
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def test_the_poll_sleep_is_capped_to_the_remaining_absence_budget():
+    """A sleep longer than the remaining budget overruns the budget by definition.
+
+    With ``wait_timeout=0.01`` and ``wait_sleep=0.15``, an uncapped sleep spends 15x the
+    configured budget inside a single poll interval, so a destructive operation runs
+    arbitrarily far past the bound the operator set.
+    """
+    clock = _Clock()
+    resource = FakeResource(
+        get_results=[_obj("uid-1"), _obj("uid-1"), ApiException(status=404), ApiException(status=404)],
+        delete_result={},
+    )
+    result = _run(
+        resource,
+        wait_timeout=0.01,
+        wait_sleep=0.15,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    assert result["changed"] is True
+    assert clock.sleeps == [pytest.approx(0.01)], "the sleep must not outlast the budget"
+    assert clock.now <= 0.01 + 0.15, "total elapsed stays within the budget plus one sleep"
+    assert clock.now <= 0.01
+
+
+def test_absence_observed_immediately_after_the_deadline_is_still_absence():
+    """The cap bounds the wait; it must not turn a proved 404 into a timeout.
+
+    The read that lands just after the deadline still observed the object gone, and
+    absence is absence -- reporting a timeout there would fail a teardown that in fact
+    completed.
+    """
+    clock = _Clock()
+    resource = FakeResource(
+        get_results=[_obj("uid-1"), _obj("uid-1"), ApiException(status=404), ApiException(status=404)],
+        delete_result={},
+    )
+    result = _run(
+        resource,
+        wait_timeout=0.01,
+        wait_sleep=5,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    assert result["stage"] == STAGE_COMPLETED
+    assert clock.now == pytest.approx(0.01), "the capped sleep spent exactly the budget"
+    assert clock.sleeps == [pytest.approx(0.01)]
+
+
+# --------------------------------------------------------------------------- discovery freshness
+
+
+def _discovery_routes(api_version: str) -> dict:
+    group, version = api_version.split("/")
+    return {
+        "/version": {"major": "1", "minor": "35", "gitVersion": "v1.35.0"},
+        "/apis": {
+            "kind": "APIGroupList",
+            "groups": [
+                {
+                    "name": group,
+                    "versions": [{"groupVersion": api_version, "version": version}],
+                    "preferredVersion": {"groupVersion": api_version, "version": version},
+                }
+            ],
+        },
+        f"/apis/{api_version}": {
+            "kind": "APIResourceList",
+            "groupVersion": api_version,
+            "resources": [
+                {
+                    "name": "widgets",
+                    "kind": "Widget",
+                    "namespaced": False,
+                    "verbs": ["get", "delete"],
+                }
+            ],
+        },
+    }
+
+
+def _cached_discovery_fixture(monkeypatch, tmp_path):
+    """A real SDK client whose discovery cache file lives in ``tmp_path``.
+
+    Returns the client, the wire log, and a one-element list whose flag turns every
+    discovery endpoint into a 403 while the object route keeps answering 404.
+    """
+    api_version = "g/v1"
+    routes = _discovery_routes(api_version)
+    object_path = f"/apis/{api_version}/widgets/observability"
+    configuration = Configuration()
+    configuration.host = "https://discovery-cache.invalid"
+    configuration.verify_ssl = False
+    api_client = ApiClient(configuration)
+    wire: list = []
+    deny = [False]
+
+    def transport(method, url, **_kwargs):
+        path = urlsplit(url).path
+        wire.append((method, path))
+        if path == object_path:
+            payload, status = {"kind": "Status", "code": 404, "reason": "NotFound"}, 404
+        elif deny[0]:
+            payload, status = {"kind": "Status", "code": 403, "reason": "Forbidden"}, 403
+        else:
+            payload, status = routes[path], 200
+        return HTTPResponse(
+            body=json.dumps(payload).encode(),
+            status=status,
+            headers={"Content-Type": "application/json"},
+        )
+
+    import tempfile
+
+    import kubernetes.config as k8s_config
+
+    monkeypatch.setattr(k8s_config, "new_client_from_config", lambda **_kwargs: api_client)
+    monkeypatch.setattr(api_client.rest_client.pool_manager, "request", transport)
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    return api_client, wire, deny, object_path
+
+
+def test_a_cold_run_discovers_the_target_and_resolves_it(monkeypatch, tmp_path):
+    """The freshness rule must not cost the module its ability to resolve anything."""
+    module = _load_module()
+    _api_client, wire, _deny, _object_path = _cached_discovery_fixture(monkeypatch, tmp_path)
+    resource = module._resolve_resource("/tmp/kc", "primary-hub", 0.5, "g/v1", "Widget", "widgets")
+    assert resource.kind == "Widget"
+    assert ("GET", "/apis") in wire, "the group list came off the wire, not out of a cache"
+
+
+def test_a_warm_cache_cannot_stand_in_for_denied_live_discovery(monkeypatch, tmp_path):
+    """The finding, reproduced: a previous invocation's cache file satisfied discovery
+    while live discovery was denied, and the module read one object route, got its 404
+    and reported the object absent -- without ever establishing that the kind is still
+    served, or that this credential may see it at all.
+
+    Stale discovery may not satisfy live mutation validation: the run is unverifiable
+    and no object is read.
+    """
+    module = _load_module()
+    _api_client, wire, deny, object_path = _cached_discovery_fixture(monkeypatch, tmp_path)
+
+    module._resolve_resource("/tmp/kc", "primary-hub", 0.5, "g/v1", "Widget", "widgets")
+    assert list(tmp_path.glob("osrcp-*.json")), "the cold run must leave a warm cache behind"
+
+    wire.clear()
+    deny[0] = True
+    captured: dict = {}
+    monkeypatch.setattr(
+        module,
+        "AnsibleModule",
+        _fake_ansible_module(_base_params(api_version="g/v1", kind="Widget", resource_name="widgets"), captured),
+    )
+    with pytest.raises(SystemExit):
+        module.main()
+
+    assert "exit" not in captured, "a denied discovery may never exit as a successful absence"
+    assert captured["fail"]["reason"] == REASON_UNVERIFIABLE
+    assert captured["fail"]["changed"] is False
+    assert [entry for entry in wire if entry[1] == object_path] == [], "no object may be read on stale discovery"

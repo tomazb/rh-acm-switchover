@@ -20,6 +20,10 @@
         wait_sleep: "{{ guarded_wait_sleep | default(0.1) }}"
       register: guarded_result
       ignore_errors: true
+      # The shipped invocation contract: the task arguments carry a kubeconfig path, so
+      # no callback may render them. The registered result stays available to the tasks
+      # below -- no_log governs callback rendering, not the variable.
+      no_log: true
 
     # Written to a file rather than echoed through debug: Ansible renders and wraps
     # debug output, so parsing it back as JSON is fragile in a way that has nothing to
