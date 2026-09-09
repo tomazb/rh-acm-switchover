@@ -21,9 +21,11 @@ rules:
   - apiGroups: ["operator.open-cluster-management.io"]
     resources: ["multiclusterhubs"]
     verbs: ["delete"]
-  # The standalone teardown in modules/decommission.py reads the named
-  # MultiClusterObservability before deleting it and again for the final absence proof,
-  # so this extension must grant `get` for the extension to be self-sufficient.
+  # `get` is here so this extension is self-consistent with the calls the standalone
+  # teardown in modules/decommission.py makes: a strict named GET before the delete and
+  # a final absence proof after it. The extension is not self-sufficient on its own --
+  # its other reads (namespaces get, managedclusters/multiclusterhubs/MCO list, pods)
+  # still come from the baseline operator role bound to the same service account.
   - apiGroups: ["observability.open-cluster-management.io"]
     resources: ["multiclusterobservabilities"]
     verbs: ["get", "delete"]
