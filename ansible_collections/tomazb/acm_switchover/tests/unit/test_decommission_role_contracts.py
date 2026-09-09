@@ -2851,3 +2851,28 @@ def test_dry_run_records_no_substep_outcome():
     assert result["returncode"] == 0
     assert summary["changed"] is False
     assert result["delete_calls"] == []
+
+
+def test_only_the_standalone_playbook_declares_the_standalone_discriminator():
+    """``acm_switchover_standalone_decommission`` switches the destination gate off.
+
+    Exactly one file may set it (``playbooks/decommission.yml``) and exactly one may read
+    it (the gate include in ``delete_observability.yml``). Any other role or playbook
+    naming it -- a finalization task in particular -- would silently disable the gate on
+    the integrated path.
+
+    Kill condition: adding the variable to any task, ``vars:`` or ``set_fact`` under
+    ``roles/`` or ``playbooks/`` other than those two files.
+    """
+    allowed = {DECOMMISSION_PLAYBOOK, DELETE_OBSERVABILITY}
+    yaml_files = [
+        path for root in (ROLES_DIR, PLAYBOOKS_DIR) for path in root.rglob("*") if path.suffix in {".yml", ".yaml"}
+    ]
+    offenders = sorted(
+        str(path.relative_to(ROLES_DIR.parent))
+        for path in yaml_files
+        if path not in allowed and "acm_switchover_standalone_decommission" in path.read_text()
+    )
+
+    assert yaml_files
+    assert offenders == []
