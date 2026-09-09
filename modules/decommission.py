@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from kubernetes.client.exceptions import ApiException
+from urllib3.exceptions import HTTPError, MaxRetryError, NewConnectionError
+from urllib3.exceptions import TimeoutError as Urllib3TimeoutError
 
 from lib.constants import (
     ACM_NAMESPACE,
@@ -37,7 +39,7 @@ from lib.decommission_outcome import (
     SubstepExecution,
     SubstepOutcome,
 )
-from lib.exceptions import PreconditionConflict, SwitchoverError, TargetDisappeared
+from lib.exceptions import SwitchoverError, TargetDisappeared
 from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.run_record import RunRecord
@@ -239,16 +241,24 @@ class Decommission:
         RunRecord, so a dry run leaves behind no result or state authority.
         """
         if substep == "observability":
-            names = self._resource_names(
-                self.primary.list_custom_resources(
-                    group="observability.open-cluster-management.io",
-                    version="v1beta2",
-                    plural="multiclusterobservabilities",
-                )
+            # Strict and named, exactly as the live teardown reads it: through the
+            # non-strict list an API failure answered `None`, which became an empty
+            # name list and a confident "nothing to delete". A preview that cannot
+            # read must refuse, not predict.
+            spec = OBSERVABILITY_TEARDOWN
+            cr = self.primary.get_custom_resource_strict(
+                group=spec.group,
+                version=spec.version,
+                plural=spec.plural,
+                name=spec.name,
+                namespace=spec.namespace,
             )
-            if names:
-                logger.info("[DRY-RUN] Would delete MultiClusterObservability: %s", format_public_list(names))
-            return bool(names)
+            if cr.status is StrictReadStatus.ERROR:
+                raise SwitchoverError(f"Cannot verify {spec.kind} {spec.name} for the dry-run preview")
+            if cr.status is StrictReadStatus.ITEMS:
+                logger.info("[DRY-RUN] Would delete %s %s", spec.kind, spec.name)
+                return True
+            return False
 
         if substep == "managed_clusters":
             names = [
@@ -361,16 +371,43 @@ class Decommission:
                     return SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
 
                 self._record(spec, key, expected_uid, TeardownPhase.DELETE_STARTED)
-                self.primary.delete_custom_resource_preconditioned(
-                    spec.group,
-                    spec.version,
-                    spec.plural,
-                    spec.name,
-                    uid=expected_uid,
-                    namespace=spec.namespace,
-                    timeout_seconds=DELETE_REQUEST_TIMEOUT,
-                )
-                changed = True
+                try:
+                    self.primary.delete_custom_resource_preconditioned(
+                        spec.group,
+                        spec.version,
+                        spec.plural,
+                        spec.name,
+                        uid=expected_uid,
+                        namespace=spec.namespace,
+                        timeout_seconds=DELETE_REQUEST_TIMEOUT,
+                    )
+                except TargetDisappeared:
+                    # The object went away between the proved read and the DELETE.
+                    # July step 3's absence poll is "GET until 404/absent", so this is
+                    # where the proof obligation starts, not a failure: fall through and
+                    # let the poll, the drain and the final pass decide. Nothing was
+                    # accepted for this invocation, so `changed` stays False.
+                    logger.info(
+                        "%s %s disappeared between the proved read and the delete; verifying absence live",
+                        spec.kind,
+                        spec.name,
+                    )
+                except ApiException as exc:
+                    # Convert at the raise site so the failure travels the one
+                    # execution-result channel and this invocation's aggregated
+                    # `changed` reaches the caller. Status and reason only: the raw
+                    # HTTP body and headers must never reach a log or the state file.
+                    raise SwitchoverError(
+                        f"Failed to delete {spec.kind} {spec.name}: API error {exc.status} {exc.reason}"
+                    ) from exc
+                except (HTTPError, MaxRetryError, NewConnectionError, Urllib3TimeoutError) as exc:
+                    # The transport failures lib/kube_client.py classifies. Their str()
+                    # can carry the request URL, so name only the exception type.
+                    raise SwitchoverError(
+                        f"Failed to delete {spec.kind} {spec.name}: transport error {type(exc).__name__}"
+                    ) from exc
+                else:
+                    changed = True
             elif self.dry_run:
                 return SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
 
@@ -484,19 +521,16 @@ class Decommission:
 
             return SubstepExecution(SubstepOutcome.COMPLETED, changed=changed)
 
-        except (ValidationError, PreconditionConflict, TargetDisappeared) as exc:
-            # PreconditionConflict and TargetDisappeared are EXPECTED outcomes of a
-            # guarded delete and belong on the return channel. ValidationError is not:
-            # the primitive raises it when the caller supplied no proved identity,
-            # which is a bug in this method, and converting it into a FAILED result
-            # would hide that behind an operational-looking outcome.
-            if isinstance(exc, ValidationError):
-                raise
-            logger.error("%s teardown failed: %s", spec.kind, exc)
-            return SubstepExecution(SubstepOutcome.FAILED, changed=changed)
+        except ValidationError:
+            # Not an operational outcome: the delete primitive raises it when the
+            # caller supplied no proved identity, which is a bug in this method, and
+            # converting it into a FAILED result would hide that behind an
+            # operational-looking outcome.
+            raise
         except SwitchoverError as exc:
-            # Expected operational failure: sanitized stage and reason only, never a
-            # raw body, header, token or client configuration.
+            # Every expected operational failure, PreconditionConflict included:
+            # sanitized stage and reason only, never a raw body, header, token or
+            # client configuration.
             logger.error("%s teardown failed: %s", spec.kind, exc)
             return SubstepExecution(SubstepOutcome.FAILED, changed=changed)
 

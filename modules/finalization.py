@@ -39,9 +39,6 @@ from lib.constants import (
     MCE_NAMESPACE,
     MCH_VERIFY_INTERVAL,
     MCH_VERIFY_TIMEOUT,
-    OBSERVABILITY_NAMESPACE,
-    OBSERVABILITY_TERMINATE_INTERVAL,
-    OBSERVABILITY_TERMINATE_TIMEOUT,
     RESTORE_FAST_POLL_INTERVAL,
     RESTORE_FAST_POLL_TIMEOUT,
     RESTORE_FULL_NAME,
@@ -56,7 +53,6 @@ from lib.constants import (
 )
 from lib.decommission_outcome import UNSUCCESSFUL_OUTCOMES
 from lib.exceptions import FatalError, SwitchoverError, TransientError
-from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient, is_retryable_error
 from lib.run_record import RunRecord
 from lib.utils import Phase, StateManager, dry_run_skip, is_acm_version_ge

@@ -30,6 +30,7 @@ from lib.constants import (
     MANAGED_CLUSTER_AGENT_NAMESPACE,
     MAX_KUBECONFIG_SIZE,
     OBSERVABILITY_NAMESPACE,
+    OBSERVABILITY_POD_LABEL_SELECTOR,
 )
 from lib.exceptions import SwitchoverError
 from lib.waiter import WaitConditionResult
@@ -576,8 +577,13 @@ class TestPostActivationVerification:
         # Method should complete without error
         post_verify_with_obs._verify_observability_pods()
 
-        # Verify get_pods was called
-        mock_secondary_client.get_pods.assert_called_once()
+        # The drain/health scope is the shared constant, not a second copy of the
+        # selector string: a copy here and a constant in the teardown machine would
+        # drift silently and check two different sets of pods.
+        mock_secondary_client.get_pods.assert_called_once_with(
+            namespace=OBSERVABILITY_NAMESPACE,
+            label_selector=OBSERVABILITY_POD_LABEL_SELECTOR,
+        )
 
     @patch("modules.post_activation.wait_for_condition")
     def test_verify_observability_pods_none_found(self, mock_wait, post_verify_with_obs, mock_secondary_client):

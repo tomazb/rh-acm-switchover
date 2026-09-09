@@ -18,6 +18,7 @@ from kubernetes.client.rest import ApiException
 # Add parent to path to import modules directly
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import modules.decommission as decommission_module
 import modules.finalization as finalization_module
 from lib.constants import BACKUP_SCHEDULE_DEFAULT_NAME
 from lib.decommission_outcome import DecommissionResult, SubstepOutcome
@@ -1393,6 +1394,61 @@ class TestFinalization:
 
         assert "already exists during recreation" in caplog.text
 
+    def test_a_rejected_mco_delete_never_writes_a_raw_response_into_the_state_file(
+        self, mock_secondary_client, mock_backup_manager, tmp_path, caplog
+    ):
+        """The persisted end of the leak, through the real StateManager.
+
+        ``finalize``'s ``except Exception`` arm stringifies whatever reaches it, and
+        ``str(ApiException)`` is the status line plus the response headers plus the
+        response body. Keeping the failure on the execution-result channel means the
+        state file records finalization's own message context instead.
+        """
+        from lib.utils import StateManager
+
+        canary = "RAW-RESPONSE-CANARY"
+        exc = ApiException(status=403, reason="Forbidden")
+        exc.body = '{"message":"%s"}' % canary
+        exc.headers = {"X-Canary": canary}
+
+        primary = Mock()
+        primary.get_custom_resource_strict.return_value = StrictReadOutcome(
+            status=StrictReadStatus.ITEMS,
+            resource={"metadata": {"name": "observability", "uid": "uid-1"}},
+        )
+        primary.get_namespace_strict.return_value = StrictReadOutcome(status=StrictReadStatus.NAMESPACE_ABSENT)
+        primary.delete_custom_resource_preconditioned.side_effect = exc
+
+        state = StateManager(str(tmp_path / "state.json"))
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=state,
+            acm_version="2.14.0",
+            primary_client=primary,
+            primary_has_observability=True,
+            old_hub_action="secondary",
+        )
+
+        with caplog.at_level(logging.ERROR):
+            assert fin.finalize() is False
+
+        state.flush_state()
+        persisted = (tmp_path / "state.json").read_text(encoding="utf-8")
+        assert canary not in persisted
+        assert canary not in caplog.text
+        assert (
+            "Failed to disable observability on the old hub" in persisted
+        ), "amendment section 11 item 2: finalization's own message context is what reaches the operator"
+
+    def test_finalization_imports_no_second_gitops_marker_path(self):
+        """GLM-H6: the consolidation left finalization with zero MCO teardown surface.
+
+        A still-imported marker recorder is not merely a dead import: it is a
+        ready-made second marker path that a later edit could call, which is exactly
+        the duplication ``Decommission.teardown_observability`` was made to erase.
+        """
+        assert not hasattr(finalization_module, "safe_record_gitops_markers")
+
     @patch("modules.decommission.wait_for_condition")
     def test_disable_observability_on_old_hub_deletes_mco(
         self, mock_wait, mock_secondary_client, mock_state_manager, mock_backup_manager, mock_mco_primary
@@ -1435,13 +1491,13 @@ class TestFinalization:
             timeout_seconds=finalization_module.DELETE_REQUEST_TIMEOUT,
         )
         assert primary.get_namespace_strict.call_args_list == [
-            call(finalization_module.OBSERVABILITY_NAMESPACE),
-            call(finalization_module.OBSERVABILITY_NAMESPACE),
+            call(decommission_module.OBSERVABILITY_NAMESPACE),
+            call(decommission_module.OBSERVABILITY_NAMESPACE),
         ]
         assert mock_wait.call_count == 2
         for wait_call in mock_wait.call_args_list:
-            assert wait_call.kwargs["timeout"] == finalization_module.OBSERVABILITY_TERMINATE_TIMEOUT
-            assert wait_call.kwargs["interval"] == finalization_module.OBSERVABILITY_TERMINATE_INTERVAL
+            assert wait_call.kwargs["timeout"] == decommission_module.OBSERVABILITY_TERMINATE_TIMEOUT
+            assert wait_call.kwargs["interval"] == decommission_module.OBSERVABILITY_TERMINATE_INTERVAL
             assert wait_call.kwargs["allow_success_after_timeout"] is True
         primary.delete_custom_resource.assert_not_called()
 

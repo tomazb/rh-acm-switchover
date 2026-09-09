@@ -43,6 +43,7 @@ from lib.constants import (
     MANAGED_CLUSTER_PLURAL,
     MAX_KUBECONFIG_SIZE,
     OBSERVABILITY_NAMESPACE,
+    OBSERVABILITY_POD_LABEL_SELECTOR,
     OBSERVABILITY_POD_TIMEOUT,
     OBSERVATORIUM_API_DEPLOYMENT,
     POD_READINESS_TOLERANCE,
@@ -563,10 +564,11 @@ class PostActivationVerification:
 
         # Use label selector scoped to ACM observability components.
         # The label app.kubernetes.io/part-of=observability is not consistently applied,
-        # while observability.open-cluster-management.io/name=observability is.
+        # while OBSERVABILITY_POD_LABEL_SELECTOR is; it is the same scope the shared
+        # teardown machine drains, so both must read one definition.
         pods = self.secondary.get_pods(
             namespace=OBSERVABILITY_NAMESPACE,
-            label_selector="observability.open-cluster-management.io/name=observability",
+            label_selector=OBSERVABILITY_POD_LABEL_SELECTOR,
         )
 
         if not pods:
