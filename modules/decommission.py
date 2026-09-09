@@ -324,6 +324,15 @@ class Decommission:
 
         Called only for the MCO spec and only when a destination client exists.
         """
+        if self.secondary is None:
+            # Refused before any read: without a destination hub there is no fact to
+            # gate on, and continuing would fail on None inside the destination step
+            # after the source reads had already been issued.
+            raise SwitchoverError(
+                "destination_observability_gate requires a secondary client; "
+                "standalone decommission has no destination"
+            )
+
         spec = OBSERVABILITY_TEARDOWN
         source_cr = self.primary.get_custom_resource_strict(
             group=spec.group,

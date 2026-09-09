@@ -2207,6 +2207,18 @@ class TestDestinationObservabilityGate:
         integrated.destination_observability_gate()
         assert integrated.secondary_client.list_custom_resources_strict.call_count > calls_after_first
 
+    def test_calling_the_gate_without_a_destination_client_refuses_explicitly(self, standalone):
+        """A caller that reaches the gate with no destination hub is refused before
+        any read, rather than failing on ``None`` deep inside the destination step."""
+        _present_source(standalone)
+
+        with pytest.raises(SwitchoverError, match="requires a secondary client"):
+            standalone.destination_observability_gate()
+
+        standalone.primary.get_custom_resource_strict.assert_not_called()
+        standalone.primary.get_namespace_strict.assert_not_called()
+        assert standalone.secondary is None
+
     def test_standalone_decommission_has_no_destination_gate(self, standalone):
         """Request level, not just a null client: the gate is never entered at all."""
         standalone.source(
@@ -2317,11 +2329,20 @@ class TestGateCallSiteInThePhaseMachine:
         writer.assert_not_called()
 
     def test_a_blocked_gate_logs_only_the_sanitized_reason_code(self, integrated, caplog):
+        """The stable code reaches the operator; the read's own detail never does.
+
+        The canary lives only inside the destination outcomes' reason text, so any
+        assertion that finds it has found a raw read detail reaching the log.
+        """
         _present_source(integrated)
-        _absent_destination(integrated)
-        with caplog.at_level(logging.ERROR):
+        integrated.destination(
+            mco=StrictReadOutcome.crd_absent(f"kind_not_served {RESPONSE_CANARY}"),
+            namespace=StrictReadOutcome.namespace_absent(f"namespace_not_found {RESPONSE_CANARY}"),
+        )
+        with caplog.at_level(logging.DEBUG):
             integrated.teardown_observability()
         assert GATE_REASON_DESTINATION_ABSENT in caplog.text
+        assert RESPONSE_CANARY not in caplog.text
 
     def test_a_passing_gate_lets_the_delete_proceed(self, integrated):
         integrated.primary.get_custom_resource_strict = Mock(
