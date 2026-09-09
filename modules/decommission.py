@@ -322,7 +322,9 @@ class Decommission:
         decision authorizes a deletion happening now. The result is returned, never
         persisted and never cached, so a resume re-proves it (section 13).
 
-        Called only for the MCO spec and only when a destination client exists.
+        Called only for the MCO spec, only when a destination client exists, and only
+        when the phase machine's own fresh read found the target present -- that is,
+        only when this invocation has a DELETE to authorize.
         """
         if self.secondary is None:
             # Refused before any read: without a destination hub there is no fact to
@@ -460,7 +462,14 @@ class Decommission:
             # authorize), and before `expected_uid` -- therefore before any durable
             # write and before the DELETE, with no mutation in between. Selected by
             # the spec object, so PRs D and E reuse this machine ungated.
-            if spec is OBSERVABILITY_TEARDOWN and self.secondary is not None:
+            #
+            # `cr.status is ITEMS` is the whole rule: section 9 requires the gate to
+            # re-run its fresh reads before the deletion substep, and this invocation
+            # has a deletion substep only when its own fresh read found the target. A
+            # record whose target is already gone owes a drain and a final proof, and
+            # gating that would block the resume on a source the gate itself reads as
+            # half-removed.
+            if spec is OBSERVABILITY_TEARDOWN and self.secondary is not None and cr.status is StrictReadStatus.ITEMS:
                 gate = self.destination_observability_gate()
                 if gate.decision is ObservabilityGateDecision.BLOCKED:
                     # No write has happened yet, in a live run or a preview, so
@@ -468,9 +477,11 @@ class Decommission:
                     # preview result, which is why dry run takes this path too.
                     return SubstepExecution(SubstepOutcome.FAILED, changed=False)
                 if gate.decision is ObservabilityGateDecision.NOT_APPLICABLE and record is None:
-                    # The object disappeared between the machine's read and the gate's.
-                    # With a record, NOT_APPLICABLE keeps the record's remaining
-                    # read-only obligations instead: it is not a clean no-op.
+                    # Reachable only because the object disappeared between this
+                    # machine's read and the gate's own: the machine saw ITEMS or the
+                    # gate would not have run. With a record the same race falls
+                    # through to the UID-preconditioned DELETE, whose TargetDisappeared
+                    # arm hands the absence proof to the poll.
                     return SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
 
             expected_uid = record.expected_uid if record is not None else self._live_uid(spec, cr)

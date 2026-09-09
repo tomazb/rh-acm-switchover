@@ -2369,8 +2369,8 @@ class TestGateCallSiteInThePhaseMachine:
         integrated.primary.delete_custom_resource_preconditioned.assert_called_once()
 
     def test_a_nonterminal_record_with_an_absent_source_keeps_its_obligations(self, integrated):
-        """NOT_APPLICABLE is not a clean no-op: the drain and final proof still run,
-        no destination is read, and nothing is deleted."""
+        """No DELETE is pending, so the gate is not invoked at all; the drain and the
+        final proof still run, no destination is read, and nothing is deleted."""
         _seed_record(integrated, phase=TeardownPhase.DELETE_STARTED)
         integrated.source(
             mco=StrictReadOutcome.object_absent("object_not_found"),
@@ -2380,9 +2380,15 @@ class TestGateCallSiteInThePhaseMachine:
         writer = Mock(wraps=integrated.run_record.record_teardown_phase)
         integrated.run_record.record_teardown_phase = writer
 
-        execution = integrated.teardown_observability()
+        with patch.object(
+            integrated,
+            "destination_observability_gate",
+            wraps=integrated.destination_observability_gate,
+        ) as gate:
+            execution = integrated.teardown_observability()
 
         assert execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+        gate.assert_not_called()
         integrated.primary.delete_custom_resource_preconditioned.assert_not_called()
         integrated.secondary_client.list_custom_resources_strict.assert_not_called()
         integrated.secondary_client.get_namespace_strict.assert_not_called()
@@ -2390,6 +2396,92 @@ class TestGateCallSiteInThePhaseMachine:
         assert TeardownPhase.CR_ABSENT in phases
         assert TeardownPhase.DRAINED in phases
         assert phases[-1] is TeardownPhase.COMPLETED
+
+    @pytest.mark.parametrize("phase", [TeardownPhase.DELETE_STARTED, TeardownPhase.CR_ABSENT])
+    def test_a_nonterminal_record_with_a_retained_namespace_resumes_the_drain(self, integrated, phase):
+        """The mid-drain resume: the DELETE landed, the namespace is still draining.
+
+        The gate's source step would read this half-removed hub as ambiguous and block
+        a teardown that has nothing left to authorize, so no DELETE pending means no
+        gate. The record's remaining obligations run to completion instead.
+        """
+        _seed_record(integrated, phase=phase)
+        integrated.source(
+            mco=StrictReadOutcome.object_absent("object_not_found"),
+            namespace=StrictReadOutcome.from_resource(
+                {"metadata": {"name": OBSERVABILITY_NAMESPACE}}, resource_version="ns-9"
+            ),
+        )
+        integrated.primary.list_pods_strict = Mock(
+            return_value=StrictReadOutcome.from_items([], resource_version="pods-9")
+        )
+        integrated.primary.delete_custom_resource_preconditioned = Mock()
+        _absent_destination(integrated)
+        writer = Mock(wraps=integrated.run_record.record_teardown_phase)
+        integrated.run_record.record_teardown_phase = writer
+
+        with patch.object(
+            integrated,
+            "destination_observability_gate",
+            wraps=integrated.destination_observability_gate,
+        ) as gate:
+            execution = integrated.teardown_observability()
+
+        assert execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+        gate.assert_not_called()
+        integrated.primary.delete_custom_resource_preconditioned.assert_not_called()
+        integrated.secondary_client.list_custom_resources_strict.assert_not_called()
+        integrated.secondary_client.get_namespace_strict.assert_not_called()
+        phases = [written.args[0].phase for written in writer.call_args_list]
+        assert phases[-1] is TeardownPhase.COMPLETED
+
+    def test_a_completed_record_with_a_retained_namespace_reproves_without_the_gate(
+        self, integrated, state_manager, tmp_path
+    ):
+        """The exact C1 probe: completed record, source CR gone, namespace retained,
+        a destination that would block. The reproof runs and writes nothing at all."""
+        integrated.run_record.record_teardown_phase(
+            TeardownRecord(
+                key=MCO_KEY,
+                expected_uid="uid-1",
+                phase=TeardownPhase.COMPLETED,
+                observed_at="2026-09-09T00:00:00+00:00",
+                resource_versions={"drain_namespace": "ns-1", "drain_pods": "pods-1"},
+                absence_proofs={"target_cr": AbsenceProof(proof_type="object_absent", resource_key=MCO_KEY)},
+            )
+        )
+        state_manager.flush_state()
+        state_path = tmp_path / "state.json"
+        before = state_path.read_bytes()
+
+        integrated.source(
+            mco=StrictReadOutcome.object_absent("object_not_found"),
+            namespace=StrictReadOutcome.from_resource(
+                {"metadata": {"name": OBSERVABILITY_NAMESPACE}}, resource_version="ns-2"
+            ),
+        )
+        integrated.primary.list_pods_strict = Mock(
+            return_value=StrictReadOutcome.from_items([], resource_version="pods-2")
+        )
+        integrated.primary.delete_custom_resource_preconditioned = Mock()
+        _absent_destination(integrated)
+
+        with patch.object(
+            integrated,
+            "destination_observability_gate",
+            wraps=integrated.destination_observability_gate,
+        ) as gate:
+            execution = integrated.teardown_observability()
+
+        assert execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+        gate.assert_not_called()
+        integrated.primary.delete_custom_resource_preconditioned.assert_not_called()
+        integrated.secondary_client.list_custom_resources_strict.assert_not_called()
+        integrated.secondary_client.get_namespace_strict.assert_not_called()
+        # `save_state` writes only when the run made the state dirty, so unchanged
+        # bytes here prove the completed record's evidence was never rewritten.
+        state_manager.save_state()
+        assert state_path.read_bytes() == before
 
     def test_a_completed_record_never_reaches_the_gate(self, integrated):
         """A completed record has no DELETE to authorize, so an unreadable or absent

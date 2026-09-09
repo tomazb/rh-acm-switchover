@@ -35,8 +35,29 @@
 - name: Require durable checkpoint state before the old hub observability teardown
   ansible.builtin.assert:
     that:
+      # Validate is REFUSED here for the same reason decommission/tasks/main.yml
+      # refuses it: the shared teardown's delete guards fire in any mode other than
+      # dry_run, while checkpoint_phase treats validate as non-mutating and records no
+      # phase, so a validate run would really delete the old hub's
+      # MultiClusterObservability and leave no durable identity map behind.
+      - (acm_switchover_execution.mode | default('dry_run')) != 'validate'
       - acm_switchover_execution.checkpoint.enabled | default(false) | bool
     fail_msg: >-
+      {{
+        _acm_adapter_validate_refusal
+        if (acm_switchover_execution.mode | default('dry_run')) == 'validate'
+        else _acm_adapter_checkpoint_refusal
+      }}
+  vars:
+    _acm_adapter_validate_refusal: >-
+      Refusing to tear down old hub Observability in validate mode: this teardown has
+      no non-mutating validate path. Its delete guards fire in any mode other than
+      dry_run, so a validate run would really delete MultiClusterObservability while
+      the checkpoint action records no phase at all. Preview with
+      acm_switchover_execution.mode set to dry_run, or run for real with
+      acm_switchover_execution.mode set to execute and
+      acm_switchover_execution.checkpoint.enabled set to true.
+    _acm_adapter_checkpoint_refusal: >-
       Refusing to tear down old hub Observability in execute mode without durable
       checkpoint state: the MultiClusterObservability identity map must be persisted
       before the delete. Set acm_switchover_execution.checkpoint.enabled to true
@@ -44,7 +65,7 @@
       acm_switchover_execution.mode set to dry_run.
   when:
     - not ansible_check_mode
-    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - (acm_switchover_execution.mode | default('dry_run')) in ['execute', 'validate']
 
 # Exactly what decommission/tasks/main.yml seeds for the same task, and nothing more:
 # the shared teardown reads `_acm_decommission_records_outcomes` and combines into

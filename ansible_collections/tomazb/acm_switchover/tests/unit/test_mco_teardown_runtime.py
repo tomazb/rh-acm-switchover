@@ -446,7 +446,8 @@ def test_an_unverifiable_source_never_reads_as_nothing_to_delete():
     assert result["destination_requests"] == []
 
 
-def test_a_proven_absent_source_is_not_applicable_and_reads_no_destination():
+def test_a_proven_absent_source_is_never_gated_and_reads_no_destination():
+    """No target, no DELETE, no gate: the clean-skip rules decide on their own."""
     result = _gated(
         mco_present=False,
         observability_namespace="absent",
@@ -455,14 +456,14 @@ def test_a_proven_absent_source_is_not_applicable_and_reads_no_destination():
     )
 
     assert result["returncode"] == 0
-    assert result["gate"] == {"decision": "not_applicable", "reason": ""}
+    assert result["gate"] is None
     assert result["acm_switchover_decommission_result"]["substeps"]["observability"] == "precondition_noop"
     assert result["destination_requests"] == []
 
 
 @pytest.mark.parametrize("phase", ["cr_absent", "drain_pending", "drained", "recovery_required"])
 def test_a_nonterminal_record_with_an_absent_source_keeps_its_obligations(phase):
-    """NOT_APPLICABLE with a record is not a clean no-op; the drain proof still runs."""
+    """A record whose target is already gone owes proof, not a DELETE: no gate runs."""
     result = _gated(
         mco_present=False,
         observability_namespace="absent",
@@ -473,7 +474,31 @@ def test_a_nonterminal_record_with_an_absent_source_keeps_its_obligations(phase)
     record = result["checkpoint"]["operational_data"]["decommission_teardown_records"][MCO_KEY]
 
     assert result["returncode"] == 0
-    assert result["gate"] == {"decision": "not_applicable", "reason": ""}
+    assert result["gate"] is None
+    assert record["phase"] == "completed"
+    assert _mco_deletes(result) == []
+    assert result["destination_requests"] == []
+
+
+@pytest.mark.parametrize("phase", ["delete_started", "cr_absent"])
+def test_a_nonterminal_record_with_a_retained_namespace_resumes_the_drain(phase):
+    """The mid-drain resume: the CR is gone, the namespace is still being drained.
+
+    The gate's own source step reads that half-removed hub as ambiguous, so gating a
+    substep with no DELETE pending would make this normal post-DELETE state
+    unresumable. Under R1 the gate is not invoked and the drain proof finishes.
+    """
+    result = _gated(
+        mco_present=False,
+        observability_namespace="present",
+        mco_record=_record(phase),
+        destination_mco="absent",
+        destination_namespace="absent",
+    )
+    record = result["checkpoint"]["operational_data"]["decommission_teardown_records"][MCO_KEY]
+
+    assert result["returncode"] == 0
+    assert result["gate"] is None
     assert record["phase"] == "completed"
     assert _mco_deletes(result) == []
     assert result["destination_requests"] == []
@@ -491,8 +516,32 @@ def test_a_completed_record_reproves_unaffected_by_a_destination_that_would_bloc
     )
 
     assert result["returncode"] == 0
+    assert result["gate"] is None
     assert result["checkpoint"]["operational_data"]["decommission_teardown_records"][MCO_KEY] == completed
     assert result["checkpoint"]["operational_data"] == result["checkpoint"]["before_operational_data"]
+    assert result["destination_requests"] == []
+
+
+def test_a_completed_record_with_a_retained_namespace_reproves_without_the_gate():
+    """The exact C1 probe from review: this row returned RC 2 before R1.
+
+    Completed record, source CR gone, observability namespace retained, a destination
+    that would block. The reproof must run and the immutable evidence must not move.
+    """
+    completed = _completed_record()
+    result = _gated(
+        mco_present=False,
+        observability_namespace="present",
+        mco_record=completed,
+        destination_mco="absent",
+        destination_namespace="absent",
+    )
+
+    assert result["returncode"] == 0
+    assert result["gate"] is None
+    assert result["checkpoint"]["operational_data"]["decommission_teardown_records"][MCO_KEY] == completed
+    assert result["checkpoint"]["operational_data"] == result["checkpoint"]["before_operational_data"]
+    assert _mco_deletes(result) == []
     assert result["destination_requests"] == []
 
 
@@ -544,6 +593,45 @@ def test_the_standalone_playbook_never_reaches_the_gate():
     assert result["gate"] is None
     assert gate_task_names.isdisjoint({task["name"] for task in result["tasks"]})
     assert len(_mco_deletes(result)) == 1
+
+
+def test_the_standalone_playbook_never_gates_even_with_a_configured_secondary():
+    """R3: the standalone entry point declares itself, so a secondary left in the hub
+    vars by an integrated run's group_vars is not a destination hub to gate on.
+    Python's ``--decommission`` constructs no secondary client at all."""
+    result = run_decommission_role(
+        standalone_playbook=True,
+        destination_mco="absent",
+        destination_namespace="absent",
+        managed_clusters_outcome="precondition_noop",
+        multiclusterhub_outcome="precondition_noop",
+    )
+
+    assert result["returncode"] == 0
+    assert result["gate"] is None
+    assert result["destination_requests"] == []
+    assert len(_mco_deletes(result)) == 1
+
+
+def test_the_standalone_playbook_refuses_the_acknowledgement_before_any_read():
+    """Exact Python parity: ``--decommission`` rejects
+    ``--acknowledge-observability-not-migrated``. A standalone run has no destination
+    hub, so there is nothing to acknowledge and nothing may be read or deleted."""
+    result = run_decommission_role(
+        standalone_playbook=True,
+        destination_mco="absent",
+        destination_namespace="absent",
+        acknowledge_observability_not_migrated=True,
+        managed_clusters_outcome="precondition_noop",
+        multiclusterhub_outcome="precondition_noop",
+    )
+    failed = {task["name"] for task in result["tasks"] if task["failed"]}
+
+    assert result["returncode"] != 0
+    assert "Refuse an acknowledgement the standalone decommission cannot honour" in failed
+    assert result["requests"] == []
+    assert result["destination_requests"] == []
+    assert result["delete_calls"] == []
 
 
 def test_the_integrated_decommission_disposition_gates_through_handle_old_hub():
@@ -665,6 +753,38 @@ def test_the_adapter_runs_the_destination_gate_and_refuses_a_blocked_teardown():
     assert result["gate"] == {"decision": "blocked", "reason": GATE_REASON_DESTINATION_ABSENT}
     assert _mco_deletes(result) == []
     assert result["checkpoint"]["operational_data"] == result["checkpoint"]["before_operational_data"]
+
+
+def test_the_adapter_refuses_validate_mode_before_any_read_or_delete():
+    """R2: the adapter mirrors decommission/tasks/main.yml's validate refusal.
+
+    Every delete guard in the shared teardown fires on any mode other than dry_run,
+    while the checkpoint action treats validate as non-mutating and records no phase.
+    Both shipped playbooks stop after preflight in validate mode, so this is defence
+    in depth on a path that must never delete without a durable identity map.
+    """
+    result = _adapter(execution_mode="validate")
+    failed = {task["name"] for task in result["tasks"] if task["failed"]}
+
+    assert result["returncode"] != 0
+    assert "Require durable checkpoint state before the old hub observability teardown" in failed
+    assert result["requests"] == []
+    assert result["destination_requests"] == []
+    assert _mco_deletes(result) == []
+
+
+@pytest.mark.parametrize("execution_mode, check_mode", [("dry_run", False), ("execute", True)])
+def test_the_adapter_warns_about_gitops_managed_observability_in_a_preview(execution_mode, check_mode):
+    """Pins current behaviour, deliberately unchanged: the warning is a prediction a
+    preview is meant to surface, so it fires when the check is enabled and a target is
+    present, in a preview exactly as in a live run."""
+    result = _adapter(execution_mode=execution_mode, check_mode=check_mode)
+    warning = "Warn that GitOps-managed MultiClusterObservability deletion must be coordinated"
+    executed = [task["name"] for task in result["tasks"] if not task["skipped"]]
+
+    assert result["returncode"] == 0
+    assert warning in executed
+    assert _mco_deletes(result) == []
 
 
 def test_the_adapter_refuses_execute_mode_without_durable_checkpoint_state():

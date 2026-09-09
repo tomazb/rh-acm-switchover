@@ -542,13 +542,17 @@ class TestDestinationObservabilityGate:
         assert not checkpoint_writer_tasks({"observability": between})
         assert not mutating_tasks({"observability": between})
 
-    def test_the_gate_include_runs_only_for_a_requested_teardown_with_a_destination(self):
-        """Python never reaches the gate without a destination client or a requested substep.
+    def test_the_gate_include_runs_only_when_a_delete_is_pending_on_an_integrated_run(self):
+        """Python never reaches the gate without a destination client, without a
+        requested substep, or when its own fresh read found no target.
 
         ``Decommission.decommission`` marks the observability substep NOT_REQUESTED and
         never calls ``teardown_observability`` when ``has_observability`` is false, so a
         collection gate guarded only by the destination would hard-fail a configuration
-        that deletes nothing at all.
+        that deletes nothing at all. ``_acm_mco_present`` is R1: a gate with no DELETE
+        to authorize would block the mid-drain resume on its own source reads. The
+        standalone declaration is the collection's ``--decommission``: that entry point
+        has no destination hub even when one is configured in the hub vars.
         """
         include = next(
             task for task in self.observability if _include_file(task) == "destination_observability_gate.yml"
@@ -558,6 +562,8 @@ class TestDestinationObservabilityGate:
         assert isinstance(when, list)
         assert "acm_switchover_hubs.secondary is defined" in when
         assert "_acm_mco_requested | bool" in when
+        assert "_acm_mco_present | bool" in when
+        assert "not (acm_switchover_standalone_decommission | default(false) | bool)" in when
 
     def test_the_gate_asserts_a_non_empty_destination_target(self):
         """A defined-but-blank secondary is a configuration error, not a skipped gate."""
@@ -2039,6 +2045,37 @@ def test_playbook_declares_the_standalone_decommission_discriminator():
 
     assert operation_facts, "playbooks/decommission.yml must declare the standalone discriminator"
     assert "combine({'decommission': true})" in operation_facts[0]
+
+
+def test_playbook_declares_itself_standalone_with_a_scalar_play_var():
+    """The gate include reads a scalar play var, not the combined operation mapping.
+
+    A play-level var is set before any task runs and cannot be undone by an include's
+    own vars, which is what lets ``delete_observability.yml`` tell the standalone
+    entry point apart from an integrated switchover's decommission disposition.
+
+    Kill condition: dropping the play var, renaming it, or setting it to false.
+    """
+    play = yaml.safe_load(DECOMMISSION_PLAYBOOK.read_text())[0]
+
+    assert play.get("vars", {}).get("acm_switchover_standalone_decommission") is True
+
+
+def test_playbook_refuses_an_acknowledgement_it_cannot_honour():
+    """Exact Python parity: ``--decommission`` rejects
+    ``--acknowledge-observability-not-migrated``.
+
+    Kill condition: dropping the assert, or asserting a different key.
+    """
+    play = yaml.safe_load(DECOMMISSION_PLAYBOOK.read_text())[0]
+    asserts = [task["ansible.builtin.assert"] for task in play.get("pre_tasks", []) if "ansible.builtin.assert" in task]
+    acknowledgement = [
+        assertion for assertion in asserts if "acknowledge_observability_not_migrated" in str(assertion.get("that"))
+    ]
+
+    assert acknowledgement, "the standalone playbook must refuse the acknowledgement"
+    fail_msg = str(acknowledgement[0].get("fail_msg", ""))
+    assert "acm_switchover_decommission.acknowledge_observability_not_migrated" in fail_msg
 
 
 def test_playbook_passes_the_phase_only_after_the_role_succeeds():

@@ -152,15 +152,24 @@
 
 # July section 4 at the ruled position: after the no-record clean-skip
 # classification, before the delete_started writer and the guarded delete, so a
-# blocked gate can never follow a durable write or a DELETE. Skipped without a
-# destination hub (standalone decommission) and for a substep that deletes nothing,
-# exactly as Python skips it when `self.secondary is None` or the observability
-# substep is NOT_REQUESTED.
+# blocked gate can never follow a durable write or a DELETE.
+#
+# Included only when this run has a DELETE to authorize, exactly as Python includes it
+# only when `self.secondary is not None`, the substep is requested, and the phase
+# machine's own fresh read returned the target. `_acm_mco_present` is what makes the
+# mid-drain resume possible: a record whose target is already gone owes a drain and a
+# final proof, and the gate's own source step reads that normal post-DELETE state as
+# half-removed. The standalone entry point declares itself, so a secondary left in the
+# hub vars is not a destination hub here. A completed or post-delete record whose
+# target is present again is refused above, so only no-record+present and
+# delete_started+present reach the gate.
 - name: Gate the teardown on destination observability
   ansible.builtin.include_tasks: destination_observability_gate.yml
   when:
     - acm_switchover_hubs.secondary is defined
+    - not (acm_switchover_standalone_decommission | default(false) | bool)
     - _acm_mco_requested | bool
+    - _acm_mco_present | bool
 
 # Finalization's secondary-disposition adapter warns before the delete, mirroring the
 # Python `record_gitops_markers` flag. The standalone decommission role passes

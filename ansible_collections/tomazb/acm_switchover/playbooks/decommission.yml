@@ -2,6 +2,12 @@
 - name: Decommission old ACM hub
   hosts: localhost
   gather_facts: false
+  # A play-level var, set before any task runs and not undoable by an include's own
+  # vars: this is what the shared teardown reads to tell the standalone entry point
+  # apart from an integrated switchover's decommission disposition. Standalone mode
+  # is declared here and inferred nowhere.
+  vars:
+    acm_switchover_standalone_decommission: true
   pre_tasks:
     - name: Require explicit primary hub target for decommission playbook
       ansible.builtin.assert:
@@ -23,6 +29,21 @@
       ansible.builtin.set_fact:
         acm_switchover_operation: >-
           {{ (acm_switchover_operation | default({}, true)) | combine({'decommission': true}) }}
+
+    # Exact parity with the Python CLI, which rejects
+    # --acknowledge-observability-not-migrated alongside --decommission. Refused in
+    # pre_tasks, before the checkpoint phase is entered and before anything is read,
+    # so an operator who carried the flag over from an integrated run learns that here
+    # rather than mid-teardown.
+    - name: Refuse an acknowledgement the standalone decommission cannot honour
+      ansible.builtin.assert:
+        that:
+          - not (acm_switchover_decommission.acknowledge_observability_not_migrated | default(false) | bool)
+        fail_msg: >-
+          acm_switchover_decommission.acknowledge_observability_not_migrated is not
+          valid for the standalone decommission playbook: this entry point has no
+          destination hub whose missing observability could be acknowledged. Unset it,
+          or run the integrated switchover with old_hub_action set to decommission.
 
   # This playbook -- NOT the shared role -- owns the standalone decommission phase
   # lifecycle. roles/finalization/tasks/handle_old_hub.yml includes the same

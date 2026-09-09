@@ -4,12 +4,14 @@
 # The mirror of Decommission.destination_observability_gate(). It reads nothing from
 # the checkpoint and caches nothing: the preflight observability booleans and any
 # earlier gate answer describe a cluster as it was, and this decision authorizes a
-# deletion happening now. Every run, including every resume and every preview, takes
-# four fresh reads. The decision is published as a fact and is never persisted.
+# deletion happening now. Every invocation, including every resume and every preview
+# that has a DELETE pending, takes its own fresh reads. The decision is published as
+# a fact and is never persisted.
 #
 # Included from delete_observability.yml after the no-record clean-skip
 # classification and immediately before the delete_started writer, so a block can
-# never follow a durable write or a DELETE.
+# never follow a durable write or a DELETE, and only where a DELETE is pending: the
+# decision to gate is the caller's and is never inferred here.
 
 - name: Require an explicit destination hub for the observability gate
   ansible.builtin.assert:
