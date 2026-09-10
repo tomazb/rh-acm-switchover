@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Collection `decommission` role no longer reads the source
+  `MultiClusterObservability` inventory when no teardown is requested. With
+  `acm_switchover_decommission.has_observability` explicitly false and no durable
+  teardown record, the substep now issues zero MultiClusterObservability requests and
+  reports `not_requested`, matching the Python `teardown_observability` behaviour, so a
+  hub whose credentials cannot list MultiClusterObservability no longer fails a
+  decommission that was never going to touch it. The explicit setting is also resolved
+  with the same `| bool` filter `roles/decommission/tasks/main.yml` uses, so `no`,
+  `off` and `0` now mean "not requested" here as well as there.
 - A top-level cancellation or a refused decommission substep now fails the run and
   exits non-zero instead of reporting success, and the Collection decommission
   artifact reports its real status rather than an optimistic one. The published
@@ -83,8 +92,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added cluster-scoped `get` on `multiclusterobservabilities` to the standalone decommission RBAC extension
   (`deploy/rbac/extensions/decommission/clusterrole.yaml` and its collection-bundled and Helm-rendered copies)
   and to the Python/collection standalone permission tables, because the standalone teardown reads the named
-  MultiClusterObservability before deleting it and again for the final absence proof, and a standalone run does
-  not carry the baseline operator ClusterRole.
+  MultiClusterObservability before deleting it and again for the final absence proof, so the extension is
+  self-consistent with the calls that teardown makes.
 
 ### Changed
 

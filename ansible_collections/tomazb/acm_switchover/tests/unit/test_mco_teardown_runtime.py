@@ -61,6 +61,11 @@ def _mco_deletes(result: dict) -> list:
     return [call for call in result["delete_calls"] if "multiclusterobservabilities" in call["path"]]
 
 
+def _mco_requests(result: dict) -> list:
+    """Every request this run issued against the MultiClusterObservability collection."""
+    return [request for request in result["requests"] if "multiclusterobservabilities" in request["path"]]
+
+
 @pytest.mark.parametrize("execution_mode, check_mode", [("execute", True), ("dry_run", False)])
 def test_preview_reads_and_predicts_without_delete_write_or_drain_wait(execution_mode, check_mode):
     result = run_decommission_role(
@@ -562,10 +567,20 @@ def test_a_preview_evaluates_the_gate_and_fails_on_a_predicted_blocker(execution
     assert result["destination_requests"]
 
 
-def test_a_configuration_that_deletes_nothing_is_never_gated():
-    """has_observability=false makes the substep NOT_REQUESTED in Python, which never gates."""
+@pytest.mark.parametrize("configured_has_observability", [False, "no"])
+def test_a_configuration_that_deletes_nothing_is_never_gated(configured_has_observability):
+    """has_observability=false makes the substep NOT_REQUESTED in Python, which never gates.
+
+    Python's ``_substep_requested`` is false, so ``teardown_observability`` issues NO
+    MultiClusterObservability request at all -- not even the source inventory read.
+    The collection must match: an unrequested substep that reads the inventory would
+    fail a decommission on a Forbidden list it never needed to issue.
+
+    ``"no"`` is the same input as ``False`` for ``main.yml``'s ``| bool`` resolution,
+    so it must be the same decision here: one input, one decision.
+    """
     result = _gated(
-        configured_has_observability=False,
+        configured_has_observability=configured_has_observability,
         destination_mco="absent",
         destination_namespace="absent",
     )
@@ -573,7 +588,33 @@ def test_a_configuration_that_deletes_nothing_is_never_gated():
     assert result["returncode"] == 0
     assert result["gate"] is None
     assert result["acm_switchover_decommission_result"]["substeps"]["observability"] == "not_requested"
+    assert result["acm_switchover_decommission_result"]["has_observability"] is False
     assert result["destination_requests"] == []
+    assert _mco_requests(result) == []
+    assert _mco_deletes(result) == []
+
+
+def test_a_stale_false_configuration_still_reads_the_inventory_a_record_obliges():
+    """The read is skipped only when NOTHING is requested.
+
+    ``has_observability: false`` with a persisted ``delete_started`` record is still a
+    requested teardown: the record is a durable obligation the configuration cannot
+    revoke, so the source inventory read runs and the obligation is carried to
+    ``completed``.
+    """
+    result = run_decommission_role(
+        configured_has_observability=False,
+        mco_record=_record("delete_started"),
+        managed_clusters_outcome="precondition_noop",
+        multiclusterhub_outcome="precondition_noop",
+    )
+    record = result["checkpoint"]["operational_data"]["decommission_teardown_records"][MCO_KEY]
+
+    assert result["returncode"] == 0
+    assert _mco_requests(result) != []
+    assert len(_mco_deletes(result)) == 1
+    assert record["phase"] == "completed"
+    assert result["acm_switchover_decommission_result"]["substeps"]["observability"] == "completed"
 
 
 def test_the_standalone_playbook_never_reaches_the_gate():

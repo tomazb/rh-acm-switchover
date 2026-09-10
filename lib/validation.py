@@ -457,6 +457,16 @@ class InputValidator:
                     "--acknowledge-observability-not-migrated cannot be used with --restore-only: "
                     "there is no old hub to tear down"
                 )
+            if is_setup:
+                raise ValidationError(
+                    "--acknowledge-observability-not-migrated cannot be used with --setup: "
+                    "setup bootstraps prerequisites and tears nothing down"
+                )
+            if has_argocd_resume_only:
+                raise ValidationError(
+                    "--acknowledge-observability-not-migrated cannot be used with --argocd-resume-only: "
+                    "resuming Argo CD tears nothing down"
+                )
             if getattr(args, "old_hub_action", None) != "decommission":
                 raise ValidationError("--acknowledge-observability-not-migrated requires --old-hub-action decommission")
 

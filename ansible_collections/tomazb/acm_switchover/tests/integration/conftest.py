@@ -543,24 +543,30 @@ def run_noncore_fixture(tmp_path):
         mco_api = None
         if fixture_name == "decommission_dry_run.yml":
             mco_api = FakeGuardedDeleteAPI(mco_object("fixture-mco-uid"))
-            primary = vars_payload["acm_switchover_hubs"]["primary"]
-            kubeconfig_path = tmp_path / "decommission-primary.kubeconfig"
-            write_kubeconfig(
-                kubeconfig_path,
-                context=primary["context"],
-                server=mco_api.url,
-                token="fixture-token",
-            )
-            primary["kubeconfig"] = str(kubeconfig_path)
 
-        vars_file = tmp_path / "vars.yml"
-        vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))
-
-        env = _ansible_env(repo_root, tmp_path)
-
-        summary_path = tmp_path / "summary.json"
-
+        # The `try` starts the instant the fake server is listening, so a failure in the
+        # remaining setup -- a missing hub key, an unwritable kubeconfig, a YAML dump
+        # error -- still closes it instead of leaking a bound socket and its thread for
+        # the rest of the session.
         try:
+            if mco_api is not None:
+                primary = vars_payload["acm_switchover_hubs"]["primary"]
+                kubeconfig_path = tmp_path / "decommission-primary.kubeconfig"
+                write_kubeconfig(
+                    kubeconfig_path,
+                    context=primary["context"],
+                    server=mco_api.url,
+                    token="fixture-token",
+                )
+                primary["kubeconfig"] = str(kubeconfig_path)
+
+            vars_file = tmp_path / "vars.yml"
+            vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))
+
+            env = _ansible_env(repo_root, tmp_path)
+
+            summary_path = tmp_path / "summary.json"
+
             completed = subprocess.run(
                 [
                     "ansible-playbook",

@@ -5,6 +5,10 @@
       observability.open-cluster-management.io/v1beta2/MultiClusterObservability//observability
     _acm_mco_pod_selector: observability.open-cluster-management.io/name=observability
     _acm_mco_clean_skip: false
+    # Seeded false so a run that requests nothing -- and therefore reads nothing --
+    # still has a classification. Every later guard reads it AFTER the requested
+    # predicate, so this value is only ever consumed on the not-requested path.
+    _acm_mco_present: false
 
 - name: Load the durable MCO teardown records
   tomazb.acm_switchover.checkpoint_phase:
@@ -17,6 +21,38 @@
     acm_switchover_mco_record: >-
       {{ _acm_mco_checkpoint.facts.teardown_records.get(_acm_mco_teardown_key) }}
 
+# BEFORE the first MultiClusterObservability request, exactly as Python decides
+# `_substep_requested` before `teardown_observability` reads anything: a substep this
+# run does not request issues NO request at all, so a hub whose credentials cannot list
+# MultiClusterObservability never fails a decommission that was never going to touch it.
+# The predicate needs only the configured setting and the durable record, and both are
+# already in hand here.
+#
+# The setting is resolved EXACTLY as main.yml resolves it (`auto` -> detection,
+# otherwise `| bool`), so one configured value cannot mean "no observability" to
+# `acm_switchover_decommission_effective_has_observability` and "tear observability
+# down" here. `auto` is requested because for `auto` the read below IS the detection --
+# the adapter path never runs main.yml, so this file cannot consume main.yml's fact.
+# A durable record outranks the setting either way: a persisted obligation is not
+# revocable by configuration.
+- name: Publish whether this run requests a MultiClusterObservability teardown
+  ansible.builtin.set_fact:
+    _acm_mco_requested: >-
+      {{
+        (
+          true
+          if (acm_switchover_decommission.has_observability | default('auto') | string | lower) == 'auto'
+          else (acm_switchover_decommission.has_observability | bool)
+        )
+        or acm_switchover_mco_record is mapping
+      }}
+
+# `_acm_mco_requested | bool` is the FIRST element of every dependant's `when` list on
+# purpose: Ansible evaluates a `when` list in order and stops at the first false, so a
+# skipped read is never templated by the tasks that consume it. Defaulting the read
+# instead -- `default([])`, `failed_when: false`, `ignore_errors` -- would turn an
+# unverifiable inventory into "nothing to delete", which is exactly what the fail-closed
+# rules below exist to prevent.
 - name: Read the source MultiClusterObservability inventory
   tomazb.acm_switchover.acm_k8s_read_outcome:
     read_mode: list
@@ -27,45 +63,50 @@
     context: "{{ acm_switchover_hubs.primary.context }}"
   register: acm_switchover_mco_read
   no_log: true
+  when:
+    - _acm_mco_requested | bool
 
 - name: Fail closed when the source MCO inventory is unverifiable
   ansible.builtin.fail:
     msg: Cannot verify the source MultiClusterObservability inventory. Nothing was deleted.
-  when: acm_switchover_mco_read.read_status not in ['ok', 'kind_not_served']
+  when:
+    - _acm_mco_requested | bool
+    - acm_switchover_mco_read.read_status not in ['ok', 'kind_not_served']
 
 - name: Select the fixed MultiClusterObservability target
   ansible.builtin.set_fact:
     _acm_mco_targets: "{{ acm_switchover_mco_read.resources }}"
+  when:
+    - _acm_mco_requested | bool
 
 - name: Fail closed on an ambiguous MultiClusterObservability inventory
   ansible.builtin.fail:
     msg: >-
       The source MultiClusterObservability inventory is not the single fixed
       observability target. Nothing was deleted.
-  when: >-
-    acm_switchover_mco_read.read_status == 'ok'
-    and (
-      (acm_switchover_mco_read.resources | length) > 1
-      or (
-        (acm_switchover_mco_read.resources | length) == 1
-        and (
-          acm_switchover_mco_read.resources[0] is not mapping
-          or acm_switchover_mco_read.resources[0].metadata is not defined
-          or acm_switchover_mco_read.resources[0].metadata is not mapping
-          or (acm_switchover_mco_read.resources[0].metadata.name | default('')) != 'observability'
+  when:
+    - _acm_mco_requested | bool
+    - >-
+      acm_switchover_mco_read.read_status == 'ok'
+      and (
+        (acm_switchover_mco_read.resources | length) > 1
+        or (
+          (acm_switchover_mco_read.resources | length) == 1
+          and (
+            acm_switchover_mco_read.resources[0] is not mapping
+            or acm_switchover_mco_read.resources[0].metadata is not defined
+            or acm_switchover_mco_read.resources[0].metadata is not mapping
+            or (acm_switchover_mco_read.resources[0].metadata.name | default('')) != 'observability'
+          )
         )
       )
-    )
 
 - name: Publish the source MultiClusterObservability classification
   ansible.builtin.set_fact:
     _acm_mco_present: >-
       {{ acm_switchover_mco_read.read_status == 'ok' and (_acm_mco_targets | length) == 1 }}
-    _acm_mco_requested: >-
-      {{
-        (acm_switchover_decommission.has_observability | default('auto') | string | lower) != 'false'
-        or acm_switchover_mco_record is mapping
-      }}
+  when:
+    - _acm_mco_requested | bool
 
 - name: Fail closed when the fixed MCO identity is unreadable
   ansible.builtin.fail:
@@ -180,7 +221,11 @@
       MultiClusterObservability {{ item.metadata.name | default('observability') }}
       may be managed declaratively. Coordinate deletion to avoid GitOps drift if
       Argo CD or Flux recreates it on the old hub.
-  loop: "{{ acm_switchover_mco_read.resources }}"
+  # A `loop` is templated BEFORE `when` is evaluated, so this cannot reference the
+  # inventory register: when nothing is requested that read is skipped and the register
+  # carries no `resources` at all. The selected targets are the same list, published
+  # under the same guard as the read itself.
+  loop: "{{ _acm_mco_targets if (_acm_mco_requested | bool) else [] }}"
   loop_control:
     label: "{{ item.metadata.name | default('observability') }}"
   when:

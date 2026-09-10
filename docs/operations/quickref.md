@@ -305,7 +305,7 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--manage-auto-import-strategy` | Temporarily set ImportAndSync on destination hub (ACM 2.14+) |
 | `--skip-observability-checks` | Explicitly bypass blocking Observability steps even if detected |
 | `--disable-observability-on-secondary` | Deprecated compatibility flag; `--old-hub-action secondary` now deletes MCO automatically |
-| `--acknowledge-observability-not-migrated` | Proceed with deleting old-hub observability even though the destination hub is proven to have none (metrics continuity ends). Only valid with `--old-hub-action decommission`; never overrides an unverifiable destination |
+| `--acknowledge-observability-not-migrated` | Proceed with deleting old-hub observability even though the destination hub is proven to have none (metrics continuity ends). Only valid with `--old-hub-action decommission`; rejected with `--decommission`, `--validate-only`, `--restore-only`, `--setup` and `--argocd-resume-only`; never overrides an unverifiable destination |
 | `--non-interactive` | Non-interactive mode (only valid with `--decommission`) |
 | `--skip-gitops-check` | Disable all GitOps detection including Argo CD deep dive |
 | `--argocd-manage` | Pause auto-sync on ACM-touching Argo CD Applications during switchover (left paused by default; with `--validate-only` it is ignored with a warning; not valid with `--argocd-resume-only`) |
@@ -475,7 +475,7 @@ podman run -it --rm \
 | `--min-managed-clusters N` | Enforce a non-negative minimum restored non-local `ManagedCluster` count. Omitted defaults to `1` in `--restore-only` (and to the derived primary count in switchover); explicit `0` opts into an empty restore target. |
 | `--old-hub-action` | Action for old hub: `secondary`, `decommission`, or `none` (required) |
 | `--disable-observability-on-secondary` | Deprecated compatibility flag; `--old-hub-action secondary` now deletes MCO automatically |
-| `--acknowledge-observability-not-migrated` | Acknowledge a proven-absent destination observability stack and proceed (only with `--old-hub-action decommission`) |
+| `--acknowledge-observability-not-migrated` | Acknowledge a proven-absent destination observability stack and proceed (only with `--old-hub-action decommission`; not valid with `--decommission`, `--validate-only`, `--restore-only`, `--setup` or `--argocd-resume-only`) |
 | `--verbose` | Enable debug logging |
 
 ### Container Aliases (Optional)

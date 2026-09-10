@@ -32,7 +32,8 @@ optional decommission assets are still required for `ClusterDeployment` list
 safety validation, `ManagedCluster`/`MultiClusterHub` teardown permissions, and
 `get`, `delete` on `multiclusterobservabilities` -- `get` is the strict named read
 the standalone teardown performs before deletion and again for the final absence
-proof, and a standalone run has only this extension to satisfy it.
+proof, listed here so the extension is self-consistent with the calls that teardown
+makes.
 
 ## AAP Contract
 

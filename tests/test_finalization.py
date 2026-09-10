@@ -1447,7 +1447,15 @@ class TestFinalization:
             status=StrictReadStatus.ITEMS,
             resource={"metadata": {"name": "observability", "uid": "uid-1"}},
         )
-        primary.get_namespace_strict.return_value = StrictReadOutcome(status=StrictReadStatus.NAMESPACE_ABSENT)
+        # A COHERENT source hub: the MultiClusterObservability and its namespace are
+        # both present. An absent namespace beside a present CR is half-removed, which
+        # the destination gate refuses as source-ambiguous BEFORE the delete -- and this
+        # test needs the delete to be issued and rejected.
+        primary.get_namespace_strict.return_value = StrictReadOutcome(
+            status=StrictReadStatus.ITEMS,
+            resource={"metadata": {"name": decommission_module.OBSERVABILITY_NAMESPACE}},
+            resource_version="source-ns-1",
+        )
         primary.delete_custom_resource_preconditioned.side_effect = exc
 
         state = StateManager(str(tmp_path / "state.json"))
@@ -1465,6 +1473,11 @@ class TestFinalization:
 
         state.flush_state()
         persisted = (tmp_path / "state.json").read_text(encoding="utf-8")
+        # Without this the redaction assertions are vacuous: any refusal BEFORE the
+        # DELETE (the destination gate reading a half-removed source, say) also keeps
+        # the canary out of the state file, and the rejected delete this test is named
+        # for would never have been issued at all.
+        primary.delete_custom_resource_preconditioned.assert_called_once()
         assert canary not in persisted
         assert canary not in caplog.text
         assert (

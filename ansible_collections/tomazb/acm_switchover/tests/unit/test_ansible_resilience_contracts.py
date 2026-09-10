@@ -483,12 +483,20 @@ def test_decommission_uses_fixed_guarded_mco_and_discovered_mch_targets():
 def test_decommission_waits_for_observability_and_acm_workload_pods():
     """Collection decommission must wait for workload pods like Python does."""
     obs_text = (DECOMMISSION_TASKS / "delete_observability.yml").read_text()
+    obs_tasks = _load_yaml(DECOMMISSION_TASKS / "delete_observability.yml")
     mch_text = (DECOMMISSION_TASKS / "delete_multiclusterhub.yml").read_text()
     mch_tasks = _load_yaml(DECOMMISSION_TASKS / "delete_multiclusterhub.yml")
 
     assert "kind: Pod" in obs_text
     assert "until" in obs_text
-    assert "failed_when: false" not in obs_text
+    # Asserted on the PARSED task, not on the file text: a literal "failed_when: false"
+    # search misses every other YAML spelling of the same value (`no`, `off`, `False`,
+    # `0`) and over-reaches to any other task in the file. Unlike the MultiClusterHub
+    # wait below, a lingering observability pod must FAIL the drain, so this task must
+    # carry no failure absorption at all.
+    obs_pod_wait = next(task for task in obs_tasks if task.get("name") == "Wait for observability pods to terminate")
+    assert "failed_when" not in obs_pod_wait
+    assert "ignore_errors" not in obs_pod_wait
     assert "Fail closed when the scoped observability pod inventory is unverifiable" in obs_text
     assert "open-cluster-management-observability" in obs_text
     assert "kind: Pod" in mch_text

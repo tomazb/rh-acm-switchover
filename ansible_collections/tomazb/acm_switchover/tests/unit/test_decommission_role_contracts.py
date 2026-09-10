@@ -220,6 +220,11 @@ def _task_actions(task: dict) -> list:
     return [key for key in task if key not in keywords]
 
 
+def _collapse(expression) -> str:
+    """One line of an expression, so a folded YAML scalar can be compared literally."""
+    return " ".join(str(expression).split())
+
+
 def task_named(tasks: list, name: str) -> dict:
     """Return the single task whose ``name`` equals ``name``."""
     matches = [task for task in tasks if task.get("name") == name]
@@ -463,6 +468,70 @@ class TestDeleteObservability:
         for task in reads:
             args = task["tomazb.acm_switchover.acm_k8s_read_outcome"]
             assert args.get("resource_name") in allowed
+
+    def test_the_requested_predicate_is_published_before_the_source_inventory_read(self):
+        """Zero reads when nothing is requested, exactly like Python's ``_substep_requested``.
+
+        The predicate depends only on the configured setting and the durable record, so
+        it can be -- and must be -- decided before the first MultiClusterObservability
+        request. Every task that consumes the read must then carry the same predicate as
+        the FIRST element of its ``when``, because Ansible evaluates a ``when`` list in
+        order and stops at the first false: that is what keeps the dependants from
+        templating a register that a skipped read never filled.
+        """
+        names = [task.get("name") for task in self.tasks]
+        publisher = "Publish whether this run requests a MultiClusterObservability teardown"
+        read = "Read the source MultiClusterObservability inventory"
+        assert names.index(publisher) < names.index(read)
+
+        dependants = [
+            read,
+            "Fail closed when the source MCO inventory is unverifiable",
+            "Select the fixed MultiClusterObservability target",
+            "Fail closed on an ambiguous MultiClusterObservability inventory",
+            "Publish the source MultiClusterObservability classification",
+        ]
+        for name in dependants:
+            when = task_named(self.tasks, name).get("when")
+            assert isinstance(when, list), f"{name!r} must carry a list `when` that short-circuits"
+            assert when[0] == "_acm_mco_requested | bool", f"{name!r} must guard on the requested predicate first"
+
+        warning = task_named(
+            self.tasks,
+            "Warn that GitOps-managed MultiClusterObservability deletion must be coordinated",
+        )
+        assert "acm_switchover_mco_read" not in str(warning["loop"]), (
+            "a `loop` is templated before `when` is evaluated, so the warning must not "
+            "template the skipped inventory register"
+        )
+
+    def test_the_requested_predicate_resolves_the_setting_exactly_as_main_yml(self):
+        """One input, one decision: ``auto`` is the detection, anything else is ``| bool``.
+
+        A ``!= 'false'`` string test disagrees with ``main.yml`` on every other falsey
+        spelling YAML and Ansible accept (``no``, ``off``, ``0``), which would make the
+        same configured value mean "no observability" to the effective-setting fact and
+        "tear observability down" to this file.
+        """
+        main_tasks = yaml.safe_load(DECOMMISSION_MAIN.read_text()) or []
+        effective = _collapse(
+            task_named(main_tasks, "Publish effective observability setting")["ansible.builtin.set_fact"][
+                "acm_switchover_decommission_effective_has_observability"
+            ]
+        )
+        requested = _collapse(
+            task_named(self.tasks, "Publish whether this run requests a MultiClusterObservability teardown")[
+                "ansible.builtin.set_fact"
+            ]["_acm_mco_requested"]
+        )
+
+        auto_probe = "(acm_switchover_decommission.has_observability | default('auto') | string | lower) == 'auto'"
+        explicit = "(acm_switchover_decommission.has_observability | bool)"
+        for expression in (effective, requested):
+            assert auto_probe in expression
+            assert explicit in expression
+        assert "!= 'false'" not in requested
+        assert "acm_switchover_mco_record is mapping" in requested
 
     def test_mco_inventory_read_fails_closed(self):
         read = task_named(self.tasks, "Read the source MultiClusterObservability inventory")

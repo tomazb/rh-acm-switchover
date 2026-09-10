@@ -59,9 +59,16 @@ Each scenario records:
 - expected artifact: `decommission-report.json`
 - MultiClusterObservability deletion runs through the UID-preconditioned guarded delete
   (`acm_uid_guarded_delete`) with a durable per-resource phase record and a fresh completion proof
-- on an integrated switchover, the destination-observability gate must pass, block (each of the five
-  reason codes), or accept `acknowledge_observability_not_migrated` for a proven-absent destination before
-  the delete; the standalone playbook never evaluates the gate and refuses a truthy acknowledgement
+- on an integrated switchover the destination-observability gate is evaluated only where this run has a
+  delete to authorize: a run whose own fresh source read finds the fixed target present with its
+  teardown record still pending. A completed record and an already-absent target reach no gate outcome
+  at all, and neither does an integrated `old_hub_action: decommission` dry run -- `handle_old_hub.yml`
+  guards the decommission include on `acm_switchover_execution.mode != 'dry_run'`, so a dry run never
+  reaches the teardown path. A native Ansible check-mode run in `execute` mode DOES include it and DOES
+  evaluate the gate, because a preview must surface a blocker it would hit for real
+- where the gate is evaluated it must pass, block (each of the five reason codes), or accept
+  `acknowledge_observability_not_migrated` for a proven-absent destination before the delete; the
+  standalone playbook never evaluates the gate and refuses a truthy acknowledgement
 
 ### SCENARIO-008 Argo CD pause and failure recovery
 

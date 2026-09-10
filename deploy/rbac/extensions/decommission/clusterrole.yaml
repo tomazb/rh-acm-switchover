@@ -1,8 +1,11 @@
 ---
 # ClusterRole for ACM Switchover Decommission
 # Grants the cluster-scoped reads and deletes needed for hub teardown.
-# Baseline operator RBAC already grants MCO get/list/delete for normal finalization,
-# but a standalone decommission run does not carry the baseline operator ClusterRole.
+# Baseline operator RBAC already grants MCO get/list/delete for normal finalization, and
+# the base deployment binds that ClusterRole to the same service account this extension
+# is bound to. The MCO rule is repeated here so this extension is self-consistent on its
+# own terms: a validator or certification run that inspects only the decommission
+# extension must find the reads the standalone teardown actually issues.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

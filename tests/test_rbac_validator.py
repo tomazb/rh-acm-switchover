@@ -1488,21 +1488,34 @@ class TestValidateDecommissionPermissions:
     def test_denied_mco_named_get_blocks_standalone_decommission_before_any_delete(
         self, mock_k8s_client, mock_primary_client, caplog
     ):
-        """A denied MultiClusterObservability named GET must stop the standalone teardown.
+        """A denied MultiClusterObservability ``get`` must stop the standalone teardown.
 
         Negative authorization for the one grant the standalone decommission surface adds:
         ``get`` on ``multiclusterobservabilities``. The denial is delivered through the real
         SelfSubjectAccessReview path rather than a stubbed ``check_permission``, so this test
-        fails if the standalone permission table stops asking for the named GET.
+        fails if the standalone permission table stops asking for that grant.
 
-        Three properties are pinned:
+        What the validator asks is deliberately NOT a per-object question:
+        ``RBACValidator.check_permission`` builds its ``V1ResourceAttributes`` from verb,
+        resource, subresource, group and namespace only, so this is a CLUSTER-SCOPED,
+        collection-wide ``get`` review. That is the right question to ask -- the shipped
+        ClusterRole grants ``get`` on ``multiclusterobservabilities`` with no
+        ``resourceNames``, so the collection-wide answer covers the strict named GET the
+        teardown issues before its delete and again for its final absence proof.
 
-        1. the named GET review is actually issued for the cluster-scoped MCO resource;
-        2. validation raises before the teardown runs, and no delete-shaped call reaches the
-           cluster client -- the CLI gate at ``acm_switchover.run_decommission`` refuses on this
-           exception, so the DELETE the teardown would otherwise issue never happens;
-        3. the operator-facing report names the denied verb and resource but leaks no raw API
+        Two properties are pinned:
+
+        1. the cluster-scoped (``namespace`` is ``None``) ``get`` review for the MCO
+           resource is actually issued, and the denial raises ``ValidationError``;
+        2. the operator-facing report names the denied verb and resource but leaks no raw API
            body -- only the SSAR ``reason`` is surfaced.
+
+        What the raised ``ValidationError`` then costs the standalone entry point is NOT
+        asserted here: this function has no delete path of its own, so "no delete reached the
+        client" would be vacuous. The fail-closed behaviour is covered by
+        ``tests/test_main.py::TestDecommissionAndSetupHelpers::test_run_decommission_returns_false_when_rbac_validation_fails``,
+        which proves ``acm_switchover.run_decommission`` returns ``False`` and never even
+        constructs ``Decommission`` when this validation raises.
         """
         reviews: list[tuple] = []
 
@@ -1532,12 +1545,9 @@ class TestValidateDecommissionPermissions:
             with pytest.raises(ValidationError, match="Decommission RBAC permission validation failed"):
                 validate_decommission_permissions(mock_primary_client, skip_observability=False)
 
+        # Cluster-scoped, collection-wide: namespace is None and no object name is asked
+        # for, which is the authorization question the named GET actually depends on.
         assert (OBSERVABILITY_API_GROUP, MULTICLUSTEROBSERVABILITIES_PLURAL, "get", None) in reviews
-
-        delete_calls = [
-            invocation for invocation in mock_primary_client.method_calls if "delete" in invocation[0].lower()
-        ]
-        assert delete_calls == [], f"standalone decommission issued a delete despite denied MCO get: {delete_calls}"
 
         report = caplog.text
         assert (

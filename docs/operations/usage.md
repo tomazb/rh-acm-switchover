@@ -102,7 +102,7 @@ re-reads both hubs live and refuses the deletion when the destination hub has no
 never conflated. `--acknowledge-observability-not-migrated` converts only the first one — a
 destination positively proven to have no observability — and is valid only with
 `--old-hub-action decommission`; it is rejected with `--decommission`, `--validate-only`,
-`--restore-only`, and when the gate would pass anyway. It never overrides an unverifiable or
+`--restore-only`, `--setup`, `--argocd-resume-only`, and when the gate would pass anyway. It never overrides an unverifiable or
 partially present destination. The gate result is never persisted: every run and every resume
 re-proves it live. A dry run evaluates the gate on the `--old-hub-action secondary` observability
 teardown; the `--old-hub-action decommission` preview is skipped, so it does not evaluate the gate.

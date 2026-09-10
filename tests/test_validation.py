@@ -1440,6 +1440,20 @@ class TestAcknowledgeObservabilityNotMigratedFlag:
             InputValidator.validate_all_cli_args(self._args(validate_only=True))
         assert "--validate-only" in str(excinfo.value)
 
+    def test_rejected_with_setup(self):
+        """``--setup`` bootstraps prerequisites and never evaluates the gate."""
+        with pytest.raises(ValidationError) as excinfo:
+            InputValidator.validate_all_cli_args(self._args(setup=True))
+        assert "--acknowledge-observability-not-migrated" in str(excinfo.value)
+        assert "--setup" in str(excinfo.value)
+
+    def test_rejected_with_argocd_resume_only(self):
+        """``--argocd-resume-only`` resumes Argo CD and tears nothing down."""
+        with pytest.raises(ValidationError) as excinfo:
+            InputValidator.validate_all_cli_args(self._args(argocd_resume_only=True))
+        assert "--acknowledge-observability-not-migrated" in str(excinfo.value)
+        assert "--argocd-resume-only" in str(excinfo.value)
+
     def test_rejected_with_restore_only(self):
         with pytest.raises(ValidationError) as excinfo:
             InputValidator.validate_all_cli_args(

@@ -43,48 +43,54 @@ def _complete_once_and_reload(tmp_path, drain_mode):
     """Create completion through the real writer, then reload it from disk."""
     state_path = tmp_path / "state.json"
     state = StateManager(str(state_path))
-    client = Mock()
-    client.get_custom_resource_strict = Mock(
-        side_effect=[
-            StrictReadOutcome.from_resource(_mco(), resource_version="cr-before"),
-            StrictReadOutcome.object_absent("deleted"),
-            StrictReadOutcome.object_absent("final proof"),
-        ]
-    )
-    client.delete_custom_resource_preconditioned = Mock(return_value=None)
-
-    if drain_mode == "namespace_absent":
-        client.get_namespace_strict = Mock(
+    # The run lock is released in `finally` so a failing assertion above cannot leave
+    # it held: the reload below, and every later test that opens a StateManager on this
+    # path, would otherwise be blocked by a lock this helper never gave back.
+    try:
+        client = Mock()
+        client.get_custom_resource_strict = Mock(
             side_effect=[
-                StrictReadOutcome.namespace_absent("deleted with observability"),
-                StrictReadOutcome.namespace_absent("final proof"),
+                StrictReadOutcome.from_resource(_mco(), resource_version="cr-before"),
+                StrictReadOutcome.object_absent("deleted"),
+                StrictReadOutcome.object_absent("final proof"),
             ]
         )
-        client.list_pods_strict = Mock()
-    else:
-        client.get_namespace_strict = Mock(
-            side_effect=[
-                StrictReadOutcome.from_resource(_namespace("ns-drain"), resource_version="ns-drain"),
-                StrictReadOutcome.from_resource(_namespace("ns-final"), resource_version="ns-final"),
-            ]
-        )
-        client.list_pods_strict = Mock(
-            side_effect=[
-                StrictReadOutcome.from_items([], resource_version="pods-drain"),
-                StrictReadOutcome.from_items([], resource_version="pods-final"),
-            ]
-        )
+        client.delete_custom_resource_preconditioned = Mock(return_value=None)
 
-    execution = Decommission(client, True, run_record=RunRecord(state)).teardown_observability()
+        if drain_mode == "namespace_absent":
+            client.get_namespace_strict = Mock(
+                side_effect=[
+                    StrictReadOutcome.namespace_absent("deleted with observability"),
+                    StrictReadOutcome.namespace_absent("final proof"),
+                ]
+            )
+            client.list_pods_strict = Mock()
+        else:
+            client.get_namespace_strict = Mock(
+                side_effect=[
+                    StrictReadOutcome.from_resource(_namespace("ns-drain"), resource_version="ns-drain"),
+                    StrictReadOutcome.from_resource(_namespace("ns-final"), resource_version="ns-final"),
+                ]
+            )
+            client.list_pods_strict = Mock(
+                side_effect=[
+                    StrictReadOutcome.from_items([], resource_version="pods-drain"),
+                    StrictReadOutcome.from_items([], resource_version="pods-final"),
+                ]
+            )
 
-    assert execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
-    client.delete_custom_resource_preconditioned.assert_called_once()
-    completed = RunRecord(state).teardown_record(MCO_KEY)
-    assert completed is not None
-    assert completed.phase is TeardownPhase.COMPLETED
-    persisted_bytes = state_path.read_bytes()
+        execution = Decommission(client, True, run_record=RunRecord(state)).teardown_observability()
 
-    state._release_run_lock()
+        assert execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
+        client.delete_custom_resource_preconditioned.assert_called_once()
+        completed = RunRecord(state).teardown_record(MCO_KEY)
+        assert completed is not None
+        assert completed.phase is TeardownPhase.COMPLETED
+        persisted_bytes = state_path.read_bytes()
+
+    finally:
+        state._release_run_lock()
+
     reloaded_state = StateManager(str(state_path))
     reloaded_record = RunRecord(reloaded_state)
     assert reloaded_record.teardown_record(MCO_KEY) == completed
