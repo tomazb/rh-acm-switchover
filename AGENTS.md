@@ -752,11 +752,60 @@ and mixed responsibilities directly involved in the change.
 
 ### Pull Request Creation Gate
 
-Before creating any PR: run the `code-review` skill against the completed branch changes;
-address all critical and warning findings or record a concrete technical reason; re-run
-`code-review` after review-driven changes; keep local verification evidence ready for the PR
-body. For a governed slice, see
+Before creating any PR: hold completed review evidence over the completed branch changes;
+address all critical and warning findings or record a concrete technical reason; re-run the
+review after review-driven changes; keep local verification evidence ready for the PR body.
+Opening a draft PR is creation. For a governed slice, see
 [Terminal Validation and Review Convergence](#terminal-validation-and-review-convergence).
+
+**What satisfies the review requirement.** The gate is satisfied by review evidence, not by
+who or what produced it. Equivalent evidence covers the completed branch changes at the
+head being submitted, at the depth the changed surface requires below, with every finding
+the reviewer rates at critical or warning level, or the equivalent in its own scale,
+addressed or dispositioned with a concrete technical reason. The `code-review` skill is the
+repository's default way to produce that evidence; a person other than the builder, an
+automated reviewer, or a hosted reviewer that produces equivalent evidence before PR
+creation satisfies the gate equally. The builder's own inspection of its change, including
+the Builder Simplification Gate review, is not review evidence for this gate. This rule
+requires and privileges no particular agent, model, vendor, product, or execution
+environment.
+
+**Review depth follows the changed surface.** Classify the change with the
+[Verification Matrix by Changed Surface](#verification-matrix-by-changed-surface), then
+review every touched surface at its matching depth:
+
+- *Documentation or process only:* a focused review of the changed prose for correctness,
+  internal contradiction, unintended scope expansion, commands, references, and links, and
+  its interaction with adjacent policy.
+- *Runtime or code:* review the changed behavior and the directly affected collaborators
+  needed to understand its correctness and safety impact, under
+  [Review Priorities and Finding Disposition](#review-priorities-and-finding-disposition).
+- *Parity-sensitive, RBAC, release-validation, live lab-controller, security-sensitive, or
+  otherwise specially governed surfaces:* the stronger rules those surfaces already carry
+  remain authoritative. This gate never lowers them.
+
+Proportionality sets depth, not whether review happens. It fixes no reviewer count and
+requires no multi-reviewer pass; add a lens only under
+[Orthogonal specialist review](#orthogonal-specialist-review).
+
+**Review after PR creation supplements the gate.** Automated, hosted, or independent review
+of the PR head after creation supplements the pre-creation evidence and is dispositioned
+under the [Pull Request Merge Gate](#pull-request-merge-gate) and, for a governed slice,
+Terminal Validation. It does not retroactively satisfy this gate: a PR opened without the
+required pre-creation evidence has deviated from the gate, and later review evidence does
+not relabel that as ordinary compliance. Post-creation evidence may substitute for the
+missing pre-creation review only through an explicit operator-approved deviation.
+
+**Deviation requires operator authority.** Only the operator may waive, substitute, or
+otherwise deviate from this gate. The builder never self-waives it; reviewer tooling
+unavailability and time pressure do not change that. Record every deviation durably in the
+PR body or a top-level PR comment, stating at minimum:
+
+1. the Creation Gate requirement being deviated from;
+2. why the normal requirement was not satisfied;
+3. the exact affected head SHA and changed-file surface;
+4. the substitute review evidence, if any; and
+5. the explicit operator approval and its reference.
 
 ### Pull Request Merge Gate
 
