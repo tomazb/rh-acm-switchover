@@ -152,6 +152,9 @@ and are deliberately not restated here.
    validated once.
 3. **Exact-head hosted CI** — mandatory for merge readiness regardless of local results.
 
+For what a result proves about a claim, see
+[Verification evidence validity](../../AGENTS.md#verification-evidence-validity) in `AGENTS.md`.
+
 ## Test Structure
 
 ```
