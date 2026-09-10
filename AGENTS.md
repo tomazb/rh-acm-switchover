@@ -109,10 +109,10 @@ A credible prospective failure mode can justify a safety requirement; a producti
 is not a prerequisite.
 
 Justification is not authorization. A justified requirement is still implemented only under
-the scope rule above. Nothing here permits discarding an existing safety, security,
-recovery, checkpoint, persisted-state, parity, compatibility, or operator-facing contract
-because no incident has occurred or no release has shipped, and a demonstrated blocking
-defect remains blocking while its authorized remediation is decided.
+the authorization rule that opens this section. Nothing here permits discarding an existing
+safety, security, recovery, checkpoint, persisted-state, parity, compatibility, or
+operator-facing contract because no incident has occurred or no release has shipped, and a
+demonstrated blocking defect remains blocking while its authorized remediation is decided.
 
 #### KISS — Keep It Simple
 
@@ -222,15 +222,15 @@ When claiming mutation-based regression evidence:
 
 - First demonstrate that the intended mutation is present — or, for an absence mutation,
   absent — on the surface the test actually exercised, and record that proof with the
-  verification evidence, without sensitive output.
+  verification evidence with sensitive output redacted.
 - A mutation that did not apply is invalid evidence about that mutation: neither a surviving
   mutant nor a detection.
 - A mutation that applied, was exercised, and left the regression passing is a surviving
   mutant. Interpret it against the intended contract, assessing relevance and equivalence;
   it is not detection evidence, and it is not automatically a production defect.
-- A failing regression proves detection only when the failure is attributable to the
-  intended contract or assertion. An unrelated import, setup, dependency, or infrastructure
-  failure is not proof of detection.
+- A failing regression proves detection of an applied mutation only when the failure is
+  attributable to the intended contract or assertion. An unrelated import, setup,
+  dependency, or infrastructure failure is not proof of detection.
 
 State exactly what the exercised surface proves. Static, fake-backed, fixture-backed, local,
 and live evidence remain distinct tiers, and none of this promotes non-live output into live
