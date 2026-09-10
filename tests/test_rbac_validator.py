@@ -1485,7 +1485,7 @@ class TestValidateDecommissionPermissions:
         assert not errors.get("namespaces", [])
 
     @patch("kubernetes.client")
-    def test_denied_mco_named_get_blocks_standalone_decommission_before_any_delete(
+    def test_denied_mco_get_fails_standalone_decommission_permission_validation(
         self, mock_k8s_client, mock_primary_client, caplog
     ):
         """A denied MultiClusterObservability ``get`` must stop the standalone teardown.
