@@ -100,6 +100,20 @@ explicitly approves the expansion.
 - Remove newly introduced unused code, options, and abstractions rather than carrying them
   forward "just in case."
 
+A proposed design requirement becomes a mandatory repository requirement only with a
+current, concrete justification: the governing requirement or approved scope, an explicit
+operator need, an existing safety, correctness, security, recovery, parity, or
+compatibility obligation, a platform constraint, or an evidenced, concrete, reachable
+failure mode. Theoretically stronger or more general behavior alone is not a justification.
+A credible prospective failure mode can justify a safety requirement; a production incident
+is not a prerequisite.
+
+Justification is not authorization. A justified requirement is still implemented only under
+the authorization rule that opens this section. Nothing here permits discarding an existing
+safety, security, recovery, checkpoint, persisted-state, parity, compatibility, or
+operator-facing contract because no incident has occurred or no release has shipped, and a
+demonstrated blocking defect remains blocking while its authorized remediation is decided.
+
 #### KISS — Keep It Simple
 
 Choose the simplest implementation that completely satisfies the approved requirements and
@@ -196,6 +210,51 @@ Tests must verify real logic, error handling, and edge cases, not implementation
 trivial behavior. On safety-critical paths, missing negative coverage is a defect:
 wrong-context behavior, check-mode behavior, idempotence, RBAC denial, checkpoint/resume
 failure, stale Argo CD status, timeout failure, and destructive-operation confirmation.
+
+### Verification evidence validity
+
+A verification result supports a claimed condition only when that condition was actually
+established on the tree, input, fixture, state, or fault-injection surface the test
+exercised. Running a command, editing a fixture the test does not load, or obtaining a green
+result is not, by itself, evidence for the claim.
+
+When claiming mutation-based regression evidence:
+
+- First demonstrate that the intended mutation is present — or, for an absence mutation,
+  absent — on the surface the test actually exercised, and record that proof with the
+  verification evidence with sensitive output redacted.
+- A mutation that did not apply is invalid evidence about that mutation: neither a surviving
+  mutant nor a detection.
+- A mutation that applied, was exercised, and left the regression passing is a surviving
+  mutant. Interpret it against the intended contract, assessing relevance and equivalence;
+  it is not detection evidence, and it is not automatically a production defect.
+- A failing regression proves detection of an applied mutation only when the failure is
+  attributable to the intended contract or assertion. An unrelated import, setup,
+  dependency, or infrastructure failure is not proof of detection.
+
+State exactly what the exercised surface proves. Static, fake-backed, fixture-backed, local,
+and live evidence remain distinct tiers, and none of this promotes non-live output into live
+certification evidence. This is an evidence-acceptance rule for claims, not a requirement to
+add mutation testing to every test or pull request.
+
+### Static guard convergence
+
+This rule applies only once review or already-required evidence has demonstrated equivalent
+evasions through different syntax, showing that spelling-by-spelling enumeration in a static
+guard is not converging. When that is demonstrated:
+
+- Identify the contract the guard actually protects and protect it with the smallest
+  suitable semantic representation: parsed structure, a meaningful identifier or structural
+  relationship, data flow, an explicit allowlist tied to the contract, or a behavioral check
+  where appropriate.
+- Do not keep appending forbidden strings as a substitute for protecting the property.
+- Pin an identifier or position only when it represents the contract. Incidental task
+  names, source layout, and equivalent implementation choices do not become requirements
+  because a guard could assert them.
+
+Keep checks that already protect their intended contracts. This is not a ban on text
+assertions, a requirement to replace static tests, or authorization for general test
+refactoring.
 
 ## Protected Critical Files
 

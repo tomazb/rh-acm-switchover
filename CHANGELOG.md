@@ -97,6 +97,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `AGENTS.md` now binds verification claims to the condition actually established on the
+  exercised test surface, distinguishing unapplied, surviving, detected, and
+  unrelated-failure mutation outcomes; requires a static guard to protect its semantic
+  contract once equivalent syntactic evasions show spelling enumeration is not converging;
+  and requires a current, concrete justification before a proposed design requirement
+  becomes mandatory, keeping justification separate from implementation authorization
+  (#292).
 - The Collection `acm_k8s_read_outcome` module now reclassifies a **positive** discovery miss from
   `read_status: error` to the new `read_status: kind_not_served`, so a caller can tell "this cluster
   does not serve that kind" from "this read could not be verified". Every unverifiable discovery
