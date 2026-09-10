@@ -45,6 +45,7 @@ CONSTANT_PAIRS = {
     "OBSERVATORIUM_API_DEPLOYMENT": "OBSERVATORIUM_API_DEPLOYMENT",
     "THANOS_COMPACTOR_STATEFULSET": "THANOS_COMPACTOR_STATEFULSET",
     "THANOS_COMPACTOR_LABEL_SELECTOR": "THANOS_COMPACTOR_LABEL_SELECTOR",
+    "OBSERVABILITY_POD_LABEL_SELECTOR": "OBSERVABILITY_POD_LABEL_SELECTOR",
     # R4-03 strict-read reason codes
     "STRICT_READ_REASON_KIND_NOT_SERVED": "STRICT_READ_REASON_KIND_NOT_SERVED",
     "STRICT_READ_REASON_NAMESPACE_NOT_FOUND": "STRICT_READ_REASON_NAMESPACE_NOT_FOUND",
@@ -53,6 +54,14 @@ CONSTANT_PAIRS = {
     "STRICT_READ_REASON_INVENTORY_INCOMPLETE": "STRICT_READ_REASON_INVENTORY_INCOMPLETE",
     "STRICT_READ_REASON_MALFORMED_RESPONSE": "STRICT_READ_REASON_MALFORMED_RESPONSE",
     "STRICT_READ_REASON_READ_FAILED": "STRICT_READ_REASON_READ_FAILED",
+    # R4-03 destination-observability gate reason codes (July section 4). Both sides
+    # publish these to operators, so a drift here would make one form factor report a
+    # blocker the other cannot name.
+    "GATE_REASON_DESTINATION_ABSENT": "GATE_REASON_DESTINATION_ABSENT",
+    "GATE_REASON_DESTINATION_UNVERIFIABLE": "GATE_REASON_DESTINATION_UNVERIFIABLE",
+    "GATE_REASON_SOURCE_UNVERIFIABLE": "GATE_REASON_SOURCE_UNVERIFIABLE",
+    "GATE_REASON_SOURCE_AMBIGUOUS": "GATE_REASON_SOURCE_AMBIGUOUS",
+    "GATE_REASON_ACK_NOT_APPLICABLE": "GATE_REASON_ACK_NOT_APPLICABLE",
     # R4-03 strict-read bounds. STRICT_READ_REQUEST_TIMEOUT is deliberately absent: it is
     # collection-only, and its equality with the Python per-instance default is asserted by
     # test_strict_read_bounds_are_mirrored in tests/test_strict_read_parity.py.
@@ -146,7 +155,8 @@ def test_teardown_shape_constants_are_mirrored():
 
 def test_teardown_phase_vocabulary_is_mirrored():
     """The phase set itself. The shared "unknown phase" vector only proves the set is not
-    too permissive; a phase silently dropped from one side would go unnoticed without this."""
+    too permissive; a phase silently dropped from one side would go unnoticed without this.
+    """
     python_phases = frozenset(phase.value for phase in py_teardown_record.TeardownPhase)
     assert ans_constants.TEARDOWN_PHASES == python_phases
 

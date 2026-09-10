@@ -106,6 +106,7 @@ DISABLE_AUTO_IMPORT_ANNOTATION = "import.open-cluster-management.io/disable-auto
 OBSERVATORIUM_API_DEPLOYMENT = "observability-observatorium-api"
 THANOS_COMPACTOR_STATEFULSET = "observability-thanos-compact"
 THANOS_COMPACTOR_LABEL_SELECTOR = "app.kubernetes.io/name=thanos-compact"
+OBSERVABILITY_POD_LABEL_SELECTOR = "observability.open-cluster-management.io/name=observability"
 
 # Ownership marker written atomically with the ImportAndSync ConfigMap patch
 # (issue #214, audit C3). The cluster is the collection's register: finalization
@@ -122,6 +123,16 @@ STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE = "discovery_unverifiable"
 STRICT_READ_REASON_INVENTORY_INCOMPLETE = "inventory_incomplete"
 STRICT_READ_REASON_MALFORMED_RESPONSE = "malformed_response"
 STRICT_READ_REASON_READ_FAILED = "read_failed"
+
+# R4-03 destination-observability gate reason codes (July section 4, plan C5).
+# Mirrored from lib/constants.py; tests/test_constants_parity.py holds them equal.
+# The two destination reasons are never conflated: they demand different operator
+# responses, and only the proven-absent one is acknowledgeable.
+GATE_REASON_DESTINATION_ABSENT = "destination_observability_absent"
+GATE_REASON_DESTINATION_UNVERIFIABLE = "destination_observability_unverifiable"
+GATE_REASON_SOURCE_UNVERIFIABLE = "source_observability_unverifiable"
+GATE_REASON_SOURCE_AMBIGUOUS = "source_observability_ambiguous"
+GATE_REASON_ACK_NOT_APPLICABLE = "acknowledgement_not_applicable"
 
 # R4-03 strict-read bounds
 STRICT_READ_PAGE_LIMIT = 500

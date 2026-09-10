@@ -20,6 +20,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.artifacts im
 )
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
     build_operation_identity,
+    teardown_key,
 )
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (
     validate_operation_inputs,
@@ -100,6 +101,41 @@ def _canonical_normal_operation_identity():
     )
 
 
+_MCO_KEY = teardown_key(
+    "observability.open-cluster-management.io/v1beta2",
+    "MultiClusterObservability",
+    None,
+    "observability",
+)
+
+
+def _checkpoint_with_lifecycle(*, operational_data=None) -> dict:
+    return {
+        "schema_version": "2.0",
+        "phase": "finalization",
+        "phase_status": "enter",
+        "completed_phases": [
+            "preflight",
+            "primary_prep",
+            "activation",
+            "post_activation",
+        ],
+        "operational_data": dict(operational_data or {"existing": "keep"}),
+        "operation_identity": _canonical_normal_operation_identity(),
+        "errors": [],
+        "report_refs": [],
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+    }
+
+
+def _write_checkpoint_with_lifecycle(tmp_path, *, operational_data=None):
+    path = tmp_path / "checkpoint.json"
+    checkpoint = _checkpoint_with_lifecycle(operational_data=operational_data)
+    path.write_text(json.dumps(checkpoint), encoding="utf-8")
+    return path, checkpoint
+
+
 def _namespace_result(uid):
     return {
         "changed": False,
@@ -154,6 +190,95 @@ def _identity_barrier_args(tmp_path, *, mode="execute", enabled=True, restore_on
 def _run_barrier_with_live_uids(action, task_vars, primary_uid="LIVE-PRIMARY", secondary_uid="LIVE-SECONDARY"):
     action._execute_module = MagicMock(side_effect=[_namespace_result(primary_uid), _namespace_result(secondary_uid)])
     return action.run(task_vars=task_vars)
+
+
+def test_data_only_read_returns_validated_teardown_records_without_changing_lifecycle(
+    tmp_path,
+):
+    record = {"expected_uid": "mco-uid-1", "phase": "delete_started"}
+    path, before = _write_checkpoint_with_lifecycle(
+        tmp_path,
+        operational_data={"decommission_teardown_records": {_MCO_KEY: record}},
+    )
+    action = _make_checkpoint_action(
+        {
+            "checkpoint": {"enabled": True, "backend": "file", "path": str(path)},
+            "read_facts": True,
+        }
+    )
+
+    result = action.run(task_vars=_task_vars_for_mode("execute"))
+
+    assert result["changed"] is False
+    assert result["facts"]["teardown_records"] == {_MCO_KEY: record}
+    assert json.loads(path.read_text(encoding="utf-8")) == before
+
+
+@pytest.mark.parametrize("malformed", [None, "bogus"])
+def test_data_only_authoritative_read_rejects_malformed_operational_data_without_writing(tmp_path, malformed):
+    path, before = _write_checkpoint_with_lifecycle(tmp_path)
+    before["operational_data"] = malformed
+    path.write_text(json.dumps(before), encoding="utf-8")
+    action = _make_checkpoint_action(
+        {
+            "checkpoint": {"enabled": True, "backend": "file", "path": str(path)},
+            "read_facts": True,
+        }
+    )
+
+    result = action.run(task_vars=_task_vars_for_mode("execute"))
+
+    assert result["failed"] is True
+    assert result.get("changed", False) is False
+    assert json.loads(path.read_text(encoding="utf-8")) == before
+
+
+def test_data_only_teardown_write_preserves_phase_status_completion_and_identity(
+    tmp_path,
+):
+    path, before = _write_checkpoint_with_lifecycle(tmp_path)
+    action = _make_checkpoint_action(
+        {
+            "checkpoint": {"enabled": True, "backend": "file", "path": str(path)},
+            "teardown_record": {
+                "key": _MCO_KEY,
+                "expected_uid": "mco-uid-1",
+                "phase": "delete_started",
+            },
+        }
+    )
+
+    result = action.run(task_vars=_task_vars_for_mode("execute"))
+    saved = json.loads(path.read_text(encoding="utf-8"))
+
+    assert result["changed"] is True
+    assert saved["operational_data"]["decommission_teardown_records"][_MCO_KEY] == {
+        "expected_uid": "mco-uid-1",
+        "phase": "delete_started",
+    }
+    for field in ("phase", "phase_status", "completed_phases", "operation_identity"):
+        assert saved[field] == before[field]
+
+
+@pytest.mark.parametrize("mode,check_mode", [("dry_run", False), ("execute", True)])
+def test_data_only_teardown_write_is_non_mutating_in_preview_modes(tmp_path, mode, check_mode):
+    path, before = _write_checkpoint_with_lifecycle(tmp_path)
+    action = _make_checkpoint_action(
+        {
+            "checkpoint": {"enabled": True, "backend": "file", "path": str(path)},
+            "teardown_record": {
+                "key": _MCO_KEY,
+                "expected_uid": "mco-uid-1",
+                "phase": "delete_started",
+            },
+        }
+    )
+    action._play_context.check_mode = check_mode
+
+    result = action.run(task_vars=_task_vars_for_mode(mode))
+
+    assert result["changed"] is False
+    assert json.loads(path.read_text(encoding="utf-8")) == before
 
 
 def test_build_phase_transition_marks_completion():
@@ -2627,7 +2752,9 @@ def test_non_live_override_is_used_only_for_validate_and_dry_run(tmp_path, mode)
     action._execute_module.assert_not_called()
 
 
-def test_identity_barrier_missing_mode_defaults_to_execute_and_ignores_override(tmp_path):
+def test_identity_barrier_missing_mode_defaults_to_execute_and_ignores_override(
+    tmp_path,
+):
     args = _identity_barrier_args(tmp_path, enabled=False)
     args["execution"] = {}
     args["test_overrides"] = {
@@ -2645,7 +2772,10 @@ def test_identity_barrier_missing_mode_defaults_to_execute_and_ignores_override(
 
     action = _make_checkpoint_action(args)
     action._execute_module = MagicMock(
-        side_effect=[_namespace_result("LIVE-PRIMARY"), _namespace_result("LIVE-SECONDARY")]
+        side_effect=[
+            _namespace_result("LIVE-PRIMARY"),
+            _namespace_result("LIVE-SECONDARY"),
+        ]
     )
     task_vars: dict[str, Any] = {}
 
@@ -2690,7 +2820,10 @@ def test_identity_barrier_pins_controller_python_for_nested_k8s_info(tmp_path):
     """Nested live reads must not rely on ansible-core 2.16 auto /usr/bin/python3."""
     action = _make_checkpoint_action(_identity_barrier_args(tmp_path, enabled=False))
     action._execute_module = MagicMock(
-        side_effect=[_namespace_result("LIVE-PRIMARY"), _namespace_result("LIVE-SECONDARY")]
+        side_effect=[
+            _namespace_result("LIVE-PRIMARY"),
+            _namespace_result("LIVE-SECONDARY"),
+        ]
     )
 
     result = action.run(task_vars={"ansible_python_interpreter": "auto_legacy"})
@@ -2703,7 +2836,10 @@ def test_identity_barrier_pins_controller_python_for_nested_k8s_info(tmp_path):
 def test_identity_barrier_preserves_explicit_python_interpreter(tmp_path):
     action = _make_checkpoint_action(_identity_barrier_args(tmp_path, enabled=False))
     action._execute_module = MagicMock(
-        side_effect=[_namespace_result("LIVE-PRIMARY"), _namespace_result("LIVE-SECONDARY")]
+        side_effect=[
+            _namespace_result("LIVE-PRIMARY"),
+            _namespace_result("LIVE-SECONDARY"),
+        ]
     )
     explicit = "/opt/custom/bin/python"
 
@@ -3038,12 +3174,17 @@ def test_initial_identity_barrier_reset_from_uses_trusted_expected_identity(tmp_
     assert result["checkpoint"]["completed_phases"] == []
 
 
-def test_native_check_barrier_then_preflight_pass_succeeds_without_checkpoint_file(tmp_path):
+def test_native_check_barrier_then_preflight_pass_succeeds_without_checkpoint_file(
+    tmp_path,
+):
     barrier_args = _identity_barrier_args(tmp_path, mode="execute", enabled=True)
     barrier = _make_checkpoint_action(barrier_args)
     barrier._play_context.check_mode = True
     barrier._execute_module = MagicMock(
-        side_effect=[_namespace_result("LIVE-PRIMARY"), _namespace_result("LIVE-SECONDARY")]
+        side_effect=[
+            _namespace_result("LIVE-PRIMARY"),
+            _namespace_result("LIVE-SECONDARY"),
+        ]
     )
     task_vars = _task_vars_with_operation_identity(mode="execute")
 
@@ -3225,7 +3366,9 @@ def test_standalone_identity_accepts_every_real_status(standalone_args, status):
     assert "Invalid checkpoint status" not in result.get("msg", "")
 
 
-def test_standalone_identity_and_identity_barrier_are_mutually_exclusive(standalone_args):
+def test_standalone_identity_and_identity_barrier_are_mutually_exclusive(
+    standalone_args,
+):
     """Section 10.3.7 item 18: two different identity shapes, so fail closed."""
     result, execute_module = _run_standalone(standalone_args(identity_barrier=True))
     assert result["failed"] is True
@@ -3272,7 +3415,11 @@ def test_standalone_identity_refuses_an_implicit_kube_context(standalone_args, h
 @pytest.mark.parametrize("status", ["enter", "pass", "fail", "reset"])
 @pytest.mark.parametrize(
     "checkpoint_extra",
-    [{"reset": True}, {"reset_from": "finalization"}, {"reset": True, "reset_from": "activation"}],
+    [
+        {"reset": True},
+        {"reset_from": "finalization"},
+        {"reset": True, "reset_from": "activation"},
+    ],
 )
 def test_standalone_identity_is_refused_while_reset_is_configured(standalone_args, status, checkpoint_extra):
     """Section 10.3.7 item 22, the refusal half -- on EVERY status.
@@ -3299,7 +3446,10 @@ def test_the_reset_path_really_does_rebind_an_established_identity(standalone_ar
     of habit.
     """
     established_two_hub = build_operation_identity(
-        hubs={"primary": {"context": "primary-hub"}, "secondary": {"context": "secondary-hub"}},
+        hubs={
+            "primary": {"context": "primary-hub"},
+            "secondary": {"context": "secondary-hub"},
+        },
         operation={},
         collection_version="",
         hub_identities={
@@ -3418,7 +3568,9 @@ def test_an_unknown_execution_mode_is_refused_before_any_read_or_write(standalon
     assert not configured.exists(), "a refused mode must persist nothing"
 
 
-def test_a_standalone_reset_status_prunes_the_phase_without_rebinding_identity(standalone_args):
+def test_a_standalone_reset_status_prunes_the_phase_without_rebinding_identity(
+    standalone_args,
+):
     """Section 10.3.7 item 17, against the REAL action rather than a pure function.
 
     ``status: reset`` is a transition status, distinct from the refused reset
@@ -3456,8 +3608,14 @@ def test_standalone_identity_requests_no_secondary_hub(standalone_args):
     """Section 10.3.7 item 8: one-hub semantics issue no secondary UID request."""
     task_vars = _standalone_task_vars(
         hubs={
-            "primary": {"context": "primary-hub", "kubeconfig": "./kubeconfigs/primary"},
-            "secondary": {"context": "secondary-hub", "kubeconfig": "./kubeconfigs/secondary"},
+            "primary": {
+                "context": "primary-hub",
+                "kubeconfig": "./kubeconfigs/primary",
+            },
+            "secondary": {
+                "context": "secondary-hub",
+                "kubeconfig": "./kubeconfigs/secondary",
+            },
         }
     )
     _result, execute_module = _run_standalone(standalone_args(), task_vars=task_vars)
@@ -3467,7 +3625,9 @@ def test_standalone_identity_requests_no_secondary_hub(standalone_args):
     assert not any(args.get("context") == "secondary-hub" for args in routed), routed
 
 
-def test_standalone_identity_builds_a_primary_only_identity_that_cannot_match_a_two_hub_record(standalone_args):
+def test_standalone_identity_builds_a_primary_only_identity_that_cannot_match_a_two_hub_record(
+    standalone_args,
+):
     """Sections 10.3.7 items 9 and 10: an established two-hub checkpoint cannot be
     downgraded into standalone identity.
 
@@ -3487,8 +3647,14 @@ def test_standalone_identity_builds_a_primary_only_identity_that_cannot_match_a_
 
     two_hub = action._build_trusted_operation_identity(
         hubs={
-            "primary": {"context": "primary-hub", "kubeconfig": "./kubeconfigs/primary"},
-            "secondary": {"context": "secondary-hub", "kubeconfig": "./kubeconfigs/secondary"},
+            "primary": {
+                "context": "primary-hub",
+                "kubeconfig": "./kubeconfigs/primary",
+            },
+            "secondary": {
+                "context": "secondary-hub",
+                "kubeconfig": "./kubeconfigs/secondary",
+            },
         },
         operation={},
         collection_version=None,

@@ -15,9 +15,9 @@ Two reset surfaces are pinned here, both driven through the shipped
    accepted because it happened to be stored already.
 
 No new reset mechanism is introduced and the accepted R4-05 reset-laundering
-limitation is unchanged. The decommission role does not read these records yet:
-that wiring belongs to PRs C, D and E, so the post-reset revalidation is asserted
-against the collection's own reader on the file the playbook left behind.
+limitation is unchanged. C4 also exercises the MCO role against a retained completed
+record, proving that the role revalidates and freshly re-proves it without rewriting
+its immutable completion evidence.
 """
 
 from __future__ import annotations
@@ -160,9 +160,8 @@ def test_full_checkpoint_reset_drops_the_decommission_teardown_records(tmp_path)
 
     What is asserted here is the record side: after a full reset no record exists
     for the resource key, so a rerun has no completion evidence to consult and
-    treats an already-absent CR as a clean skip. The rerun's own behaviour is NOT
-    asserted here -- at the B stage the decommission role reads no teardown record
-    (PRs C, D and E add the readers), so the causal second half is PR C's to pin.
+    treats an already-absent CR as a clean skip. The reset contract itself is the
+    subject here; C4's focused runtime tests cover the role's record-aware rerun.
     This is documented, not mitigated: no new reset mechanism is introduced and the
     accepted R4-05 reset-laundering limitation is unchanged.
     """
@@ -222,8 +221,9 @@ def test_reset_from_does_not_launder_a_malformed_teardown_record(tmp_path):
         },
     )
 
-    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert completed.returncode != 0
     reloaded = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert reloaded["completed_phases"] == ["preflight"]
     assert _MCO_KEY in reloaded["operational_data"][KEY_DECOMMISSION_TEARDOWN_RECORDS]
     with pytest.raises(MalformedTeardownRecord):
         teardown_records(reloaded)
@@ -241,3 +241,19 @@ def test_decommission_artifact_reports_the_real_outcome_on_this_lane():
     assert summary["status"] == "fail"
     assert summary["substeps"] == {"observability": "failed"}
     assert summary["would_change"] is False
+
+
+def test_completed_mco_record_is_reproved_without_rewrite_on_this_lane():
+    before = json.loads(json.dumps(_VALID_RECORD))
+    result = run_decommission_role(
+        mco_present=False,
+        mco_record=before,
+        managed_clusters_outcome="precondition_noop",
+        multiclusterhub_outcome="precondition_noop",
+    )
+
+    stored = result["checkpoint"]["operational_data"][KEY_DECOMMISSION_TEARDOWN_RECORDS][_MCO_KEY]
+    assert result["returncode"] == 0
+    assert stored == before
+    assert not [call for call in result["delete_calls"] if "multiclusterobservabilities" in call["path"]]
+    assert [request for request in result["requests"] if "/pods" in request["path"]]

@@ -76,7 +76,47 @@ def _validate_choice(value: str, valid_choices: Sequence[str], field_name: str) 
         raise ValidationError(f"Invalid {field_name} '{value}'. Must be one of: {choices_str}")
 
 
-def validate_operation_inputs(operation: dict, features: dict, execution: dict | None = None) -> dict:
+def _validate_observability_acknowledgement(
+    *,
+    acknowledged: bool,
+    execution_mode: str,
+    restore_only: bool,
+    old_hub_action: str,
+    standalone_decommission: bool,
+) -> None:
+    """Mirror of the Python CLI's --acknowledge-observability-not-migrated rule.
+
+    The destination-observability gate this acknowledges runs only where an
+    integrated switchover tears the old hub down, so the flag is refused
+    everywhere else rather than silently ignored.
+    """
+    if not acknowledged:
+        return
+    if standalone_decommission:
+        raise ValidationError(
+            "acknowledge_observability_not_migrated cannot be used with a standalone decommission: "
+            "there is no destination hub to acknowledge"
+        )
+    if execution_mode == "validate":
+        raise ValidationError(
+            "acknowledge_observability_not_migrated cannot be used in validate mode: "
+            "validation performs no teardown to acknowledge"
+        )
+    if restore_only:
+        raise ValidationError(
+            "acknowledge_observability_not_migrated cannot be used with restore_only: "
+            "there is no old hub to tear down"
+        )
+    if old_hub_action != "decommission":
+        raise ValidationError("acknowledge_observability_not_migrated requires old_hub_action=decommission")
+
+
+def validate_operation_inputs(
+    operation: dict,
+    features: dict,
+    execution: dict | None = None,
+    decommission: dict | None = None,
+) -> dict:
     """Validate that operation and feature params form a supported combination.
 
     Returns:
@@ -93,6 +133,10 @@ def validate_operation_inputs(operation: dict, features: dict, execution: dict |
         execution = {}
     if not isinstance(execution, dict):
         raise ValidationError("execution must be a dictionary")
+    if decommission is None:
+        decommission = {}
+    if not isinstance(decommission, dict):
+        raise ValidationError("decommission must be a dictionary")
 
     min_mc = operation.get("min_managed_clusters")
     if min_mc is not None:
@@ -128,6 +172,19 @@ def validate_operation_inputs(operation: dict, features: dict, execution: dict |
         raise ValidationError(
             "disable_observability_on_secondary requires old_hub_action=secondary so the old hub remains available"
         )
+
+    # Checked before the restore_only branch below, which returns early. The
+    # acknowledgement lives on `acm_switchover_decommission`, the variable the plan's
+    # decision record names, and `operation.decommission` is the standalone
+    # decommission entry point's discriminator -- the collection's equivalent of the
+    # Python CLI's `--decommission`.
+    _validate_observability_acknowledgement(
+        acknowledged=decommission.get("acknowledge_observability_not_migrated", False),
+        execution_mode=execution_mode,
+        restore_only=restore_only,
+        old_hub_action=old_hub_action,
+        standalone_decommission=bool(operation.get("decommission", False)),
+    )
 
     if restore_only:
         method = operation.get("method", "full")

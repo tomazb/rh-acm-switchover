@@ -342,3 +342,114 @@
   expected:
     passed: false
     contains: "allowed"
+
+- name: observability acknowledgement valid for an integrated decommission
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: decommission
+    execution:
+      mode: execute
+    decommission:
+      acknowledge_observability_not_migrated: true
+  expected:
+    passed: true
+
+- name: observability acknowledgement rejected for old_hub_action secondary
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+    execution:
+      mode: execute
+    decommission:
+      acknowledge_observability_not_migrated: true
+  expected:
+    passed: false
+    contains: "acknowledge"
+
+- name: observability acknowledgement rejected for old_hub_action none
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: "none"
+    execution:
+      mode: execute
+    decommission:
+      acknowledge_observability_not_migrated: true
+  expected:
+    passed: false
+    contains: "acknowledge"
+
+- name: observability acknowledgement rejected in validate mode
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: decommission
+    execution:
+      mode: validate
+    decommission:
+      acknowledge_observability_not_migrated: true
+  expected:
+    passed: false
+    contains: "acknowledge"
+
+- name: observability acknowledgement rejected for restore_only
+  kind: operation
+  input:
+    operation:
+      restore_only: true
+      method: full
+      activation_method: patch
+      old_hub_action: null
+    execution:
+      mode: execute
+    decommission:
+      acknowledge_observability_not_migrated: true
+  expected:
+    passed: false
+    contains: "acknowledge"
+
+- name: observability acknowledgement rejected for standalone decommission
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: decommission
+      decommission: true
+    execution:
+      mode: execute
+    decommission:
+      acknowledge_observability_not_migrated: true
+  expected:
+    passed: false
+    contains: "acknowledge"
+
+- name: absent observability acknowledgement constrains nothing
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+    execution:
+      mode: execute
+    decommission:
+      acknowledge_observability_not_migrated: false
+  expected:
+    passed: true

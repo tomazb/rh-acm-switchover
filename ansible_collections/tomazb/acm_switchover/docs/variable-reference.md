@@ -67,11 +67,11 @@ post-activation reaches klusterlet operations.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `mode` | `execute`, `validate`, `dry_run` | `execute` | Runtime mode. `validate` runs the checkpoint preflight (loading and verifying checkpoint state, including hub-identity binding) along the same path used by `execute`, but does not persist checkpoint transitions or perform mutations — so misconfigured checkpoints fail fast before any execute-mode run. `dry_run` also does not persist checkpoint transitions. Native Ansible check mode is non-mutating even when this is `execute`; published role results (`acm_switchover_pause_backups_result.changed`, `acm_switchover_restore_activation_result.changed`) report the would-change verdict under `--check`. |
+| `mode` | `execute`, `validate`, `dry_run` | `execute` | Runtime mode. `validate` runs the checkpoint preflight (loading and verifying checkpoint state, including hub-identity binding) along the same path used by `execute`, but does not persist checkpoint transitions or perform mutations — so misconfigured checkpoints fail fast before any execute-mode run. `dry_run` also does not persist checkpoint transitions. Native Ansible check mode is non-mutating even when this is `execute`; published role results (`acm_switchover_pause_backups_result.changed`, `acm_switchover_restore_activation_result.changed`) report the would-change verdict under `--check`. The `old_hub_action: secondary` finalization adapter (`disable_old_hub_observability.yml`) refuses `mode: validate` explicitly, before any read or delete: its shared MultiClusterObservability teardown has no non-mutating validate path. |
 | `verbose` | bool | `false` | Enable verbose collection output where roles expose additional debug detail |
 | `force` | bool | `false` | Operator override flag reserved for compatibility with Python CLI state-reset workflows |
 | `report_dir` | str | `./artifacts` | Directory for JSON report artifacts; validated by the safe-path policy |
-| `checkpoint.enabled` | bool | `false` | Enable file-backed phase checkpointing |
+| `checkpoint.enabled` | bool | `false` | Enable file-backed phase checkpointing. Required (`true`) in execute mode for the `old_hub_action: secondary` finalization adapter's MultiClusterObservability teardown, which persists a durable identity map before its guarded delete and refuses to run without it — the default `false` now fails that path closed with an explicit message before any read, instead of failing opaquely mid-teardown. |
 | `checkpoint.backend` | str | `file` | Checkpoint backend; only `file` is currently supported |
 | `checkpoint.path` | str | `.state/switchover.json` | Checkpoint JSON path; validated by the safe-path policy before controller-side reads or writes |
 | `checkpoint.reset` | bool | `false` | Start a fresh checkpoint from `preflight` and ignore existing checkpoint content |
@@ -211,6 +211,7 @@ Observability will be handled separately.
 | `confirmed` | bool | `false` | Must be `true` to proceed outside `dry_run` mode |
 | `interactive` | bool | `false` | Reserved for future interactive prompting |
 | `has_observability` | `auto`, `true`, `false` | `auto` | Auto-detect `open-cluster-management-observability` by default; `true`/`false` force the observability deletion path on or off. Auto-detection fails closed on API errors; only a successful lookup with no namespace disables Observability deletion/checks. |
+| `acknowledge_observability_not_migrated` | bool | `false` | Converts a *proven absent* destination-hub Observability install into a proceed for the MultiClusterObservability teardown, and nothing else. It never overrides an unverifiable or partially present destination, and it is refused when the gate would pass anyway. Valid only for an integrated switchover with `old_hub_action: decommission`; rejected in validate mode, with `restore_only`, and for the standalone decommission playbook. |
 
 Decommission always re-checks matching Hive `ClusterDeployment` resources before
 live non-local `ManagedCluster` deletion. Matching ClusterDeployments must have

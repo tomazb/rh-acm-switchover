@@ -1,7 +1,11 @@
 ---
 # ClusterRole for ACM Switchover Decommission
-# Grants cluster-scoped delete permissions needed for hub teardown.
-# Baseline operator RBAC already grants MCO delete for normal finalization.
+# Grants the cluster-scoped reads and deletes needed for hub teardown.
+# Baseline operator RBAC already grants MCO get/list/delete for normal finalization, and
+# the base deployment binds that ClusterRole to the same service account this extension
+# is bound to. The MCO rule is repeated here so this extension is self-consistent on its
+# own terms: a validator or certification run that inspects only the decommission
+# extension must find the reads the standalone teardown actually issues.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -20,6 +24,11 @@ rules:
   - apiGroups: ["operator.open-cluster-management.io"]
     resources: ["multiclusterhubs"]
     verbs: ["delete"]
+  # `get` is here so this extension is self-consistent with the calls the standalone
+  # teardown in modules/decommission.py makes: a strict named GET before the delete and
+  # a final absence proof after it. The extension is not self-sufficient on its own --
+  # its other reads (namespaces get, managedclusters/multiclusterhubs/MCO list, pods)
+  # still come from the baseline operator role bound to the same service account.
   - apiGroups: ["observability.open-cluster-management.io"]
     resources: ["multiclusterobservabilities"]
-    verbs: ["delete"]
+    verbs: ["get", "delete"]

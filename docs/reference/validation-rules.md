@@ -176,6 +176,12 @@ validates the path before writing `preflight-report.json`, `switchover-report.js
 - `--secondary-context` is required for switchover operations (unless `--decommission` or `--setup`)
 - `--non-interactive` is only valid with `--decommission`
 - `--disable-observability-on-secondary` is deprecated/redundant, but if supplied it still requires `--old-hub-action secondary` and is not valid with `--decommission`
+- `--acknowledge-observability-not-migrated` requires `--old-hub-action decommission` (the destination-observability gate runs only where an integrated switchover tears the old hub down)
+- `--acknowledge-observability-not-migrated` cannot be used with `--decommission` (standalone decommission has no destination hub to acknowledge)
+- `--acknowledge-observability-not-migrated` cannot be used with `--validate-only` (validation performs no teardown to acknowledge)
+- `--acknowledge-observability-not-migrated` cannot be used with `--restore-only` (there is no old hub to tear down)
+- `--acknowledge-observability-not-migrated` cannot be used with `--setup` (setup bootstraps prerequisites and tears nothing down)
+- `--acknowledge-observability-not-migrated` cannot be used with `--argocd-resume-only` (resuming Argo CD tears nothing down)
 - `--argocd-resume-only` requires `--secondary-context` (used to resolve the state file for restoring Argo CD auto-sync)
 - `--argocd-resume-only` cannot be used with `--validate-only` (resume performs changes)
 - `--argocd-resume-only` cannot be used with `--decommission`

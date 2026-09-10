@@ -42,6 +42,27 @@ class SecurityValidationError(ValidationError):
     """
 
 
+class PreconditionConflict(FatalError):
+    """A UID-preconditioned delete was refused because the live object is not the one
+    the caller proved (HTTP 409 or 412).
+
+    Fatal by construction. The caller MUST NOT fall back to an unconditional or
+    name-only delete: the precondition failing means the name now refers to a
+    different object, which is precisely what the precondition exists to catch.
+    Re-prove identity from a fresh read instead.
+    """
+
+
+class TargetDisappeared(FatalError):
+    """A UID-preconditioned delete found the target already absent (HTTP 404).
+
+    Distinct from success. The object may have been deleted by someone else, or it
+    may never have existed; those are not the same, and this exception exists so the
+    caller runs its final live verification rather than recording an unearned
+    completion. Never treat this as an accepted delete.
+    """
+
+
 class StateLoadError(FatalError):
     """State file could not be loaded due to corruption or I/O failure.
 

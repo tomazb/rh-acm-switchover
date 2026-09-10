@@ -174,6 +174,9 @@ RESTORE_PLURAL = "restores"
 
 # MultiClusterObservability API identifiers
 OBSERVABILITY_API_GROUP = "observability.open-cluster-management.io"
+# Promoted from the literal at modules/post_activation.py:569 so the drain scope has
+# one owner. Mirrored in the collection; a parity test holds the two equal.
+OBSERVABILITY_POD_LABEL_SELECTOR = "observability.open-cluster-management.io/name=observability"
 MULTICLUSTEROBSERVABILITIES_PLURAL = "multiclusterobservabilities"
 
 # Hive ClusterDeployment API identifiers
@@ -387,6 +390,16 @@ STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE = "discovery_unverifiable"
 STRICT_READ_REASON_INVENTORY_INCOMPLETE = "inventory_incomplete"
 STRICT_READ_REASON_MALFORMED_RESPONSE = "malformed_response"
 STRICT_READ_REASON_READ_FAILED = "read_failed"
+
+# R4-03 destination-observability gate reason codes (July section 4, plan C5).
+# Mirrored verbatim in the collection; tests/test_constants_parity.py holds them equal.
+# The two destination reasons are never conflated: they demand different operator
+# responses, and only the proven-absent one is acknowledgeable.
+GATE_REASON_DESTINATION_ABSENT = "destination_observability_absent"
+GATE_REASON_DESTINATION_UNVERIFIABLE = "destination_observability_unverifiable"
+GATE_REASON_SOURCE_UNVERIFIABLE = "source_observability_unverifiable"
+GATE_REASON_SOURCE_AMBIGUOUS = "source_observability_ambiguous"
+GATE_REASON_ACK_NOT_APPLICABLE = "acknowledgement_not_applicable"
 
 # R4-03 strict-read bounds
 STRICT_READ_PAGE_LIMIT = 500

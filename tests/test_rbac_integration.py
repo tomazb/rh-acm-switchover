@@ -519,7 +519,7 @@ class TestRBACManifestConsistency:
             "name: acm-switchover-decommission",
             'resources: ["managedclusters"]\n    verbs: ["delete"]',
             'resources: ["multiclusterhubs"]\n    verbs: ["delete"]',
-            'resources: ["multiclusterobservabilities"]\n    verbs: ["delete"]',
+            'resources: ["multiclusterobservabilities"]\n    verbs: ["get", "delete"]',
             'resources: ["clusterdeployments"]\n    verbs: ["list"]',
         ]
         for snippet in required_snippets:
@@ -543,6 +543,7 @@ class TestRBACManifestConsistency:
             'resources: ["managedclusters"]',
             'verbs: ["delete"]',
             'resources: ["clusterdeployments"]\n    verbs: ["list"]',
+            'resources: ["multiclusterobservabilities"]\n    verbs: ["get", "delete"]',
         ]
         assert ".Values.rbac.includeDecommissionClusterRole" in helm_clusterrole_content
         for snippet in required_snippets:

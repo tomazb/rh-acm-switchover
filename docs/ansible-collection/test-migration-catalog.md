@@ -35,7 +35,12 @@ Purpose: Triage the existing Python-oriented test suite into collection-era test
 | `tests/test_rbac_validator.py` | later unit/integration | RBAC self-validation stays in core parity |
 | `tests/test_argocd.py` | parity, collection unit | Argo CD pause/resume and resume-on-failure are dual-supported |
 | `tests/test_gitops_detector.py` | parity, collection unit | GitOps classification remains shared behavior; full context discovery remains bridge-backed |
-| `tests/test_decommission.py` | parity, collection unit | Decommission is dual-supported, including observability autodetection and pod waits |
+| `tests/test_decommission.py` | parity, collection unit | Decommission is dual-supported, including observability autodetection and pod waits, the shared MultiClusterObservability phase machine, and the destination-observability gate |
+| `tests/test_mco_completed_resume.py` | parity, collection unit | Completed-record resume re-proves MultiClusterObservability absence live without rewriting the immutable completion evidence |
+| `tests/test_kube_client.py` | later unit/integration | Covers the UID-preconditioned guarded delete primitive `delete_custom_resource_preconditioned` and the strict-read producers |
+| `ansible_collections/tomazb/acm_switchover/tests/unit/test_mco_teardown_runtime.py` | collection unit | Collection MultiClusterObservability teardown runtime rows, including the destination-observability gate's pass/block/acknowledge outcomes and the finalization adapter |
+| `ansible_collections/tomazb/acm_switchover/tests/unit/test_uid_guarded_delete.py` | collection unit | `acm_uid_guarded_delete` module unit behavior: namespace-scope validation, fresh discovery, finite budgets, poll-sleep capping, DELETE-404 final proof |
+| `ansible_collections/tomazb/acm_switchover/tests/integration/test_uid_guarded_delete_runtime.py` | collection integration | `acm_uid_guarded_delete` against a fake Kubernetes API, including the UID-precondition wire body and the `no_log` fixture contract |
 | `tests/test_scripts_integration.py` | partial drop, partial bridge docs | only bridge behavior retained |
 | `tests/test_rbac_validator.py` | parity, collection unit | SSAR shape, dry-run validation, and manifest/policy alignment are shared contracts |
 | `tests/release/adapters/test_python_cli.py` | release adapter | Python scenario commands must pass `--report-dir` |

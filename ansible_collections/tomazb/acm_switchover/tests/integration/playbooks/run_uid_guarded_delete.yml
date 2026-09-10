@@ -1,0 +1,39 @@
+---
+# Drives the SHIPPED acm_uid_guarded_delete module against a real HTTP API, so the
+# runtime tests exercise the module as Ansible actually loads and runs it rather than
+# calling its Python directly.
+- name: Run the guarded delete
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Delete the proved object
+      tomazb.acm_switchover.acm_uid_guarded_delete:
+        kubeconfig: "{{ guarded_kubeconfig }}"
+        context: "{{ guarded_context }}"
+        api_version: "{{ guarded_api_version }}"
+        kind: "{{ guarded_kind }}"
+        resource_name: "{{ guarded_resource_name }}"
+        name: "{{ guarded_name }}"
+        expected_uid: "{{ guarded_expected_uid }}"
+        wait_timeout: "{{ guarded_wait_timeout | default(10) }}"
+        wait_sleep: "{{ guarded_wait_sleep | default(0.1) }}"
+      register: guarded_result
+      ignore_errors: true
+      # The shipped invocation contract: the task arguments carry a kubeconfig path, so
+      # no callback may render them. The registered result stays available to the tasks
+      # below -- no_log governs callback rendering, not the variable.
+      no_log: true
+
+    # Written to a file rather than echoed through debug: Ansible renders and wraps
+    # debug output, so parsing it back as JSON is fragile in a way that has nothing to
+    # do with what is under test.
+    - name: Publish the module outcome for the test to read
+      ansible.builtin.copy:
+        content: "{{ guarded_result | to_json }}"
+        dest: "{{ guarded_result_path }}"
+        mode: "0644"
+      # This task is test scaffolding, not part of what --check is previewing. Without
+      # this the file is never written under --check and the check-mode test cannot
+      # read the very outcome it exists to assert.
+      check_mode: false

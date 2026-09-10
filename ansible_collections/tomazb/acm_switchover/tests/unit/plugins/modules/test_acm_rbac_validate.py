@@ -22,6 +22,10 @@ from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_validate
 
 RUN_SSAR_TASK = Path(__file__).resolve().parents[4] / "roles" / "preflight" / "tasks" / "run_ssar.yml"
 
+#: Stand-in for the raw SelfSubjectAccessReview request/response body. Denial reporting must
+#: surface the review's ``reason`` only, so this sentinel must not reach any operator output.
+_RAW_SSAR_BODY_SENTINEL = "evaluation-error: raw ssar response body must not be reported"
+
 
 class ModuleExit(Exception):
     def __init__(self, results):
@@ -797,3 +801,171 @@ def test_operator_managed_cluster_secret_permissions_patch_without_delete():
     assert "create" in verbs
     assert "patch" in verbs
     assert "delete" not in verbs
+
+
+def test_decommission_only_requires_mco_named_get_when_observability_present():
+    """The standalone decommission expansion must carry the MCO named GET.
+
+    ``roles/decommission/tasks/validate_rbac.yml:2-9`` calls this module with
+    ``decommission_only: true`` and ``skip_observability`` derived from
+    ``acm_switchover_decommission_effective_has_observability``. When observability IS
+    present that flag is false, and this is the exact expansion the role's
+    SelfSubjectAccessReview sweep issues. Without ``get`` in
+    ``DECOMMISSION_CLUSTER_PERMISSIONS`` the sweep never asks for the strict named read the
+    standalone MCO teardown performs, and the missing grant goes undetected until the live
+    API call fails.
+
+    The pre-existing ``decommission_only`` case only covers ``skip_observability=True``,
+    which drops every observability entry, so it cannot see this.
+    """
+    permissions = expand_rbac_requirements(
+        role="operator",
+        include_decommission=True,
+        include_old_hub_finalization=False,
+        skip_observability=False,
+        argocd_mode="none",
+        argocd_install_type="unknown",
+        decommission_only=True,
+    )
+
+    assert (
+        "observability.open-cluster-management.io",
+        "multiclusterobservabilities",
+        "get",
+        None,
+    ) in permissions
+    assert (
+        "observability.open-cluster-management.io",
+        "multiclusterobservabilities",
+        "delete",
+        None,
+    ) in permissions
+
+
+def test_decommission_only_drops_mco_named_get_when_observability_absent():
+    """Verified observability absence must drop the named GET with the rest of the MCO surface.
+
+    Pins that the new grant is gated by the same ``skip_observability`` guard as MCO
+    ``list``/``delete``, so an observability-free hub is not asked for a permission it has
+    no reason to hold.
+    """
+    permissions = expand_rbac_requirements(
+        role="operator",
+        include_decommission=True,
+        include_old_hub_finalization=False,
+        skip_observability=True,
+        argocd_mode="none",
+        argocd_install_type="unknown",
+        decommission_only=True,
+    )
+
+    assert (
+        "observability.open-cluster-management.io",
+        "multiclusterobservabilities",
+        "get",
+        None,
+    ) not in permissions
+
+
+def test_denied_mco_named_get_fails_decommission_rbac_closed_with_sanitized_output(monkeypatch):
+    """A denied MCO named GET must fail the decommission RBAC gate, without leaking the API body.
+
+    Mirrors the Python-side negative-authorization test on the collection lane. The denial is
+    built by rendering the REAL ``roles/preflight/tasks/run_ssar.yml`` template over an SSAR
+    response, so this tracks the shipped translation rather than a snapshot of it, and is then
+    handed to ``main()`` the way ``roles/decommission/tasks/validate_rbac.yml:23-31`` hands it.
+
+    "Before any DELETE" is structural in this lane: ``roles/decommission/tasks/main.yml``
+    includes ``validate_rbac.yml`` at :57 and only reaches ``delete_observability.yml`` at
+    :119, gated by the ``Fail when RBAC permissions are missing for decommission`` task at
+    ``validate_rbac.yml:34-38``, which fires on exactly the ``passed: false`` asserted here.
+    """
+    denied_permissions = _render_denied_permissions_from_run_ssar(
+        [
+            {
+                "item": [
+                    "observability.open-cluster-management.io",
+                    "multiclusterobservabilities",
+                    "get",
+                    None,
+                ],
+                "result": {
+                    # The raw request/response body the SSAR call carries. Only the review's
+                    # `reason` may be reported; none of this may reach the operator output.
+                    "spec": {"resourceAttributes": {"note": _RAW_SSAR_BODY_SENTINEL}},
+                    "status": {
+                        "allowed": False,
+                        "reason": "Permission denied",
+                        "evaluationError": _RAW_SSAR_BODY_SENTINEL,
+                    },
+                },
+            }
+        ]
+    )
+
+    assert denied_permissions == [
+        {
+            "api_group": "observability.open-cluster-management.io",
+            "resource": "multiclusterobservabilities",
+            "verb": "get",
+            "namespace": None,
+            "reason": "Permission denied",
+        }
+    ]
+
+    captured = {}
+
+    class FakeModule:
+        def __init__(self, *args, **kwargs):
+            self.params = {
+                "hub": "primary",
+                "role": "operator",
+                "include_decommission": True,
+                "include_old_hub_finalization": False,
+                "decommission_only": True,
+                "scope": "hub",
+                "skip_observability": False,
+                "argocd_mode": "none",
+                "argocd_install_type": "vanilla",
+                "denied_permissions": denied_permissions,
+                "result_id": None,
+                "failure_message": None,
+                "success_message": None,
+                "recommended_action": None,
+            }
+            self.check_mode = False
+
+        def exit_json(self, **kwargs):
+            captured["exit"] = kwargs
+
+        def fail_json(self, **kwargs):
+            raise AssertionError(f"unexpected fail_json: {kwargs}")
+
+    monkeypatch.setattr(acm_rbac_validate_module, "AnsibleModule", FakeModule)
+
+    main()
+
+    exit_result = captured["exit"]
+
+    # The permission the sweep denied is one the standalone expansion actually asks for.
+    # `main()` hands `exit_json` the expansion as-is, so these are the raw tuples; a real
+    # AnsibleModule would JSON-encode them into lists on the wire.
+    assert (
+        "observability.open-cluster-management.io",
+        "multiclusterobservabilities",
+        "get",
+        None,
+    ) in exit_result["permissions"]
+
+    # Fail closed: the role's `Fail when RBAC permissions are missing for decommission` task
+    # keys off `passed`, so the teardown never reaches its delete tasks.
+    assert exit_result["passed"] is False
+    assert exit_result["critical_failures"] == 1
+    assert exit_result["results"][0]["status"] == "fail"
+    assert exit_result["results"][0]["severity"] == "critical"
+    assert exit_result["results"][0]["details"]["denied_permissions"] == denied_permissions
+
+    # Sanitized: the resource and verb are named, the raw SSAR body is not reported.
+    rendered = json.dumps(exit_result, default=str)
+    assert "multiclusterobservabilities" in rendered
+    assert _RAW_SSAR_BODY_SENTINEL not in rendered

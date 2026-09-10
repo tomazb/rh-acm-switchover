@@ -5,6 +5,7 @@
     operation: "{{ acm_switchover_operation }}"
     execution: "{{ acm_switchover_execution }}"
     features: "{{ acm_switchover_features }}"
+    decommission: "{{ acm_switchover_decommission | default({}) }}"
   register: acm_input_validation
 
 - name: Merge input validation results into preflight accumulator

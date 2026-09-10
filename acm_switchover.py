@@ -257,6 +257,17 @@ Examples:
             "'none' leaves it unchanged for manual handling"
         ),
     )
+    parser.add_argument(
+        "--acknowledge-observability-not-migrated",
+        action="store_true",
+        help=(
+            "Acknowledge that the destination hub has NO observability and proceed with deleting "
+            "observability on the old hub anyway (metrics continuity ends). Only valid with "
+            "--old-hub-action decommission, and only accepted once the destination has been "
+            "positively verified to have no observability; it never overrides an unverifiable "
+            "destination"
+        ),
+    )
 
     # Setup mode options (only used with --setup)
     setup_group = parser.add_argument_group("Setup Options (used with --setup)")
@@ -914,6 +925,7 @@ def _run_phase_finalization(
         manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", False),
         disable_observability_on_secondary=getattr(args, "disable_observability_on_secondary", False),
         restore_only=is_restore_only,
+        acknowledge_observability_not_migrated=getattr(args, "acknowledge_observability_not_migrated", False),
     )
 
     if not finalization.finalize():

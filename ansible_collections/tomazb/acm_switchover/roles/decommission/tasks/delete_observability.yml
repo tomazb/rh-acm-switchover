@@ -1,75 +1,526 @@
 ---
-- name: Announce observability deletion (dry_run)
-  ansible.builtin.debug:
-    msg: "[dry_run] Would delete all MultiClusterObservability resources"
-  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+- name: Define the fixed MultiClusterObservability teardown identity
+  ansible.builtin.set_fact:
+    _acm_mco_teardown_key: >-
+      observability.open-cluster-management.io/v1beta2/MultiClusterObservability//observability
+    _acm_mco_pod_selector: observability.open-cluster-management.io/name=observability
+    _acm_mco_clean_skip: false
+    # Seeded false so a run that requests nothing -- and therefore reads nothing --
+    # still has a classification. Every later guard reads it AFTER the requested
+    # predicate, so this value is only ever consumed on the not-requested path.
+    _acm_mco_present: false
 
-- name: List MultiClusterObservability resources
-  kubernetes.core.k8s_info:
-    kind: MultiClusterObservability
-    api_version: observability.open-cluster-management.io/v1beta2
-    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
-  register: _multiclusterobservability_resources
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+- name: Load the durable MCO teardown records
+  tomazb.acm_switchover.checkpoint_phase:
+    checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+    read_facts: true
+  register: _acm_mco_checkpoint
 
-- name: Delete discovered MultiClusterObservability resources
-  kubernetes.core.k8s:
-    kind: MultiClusterObservability
-    name: "{{ item.metadata.name }}"
+- name: Publish the durable MCO teardown record
+  ansible.builtin.set_fact:
+    acm_switchover_mco_record: >-
+      {{ _acm_mco_checkpoint.facts.teardown_records.get(_acm_mco_teardown_key) }}
+
+# BEFORE the first MultiClusterObservability request, exactly as Python decides
+# `_substep_requested` before `teardown_observability` reads anything: a substep this
+# run does not request issues NO request at all, so a hub whose credentials cannot list
+# MultiClusterObservability never fails a decommission that was never going to touch it.
+# The predicate needs only the configured setting and the durable record, and both are
+# already in hand here.
+#
+# The setting is resolved EXACTLY as main.yml resolves it (`auto` -> detection,
+# otherwise `| bool`), so one configured value cannot mean "no observability" to
+# `acm_switchover_decommission_effective_has_observability` and "tear observability
+# down" here. `auto` is requested because for `auto` the read below IS the detection --
+# the adapter path never runs main.yml, so this file cannot consume main.yml's fact.
+# A durable record outranks the setting either way: a persisted obligation is not
+# revocable by configuration.
+- name: Publish whether this run requests a MultiClusterObservability teardown
+  ansible.builtin.set_fact:
+    _acm_mco_requested: >-
+      {{
+        (
+          true
+          if (acm_switchover_decommission.has_observability | default('auto') | string | lower) == 'auto'
+          else (acm_switchover_decommission.has_observability | bool)
+        )
+        or acm_switchover_mco_record is mapping
+      }}
+
+# `_acm_mco_requested | bool` is the FIRST element of every dependant's `when` list on
+# purpose: Ansible evaluates a `when` list in order and stops at the first false, so a
+# skipped read is never templated by the tasks that consume it. Defaulting the read
+# instead -- `default([])`, `failed_when: false`, `ignore_errors` -- would turn an
+# unverifiable inventory into "nothing to delete", which is exactly what the fail-closed
+# rules below exist to prevent.
+- name: Read the source MultiClusterObservability inventory
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: list
     api_version: observability.open-cluster-management.io/v1beta2
-    state: absent
-    wait: true
+    kind: MultiClusterObservability
+    resource_name: multiclusterobservabilities
     kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
-  loop: "{{ _multiclusterobservability_resources.resources | default([]) }}"
-  loop_control:
-    label: "{{ item.metadata.name }}"
-  register: _multiclusterobservability_delete_results
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: acm_switchover_mco_read
+  no_log: true
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - _acm_mco_requested | bool
+
+- name: Fail closed when the source MCO inventory is unverifiable
+  ansible.builtin.fail:
+    msg: Cannot verify the source MultiClusterObservability inventory. Nothing was deleted.
+  when:
+    - _acm_mco_requested | bool
+    - acm_switchover_mco_read.read_status not in ['ok', 'kind_not_served']
+
+- name: Select the fixed MultiClusterObservability target
+  ansible.builtin.set_fact:
+    _acm_mco_targets: "{{ acm_switchover_mco_read.resources }}"
+  when:
+    - _acm_mco_requested | bool
+
+- name: Fail closed on an ambiguous MultiClusterObservability inventory
+  ansible.builtin.fail:
+    msg: >-
+      The source MultiClusterObservability inventory is not the single fixed
+      observability target. Nothing was deleted.
+  when:
+    - _acm_mco_requested | bool
+    - >-
+      acm_switchover_mco_read.read_status == 'ok'
+      and (
+        (acm_switchover_mco_read.resources | length) > 1
+        or (
+          (acm_switchover_mco_read.resources | length) == 1
+          and (
+            acm_switchover_mco_read.resources[0] is not mapping
+            or acm_switchover_mco_read.resources[0].metadata is not defined
+            or acm_switchover_mco_read.resources[0].metadata is not mapping
+            or (acm_switchover_mco_read.resources[0].metadata.name | default('')) != 'observability'
+          )
+        )
+      )
+
+- name: Publish the source MultiClusterObservability classification
+  ansible.builtin.set_fact:
+    _acm_mco_present: >-
+      {{ acm_switchover_mco_read.read_status == 'ok' and (_acm_mco_targets | length) == 1 }}
+  when:
+    - _acm_mco_requested | bool
+
+- name: Fail closed when the fixed MCO identity is unreadable
+  ansible.builtin.fail:
+    msg: Cannot establish the UID of MultiClusterObservability observability. Nothing was deleted.
+  when:
+    - _acm_mco_requested | bool
+    - _acm_mco_present | bool
+    - (_acm_mco_targets[0].metadata.uid | default('', true) | string | trim | length) == 0
+
+- name: Publish the expected MultiClusterObservability UID
+  ansible.builtin.set_fact:
+    _acm_mco_expected_uid: >-
+      {{
+        acm_switchover_mco_record.expected_uid
+        if acm_switchover_mco_record is mapping
+        else _acm_mco_targets[0].metadata.uid
+      }}
+  when:
+    - _acm_mco_requested | bool
+    - _acm_mco_present | bool or acm_switchover_mco_record is mapping
+
+- name: Refuse a replacement MultiClusterObservability
+  ansible.builtin.fail:
+    msg: >-
+      MultiClusterObservability observability is not the object recorded for teardown.
+      The replacement was left intact.
+  when:
+    - _acm_mco_requested | bool
+    - _acm_mco_present | bool
+    - acm_switchover_mco_record is mapping
+    - _acm_mco_targets[0].metadata.uid != _acm_mco_expected_uid
+
+- name: Refuse a completed or post-delete record whose target is present again
+  ansible.builtin.fail:
+    msg: >-
+      MultiClusterObservability observability is present after its recorded delete phase.
+      It was left intact.
+  when:
+    - _acm_mco_requested | bool
+    - _acm_mco_present | bool
+    - acm_switchover_mco_record is mapping
+    - acm_switchover_mco_record.phase not in ['delete_started']
+
+- name: Read the observability namespace for initial drain classification
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: get
+    api_version: v1
+    kind: Namespace
+    resource_name: namespaces
+    name: open-cluster-management-observability
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _acm_mco_initial_namespace
+  no_log: true
+  when:
+    - _acm_mco_requested | bool
+    - not (_acm_mco_present | bool)
+
+- name: Fail closed when the initial observability drain state is unverifiable
+  ansible.builtin.fail:
+    msg: MultiClusterObservability is absent but the observability namespace cannot be verified.
+  when:
+    - _acm_mco_requested | bool
+    - not (_acm_mco_present | bool)
+    - _acm_mco_initial_namespace.read_status not in ['ok', 'not_found']
+
+- name: Refuse a no-record half-removed observability installation
+  ansible.builtin.fail:
+    msg: MultiClusterObservability is absent but the observability namespace is still present.
+  when:
+    - _acm_mco_requested | bool
+    - not (_acm_mco_present | bool)
+    - acm_switchover_mco_record is not mapping
+    - _acm_mco_initial_namespace.read_status == 'ok'
+
+- name: Publish the no-record clean-skip classification
+  ansible.builtin.set_fact:
+    _acm_mco_clean_skip: true
+  when:
+    - _acm_mco_requested | bool
+    - not (_acm_mco_present | bool)
+    - acm_switchover_mco_record is not mapping
+    - _acm_mco_initial_namespace.read_status == 'not_found'
+
+# July section 4 at the ruled position: after the no-record clean-skip
+# classification, before the delete_started writer and the guarded delete, so a
+# blocked gate can never follow a durable write or a DELETE.
+#
+# Included only when this run has a DELETE to authorize, exactly as Python includes it
+# only when `self.secondary is not None`, the substep is requested, and the phase
+# machine's own fresh read returned the target. `_acm_mco_present` is what makes the
+# mid-drain resume possible: a record whose target is already gone owes a drain and a
+# final proof, and the gate's own source step reads that normal post-DELETE state as
+# half-removed. The standalone entry point declares itself, so a secondary left in the
+# hub vars is not a destination hub here. A completed or post-delete record whose
+# target is present again is refused above, so only no-record+present and
+# delete_started+present reach the gate.
+- name: Gate the teardown on destination observability
+  ansible.builtin.include_tasks: destination_observability_gate.yml
+  when:
+    - acm_switchover_hubs.secondary is defined
+    - not (acm_switchover_standalone_decommission | default(false) | bool)
+    - _acm_mco_requested | bool
+    - _acm_mco_present | bool
+
+# Finalization's secondary-disposition adapter warns before the delete, mirroring the
+# Python `record_gitops_markers` flag. The standalone decommission role passes
+# nothing, so it warns about nothing.
+- name: Warn that GitOps-managed MultiClusterObservability deletion must be coordinated
+  ansible.builtin.debug:
+    msg: >-
+      MultiClusterObservability {{ item.metadata.name | default('observability') }}
+      may be managed declaratively. Coordinate deletion to avoid GitOps drift if
+      Argo CD or Flux recreates it on the old hub.
+  # A `loop` is templated BEFORE `when` is evaluated, so this cannot reference the
+  # inventory register: when nothing is requested that read is skipped and the register
+  # carries no `resources` at all. The selected targets are the same list, published
+  # under the same guard as the read itself.
+  loop: "{{ _acm_mco_targets if (_acm_mco_requested | bool) else [] }}"
+  loop_control:
+    label: "{{ item.metadata.name | default('observability') }}"
+  when:
+    - _acm_mco_warn_gitops | default(false) | bool
+    - not (acm_switchover_features.skip_gitops_check | default(false) | bool)
+    - _acm_mco_requested | bool
+    - _acm_mco_present | bool
+
+- name: Record MultiClusterObservability delete_started
+  tomazb.acm_switchover.checkpoint_phase:
+    checkpoint: "{{ acm_switchover_execution.checkpoint }}"
+    teardown_record:
+      key: "{{ _acm_mco_teardown_key }}"
+      expected_uid: "{{ _acm_mco_expected_uid }}"
+      phase: delete_started
+  when:
     - not ansible_check_mode
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - _acm_mco_requested | bool
+    - _acm_mco_present | bool
+    - acm_switchover_mco_record is not mapping or acm_switchover_mco_record.phase == 'delete_started'
+
+- name: Delete the recorded MultiClusterObservability
+  tomazb.acm_switchover.acm_uid_guarded_delete:
+    api_version: observability.open-cluster-management.io/v1beta2
+    kind: MultiClusterObservability
+    resource_name: multiclusterobservabilities
+    name: observability
+    expected_uid: "{{ _acm_mco_expected_uid }}"
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+    request_timeout: 30
+    wait_timeout: 300
+    wait_sleep: 5
+  register: acm_switchover_mco_delete
+  check_mode: >-
+    {{ ansible_check_mode or (acm_switchover_execution.mode | default('dry_run')) == 'dry_run' }}
+  no_log: true
+  when:
+    - _acm_mco_requested | bool
+    - _acm_mco_present | bool
+    - acm_switchover_mco_record is not mapping or acm_switchover_mco_record.phase == 'delete_started'
+
+- name: Publish whether this run must prove the observability drain
+  ansible.builtin.set_fact:
+    _acm_mco_prove_drain: >-
+      {{
+        (_acm_mco_requested | bool)
+        and not (_acm_mco_clean_skip | bool)
+        and (
+          ((not ansible_check_mode) and (acm_switchover_execution.mode | default('dry_run')) == 'execute')
+          or not (_acm_mco_present | bool)
+        )
+      }}
+
+- name: Record MultiClusterObservability cr_absent
+  tomazb.acm_switchover.checkpoint_phase:
+    checkpoint: "{{ acm_switchover_execution.checkpoint }}"
+    teardown_record:
+      key: "{{ _acm_mco_teardown_key }}"
+      expected_uid: "{{ _acm_mco_expected_uid }}"
+      phase: cr_absent
+  when:
+    - not ansible_check_mode
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - _acm_mco_requested | bool
+    - not (_acm_mco_clean_skip | bool)
+    - acm_switchover_mco_record is not mapping or acm_switchover_mco_record.phase == 'delete_started'
+
+- name: Record MultiClusterObservability drain_pending
+  tomazb.acm_switchover.checkpoint_phase:
+    checkpoint: "{{ acm_switchover_execution.checkpoint }}"
+    teardown_record:
+      key: "{{ _acm_mco_teardown_key }}"
+      expected_uid: "{{ _acm_mco_expected_uid }}"
+      phase: drain_pending
+  when:
+    - not ansible_check_mode
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - _acm_mco_requested | bool
+    - not (_acm_mco_clean_skip | bool)
+    - >-
+      acm_switchover_mco_record is not mapping
+      or acm_switchover_mco_record.phase in ['delete_started', 'cr_absent', 'recovery_required']
+
+- name: Read the observability namespace for the bounded drain
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: get
+    api_version: v1
+    kind: Namespace
+    resource_name: namespaces
+    name: open-cluster-management-observability
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _acm_mco_drain_namespace
+  no_log: true
+  when:
+    - _acm_mco_prove_drain | bool
+
+- name: Fail closed when the observability drain namespace is unverifiable
+  ansible.builtin.fail:
+    msg: The observability namespace state is ambiguous during the MCO drain.
+  when:
+    - _acm_mco_prove_drain | bool
+    - _acm_mco_drain_namespace.read_status not in ['ok', 'not_found']
 
 - name: Wait for observability pods to terminate
-  kubernetes.core.k8s_info:
-    kind: Pod
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: list
     api_version: v1
+    kind: Pod
+    resource_name: pods
     namespace: open-cluster-management-observability
+    label_selectors:
+      - "{{ _acm_mco_pod_selector }}"
     kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
-  register: _observability_pods_after_delete
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: acm_switchover_mco_pods
   retries: 60
-  delay: 10
-  failed_when:
-    - _observability_pods_after_delete.failed | default(false)
-    - "'NotFound' not in (_observability_pods_after_delete.msg | default(''))"
-    - "'not found' not in (_observability_pods_after_delete.msg | default('') | lower)"
+  delay: 5
   until: >-
-    (_observability_pods_after_delete.resources | default([]) | length) == 0
-    or (
-      _observability_pods_after_delete.failed | default(false)
-      and (
-        'NotFound' in (_observability_pods_after_delete.msg | default(''))
-        or 'not found' in (_observability_pods_after_delete.msg | default('') | lower)
-      )
-    )
+    acm_switchover_mco_pods.read_status != 'ok'
+    or (acm_switchover_mco_pods.resources | length) == 0
+  no_log: true
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-    - not ansible_check_mode
-    - (_multiclusterobservability_resources.resources | default([]) | length) > 0
+    - _acm_mco_prove_drain | bool
+    - _acm_mco_drain_namespace.read_status == 'ok'
 
-- name: Record the Observability substep outcome
+- name: Fail closed when the scoped observability pod inventory is unverifiable
+  ansible.builtin.fail:
+    msg: The scoped observability pod inventory could not be verified during the MCO drain.
+  when:
+    - _acm_mco_prove_drain | bool
+    - _acm_mco_drain_namespace.read_status == 'ok'
+    - acm_switchover_mco_pods.read_status != 'ok'
+
+- name: Record MultiClusterObservability drained
+  tomazb.acm_switchover.checkpoint_phase:
+    checkpoint: "{{ acm_switchover_execution.checkpoint }}"
+    teardown_record:
+      key: "{{ _acm_mco_teardown_key }}"
+      expected_uid: "{{ _acm_mco_expected_uid }}"
+      phase: drained
+  when:
+    - not ansible_check_mode
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - _acm_mco_requested | bool
+    - not (_acm_mco_clean_skip | bool)
+    - >-
+      acm_switchover_mco_record is not mapping
+      or acm_switchover_mco_record.phase in
+      ['delete_started', 'cr_absent', 'drain_pending', 'recovery_required']
+
+- name: Re-read the source MultiClusterObservability inventory for final proof
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: list
+    api_version: observability.open-cluster-management.io/v1beta2
+    kind: MultiClusterObservability
+    resource_name: multiclusterobservabilities
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _acm_mco_final_read
+  no_log: true
+  when:
+    - _acm_mco_prove_drain | bool
+
+- name: Fail closed when final MultiClusterObservability absence is unproven
+  ansible.builtin.fail:
+    msg: Final proof did not establish that MultiClusterObservability observability is absent.
+  when:
+    - _acm_mco_prove_drain | bool
+    - >-
+      _acm_mco_final_read.read_status not in ['ok', 'kind_not_served']
+      or (
+        _acm_mco_final_read.read_status == 'ok'
+        and (_acm_mco_final_read.resources | length) != 0
+      )
+
+- name: Re-read the observability namespace for final proof
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: get
+    api_version: v1
+    kind: Namespace
+    resource_name: namespaces
+    name: open-cluster-management-observability
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _acm_mco_final_namespace
+  no_log: true
+  when:
+    - _acm_mco_prove_drain | bool
+
+- name: Fail closed when final observability namespace state is unverifiable
+  ansible.builtin.fail:
+    msg: Final proof could not verify the observability namespace.
+  when:
+    - _acm_mco_prove_drain | bool
+    - _acm_mco_final_namespace.read_status not in ['ok', 'not_found']
+
+- name: Re-read scoped observability pods for final proof
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: list
+    api_version: v1
+    kind: Pod
+    resource_name: pods
+    namespace: open-cluster-management-observability
+    label_selectors:
+      - "{{ _acm_mco_pod_selector }}"
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _acm_mco_final_pods
+  no_log: true
+  when:
+    - _acm_mco_prove_drain | bool
+    - _acm_mco_final_namespace.read_status == 'ok'
+
+- name: Fail closed when final scoped pod absence is unproven
+  ansible.builtin.fail:
+    msg: Final proof did not establish an empty scoped observability pod inventory.
+  when:
+    - _acm_mco_prove_drain | bool
+    - _acm_mco_final_namespace.read_status == 'ok'
+    - >-
+      _acm_mco_final_pods.read_status != 'ok'
+      or (_acm_mco_final_pods.resources | length) != 0
+
+- name: Build the final MultiClusterObservability absence proof
+  ansible.builtin.set_fact:
+    _acm_mco_target_absence_proof:
+      proof_type: >-
+        {{ 'crd_absent' if _acm_mco_final_read.read_status == 'kind_not_served' else 'object_absent' }}
+      resource_key: "{{ _acm_mco_teardown_key }}"
+  when:
+    - _acm_mco_prove_drain | bool
+
+- name: Build namespace-present MCO completion evidence
+  ansible.builtin.set_fact:
+    _acm_mco_resource_versions:
+      drain_namespace: "{{ _acm_mco_final_namespace.resource_version }}"
+      drain_pods: "{{ _acm_mco_final_pods.resource_version }}"
+    _acm_mco_absence_proofs:
+      target_cr: "{{ _acm_mco_target_absence_proof }}"
+  when:
+    - _acm_mco_prove_drain | bool
+    - _acm_mco_final_namespace.read_status == 'ok'
+
+- name: Build namespace-absent MCO completion evidence
+  ansible.builtin.set_fact:
+    _acm_mco_resource_versions: {}
+    _acm_mco_absence_proofs:
+      target_cr: "{{ _acm_mco_target_absence_proof }}"
+      drain_namespace:
+        proof_type: namespace_absent
+        resource_key: v1/Namespace//open-cluster-management-observability
+  when:
+    - _acm_mco_prove_drain | bool
+    - _acm_mco_final_namespace.read_status == 'not_found'
+
+- name: Record MultiClusterObservability completed
+  tomazb.acm_switchover.checkpoint_phase:
+    checkpoint: "{{ acm_switchover_execution.checkpoint }}"
+    teardown_record:
+      key: "{{ _acm_mco_teardown_key }}"
+      expected_uid: "{{ _acm_mco_expected_uid }}"
+      phase: completed
+      observed_at: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+      resource_versions: "{{ _acm_mco_resource_versions }}"
+      absence_proofs: "{{ _acm_mco_absence_proofs }}"
+  when:
+    - not ansible_check_mode
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - _acm_mco_requested | bool
+    - not (_acm_mco_clean_skip | bool)
+    - acm_switchover_mco_record is not mapping or acm_switchover_mco_record.phase != 'completed'
+
+- name: Publish the MultiClusterObservability change inputs
+  ansible.builtin.set_fact:
+    _acm_mco_changed: "{{ acm_switchover_mco_delete.changed | default(false) | bool }}"
+    _acm_mco_would_change: "{{ acm_switchover_mco_delete.would_change | default(false) | bool }}"
+
+- name: Record the MultiClusterObservability substep outcome
   ansible.builtin.set_fact:
     acm_switchover_decommission_outcomes: >-
       {{
         acm_switchover_decommission_outcomes
-        | default({})
         | combine({
             'observability': (
-              'completed'
-              if ((_multiclusterobservability_resources.resources | default([])) | length) > 0
-              else 'precondition_noop'
+              'not_requested'
+              if not (_acm_mco_requested | bool)
+              else (
+                'precondition_noop'
+                if (_acm_mco_clean_skip | bool)
+                else 'completed'
+              )
             )
           })
       }}
-  when: _acm_decommission_records_outcomes | default(false) | bool
+  when: _acm_decommission_records_outcomes | bool

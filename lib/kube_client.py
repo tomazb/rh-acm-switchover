@@ -41,6 +41,7 @@ from lib.constants import (
     STRICT_READ_REASON_OBJECT_NOT_FOUND,
     STRICT_READ_REASON_READ_FAILED,
 )
+from lib.exceptions import FatalError, PreconditionConflict, TargetDisappeared
 from lib.strict_read import StrictReadOutcome, StrictReadStatus
 from lib.validation import InputValidator, ValidationError
 
@@ -1397,6 +1398,92 @@ class KubeClient:
             if is_retryable_error(e):
                 raise
             logger.error("Failed to create %s: %s", plural, e)
+            raise
+
+    def delete_custom_resource_preconditioned(
+        self,
+        group: str,
+        version: str,
+        plural: str,
+        name: str,
+        *,
+        uid: str,
+        resource_version: Optional[str] = None,
+        namespace: Optional[str] = None,
+        timeout_seconds: Optional[int] = None,
+    ) -> None:
+        """Delete a custom resource only if it is still the object identified by ``uid``.
+
+        The preconditions travel in the delete body, so the API server evaluates them
+        atomically with the deletion. A name-only delete cannot do this: between the
+        read that established identity and the delete, the name may come to refer to a
+        different object.
+
+        ``uid`` is required and keyword-only. ``resource_version`` is optional so a
+        later caller can add it without a second primitive; R4-03 callers pass UID only.
+
+        This method is deliberately undecorated. ``@api_call(not_found_value=True)``
+        would convert the 404 into a ``True`` return, making an accepted delete and an
+        already-absent object indistinguishable -- exactly the ambiguity this primitive
+        exists to remove.
+
+        Raises:
+            ValidationError: name/namespace invalid, or ``uid`` empty.
+            FatalError: the client is in dry-run mode.
+            PreconditionConflict: 409/412 -- the live object is not the proven one.
+            TargetDisappeared: 404 -- absent at delete time; verify, do not assume.
+            ApiException: anything else, unchanged.
+        """
+        self._validate_resource_inputs(namespace, name, "custom resource")
+        if not isinstance(uid, str) or not uid.strip():
+            raise ValidationError(
+                f"A non-empty uid is required to delete {plural}/{name}: "
+                "an unconditional delete is not an acceptable fallback."
+            )
+
+        if self.dry_run:
+            # Deliberately louder than delete_custom_resource's would-delete log: a
+            # preview must never reach a delete primitive at all. PR C's callers
+            # branch before this point, so arriving here is a bug, not a preview.
+            raise FatalError(
+                f"Refusing to reach the preconditioned delete primitive for {plural}/{name} "
+                "in dry-run mode: callers must branch before any delete primitive."
+            )
+
+        preconditions = client.V1Preconditions(uid=uid.strip())
+        if resource_version is not None:
+            preconditions.resource_version = resource_version
+        body = client.V1DeleteOptions(preconditions=preconditions)
+
+        kwargs: Dict[str, Any] = {"body": body}
+        if timeout_seconds is not None:
+            kwargs["_request_timeout"] = timeout_seconds
+
+        try:
+            if namespace:
+                self.custom_api.delete_namespaced_custom_object(
+                    group=group,
+                    version=version,
+                    namespace=namespace,
+                    plural=plural,
+                    name=name,
+                    **kwargs,
+                )
+            else:
+                self.custom_api.delete_cluster_custom_object(
+                    group=group, version=version, plural=plural, name=name, **kwargs
+                )
+        except ApiException as exc:
+            if exc.status in (409, 412):
+                raise PreconditionConflict(
+                    f"Refusing to delete {plural}/{name}: it is no longer the object with uid {uid}. "
+                    "Re-prove identity from a fresh read; do not retry without the precondition."
+                ) from exc
+            if exc.status == 404:
+                raise TargetDisappeared(
+                    f"{plural}/{name} was already absent at delete time. "
+                    "Verify absence live rather than recording this as an accepted delete."
+                ) from exc
             raise
 
     @api_call(not_found_value=True, resource_desc="delete custom resource")

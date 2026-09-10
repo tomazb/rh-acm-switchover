@@ -62,6 +62,16 @@ The certification validates that the `acm-switchover-operator` service account h
   - `open-cluster-management-observability`: statefulsets, deployments, pods, routes
   - `multicluster-engine`: configmaps
 
+The shipped deployment binds the baseline operator ClusterRole and the optional decommission
+extension to the SAME service account, so a standalone `--decommission` run normally carries
+both. Where an operator instead certifies an identity that carries the decommission extension
+alone, the required SubjectAccessReview inventory for that identity additionally includes the
+cluster-scoped `get` on `multiclusterobservabilities`, which the observability teardown issues
+before its delete and again for the final absence proof. The profile-driven certification
+expansion above covers the baseline operator role, where that read is already part of the
+baseline cluster read surface; the extension-only identity is the case this line records.
+Nothing in this section asserts that a live certification run has been performed.
+
 ### Secondary Hub (Profile-Driven Scope)
 
 The secondary hub uses the same profile-driven role and extension flags. Baseline certification should leave decommission and old-hub finalization flags disabled; enable them only when those RBAC extensions were intentionally bootstrapped.

@@ -41,6 +41,7 @@ def _run_operation_case(case_input: dict) -> tuple[bool, str]:
             operation=case_input.get("operation", {}),
             features=case_input.get("features", {}),
             execution=case_input.get("execution", {}),
+            decommission=case_input.get("decommission", {}),
         )
     except ValidationError as exc:
         return False, str(exc)
@@ -68,6 +69,7 @@ def _run_hub_context_case(case_input: dict) -> tuple[bool, str]:
             "operation": operation,
             "execution": case_input.get("execution", {}),
             "features": case_input.get("features", {}),
+            "decommission": case_input.get("decommission", {}),
         }
     )
     summary = summarize_input_validation(results)

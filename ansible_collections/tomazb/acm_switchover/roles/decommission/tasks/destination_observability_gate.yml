@@ -1,0 +1,231 @@
+---
+# July section 4: may the source hub's observability be deleted at all right now?
+#
+# The mirror of Decommission.destination_observability_gate(). It reads nothing from
+# the checkpoint and caches nothing: the preflight observability booleans and any
+# earlier gate answer describe a cluster as it was, and this decision authorizes a
+# deletion happening now. Every invocation, including every resume and every preview
+# that has a DELETE pending, takes its own fresh reads. The decision is published as
+# a fact and is never persisted.
+#
+# Included from delete_observability.yml after the no-record clean-skip
+# classification and immediately before the delete_started writer, so a block can
+# never follow a durable write or a DELETE, and only where a DELETE is pending: the
+# decision to gate is the caller's and is never inferred here.
+
+- name: Require an explicit destination hub for the observability gate
+  ansible.builtin.assert:
+    that:
+      - acm_switchover_hubs.secondary is mapping
+      - (acm_switchover_hubs.secondary.kubeconfig | default('', true) | string | trim | length) > 0
+      - (acm_switchover_hubs.secondary.context | default('', true) | string | trim | length) > 0
+    fail_msg: >-
+      The destination-observability gate requires non-empty
+      acm_switchover_hubs.secondary.kubeconfig and acm_switchover_hubs.secondary.context.
+      A defined but blank destination hub is a configuration error. Nothing was deleted.
+
+- name: Read the source MultiClusterObservability inventory for the destination gate
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: list
+    api_version: observability.open-cluster-management.io/v1beta2
+    kind: MultiClusterObservability
+    resource_name: multiclusterobservabilities
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _acm_gate_source_mco
+  no_log: true
+
+- name: Read the source observability namespace for the destination gate
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: get
+    api_version: v1
+    kind: Namespace
+    resource_name: namespaces
+    name: open-cluster-management-observability
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _acm_gate_source_namespace
+  no_log: true
+
+# A complete inventory with no items is a positive absence proof, exactly as a named
+# get that returns NotFound is. An unreadable inventory proves nothing at all.
+- name: Classify the source observability state
+  ansible.builtin.set_fact:
+    _acm_gate_source_unverifiable: >-
+      {{
+        _acm_gate_source_mco.read_status not in ['ok', 'kind_not_served']
+        or _acm_gate_source_namespace.read_status not in ['ok', 'not_found']
+      }}
+    _acm_gate_source_present: >-
+      {{
+        _acm_gate_source_mco.read_status == 'ok'
+        and (_acm_gate_source_mco.resources | length) > 0
+        and _acm_gate_source_namespace.read_status == 'ok'
+      }}
+    _acm_gate_source_absent: >-
+      {{
+        (
+          _acm_gate_source_mco.read_status == 'kind_not_served'
+          or (
+            _acm_gate_source_mco.read_status == 'ok'
+            and (_acm_gate_source_mco.resources | length) == 0
+          )
+        )
+        and _acm_gate_source_namespace.read_status == 'not_found'
+      }}
+
+- name: Block the teardown on an unverifiable source hub
+  ansible.builtin.set_fact:
+    acm_switchover_observability_gate:
+      decision: blocked
+      reason: source_observability_unverifiable
+  when: _acm_gate_source_unverifiable | bool
+
+- name: Report that there is no source observability to delete
+  ansible.builtin.set_fact:
+    acm_switchover_observability_gate:
+      decision: not_applicable
+      reason: ""
+  when:
+    - not (_acm_gate_source_unverifiable | bool)
+    - _acm_gate_source_absent | bool
+
+- name: Block the teardown on a half-removed source hub
+  ansible.builtin.set_fact:
+    acm_switchover_observability_gate:
+      decision: blocked
+      reason: source_observability_ambiguous
+  when:
+    - not (_acm_gate_source_unverifiable | bool)
+    - not (_acm_gate_source_absent | bool)
+    - not (_acm_gate_source_present | bool)
+
+- name: Read the destination MultiClusterObservability inventory
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: list
+    api_version: observability.open-cluster-management.io/v1beta2
+    kind: MultiClusterObservability
+    resource_name: multiclusterobservabilities
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _acm_gate_destination_mco
+  no_log: true
+  when: _acm_gate_source_present | bool
+
+- name: Read the destination observability namespace
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: get
+    api_version: v1
+    kind: Namespace
+    resource_name: namespaces
+    name: open-cluster-management-observability
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _acm_gate_destination_namespace
+  no_log: true
+  when: _acm_gate_source_present | bool
+
+# The source clean-skip rule is deliberately NOT reused here: on the destination a
+# missing CRD, a missing CR and a missing namespace are all absence, never harmless.
+- name: Classify the destination observability state
+  ansible.builtin.set_fact:
+    _acm_gate_destination_unverifiable: >-
+      {{
+        _acm_gate_destination_mco.read_status not in ['ok', 'kind_not_served']
+        or _acm_gate_destination_namespace.read_status not in ['ok', 'not_found']
+      }}
+    _acm_gate_destination_present: >-
+      {{
+        _acm_gate_destination_mco.read_status == 'ok'
+        and (_acm_gate_destination_mco.resources | length) > 0
+        and _acm_gate_destination_namespace.read_status == 'ok'
+      }}
+    _acm_gate_destination_absent: >-
+      {{
+        (
+          _acm_gate_destination_mco.read_status == 'kind_not_served'
+          or (
+            _acm_gate_destination_mco.read_status == 'ok'
+            and (_acm_gate_destination_mco.resources | length) == 0
+          )
+        )
+        and _acm_gate_destination_namespace.read_status == 'not_found'
+      }}
+    _acm_gate_acknowledged: >-
+      {{ acm_switchover_decommission.acknowledge_observability_not_migrated | default(false) | bool }}
+  when: _acm_gate_source_present | bool
+
+- name: Block the teardown on an unverifiable or partially present destination hub
+  ansible.builtin.set_fact:
+    acm_switchover_observability_gate:
+      decision: blocked
+      reason: destination_observability_unverifiable
+  when:
+    - _acm_gate_source_present | bool
+    - >-
+      (_acm_gate_destination_unverifiable | bool)
+      or not (
+        (_acm_gate_destination_present | bool) or (_acm_gate_destination_absent | bool)
+      )
+
+- name: Refuse an acknowledgement the destination hub does not need
+  ansible.builtin.set_fact:
+    acm_switchover_observability_gate:
+      decision: blocked
+      reason: acknowledgement_not_applicable
+  when:
+    - _acm_gate_source_present | bool
+    - not (_acm_gate_destination_unverifiable | bool)
+    - _acm_gate_destination_present | bool
+    - _acm_gate_acknowledged | bool
+
+- name: Allow the teardown against a migrated destination hub
+  ansible.builtin.set_fact:
+    acm_switchover_observability_gate:
+      decision: proceed
+      reason: ""
+  when:
+    - _acm_gate_source_present | bool
+    - not (_acm_gate_destination_unverifiable | bool)
+    - _acm_gate_destination_present | bool
+    - not (_acm_gate_acknowledged | bool)
+
+- name: Block the teardown against a destination hub with no observability
+  ansible.builtin.set_fact:
+    acm_switchover_observability_gate:
+      decision: blocked
+      reason: destination_observability_absent
+  when:
+    - _acm_gate_source_present | bool
+    - not (_acm_gate_destination_unverifiable | bool)
+    - _acm_gate_destination_absent | bool
+    - not (_acm_gate_acknowledged | bool)
+
+- name: Allow the teardown against an acknowledged absent destination hub
+  ansible.builtin.set_fact:
+    acm_switchover_observability_gate:
+      decision: proceed
+      reason: ""
+  when:
+    - _acm_gate_source_present | bool
+    - not (_acm_gate_destination_unverifiable | bool)
+    - _acm_gate_destination_absent | bool
+    - _acm_gate_acknowledged | bool
+
+- name: Warn that acknowledged destination absence ends metrics continuity
+  ansible.builtin.debug:
+    msg: >-
+      Destination observability is proven absent and the operator acknowledged it:
+      metrics continuity ends with this deletion.
+  when:
+    - _acm_gate_source_present | bool
+    - not (_acm_gate_destination_unverifiable | bool)
+    - _acm_gate_destination_absent | bool
+    - _acm_gate_acknowledged | bool
+
+- name: Fail closed when the destination-observability gate blocked the teardown
+  ansible.builtin.fail:
+    msg: >-
+      The destination-observability gate blocked the MultiClusterObservability
+      teardown ({{ acm_switchover_observability_gate.reason }}). Nothing was deleted.
+  when: acm_switchover_observability_gate.decision == 'blocked'

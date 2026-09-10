@@ -57,15 +57,6 @@
   ansible.builtin.include_tasks: validate_rbac.yml
   when: not (acm_switchover_features.skip_rbac_validation | default(false))
 
-- name: Record the not-requested Observability substep outcome
-  ansible.builtin.set_fact:
-    acm_switchover_decommission_outcomes: >-
-      {{ acm_switchover_decommission_outcomes | combine({'observability': 'not_requested'}) }}
-  when:
-    - _acm_decommission_records_outcomes | bool
-    - not (acm_switchover_decommission_effective_has_observability | bool)
-
-
 # Fail closed: an execute-mode run that cannot persist its identity map issues no
 # DELETE at all, and a validate-mode run never reaches the teardown here. A dry run
 # and a native check-mode run require no durable state and write none, so neither is
@@ -126,7 +117,6 @@
       block:
         - name: Delete Observability resources
           ansible.builtin.include_tasks: delete_observability.yml
-          when: acm_switchover_decommission_effective_has_observability | bool
       rescue:
         - name: Record that the Observability decommission substep was rescued
           ansible.builtin.set_fact:
@@ -219,8 +209,7 @@
                   | selectattr('changed') | list | length) > 0
                 )
                 or (
-                  ((_multiclusterobservability_delete_results | default({})).results | default([])
-                  | selectattr('changed') | list | length) > 0
+                  acm_switchover_mco_delete.changed | default(false) | bool
                 )
                 or (
                   ((_multiclusterhub_delete_results | default({})).results | default([])
@@ -228,10 +217,7 @@
                 )
               )
             }}
-          # PR B publishes no prediction. A debug announcement and a check-mode
-          # module's prospective `changed` are not a fresh per-family prediction;
-          # PRs C, D and E add real ones alongside each mutation.
-          would_change: false
+          would_change: "{{ _acm_mco_would_change | default(false) | bool }}"
 
     - name: Normalize summary path input
       ansible.builtin.set_fact:

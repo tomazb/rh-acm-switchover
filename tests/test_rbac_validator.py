@@ -3,6 +3,7 @@ Unit tests for RBAC validator module.
 """
 
 import logging
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -16,10 +17,16 @@ from lib.constants import (
     MANAGED_CLUSTER_API_GROUP,
     MANAGED_CLUSTER_PLURAL,
     MCE_NAMESPACE,
+    MULTICLUSTEROBSERVABILITIES_PLURAL,
+    OBSERVABILITY_API_GROUP,
     OBSERVABILITY_NAMESPACE,
 )
 from lib.exceptions import ValidationError
 from lib.rbac_validator import RBACValidator, validate_decommission_permissions, validate_rbac_permissions
+
+#: Stand-in for the raw SelfSubjectAccessReview API payload. Denial reporting must surface the
+#: review's ``reason`` only, never the response body, so this sentinel must not reach any report.
+_RAW_SSAR_BODY_SENTINEL = "evaluation-error: raw ssar response body must not be reported"
 
 
 class TestRBACValidator:
@@ -1476,3 +1483,76 @@ class TestValidateDecommissionPermissions:
 
         assert all_valid is True
         assert not errors.get("namespaces", [])
+
+    @patch("kubernetes.client")
+    def test_denied_mco_get_fails_standalone_decommission_permission_validation(
+        self, mock_k8s_client, mock_primary_client, caplog
+    ):
+        """A denied MultiClusterObservability ``get`` must stop the standalone teardown.
+
+        Negative authorization for the one grant the standalone decommission surface adds:
+        ``get`` on ``multiclusterobservabilities``. The denial is delivered through the real
+        SelfSubjectAccessReview path rather than a stubbed ``check_permission``, so this test
+        fails if the standalone permission table stops asking for that grant.
+
+        What the validator asks is deliberately NOT a per-object question:
+        ``RBACValidator.check_permission`` builds its ``V1ResourceAttributes`` from verb,
+        resource, subresource, group and namespace only, so this is a CLUSTER-SCOPED,
+        collection-wide ``get`` review. That is the right question to ask -- the shipped
+        ClusterRole grants ``get`` on ``multiclusterobservabilities`` with no
+        ``resourceNames``, so the collection-wide answer covers the strict named GET the
+        teardown issues before its delete and again for its final absence proof.
+
+        Two properties are pinned:
+
+        1. the cluster-scoped (``namespace`` is ``None``) ``get`` review for the MCO
+           resource is actually issued, and the denial raises ``ValidationError``;
+        2. the operator-facing report names the denied verb and resource but leaks no raw API
+           body -- only the SSAR ``reason`` is surfaced.
+
+        What the raised ``ValidationError`` then costs the standalone entry point is NOT
+        asserted here: this function has no delete path of its own, so "no delete reached the
+        client" would be vacuous. The fail-closed behaviour is covered by
+        ``tests/test_main.py::TestDecommissionAndSetupHelpers::test_run_decommission_returns_false_when_rbac_validation_fails``,
+        which proves ``acm_switchover.run_decommission`` returns ``False`` and never even
+        constructs ``Decommission`` when this validation raises.
+        """
+        reviews: list[tuple] = []
+
+        mock_k8s_client.V1ResourceAttributes.side_effect = lambda **kwargs: SimpleNamespace(**kwargs)
+        mock_k8s_client.V1SelfSubjectAccessReviewSpec.side_effect = lambda **kwargs: SimpleNamespace(**kwargs)
+        mock_k8s_client.V1SelfSubjectAccessReview.side_effect = lambda **kwargs: SimpleNamespace(**kwargs)
+
+        def create_self_subject_access_review(body):
+            attrs = body.spec.resource_attributes
+            reviews.append((attrs.group, attrs.resource, attrs.verb, attrs.namespace))
+            allowed = not (attrs.resource == MULTICLUSTEROBSERVABILITIES_PLURAL and attrs.verb == "get")
+            return SimpleNamespace(
+                status=SimpleNamespace(
+                    allowed=allowed,
+                    reason=None if allowed else "Permission denied",
+                    # Stand-in for the raw API payload the SSAR response carries. It must never
+                    # reach the operator-facing report.
+                    evaluation_error=_RAW_SSAR_BODY_SENTINEL,
+                )
+            )
+
+        authorization_api = MagicMock()
+        authorization_api.create_self_subject_access_review.side_effect = create_self_subject_access_review
+        mock_k8s_client.AuthorizationV1Api.return_value = authorization_api
+
+        with caplog.at_level(logging.ERROR, logger="lib.rbac_validator"):
+            with pytest.raises(ValidationError, match="Decommission RBAC permission validation failed"):
+                validate_decommission_permissions(mock_primary_client, skip_observability=False)
+
+        # Cluster-scoped, collection-wide: namespace is None and no object name is asked
+        # for, which is the authorization question the named GET actually depends on.
+        assert (OBSERVABILITY_API_GROUP, MULTICLUSTEROBSERVABILITIES_PLURAL, "get", None) in reviews
+
+        report = caplog.text
+        assert (
+            f"Missing decommission permission: get {OBSERVABILITY_API_GROUP}/{MULTICLUSTEROBSERVABILITIES_PLURAL}"
+            in report
+        )
+        assert "Permission denied" in report
+        assert _RAW_SSAR_BODY_SENTINEL not in report

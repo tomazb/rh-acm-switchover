@@ -437,6 +437,39 @@ class InputValidator:
             if hasattr(args, "old_hub_action") and args.old_hub_action != "secondary":
                 raise ValidationError("--disable-observability-on-secondary requires --old-hub-action secondary")
 
+        # Validate the destination-observability acknowledgement (July section 4).
+        # The gate it overrides runs only where an integrated switchover is tearing the
+        # old hub down, so accepting the flag anywhere else would let an operator carry
+        # a stale acknowledgement into a run that never evaluates it.
+        if getattr(args, "acknowledge_observability_not_migrated", False):
+            if is_decommission:
+                raise ValidationError(
+                    "--acknowledge-observability-not-migrated cannot be used with --decommission: "
+                    "standalone decommission has no destination hub to acknowledge"
+                )
+            if has_validate_only:
+                raise ValidationError(
+                    "--acknowledge-observability-not-migrated cannot be used with --validate-only: "
+                    "validation performs no teardown to acknowledge"
+                )
+            if is_restore_only:
+                raise ValidationError(
+                    "--acknowledge-observability-not-migrated cannot be used with --restore-only: "
+                    "there is no old hub to tear down"
+                )
+            if is_setup:
+                raise ValidationError(
+                    "--acknowledge-observability-not-migrated cannot be used with --setup: "
+                    "setup bootstraps prerequisites and tears nothing down"
+                )
+            if has_argocd_resume_only:
+                raise ValidationError(
+                    "--acknowledge-observability-not-migrated cannot be used with --argocd-resume-only: "
+                    "resuming Argo CD tears nothing down"
+                )
+            if getattr(args, "old_hub_action", None) != "decommission":
+                raise ValidationError("--acknowledge-observability-not-migrated requires --old-hub-action decommission")
+
         # Validate Argo CD argument combinations
 
         has_argocd_resume_on_failure = hasattr(args, "argocd_resume_on_failure") and args.argocd_resume_on_failure

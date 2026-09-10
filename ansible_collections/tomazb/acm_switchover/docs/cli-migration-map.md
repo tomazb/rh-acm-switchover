@@ -27,6 +27,7 @@
 | `--skip-rbac-validation` | `acm_switchover_features.skip_rbac_validation` |
 | `--skip-observability-checks` | `acm_switchover_features.skip_observability_checks` |
 | `--disable-observability-on-secondary` | Deprecated compatibility flag; use `acm_switchover_features.disable_observability_on_secondary` only when preserving legacy Python invocation shape |
+| `--acknowledge-observability-not-migrated` | `acm_switchover_decommission.acknowledge_observability_not_migrated` — converts only a destination hub proven to have no observability into a proceed for the MultiClusterObservability teardown; valid only with `old_hub_action: decommission` on an integrated switchover, rejected in validate mode, with `restore_only`, and for the standalone decommission playbook |
 | `--non-interactive` | `acm_switchover_decommission.confirmed=true` for decommission automation |
 | `--admin-kubeconfig` | `acm_switchover_hubs.primary.kubeconfig` for the admin bootstrap target |
 | `--role {operator,validator,both}` | `acm_switchover_rbac_bootstrap.role` |
@@ -42,6 +43,14 @@ the omitted value requires at least one restored non-local ManagedCluster unless
 `acm_switchover_operation.allow_zero_managed_clusters=true` is set. Set
 `min_managed_clusters` to `0` to opt into an empty non-local ManagedCluster
 target, or set a positive value to enforce that explicit minimum count.
+
+The `old_hub_action: secondary` finalization adapter
+(`roles/finalization/tasks/disable_old_hub_observability.yml`) gates its MultiClusterObservability delete on
+fresh destination-observability proof the same way `decommission` does, but with no
+`acknowledge_observability_not_migrated` override available on that path — the acknowledgement variable is
+valid only with `old_hub_action: decommission`. In execute mode the adapter also requires
+`acm_switchover_execution.checkpoint.enabled: true` (its shared teardown persists a durable identity map
+before the delete) and refuses `mode: validate` outright; both refusals fire before any read or delete.
 
 `playbooks/argocd_resume.yml` can recover the Argo CD pause `run_id` from the
 configured checkpoint file. When it does, the playbook reads live `kube-system`
@@ -70,7 +79,7 @@ decommission, so neither flow uses this normal two-hub predicate.
 | Python / CLI Capability | Collection Phase 6 Status | Playbook | Notes |
 |-------------------------|---------------------------|----------|-------|
 | Hub discovery | dual-supported | `playbooks/discovery.yml` | `scripts/discover-hub.sh` remains supported bridge for context enumeration |
-| Decommission old hub | dual-supported | `playbooks/decommission.yml` | Requires explicit non-empty primary kubeconfig/context plus `acm_switchover_decommission.confirmed: true` or `mode: dry_run`; warns and continues if non-operator ACM pods remain after the bounded MultiClusterHub deletion wait |
+| Decommission old hub | dual-supported | `playbooks/decommission.yml` | Requires explicit non-empty primary kubeconfig/context plus `acm_switchover_decommission.confirmed: true` or `mode: dry_run`; warns and continues if non-operator ACM pods remain after the bounded MultiClusterHub deletion wait (unrelated to the MultiClusterObservability teardown below, which fails closed instead of warning). MultiClusterObservability deletion goes through a UID-preconditioned guarded delete with a durable per-resource phase record and a fresh completion proof; the standalone playbook declares `acm_switchover_standalone_decommission: true`, never evaluates the destination-observability gate, and refuses a truthy `acknowledge_observability_not_migrated` in `pre_tasks` before any read |
 | RBAC bootstrap | dual-supported | `playbooks/rbac_bootstrap.yml` | Replaces `scripts/setup-rbac.sh` |
 
 ## Phase 2 Capability Status

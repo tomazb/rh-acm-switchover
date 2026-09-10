@@ -40,15 +40,27 @@ def test_finalization_main_disables_old_hub_observability_only_when_observabilit
     assert "(acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'" in when_text
 
 
-def test_disable_old_hub_observability_deletes_mco_and_waits_for_termination():
-    """disable_old_hub_observability.yml must delete MCO, not scale workloads to zero."""
+def test_disable_old_hub_observability_delegates_to_the_shared_mco_teardown():
+    """The adapter reaches the one MCO algorithm; it must not re-implement or scale."""
     text = (FINALIZATION_TASKS / "disable_old_hub_observability.yml").read_text()
+    shared = (ROLES_DIR / "decommission" / "tasks" / "delete_observability.yml").read_text()
 
-    assert "kind: MultiClusterObservability" in text
-    assert "state: absent" in text
+    assert "tasks_from: delete_observability.yml" in text
     assert "deleted_mcos" in text
-    assert "kind: Pod" in text
     assert "kubernetes.core.k8s_scale" not in text
+    # The behaviour the adapter used to own itself now lives once, in the shared task.
+    assert "kind: MultiClusterObservability" in shared
+    assert "kind: Pod" in shared
+
+
+def test_disable_old_hub_observability_asks_the_shared_task_to_warn_about_gitops():
+    """The GitOps warning is caller-requested, mirroring Python's record_gitops_markers."""
+    text = (FINALIZATION_TASKS / "disable_old_hub_observability.yml").read_text()
+    shared = (ROLES_DIR / "decommission" / "tasks" / "delete_observability.yml").read_text()
+
+    assert "_acm_mco_warn_gitops: true" in text
+    assert "_acm_mco_warn_gitops | default(false) | bool" in shared
+    assert "acm_switchover_features.skip_gitops_check" in shared
 
 
 def test_verify_old_hub_state_checks_clusters_and_backup_schedule():

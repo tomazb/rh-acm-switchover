@@ -5,8 +5,13 @@ Decommission module for old primary hub.
 # Runbook: Step 14 (decommission) and Rollback references where applicable
 
 import logging
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Callable, Optional
 
 from kubernetes.client.exceptions import ApiException
+from urllib3.exceptions import HTTPError, MaxRetryError, NewConnectionError
+from urllib3.exceptions import TimeoutError as Urllib3TimeoutError
 
 from lib.constants import (
     ACM_NAMESPACE,
@@ -14,6 +19,11 @@ from lib.constants import (
     DECOMMISSION_POD_INTERVAL,
     DECOMMISSION_POD_TIMEOUT,
     DELETE_REQUEST_TIMEOUT,
+    GATE_REASON_ACK_NOT_APPLICABLE,
+    GATE_REASON_DESTINATION_ABSENT,
+    GATE_REASON_DESTINATION_UNVERIFIABLE,
+    GATE_REASON_SOURCE_AMBIGUOUS,
+    GATE_REASON_SOURCE_UNVERIFIABLE,
     HIVE_CLUSTERDEPLOYMENT_API_GROUP,
     HIVE_CLUSTERDEPLOYMENT_API_VERSION,
     HIVE_CLUSTERDEPLOYMENT_PLURAL,
@@ -24,22 +34,71 @@ from lib.constants import (
     MANAGED_CLUSTER_DELETE_TIMEOUT,
     MANAGED_CLUSTER_PLURAL,
     OBSERVABILITY_NAMESPACE,
+    OBSERVABILITY_POD_LABEL_SELECTOR,
     OBSERVABILITY_TERMINATE_INTERVAL,
     OBSERVABILITY_TERMINATE_TIMEOUT,
 )
 from lib.decommission_outcome import (
     UNSUCCESSFUL_OUTCOMES,
     DecommissionResult,
+    ObservabilityGateDecision,
+    ObservabilityGateResult,
     SubstepExecution,
     SubstepOutcome,
 )
-from lib.exceptions import SwitchoverError
+from lib.exceptions import SwitchoverError, TargetDisappeared
+from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.run_record import RunRecord
+from lib.strict_read import StrictReadStatus
+from lib.teardown_record import (
+    AbsenceProof,
+    TeardownPhase,
+    TeardownRecord,
+    teardown_key,
+)
 from lib.utils import confirm_action
+from lib.validation import ValidationError
 from lib.waiter import WaitConditionResult, format_public_list, wait_for_condition
 
 logger = logging.getLogger("acm_switchover")
+
+
+@dataclass(frozen=True)
+class TeardownSpec:
+    """Everything the shared phase machine needs about one resource family.
+
+    PRs D and E supply their own specs to the same ``_teardown_resource``; that is
+    what keeps one algorithm rather than three that drift.
+    """
+
+    group: str
+    version: str
+    plural: str
+    resource_name: str
+    kind: str
+    namespace: Optional[str]
+    name: str
+    drain_namespace: str
+    drain_label_selector: str
+    classifier: Optional[Callable[[dict], str]] = None
+
+    @property
+    def api_version(self) -> str:
+        return f"{self.group}/{self.version}"
+
+
+OBSERVABILITY_TEARDOWN = TeardownSpec(
+    group="observability.open-cluster-management.io",
+    version="v1beta2",
+    plural="multiclusterobservabilities",
+    resource_name="multiclusterobservabilities",
+    kind="MultiClusterObservability",
+    namespace=None,
+    name="observability",
+    drain_namespace=OBSERVABILITY_NAMESPACE,
+    drain_label_selector=OBSERVABILITY_POD_LABEL_SELECTOR,
+)
 
 
 class Decommission:
@@ -62,9 +121,16 @@ class Decommission:
         *,
         run_record: RunRecord,
         dry_run: bool = False,
+        secondary_client: Optional[KubeClient] = None,
+        acknowledge_observability_not_migrated: bool = False,
     ) -> None:
         self.primary = primary_client
         self.has_observability = has_observability
+        # The destination hub, present only for an integrated switchover. Standalone
+        # decommission has no destination, so the July section 4 gate is not called at
+        # all rather than called and defaulted.
+        self.secondary = secondary_client
+        self.acknowledge_observability_not_migrated = acknowledge_observability_not_migrated
         # Keyword-only and required on purpose: a default would let a caller
         # silently opt out of the durable channel. This task opens the channel;
         # it writes no teardown record through it yet.
@@ -156,10 +222,36 @@ class Decommission:
         logger.warning("=" * 60)
 
     def _substep_requested(self, substep: str) -> bool:
-        """Whether configuration asks for this substep at all."""
+        """Whether configuration or a durable record asks for this substep at all.
+
+        A persisted teardown record is a request in its own right. Standalone
+        ``--decommission`` re-detects ``has_observability`` live on every run, and the
+        DELETE this machine issues is exactly what makes that detection answer false,
+        so a resume of an interrupted teardown would otherwise skip the drain and the
+        final absence proof it still owes. The collection's ``_acm_mco_requested``
+        carries the same clause (``roles/decommission/tasks/delete_observability.yml``).
+        A completed record counts too: it is re-proved read-only rather than trusted,
+        which is what the collection does for any mapping record.
+        """
         if substep == "observability":
-            return self.has_observability
+            return self.has_observability or self._has_teardown_record(OBSERVABILITY_TEARDOWN)
         return True
+
+    @staticmethod
+    def _teardown_key(spec: TeardownSpec) -> str:
+        """The canonical record key for ``spec``'s fixed identity, derived once.
+
+        The request question and the phase machine both go through this, so they
+        cannot disagree about which record they mean.
+        """
+        return teardown_key(spec.api_version, spec.kind, spec.namespace, spec.name)
+
+    def _has_teardown_record(self, spec: TeardownSpec) -> bool:
+        """Whether a durable teardown record already exists for ``spec``.
+
+        Read-only: nothing here writes, defaults or repairs a record.
+        """
+        return self.run_record.teardown_record(self._teardown_key(spec)) is not None
 
     def _requested_substeps(self) -> tuple[str, ...]:
         return tuple(substep for substep in self._SUBSTEPS if self._substep_requested(substep))
@@ -176,7 +268,7 @@ class Decommission:
         it knows whether a delete was accepted.
         """
         dispatch = {
-            "observability": self._delete_observability,
+            "observability": self.teardown_observability,
             "managed_clusters": self._delete_managed_clusters,
             "multiclusterhub": self._delete_multiclusterhub,
         }
@@ -189,16 +281,24 @@ class Decommission:
         RunRecord, so a dry run leaves behind no result or state authority.
         """
         if substep == "observability":
-            names = self._resource_names(
-                self.primary.list_custom_resources(
-                    group="observability.open-cluster-management.io",
-                    version="v1beta2",
-                    plural="multiclusterobservabilities",
-                )
+            # Strict and named, exactly as the live teardown reads it: through the
+            # non-strict list an API failure answered `None`, which became an empty
+            # name list and a confident "nothing to delete". A preview that cannot
+            # read must refuse, not predict.
+            spec = OBSERVABILITY_TEARDOWN
+            cr = self.primary.get_custom_resource_strict(
+                group=spec.group,
+                version=spec.version,
+                plural=spec.plural,
+                name=spec.name,
+                namespace=spec.namespace,
             )
-            if names:
-                logger.info("[DRY-RUN] Would delete MultiClusterObservability: %s", format_public_list(names))
-            return bool(names)
+            if cr.status is StrictReadStatus.ERROR:
+                raise SwitchoverError(f"Cannot verify {spec.kind} {spec.name} for the dry-run preview")
+            if cr.status is StrictReadStatus.ITEMS:
+                logger.info("[DRY-RUN] Would delete %s %s", spec.kind, spec.name)
+                return True
+            return False
 
         if substep == "managed_clusters":
             names = [
@@ -230,81 +330,431 @@ class Decommission:
         """Names of the listed resources, tolerating a None list answer."""
         return [resource.get("metadata", {}).get("name") for resource in resources or []]
 
-    def _delete_observability(self) -> SubstepExecution:
-        """Delete MultiClusterObservability resources.
+    def teardown_observability(self, *, record_gitops_markers: bool = False) -> SubstepExecution:
+        """Tear down MultiClusterObservability through the shared phase machine.
 
-        Family method on the one execution-result channel: an expected
-        SwitchoverError-class failure becomes a FAILED execution here, where
-        whether a delete was accepted is known.
+        The one MCO algorithm. ``Finalization`` reaches it through this same method
+        with ``record_gitops_markers=True``; it owns no MCO deletion logic of its own
+        (GLM-H6).
         """
-        logger.info("Deleting MultiClusterObservability resource...")
+        return self._teardown_resource(OBSERVABILITY_TEARDOWN, record_gitops_markers=record_gitops_markers)
+
+    def destination_observability_gate(self) -> ObservabilityGateResult:
+        """July section 4: may source observability be deleted at all right now?
+
+        Takes no arguments and reads nothing from state. Every input is a fresh
+        live read on both hubs, because the preflight ``primary_has_observability``
+        boolean and any earlier gate answer describe a cluster as it was, and this
+        decision authorizes a deletion happening now. The result is returned, never
+        persisted and never cached, so a resume re-proves it (section 13).
+
+        Called only for the MCO spec, only when a destination client exists, and only
+        when the phase machine's own fresh read found the target present -- that is,
+        only when this invocation has a DELETE to authorize.
+        """
+        if self.secondary is None:
+            # Refused before any read: without a destination hub there is no fact to
+            # gate on, and continuing would fail on None inside the destination step
+            # after the source reads had already been issued.
+            raise SwitchoverError(
+                "destination_observability_gate requires a secondary client; "
+                "standalone decommission has no destination"
+            )
+
+        spec = OBSERVABILITY_TEARDOWN
+        source_cr = self.primary.get_custom_resource_strict(
+            group=spec.group,
+            version=spec.version,
+            plural=spec.plural,
+            name=spec.name,
+            namespace=spec.namespace,
+        )
+        source_namespace = self.primary.get_namespace_strict(spec.drain_namespace)
+
+        if StrictReadStatus.ERROR in (source_cr.status, source_namespace.status):
+            # An unverifiable source is never read as "nothing to delete".
+            return self._blocked(GATE_REASON_SOURCE_UNVERIFIABLE, "the source hub's observability state")
+
+        if source_cr.proves_absence and source_namespace.status is StrictReadStatus.NAMESPACE_ABSENT:
+            logger.info(
+                "No %s and no %s namespace on the source hub: the destination gate does not apply",
+                spec.kind,
+                spec.drain_namespace,
+            )
+            return ObservabilityGateResult(decision=ObservabilityGateDecision.NOT_APPLICABLE)
+
+        if not (source_cr.status is StrictReadStatus.ITEMS and source_namespace.status is StrictReadStatus.ITEMS):
+            # Half-removed: an absent CRD with a live namespace, or the reverse.
+            return self._blocked(GATE_REASON_SOURCE_AMBIGUOUS, "the source hub's observability state")
+
+        destination_cr = self.secondary.list_custom_resources_strict(
+            group=spec.group,
+            version=spec.version,
+            plural=spec.plural,
+        )
+        destination_namespace = self.secondary.get_namespace_strict(spec.drain_namespace)
+
+        if StrictReadStatus.ERROR in (destination_cr.status, destination_namespace.status):
+            return self._blocked(GATE_REASON_DESTINATION_UNVERIFIABLE, "the destination hub could not be read")
+
+        namespace_present = destination_namespace.status is StrictReadStatus.ITEMS
+        namespace_absent = destination_namespace.status is StrictReadStatus.NAMESPACE_ABSENT
+        # A complete inventory with no items is a positive absence proof; the source's
+        # clean-skip rule is deliberately NOT reused, so nothing here treats a missing
+        # CRD or namespace as harmless.
+        cr_present = destination_cr.status is StrictReadStatus.ITEMS and bool(destination_cr.items)
+        cr_absent = destination_cr.proves_absence or (
+            destination_cr.status is StrictReadStatus.ITEMS and not destination_cr.items
+        )
+
+        if cr_present and namespace_present:
+            if self.acknowledge_observability_not_migrated:
+                return self._blocked(
+                    GATE_REASON_ACK_NOT_APPLICABLE,
+                    "the destination hub already has observability, so there is nothing to acknowledge",
+                )
+            return ObservabilityGateResult(decision=ObservabilityGateDecision.PROCEED)
+
+        if cr_absent and namespace_absent:
+            if self.acknowledge_observability_not_migrated:
+                logger.warning(
+                    "Destination observability is proven absent and the operator acknowledged it: "
+                    "metrics continuity ends with this deletion"
+                )
+                return ObservabilityGateResult(decision=ObservabilityGateDecision.PROCEED)
+            return self._blocked(
+                GATE_REASON_DESTINATION_ABSENT,
+                "the destination hub has no observability, so metrics continuity ends here",
+            )
+
+        # Readable but mixed: this proves neither coherent presence nor complete
+        # absence, so there is no fact to acknowledge. Reported as unverifiable
+        # because nothing about the destination has been established -- the message
+        # says inconsistent state, never a transport failure.
+        return self._blocked(
+            GATE_REASON_DESTINATION_UNVERIFIABLE,
+            "the destination hub's observability is in an inconsistent, partially present state",
+        )
+
+    @staticmethod
+    def _blocked(reason: str, detail: str) -> ObservabilityGateResult:
+        """One blocked result. The code is the contract; the detail is for the log."""
+        logger.error("Destination observability gate blocked the teardown (%s): %s", reason, detail)
+        return ObservabilityGateResult(decision=ObservabilityGateDecision.BLOCKED, reason=reason)
+
+    def _teardown_resource(  # noqa: C901 - one linear phase table; splitting it hides the order
+        self, spec: TeardownSpec, *, record_gitops_markers: bool
+    ) -> SubstepExecution:
+        """The July section 1 phase machine, once, for any resource family.
+
+        Owns the conversion of expected operational failures into a FAILED execution,
+        because this is the single place that knows whether the API accepted the
+        UID-preconditioned DELETE **for this invocation**. That local flag is what
+        ``changed`` is derived from: it is set the moment the DELETE is accepted and
+        never cleared, so a resumed record whose delete landed earlier contributes
+        ``changed=False`` even when this invocation writes ``completed``.
+
+        A ``ValidationError`` from the delete primitive is deliberately NOT caught: it
+        means the caller failed to supply a proved identity, which is a bug here, and
+        converting it into a FAILED result would hide a defect behind an
+        operational-looking outcome. The primitive's own dry-run refusal is a
+        ``FatalError`` and therefore a ``SwitchoverError``, so the general arm below
+        would report it as FAILED rather than let it propagate. Nothing relies on that:
+        this machine never calls the primitive in a dry run, because the dry-run branch
+        returns before the DELETE.
+        """
+        key = self._teardown_key(spec)
+        record = self.run_record.teardown_record(key)
         changed = False
 
         try:
-            # List all MultiClusterObservability resources
-            mcos = self.primary.list_custom_resources(
-                group="observability.open-cluster-management.io",
-                version="v1beta2",
-                plural="multiclusterobservabilities",
+            cr = self.primary.get_custom_resource_strict(
+                group=spec.group,
+                version=spec.version,
+                plural=spec.plural,
+                name=spec.name,
+                namespace=spec.namespace,
             )
+            if cr.status is StrictReadStatus.ERROR:
+                raise SwitchoverError(f"Cannot verify {spec.kind} {spec.name}: inventory unreadable")
 
-            if not mcos:
-                # PR C makes this absence proof strict; today it is the existing
-                # non-strict list, taken at face value.
-                logger.info("No MultiClusterObservability resources found")
-                return SubstepExecution(SubstepOutcome.PRECONDITION_NOOP)
+            if record is None:
+                noop = self._precondition_noop(spec, cr)
+                if noop is not None:
+                    return noop
 
-            for mco in mcos:
-                mco_name = mco.get("metadata", {}).get("name")
+            if record is not None and record.phase is TeardownPhase.COMPLETED:
+                return self._reprove_completed(spec, cr, record)
 
-                logger.info("Deleting MultiClusterObservability: %s", mco_name)
+            # July section 4, at the ruled position: after the clean-skip check and
+            # after the completed dispatch (a completed record has no DELETE to
+            # authorize), and before `expected_uid` -- therefore before any durable
+            # write and before the DELETE, with no mutation in between. Selected by
+            # the spec object, so PRs D and E reuse this machine ungated.
+            #
+            # `cr.status is ITEMS` is the whole rule: section 9 requires the gate to
+            # re-run its fresh reads before the deletion substep, and this invocation
+            # has a deletion substep only when its own fresh read found the target. A
+            # record whose target is already gone owes a drain and a final proof, and
+            # gating that would block the resume on a source the gate itself reads as
+            # half-removed.
+            if spec is OBSERVABILITY_TEARDOWN and self.secondary is not None and cr.status is StrictReadStatus.ITEMS:
+                gate = self.destination_observability_gate()
+                if gate.decision is ObservabilityGateDecision.BLOCKED:
+                    # No write has happened yet, in a live run or a preview, so
+                    # `changed` is necessarily false. A predicted blocker is a real
+                    # preview result, which is why dry run takes this path too.
+                    return SubstepExecution(SubstepOutcome.FAILED, changed=False)
+                if gate.decision is ObservabilityGateDecision.NOT_APPLICABLE and record is None:
+                    # Reachable only because the object disappeared between this
+                    # machine's read and the gate's own: the machine saw ITEMS or the
+                    # gate would not have run. With a record the same race falls
+                    # through to the UID-preconditioned DELETE, whose TargetDisappeared
+                    # arm hands the absence proof to the poll.
+                    return SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
 
+            expected_uid = record.expected_uid if record is not None else self._live_uid(spec, cr)
+
+            if cr.status is StrictReadStatus.ITEMS:
+                live_uid = (cr.resource or {}).get("metadata", {}).get("uid")
+                if live_uid != expected_uid:
+                    raise SwitchoverError(
+                        f"{spec.kind} {spec.name} is not the object recorded for teardown; " "it was left intact"
+                    )
+
+                if record_gitops_markers:
+                    markers = safe_record_gitops_markers(
+                        logger=logger,
+                        context="primary",
+                        namespace=spec.namespace or "",
+                        kind=spec.kind,
+                        name=spec.name,
+                        metadata=(cr.resource or {}).get("metadata", {}),
+                    )
+                    if markers:
+                        logger.warning(
+                            "%s %s appears GitOps-managed (%s). Coordinate deletion to avoid drift.",
+                            spec.kind,
+                            spec.name,
+                            ", ".join(markers),
+                        )
+
+                if self.dry_run:
+                    logger.info("[DRY-RUN] Would delete %s %s", spec.kind, spec.name)
+                    return SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+
+                self._record(spec, key, expected_uid, TeardownPhase.DELETE_STARTED)
                 try:
-                    self.primary.delete_custom_resource(
-                        group="observability.open-cluster-management.io",
-                        version="v1beta2",
-                        plural="multiclusterobservabilities",
-                        name=mco_name,
+                    self.primary.delete_custom_resource_preconditioned(
+                        spec.group,
+                        spec.version,
+                        spec.plural,
+                        spec.name,
+                        uid=expected_uid,
+                        namespace=spec.namespace,
                         timeout_seconds=DELETE_REQUEST_TIMEOUT,
                     )
-                    changed = True
+                except TargetDisappeared:
+                    # The object went away between the proved read and the DELETE.
+                    # July step 3's absence poll is "GET until 404/absent", so this is
+                    # where the proof obligation starts, not a failure: fall through and
+                    # let the poll, the drain and the final pass decide. Nothing was
+                    # accepted for this invocation, so `changed` stays False.
+                    logger.info(
+                        "%s %s disappeared between the proved read and the delete; verifying absence live",
+                        spec.kind,
+                        spec.name,
+                    )
                 except ApiException as exc:
-                    if exc.status == 404:
-                        # Already gone: no mutation was performed by this invocation.
-                        logger.info("MultiClusterObservability %s already gone (404), treating as success", mco_name)
-                    else:
-                        # Convert at the raise site so the failure travels the one
-                        # execution-result channel and this invocation's aggregated
-                        # `changed` reaches the caller. Status and reason only: the
-                        # raw HTTP body must never reach a log or the state file.
-                        raise SwitchoverError(
-                            f"Failed to delete MultiClusterObservability {mco_name}: "
-                            f"API error {exc.status} {exc.reason}"
-                        ) from exc
+                    # Convert at the raise site so the failure travels the one
+                    # execution-result channel and this invocation's aggregated
+                    # `changed` reaches the caller. Status and reason only: the raw
+                    # HTTP body and headers must never reach a log or the state file.
+                    raise SwitchoverError(
+                        f"Failed to delete {spec.kind} {spec.name}: API error {exc.status} {exc.reason}"
+                    ) from exc
+                except (HTTPError, MaxRetryError, NewConnectionError, Urllib3TimeoutError) as exc:
+                    # The transport failures lib/kube_client.py classifies. Their str()
+                    # can carry the request URL, so name only the exception type.
+                    raise SwitchoverError(
+                        f"Failed to delete {spec.kind} {spec.name}: transport error {type(exc).__name__}"
+                    ) from exc
+                else:
+                    changed = True
+            elif self.dry_run:
+                return SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
 
-            def _observability_terminated():
-                pods = self.primary.get_pods(namespace=OBSERVABILITY_NAMESPACE)
-                if not pods:
-                    return WaitConditionResult.complete("all observability pods terminated")
-                return WaitConditionResult.pending(f"{len(pods)} pod(s) remaining")
+            def cr_removed() -> WaitConditionResult:
+                observed = self.primary.get_custom_resource_strict(
+                    group=spec.group,
+                    version=spec.version,
+                    plural=spec.plural,
+                    name=spec.name,
+                    namespace=spec.namespace,
+                )
+                if observed.status in (StrictReadStatus.OBJECT_ABSENT, StrictReadStatus.CRD_ABSENT):
+                    return WaitConditionResult.complete("resource absent")
+                if observed.status is StrictReadStatus.ITEMS:
+                    if self._live_uid(spec, observed) != expected_uid:
+                        raise SwitchoverError(f"{spec.kind} {spec.name} was replaced; it was left intact")
+                    return WaitConditionResult.pending("resource still present")
+                raise SwitchoverError(f"Cannot verify {spec.kind} {spec.name} absence")
 
-            success = wait_for_condition(
-                "Observability pod termination",
-                _observability_terminated,
+            if not wait_for_condition(
+                f"{spec.kind} removal",
+                cr_removed,
                 timeout=OBSERVABILITY_TERMINATE_TIMEOUT,
                 interval=OBSERVABILITY_TERMINATE_INTERVAL,
+                allow_success_after_timeout=True,
                 logger=logger,
-            )
+            ):
+                raise SwitchoverError(f"Timeout waiting for {spec.kind} {spec.name} removal")
+            self._record(spec, key, expected_uid, TeardownPhase.CR_ABSENT)
+            self._record(spec, key, expected_uid, TeardownPhase.DRAIN_PENDING)
 
-            if not success:
-                remaining = self.primary.get_pods(namespace=OBSERVABILITY_NAMESPACE)
-                if remaining:
-                    raise SwitchoverError(f"Observability pods still running after {OBSERVABILITY_TERMINATE_TIMEOUT}s")
+            def pods_removed() -> WaitConditionResult:
+                namespace = self.primary.get_namespace_strict(spec.drain_namespace)
+                if namespace.status is StrictReadStatus.NAMESPACE_ABSENT:
+                    return WaitConditionResult.complete("namespace absent")
+                if namespace.status is not StrictReadStatus.ITEMS:
+                    self._record(spec, key, expected_uid, TeardownPhase.RECOVERY_REQUIRED)
+                    raise SwitchoverError(f"The {spec.drain_namespace} namespace state is ambiguous")
+                pods = self.primary.list_pods_strict(spec.drain_namespace, label_selector=spec.drain_label_selector)
+                if pods.status is not StrictReadStatus.ITEMS:
+                    raise SwitchoverError(f"Cannot verify the {spec.drain_namespace} drain")
+                if pods.items:
+                    return WaitConditionResult.pending(f"{len(pods.items)} pod(s) still running")
+                return WaitConditionResult.complete("no pods remaining")
+
+            if not wait_for_condition(
+                f"{spec.kind} pod termination",
+                pods_removed,
+                timeout=OBSERVABILITY_TERMINATE_TIMEOUT,
+                interval=OBSERVABILITY_TERMINATE_INTERVAL,
+                allow_success_after_timeout=True,
+                logger=logger,
+            ):
+                raise SwitchoverError(f"Timeout: pods still running in {spec.drain_namespace}")
+            self._record(spec, key, expected_uid, TeardownPhase.DRAINED)
+
+            # Final verification pass. Every field of the completion evidence comes
+            # from THESE reads and nothing earlier: evidence copied from a pre-DELETE
+            # read or a previous invocation would certify what this run never proved.
+            final_cr = self.primary.get_custom_resource_strict(
+                group=spec.group,
+                version=spec.version,
+                plural=spec.plural,
+                name=spec.name,
+                namespace=spec.namespace,
+            )
+            if final_cr.status is StrictReadStatus.ITEMS:
+                raise SwitchoverError(f"{spec.kind} {spec.name} is still present after its delete")
+            if final_cr.status is StrictReadStatus.ERROR:
+                raise SwitchoverError(f"Cannot re-prove {spec.kind} {spec.name} absence")
+
+            namespace_read = self.primary.get_namespace_strict(spec.drain_namespace)
+            resource_versions: dict = {}
+            absence_proofs = {
+                "target_cr": AbsenceProof(
+                    proof_type=("crd_absent" if final_cr.status is StrictReadStatus.CRD_ABSENT else "object_absent"),
+                    resource_key=key,
+                )
+            }
+
+            if namespace_read.status is StrictReadStatus.NAMESPACE_ABSENT:
+                # July section 3 fixed-namespace scope rule: a positively absent
+                # namespace is verified-empty.
+                absence_proofs["drain_namespace"] = AbsenceProof(
+                    proof_type="namespace_absent",
+                    resource_key=f"v1/Namespace//{spec.drain_namespace}",
+                )
+            elif namespace_read.status is StrictReadStatus.ITEMS:
+                pods = self.primary.list_pods_strict(spec.drain_namespace, label_selector=spec.drain_label_selector)
+                if pods.status is not StrictReadStatus.ITEMS:
+                    raise SwitchoverError(f"Cannot verify the {spec.drain_namespace} drain")
+                if pods.items:
+                    raise SwitchoverError(f"{len(pods.items)} pod(s) still running in {spec.drain_namespace}")
+                resource_versions["drain_namespace"] = namespace_read.resource_version
+                resource_versions["drain_pods"] = pods.resource_version
+            else:
+                self._record(spec, key, expected_uid, TeardownPhase.RECOVERY_REQUIRED)
+                raise SwitchoverError(f"The {spec.drain_namespace} namespace state is ambiguous")
+
+            if not self.dry_run:
+                self.run_record.record_teardown_phase(
+                    TeardownRecord(
+                        key=key,
+                        expected_uid=expected_uid,
+                        phase=TeardownPhase.COMPLETED,
+                        observed_at=datetime.now(timezone.utc).isoformat(),
+                        resource_versions=resource_versions,
+                        absence_proofs=absence_proofs,
+                    )
+                )
+
+            return SubstepExecution(SubstepOutcome.COMPLETED, changed=changed)
+
+        except ValidationError:
+            # Not an operational outcome: the delete primitive raises it when the
+            # caller supplied no proved identity, which is a bug in this method, and
+            # converting it into a FAILED result would hide that behind an
+            # operational-looking outcome.
+            raise
         except SwitchoverError as exc:
-            logger.error("Observability teardown failed: %s", exc)
+            # Every expected operational failure, PreconditionConflict included:
+            # sanitized stage and reason only, never a raw body, header, token or
+            # client configuration.
+            logger.error("%s teardown failed: %s", spec.kind, exc)
             return SubstepExecution(SubstepOutcome.FAILED, changed=changed)
 
-        return SubstepExecution(SubstepOutcome.COMPLETED, changed=changed)
+    def _reprove_completed(self, spec: TeardownSpec, cr, record: TeardownRecord) -> SubstepExecution:
+        """Revalidate a completed record without rewriting its immutable evidence."""
+        if cr.status is StrictReadStatus.ITEMS:
+            if self._live_uid(spec, cr) != record.expected_uid:
+                raise SwitchoverError(f"{spec.kind} {spec.name} was replaced; it was left intact")
+            raise SwitchoverError(f"{spec.kind} {spec.name} is still present after its completed teardown")
+
+        namespace = self.primary.get_namespace_strict(spec.drain_namespace)
+        if namespace.status is StrictReadStatus.NAMESPACE_ABSENT:
+            return SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+        if namespace.status is not StrictReadStatus.ITEMS:
+            raise SwitchoverError(f"The {spec.drain_namespace} namespace state is ambiguous")
+
+        pods = self.primary.list_pods_strict(spec.drain_namespace, label_selector=spec.drain_label_selector)
+        if pods.status is not StrictReadStatus.ITEMS:
+            raise SwitchoverError(f"Cannot verify the {spec.drain_namespace} drain")
+        if pods.items:
+            raise SwitchoverError(f"{len(pods.items)} pod(s) still running in {spec.drain_namespace}")
+        return SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+
+    def _precondition_noop(self, spec: TeardownSpec, cr) -> Optional[SubstepExecution]:
+        """A clean skip, available only when there is no record at all.
+
+        A CRD that is positively absent while the drain namespace is still present is
+        NOT a clean skip: something is half-removed, and reporting a no-op would hide
+        it.
+        """
+        if cr.status is StrictReadStatus.ITEMS and cr.resource is not None:
+            return None
+        namespace_read = self.primary.get_namespace_strict(spec.drain_namespace)
+        if namespace_read.status is StrictReadStatus.NAMESPACE_ABSENT:
+            logger.info("No %s and no %s namespace: nothing to tear down", spec.kind, spec.drain_namespace)
+            return SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
+        if namespace_read.status is StrictReadStatus.ITEMS:
+            raise SwitchoverError(f"{spec.kind} is absent but the {spec.drain_namespace} namespace is still present")
+        raise SwitchoverError(f"Cannot verify the {spec.drain_namespace} namespace")
+
+    def _live_uid(self, spec: TeardownSpec, cr) -> str:
+        uid = (cr.resource or {}).get("metadata", {}).get("uid") if cr.resource else None
+        if not isinstance(uid, str) or not uid.strip():
+            raise SwitchoverError(f"Cannot establish the identity of {spec.kind} {spec.name}")
+        return uid
+
+    def _record(self, spec: TeardownSpec, key: str, expected_uid: str, phase: TeardownPhase) -> None:
+        """One durable phase write. Dry run never reaches here."""
+        if self.dry_run:
+            return
+        self.run_record.record_teardown_phase(TeardownRecord(key=key, expected_uid=expected_uid, phase=phase))
 
     def _delete_managed_clusters(self) -> SubstepExecution:
         """Delete ManagedCluster resources (excluding local-cluster).

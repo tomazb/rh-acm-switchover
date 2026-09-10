@@ -75,6 +75,7 @@ def _python_args(case_input: dict) -> MockArgs:
     operation = case_input.get("operation", {})
     execution = case_input.get("execution", {})
     features = case_input.get("features", {})
+    decommission = case_input.get("decommission", {})
     argocd = features.get("argocd") or {}
     restore_only = bool(operation.get("restore_only", False))
     hub_contexts = case_input.get("hub_contexts") or {}
@@ -96,6 +97,10 @@ def _python_args(case_input: dict) -> MockArgs:
         argocd_resume_on_failure=bool(argocd.get("resume_on_failure", False)),
         argocd_resume_only=bool(argocd.get("resume_only", False)),
         admin_kubeconfig=operation.get("admin_kubeconfig"),
+        # The collection keys the acknowledgement on `acm_switchover_decommission`,
+        # the variable the plan's decision record names, so the shared fixture does
+        # too and the CLI flag is mapped from that block.
+        acknowledge_observability_not_migrated=bool(decommission.get("acknowledge_observability_not_migrated", False)),
     )
 
 

@@ -67,11 +67,11 @@ def test_roles_do_not_read_operational_data_directly():
 
 
 def test_teardown_record_key_is_never_named_in_role_or_playbook_yaml():
-    """R4-03 teardown records are mutation authority, not a role-readable fact.
+    """The raw durable key stays private to checkpoint.py.
 
     The `.get('operational_data'` patterns above do not catch bracket access, so
-    the raw key literal is forbidden outright: roles and playbooks reach these
-    records only through module_utils, never by naming the key themselves.
+    the raw key literal is forbidden outright. Roles consume the validated
+    ``facts.teardown_records`` facade and never name the storage key themselves.
     """
     offenders = []
     for directory in (ROLES_DIR, PLAYBOOKS_DIR):
