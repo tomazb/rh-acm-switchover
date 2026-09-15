@@ -60,7 +60,9 @@ def is_retryable_error(exception: BaseException) -> bool:
         # Retry on server errors (5xx) and too many requests (429)
         return 500 <= exception.status < 600 or exception.status == 429
     # Network-related exceptions that should be retried
-    if isinstance(exception, (HTTPError, MaxRetryError, NewConnectionError, Urllib3TimeoutError)):
+    if isinstance(
+        exception, (HTTPError, MaxRetryError, NewConnectionError, Urllib3TimeoutError)
+    ):
         return True
     # Connection and timeout errors (network-specific)
     if isinstance(exception, (ConnectionError, TimeoutError)):
@@ -121,7 +123,9 @@ def _sanitize_created_resource_for_compare(resource: Any) -> Any:
     return resource
 
 
-def _create_result_matches_requested_body(existing: Dict[str, Any], requested: Dict[str, Any]) -> bool:
+def _create_result_matches_requested_body(
+    existing: Dict[str, Any], requested: Dict[str, Any]
+) -> bool:
     """Check whether a reread object is equivalent to the requested create body.
 
     Comparison is intentionally asymmetric: the existing object may contain extra
@@ -137,11 +141,14 @@ def _create_result_matches_requested_body(existing: Dict[str, Any], requested: D
             if not isinstance(existing_value, dict):
                 return False
             return all(
-                key in existing_value and _is_requested_subset(value, existing_value[key])
+                key in existing_value
+                and _is_requested_subset(value, existing_value[key])
                 for key, value in requested_value.items()
             )
         if isinstance(requested_value, list):
-            if not isinstance(existing_value, list) or len(requested_value) != len(existing_value):
+            if not isinstance(existing_value, list) or len(requested_value) != len(
+                existing_value
+            ):
                 return False
             return all(
                 _is_requested_subset(req_item, exist_item)
@@ -250,7 +257,9 @@ class KubeClient:
 
         # Build an ApiClient for this context without mutating global Kubernetes configuration.
         try:
-            api_client = config.new_client_from_config(context=context, persist_config=False)
+            api_client = config.new_client_from_config(
+                context=context, persist_config=False
+            )
         except ConfigException as exc:
             if log_config_errors:
                 logger.error(
@@ -297,11 +306,19 @@ class KubeClient:
             request_timeout,
         )
 
-    def _request_timeout_kwargs(self, request_timeout: Optional[int] = None) -> Dict[str, int]:
+    def _request_timeout_kwargs(
+        self, request_timeout: Optional[int] = None
+    ) -> Dict[str, int]:
         """Return Kubernetes client kwargs with an explicit per-request timeout."""
-        return {"_request_timeout": (request_timeout if request_timeout is not None else self.request_timeout)}
+        return {
+            "_request_timeout": (
+                request_timeout if request_timeout is not None else self.request_timeout
+            )
+        }
 
-    def _discovery_serves(self, group: str, version: str, resource_name: str) -> StrictReadOutcome:
+    def _discovery_serves(
+        self, group: str, version: str, resource_name: str
+    ) -> StrictReadOutcome:
         """Positively determine whether one kind is served, or fail closed.
 
         Kind absence is proven only by a successful, decodable discovery
@@ -351,7 +368,9 @@ class KubeClient:
                 or not isinstance(entry.get("kind"), str)
                 or not entry["kind"]
             ):
-                return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
+                return StrictReadOutcome.error(
+                    STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE
+                )
         if any(entry["name"] == resource_name for entry in resources):
             return StrictReadOutcome.from_items([])
         return StrictReadOutcome.crd_absent(STRICT_READ_REASON_KIND_NOT_SERVED)
@@ -412,7 +431,9 @@ class KubeClient:
     @retry_api_call_advisory
     def _read_cluster_identity_namespace(self) -> Dict:
         """Read kube-system identity evidence without generic API-error logging."""
-        namespace = self.core_v1.read_namespace("kube-system", **self._request_timeout_kwargs())
+        namespace = self.core_v1.read_namespace(
+            "kube-system", **self._request_timeout_kwargs()
+        )
         return namespace.to_dict()
 
     def get_cluster_identity(self) -> Dict[str, Optional[str]]:
@@ -420,7 +441,9 @@ class KubeClient:
         namespace = self._read_cluster_identity_namespace()
         cluster_uid = ((namespace or {}).get("metadata") or {}).get("uid")
         if not cluster_uid:
-            raise RuntimeError("Unable to determine cluster identity: kube-system namespace UID is unavailable")
+            raise RuntimeError(
+                "Unable to determine cluster identity: kube-system namespace UID is unavailable"
+            )
         return {"context": self.context, "cluster_uid": cluster_uid}
 
     @api_call(not_found_value=[], resource_desc="list namespaces")
@@ -537,7 +560,9 @@ class KubeClient:
         return self.get_configmap(namespace, name) is not None
 
     @retry_api_call
-    def create_or_patch_configmap(self, namespace: str, name: str, data: Dict[str, str]) -> Dict:
+    def create_or_patch_configmap(
+        self, namespace: str, name: str, data: Dict[str, str]
+    ) -> Dict:
         """Create or patch a ConfigMap's data field.
 
         Uses a create-first, patch-on-409 strategy to avoid the TOCTOU race
@@ -597,7 +622,9 @@ class KubeClient:
                 return result.to_dict()
             if is_retryable_error(e):
                 raise
-            logger.error("Failed to create/patch configmap %s/%s: %s", namespace, name, e)
+            logger.error(
+                "Failed to create/patch configmap %s/%s: %s", namespace, name, e
+            )
             raise
 
     @api_call(not_found_value=True, resource_desc="delete configmap")
@@ -620,7 +647,9 @@ class KubeClient:
             logger.info("[DRY-RUN] Would delete ConfigMap %s/%s", namespace, name)
             return True
 
-        self.core_v1.delete_namespaced_config_map(name=name, namespace=namespace, **self._request_timeout_kwargs())
+        self.core_v1.delete_namespaced_config_map(
+            name=name, namespace=namespace, **self._request_timeout_kwargs()
+        )
         return True
 
     @api_call(not_found_value=True, resource_desc="delete pod")
@@ -643,7 +672,9 @@ class KubeClient:
             logger.info("[DRY-RUN] Would delete Pod %s/%s", namespace, name)
             return True
 
-        self.core_v1.delete_namespaced_pod(name=name, namespace=namespace, **self._request_timeout_kwargs())
+        self.core_v1.delete_namespaced_pod(
+            name=name, namespace=namespace, **self._request_timeout_kwargs()
+        )
         return True
 
     @api_call(not_found_value=None, resource_desc="read Route")
@@ -873,7 +904,9 @@ class KubeClient:
             continue_token = metadata.get("continue")
 
             # Stop if no more pages or we've hit the limit
-            if not continue_token or (max_items is not None and len(items) >= max_items):
+            if not continue_token or (
+                max_items is not None and len(items) >= max_items
+            ):
                 break
 
         return items
@@ -918,7 +951,9 @@ class KubeClient:
             return served
 
         for _ in range(STRICT_READ_MAX_RESTARTS + 1):
-            outcome = self._drain_strict_list(group, version, plural, namespace, label_selector)
+            outcome = self._drain_strict_list(
+                group, version, plural, namespace, label_selector
+            )
             if outcome is not _RESTART_READ:
                 return outcome
         # The restart budget is spent and the continuation is still expiring.
@@ -991,7 +1026,9 @@ class KubeClient:
                 return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
             continue_token = metadata.get("continue") or None
             if continue_token is None:
-                return StrictReadOutcome.from_items(items, resource_version=snapshot_revision)
+                return StrictReadOutcome.from_items(
+                    items, resource_version=snapshot_revision
+                )
 
         # Page budget exhausted with a continuation still outstanding.
         return StrictReadOutcome.error(STRICT_READ_REASON_INVENTORY_INCOMPLETE)
@@ -1035,7 +1072,9 @@ class KubeClient:
                 )
         except ApiException as exc:
             if exc.status == 404:
-                return StrictReadOutcome.object_absent(STRICT_READ_REASON_OBJECT_NOT_FOUND)
+                return StrictReadOutcome.object_absent(
+                    STRICT_READ_REASON_OBJECT_NOT_FOUND
+                )
             return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
         except Exception:
             return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
@@ -1058,10 +1097,14 @@ class KubeClient:
         # published as a positive absence proof. `get_namespace` and `list_pods_strict` agree.
         self._validate_resource_inputs(namespace=name)
         try:
-            namespace = self.core_v1.read_namespace(name, **self._request_timeout_kwargs())
+            namespace = self.core_v1.read_namespace(
+                name, **self._request_timeout_kwargs()
+            )
         except ApiException as exc:
             if exc.status == 404:
-                return StrictReadOutcome.namespace_absent(STRICT_READ_REASON_NAMESPACE_NOT_FOUND)
+                return StrictReadOutcome.namespace_absent(
+                    STRICT_READ_REASON_NAMESPACE_NOT_FOUND
+                )
             return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
         except Exception:
             return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
@@ -1079,7 +1122,9 @@ class KubeClient:
             resource_version=revision,
         )
 
-    def list_pods_strict(self, namespace: str, label_selector: Optional[str] = None) -> StrictReadOutcome:
+    def list_pods_strict(
+        self, namespace: str, label_selector: Optional[str] = None
+    ) -> StrictReadOutcome:
         """Strictly list Pods in one namespace, or fail closed.
 
         A Pod LIST 404 is not zero Pods: it is resolved by a fresh named
@@ -1129,7 +1174,9 @@ class KubeClient:
             for pod in page_items:
                 converted = self._model_to_mapping(pod)
                 if converted is None:
-                    return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+                    return StrictReadOutcome.error(
+                        STRICT_READ_REASON_MALFORMED_RESPONSE
+                    )
                 items.append(converted)
 
             metadata = getattr(page, "metadata", None)
@@ -1145,7 +1192,9 @@ class KubeClient:
                 return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
             continue_token = getattr(metadata, "_continue", None) or None
             if continue_token is None:
-                return StrictReadOutcome.from_items(items, resource_version=snapshot_revision)
+                return StrictReadOutcome.from_items(
+                    items, resource_version=snapshot_revision
+                )
 
         return StrictReadOutcome.error(STRICT_READ_REASON_INVENTORY_INCOMPLETE)
 
@@ -1160,20 +1209,30 @@ class KubeClient:
 
     def get_deployment_strict(self, name: str, namespace: str) -> StrictReadOutcome:
         """Strictly GET one Deployment with its identity, or fail closed."""
-        return self._get_apps_object_strict(self.apps_v1.read_namespaced_deployment, name, namespace)
+        return self._get_apps_object_strict(
+            self.apps_v1.read_namespaced_deployment, name, namespace
+        )
 
     def get_replicaset_strict(self, name: str, namespace: str) -> StrictReadOutcome:
         """Strictly GET one ReplicaSet with its identity, or fail closed."""
-        return self._get_apps_object_strict(self.apps_v1.read_namespaced_replica_set, name, namespace)
+        return self._get_apps_object_strict(
+            self.apps_v1.read_namespaced_replica_set, name, namespace
+        )
 
-    def _get_apps_object_strict(self, reader, name: str, namespace: str) -> StrictReadOutcome:
+    def _get_apps_object_strict(
+        self, reader, name: str, namespace: str
+    ) -> StrictReadOutcome:
         """One bounded named Apps GET whose success always carries identity."""
         self._validate_resource_inputs(namespace, name, "apps object")
         try:
-            model = reader(name=name, namespace=namespace, **self._request_timeout_kwargs())
+            model = reader(
+                name=name, namespace=namespace, **self._request_timeout_kwargs()
+            )
         except ApiException as exc:
             if exc.status == 404:
-                return StrictReadOutcome.object_absent(STRICT_READ_REASON_OBJECT_NOT_FOUND)
+                return StrictReadOutcome.object_absent(
+                    STRICT_READ_REASON_OBJECT_NOT_FOUND
+                )
             return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
         except Exception:
             return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
@@ -1230,7 +1289,8 @@ class KubeClient:
             return {}
 
         logger.debug(
-            "KUBE_CLIENT patch_custom_resource: group=%s, version=%s, " "plural=%s, name=%s, namespace=%s, patch=%s",
+            "KUBE_CLIENT patch_custom_resource: group=%s, version=%s, "
+            "plural=%s, name=%s, namespace=%s, patch=%s",
             group,
             version,
             plural,
@@ -1251,7 +1311,9 @@ class KubeClient:
                     body=patch,
                     **self._request_timeout_kwargs(),
                 )
-                logger.debug("KUBE_CLIENT: patch_namespaced_custom_object returned successfully")
+                logger.debug(
+                    "KUBE_CLIENT: patch_namespaced_custom_object returned successfully"
+                )
             else:
                 logger.debug("KUBE_CLIENT: Calling patch_cluster_custom_object...")
                 result = self.custom_api.patch_cluster_custom_object(
@@ -1262,7 +1324,9 @@ class KubeClient:
                     body=patch,
                     **self._request_timeout_kwargs(),
                 )
-                logger.debug("KUBE_CLIENT: patch_cluster_custom_object returned successfully")
+                logger.debug(
+                    "KUBE_CLIENT: patch_cluster_custom_object returned successfully"
+                )
 
             logger.debug(
                 "KUBE_CLIENT: Patch result keys: %s",
@@ -1326,7 +1390,9 @@ class KubeClient:
             create_once = retry_api_call(self._create_custom_resource_once)
             return create_once(group, version, plural, body, namespace, resource_name)
 
-        return self._create_custom_resource_once(group, version, plural, body, namespace, resource_name)
+        return self._create_custom_resource_once(
+            group, version, plural, body, namespace, resource_name
+        )
 
     def _create_custom_resource_once(
         self,
@@ -1547,6 +1613,19 @@ class KubeClient:
             plural=MANAGED_CLUSTER_PLURAL,
         )
 
+    def list_managed_clusters_strict(self) -> StrictReadOutcome:
+        """Strictly list ManagedCluster resources, or fail closed.
+
+        Preserves the shared strict-list algebra: a positively empty inventory is
+        ``ITEMS`` with ``[]``; discovery/authorization/transport failures are never
+        reported as empty.
+        """
+        return self.list_custom_resources_strict(
+            group=MANAGED_CLUSTER_API_GROUP,
+            version=MANAGED_CLUSTER_API_VERSION,
+            plural=MANAGED_CLUSTER_PLURAL,
+        )
+
     def patch_managed_cluster(self, name: str, patch: Dict[str, Any]) -> Dict:
         """Patch a ManagedCluster resource."""
         return self.patch_custom_resource(
@@ -1707,7 +1786,15 @@ class KubeClient:
 
         try:
             now = time.strftime("%Y%m%d%H%M%S")
-            body = {"spec": {"template": {"metadata": {"annotations": {"kubectl.kubernetes.io/restartedAt": now}}}}}
+            body = {
+                "spec": {
+                    "template": {
+                        "metadata": {
+                            "annotations": {"kubectl.kubernetes.io/restartedAt": now}
+                        }
+                    }
+                }
+            }
             result = self.apps_v1.patch_namespaced_deployment(
                 name=name,
                 namespace=namespace,
@@ -1739,7 +1826,9 @@ class KubeClient:
             # and includes keys with prefixes like 'app.kubernetes.io/name'
             # Let the Kubernetes API validate the selector and return appropriate errors
             if not label_selector.strip():
-                raise ValidationError("Label selector cannot be empty or whitespace-only")
+                raise ValidationError(
+                    "Label selector cannot be empty or whitespace-only"
+                )
 
         kwargs: Dict[str, Any] = {
             "namespace": namespace,
@@ -1813,13 +1902,20 @@ class KubeClient:
             try:
                 tail_lines_int = int(tail_lines)
             except (TypeError, ValueError) as exc:
-                raise ValidationError("tail_lines must be a non-negative integer") from exc
+                raise ValidationError(
+                    "tail_lines must be a non-negative integer"
+                ) from exc
             if tail_lines_int < 0:
                 raise ValidationError("tail_lines must be a non-negative integer")
             kwargs["tail_lines"] = tail_lines_int
 
         kwargs.update(self._request_timeout_kwargs())
-        return self.core_v1.read_namespaced_pod_log(name=name, namespace=namespace, **kwargs) or ""
+        return (
+            self.core_v1.read_namespaced_pod_log(
+                name=name, namespace=namespace, **kwargs
+            )
+            or ""
+        )
 
     def wait_for_pods_ready(
         self,
@@ -1844,7 +1940,9 @@ class KubeClient:
         poll_interval = 5
 
         def sleep_remaining_budget() -> None:
-            sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
+            sleep_time = min(
+                poll_interval, max(0.0, timeout - (time.time() - start_time))
+            )
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
@@ -1864,14 +1962,18 @@ class KubeClient:
                 if exc.status == 404:
                     pods = []
                 elif is_retryable_error(exc):
-                    logger.debug("Transient error while listing pods in %s: %s", namespace, exc)
+                    logger.debug(
+                        "Transient error while listing pods in %s: %s", namespace, exc
+                    )
                     sleep_remaining_budget()
                     continue
                 else:
                     raise
             except Exception as exc:
                 if is_retryable_error(exc):
-                    logger.debug("Transient error while listing pods in %s: %s", namespace, exc)
+                    logger.debug(
+                        "Transient error while listing pods in %s: %s", namespace, exc
+                    )
                     sleep_remaining_budget()
                     continue
                 raise
@@ -1885,7 +1987,9 @@ class KubeClient:
                 if len(pods) == 0:
                     logger.info("No pods expected in %s and none found", namespace)
                     return True
-                logger.debug("Waiting for zero pods in %s, found %s", namespace, len(pods))
+                logger.debug(
+                    "Waiting for zero pods in %s, found %s", namespace, len(pods)
+                )
                 sleep_remaining_budget()
                 continue
 
@@ -1893,7 +1997,10 @@ class KubeClient:
             for pod in pods:
                 conditions = pod.get("status", {}).get("conditions", [])
                 for condition in conditions:
-                    if condition.get("type") == "Ready" and condition.get("status") == "True":
+                    if (
+                        condition.get("type") == "Ready"
+                        and condition.get("status") == "True"
+                    ):
                         ready_count += 1
                         break
 

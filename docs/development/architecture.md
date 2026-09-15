@@ -463,7 +463,13 @@ Important finalization-related flags:
 `modules/decommission.py` performs the separate old-hub teardown flow with explicit confirmation and
 verification. Its MultiClusterObservability substep (`Decommission.teardown_observability`, delegated to
 by `Finalization._disable_observability_on_old_hub` and `Finalization._decommission_old_hub`) runs the one
-shared phase machine, `_teardown_resource`, for any UID-preconditioned resource family:
+shared phase machine, `_teardown_resource`, for any UID-preconditioned resource family. ManagedCluster
+teardown (`Decommission.teardown_managed_clusters`) uses the same machine with **no drain scope**
+(`drain_namespace=None`): durable phases are `delete_started` → `cr_absent` → `completed` only, with zero
+namespace/Pod drain I/O. Collection parity lives in `roles/decommission/tasks/delete_managed_clusters.yml`
+plus `teardown_one_managed_cluster.yml` via `acm_k8s_read_outcome` and `acm_uid_guarded_delete`.
+
+Drain-scoped families (MCO) use the full phase table:
 
 - **Phase table** (durable, per resource, keyed `apiVersion/kind/namespace/name`):
   `delete_started` → `cr_absent` → `drain_pending` → `drained` → `completed`, with `recovery_required` on

@@ -1,0 +1,250 @@
+---
+# Per-target no-drain ManagedCluster teardown (R4-03 PR D).
+#
+# Loop variable: _acm_mc_target_name (never local-cluster; family filters first).
+# Phase table: delete_started -> cr_absent -> completed with
+# resource_versions={} and absence_proofs={target_cr} only. No drain reads.
+# Per-target expected failures are rescued into _acm_mc_survivors so the family
+# can fail once listing every survivor while preserving changed from any
+# accepted UID-guarded DELETE.
+
+- name: Tear down one ManagedCluster
+  block:
+    - name: Define this ManagedCluster teardown identity
+      ansible.builtin.set_fact:
+        _acm_mc_teardown_key: >-
+          cluster.open-cluster-management.io/v1/ManagedCluster//{{ _acm_mc_target_name }}
+        _acm_mc_target_clean_skip: false
+        _acm_mc_target_present: false
+        _acm_mc_target_prove: false
+
+    - name: Publish this ManagedCluster durable record
+      ansible.builtin.set_fact:
+        acm_switchover_mc_record: >-
+          {{ (_acm_mc_checkpoint.facts.teardown_records | default({})).get(_acm_mc_teardown_key) }}
+
+    - name: Read this ManagedCluster for teardown
+      tomazb.acm_switchover.acm_k8s_read_outcome:
+        read_mode: get
+        api_version: cluster.open-cluster-management.io/v1
+        kind: ManagedCluster
+        resource_name: managedclusters
+        name: "{{ _acm_mc_target_name }}"
+        kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+        context: "{{ acm_switchover_hubs.primary.context }}"
+      register: acm_switchover_mc_target_read
+      no_log: true
+
+    - name: Fail closed when this ManagedCluster inventory is unverifiable
+      ansible.builtin.fail:
+        msg: >-
+          Cannot verify ManagedCluster {{ _acm_mc_target_name }}: inventory unreadable
+      when: acm_switchover_mc_target_read.read_status not in ['ok', 'not_found', 'kind_not_served']
+
+    - name: Publish whether this ManagedCluster target is present
+      ansible.builtin.set_fact:
+        _acm_mc_target_present: "{{ acm_switchover_mc_target_read.read_status == 'ok' }}"
+
+    - name: Refuse a completed ManagedCluster that is present again
+      ansible.builtin.fail:
+        msg: >-
+          ManagedCluster {{ _acm_mc_target_name }} is still present after its completed teardown
+      when:
+        - acm_switchover_mc_record is mapping
+        - acm_switchover_mc_record.phase == 'completed'
+        - _acm_mc_target_present | bool
+
+    - name: Publish completed-record reprove success
+      ansible.builtin.set_fact:
+        _acm_mc_target_clean_skip: true
+      when:
+        - acm_switchover_mc_record is mapping
+        - acm_switchover_mc_record.phase == 'completed'
+        - not (_acm_mc_target_present | bool)
+
+    - name: Publish no-record clean-skip for an already-absent ManagedCluster
+      ansible.builtin.set_fact:
+        _acm_mc_target_clean_skip: true
+      when:
+        - not (_acm_mc_target_clean_skip | bool)
+        - acm_switchover_mc_record is not mapping
+        - not (_acm_mc_target_present | bool)
+
+    - name: Fail closed when the fixed ManagedCluster identity is unreadable
+      ansible.builtin.fail:
+        msg: >-
+          Cannot establish the UID of ManagedCluster {{ _acm_mc_target_name }}. Nothing was deleted.
+      when:
+        - not (_acm_mc_target_clean_skip | bool)
+        - _acm_mc_target_present | bool
+        - (acm_switchover_mc_target_read.resources[0].metadata.uid | default('', true) | string | trim | length) == 0
+
+    - name: Publish the expected ManagedCluster UID
+      ansible.builtin.set_fact:
+        _acm_mc_expected_uid: >-
+          {{
+            acm_switchover_mc_record.expected_uid
+            if acm_switchover_mc_record is mapping
+            else acm_switchover_mc_target_read.resources[0].metadata.uid
+          }}
+      when:
+        - not (_acm_mc_target_clean_skip | bool)
+        - (_acm_mc_target_present | bool) or (acm_switchover_mc_record is mapping)
+
+    - name: Refuse a replacement ManagedCluster
+      ansible.builtin.fail:
+        msg: >-
+          ManagedCluster {{ _acm_mc_target_name }} is not the object recorded for teardown.
+          The replacement was left intact.
+      when:
+        - not (_acm_mc_target_clean_skip | bool)
+        - _acm_mc_target_present | bool
+        - acm_switchover_mc_record is mapping
+        - acm_switchover_mc_target_read.resources[0].metadata.uid != _acm_mc_expected_uid
+
+    - name: Refuse a post-delete ManagedCluster record whose target is present again
+      ansible.builtin.fail:
+        msg: >-
+          ManagedCluster {{ _acm_mc_target_name }} is present after its recorded delete phase.
+          It was left intact.
+      when:
+        - not (_acm_mc_target_clean_skip | bool)
+        - _acm_mc_target_present | bool
+        - acm_switchover_mc_record is mapping
+        - acm_switchover_mc_record.phase not in ['delete_started']
+
+    - name: Record ManagedCluster delete_started
+      tomazb.acm_switchover.checkpoint_phase:
+        checkpoint: "{{ acm_switchover_execution.checkpoint }}"
+        teardown_record:
+          key: "{{ _acm_mc_teardown_key }}"
+          expected_uid: "{{ _acm_mc_expected_uid }}"
+          phase: delete_started
+      when:
+        - not (_acm_mc_target_clean_skip | bool)
+        - not ansible_check_mode
+        - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+        - _acm_mc_target_present | bool
+        - acm_switchover_mc_record is not mapping or acm_switchover_mc_record.phase == 'delete_started'
+
+    - name: Delete the recorded ManagedCluster
+      tomazb.acm_switchover.acm_uid_guarded_delete:
+        api_version: cluster.open-cluster-management.io/v1
+        kind: ManagedCluster
+        resource_name: managedclusters
+        name: "{{ _acm_mc_target_name }}"
+        expected_uid: "{{ _acm_mc_expected_uid }}"
+        kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+        context: "{{ acm_switchover_hubs.primary.context }}"
+        request_timeout: 30
+        wait_timeout: 300
+        wait_sleep: 10
+      register: acm_switchover_mc_delete
+      check_mode: >-
+        {{ ansible_check_mode or (acm_switchover_execution.mode | default('dry_run')) == 'dry_run' }}
+      no_log: true
+      when:
+        - not (_acm_mc_target_clean_skip | bool)
+        - _acm_mc_target_present | bool
+        - acm_switchover_mc_record is not mapping or acm_switchover_mc_record.phase == 'delete_started'
+
+    - name: Accumulate ManagedCluster change signals from the guarded delete
+      ansible.builtin.set_fact:
+        _acm_mc_changed: >-
+          {{
+            (_acm_mc_changed | default(false) | bool)
+            or (acm_switchover_mc_delete.changed | default(false) | bool)
+          }}
+        _acm_mc_would_change: >-
+          {{
+            (_acm_mc_would_change | default(false) | bool)
+            or (acm_switchover_mc_delete.would_change | default(false) | bool)
+          }}
+      when:
+        - not (_acm_mc_target_clean_skip | bool)
+        - acm_switchover_mc_delete is defined
+        - acm_switchover_mc_delete is not skipped
+
+    - name: Publish whether this run must prove ManagedCluster absence
+      ansible.builtin.set_fact:
+        _acm_mc_target_prove: >-
+          {{
+            (not (_acm_mc_target_clean_skip | bool))
+            and (
+              ((not ansible_check_mode) and (acm_switchover_execution.mode | default('dry_run')) == 'execute')
+              or (
+                (not (_acm_mc_target_present | bool))
+                and (acm_switchover_mc_record is mapping)
+              )
+            )
+          }}
+
+    - name: Record ManagedCluster cr_absent
+      tomazb.acm_switchover.checkpoint_phase:
+        checkpoint: "{{ acm_switchover_execution.checkpoint }}"
+        teardown_record:
+          key: "{{ _acm_mc_teardown_key }}"
+          expected_uid: "{{ _acm_mc_expected_uid }}"
+          phase: cr_absent
+      when:
+        - _acm_mc_target_prove | bool
+        - not ansible_check_mode
+        - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+        - acm_switchover_mc_record is not mapping or acm_switchover_mc_record.phase in ['delete_started', 'cr_absent']
+
+    - name: Re-read this ManagedCluster for final absence proof
+      tomazb.acm_switchover.acm_k8s_read_outcome:
+        read_mode: get
+        api_version: cluster.open-cluster-management.io/v1
+        kind: ManagedCluster
+        resource_name: managedclusters
+        name: "{{ _acm_mc_target_name }}"
+        kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+        context: "{{ acm_switchover_hubs.primary.context }}"
+      register: _acm_mc_final_read
+      no_log: true
+      when: _acm_mc_target_prove | bool
+
+    - name: Fail closed when final ManagedCluster absence is unproven
+      ansible.builtin.fail:
+        msg: >-
+          Final proof did not establish that ManagedCluster {{ _acm_mc_target_name }} is absent.
+      when:
+        - _acm_mc_target_prove | bool
+        - _acm_mc_final_read.read_status not in ['not_found', 'kind_not_served']
+
+    - name: Build ManagedCluster completion evidence
+      ansible.builtin.set_fact:
+        _acm_mc_resource_versions: {}
+        _acm_mc_absence_proofs:
+          target_cr:
+            proof_type: >-
+              {{ 'crd_absent' if _acm_mc_final_read.read_status == 'kind_not_served' else 'object_absent' }}
+            resource_key: "{{ _acm_mc_teardown_key }}"
+      when: _acm_mc_target_prove | bool
+
+    - name: Record ManagedCluster completed
+      tomazb.acm_switchover.checkpoint_phase:
+        checkpoint: "{{ acm_switchover_execution.checkpoint }}"
+        teardown_record:
+          key: "{{ _acm_mc_teardown_key }}"
+          expected_uid: "{{ _acm_mc_expected_uid }}"
+          phase: completed
+          observed_at: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+          resource_versions: "{{ _acm_mc_resource_versions }}"
+          absence_proofs: "{{ _acm_mc_absence_proofs }}"
+      when:
+        - _acm_mc_target_prove | bool
+        - not ansible_check_mode
+        - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+        - acm_switchover_mc_record is not mapping or acm_switchover_mc_record.phase != 'completed'
+
+  rescue:
+    - name: Record this ManagedCluster as a survivor
+      ansible.builtin.set_fact:
+        _acm_mc_survivors: "{{ (_acm_mc_survivors | default([])) + [_acm_mc_target_name] }}"
+        _acm_mc_changed: >-
+          {{
+            (_acm_mc_changed | default(false) | bool)
+            or (ansible_failed_result.changed | default(false) | bool)
+          }}

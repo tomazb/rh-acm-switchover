@@ -18,9 +18,12 @@ rules:
   - apiGroups: ["hive.openshift.io"]
     resources: ["clusterdeployments"]
     verbs: ["list"]
+  # `get` on ManagedClusters matches the MCO pattern below: standalone teardown issues a
+  # strict named GET before the UID-preconditioned delete and again for absence proof.
+  # `list` stays on the baseline operator role; this extension must not grow list/patch/*.
   - apiGroups: ["cluster.open-cluster-management.io"]
     resources: ["managedclusters"]
-    verbs: ["delete"]
+    verbs: ["get", "delete"]
   - apiGroups: ["operator.open-cluster-management.io"]
     resources: ["multiclusterhubs"]
     verbs: ["delete"]

@@ -46,7 +46,9 @@ VALID_ARGOCD_MODES = ("none", "check", "manage")
 def _validate_argocd_mode(argocd_mode: str) -> None:
     """Validate Argo CD RBAC mode."""
     if argocd_mode not in VALID_ARGOCD_MODES:
-        raise ValueError(f"Invalid argocd_mode '{argocd_mode}'. Must be one of: {VALID_ARGOCD_MODES}")
+        raise ValueError(
+            f"Invalid argocd_mode '{argocd_mode}'. Must be one of: {VALID_ARGOCD_MODES}"
+        )
 
 
 # Verbs that mutate cluster state. Single source for validator-table derivation
@@ -62,7 +64,9 @@ VALIDATOR_CLUSTER_VERB_EXCEPTIONS: Dict[Tuple[str, str], FrozenSet[str]] = {
 }
 
 
-def _format_verb_removals(removals: Dict[Tuple[str, str], FrozenSet[str]]) -> Dict[Tuple[str, str], List[str]]:
+def _format_verb_removals(
+    removals: Dict[Tuple[str, str], FrozenSet[str]],
+) -> Dict[Tuple[str, str], List[str]]:
     """Render a removals mapping with deterministic ordering for error messages."""
     return {key: sorted(verbs) for key, verbs in sorted(removals.items())}
 
@@ -258,7 +262,11 @@ class RBACValidator:
     DECOMMISSION_CLUSTER_PERMISSIONS = [
         ("", "namespaces", ["get"]),
         (HIVE_CLUSTERDEPLOYMENT_API_GROUP, HIVE_CLUSTERDEPLOYMENT_PLURAL, ["list"]),
-        ("cluster.open-cluster-management.io", "managedclusters", ["list", "delete"]),
+        (
+            "cluster.open-cluster-management.io",
+            "managedclusters",
+            ["get", "list", "delete"],
+        ),
         ("operator.open-cluster-management.io", "multiclusterhubs", ["list", "delete"]),
         (
             "observability.open-cluster-management.io",
@@ -290,7 +298,9 @@ class RBACValidator:
     ]
 
     # Backwards-compatible alias (includes all permissions)
-    ARGOCD_CHECK_CLUSTER_PERMISSIONS = ARGOCD_BASE_CLUSTER_PERMISSIONS + ARGOCD_OPERATOR_CLUSTER_PERMISSIONS
+    ARGOCD_CHECK_CLUSTER_PERMISSIONS = (
+        ARGOCD_BASE_CLUSTER_PERMISSIONS + ARGOCD_OPERATOR_CLUSTER_PERMISSIONS
+    )
 
     # Additional Argo CD write permissions required for --argocd-manage (operator role)
     ARGOCD_MANAGE_EXTRA_CLUSTER_PERMISSIONS = [
@@ -309,9 +319,13 @@ class RBACValidator:
             raise ValueError(f"Invalid role '{role}'. Must be one of: {VALID_ROLES}")
         self.client = client
         self.role = role
-        self._permission_cache: Dict[Tuple[str, str, str, Optional[str]], Union[Tuple[bool, str], str]] = {}
+        self._permission_cache: Dict[
+            Tuple[str, str, str, Optional[str]], Union[Tuple[bool, str], str]
+        ] = {}
         self._namespace_exists_cache: Dict[str, bool] = {}
-        self._validation_result_cache: Dict[Tuple[Any, ...], Tuple[bool, Dict[str, List[str]]]] = {}
+        self._validation_result_cache: Dict[
+            Tuple[Any, ...], Tuple[bool, Dict[str, List[str]]]
+        ] = {}
 
     def _cached_validation_result(
         self,
@@ -326,7 +340,9 @@ class RBACValidator:
     def _namespace_exists_cached(self, namespace: str) -> bool:
         """Return namespace existence, caching results for repeated validation passes."""
         if namespace not in self._namespace_exists_cache:
-            self._namespace_exists_cache[namespace] = self.client.namespace_exists(namespace)
+            self._namespace_exists_cache[namespace] = self.client.namespace_exists(
+                namespace
+            )
         return self._namespace_exists_cache[namespace]
 
     def _get_cluster_permissions(self) -> List[Tuple[str, str, List[str]]]:
@@ -434,7 +450,9 @@ class RBACValidator:
 
             # Create SelfSubjectAccessReview
             body = k8s_client.V1SelfSubjectAccessReview(
-                spec=k8s_client.V1SelfSubjectAccessReviewSpec(resource_attributes=resource_attrs)
+                spec=k8s_client.V1SelfSubjectAccessReviewSpec(
+                    resource_attributes=resource_attrs
+                )
             )
 
             # Check permission
@@ -449,9 +467,7 @@ class RBACValidator:
             return result
 
         except ApiException as e:
-            error_message = (
-                f"Unable to check permission {verb} {group_name}/{resource} on {scope}: {e.status} {e.reason}"
-            )
+            error_message = f"Unable to check permission {verb} {group_name}/{resource} on {scope}: {e.status} {e.reason}"
             self._permission_cache[cache_key] = error_message
             raise ValidationError(error_message) from e
         except Exception as e:
@@ -487,7 +503,9 @@ class RBACValidator:
         errors = []
         all_valid = True
 
-        logger.info("Validating cluster-scoped RBAC permissions for role: %s", self.role)
+        logger.info(
+            "Validating cluster-scoped RBAC permissions for role: %s", self.role
+        )
 
         # Get permissions based on role
         cluster_permissions = self._get_cluster_permissions()
@@ -496,7 +514,9 @@ class RBACValidator:
         for api_group, resource, verbs in cluster_permissions:
             # Skip observability permissions if requested
             if skip_observability and "observability" in api_group:
-                logger.info("Skipping observability permission: %s/%s", api_group, resource)
+                logger.info(
+                    "Skipping observability permission: %s/%s", api_group, resource
+                )
                 continue
 
             for verb in verbs:
@@ -511,7 +531,9 @@ class RBACValidator:
                     logger.error(error_msg)
 
         # Check Argo CD permissions if requested
-        argocd_permissions = self._get_argocd_cluster_permissions(argocd_mode, argocd_install_type)
+        argocd_permissions = self._get_argocd_cluster_permissions(
+            argocd_mode, argocd_install_type
+        )
         if argocd_permissions:
             logger.info("Including Argo CD RBAC checks (mode: %s)", argocd_mode)
             for api_group, resource, verbs in argocd_permissions:
@@ -539,7 +561,11 @@ class RBACValidator:
 
             for api_group, resource, verbs in self.DECOMMISSION_PERMISSIONS:
                 if skip_observability and "observability" in api_group:
-                    logger.info("Skipping observability decommission permission: %s/%s", api_group, resource)
+                    logger.info(
+                        "Skipping observability decommission permission: %s/%s",
+                        api_group,
+                        resource,
+                    )
                     continue
 
                 for verb in verbs:
@@ -573,7 +599,9 @@ class RBACValidator:
                             continue
                         checked_extra_permissions.add(permission_key)
 
-                        has_perm, error = self.check_permission(api_group, resource, verb)
+                        has_perm, error = self.check_permission(
+                            api_group, resource, verb
+                        )
                         if not has_perm:
                             all_valid = False
                             group_name = api_group if api_group else "core"
@@ -584,9 +612,13 @@ class RBACValidator:
                             logger.error(error_msg)
 
         if all_valid:
-            logger.info("✓ All cluster-scoped permissions validated for role: %s", self.role)
+            logger.info(
+                "✓ All cluster-scoped permissions validated for role: %s", self.role
+            )
         else:
-            logger.error("✗ Cluster-scoped permission validation failed for role: %s", self.role)
+            logger.error(
+                "✗ Cluster-scoped permission validation failed for role: %s", self.role
+            )
 
         return all_valid, errors
 
@@ -610,7 +642,9 @@ class RBACValidator:
         errors = []
         all_valid = True
 
-        logger.info("Validating namespace-scoped RBAC permissions for role: %s", self.role)
+        logger.info(
+            "Validating namespace-scoped RBAC permissions for role: %s", self.role
+        )
 
         # Get permissions based on role
         namespace_permissions = self._get_hub_namespace_permissions()
@@ -631,7 +665,9 @@ class RBACValidator:
 
             # Check if namespace exists first
             if not self._namespace_exists_cached(namespace):
-                warning = f"Namespace {namespace} does not exist - skipping permission checks"
+                warning = (
+                    f"Namespace {namespace} does not exist - skipping permission checks"
+                )
                 logger.warning(warning)
                 errors.append(warning)
                 all_valid = False
@@ -641,11 +677,16 @@ class RBACValidator:
 
             for api_group, resource, verbs in permissions:
                 for verb in verbs:
-                    has_perm, error = self.check_permission(api_group, resource, verb, namespace)
+                    has_perm, error = self.check_permission(
+                        api_group, resource, verb, namespace
+                    )
                     if not has_perm:
                         all_valid = False
                         group_name = api_group if api_group else "core"
-                        error_msg = f"Missing permission in {namespace}: " f"{verb} {group_name}/{resource}"
+                        error_msg = (
+                            f"Missing permission in {namespace}: "
+                            f"{verb} {group_name}/{resource}"
+                        )
                         if error:
                             error_msg += f" - {error}"
                         errors.append(error_msg)
@@ -672,7 +713,9 @@ class RBACValidator:
         errors = []
         all_valid = True
 
-        logger.info("Validating managed cluster RBAC permissions for role: %s", self.role)
+        logger.info(
+            "Validating managed cluster RBAC permissions for role: %s", self.role
+        )
 
         # Get managed cluster permissions based on role
         namespace_permissions = self._get_managed_cluster_namespace_permissions()
@@ -690,7 +733,9 @@ class RBACValidator:
 
             for api_group, resource, verbs in permissions:
                 for verb in verbs:
-                    has_perm, error = self.check_permission(api_group, resource, verb, namespace)
+                    has_perm, error = self.check_permission(
+                        api_group, resource, verb, namespace
+                    )
                     if not has_perm:
                         all_valid = False
                         group_name = api_group if api_group else "core"
@@ -756,7 +801,9 @@ class RBACValidator:
                 all_errors["cluster"] = cluster_errors
 
             # Validate namespace permissions
-            namespace_valid, namespace_errors = self.validate_namespace_permissions(skip_observability)
+            namespace_valid, namespace_errors = self.validate_namespace_permissions(
+                skip_observability
+            )
             if namespace_errors:
                 all_errors["namespaces"] = namespace_errors
 
@@ -780,7 +827,9 @@ class RBACValidator:
     ) -> Tuple[bool, Dict[str, List[str]]]:
         """Validate only the permissions exercised by standalone decommission."""
         if self.role != "operator":
-            raise ValueError("Decommission permissions are only applicable to the operator role.")
+            raise ValueError(
+                "Decommission permissions are only applicable to the operator role."
+            )
 
         cache_key = (RBAC_CACHE_KEY_DECOMMISSION_PERMISSIONS, skip_observability)
 
@@ -790,10 +839,15 @@ class RBACValidator:
             cluster_errors: List[str] = []
             namespace_errors: List[str] = []
 
-            logger.info("Validating standalone decommission RBAC permissions for role: %s", self.role)
+            logger.info(
+                "Validating standalone decommission RBAC permissions for role: %s",
+                self.role,
+            )
 
             check_observability = not skip_observability
-            if check_observability and not self._namespace_exists_cached(OBSERVABILITY_NAMESPACE):
+            if check_observability and not self._namespace_exists_cached(
+                OBSERVABILITY_NAMESPACE
+            ):
                 logger.info(
                     "Namespace %s does not exist - skipping observability decommission permission checks",
                     OBSERVABILITY_NAMESPACE,
@@ -802,11 +856,15 @@ class RBACValidator:
 
             for api_group, resource, verbs in self.DECOMMISSION_CLUSTER_PERMISSIONS:
                 if not check_observability and "observability" in api_group:
-                    logger.info("Skipping observability permission: %s/%s", api_group, resource)
+                    logger.info(
+                        "Skipping observability permission: %s/%s", api_group, resource
+                    )
                     continue
 
                 for verb in verbs:
-                    has_perm, error = self.check_permission(api_group, resource, verb, None)
+                    has_perm, error = self.check_permission(
+                        api_group, resource, verb, None
+                    )
                     if not has_perm:
                         all_valid = False
                         group_name = api_group if api_group else "core"
@@ -819,7 +877,10 @@ class RBACValidator:
             if cluster_errors:
                 all_errors["cluster"] = cluster_errors
 
-            for namespace, permissions in self.DECOMMISSION_NAMESPACE_PERMISSIONS.items():
+            for (
+                namespace,
+                permissions,
+            ) in self.DECOMMISSION_NAMESPACE_PERMISSIONS.items():
                 if namespace == OBSERVABILITY_NAMESPACE and not check_observability:
                     continue
 
@@ -839,17 +900,19 @@ class RBACValidator:
                     all_valid = False
                     continue
 
-                logger.info("Checking decommission permissions in namespace: %s", namespace)
+                logger.info(
+                    "Checking decommission permissions in namespace: %s", namespace
+                )
 
                 for api_group, resource, verbs in permissions:
                     for verb in verbs:
-                        has_perm, error = self.check_permission(api_group, resource, verb, namespace)
+                        has_perm, error = self.check_permission(
+                            api_group, resource, verb, namespace
+                        )
                         if not has_perm:
                             all_valid = False
                             group_name = api_group if api_group else "core"
-                            error_msg = (
-                                f"Missing decommission permission in {namespace}: {verb} {group_name}/{resource}"
-                            )
+                            error_msg = f"Missing decommission permission in {namespace}: {verb} {group_name}/{resource}"
                             if error:
                                 error_msg += f" - {error}"
                             namespace_errors.append(error_msg)
@@ -859,9 +922,13 @@ class RBACValidator:
                 all_errors["namespaces"] = namespace_errors
 
             if all_valid:
-                logger.info("✓ Standalone decommission RBAC permissions validated successfully")
+                logger.info(
+                    "✓ Standalone decommission RBAC permissions validated successfully"
+                )
             else:
-                logger.error("✗ Standalone decommission RBAC permission validation failed")
+                logger.error(
+                    "✗ Standalone decommission RBAC permission validation failed"
+                )
                 logger.error("Error summary:")
                 for category, error_list in all_errors.items():
                     logger.error("  %s: %d errors", category, len(error_list))
@@ -908,7 +975,9 @@ class RBACValidator:
         if all_valid:
             report.append("✓ STATUS: ALL PERMISSIONS VALIDATED")
             report.append("")
-            report.append("The current user/service account has all required permissions")
+            report.append(
+                "The current user/service account has all required permissions"
+            )
             report.append("to execute ACM switchover operations.")
         else:
             report.append("✗ STATUS: PERMISSION VALIDATION FAILED")
@@ -927,16 +996,26 @@ class RBACValidator:
             report.append("To fix these issues:")
             report.append("  1. Apply the baseline RBAC manifests under deploy/rbac/")
             if include_decommission:
-                report.append("  2. Apply the opt-in decommission extension under deploy/rbac/extensions/decommission/")
+                report.append(
+                    "  2. Apply the opt-in decommission extension under deploy/rbac/extensions/decommission/"
+                )
                 report.append(
                     "  3. Or use Helm with --set rbac.includeDecommissionClusterRole=true for operator teardown access"
                 )
-                report.append("  4. Or use Kustomize for the baseline and add the decommission manifests separately")
+                report.append(
+                    "  4. Or use Kustomize for the baseline and add the decommission manifests separately"
+                )
             else:
-                report.append("  2. Use Kustomize: kubectl apply -k deploy/kustomize/base/")
-                report.append("  3. Use Helm: helm install acm-switchover-rbac deploy/helm/acm-switchover-rbac/")
+                report.append(
+                    "  2. Use Kustomize: kubectl apply -k deploy/kustomize/base/"
+                )
+                report.append(
+                    "  3. Use Helm: helm install acm-switchover-rbac deploy/helm/acm-switchover-rbac/"
+                )
             report.append("")
-            report.append("For more information, see docs/deployment/rbac-requirements.md")
+            report.append(
+                "For more information, see docs/deployment/rbac-requirements.md"
+            )
 
         report.append("=" * 80)
         return "\n".join(report)
@@ -970,7 +1049,9 @@ def _validate_hub(
             argocd_install_type=argocd_install_type,
         )
     except ValidationError as exc:
-        raise ValidationError(f"RBAC permission validation could not be completed on {hub_role} hub: {exc}") from exc
+        raise ValidationError(
+            f"RBAC permission validation could not be completed on {hub_role} hub: {exc}"
+        ) from exc
 
     if valid:
         return
@@ -989,7 +1070,9 @@ def _validate_hub(
             f"RBAC permission validation failed on {hub_role} hub ({error_count} error(s)). "
             "See report above for details."
         )
-    raise ValidationError(f"RBAC permission validation failed on {hub_role} hub. See report above for details.")
+    raise ValidationError(
+        f"RBAC permission validation failed on {hub_role} hub. See report above for details."
+    )
 
 
 def validate_rbac_permissions(
@@ -1026,7 +1109,9 @@ def validate_rbac_permissions(
         ValueError: If both clients are None or include_decommission used without primary
     """
     if primary_client is None and secondary_client is None:
-        raise ValueError("At least one of primary_client or secondary_client must be provided")
+        raise ValueError(
+            "At least one of primary_client or secondary_client must be provided"
+        )
     if include_decommission and primary_client is None:
         raise ValueError("include_decommission requires primary_client")
 
@@ -1069,6 +1154,7 @@ def validate_rbac_permissions(
             continue
         if hub_role == HUB_ROLE_SECONDARY and client is None:
             continue
+        assert client is not None  # narrowed after the None skips above
         _validate_hub(
             hub_role,
             client,
@@ -1096,7 +1182,9 @@ def validate_decommission_permissions(
             skip_observability=skip_observability,
         )
     except ValidationError as exc:
-        raise ValidationError(f"Decommission RBAC validation could not be completed on primary hub: {exc}") from exc
+        raise ValidationError(
+            f"Decommission RBAC validation could not be completed on primary hub: {exc}"
+        ) from exc
 
     if not all_valid:
         report = ["=" * 80]
@@ -1114,11 +1202,15 @@ def validate_decommission_permissions(
             report.append("")
         report.append("REMEDIATION:")
         report.append("")
-        report.append("  1. Apply the opt-in decommission extension under deploy/rbac/extensions/decommission/")
+        report.append(
+            "  1. Apply the opt-in decommission extension under deploy/rbac/extensions/decommission/"
+        )
         report.append(
             "  2. Or use Helm with --set rbac.includeDecommissionClusterRole=true for operator teardown access"
         )
-        report.append("  3. Or use Kustomize for the baseline and add the decommission manifests separately")
+        report.append(
+            "  3. Or use Kustomize for the baseline and add the decommission manifests separately"
+        )
         report.append("")
         report.append("For more information, see docs/deployment/rbac-requirements.md")
         report.append("=" * 80)
