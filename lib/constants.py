@@ -422,9 +422,10 @@ OPERATOR_IDENTITY_UNAVAILABLE_REASONS = (
 )
 
 # R4-03 OLM ClusterServiceVersion API coordinates for operator-identity capture
-# (plan §11C.2, task E2). Python-only: the Ansible collection classifier (E5)
-# does not read the CSV/Deployment API directly, so these are not mirrored in
-# CONSTANT_PAIRS or the collection module_utils/constants.py.
+# (plan §11C.2, task E2). Python-only for now: there is no collection consumer
+# of the CSV/Deployment API until E5's approved `capture_identity` decomposition
+# lands, so these are not yet mirrored in CONSTANT_PAIRS or the collection
+# module_utils/constants.py.
 CSV_API_GROUP = "operators.coreos.com"
 CSV_API_VERSION = "v1alpha1"
 CSV_PLURAL = "clusterserviceversions"

@@ -93,7 +93,11 @@ def _deployment_owner_ref(*, name=RECORDED_DEPLOYMENT_NAME, uid=RECORDED_DEPLOYM
 
 
 def _pod(name, *, namespace=ACM_NS, owner_references):
-    return {"name": name, "namespace": namespace, "owner_references": list(owner_references)}
+    # `owner_references=None` renders a real bare-Pod `to_dict()` shape (the API
+    # omits the field entirely rather than returning `[]`); anything else is
+    # copied into a fresh list so vectors never alias a shared mutable default.
+    rendered_owner_references = None if owner_references is None else list(owner_references)
+    return {"name": name, "namespace": namespace, "owner_references": rendered_owner_references}
 
 
 def _rs_items(uid, owner_references):
@@ -172,6 +176,17 @@ OWNER_CHAIN_VECTORS = (
         identity="captured",
         pods=[_pod("multiclusterhub-operator-bare", owner_references=[])],
         passes=[_pass(_recorded_ok(), None, {"multiclusterhub-operator-bare": _DRAIN_BLOCKING})],
+    ),
+    _vector(
+        # A real `to_dict()` bare Pod carries `owner_references: None` (the field
+        # is omitted server-side), not `[]`. This is a distinct wire shape from
+        # row02's empty list and must classify the same way: DRAIN_BLOCKING,
+        # verified pass (status None), no client reads.
+        "row02_bare_prefixed_pod_null_owner_references",
+        2,
+        identity="captured",
+        pods=[_pod("multiclusterhub-operator-bare-null", owner_references=None)],
+        passes=[_pass(_recorded_ok(), None, {"multiclusterhub-operator-bare-null": _DRAIN_BLOCKING})],
     ),
     _vector(
         "row03_job_controller_blocking",
@@ -762,6 +777,12 @@ IDENTITY_CAPTURE_VECTORS = (
         "capture_csv_get_error",
         csv_list=_csv_list_items(_csv()),
         csv_get=_csv_get_error(),
+        expected=_outcome_fatal(),
+    ),
+    _capture_vector(
+        "capture_csv_get_empty_uid",
+        csv_list=_csv_list_items(_csv()),
+        csv_get=_csv_get_items(_csv(uid="")),
         expected=_outcome_fatal(),
     ),
     _capture_vector(
@@ -1656,9 +1677,10 @@ def test_recorded_deployment_reread_happens_even_with_zero_pods():
 
 
 def test_invalid_recorded_deployment_name_is_inconsistent_without_any_read():
-    """Covers `classify_pods`'s `if _is_valid_name(recorded_name):` guard (modules/decommission_
-    identity.py): an invalid recorded Deployment name must short-circuit to IDENTITY_INCONSISTENT
-    with ZERO client calls, before ever reading anything -- not merely fail to match afterwards.
+    """Covers `classify_pods`'s pre-read guard (modules/decommission_identity.py; now
+    `if _is_valid_name(recorded_name) and recorded_namespace == ACM_NAMESPACE:`): an invalid
+    recorded Deployment name must short-circuit to IDENTITY_INCONSISTENT with ZERO client calls,
+    before ever reading anything -- not merely fail to match afterwards.
 
     The fake is deliberately primed to answer a `get_deployment_strict("Bad Name!", ...)` call
     with a fully verified `items` outcome, and the Pod's chain is built to resolve all the way to
@@ -1694,6 +1716,54 @@ def test_invalid_recorded_deployment_name_is_inconsistent_without_any_read():
     assert result.operator_deployment_resource_version is None
     assert all(d.decision == _DRAIN_BLOCKING for d in result.decisions)
     assert client.calls == []
+
+
+def _assert_recorded_namespace_short_circuits(recorded_namespace):
+    """Shared body for the two recorded-namespace-guard tests below: a corrupted durable record
+    naming a namespace other than `ACM_NAMESPACE` (whether or not it is itself a valid DNS-1123
+    name) must short-circuit to IDENTITY_INCONSISTENT with ZERO client calls -- and must never let
+    `ValidationError` escape `classify_pods`, which is exactly what happens if the mismatched value
+    is ever handed to a real `KubeClient.get_deployment_strict` call."""
+    identity = OperatorIdentity(operator_deployment=_valid_operator_deployment(namespace=recorded_namespace))
+    pods = [
+        _pod(
+            "multiclusterhub-operator-badrecordedns",
+            namespace=recorded_namespace,
+            owner_references=[_owner_ref(name="rs-badrecordedns", uid="uid-rs-badrecordedns")],
+        )
+    ]
+    replicasets = {
+        "rs-badrecordedns": _rs_items("uid-rs-badrecordedns", [_deployment_owner_ref(uid=RECORDED_DEPLOYMENT_UID)])
+    }
+    client = _FakeClassifierClient(
+        recorded_deployment_reads=[{"read": "items", "uid": RECORDED_DEPLOYMENT_UID}],
+        replicasets=replicasets,
+        vector_id="bad-recorded-namespace",
+    )
+
+    try:
+        result = classify_pods(client, _render_pods(pods), identity)
+    except ValidationError:
+        pytest.fail("ValidationError escaped classify_pods for a recorded namespace != ACM_NAMESPACE")
+
+    assert result.identity_status == _IDENTITY_INCONSISTENT
+    assert result.operator_deployment_resource_version is None
+    assert all(d.decision == _DRAIN_BLOCKING for d in result.decisions)
+    assert client.calls == []
+
+
+def test_invalid_recorded_deployment_namespace_is_inconsistent_without_any_read():
+    """Recorded namespace that is itself not a valid DNS-1123 name (e.g. a corrupted durable
+    record) -- covers `classify_pods`'s namespace guard the same way the invalid-name test covers
+    the name guard."""
+    _assert_recorded_namespace_short_circuits("Bad Namespace!")
+
+
+def test_recorded_deployment_namespace_other_than_acm_namespace_is_inconsistent_without_any_read():
+    """Recorded namespace that is a syntactically valid DNS-1123 name but not `ACM_NAMESPACE` --
+    §10.2.2 says the recorded namespace is always "the exact ACM namespace", so any other value,
+    valid-looking or not, means a corrupted record and must short-circuit the same way."""
+    _assert_recorded_namespace_short_circuits("other-namespace")
 
 
 def test_inconsistent_pass_performs_zero_replicaset_reads():
@@ -1871,10 +1941,23 @@ def test_identity_module_owns_only_read_side_identity():
     stays a pure read-side identity/classification module -- no state/RunRecord
     persistence, no mutation calls, no orchestration imports. The kill-condition
     proof recorded in the task report demonstrates this guard actually detects a
-    violation, not merely that it passes today."""
+    violation, not merely that it passes today.
+
+    The client-surface rule below checks the *contract*, not a naming convention: every
+    `ast.Attribute` whose name is a public `KubeClient` member (`dir(KubeClient)`, no
+    leading underscore) must be one of the four allowed strict reads. A `_strict`-suffix
+    check alone would miss `client.list_pods(...)`, `client.get_namespace(...)`, or
+    `client.wait_for_pods_ready(...)` -- real `KubeClient` methods with no `_strict`
+    suffix that this module must never call (Pod-list orchestration, namespace reads,
+    and wait orchestration all belong to task E4).
+    """
+    from lib.kube_client import KubeClient
+
     source = _IDENTITY_MODULE_PATH.read_text()
     tree = ast.parse(source, filename=str(_IDENTITY_MODULE_PATH))
+    kube_client_public_members = frozenset(name for name in dir(KubeClient) if not name.startswith("_"))
     violations = []
+    touched_kube_client_members: set = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -1900,12 +1983,20 @@ def test_identity_module_owns_only_read_side_identity():
                     violations.append(f"line {node.lineno}: forbidden import {qualified!r}")
         elif isinstance(node, ast.Attribute):
             attr = node.attr
-            if attr.endswith("_strict") and attr not in _GUARD_ALLOWED_STRICT_METHODS:
-                violations.append(f"line {node.lineno}: forbidden strict-read method {attr!r}")
+            if attr in kube_client_public_members:
+                touched_kube_client_members.add(attr)
+                if attr not in _GUARD_ALLOWED_STRICT_METHODS:
+                    violations.append(f"line {node.lineno}: forbidden KubeClient member {attr!r}")
             if attr in _GUARD_FORBIDDEN_ATTRIBUTE_NAMES:
                 violations.append(f"line {node.lineno}: forbidden attribute {attr!r}")
             if any(attr.startswith(prefix) for prefix in _GUARD_FORBIDDEN_ATTRIBUTE_PREFIXES):
                 violations.append(f"line {node.lineno}: forbidden attribute prefix {attr!r}")
     assert not violations, "Ownership-boundary violations in modules/decommission_identity.py:\n  " + "\n  ".join(
         violations
+    )
+    # Pin the measured client surface: today it must be exactly the four allowed strict reads --
+    # no more, no fewer. A future addition or removal must show up here as a deliberate change.
+    assert touched_kube_client_members == _GUARD_ALLOWED_STRICT_METHODS, (
+        "modules/decommission_identity.py touches an unexpected KubeClient public-member set: "
+        f"{sorted(touched_kube_client_members)} (expected {sorted(_GUARD_ALLOWED_STRICT_METHODS)})"
     )

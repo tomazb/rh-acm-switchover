@@ -124,7 +124,7 @@ def classify_pods(client: Any, pods: Sequence[Mapping[str, Any]], identity: Oper
     recorded_uid = recorded["uid"]
 
     verified_resource_version: Optional[str] = None
-    if _is_valid_name(recorded_name):
+    if _is_valid_name(recorded_name) and recorded_namespace == ACM_NAMESPACE:
         outcome = client.get_deployment_strict(name=recorded_name, namespace=recorded_namespace)
         if outcome.status is StrictReadStatus.ITEMS:
             resource_metadata = outcome.resource.get("metadata") if isinstance(outcome.resource, dict) else None
