@@ -420,3 +420,12 @@ OPERATOR_IDENTITY_UNAVAILABLE_REASONS = (
     "deployment_read_failed",
     "deployment_identity_incomplete",
 )
+
+# R4-03 MCH owner-chain classification (plan §11C.1). Reason codes for how a Pod in
+# the MultiClusterHub operator's namespace relates to the recorded operator Deployment.
+# ACM_OPERATOR_POD_PREFIX (above) is a supplementary diagnostic only, never proof of
+# ownership; the owner-chain walk is authoritative.
+POD_CLASSIFICATION_OPERATOR_OWNED = "operator_owned"
+POD_CLASSIFICATION_DRAIN_BLOCKING = "drain_blocking"
+POD_CLASSIFICATION_IDENTITY_UNAVAILABLE = "operator_identity_unavailable"
+POD_CLASSIFICATION_IDENTITY_INCONSISTENT = "operator_identity_inconsistent"

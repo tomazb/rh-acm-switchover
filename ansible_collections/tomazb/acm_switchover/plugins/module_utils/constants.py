@@ -159,6 +159,15 @@ OPERATOR_IDENTITY_UNAVAILABLE_REASONS = (
     "deployment_identity_incomplete",
 )
 
+# R4-03 MCH owner-chain classification (plan §11C.1). Mirrors lib/constants.py; the
+# root parity test holds every one of these equal to its Python owner. The prefix
+# below is a supplementary diagnostic only, never an ownership proof.
+ACM_OPERATOR_POD_PREFIX = "multiclusterhub-operator"
+POD_CLASSIFICATION_OPERATOR_OWNED = "operator_owned"
+POD_CLASSIFICATION_DRAIN_BLOCKING = "drain_blocking"
+POD_CLASSIFICATION_IDENTITY_UNAVAILABLE = "operator_identity_unavailable"
+POD_CLASSIFICATION_IDENTITY_INCONSISTENT = "operator_identity_inconsistent"
+
 # How one decommission substep ended in this invocation. Mirrors the FIVE values
 # of lib/decommission_outcome.SubstepOutcome; the root parity test
 # tests/test_constants_parity.py compares the enum values against this tuple.
