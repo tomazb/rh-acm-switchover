@@ -106,10 +106,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `AGENTS.md` now separates model/capability selection from reasoning-effort selection,
-  permits lower-cost/faster delegation only under bounded, verifiable contracts, preserves
-  stricter slice-specific floors, and treats mandatory-but-unverifiable model/capability/
-  effort requirements as unmet (#306).
 - `AGENTS.md` now binds verification claims to the condition actually established on the
   exercised test surface, distinguishing unapplied, surviving, detected, and
   unrelated-failure mutation outcomes; requires a static guard to protect its semantic
@@ -531,6 +527,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Retried phase failures now record a fresh wrapper error when no new same-attempt phase error was added
 - `FinishedWithErrors` restore phase now treated as success when all messages indicate managed clusters are "already available" (expected for consecutive switchovers)
 - Bandit now uses a repo-level `.bandit` config in CI/local tooling, avoiding `.venv` scan noise and malformed `# nosec` warning output
+
+## [1.6.1] - 2026-04-05
+
+### Fixed
+
+- Dry-run no longer marks `reset_auto_import_strategy` step as completed, preventing broken resume
+- Secondary MCO preflight check no longer uses incorrect namespace flag for cluster-scoped resource
+- ArgoCD CRD probe distinguishes indeterminate errors (403/timeout) from "not found", returning `unknown` install type
+- `argocd-manage.sh` CRD probe uses `run_json_query` to properly handle auth/network errors
+- Backup integrity verification uses `_list_acm_owned_velero_backups()` helper for consistent error handling
 
 ### Changed
 
@@ -1630,7 +1636,6 @@ python3 --version  # Should show 3.9+
 sudo apt install python3.9 python3.9-venv
 python3.9 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
 ```
 
 #### Option 2: Use Container Image
