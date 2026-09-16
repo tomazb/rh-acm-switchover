@@ -970,7 +970,7 @@ list the open `Phase 9` issues rather than trusting any status sentence written 
   source and tests before reporting it as a finding.
 - **External reviews are hypotheses until verified.** The operator-supplied Thermos Ansible
   review and any external or AI reviewer produce candidate findings; validate each against
-  source, tests, and documentation before treating them as a repository defect. Track Thermos
+  source, tests, and documentation before treating it as a repository defect. Track Thermos
   follow-up state in [`thermos-resolution-plan.md`](thermos-resolution-plan.md), one branch
   and one tracker row per PR, each based on the latest merged `ansible` unless the tracker
   records a stacked dependency.
