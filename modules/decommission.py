@@ -7,7 +7,7 @@ Decommission module for old primary hub.
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, Optional
+from typing import Any, Callable, Mapping, NamedTuple, Optional, Sequence
 
 from kubernetes.client.exceptions import ApiException
 from urllib3.exceptions import HTTPError, MaxRetryError, NewConnectionError
@@ -15,7 +15,6 @@ from urllib3.exceptions import TimeoutError as Urllib3TimeoutError
 
 from lib.constants import (
     ACM_NAMESPACE,
-    ACM_OPERATOR_POD_PREFIX,
     DECOMMISSION_POD_INTERVAL,
     DECOMMISSION_POD_TIMEOUT,
     DELETE_REQUEST_TIMEOUT,
@@ -37,6 +36,7 @@ from lib.constants import (
     OBSERVABILITY_POD_LABEL_SELECTOR,
     OBSERVABILITY_TERMINATE_INTERVAL,
     OBSERVABILITY_TERMINATE_TIMEOUT,
+    POD_CLASSIFICATION_IDENTITY_INCONSISTENT,
 )
 from lib.decommission_outcome import (
     UNSUCCESSFUL_OUTCOMES,
@@ -52,16 +52,29 @@ from lib.kube_client import KubeClient
 from lib.run_record import RunRecord
 from lib.strict_read import StrictReadOutcome, StrictReadStatus
 from lib.teardown_record import (
+    IDENTITY_BEARING_KINDS,
     AbsenceProof,
     TeardownPhase,
     TeardownRecord,
+    split_resource_key,
     teardown_key,
+    teardown_kind,
 )
 from lib.utils import confirm_action
-from lib.validation import ValidationError
+from lib.validation import InputValidator, ValidationError
 from lib.waiter import WaitConditionResult, format_public_list, wait_for_condition
 
+from .decommission_identity import (
+    ClassificationPass,
+    OperatorIdentity,
+    capture_operator_identity,
+    classify_pods,
+)
+
 logger = logging.getLogger("acm_switchover")
+
+#: One pass over a strict Pod inventory against the recorded operator identity.
+DrainClassifier = Callable[[KubeClient, Sequence[Mapping[str, Any]], OperatorIdentity], ClassificationPass]
 
 
 @dataclass(frozen=True)
@@ -71,9 +84,19 @@ class TeardownSpec:
     PRs D and E supply their own specs to the same ``_teardown_resource``; that is
     what keeps one algorithm rather than three that drift.
 
-    ``drain_namespace`` / ``drain_label_selector`` are both ``None`` for families
-    with no drain scope (ManagedCluster). Drain-scoped families supply both as
-    non-empty strings. Mixed None/string pairs are rejected at construction.
+    Exactly three drain shapes are valid, and every other combination is rejected
+    at construction:
+
+    * no drain -- ``drain_namespace``, ``drain_label_selector`` and ``classifier``
+      all ``None`` (ManagedCluster);
+    * selector drain -- a namespace and a non-empty selector, no classifier (MCO);
+    * classified drain -- a namespace, no selector, and a pass-level ``classifier``
+      deciding which of ALL the namespace's Pods block. Only an identity-bearing
+      family (MultiClusterHub) may classify, because classification needs the
+      recorded operator identity.
+
+    A selector-drain spec that loses its selector therefore fails here rather than
+    silently widening into an all-Pod scan.
     """
 
     group: str
@@ -85,20 +108,32 @@ class TeardownSpec:
     name: str
     drain_namespace: Optional[str]
     drain_label_selector: Optional[str]
-    classifier: Optional[Callable[[dict], str]] = None
+    classifier: Optional[DrainClassifier] = None
     # None means "use the module OBSERVABILITY_TERMINATE_* constants at call time"
     # so existing MCO tests that monkeypatch those names keep working. ManagedCluster
-    # supplies explicit MANAGED_CLUSTER_DELETE_* values.
+    # and MultiClusterHub supply explicit values.
     cr_absent_timeout: Optional[int] = None
     cr_absent_interval: Optional[int] = None
+    drain_timeout: Optional[int] = None
+    drain_interval: Optional[int] = None
 
     def __post_init__(self) -> None:
         drain_ns = self.drain_namespace
         drain_sel = self.drain_label_selector
-        if (drain_ns is None) != (drain_sel is None):
-            raise ValueError("drain_namespace and drain_label_selector must both be set or both be None")
-        if drain_ns is not None and (not drain_ns.strip() or not (drain_sel or "").strip()):
-            raise ValueError("drain_namespace and drain_label_selector must be non-empty when drain is enabled")
+        if drain_ns is None:
+            if drain_sel is not None or self.classifier is not None:
+                raise ValueError(f"{self.kind} teardown has no drain namespace, so it takes no selector or classifier")
+            return
+        if not drain_ns.strip():
+            raise ValueError("drain_namespace must be non-empty when drain is enabled")
+        if self.classifier is None:
+            if drain_sel is None or not drain_sel.strip():
+                raise ValueError(f"{self.kind} teardown needs a non-empty drain_label_selector or a classifier")
+            return
+        if drain_sel is not None:
+            raise ValueError(f"{self.kind} teardown takes a drain_label_selector or a classifier, not both")
+        if self.kind not in IDENTITY_BEARING_KINDS:
+            raise ValueError(f"{self.kind} teardown carries no operator identity, so it cannot classify Pods")
 
     @property
     def api_version(self) -> str:
@@ -108,14 +143,15 @@ class TeardownSpec:
     def has_drain(self) -> bool:
         return self.drain_namespace is not None
 
-    def require_drain(self) -> tuple[str, str]:
+    def require_drain(self) -> tuple[str, Optional[str]]:
         """Return ``(drain_namespace, drain_label_selector)`` when drain is enabled.
 
-        Narrows the Optional construction fields for type checkers. Call only on
-        drain-scoped specs (or inside ``if spec.has_drain``); no-drain families
-        must not enter drain I/O.
+        Narrows the Optional namespace for type checkers. Call only on drain-scoped
+        specs (or inside ``if spec.has_drain``); no-drain families must not enter
+        drain I/O. A ``None`` selector is deliberate and means "all Pods": it exists
+        only on a classified drain, whose classifier decides what blocks.
         """
-        if self.drain_namespace is None or self.drain_label_selector is None:
+        if self.drain_namespace is None:
             raise ValueError(f"{self.kind} teardown has no drain scope")
         return self.drain_namespace, self.drain_label_selector
 
@@ -124,6 +160,60 @@ class TeardownSpec:
 
     def absence_wait_interval(self) -> int:
         return self.cr_absent_interval if self.cr_absent_interval is not None else OBSERVABILITY_TERMINATE_INTERVAL
+
+    def drain_wait_timeout(self) -> int:
+        return self.drain_timeout if self.drain_timeout is not None else OBSERVABILITY_TERMINATE_TIMEOUT
+
+    def drain_wait_interval(self) -> int:
+        return self.drain_interval if self.drain_interval is not None else OBSERVABILITY_TERMINATE_INTERVAL
+
+
+_MCH_GROUP = "operator.open-cluster-management.io"
+_MCH_VERSION = "v1"
+_MCH_PLURAL = "multiclusterhubs"
+_MCH_KIND = "MultiClusterHub"
+
+
+def _multiclusterhub_teardown_spec(name: str) -> TeardownSpec:
+    """The classified-drain TeardownSpec for one MultiClusterHub name.
+
+    Built per invocation, so the ``DECOMMISSION_POD_*`` bounds are read at call time.
+    The CR-absence wait and the drain wait each use them: the design names no
+    separate MCH CR-absence constant, so both sequential waits share this bound.
+    """
+    return TeardownSpec(
+        group=_MCH_GROUP,
+        version=_MCH_VERSION,
+        plural=_MCH_PLURAL,
+        resource_name=_MCH_PLURAL,
+        kind=_MCH_KIND,
+        namespace=ACM_NAMESPACE,
+        name=name,
+        drain_namespace=ACM_NAMESPACE,
+        drain_label_selector=None,
+        classifier=classify_pods,
+        cr_absent_timeout=DECOMMISSION_POD_TIMEOUT,
+        cr_absent_interval=DECOMMISSION_POD_INTERVAL,
+        drain_timeout=DECOMMISSION_POD_TIMEOUT,
+        drain_interval=DECOMMISSION_POD_INTERVAL,
+    )
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+_IDENTITY_INCONSISTENT_MESSAGE = (
+    "The recorded MultiClusterHub operator Deployment is absent, replaced, or unreadable; recovery is required"
+)
+
+
+class _DrainPass(NamedTuple):
+    """What one drain pass proved, before any caller decides what to write."""
+
+    blocking: int
+    identity_inconsistent: bool
+    operator_deployment_revision: Optional[str]
 
 
 OBSERVABILITY_TEARDOWN = TeardownSpec(
@@ -308,7 +398,7 @@ class Decommission:
         dispatch = {
             "observability": self.teardown_observability,
             "managed_clusters": self.teardown_managed_clusters,
-            "multiclusterhub": self._delete_multiclusterhub,
+            "multiclusterhub": self.teardown_multiclusterhub,
         }
         return dispatch[substep]()
 
@@ -342,27 +432,104 @@ class Decommission:
             return self._preview_managed_clusters()
 
         if substep == "multiclusterhub":
-            names = self._resource_names(
-                self.primary.list_custom_resources(
-                    group="operator.open-cluster-management.io",
-                    version="v1",
-                    plural="multiclusterhubs",
-                    namespace=ACM_NAMESPACE,
-                )
-            )
-            if names:
-                logger.info(
-                    "[DRY-RUN] Would delete MultiClusterHub: %s",
-                    format_public_list(names),
-                )
-            return bool(names)
+            # The live teardown's own resolver, then its own guarded-target checks. It
+            # predicts whether a DELETE is still owed, not whether the drain can finish,
+            # so Pods are not classified here.
+            name = self._resolve_multiclusterhub_target()
+            if name is None or not self._preview_target_would_change(_multiclusterhub_teardown_spec(name)):
+                return False
+            logger.info("[DRY-RUN] Would delete MultiClusterHub %s", name)
+            return True
 
         raise KeyError(substep)
 
+    def teardown_multiclusterhub(self) -> SubstepExecution:
+        """Tear down the MultiClusterHub through the shared phase machine.
+
+        Resolves the one target strictly, then hands it to ``_teardown_resource``,
+        which captures the operator identity for a new teardown before its first
+        durable write and reuses the recorded identity on every resume.
+        """
+        logger.info("Deleting MultiClusterHub resource...")
+        try:
+            name = self._resolve_multiclusterhub_target()
+        except ValidationError:
+            # A caller or programming defect, never an operational outcome.
+            raise
+        except SwitchoverError as exc:
+            logger.error("MultiClusterHub teardown failed: %s", exc)
+            return SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        if name is None:
+            logger.info("No MultiClusterHub: nothing to tear down")
+            return SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
+        logger.info(
+            "Tearing down or re-verifying MultiClusterHub %s; each wait is bounded by %ss",
+            name,
+            DECOMMISSION_POD_TIMEOUT,
+        )
+        return self._teardown_resource(_multiclusterhub_teardown_spec(name), record_gitops_markers=False)
+
+    def _resolve_multiclusterhub_target(self) -> Optional[str]:
+        """The one MultiClusterHub this teardown owns, or ``None`` when there is none.
+
+        Shared by the live teardown and the dry-run preview so the two cannot disagree.
+        A durable record binds the name for good: discovery never replaces it, and a
+        different live MultiClusterHub is left intact rather than adopted. Without a
+        record, strict discovery must find zero (a clean skip) or exactly one; more
+        than one is ambiguous and nothing is chosen by name.
+        """
+        mch_api_version = f"{_MCH_GROUP}/{_MCH_VERSION}"
+        recorded = []
+        for key in self.run_record.all_teardown_records():
+            parts = split_resource_key(key)
+            if parts is not None and parts[:3] == (mch_api_version, _MCH_KIND, ACM_NAMESPACE):
+                recorded.append(parts[3])
+        if len(recorded) > 1:
+            raise SwitchoverError("More than one MultiClusterHub teardown is recorded; refusing to choose one")
+        if recorded and not self._is_valid_multiclusterhub_name(recorded[0]):
+            raise SwitchoverError("The recorded MultiClusterHub name is invalid; refusing to resume its teardown")
+
+        inventory = self.primary.list_custom_resources_strict(
+            group=_MCH_GROUP,
+            version=_MCH_VERSION,
+            plural=_MCH_PLURAL,
+            namespace=ACM_NAMESPACE,
+        )
+        if inventory.status is StrictReadStatus.CRD_ABSENT:
+            live_names: list[str] = []
+        elif inventory.status is StrictReadStatus.ITEMS:
+            live_names = []
+            for item in inventory.items:
+                metadata = item.get("metadata") if isinstance(item, dict) else None
+                live_name = metadata.get("name") if isinstance(metadata, dict) else None
+                # A malformed member is a failed proof and never reaches a named read.
+                if not self._is_valid_multiclusterhub_name(live_name):
+                    raise SwitchoverError("Cannot verify MultiClusterHub inventory")
+                live_names.append(live_name)
+        else:
+            raise SwitchoverError("Cannot verify MultiClusterHub inventory")
+
+        if recorded:
+            if any(live_name != recorded[0] for live_name in live_names):
+                raise SwitchoverError(
+                    f"A MultiClusterHub other than the recorded {recorded[0]} exists; "
+                    "it was left intact and not adopted"
+                )
+            return recorded[0]
+        if len(live_names) > 1:
+            raise SwitchoverError("More than one MultiClusterHub exists; refusing to choose one")
+        return live_names[0] if live_names else None
+
     @staticmethod
-    def _resource_names(resources) -> list:
-        """Names of the listed resources, tolerating a None list answer."""
-        return [resource.get("metadata", {}).get("name") for resource in resources or []]
+    def _is_valid_multiclusterhub_name(name: Any) -> bool:
+        """Whether ``name`` may reach a named read without raising ``ValidationError``."""
+        if not isinstance(name, str):
+            return False
+        try:
+            InputValidator.validate_kubernetes_name(name, _MCH_KIND)
+        except ValidationError:
+            return False
+        return True
 
     def teardown_observability(self, *, record_gitops_markers: bool = False) -> SubstepExecution:
         """Tear down MultiClusterObservability through the shared phase machine.
@@ -510,6 +677,9 @@ class Decommission:
         """
         key = self._teardown_key(spec)
         record = self.run_record.teardown_record(key)
+        # A recorded operator identity is reused verbatim for the record's lifetime:
+        # never rediscovered, never upgraded, never rebound.
+        identity = self._recorded_identity(record)
         changed = False
 
         try:
@@ -529,7 +699,7 @@ class Decommission:
                     return noop
 
             if record is not None and record.phase is TeardownPhase.COMPLETED:
-                return self._reprove_completed(spec, cr, record)
+                return self._reprove_completed(spec, cr, record, identity)
 
             # July section 4, at the ruled position: after the clean-skip check and
             # after the completed dispatch (a completed record has no DELETE to
@@ -588,7 +758,18 @@ class Decommission:
                     logger.info("[DRY-RUN] Would delete %s %s", spec.kind, spec.name)
                     return SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
 
-                self._record(spec, key, expected_uid, TeardownPhase.DELETE_STARTED)
+                if record is None and spec.kind in IDENTITY_BEARING_KINDS:
+                    # Plan 11C.2: after the live UID is proved, so the identity is bound
+                    # to exactly this object, and before the first durable write, so it
+                    # is durable before the DELETE. A fatal capture read raises here,
+                    # with nothing written and nothing deleted.
+                    identity = capture_operator_identity(
+                        self.primary,
+                        mch_teardown_key=key,
+                        mch_expected_uid=expected_uid,
+                        captured_at=_utc_now(),
+                    )
+                self._record(spec, key, expected_uid, TeardownPhase.DELETE_STARTED, identity=identity)
                 try:
                     self.primary.delete_custom_resource_preconditioned(
                         spec.group,
@@ -662,10 +843,10 @@ class Decommission:
                 logger=logger,
             ):
                 raise SwitchoverError(f"Timeout waiting for {spec.kind} {spec.name} removal")
-            self._record(spec, key, expected_uid, TeardownPhase.CR_ABSENT)
+            self._record(spec, key, expected_uid, TeardownPhase.CR_ABSENT, identity=identity)
 
             if spec.has_drain:
-                self._record(spec, key, expected_uid, TeardownPhase.DRAIN_PENDING)
+                self._record(spec, key, expected_uid, TeardownPhase.DRAIN_PENDING, identity=identity)
                 drain_ns, drain_sel = spec.require_drain()
 
                 def pods_removed() -> WaitConditionResult:
@@ -673,25 +854,29 @@ class Decommission:
                     if namespace.status is StrictReadStatus.NAMESPACE_ABSENT:
                         return WaitConditionResult.complete("namespace absent")
                     if namespace.status is not StrictReadStatus.ITEMS:
-                        self._record(spec, key, expected_uid, TeardownPhase.RECOVERY_REQUIRED)
+                        self._record(spec, key, expected_uid, TeardownPhase.RECOVERY_REQUIRED, identity=identity)
                         raise SwitchoverError(f"The {drain_ns} namespace state is ambiguous")
                     pods = self.primary.list_pods_strict(drain_ns, label_selector=drain_sel)
                     if pods.status is not StrictReadStatus.ITEMS:
                         raise SwitchoverError(f"Cannot verify the {drain_ns} drain")
-                    if pods.items:
-                        return WaitConditionResult.pending(f"{len(pods.items)} pod(s) still running")
+                    drain = self._classify_drain(spec, pods, identity)
+                    if drain.identity_inconsistent:
+                        self._record(spec, key, expected_uid, TeardownPhase.RECOVERY_REQUIRED, identity=identity)
+                        raise SwitchoverError(_IDENTITY_INCONSISTENT_MESSAGE)
+                    if drain.blocking:
+                        return WaitConditionResult.pending(f"{drain.blocking} pod(s) still running")
                     return WaitConditionResult.complete("no pods remaining")
 
                 if not wait_for_condition(
                     f"{spec.kind} pod termination",
                     pods_removed,
-                    timeout=OBSERVABILITY_TERMINATE_TIMEOUT,
-                    interval=OBSERVABILITY_TERMINATE_INTERVAL,
+                    timeout=spec.drain_wait_timeout(),
+                    interval=spec.drain_wait_interval(),
                     allow_success_after_timeout=True,
                     logger=logger,
                 ):
                     raise SwitchoverError(f"Timeout: pods still running in {drain_ns}")
-                self._record(spec, key, expected_uid, TeardownPhase.DRAINED)
+                self._record(spec, key, expected_uid, TeardownPhase.DRAINED, identity=identity)
 
             # Final verification pass. Every field of the completion evidence comes
             # from THESE reads and nothing earlier: evidence copied from a pre-DELETE
@@ -730,25 +915,30 @@ class Decommission:
                     pods = self.primary.list_pods_strict(drain_ns, label_selector=drain_sel)
                     if pods.status is not StrictReadStatus.ITEMS:
                         raise SwitchoverError(f"Cannot verify the {drain_ns} drain")
-                    if pods.items:
-                        raise SwitchoverError(f"{len(pods.items)} pod(s) still running in {drain_ns}")
+                    drain = self._classify_drain(spec, pods, identity)
+                    if drain.identity_inconsistent:
+                        self._record(spec, key, expected_uid, TeardownPhase.RECOVERY_REQUIRED, identity=identity)
+                        raise SwitchoverError(_IDENTITY_INCONSISTENT_MESSAGE)
+                    if drain.blocking:
+                        raise SwitchoverError(f"{drain.blocking} pod(s) still running in {drain_ns}")
                     resource_versions["drain_namespace"] = namespace_read.resource_version
                     resource_versions["drain_pods"] = pods.resource_version
+                    if drain.operator_deployment_revision is not None:
+                        resource_versions["operator_deployment"] = drain.operator_deployment_revision
                 else:
-                    self._record(spec, key, expected_uid, TeardownPhase.RECOVERY_REQUIRED)
+                    self._record(spec, key, expected_uid, TeardownPhase.RECOVERY_REQUIRED, identity=identity)
                     raise SwitchoverError(f"The {drain_ns} namespace state is ambiguous")
 
-            if not self.dry_run:
-                self.run_record.record_teardown_phase(
-                    TeardownRecord(
-                        key=key,
-                        expected_uid=expected_uid,
-                        phase=TeardownPhase.COMPLETED,
-                        observed_at=datetime.now(timezone.utc).isoformat(),
-                        resource_versions=resource_versions,
-                        absence_proofs=absence_proofs,
-                    )
-                )
+            self._record(
+                spec,
+                key,
+                expected_uid,
+                TeardownPhase.COMPLETED,
+                identity=identity,
+                observed_at=_utc_now(),
+                resource_versions=resource_versions,
+                absence_proofs=absence_proofs,
+            )
 
             return SubstepExecution(SubstepOutcome.COMPLETED, changed=changed)
 
@@ -765,8 +955,14 @@ class Decommission:
             logger.error("%s teardown failed: %s", spec.kind, exc)
             return SubstepExecution(SubstepOutcome.FAILED, changed=changed)
 
-    def _reprove_completed(self, spec: TeardownSpec, cr, record: TeardownRecord) -> SubstepExecution:
-        """Revalidate a completed record without rewriting its immutable evidence."""
+    def _reprove_completed(
+        self, spec: TeardownSpec, cr, record: TeardownRecord, identity: Optional[OperatorIdentity]
+    ) -> SubstepExecution:
+        """Revalidate a completed record without rewriting its immutable evidence.
+
+        A failed reproof fails the run and writes nothing: ``completed`` is never
+        rewritten or moved back to ``recovery_required``.
+        """
         if cr.status is StrictReadStatus.ITEMS:
             if self._live_uid(spec, cr) != record.expected_uid:
                 raise SwitchoverError(f"{spec.kind} {spec.name} was replaced; it was left intact")
@@ -785,21 +981,54 @@ class Decommission:
         pods = self.primary.list_pods_strict(drain_ns, label_selector=drain_sel)
         if pods.status is not StrictReadStatus.ITEMS:
             raise SwitchoverError(f"Cannot verify the {drain_ns} drain")
-        if pods.items:
-            raise SwitchoverError(f"{len(pods.items)} pod(s) still running in {drain_ns}")
+        drain = self._classify_drain(spec, pods, identity)
+        if drain.identity_inconsistent:
+            raise SwitchoverError(_IDENTITY_INCONSISTENT_MESSAGE)
+        if drain.blocking:
+            raise SwitchoverError(f"{drain.blocking} pod(s) still running in {drain_ns}")
         return SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+
+    def _classify_drain(
+        self, spec: TeardownSpec, pods: StrictReadOutcome, identity: Optional[OperatorIdentity]
+    ) -> _DrainPass:
+        """One drain pass over a strict ``ITEMS`` Pod inventory. Writes nothing.
+
+        A selector drain counts every listed Pod. A classified drain runs the spec's
+        classifier against the recorded identity; callers must test
+        ``identity_inconsistent`` BEFORE ``blocking``, because zero Pods leave nothing
+        blocking even when the recorded operator Deployment is gone or replaced. A
+        captured identity whose pass surfaced no Deployment revision is inconsistent
+        too: there is no fresh proof that the recorded Deployment still exists.
+        """
+        if spec.classifier is None:
+            return _DrainPass(blocking=len(pods.items), identity_inconsistent=False, operator_deployment_revision=None)
+        if identity is None:
+            raise ValueError(f"{spec.kind} drain classification requires the recorded operator identity")
+        result = spec.classifier(self.primary, pods.items, identity)
+        revision = result.operator_deployment_resource_version
+        inconsistent = result.identity_status == POD_CLASSIFICATION_IDENTITY_INCONSISTENT or (
+            identity.available and revision is None
+        )
+        return _DrainPass(
+            blocking=len(result.blocking),
+            identity_inconsistent=inconsistent,
+            operator_deployment_revision=None if inconsistent else revision,
+        )
 
     def _precondition_noop(self, spec: TeardownSpec, cr) -> Optional[SubstepExecution]:
         """A clean skip, available only when there is no record at all.
 
-        For drain-scoped families, a CRD that is positively absent while the drain
+        For MultiClusterObservability, a CRD that is positively absent while the drain
         namespace is still present is NOT a clean skip: something is half-removed, and
         reporting a no-op would hide it. No-drain families skip on positive CR
-        absence alone — they have no namespace half-removed predicate.
+        absence alone — they have no namespace half-removed predicate. Neither does
+        MultiClusterHub: its drain namespace is the ACM namespace, which outlives the
+        hub by design, and with no record no teardown started, so there is no identity
+        or drain obligation to prove. That skip reads no namespace.
         """
         if cr.status is StrictReadStatus.ITEMS and cr.resource is not None:
             return None
-        if not spec.has_drain:
+        if not spec.has_drain or spec.kind == _MCH_KIND:
             if cr.status in (
                 StrictReadStatus.OBJECT_ABSENT,
                 StrictReadStatus.CRD_ABSENT,
@@ -826,11 +1055,55 @@ class Decommission:
             raise SwitchoverError(f"Cannot establish the identity of {spec.kind} {spec.name}")
         return uid
 
-    def _record(self, spec: TeardownSpec, key: str, expected_uid: str, phase: TeardownPhase) -> None:
-        """One durable phase write. Dry run never reaches here."""
+    def _record(
+        self,
+        spec: TeardownSpec,
+        key: str,
+        expected_uid: str,
+        phase: TeardownPhase,
+        *,
+        identity: Optional[OperatorIdentity],
+        observed_at: Optional[str] = None,
+        resource_versions: Optional[dict] = None,
+        absence_proofs: Optional[dict] = None,
+    ) -> None:
+        """The one durable teardown writer, for every phase including ``completed``.
+
+        ``identity`` is required and explicit. An identity-bearing record must carry
+        its captured outcome at every phase, and any other family must carry none; a
+        call site that gets this wrong is a bug, so it raises ``ValueError`` before a
+        ``TeardownRecord`` exists. Leaving it to the validator would surface
+        ``MalformedTeardownRecord``, a ``SwitchoverError``, as an ordinary FAILED.
+        Dry run never reaches a write.
+        """
+        if (identity is not None) != (teardown_kind(key) in IDENTITY_BEARING_KINDS):
+            raise ValueError(f"{spec.kind} teardown write carries the wrong operator identity shape")
         if self.dry_run:
             return
-        self.run_record.record_teardown_phase(TeardownRecord(key=key, expected_uid=expected_uid, phase=phase))
+        self.run_record.record_teardown_phase(
+            TeardownRecord(
+                key=key,
+                expected_uid=expected_uid,
+                phase=phase,
+                observed_at=observed_at,
+                resource_versions=resource_versions,
+                absence_proofs=absence_proofs,
+                operator_deployment=identity.operator_deployment if identity is not None else None,
+                operator_identity_unavailable=(
+                    identity.operator_identity_unavailable if identity is not None else None
+                ),
+            )
+        )
+
+    @staticmethod
+    def _recorded_identity(record: Optional[TeardownRecord]) -> Optional[OperatorIdentity]:
+        """The identity a durable record already carries, or ``None`` for a family with none."""
+        if record is None or (record.operator_deployment is None and record.operator_identity_unavailable is None):
+            return None
+        return OperatorIdentity(
+            operator_deployment=record.operator_deployment,
+            operator_identity_unavailable=record.operator_identity_unavailable,
+        )
 
     def _managed_cluster_teardown_spec(self, name: str) -> TeardownSpec:
         """No-drain TeardownSpec for one ManagedCluster name."""
@@ -913,9 +1186,15 @@ class Decommission:
             raise SwitchoverError(inventory_error)
         return live_names, work_set
 
-    def _preview_managed_cluster_target_would_change(self, name: str) -> bool:
-        """Read-only: would this ManagedCluster still require a DELETE?"""
-        spec = self._managed_cluster_teardown_spec(name)
+    def _preview_target_would_change(self, spec: TeardownSpec) -> bool:
+        """Read-only: would this named target still require a DELETE?
+
+        Shared by the ManagedCluster and MultiClusterHub previews. For a new
+        identity-bearing target it also runs the read-only identity capture, so a fatal
+        identity read fails the prediction exactly as it would fail the live run before
+        its DELETE. A determinate unavailable identity still predicts the DELETE.
+        Nothing is persisted.
+        """
         key = self._teardown_key(spec)
         record = self.run_record.teardown_record(key)
         cr = self.primary.get_custom_resource_strict(
@@ -926,22 +1205,29 @@ class Decommission:
             namespace=spec.namespace,
         )
         if cr.status is StrictReadStatus.ERROR:
-            raise SwitchoverError(f"Cannot verify ManagedCluster {name} for the dry-run preview")
+            raise SwitchoverError(f"Cannot verify {spec.kind} {spec.name} for the dry-run preview")
         if cr.status is StrictReadStatus.ITEMS:
             live_uid = self._live_uid(spec, cr)
             if record is not None and live_uid != record.expected_uid:
                 raise SwitchoverError(
-                    f"ManagedCluster {name} is not the object recorded for teardown; " "it was left intact"
+                    f"{spec.kind} {spec.name} is not the object recorded for teardown; " "it was left intact"
                 )
             if record is not None and record.phase is TeardownPhase.COMPLETED:
-                raise SwitchoverError(f"ManagedCluster {name} is still present after its completed teardown")
+                raise SwitchoverError(f"{spec.kind} {spec.name} is still present after its completed teardown")
+            if record is None and spec.kind in IDENTITY_BEARING_KINDS:
+                capture_operator_identity(
+                    self.primary,
+                    mch_teardown_key=key,
+                    mch_expected_uid=live_uid,
+                    captured_at=_utc_now(),
+                )
             return True
         if cr.status in (
             StrictReadStatus.OBJECT_ABSENT,
             StrictReadStatus.CRD_ABSENT,
         ):
             return False
-        raise SwitchoverError(f"Cannot verify ManagedCluster {name} for the dry-run preview")
+        raise SwitchoverError(f"Cannot verify {spec.kind} {spec.name} for the dry-run preview")
 
     def _preview_managed_clusters(self) -> bool:
         """Dry-run ManagedCluster prediction using the live pre-mutation safety path."""
@@ -950,7 +1236,9 @@ class Decommission:
             return False
         if live_names:
             self._verify_managed_cluster_delete_safety(live_names)
-        would_change_names = [name for name in work_set if self._preview_managed_cluster_target_would_change(name)]
+        would_change_names = [
+            name for name in work_set if self._preview_target_would_change(self._managed_cluster_teardown_spec(name))
+        ]
         if would_change_names:
             logger.info(
                 "[DRY-RUN] Would delete %s ManagedCluster(s): %s",
@@ -1145,99 +1433,3 @@ class Decommission:
             )
 
         return None, None
-
-    def _delete_multiclusterhub(self) -> SubstepExecution:
-        """Delete the MultiClusterHub resource.
-
-        Family method on the one execution-result channel: an expected
-        SwitchoverError-class failure -- a rejected delete -- becomes a FAILED
-        execution here, carrying whatever this invocation actually deleted. The
-        pod-removal wait only warns on timeout and does not fail the substep.
-        """
-        logger.info("Deleting MultiClusterHub resource...")
-        changed = False
-
-        try:
-            # Get MultiClusterHub
-            mchs = self.primary.list_custom_resources(
-                group="operator.open-cluster-management.io",
-                version="v1",
-                plural="multiclusterhubs",
-                namespace=ACM_NAMESPACE,
-            )
-
-            if not mchs:
-                # PR E makes this absence proof strict; today it is the existing
-                # non-strict list, taken at face value.
-                logger.info("No MultiClusterHub resources found (already deleted or never created)")
-                logger.info(
-                    "Note: ACM operator pods (%s-*) may still be running - "
-                    "this is expected as the operator is installed separately",
-                    ACM_OPERATOR_POD_PREFIX,
-                )
-                return SubstepExecution(SubstepOutcome.PRECONDITION_NOOP)
-
-            for mch in mchs:
-                mch_name = mch.get("metadata", {}).get("name")
-
-                logger.info("Deleting MultiClusterHub: %s", mch_name)
-                logger.info("This may take up to 20 minutes...")
-
-                try:
-                    self.primary.delete_custom_resource(
-                        group="operator.open-cluster-management.io",
-                        version="v1",
-                        plural="multiclusterhubs",
-                        name=mch_name,
-                        namespace=ACM_NAMESPACE,
-                        timeout_seconds=DELETE_REQUEST_TIMEOUT,
-                    )
-                except ApiException as exc:
-                    # Status and reason only, converted here so the deletes already
-                    # accepted in this invocation are still reported.
-                    raise SwitchoverError(
-                        f"Failed to delete MultiClusterHub {mch_name}: API error {exc.status} {exc.reason}"
-                    ) from exc
-                changed = True
-
-            def _acm_pods_removed():
-                """Check if ACM pods are removed (excluding operator pods which remain)."""
-                pods = self.primary.get_pods(namespace=ACM_NAMESPACE)
-                if not pods:
-                    return WaitConditionResult.complete("all ACM pods removed")
-                # Filter out operator pods - they remain after MCH deletion
-                non_operator_pods = [
-                    p for p in pods if not p.get("metadata", {}).get("name", "").startswith(ACM_OPERATOR_POD_PREFIX)
-                ]
-                if not non_operator_pods:
-                    operator_count = len(pods)
-                    return WaitConditionResult.complete(
-                        f"all ACM pods removed (except {operator_count} operator pod(s) which remain)"
-                    )
-                return WaitConditionResult.pending(f"{len(non_operator_pods)} non-operator pod(s) remaining")
-
-            success = wait_for_condition(
-                "ACM pod removal",
-                _acm_pods_removed,
-                timeout=DECOMMISSION_POD_TIMEOUT,
-                interval=DECOMMISSION_POD_INTERVAL,
-                logger=logger,
-            )
-
-            if not success:
-                logger.warning(
-                    "Some ACM pods still running after %ss",
-                    DECOMMISSION_POD_TIMEOUT,
-                )
-            else:
-                logger.info(
-                    "ACM components removed. Operator pods (%s-*) remain as expected.",
-                    ACM_OPERATOR_POD_PREFIX,
-                )
-
-            logger.info("Decommission complete. Backup data in object storage remains available for the new hub.")
-        except SwitchoverError as exc:
-            logger.error("MultiClusterHub teardown failed: %s", exc)
-            return SubstepExecution(SubstepOutcome.FAILED, changed=changed)
-
-        return SubstepExecution(SubstepOutcome.COMPLETED, changed=changed)

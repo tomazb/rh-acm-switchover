@@ -19,6 +19,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import modules.decommission as decommission_module
 from lib.constants import (
     ACM_NAMESPACE,
+    DECOMMISSION_POD_INTERVAL,
+    DECOMMISSION_POD_TIMEOUT,
     DELETE_REQUEST_TIMEOUT,
     GATE_REASON_ACK_NOT_APPLICABLE,
     GATE_REASON_DESTINATION_ABSENT,
@@ -27,6 +29,9 @@ from lib.constants import (
     GATE_REASON_SOURCE_UNVERIFIABLE,
     LOCAL_CLUSTER_NAME,
     OBSERVABILITY_NAMESPACE,
+    OBSERVABILITY_POD_LABEL_SELECTOR,
+    OBSERVABILITY_TERMINATE_INTERVAL,
+    OBSERVABILITY_TERMINATE_TIMEOUT,
 )
 from lib.decommission_outcome import (
     DecommissionResult,
@@ -35,7 +40,7 @@ from lib.decommission_outcome import (
     SubstepExecution,
     SubstepOutcome,
 )
-from lib.exceptions import SwitchoverError, TargetDisappeared
+from lib.exceptions import FatalError, SwitchoverError, TargetDisappeared
 from lib.kube_client import KubeClient
 from lib.run_record import HubFacts, RunRecord
 from lib.strict_read import StrictReadOutcome
@@ -46,7 +51,7 @@ from lib.teardown_record import (
     teardown_key,
 )
 from lib.utils import StateManager
-from lib.waiter import WaitConditionResult
+from modules.decommission_identity import OperatorIdentity, classify_pods
 
 Decommission = decommission_module.Decommission
 
@@ -139,11 +144,26 @@ def primary_with_all_resources(mock_primary_client):
     def _list_custom_resources(*args, **kwargs):
         if kwargs.get("plural") == "multiclusterobservabilities":
             return [{"metadata": {"name": "observability"}}]
-        if kwargs.get("plural") == "multiclusterhubs":
-            return [{"metadata": {"name": "multiclusterhub", "namespace": ACM_NAMESPACE}}]
         return []
 
+    def _list_custom_resources_strict(group, version, plural, namespace=None, label_selector=None):
+        if plural == "multiclusterhubs":
+            return _mch_inventory(MCH_NAME)
+        if plural == "clusterserviceversions":
+            return _strict("ITEMS", items=[_csv()], resource_version="csv-list-1")
+        return _strict("ITEMS", items=[], resource_version="1")
+
+    def _get_custom_resource_strict(group, version, plural, name, namespace=None):
+        if plural == "multiclusterhubs":
+            return _mch_present(name)
+        if plural == "clusterserviceversions":
+            return _strict("ITEMS", resource=_csv(), resource_version="csv-1")
+        return _strict("ITEMS", resource=_mco())
+
     mock_primary_client.list_custom_resources.side_effect = _list_custom_resources
+    mock_primary_client.list_custom_resources_strict = Mock(side_effect=_list_custom_resources_strict)
+    mock_primary_client.get_custom_resource_strict = Mock(side_effect=_get_custom_resource_strict)
+    mock_primary_client.get_deployment_strict = Mock(return_value=_deployment())
     mc_items = [
         {"metadata": {"name": "cluster1", "uid": "uid-c1"}},
         {"metadata": {"name": LOCAL_CLUSTER_NAME, "uid": "uid-local"}},
@@ -187,8 +207,9 @@ class TestDecommission:
         result = decommission_with_obs.decommission(interactive=False)
 
         assert result.succeeded is True
-        # Verify deletion calls
-        assert mock_primary_client.delete_custom_resource.called
+        # Every family deletes through the UID-guarded primitive; nothing uses the name-only delete.
+        assert mock_primary_client.delete_custom_resource_preconditioned.called
+        mock_primary_client.delete_custom_resource.assert_not_called()
 
     @patch("modules.decommission.wait_for_condition")
     def test_decommission_non_interactive_without_observability(
@@ -641,38 +662,12 @@ class TestDecommission:
         assert execution == SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
         client.delete_custom_resource_preconditioned.assert_not_called()
 
-    @patch("modules.decommission.wait_for_condition")
-    def test_delete_multiclusterhub(self, mock_wait, decommission_with_obs, mock_primary_client):
-        """Test deleting MultiClusterHub resource."""
-        mock_wait.return_value = True
-
-        mock_primary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "multiclusterhub", "namespace": ACM_NAMESPACE}}
-        ]
-
-        decommission_with_obs._delete_multiclusterhub()
-
-        mock_primary_client.delete_custom_resource.assert_called_once()
-
-    @patch("modules.decommission.wait_for_condition")
-    def test_delete_multiclusterhub_timeout(self, mock_wait, decommission_with_obs, mock_primary_client):
-        """Test when MultiClusterHub deletion times out."""
-        mock_wait.return_value = False  # Timeout
-
-        mock_primary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "multiclusterhub", "namespace": ACM_NAMESPACE}}
-        ]
-        mock_primary_client.delete_custom_resource.return_value = True
-
-        # Timeout is logged as warning but doesn't raise exception
-        decommission_with_obs._delete_multiclusterhub()
-
-        # Verify deletion was attempted
-        mock_primary_client.delete_custom_resource.assert_called_once()
-
     def test_decommission_unexpected_exception_propagates(self, decommission_with_obs, mock_primary_client):
-        """An unexpected exception is never laundered into a handled result."""
-        mock_primary_client.list_custom_resources.side_effect = Exception("API error")
+        """An unexpected exception is never laundered into a handled result.
+
+        Injected at the strict MultiClusterHub inventory read, the MCH family's first read.
+        """
+        mock_primary_client.list_custom_resources_strict.side_effect = Exception("API error")
 
         with pytest.raises(Exception, match="API error"):
             decommission_with_obs.decommission(interactive=False)
@@ -781,7 +776,7 @@ class TestDecommissionOutcomes:
 # producer can never be introduced without being covered by the interface guardrail below.
 # C adds "teardown_observability" and "_teardown_resource"; D adds "teardown_managed_clusters";
 # E adds "teardown_multiclusterhub".
-SUBSTEP_EXECUTORS = ("_run_substep", "teardown_managed_clusters")
+SUBSTEP_EXECUTORS = ("_run_substep", "teardown_managed_clusters", "teardown_multiclusterhub")
 
 
 @pytest.mark.unit
@@ -1032,7 +1027,7 @@ class TestActualChangeTruth:
             mco_read,
             call.get_namespace_strict(OBSERVABILITY_NAMESPACE),
             call.list_managed_clusters_strict(),
-            call.list_custom_resources(
+            call.list_custom_resources_strict(
                 group="operator.open-cluster-management.io",
                 version="v1",
                 plural="multiclusterhubs",
@@ -1242,46 +1237,25 @@ class TestDeleteApiErrorsReachTheResult:
         assert execution.outcome is SubstepOutcome.FAILED
         assert execution.changed is False
 
-    @patch("modules.decommission.wait_for_condition")
-    def test_multiclusterhub_delete_rejection_reports_the_earlier_delete(
-        self, mock_wait, decommission_with_obs, mock_primary_client, caplog
-    ):
-        """The first MultiClusterHub was deleted; the second is rejected.
+    def test_multiclusterhub_delete_rejection_reports_no_change_and_no_raw_body(self, state_manager, caplog):
+        """The guarded MultiClusterHub DELETE is rejected after identity was recorded.
 
-        The body assertion covers the message this module builds, not the shared
-        ``api_call`` decorator's logging -- the Mock client never reaches it.
+        Replaces the two-MultiClusterHub variant: more than one live MultiClusterHub now
+        fails closed before any mutation (see ``TestMultiClusterHubTargetResolution``), so
+        a "first deleted, second rejected" sequence is no longer reachable. The body
+        assertion covers the message this module builds, not the shared ``api_call``
+        decorator's logging -- the fake client never reaches it.
         """
-        mock_wait.return_value = True
-        mock_primary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "mch-one", "namespace": ACM_NAMESPACE}},
-            {"metadata": {"name": "mch-two", "namespace": ACM_NAMESPACE}},
-        ]
-        mock_primary_client.delete_custom_resource.side_effect = [
-            True,
-            self._api_error(403, "Forbidden"),
-        ]
+        hub = _AcmHub(delete=self._api_error(403, "Forbidden", body='{"message":"%s"}' % RESPONSE_CANARY))
+        dec = _mch_decommission(state_manager, hub)
 
         with caplog.at_level(logging.ERROR):
-            execution = decommission_with_obs._delete_multiclusterhub()
+            execution = dec.teardown_multiclusterhub()
 
-        assert execution.outcome is SubstepOutcome.FAILED
-        assert execution.changed is True
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert _phases(hub) == ["delete_started"]
         assert "403" in caplog.text and "Forbidden" in caplog.text
-        assert "raw body must never be shown" not in caplog.text
-
-    def test_multiclusterhub_delete_rejection_with_no_prior_delete_reports_no_change(
-        self, decommission_with_obs, mock_primary_client, caplog
-    ):
-        mock_primary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "mch-one", "namespace": ACM_NAMESPACE}}
-        ]
-        mock_primary_client.delete_custom_resource.side_effect = self._api_error(409, "Conflict")
-
-        with caplog.at_level(logging.ERROR):
-            execution = decommission_with_obs._delete_multiclusterhub()
-
-        assert execution.outcome is SubstepOutcome.FAILED
-        assert execution.changed is False
+        assert RESPONSE_CANARY not in caplog.text
 
     def test_a_rejected_delete_never_escapes_the_aggregator(self, decommission_with_obs, mock_primary_client):
         """The probed scenario: MCO destroyed, then a ManagedCluster DELETE is rejected.
@@ -1441,69 +1415,6 @@ class TestDryRunPrediction:
 class TestDecommissionIntegration:
     """Integration tests for Decommission workflows."""
 
-    def test_operator_pods_excluded_from_removal_check(self, mock_primary_client, state_manager):
-        """Test that operator pods are excluded from removal check.
-
-        When only operator pods remain (multiclusterhub-operator-*), the
-        decommission should consider ACM removed successfully.
-        """
-        decomm = Decommission(
-            primary_client=mock_primary_client,
-            has_observability=False,
-            run_record=RunRecord(state_manager),
-        )
-
-        # Set up MCH to exist so deletion is attempted
-        mch_listed = False
-
-        def list_side_effect(*args, **kwargs):
-            nonlocal mch_listed
-            if kwargs.get("plural") == "multiclusterhubs":
-                if not mch_listed:
-                    mch_listed = True
-                    return [
-                        {
-                            "metadata": {
-                                "name": "multiclusterhub",
-                                "namespace": ACM_NAMESPACE,
-                            }
-                        }
-                    ]
-                return []  # MCH deleted
-            return []
-
-        mock_primary_client.list_custom_resources.side_effect = list_side_effect
-        mock_primary_client.list_managed_clusters.return_value = []
-        mock_primary_client.delete_custom_resource.return_value = True
-
-        # Only operator pods remain after MCH deletion
-        mock_primary_client.get_pods.return_value = [
-            {"metadata": {"name": "multiclusterhub-operator-597d5cfb4f-v8dl7"}},
-            {"metadata": {"name": "multiclusterhub-operator-597d5cfb4f-wchrt"}},
-        ]
-
-        # The wait_for_condition will call the check function
-        # We need to capture the actual check logic
-        with patch("modules.decommission.wait_for_condition") as mock_wait:
-            # Simulate calling the condition function
-            def capture_condition_call(name, condition_fn, **kwargs):
-                if "pod removal" in name.lower():
-                    result = condition_fn()
-                    assert isinstance(result, WaitConditionResult)
-                    assert result.done is True, f"Expected success but got: {result.public_detail}"
-                    assert (
-                        "operator" in result.public_detail.lower()
-                    ), f"Expected operator mention in: {result.public_detail}"
-                return True
-
-            mock_wait.side_effect = capture_condition_call
-
-            decomm._delete_multiclusterhub()
-
-            # Verify wait_for_condition was called for pod removal
-            calls = [str(c) for c in mock_wait.call_args_list]
-            assert any("pod removal" in c.lower() for c in calls), f"Expected pod removal call in: {calls}"
-
     @patch("modules.decommission.wait_for_condition")
     def test_full_decommission_workflow(self, mock_wait, mock_primary_client, state_manager):
         """Test complete decommission workflow."""
@@ -1519,15 +1430,20 @@ class TestDecommissionIntegration:
         mock_primary_client.list_managed_clusters_strict.return_value = _strict(
             "ITEMS", items=[mc], resource_version="mc-1"
         )
-        mock_primary_client.list_custom_resources_strict.return_value = _strict(
-            "ITEMS", items=[], resource_version="cd-1"
-        )
-        mock_primary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "multiclusterhub", "namespace": ACM_NAMESPACE}}
-        ]
+
+        def strict_list(group, version, plural, namespace=None, label_selector=None):
+            if plural == "multiclusterhubs":
+                return _mch_inventory(MCH_NAME)
+            if plural == "clusterserviceversions":
+                return _strict("ITEMS", items=[_csv()], resource_version="csv-list-1")
+            return _strict("ITEMS", items=[], resource_version="cd-1")
+
+        mock_primary_client.list_custom_resources_strict = Mock(side_effect=strict_list)
+        mock_primary_client.get_deployment_strict = Mock(return_value=_deployment())
 
         mco = _mco()
         by_name = {"cluster1": mc}
+        mch_present = {"present": True}
 
         def named_get(group, version, plural, name, namespace=None):
             if plural == "multiclusterobservabilities":
@@ -1539,6 +1455,10 @@ class TestDecommissionIntegration:
             if plural == "managedclusters":
                 resource = by_name.get(name)
                 return _strict("ITEMS", resource=resource) if resource else _strict("OBJECT_ABSENT")
+            if plural == "multiclusterhubs":
+                return _mch_present() if mch_present["present"] else _strict("OBJECT_ABSENT")
+            if plural == "clusterserviceversions":
+                return _strict("ITEMS", resource=_csv(), resource_version="csv-1")
             return _strict("OBJECT_ABSENT")
 
         named_get.mco_calls = 0
@@ -1546,11 +1466,12 @@ class TestDecommissionIntegration:
         def delete_preconditioned(group, version, plural, name, uid=None, namespace=None, timeout_seconds=None):
             if plural == "managedclusters":
                 by_name.pop(name, None)
+            if plural == "multiclusterhubs":
+                mch_present["present"] = False
             return None
 
         mock_primary_client.get_custom_resource_strict = Mock(side_effect=named_get)
         mock_primary_client.delete_custom_resource_preconditioned = Mock(side_effect=delete_preconditioned)
-        mock_primary_client.delete_custom_resource.return_value = True
 
         result = decomm.decommission(interactive=False)
 
@@ -1581,16 +1502,22 @@ class TestDecommissionIntegration:
             )
             for c in mock_primary_client.delete_custom_resource_preconditioned.call_args_list
         )
-        assert mock_primary_client.delete_custom_resource.call_args_list == [
+        assert (
             call(
-                group="operator.open-cluster-management.io",
-                version="v1",
-                plural="multiclusterhubs",
-                name="multiclusterhub",
+                "operator.open-cluster-management.io",
+                "v1",
+                "multiclusterhubs",
+                "multiclusterhub",
+                uid=MCH_UID,
                 namespace=ACM_NAMESPACE,
                 timeout_seconds=DELETE_REQUEST_TIMEOUT,
-            ),
-        ]
+            )
+            in mock_primary_client.delete_custom_resource_preconditioned.call_args_list
+        )
+        mock_primary_client.delete_custom_resource.assert_not_called()
+        mch_record = RunRecord(state_manager).teardown_record(_mch_key())
+        assert mch_record.phase is TeardownPhase.COMPLETED
+        assert mch_record.operator_deployment["uid"] == OPERATOR_DEPLOYMENT_UID
 
 
 def _strict(status, items=None, resource=None, resource_version=None):
@@ -3539,3 +3466,1493 @@ class TestManagedClusterMalformedInventory:
         assert "spoke-a" in deleted or any(
             "spoke-a" in str(c) for c in client.delete_custom_resource_preconditioned.call_args_list
         )
+
+
+# --------------------------------------------------------------------------- E4: MultiClusterHub
+
+MCH_GROUP = "operator.open-cluster-management.io"
+MCH_API_VERSION = f"{MCH_GROUP}/v1"
+MCH_NAME = "multiclusterhub"
+MCH_UID = "uid-mch"
+CSV_GROUP = "operators.coreos.com"
+CSV_NAME = "advanced-cluster-management.v2.13.0"
+CSV_UID = "uid-csv"
+MCH_OWNED_CRD_NAME = "multiclusterhubs.operator.open-cluster-management.io"
+OPERATOR_DEPLOYMENT_NAME = "multiclusterhub-operator"
+OPERATOR_DEPLOYMENT_UID = "uid-operator-deployment"
+OPERATOR_RS_NAME = "multiclusterhub-operator-7d9f"
+OPERATOR_RS_UID = "uid-rs-7d9f"
+DISCOVERY_METHOD = "olm_csv_owned_mch_crd_install_deployment_v1"
+ACM_NAMESPACE_KEY = f"v1/Namespace//{ACM_NAMESPACE}"
+
+# The three reads identity capture performs, in order, as (verb, group, resource, namespace, name).
+CAPTURE_REQUESTS = (
+    ("LIST", CSV_GROUP, "clusterserviceversions", ACM_NAMESPACE, None),
+    ("GET", CSV_GROUP, "clusterserviceversions", ACM_NAMESPACE, CSV_NAME),
+    ("GET", "apps", "deployments", ACM_NAMESPACE, OPERATOR_DEPLOYMENT_NAME),
+)
+MCH_DELETE = ("DELETE", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE, MCH_NAME)
+
+
+def _mch_key(name=MCH_NAME):
+    return teardown_key(MCH_API_VERSION, "MultiClusterHub", ACM_NAMESPACE, name)
+
+
+def _mch(name=MCH_NAME, uid=MCH_UID):
+    return {
+        "apiVersion": MCH_API_VERSION,
+        "kind": "MultiClusterHub",
+        "metadata": {
+            "name": name,
+            "namespace": ACM_NAMESPACE,
+            "uid": uid,
+            "resourceVersion": "mch-pre-delete",
+        },
+    }
+
+
+def _mch_present(name=MCH_NAME, uid=MCH_UID):
+    return _strict("ITEMS", resource=_mch(name, uid), resource_version="mch-pre-delete")
+
+
+def _mch_inventory(*names):
+    return _strict("ITEMS", items=[_mch(name) for name in names], resource_version="mch-list-1")
+
+
+def _csv(*, deployment=OPERATOR_DEPLOYMENT_NAME):
+    return {
+        "metadata": {"name": CSV_NAME, "namespace": ACM_NAMESPACE, "uid": CSV_UID},
+        "spec": {
+            "customresourcedefinitions": {"owned": [{"name": MCH_OWNED_CRD_NAME}]},
+            "install": {"strategy": "deployment", "spec": {"deployments": [{"name": deployment}]}},
+        },
+        "status": {"phase": "Succeeded"},
+    }
+
+
+def _deployment(uid=OPERATOR_DEPLOYMENT_UID, revision="deploy-1"):
+    return _strict(
+        "ITEMS",
+        resource={"metadata": {"name": OPERATOR_DEPLOYMENT_NAME, "namespace": ACM_NAMESPACE, "uid": uid}},
+        resource_version=revision,
+    )
+
+
+def _controller(kind, name, uid, api_version="apps/v1"):
+    return {"api_version": api_version, "kind": kind, "name": name, "uid": uid, "controller": True}
+
+
+def _acm_pod(name, *, controller=None):
+    """A Pod in the CoreV1 ``to_dict()`` shape ``list_pods_strict`` yields."""
+    return {
+        "metadata": {
+            "name": name,
+            "namespace": ACM_NAMESPACE,
+            "owner_references": [] if controller is None else [controller],
+        }
+    }
+
+
+def _operator_pod(name="multiclusterhub-operator-7d9f-abcde", rs_name=OPERATOR_RS_NAME, rs_uid=OPERATOR_RS_UID):
+    return _acm_pod(name, controller=_controller("ReplicaSet", rs_name, rs_uid))
+
+
+def _replicaset(name=OPERATOR_RS_NAME, uid=OPERATOR_RS_UID, *, deployment_uid=OPERATOR_DEPLOYMENT_UID):
+    return _strict(
+        "ITEMS",
+        resource={
+            "metadata": {
+                "name": name,
+                "namespace": ACM_NAMESPACE,
+                "uid": uid,
+                "owner_references": [_controller("Deployment", OPERATOR_DEPLOYMENT_NAME, deployment_uid)],
+            }
+        },
+        resource_version=f"{name}-rv",
+    )
+
+
+def _namespace_present(revision="ns-1"):
+    return _strict("ITEMS", resource={"metadata": {"name": ACM_NAMESPACE}}, resource_version=revision)
+
+
+def _pods(*pods, revision="pods-1"):
+    return _strict("ITEMS", items=list(pods), resource_version=revision)
+
+
+def _captured_identity(name=MCH_NAME, expected_uid=MCH_UID):
+    return {
+        "namespace": ACM_NAMESPACE,
+        "name": OPERATOR_DEPLOYMENT_NAME,
+        "uid": OPERATOR_DEPLOYMENT_UID,
+        "discovery_method": DISCOVERY_METHOD,
+        "captured_at": "2026-09-16T00:00:00+00:00",
+        "csv": {"namespace": ACM_NAMESPACE, "name": CSV_NAME, "uid": CSV_UID, "owned_crd": MCH_OWNED_CRD_NAME},
+        "mch_teardown_key": _mch_key(name),
+        "mch_expected_uid": expected_uid,
+    }
+
+
+def _unavailable_identity(name=MCH_NAME, expected_uid=MCH_UID):
+    return {
+        "reason": "csv_absent",
+        "discovery_method": DISCOVERY_METHOD,
+        "captured_at": "2026-09-16T00:00:00+00:00",
+        "evidence_summary": "No ClusterServiceVersion owning the MultiClusterHub CRD was found.",
+        "mch_teardown_key": _mch_key(name),
+        "mch_expected_uid": expected_uid,
+    }
+
+
+def _completed_evidence(key, mode):
+    target = {"target_cr": AbsenceProof(proof_type="object_absent", resource_key=key)}
+    if mode == "namespace_absent":
+        return {
+            "resource_versions": {},
+            "absence_proofs": {
+                **target,
+                "drain_namespace": AbsenceProof(proof_type="namespace_absent", resource_key=ACM_NAMESPACE_KEY),
+            },
+        }
+    return {
+        "resource_versions": {
+            "drain_namespace": "ns-old",
+            "drain_pods": "pods-old",
+            "operator_deployment": "deploy-old",
+        },
+        "absence_proofs": target,
+    }
+
+
+def _mch_record(phase, *, identity="captured", name=MCH_NAME, expected_uid=MCH_UID, completed_mode="namespace_absent"):
+    """One valid MCH teardown record seeded through the real validator."""
+    key = _mch_key(name)
+    fields = {}
+    if identity == "captured":
+        fields["operator_deployment"] = _captured_identity(name, expected_uid)
+    else:
+        fields["operator_identity_unavailable"] = _unavailable_identity(name, expected_uid)
+    if phase is TeardownPhase.COMPLETED:
+        fields.update(observed_at="2026-09-16T00:00:00+00:00", **_completed_evidence(key, completed_mode))
+    return TeardownRecord(key=key, expected_uid=expected_uid, phase=phase, **fields)
+
+
+class _Script:
+    """Scripted outcomes: each call consumes the head, and the last one repeats."""
+
+    def __init__(self, outcomes):
+        self._outcomes = list(outcomes)
+
+    def next(self):
+        return self._outcomes.pop(0) if len(self._outcomes) > 1 else self._outcomes[0]
+
+
+class _AcmHub:
+    """Request-recording fake of the source hub for the MultiClusterHub family.
+
+    Every read and the guarded DELETE append ``(verb, group, resource, namespace, name)``
+    to ``requests``; ``_mch_decommission`` appends each durable write as
+    ``("WRITE", phase)`` to the same log, so ordering is asserted over one sequence.
+    The defaults describe the ordinary fresh path: one live MultiClusterHub that is
+    gone after its DELETE, one Succeeded CSV owning the MCH CRD, a live operator
+    Deployment, and a positively absent ACM namespace.
+    """
+
+    def __init__(
+        self,
+        *,
+        mch_list=None,
+        mch_gets=None,
+        csv_list=None,
+        csv_get=None,
+        deployments=None,
+        replicasets=None,
+        namespaces=None,
+        pods=None,
+        delete=None,
+    ):
+        self.requests = []
+        self.writes = []
+        self.delete_uids = []
+        self._mch_list = _Script(mch_list or [_mch_inventory(MCH_NAME)])
+        self._mch_gets = _Script(mch_gets or [_mch_present(), _strict("OBJECT_ABSENT")])
+        self._csv_list = _Script(csv_list or [_strict("ITEMS", items=[_csv()], resource_version="csv-list-1")])
+        self._csv_get = _Script(csv_get or [_strict("ITEMS", resource=_csv(), resource_version="csv-1")])
+        self._deployments = _Script(deployments or [_deployment()])
+        self._replicasets = {name: _Script(outcomes) for name, outcomes in (replicasets or {}).items()}
+        self._namespaces = _Script(namespaces or [_strict("NAMESPACE_ABSENT")])
+        self._pods = _Script(pods or [_pods()])
+        self._delete = delete
+
+    def list_custom_resources_strict(self, group, version, plural, namespace=None, label_selector=None):
+        self.requests.append(("LIST", group, plural, namespace, None))
+        if plural == "multiclusterhubs":
+            return self._mch_list.next()
+        if plural == "clusterserviceversions":
+            return self._csv_list.next()
+        raise AssertionError(f"unexpected strict list of {plural}")
+
+    def get_custom_resource_strict(self, group, version, plural, name, namespace=None):
+        self.requests.append(("GET", group, plural, namespace, name))
+        if plural == "multiclusterhubs":
+            return self._mch_gets.next()
+        if plural == "clusterserviceversions":
+            return self._csv_get.next()
+        raise AssertionError(f"unexpected strict get of {plural}")
+
+    def get_deployment_strict(self, name, namespace):
+        self.requests.append(("GET", "apps", "deployments", namespace, name))
+        return self._deployments.next()
+
+    def get_replicaset_strict(self, name, namespace):
+        self.requests.append(("GET", "apps", "replicasets", namespace, name))
+        script = self._replicasets.get(name)
+        return script.next() if script is not None else _strict("OBJECT_ABSENT")
+
+    def get_namespace_strict(self, name):
+        self.requests.append(("GET", "", "namespaces", None, name))
+        return self._namespaces.next()
+
+    def list_pods_strict(self, namespace, label_selector=None):
+        self.requests.append(("LIST", "", "pods", namespace, label_selector))
+        return self._pods.next()
+
+    def delete_custom_resource_preconditioned(
+        self, group, version, plural, name, uid, namespace=None, timeout_seconds=None
+    ):
+        self.requests.append(("DELETE", group, plural, namespace, name))
+        self.delete_uids.append(uid)
+        if self._delete is not None:
+            raise self._delete
+
+
+def _mch_decommission(state_manager, hub, *, records=(), dry_run=False, has_observability=False):
+    """A Decommission over ``hub`` whose durable writes are logged into ``hub.requests``.
+
+    ``records`` are seeded through the real writer first, so they are valid resumable
+    states and do not appear in the log. The logged writer still delegates to the real
+    ``RunRecord.record_teardown_phase``, so ``lib.teardown_record.validate`` runs on
+    every write under test.
+    """
+    run_record = RunRecord(state_manager)
+    for record in records:
+        run_record.record_teardown_phase(record)
+    real_writer = run_record.record_teardown_phase
+
+    def logged_writer(record):
+        hub.requests.append(("WRITE", record.phase.value))
+        hub.writes.append(record)
+        return real_writer(record)
+
+    run_record.record_teardown_phase = logged_writer
+    return Decommission(
+        primary_client=hub,
+        has_observability=has_observability,
+        run_record=run_record,
+        dry_run=dry_run,
+    )
+
+
+def _phases(hub):
+    return [record.phase.value for record in hub.writes]
+
+
+def _requests_of(hub, verb, resource):
+    return [request for request in hub.requests if request[0] == verb and request[2] == resource]
+
+
+def _completed_write(hub):
+    completed = [record for record in hub.writes if record.phase is TeardownPhase.COMPLETED]
+    assert len(completed) == 1, f"expected exactly one completed write, got phases {_phases(hub)}"
+    return completed[0]
+
+
+@pytest.fixture
+def no_sleep(monkeypatch):
+    monkeypatch.setattr("lib.waiter.time.sleep", lambda _: None)
+
+
+@pytest.fixture
+def one_mch_poll(monkeypatch):
+    """Every MCH wait performs exactly one post-deadline poll, so a blocker fails fast."""
+    monkeypatch.setattr(decommission_module, "DECOMMISSION_POD_TIMEOUT", 0)
+
+
+@pytest.mark.unit
+class TestMultiClusterHubMandatoryContracts:
+    """The six E4 assertion-level contracts, driven through the substep dispatch."""
+
+    def test_a_prefixed_pod_without_an_owner_blocks_the_drain(self, state_manager, one_mch_poll):
+        """July criterion 11: a name prefix is never an exclusion rule."""
+        spoof = _acm_pod("multiclusterhub-operator-spoofed-x1")
+        hub = _AcmHub(namespaces=[_namespace_present()], pods=[_pods(spoof)])
+        dec = _mch_decommission(state_manager, hub)
+
+        execution = dec._run_substep("multiclusterhub")
+
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        assert "completed" not in _phases(hub)
+        assert _phases(hub)[-1] == "drain_pending"
+
+    def test_identity_capture_is_durable_before_the_guarded_delete(self, state_manager):
+        hub = _AcmHub()
+        dec = _mch_decommission(state_manager, hub)
+
+        dec._run_substep("multiclusterhub")
+
+        assert MCH_DELETE in hub.requests, "the guarded delete must be issued"
+        uid_proof = ("GET", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE, MCH_NAME)
+        positions = [hub.requests.index(uid_proof)]
+        positions += [hub.requests.index(request) for request in CAPTURE_REQUESTS]
+        positions += [hub.requests.index(("WRITE", "delete_started")), hub.requests.index(MCH_DELETE)]
+        assert positions == sorted(positions), hub.requests
+        assert hub.delete_uids == [MCH_UID]
+        first = hub.writes[0]
+        assert first.phase is TeardownPhase.DELETE_STARTED
+        captured_at = first.operator_deployment["captured_at"]
+        assert first.operator_deployment == {**_captured_identity(), "captured_at": captured_at}
+
+    def test_zero_pods_with_an_inconsistent_recorded_deployment_never_drains(self, state_manager):
+        """The pre-E4 advisor finding: zero Pods yield an empty blocking tuple even when the
+        recorded operator Deployment is gone, so identity status must be checked first."""
+        hub = _AcmHub(
+            mch_list=[_mch_inventory()],
+            mch_gets=[_strict("OBJECT_ABSENT")],
+            deployments=[_strict("OBJECT_ABSENT")],
+            namespaces=[_namespace_present()],
+            pods=[_pods()],
+        )
+        dec = _mch_decommission(state_manager, hub, records=[_mch_record(TeardownPhase.DRAIN_PENDING)])
+
+        execution = dec._run_substep("multiclusterhub")
+
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert "drained" not in _phases(hub) and "completed" not in _phases(hub)
+        assert dec.run_record.teardown_record(_mch_key()).phase is TeardownPhase.RECOVERY_REQUIRED
+
+    def test_captured_identity_completion_records_exactly_three_revisions(self, state_manager):
+        hub = _AcmHub(
+            deployments=[_deployment(revision="deploy-capture"), _deployment(revision="deploy-final")],
+            namespaces=[_namespace_present("ns-final")],
+            pods=[_pods(revision="pods-final")],
+        )
+        dec = _mch_decommission(state_manager, hub)
+
+        execution = dec._run_substep("multiclusterhub")
+
+        assert execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
+        completed = _completed_write(hub)
+        assert completed.resource_versions == {
+            "drain_namespace": "ns-final",
+            "drain_pods": "pods-final",
+            "operator_deployment": "deploy-final",
+        }
+        assert set(completed.absence_proofs) == {"target_cr"}
+
+    def test_namespace_absent_completion_records_both_proofs_and_no_revisions(self, state_manager):
+        hub = _AcmHub(namespaces=[_strict("NAMESPACE_ABSENT")])
+        dec = _mch_decommission(state_manager, hub)
+
+        execution = dec._run_substep("multiclusterhub")
+
+        assert execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
+        completed = _completed_write(hub)
+        assert completed.resource_versions == {}
+        assert completed.absence_proofs == {
+            "target_cr": AbsenceProof(proof_type="object_absent", resource_key=_mch_key()),
+            "drain_namespace": AbsenceProof(proof_type="namespace_absent", resource_key=ACM_NAMESPACE_KEY),
+        }
+        assert _requests_of(hub, "LIST", "pods") == [], "namespace absence entails the pod-empty predicate"
+        assert len(_requests_of(hub, "GET", "deployments")) == 1, "only the capture reads the Deployment"
+
+    def test_only_final_pass_revisions_are_persisted(self, state_manager, no_sleep):
+        blocker = _acm_pod("app-pod-still-terminating")
+        hub = _AcmHub(
+            deployments=[
+                _deployment(revision="deploy-capture"),
+                _deployment(revision="deploy-drain-1"),
+                _deployment(revision="deploy-drain-2"),
+                _deployment(revision="deploy-final"),
+            ],
+            namespaces=[
+                _namespace_present("ns-drain-1"),
+                _namespace_present("ns-drain-2"),
+                _namespace_present("ns-final"),
+            ],
+            pods=[
+                _pods(blocker, revision="pods-drain-1"),
+                _pods(revision="pods-drain-2"),
+                _pods(revision="pods-final"),
+            ],
+        )
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec._run_substep("multiclusterhub").outcome is SubstepOutcome.COMPLETED
+
+        assert _completed_write(hub).resource_versions == {
+            "drain_namespace": "ns-final",
+            "drain_pods": "pods-final",
+            "operator_deployment": "deploy-final",
+        }
+        stored = json.dumps(dec.run_record.all_teardown_records(), default=str)
+        for earlier in ("deploy-capture", "deploy-drain", "ns-drain", "pods-drain", "mch-pre-delete"):
+            assert earlier not in stored
+
+
+def _mch_family_requests(hub, resource):
+    return [request for request in hub.requests if request[0] != "WRITE" and request[2] == resource]
+
+
+@pytest.mark.unit
+class TestMultiClusterHubTargetResolution:
+    """One strict resolver: zero is a clean skip, many fail closed, a record is never rebound."""
+
+    def test_no_record_and_a_crd_absent_inventory_is_a_noop_without_a_namespace_read(self, state_manager):
+        hub = _AcmHub(mch_list=[_strict("CRD_ABSENT")])
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
+        assert hub.requests == [("LIST", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE, None)]
+
+    def test_no_record_and_an_empty_strict_inventory_is_a_noop(self, state_manager):
+        hub = _AcmHub(mch_list=[_mch_inventory()])
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
+        assert hub.requests == [("LIST", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE, None)]
+
+    def test_an_unreadable_inventory_fails_without_change(self, state_manager):
+        hub = _AcmHub(mch_list=[_strict("ERROR")])
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert hub.requests == [("LIST", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE, None)]
+
+    def test_more_than_one_live_multiclusterhub_fails_before_any_mutation(self, state_manager):
+        hub = _AcmHub(mch_list=[_mch_inventory("hub-a", "hub-b")])
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert hub.requests == [("LIST", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE, None)]
+
+    @pytest.mark.parametrize(
+        "item",
+        [
+            "not-a-mapping",
+            {"metadata": "not-a-mapping"},
+            {"metadata": {}},
+            {"metadata": {"name": ""}},
+            {"metadata": {"name": "Not_A_DNS_Name"}},
+        ],
+        ids=["item", "metadata", "missing-name", "empty-name", "invalid-name"],
+    )
+    def test_a_malformed_inventory_member_fails_the_proof_before_any_named_read(self, item, state_manager):
+        hub = _AcmHub(mch_list=[_strict("ITEMS", items=[item], resource_version="mch-list-1")])
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert hub.requests == [("LIST", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE, None)]
+
+    def test_one_live_multiclusterhub_is_bound_by_its_exact_name(self, state_manager):
+        name = "acm-hub-custom"
+        hub = _AcmHub(mch_list=[_mch_inventory(name)], mch_gets=[_mch_present(name), _strict("OBJECT_ABSENT")])
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
+        mch_reads = _mch_family_requests(hub, "multiclusterhubs")
+        assert mch_reads[1] == ("GET", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE, name)
+        assert ("DELETE", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE, name) in hub.requests
+        assert {record.key for record in hub.writes} == {_mch_key(name)}
+        assert hub.writes[0].operator_deployment["mch_teardown_key"] == _mch_key(name)
+
+    def test_a_target_gone_between_the_list_and_the_named_get_is_a_noop(self, state_manager):
+        hub = _AcmHub(mch_gets=[_strict("OBJECT_ABSENT")], namespaces=[_namespace_present()])
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
+        assert hub.requests == [
+            ("LIST", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE, None),
+            ("GET", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE, MCH_NAME),
+        ], "no identity capture, no namespace read, no write and no delete"
+
+    def test_the_observability_half_removed_rule_is_unchanged(self, decommission_with_obs):
+        """MCH's clean skip ignores the surviving ACM namespace; MCO's must not."""
+        client = _arrange(
+            decommission_with_obs,
+            cr=_strict("CRD_ABSENT"),
+            namespace=_strict("ITEMS", resource_version="ns-1"),
+        )
+
+        assert decommission_with_obs.teardown_observability() == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        client.get_namespace_strict.assert_called_once_with(OBSERVABILITY_NAMESPACE)
+
+    def test_more_than_one_durable_multiclusterhub_record_fails_closed(self, state_manager):
+        hub = _AcmHub(mch_list=[_mch_inventory()])
+        records = [
+            _mch_record(TeardownPhase.DRAIN_PENDING, name="hub-a"),
+            _mch_record(TeardownPhase.DRAIN_PENDING, name="hub-b"),
+        ]
+        dec = _mch_decommission(state_manager, hub, records=records)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert [request for request in hub.requests if request[0] in ("GET", "DELETE", "WRITE")] == []
+
+    @pytest.mark.parametrize("live", [("hub-b",), ("hub-a", "hub-b")], ids=["other", "other-alongside"])
+    def test_a_record_never_rebinds_to_a_different_live_multiclusterhub(self, live, state_manager):
+        hub = _AcmHub(mch_list=[_mch_inventory(*live)])
+        dec = _mch_decommission(state_manager, hub, records=[_mch_record(TeardownPhase.DELETE_STARTED, name="hub-a")])
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert [request for request in hub.requests if request[0] in ("GET", "DELETE", "WRITE")] == []
+        assert dec.run_record.teardown_record(_mch_key("hub-a")).phase is TeardownPhase.DELETE_STARTED
+        assert dec.run_record.teardown_record(_mch_key("hub-b")) is None
+
+    def test_a_recorded_teardown_with_an_unreadable_inventory_fails_without_resuming(self, state_manager):
+        hub = _AcmHub(mch_list=[_strict("ERROR")])
+        dec = _mch_decommission(state_manager, hub, records=[_mch_record(TeardownPhase.DRAIN_PENDING)])
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert hub.requests == [("LIST", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE, None)]
+
+    def test_an_invalid_recorded_name_fails_closed_before_any_read(self, state_manager, caplog):
+        hub = _AcmHub()
+        dec = _mch_decommission(state_manager, hub, records=[_mch_record(TeardownPhase.DRAIN_PENDING, name="Bad_Name")])
+
+        with caplog.at_level(logging.ERROR):
+            assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert hub.requests == []
+        assert "recorded MultiClusterHub name is invalid" in caplog.text
+
+    def test_records_of_other_families_are_not_multiclusterhub_targets(self, state_manager):
+        hub = _AcmHub(mch_list=[_mch_inventory()])
+        mco = TeardownRecord(key=MCO_KEY, expected_uid="uid-1", phase=TeardownPhase.DRAIN_PENDING)
+        dec = _mch_decommission(state_manager, hub, records=[mco])
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
+
+    def test_a_record_resumes_by_its_recorded_name_when_the_kind_is_gone(self, state_manager):
+        hub = _AcmHub(mch_list=[_strict("CRD_ABSENT")], mch_gets=[_strict("CRD_ABSENT")])
+        dec = _mch_decommission(state_manager, hub, records=[_mch_record(TeardownPhase.CR_ABSENT, name="hub-a")])
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+        assert ("GET", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE, "hub-a") in hub.requests
+        assert _completed_write(hub).absence_proofs["target_cr"].proof_type == "crd_absent"
+
+
+@pytest.mark.unit
+class TestMultiClusterHubTeardownSpec:
+    """The MCH spec, the drain-shape invariant, and the per-family wait bounds."""
+
+    def test_the_factory_supplies_the_pass_level_classifier_and_the_mch_bounds(self):
+        spec = decommission_module._multiclusterhub_teardown_spec("hub-a")
+
+        assert spec.classifier is classify_pods
+        assert (spec.group, spec.version, spec.plural, spec.kind, spec.namespace, spec.name) == (
+            MCH_GROUP,
+            "v1",
+            "multiclusterhubs",
+            "MultiClusterHub",
+            ACM_NAMESPACE,
+            "hub-a",
+        )
+        assert spec.require_drain() == (ACM_NAMESPACE, None), "no selector: every Pod is classified"
+        assert (
+            spec.absence_wait_timeout(),
+            spec.absence_wait_interval(),
+            spec.drain_wait_timeout(),
+            spec.drain_wait_interval(),
+        ) == (DECOMMISSION_POD_TIMEOUT, DECOMMISSION_POD_INTERVAL, DECOMMISSION_POD_TIMEOUT, DECOMMISSION_POD_INTERVAL)
+
+    def test_observability_keeps_its_selector_and_no_classifier(self):
+        spec = decommission_module.OBSERVABILITY_TEARDOWN
+
+        assert spec.classifier is None
+        assert spec.require_drain() == (OBSERVABILITY_NAMESPACE, OBSERVABILITY_POD_LABEL_SELECTOR)
+        assert (spec.drain_wait_timeout(), spec.drain_wait_interval()) == (
+            OBSERVABILITY_TERMINATE_TIMEOUT,
+            OBSERVABILITY_TERMINATE_INTERVAL,
+        )
+
+    @pytest.mark.parametrize(
+        "kind, drain",
+        [
+            ("MultiClusterObservability", {"drain_namespace": OBSERVABILITY_NAMESPACE, "drain_label_selector": None}),
+            ("MultiClusterHub", {"drain_namespace": ACM_NAMESPACE, "drain_label_selector": None}),
+            (
+                "MultiClusterHub",
+                {"drain_namespace": ACM_NAMESPACE, "drain_label_selector": "app=x", "classifier": classify_pods},
+            ),
+            (
+                "MultiClusterObservability",
+                {"drain_namespace": OBSERVABILITY_NAMESPACE, "drain_label_selector": None, "classifier": classify_pods},
+            ),
+            ("ManagedCluster", {"drain_namespace": None, "drain_label_selector": None, "classifier": classify_pods}),
+            ("ManagedCluster", {"drain_namespace": None, "drain_label_selector": "app=x"}),
+            ("MultiClusterHub", {"drain_namespace": " ", "drain_label_selector": None, "classifier": classify_pods}),
+            ("MultiClusterObservability", {"drain_namespace": OBSERVABILITY_NAMESPACE, "drain_label_selector": " "}),
+        ],
+        ids=[
+            "selector-drain-missing-selector",
+            "mch-without-classifier",
+            "selector-and-classifier",
+            "classifier-on-non-identity-kind",
+            "no-drain-with-classifier",
+            "no-drain-with-selector",
+            "blank-namespace",
+            "blank-selector",
+        ],
+    )
+    def test_an_invalid_drain_shape_is_rejected_at_construction(self, kind, drain):
+        """An MCO spec missing its selector must never silently become an all-Pod scan."""
+        with pytest.raises(ValueError):
+            decommission_module.TeardownSpec(
+                group="example.io",
+                version="v1",
+                plural="examples",
+                resource_name="examples",
+                kind=kind,
+                namespace=None,
+                name="example",
+                **drain,
+            )
+
+    def test_the_dispatch_wires_multiclusterhub_to_the_public_method(self, state_manager):
+        dec = _mch_decommission(state_manager, _AcmHub())
+        sentinel = SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
+        dec.teardown_multiclusterhub = Mock(return_value=sentinel)
+
+        assert dec._run_substep("multiclusterhub") is sentinel
+        dec.teardown_multiclusterhub.assert_called_once_with()
+
+    def test_the_legacy_name_only_path_is_gone(self):
+        assert not hasattr(Decommission, "_delete_multiclusterhub")
+
+    def test_multiclusterhub_waits_use_the_decommission_pod_bounds(self, state_manager):
+        hub = _AcmHub(namespaces=[_namespace_present()])
+        dec = _mch_decommission(state_manager, hub)
+
+        with patch.object(decommission_module, "wait_for_condition", return_value=True) as wait:
+            assert dec.teardown_multiclusterhub().outcome is SubstepOutcome.COMPLETED
+
+        assert [(c.kwargs["timeout"], c.kwargs["interval"]) for c in wait.call_args_list] == [
+            (DECOMMISSION_POD_TIMEOUT, DECOMMISSION_POD_INTERVAL)
+        ] * 2
+
+    def test_observability_waits_keep_the_terminate_bounds(self, decommission_with_obs):
+        _arrange(decommission_with_obs, namespace=_strict("ITEMS", resource_version="ns-1"))
+
+        with patch.object(decommission_module, "wait_for_condition", return_value=True) as wait:
+            assert decommission_with_obs.teardown_observability().outcome is SubstepOutcome.COMPLETED
+
+        assert [(c.kwargs["timeout"], c.kwargs["interval"]) for c in wait.call_args_list] == [
+            (OBSERVABILITY_TERMINATE_TIMEOUT, OBSERVABILITY_TERMINATE_INTERVAL)
+        ] * 2
+
+
+@pytest.mark.unit
+class TestMultiClusterHubMutationOrdering:
+    """Identity is captured after the UID is proved and made durable before the DELETE."""
+
+    @pytest.mark.parametrize("failure", ["csv_list", "csv_get"])
+    def test_a_fatal_capture_read_writes_nothing_and_deletes_nothing(self, failure, state_manager):
+        hub = _AcmHub(**{failure: [_strict("ERROR")]})
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert hub.writes == []
+        assert MCH_DELETE not in hub.requests
+
+    def test_a_failed_delete_started_write_issues_no_delete(self, state_manager):
+        hub = _AcmHub()
+        dec = _mch_decommission(state_manager, hub)
+        dec.run_record.record_teardown_phase = Mock(side_effect=FatalError("state flush failed"))
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert all(request in hub.requests for request in CAPTURE_REQUESTS)
+        assert MCH_DELETE not in hub.requests
+
+    @pytest.mark.parametrize("identity", ["captured", "unavailable"])
+    def test_every_phase_write_carries_the_identical_identity(self, identity, state_manager):
+        csv_list = [_strict("ITEMS", items=[], resource_version="csv-list-1")] if identity == "unavailable" else None
+        hub = _AcmHub(csv_list=csv_list, namespaces=[_namespace_present()], pods=[_pods()])
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
+        assert _phases(hub) == ["delete_started", "cr_absent", "drain_pending", "drained", "completed"]
+        first = hub.writes[0]
+        assert (first.operator_deployment is not None) is (identity == "captured")
+        assert (first.operator_identity_unavailable is not None) is (identity == "unavailable")
+        for record in hub.writes:
+            assert (record.operator_deployment, record.operator_identity_unavailable) == (
+                first.operator_deployment,
+                first.operator_identity_unavailable,
+            )
+
+    def test_a_programmer_error_from_capture_propagates(self, state_manager, monkeypatch):
+        monkeypatch.setattr(decommission_module, "capture_operator_identity", Mock(side_effect=ValueError("binding")))
+        hub = _AcmHub()
+        dec = _mch_decommission(state_manager, hub)
+
+        with pytest.raises(ValueError):
+            dec.teardown_multiclusterhub()
+        assert hub.writes == [] and MCH_DELETE not in hub.requests
+
+    def test_the_writer_requires_an_explicit_identity_argument(self):
+        parameter = inspect.signature(Decommission._record).parameters["identity"]
+        assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        assert parameter.default is inspect.Parameter.empty
+
+    def test_a_missing_or_misplaced_identity_is_a_programmer_error_not_a_failure(self, state_manager):
+        hub = _AcmHub()
+        dec = _mch_decommission(state_manager, hub)
+        mch_spec = decommission_module._multiclusterhub_teardown_spec(MCH_NAME)
+        identity = OperatorIdentity(operator_deployment=_captured_identity())
+
+        with pytest.raises(ValueError):
+            dec._record(mch_spec, _mch_key(), MCH_UID, TeardownPhase.DELETE_STARTED, identity=None)
+        with pytest.raises(ValueError):
+            dec._record(
+                decommission_module.OBSERVABILITY_TEARDOWN,
+                MCO_KEY,
+                "uid-1",
+                TeardownPhase.DELETE_STARTED,
+                identity=identity,
+            )
+        assert hub.writes == []
+
+
+@pytest.mark.unit
+class TestMultiClusterHubResume:
+    """A durable record resumes its obligations by its own name, UID and identity."""
+
+    def test_a_delete_started_record_retries_the_guarded_delete_without_recapture(self, state_manager):
+        hub = _AcmHub(mch_list=[_mch_inventory("hub-a")], mch_gets=[_mch_present("hub-a"), _strict("OBJECT_ABSENT")])
+        seeded = _mch_record(TeardownPhase.DELETE_STARTED, name="hub-a")
+        dec = _mch_decommission(state_manager, hub, records=[seeded])
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
+        assert ("DELETE", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE, "hub-a") in hub.requests
+        assert hub.delete_uids == [MCH_UID]
+        assert _mch_family_requests(hub, "clusterserviceversions") == []
+        assert all(record.operator_deployment == seeded.operator_deployment for record in hub.writes)
+
+    def test_a_same_name_replacement_fails_and_is_left_intact(self, state_manager):
+        hub = _AcmHub(mch_gets=[_mch_present(uid="uid-replacement")])
+        dec = _mch_decommission(state_manager, hub, records=[_mch_record(TeardownPhase.DELETE_STARTED)])
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert MCH_DELETE not in hub.requests
+        assert hub.writes == []
+
+    @pytest.mark.parametrize(
+        "phase",
+        [
+            TeardownPhase.DELETE_STARTED,
+            TeardownPhase.CR_ABSENT,
+            TeardownPhase.DRAIN_PENDING,
+            TeardownPhase.DRAINED,
+            TeardownPhase.RECOVERY_REQUIRED,
+            TeardownPhase.COMPLETED,
+        ],
+        ids=lambda phase: phase.value,
+    )
+    def test_no_resume_recaptures_identity(self, phase, state_manager):
+        hub = _AcmHub(mch_list=[_mch_inventory()], mch_gets=[_strict("OBJECT_ABSENT")])
+        seeded = _mch_record(phase)
+        dec = _mch_decommission(state_manager, hub, records=[seeded])
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+        assert _mch_family_requests(hub, "clusterserviceversions") == []
+        assert MCH_DELETE not in hub.requests
+        assert dec.run_record.teardown_record(_mch_key()).operator_deployment == seeded.operator_deployment
+        if phase is TeardownPhase.COMPLETED:
+            assert hub.writes == []
+
+    def test_an_unavailable_durable_identity_is_never_upgraded(self, state_manager):
+        hub = _AcmHub(
+            mch_list=[_mch_inventory()],
+            mch_gets=[_strict("OBJECT_ABSENT")],
+            namespaces=[_namespace_present("ns-final")],
+            pods=[_pods(revision="pods-final")],
+        )
+        dec = _mch_decommission(
+            state_manager, hub, records=[_mch_record(TeardownPhase.DRAIN_PENDING, identity="unavailable")]
+        )
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+        completed = _completed_write(hub)
+        assert completed.operator_identity_unavailable == _unavailable_identity()
+        assert completed.operator_deployment is None
+        assert completed.resource_versions == {"drain_namespace": "ns-final", "drain_pods": "pods-final"}
+        assert _mch_family_requests(hub, "clusterserviceversions") == []
+        assert _mch_family_requests(hub, "deployments") == []
+
+    @pytest.mark.parametrize(
+        "phase",
+        [TeardownPhase.CR_ABSENT, TeardownPhase.DRAIN_PENDING, TeardownPhase.DRAINED],
+        ids=lambda phase: phase.value,
+    )
+    def test_a_post_delete_phase_resumes_its_remaining_obligations(self, phase, state_manager):
+        hub = _AcmHub(
+            mch_list=[_mch_inventory()],
+            mch_gets=[_strict("OBJECT_ABSENT")],
+            namespaces=[_namespace_present("ns-final")],
+            pods=[_pods(_operator_pod(), revision="pods-final")],
+            replicasets={OPERATOR_RS_NAME: [_replicaset()]},
+            deployments=[_deployment(revision="deploy-final")],
+        )
+        dec = _mch_decommission(state_manager, hub, records=[_mch_record(phase)])
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+        assert _completed_write(hub).resource_versions == {
+            "drain_namespace": "ns-final",
+            "drain_pods": "pods-final",
+            "operator_deployment": "deploy-final",
+        }
+        assert MCH_DELETE not in hub.requests
+
+    def test_recovery_required_retries_the_proof_without_rebinding(self, state_manager):
+        hub = _AcmHub(
+            mch_list=[_mch_inventory()],
+            mch_gets=[_strict("OBJECT_ABSENT")],
+            namespaces=[_namespace_present()],
+            pods=[_pods()],
+        )
+        seeded = _mch_record(TeardownPhase.RECOVERY_REQUIRED)
+        dec = _mch_decommission(state_manager, hub, records=[seeded])
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+        completed = _completed_write(hub)
+        assert (completed.key, completed.expected_uid, completed.operator_deployment) == (
+            seeded.key,
+            seeded.expected_uid,
+            seeded.operator_deployment,
+        )
+
+    def test_recovery_required_stays_blocked_while_the_deployment_is_replaced(self, state_manager):
+        hub = _AcmHub(
+            mch_list=[_mch_inventory()],
+            mch_gets=[_strict("OBJECT_ABSENT")],
+            deployments=[_deployment(uid="uid-replacement")],
+            namespaces=[_namespace_present()],
+            pods=[_pods()],
+        )
+        dec = _mch_decommission(state_manager, hub, records=[_mch_record(TeardownPhase.RECOVERY_REQUIRED)])
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert "completed" not in _phases(hub)
+        assert dec.run_record.teardown_record(_mch_key()).phase is TeardownPhase.RECOVERY_REQUIRED
+
+
+_LOST_RECORDED_DEPLOYMENT = {
+    "absent": _strict("OBJECT_ABSENT"),
+    "replaced": _deployment(uid="uid-replacement"),
+    "error": _strict("ERROR"),
+}
+
+
+@pytest.mark.unit
+class TestMultiClusterHubDrain:
+    """Identity-bound drain: every unproven Pod blocks, and identity status is checked first."""
+
+    @pytest.mark.parametrize("lost", sorted(_LOST_RECORDED_DEPLOYMENT))
+    def test_zero_pods_with_a_lost_recorded_deployment_enters_recovery_required(self, lost, state_manager):
+        hub = _AcmHub(
+            deployments=[_deployment(), _LOST_RECORDED_DEPLOYMENT[lost]],
+            namespaces=[_namespace_present()],
+            pods=[_pods()],
+        )
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        assert _phases(hub) == ["delete_started", "cr_absent", "drain_pending", "recovery_required"]
+
+    def test_an_operator_pod_owned_through_the_recorded_chain_is_excluded(self, state_manager):
+        hub = _AcmHub(
+            namespaces=[_namespace_present()],
+            pods=[_pods(_operator_pod())],
+            replicasets={OPERATOR_RS_NAME: [_replicaset()]},
+        )
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
+
+    def test_a_rolling_update_drains_when_every_chain_resolves_to_the_recorded_deployment(
+        self, state_manager, no_sleep
+    ):
+        old = _operator_pod("multiclusterhub-operator-old-1", rs_name="mch-op-old", rs_uid="uid-rs-old")
+        new = _acm_pod("renamed-operator-new-1", controller=_controller("ReplicaSet", "mch-op-new", "uid-rs-new"))
+        app = _acm_pod("console-chart-abc", controller=_controller("ReplicaSet", "console-rs", "uid-console-rs"))
+        console_rs = _strict(
+            "ITEMS",
+            resource={
+                "metadata": {
+                    "name": "console-rs",
+                    "namespace": ACM_NAMESPACE,
+                    "uid": "uid-console-rs",
+                    "owner_references": [_controller("Deployment", "console-chart", "uid-console")],
+                }
+            },
+            resource_version="console-rs-rv",
+        )
+        hub = _AcmHub(
+            namespaces=[_namespace_present()],
+            pods=[_pods(old, new, app), _pods(old, new), _pods(new, revision="pods-final")],
+            replicasets={
+                "mch-op-old": [_replicaset("mch-op-old", "uid-rs-old")],
+                "mch-op-new": [_replicaset("mch-op-new", "uid-rs-new")],
+                "console-rs": [console_rs],
+            },
+        )
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
+        assert _completed_write(hub).resource_versions["drain_pods"] == "pods-final"
+
+    def test_unavailable_identity_with_zero_pods_drains(self, state_manager):
+        hub = _AcmHub(
+            csv_list=[_strict("ITEMS", items=[], resource_version="csv-list-1")],
+            namespaces=[_namespace_present()],
+            pods=[_pods()],
+        )
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
+        assert _completed_write(hub).operator_identity_unavailable["reason"] == "csv_absent"
+
+    def test_unavailable_identity_excludes_no_pod_even_a_genuine_operator_pod(self, state_manager, one_mch_poll):
+        hub = _AcmHub(
+            csv_list=[_strict("ITEMS", items=[], resource_version="csv-list-1")],
+            namespaces=[_namespace_present()],
+            pods=[_pods(_operator_pod())],
+            replicasets={OPERATOR_RS_NAME: [_replicaset()]},
+        )
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        assert _phases(hub)[-1] == "drain_pending", "a timeout alone is not recovery_required"
+        assert _mch_family_requests(hub, "replicasets") == []
+
+    @pytest.mark.parametrize(
+        "pod, replicasets",
+        [
+            (
+                _acm_pod(
+                    "multiclusterhub-operator-job-x", controller=_controller("Job", "mch-job", "uid-job", "batch/v1")
+                ),
+                {},
+            ),
+            (
+                _acm_pod("multiclusterhub-operator-sts-0", controller=_controller("StatefulSet", "mch-sts", "uid-sts")),
+                {},
+            ),
+            (
+                _operator_pod("multiclusterhub-operator-other-1", rs_name="other-rs", rs_uid="uid-other-rs"),
+                {"other-rs": [_replicaset("other-rs", "uid-other-rs", deployment_uid="uid-other-deployment")]},
+            ),
+        ],
+        ids=["job-owned", "statefulset-owned", "unrelated-replicaset"],
+    )
+    def test_a_prefixed_pod_with_the_wrong_owner_blocks(self, pod, replicasets, state_manager, one_mch_poll):
+        hub = _AcmHub(namespaces=[_namespace_present()], pods=[_pods(pod)], replicasets=replicasets)
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        assert _phases(hub)[-1] == "drain_pending"
+
+    def test_a_deployment_replaced_between_passes_enters_recovery_required(self, state_manager, no_sleep):
+        hub = _AcmHub(
+            deployments=[_deployment(), _deployment(), _deployment(uid="uid-replacement")],
+            namespaces=[_namespace_present()],
+            pods=[_pods(_acm_pod("app-pod-terminating")), _pods()],
+        )
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        assert _phases(hub) == ["delete_started", "cr_absent", "drain_pending", "recovery_required"]
+
+    def test_an_unreadable_pod_list_fails_and_is_never_empty(self, state_manager):
+        hub = _AcmHub(namespaces=[_namespace_present()], pods=[_strict("ERROR")])
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        assert _phases(hub)[-1] == "drain_pending"
+
+    def test_an_unreadable_namespace_enters_recovery_required(self, state_manager):
+        hub = _AcmHub(namespaces=[_strict("ERROR")])
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        assert _phases(hub)[-1] == "recovery_required"
+        assert _requests_of(hub, "LIST", "pods") == []
+
+    def test_a_replicaset_read_failure_leaves_the_pod_blocking(self, state_manager, one_mch_poll):
+        hub = _AcmHub(
+            namespaces=[_namespace_present()],
+            pods=[_pods(_operator_pod())],
+            replicasets={OPERATOR_RS_NAME: [_strict("ERROR")]},
+        )
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        assert _phases(hub)[-1] == "drain_pending"
+
+    def test_every_drain_pod_list_is_unscoped(self, state_manager):
+        hub = _AcmHub(namespaces=[_namespace_present()], pods=[_pods()])
+        dec = _mch_decommission(state_manager, hub)
+
+        dec.teardown_multiclusterhub()
+
+        pod_lists = _requests_of(hub, "LIST", "pods")
+        assert pod_lists and all(request[4] is None for request in pod_lists)
+
+
+@pytest.mark.unit
+class TestMultiClusterHubFinalEvidence:
+    """The completed write is gated by, and built only from, a fresh final pass."""
+
+    def test_a_new_pod_at_final_verification_prevents_completion(self, state_manager):
+        hub = _AcmHub(namespaces=[_namespace_present()], pods=[_pods(), _pods(_acm_pod("late-pod"))])
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        assert _phases(hub)[-1] == "drained"
+
+    @pytest.mark.parametrize("lost", sorted(_LOST_RECORDED_DEPLOYMENT))
+    def test_a_lost_recorded_deployment_at_final_verification_enters_recovery_required(self, lost, state_manager):
+        hub = _AcmHub(
+            deployments=[_deployment(), _deployment(), _LOST_RECORDED_DEPLOYMENT[lost]],
+            namespaces=[_namespace_present()],
+            pods=[_pods()],
+        )
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        assert _phases(hub) == ["delete_started", "cr_absent", "drain_pending", "drained", "recovery_required"]
+
+    def test_an_unreadable_final_pod_list_prevents_completion(self, state_manager):
+        hub = _AcmHub(namespaces=[_namespace_present()], pods=[_pods(), _strict("ERROR")])
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        assert _phases(hub)[-1] == "drained"
+
+    def test_an_ambiguous_final_namespace_enters_recovery_required(self, state_manager):
+        hub = _AcmHub(namespaces=[_namespace_present(), _strict("ERROR")], pods=[_pods()])
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        assert _phases(hub)[-1] == "recovery_required"
+
+    @pytest.mark.parametrize("final_cr", ["present", "error"])
+    def test_a_final_target_read_that_is_not_positive_absence_prevents_completion(self, final_cr, state_manager):
+        final = _mch_present() if final_cr == "present" else _strict("ERROR")
+        hub = _AcmHub(mch_gets=[_mch_present(), _strict("OBJECT_ABSENT"), final])
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        assert "completed" not in _phases(hub)
+
+    def test_unavailable_identity_completion_records_exactly_two_revisions(self, state_manager):
+        hub = _AcmHub(
+            csv_list=[_strict("ITEMS", items=[], resource_version="csv-list-1")],
+            namespaces=[_namespace_present("ns-final")],
+            pods=[_pods(revision="pods-final")],
+        )
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
+        completed = _completed_write(hub)
+        assert completed.resource_versions == {"drain_namespace": "ns-final", "drain_pods": "pods-final"}
+        assert set(completed.absence_proofs) == {"target_cr"}
+
+
+@pytest.mark.unit
+class TestMultiClusterHubCompletedReproof:
+    """A completed record is re-proved live and never rewritten."""
+
+    def test_namespace_absent_reproof_reads_no_deployment_and_no_pods(self, state_manager):
+        hub = _AcmHub(mch_gets=[_strict("OBJECT_ABSENT")], namespaces=[_strict("NAMESPACE_ABSENT")])
+        seeded = _mch_record(TeardownPhase.COMPLETED)
+        dec = _mch_decommission(state_manager, hub, records=[seeded])
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+        assert hub.writes == []
+        assert _mch_family_requests(hub, "deployments") == [] and _mch_family_requests(hub, "pods") == []
+        assert dec.run_record.teardown_record(_mch_key()) == seeded
+
+    def test_namespace_present_reproof_classifies_a_fresh_pod_list(self, state_manager):
+        hub = _AcmHub(
+            mch_gets=[_strict("OBJECT_ABSENT")],
+            namespaces=[_namespace_present()],
+            pods=[_pods(_operator_pod())],
+            replicasets={OPERATOR_RS_NAME: [_replicaset()]},
+        )
+        seeded = _mch_record(TeardownPhase.COMPLETED, completed_mode="namespace_present")
+        dec = _mch_decommission(state_manager, hub, records=[seeded])
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+        assert hub.writes == []
+        assert len(_mch_family_requests(hub, "deployments")) == 1
+        assert len(_requests_of(hub, "LIST", "pods")) == 1
+
+    @pytest.mark.parametrize(
+        "scripts",
+        [
+            {"mch_gets": [_mch_present()]},
+            {"mch_gets": [_strict("ERROR")]},
+            {"namespaces": [_strict("ERROR")]},
+            {"namespaces": [_namespace_present()], "pods": [_strict("ERROR")]},
+            {"namespaces": [_namespace_present()], "deployments": [_strict("OBJECT_ABSENT")]},
+            {"namespaces": [_namespace_present()], "pods": [_pods(_acm_pod("late-pod"))]},
+        ],
+        ids=[
+            "target-present",
+            "target-unreadable",
+            "namespace-unreadable",
+            "pods-unreadable",
+            "identity-inconsistent",
+            "blocking-pod",
+        ],
+    )
+    def test_a_failed_reproof_fails_without_rewriting_the_record(self, scripts, state_manager):
+        hub = _AcmHub(**{"mch_gets": [_strict("OBJECT_ABSENT")], **scripts})
+        seeded = _mch_record(TeardownPhase.COMPLETED)
+        dec = _mch_decommission(state_manager, hub, records=[seeded])
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert hub.writes == []
+        assert MCH_DELETE not in hub.requests
+        assert dec.run_record.teardown_record(_mch_key()) == seeded
+
+
+@pytest.mark.unit
+class TestMultiClusterHubTeardownIvR40301:
+    """The seven IV-R403-01 execution-result cases for the MultiClusterHub family."""
+
+    def test_case1_no_mutation_then_proof_failure_reports_no_change(self, state_manager):
+        hub = _AcmHub(mch_gets=[_strict("ERROR")])
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert MCH_DELETE not in hub.requests
+
+    def test_case2_accepted_delete_then_cr_absence_failure_reports_the_change(self, state_manager):
+        hub = _AcmHub(mch_gets=[_mch_present(), _strict("ERROR")])
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        assert _phases(hub) == ["delete_started"]
+
+    @pytest.mark.parametrize("drain_failure", ["pod-read", "broken-chain"])
+    def test_case3_accepted_delete_then_drain_failure_reports_the_change(
+        self, drain_failure, state_manager, one_mch_poll
+    ):
+        if drain_failure == "pod-read":
+            hub = _AcmHub(namespaces=[_namespace_present()], pods=[_strict("ERROR")])
+        else:
+            hub = _AcmHub(
+                namespaces=[_namespace_present()],
+                pods=[_pods(_operator_pod())],
+                replicasets={OPERATOR_RS_NAME: [_replicaset(uid="uid-rs-mismatch")]},
+            )
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        assert "completed" not in _phases(hub)
+
+    def test_case4_accepted_delete_then_a_replaced_deployment_at_final_verification(self, state_manager):
+        hub = _AcmHub(
+            deployments=[_deployment(), _deployment(), _deployment(uid="uid-replacement")],
+            namespaces=[_namespace_present()],
+            pods=[_pods()],
+        )
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        assert _phases(hub)[-1] == "recovery_required"
+        assert "completed" not in _phases(hub)
+
+    def test_case5_resumed_drained_record_whose_final_proof_fails_reports_no_change(self, state_manager):
+        hub = _AcmHub(
+            mch_gets=[_strict("OBJECT_ABSENT"), _strict("OBJECT_ABSENT"), _strict("ERROR")],
+        )
+        dec = _mch_decommission(state_manager, hub, records=[_mch_record(TeardownPhase.DRAINED)])
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert "completed" not in _phases(hub)
+
+    def test_case6_an_earlier_substeps_change_survives_a_multiclusterhub_failure(self, state_manager):
+        hub = _AcmHub(mch_list=[_strict("ERROR")])
+        dec = _mch_decommission(state_manager, hub, has_observability=True)
+        dec.teardown_observability = Mock(return_value=SubstepExecution(SubstepOutcome.COMPLETED, changed=True))
+        dec.teardown_managed_clusters = Mock(
+            return_value=SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
+        )
+
+        result = dec.decommission(interactive=False)
+
+        assert result.succeeded is False
+        assert result.changed is True
+        assert result.substeps["observability"] is SubstepOutcome.COMPLETED
+        assert result.substeps["multiclusterhub"] is SubstepOutcome.FAILED
+
+    @pytest.mark.parametrize(
+        "scripts",
+        [
+            {"mch_list": [_strict("ERROR")]},
+            {"mch_list": [_mch_inventory("hub-a", "hub-b")]},
+            {"csv_list": [_strict("ERROR")]},
+            {"delete": ApiException(status=500, reason="Internal")},
+            {"namespaces": [_strict("ERROR")]},
+            {"namespaces": [_namespace_present()], "pods": [_strict("ERROR")]},
+            {"namespaces": [_namespace_present()], "deployments": [_deployment(), _strict("ERROR")]},
+        ],
+        ids=[
+            "inventory-error",
+            "ambiguous-inventory",
+            "capture-error",
+            "delete-rejected",
+            "namespace-error",
+            "pods-error",
+            "deployment-error",
+        ],
+    )
+    def test_case7_no_expected_failure_escapes_as_an_exception(self, scripts, state_manager, one_mch_poll):
+        hub = _AcmHub(**scripts)
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub().outcome is SubstepOutcome.FAILED
+
+    def test_a_target_gone_at_the_delete_reports_no_change_and_is_still_proven(self, state_manager):
+        hub = _AcmHub(delete=TargetDisappeared("already absent at delete time"))
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+        assert _phases(hub) == ["delete_started", "cr_absent", "drain_pending", "drained", "completed"]
+
+
+@pytest.mark.unit
+class TestMultiClusterHubDryRun:
+    """The preview reads strictly, captures identity read-only, and persists nothing."""
+
+    @staticmethod
+    def _preview(state_manager, hub, records=()):
+        dec = _mch_decommission(state_manager, hub, records=records, dry_run=True)
+        return dec, dec._preview_substep("multiclusterhub")
+
+    def test_an_available_identity_predicts_a_delete_and_writes_nothing(self, state_manager):
+        hub = _AcmHub()
+        dec, predicted = self._preview(state_manager, hub)
+
+        assert predicted is True
+        assert hub.writes == [] and MCH_DELETE not in hub.requests
+        positions = [hub.requests.index(request) for request in CAPTURE_REQUESTS]
+        assert positions == sorted(positions)
+        for resource in ("namespaces", "pods", "replicasets"):
+            assert _mch_family_requests(hub, resource) == [], "the preview does not classify Pods"
+        assert dec.run_record.all_teardown_records() == {}
+
+    def test_an_unavailable_identity_still_predicts_a_delete(self, state_manager):
+        hub = _AcmHub(csv_list=[_strict("ITEMS", items=[], resource_version="csv-list-1")])
+        _dec, predicted = self._preview(state_manager, hub)
+
+        assert predicted is True
+        assert hub.writes == []
+
+    def test_no_target_predicts_no_change(self, state_manager):
+        hub = _AcmHub(mch_list=[_mch_inventory()])
+        _dec, predicted = self._preview(state_manager, hub)
+
+        assert predicted is False
+        assert hub.requests == [("LIST", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE, None)]
+
+    def test_a_target_gone_between_list_and_get_predicts_no_change(self, state_manager):
+        hub = _AcmHub(mch_gets=[_strict("OBJECT_ABSENT")])
+        _dec, predicted = self._preview(state_manager, hub)
+
+        assert predicted is False
+        assert _mch_family_requests(hub, "clusterserviceversions") == []
+
+    @pytest.mark.parametrize(
+        "scripts",
+        [
+            {"mch_list": [_strict("ERROR")]},
+            {"mch_list": [_mch_inventory("hub-a", "hub-b")]},
+            {"mch_gets": [_strict("ERROR")]},
+            {"csv_list": [_strict("ERROR")]},
+            {"csv_get": [_strict("ERROR")]},
+        ],
+        ids=["inventory-error", "ambiguous-inventory", "target-error", "csv-list-error", "csv-get-error"],
+    )
+    def test_an_unverifiable_read_fails_the_prediction(self, scripts, state_manager):
+        hub = _AcmHub(**scripts)
+
+        with pytest.raises(SwitchoverError):
+            self._preview(state_manager, hub)
+        assert hub.writes == [] and MCH_DELETE not in hub.requests
+
+    @pytest.mark.parametrize(
+        "phase, live",
+        [
+            (TeardownPhase.DELETE_STARTED, _mch_present(uid="uid-replacement")),
+            (TeardownPhase.COMPLETED, _mch_present()),
+        ],
+        ids=["replaced", "completed-but-present"],
+    )
+    def test_a_recorded_target_that_contradicts_its_record_fails_the_prediction(self, phase, live, state_manager):
+        hub = _AcmHub(mch_gets=[live])
+
+        with pytest.raises(SwitchoverError):
+            self._preview(state_manager, hub, records=[_mch_record(phase)])
+        assert hub.writes == []
+
+    def test_a_recorded_non_completed_live_target_predicts_a_delete_without_capture(self, state_manager):
+        hub = _AcmHub()
+        _dec, predicted = self._preview(state_manager, hub, records=[_mch_record(TeardownPhase.DELETE_STARTED)])
+
+        assert predicted is True
+        assert _mch_family_requests(hub, "clusterserviceversions") == []
+
+    def test_a_live_run_after_a_preview_repeats_every_authoritative_read(self, state_manager):
+        hub = _AcmHub(mch_gets=[_mch_present(), _mch_present(), _strict("OBJECT_ABSENT")])
+        before = json.dumps(state_manager.capture_state_snapshot(), sort_keys=True)
+
+        self._preview(state_manager, hub)
+
+        assert json.dumps(state_manager.capture_state_snapshot(), sort_keys=True) == before
+        hub.requests.clear()
+        live = _mch_decommission(state_manager, hub)
+        assert live.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
+        for request in [
+            ("LIST", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE, None),
+            ("GET", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE, MCH_NAME),
+            *CAPTURE_REQUESTS,
+        ]:
+            assert request in hub.requests
+
+
+# Python E4 request-shape measurement -- NOT yet complete E7 RBAC evidence. Each shape is
+# (verb, API group, resource, namespace); "" is the core group and None is cluster scope.
+MCH_LIST_SHAPE = ("LIST", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE)
+MCH_GET_SHAPE = ("GET", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE)
+CSV_LIST_SHAPE = ("LIST", CSV_GROUP, "clusterserviceversions", ACM_NAMESPACE)
+CSV_GET_SHAPE = ("GET", CSV_GROUP, "clusterserviceversions", ACM_NAMESPACE)
+DEPLOYMENT_GET_SHAPE = ("GET", "apps", "deployments", ACM_NAMESPACE)
+REPLICASET_GET_SHAPE = ("GET", "apps", "replicasets", ACM_NAMESPACE)
+NAMESPACE_GET_SHAPE = ("GET", "", "namespaces", None)
+POD_LIST_SHAPE = ("LIST", "", "pods", ACM_NAMESPACE)
+MCH_GUARDED_DELETE_SHAPE = ("DELETE", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE)
+
+
+def _request_shapes(hub):
+    return {request[:4] for request in hub.requests if request[0] != "WRITE"}
+
+
+@pytest.mark.unit
+class TestMultiClusterHubRequestShapes:
+    """The measured Python request surface for the later RBAC STOP; no RBAC file is implied."""
+
+    def test_fresh_captured_identity_with_a_rolling_update(self, state_manager, no_sleep):
+        old = _operator_pod("mch-op-old-1", rs_name="mch-op-old", rs_uid="uid-rs-old")
+        new = _operator_pod("mch-op-new-1", rs_name="mch-op-new", rs_uid="uid-rs-new")
+        hub = _AcmHub(
+            namespaces=[_namespace_present()],
+            pods=[_pods(old, new), _pods(new)],
+            replicasets={
+                "mch-op-old": [_replicaset("mch-op-old", "uid-rs-old")],
+                "mch-op-new": [_replicaset("mch-op-new", "uid-rs-new")],
+            },
+        )
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub().outcome is SubstepOutcome.COMPLETED
+        assert _request_shapes(hub) == {
+            MCH_LIST_SHAPE,
+            MCH_GET_SHAPE,
+            CSV_LIST_SHAPE,
+            CSV_GET_SHAPE,
+            DEPLOYMENT_GET_SHAPE,
+            REPLICASET_GET_SHAPE,
+            NAMESPACE_GET_SHAPE,
+            POD_LIST_SHAPE,
+            MCH_GUARDED_DELETE_SHAPE,
+        }
+        assert hub.delete_uids == [MCH_UID]
+
+    def test_fresh_unavailable_identity(self, state_manager):
+        hub = _AcmHub(
+            csv_list=[_strict("ITEMS", items=[], resource_version="csv-list-1")],
+            namespaces=[_namespace_present()],
+            pods=[_pods()],
+        )
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub().outcome is SubstepOutcome.COMPLETED
+        assert _request_shapes(hub) == {
+            MCH_LIST_SHAPE,
+            MCH_GET_SHAPE,
+            CSV_LIST_SHAPE,
+            NAMESPACE_GET_SHAPE,
+            POD_LIST_SHAPE,
+            MCH_GUARDED_DELETE_SHAPE,
+        }
+
+    def test_resume_from_drain_pending(self, state_manager):
+        hub = _AcmHub(
+            mch_list=[_mch_inventory()],
+            mch_gets=[_strict("OBJECT_ABSENT")],
+            namespaces=[_namespace_present()],
+            pods=[_pods(_operator_pod())],
+            replicasets={OPERATOR_RS_NAME: [_replicaset()]},
+        )
+        dec = _mch_decommission(state_manager, hub, records=[_mch_record(TeardownPhase.DRAIN_PENDING)])
+
+        assert dec.teardown_multiclusterhub().outcome is SubstepOutcome.COMPLETED
+        assert _request_shapes(hub) == {
+            MCH_LIST_SHAPE,
+            MCH_GET_SHAPE,
+            DEPLOYMENT_GET_SHAPE,
+            REPLICASET_GET_SHAPE,
+            NAMESPACE_GET_SHAPE,
+            POD_LIST_SHAPE,
+        }
+
+    def test_completed_reproof(self, state_manager):
+        hub = _AcmHub(
+            mch_gets=[_strict("OBJECT_ABSENT")],
+            namespaces=[_namespace_present()],
+            pods=[_pods(_operator_pod())],
+            replicasets={OPERATOR_RS_NAME: [_replicaset()]},
+        )
+        dec = _mch_decommission(state_manager, hub, records=[_mch_record(TeardownPhase.COMPLETED)])
+
+        assert dec.teardown_multiclusterhub().outcome is SubstepOutcome.COMPLETED
+        assert _request_shapes(hub) == {
+            MCH_LIST_SHAPE,
+            MCH_GET_SHAPE,
+            NAMESPACE_GET_SHAPE,
+            POD_LIST_SHAPE,
+            DEPLOYMENT_GET_SHAPE,
+            REPLICASET_GET_SHAPE,
+        }
+
+    def test_dry_run_preview(self, state_manager):
+        hub = _AcmHub()
+        dec = _mch_decommission(state_manager, hub, dry_run=True)
+
+        assert dec._preview_substep("multiclusterhub") is True
+        assert _request_shapes(hub) == {
+            MCH_LIST_SHAPE,
+            MCH_GET_SHAPE,
+            CSV_LIST_SHAPE,
+            CSV_GET_SHAPE,
+            DEPLOYMENT_GET_SHAPE,
+        }
+
+    def test_no_target_clean_skip(self, state_manager):
+        hub = _AcmHub(mch_list=[_mch_inventory()])
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub().outcome is SubstepOutcome.PRECONDITION_NOOP
+        assert _request_shapes(hub) == {MCH_LIST_SHAPE}
