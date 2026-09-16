@@ -40,7 +40,6 @@ from lib.constants import (
 from lib.exceptions import SwitchoverError, ValidationError
 from lib.strict_read import StrictReadOutcome
 from lib.teardown_record import (
-    MCH_OWNED_CRD,
     MalformedTeardownRecord,
     TeardownPhase,
     TeardownRecord,
@@ -1654,6 +1653,47 @@ def test_recorded_deployment_reread_happens_even_with_zero_pods():
     assert result.decisions == ()
     assert len([c for c in client.calls if c[0] == "get_deployment_strict"]) == 1
     assert len([c for c in client.calls if c[0] == "get_replicaset_strict"]) == 0
+
+
+def test_invalid_recorded_deployment_name_is_inconsistent_without_any_read():
+    """Covers `classify_pods`'s `if _is_valid_name(recorded_name):` guard (modules/decommission_
+    identity.py): an invalid recorded Deployment name must short-circuit to IDENTITY_INCONSISTENT
+    with ZERO client calls, before ever reading anything -- not merely fail to match afterwards.
+
+    The fake is deliberately primed to answer a `get_deployment_strict("Bad Name!", ...)` call
+    with a fully verified `items` outcome, and the Pod's chain is built to resolve all the way to
+    an OPERATOR_OWNED decision if that read were ever allowed to happen. This means a mutation
+    that bypasses the validity check (e.g. replacing the guard with `if True:`) does not merely
+    trip the fake's own "no answer configured" bookkeeping -- it produces a real, wrong
+    `ClassificationPass` (identity_status None instead of IDENTITY_INCONSISTENT, a non-None
+    resource_version, an OPERATOR_OWNED decision, and non-empty client.calls) that every assertion
+    below independently catches.
+    """
+    invalid_name = "Bad Name!"
+    identity = OperatorIdentity(operator_deployment=_valid_operator_deployment(name=invalid_name))
+    pods = [
+        _pod(
+            "multiclusterhub-operator-badrecordedname",
+            owner_references=[_owner_ref(name="rs-badrecordedname", uid="uid-rs-badrecordedname")],
+        )
+    ]
+    replicasets = {
+        "rs-badrecordedname": _rs_items(
+            "uid-rs-badrecordedname", [_deployment_owner_ref(name=invalid_name, uid=RECORDED_DEPLOYMENT_UID)]
+        )
+    }
+    client = _FakeClassifierClient(
+        recorded_deployment_reads=[{"read": "items", "uid": RECORDED_DEPLOYMENT_UID}],
+        replicasets=replicasets,
+        vector_id="invalid-recorded-name",
+    )
+
+    result = classify_pods(client, _render_pods(pods), identity)
+
+    assert result.identity_status == _IDENTITY_INCONSISTENT
+    assert result.operator_deployment_resource_version is None
+    assert all(d.decision == _DRAIN_BLOCKING for d in result.decisions)
+    assert client.calls == []
 
 
 def test_inconsistent_pass_performs_zero_replicaset_reads():
