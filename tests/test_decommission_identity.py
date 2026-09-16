@@ -376,16 +376,20 @@ OWNER_CHAIN_VECTORS = (
         passes=[_pass(_recorded_ok(), None, {"multiclusterhub-operator-otherns": _DRAIN_BLOCKING})],
     ),
     _vector(
-        "row10_rs_owner_ref_name_invalid_dns",
+        # The Pod's own controller ref to the ReplicaSet carries the invalid DNS-1123
+        # name -- not the RS's ref to the Deployment. A classifier under test must
+        # reject this before ever reading the "Bad Name!" ReplicaSet: no entry for it
+        # exists in `replicasets`, so a lookup by that name proves a bug.
+        "row10_pod_rs_ref_name_invalid_dns",
         10,
         identity="captured",
         pods=[
             _pod(
                 "multiclusterhub-operator-badname",
-                owner_references=[_owner_ref(name="rs-badname", uid="uid-rs-badname")],
+                owner_references=[_owner_ref(name="Bad Name!", uid="uid-rs-badname")],
             )
         ],
-        replicasets={"rs-badname": _rs_items("uid-rs-badname", [_deployment_owner_ref(name="Bad Name!")])},
+        replicasets={},
         passes=[_pass(_recorded_ok(), None, {"multiclusterhub-operator-badname": _DRAIN_BLOCKING})],
     ),
     _vector(
@@ -601,6 +605,20 @@ def _csv_get_error():
     return {"read": "error"}
 
 
+# `csv_get` carries exactly one meaning per value, unlike the brief's original
+# schema comment (which conflated two): `None` means the named GET was attempted
+# and returned the selected candidate unchanged; `{"read": "not_reached"}` means
+# the classification concluded (fatal or operator_identity_unavailable) before the
+# named GET was ever attempted, so no client call for it should occur. The two
+# must never be interchanged -- a mock built strictly from `None` == "unchanged"
+# would wrongly configure a passthrough response for a GET that is never issued.
+_CSV_GET_NOT_REACHED = {"read": "not_reached"}
+
+
+def _csv_get_not_reached():
+    return dict(_CSV_GET_NOT_REACHED)
+
+
 def _deployment_get_items(uid):
     return {"read": "items", "uid": uid}
 
@@ -645,26 +663,31 @@ IDENTITY_CAPTURE_VECTORS = (
     _capture_vector(
         "capture_csv_kind_not_served",
         csv_list=_csv_list_crd_absent(),
+        csv_get=_csv_get_not_reached(),
         expected=_outcome_unavailable("csv_absent"),
     ),
     _capture_vector(
         "capture_zero_csvs",
         csv_list=_csv_list_items(),
+        csv_get=_csv_get_not_reached(),
         expected=_outcome_unavailable("csv_absent"),
     ),
     _capture_vector(
         "capture_csv_owns_other_crd_only",
         csv_list=_csv_list_items(_csv(owned_crds=["someothercrd.example.io"])),
+        csv_get=_csv_get_not_reached(),
         expected=_outcome_unavailable("csv_owned_crd_mismatch"),
     ),
     _capture_vector(
         "capture_csv_owned_crds_null",
         csv_list=_csv_list_items(_csv(owned_crds=None)),
+        csv_get=_csv_get_not_reached(),
         expected=_outcome_unavailable("csv_owned_crd_mismatch"),
     ),
     _capture_vector(
         "capture_csv_phase_installing",
         csv_list=_csv_list_items(_csv(phase="Installing")),
+        csv_get=_csv_get_not_reached(),
         expected=_outcome_unavailable("csv_not_succeeded"),
     ),
     _capture_vector(
@@ -673,6 +696,7 @@ IDENTITY_CAPTURE_VECTORS = (
             _csv(name="advanced-cluster-management.v2.13.0-a", uid="uid-csv-a"),
             _csv(name="advanced-cluster-management.v2.13.0-b", uid="uid-csv-b"),
         ),
+        csv_get=_csv_get_not_reached(),
         expected=_outcome_unavailable("csv_ambiguous"),
     ),
     _capture_vector(
@@ -687,16 +711,19 @@ IDENTITY_CAPTURE_VECTORS = (
     _capture_vector(
         "capture_csv_list_error",
         csv_list=_csv_list_error(),
+        csv_get=_csv_get_not_reached(),
         expected=_outcome_fatal(),
     ),
     _capture_vector(
         "capture_selected_csv_empty_uid",
         csv_list=_csv_list_items(_csv(uid="")),
+        csv_get=_csv_get_not_reached(),
         expected=_outcome_fatal(),
     ),
     _capture_vector(
         "capture_selected_csv_invalid_name",
         csv_list=_csv_list_items(_csv(name="Bad Name!")),
+        csv_get=_csv_get_not_reached(),
         expected=_outcome_fatal(),
     ),
     _capture_vector(
@@ -845,6 +872,10 @@ def test_owner_chain_expectations_use_the_closed_vocabulary():
                 violations.append(f"{vector['id']}: pod_list_read=error but passes is not empty")
             continue
 
+        if vector["passes"] == []:
+            violations.append(f"{vector['id']}: pod_list_read={vector['pod_list_read']!r} but passes is empty")
+            continue
+
         for i, one_pass in enumerate(vector["passes"]):
             status = one_pass["expected_status"]
             if status not in status_values:
@@ -894,6 +925,49 @@ def test_capture_expectations_use_the_closed_reason_vocabulary():
     missing = set(reasons) - seen_reasons if reasons is not _MISSING else set()
     assert not violations, "Capture vector vocabulary violations:\n  " + "\n  ".join(violations)
     assert not missing, f"Reasons never exercised by a capture vector: {sorted(missing)}"
+
+
+# Vectors whose `csv_list` already reads "items" (so the failure isn't visible from
+# `csv_list` alone) but whose classification concludes before the named CSV GET per
+# the brief's evaluation order, steps 1-4: zero CSVs / no owning CSV / no Succeeded
+# owning CSV / more than one Succeeded owning CSV / the selected candidate itself
+# being unusable (empty uid or an invalid name). Deliberately excludes
+# capture_csv_kind_not_served and capture_csv_list_error -- those are already
+# provable from `csv_list["read"] != "items"` below, so listing them here too would
+# make the check tautological rather than an independent cross-check.
+_PRE_CSV_GET_ITEMS_VECTOR_IDS = frozenset(
+    {
+        "capture_zero_csvs",
+        "capture_csv_owns_other_crd_only",
+        "capture_csv_owned_crds_null",
+        "capture_csv_phase_installing",
+        "capture_two_succeeded_owning_csvs",
+        "capture_selected_csv_empty_uid",
+        "capture_selected_csv_invalid_name",
+    }
+)
+
+
+def test_capture_csv_get_not_reached_matches_pre_get_failures():
+    """`csv_get` is the `not_reached` sentinel iff the named CSV GET is never issued.
+
+    Structural half: `csv_list["read"] != "items"` (crd_absent / error) always means
+    no candidate was ever selected, so the GET cannot have been attempted.
+    Explicit half: `csv_list["read"] == "items"` but classification concludes on the
+    listed CSVs themselves (steps 1-4), named by `_PRE_CSV_GET_ITEMS_VECTOR_IDS`.
+    Every other vector must show the GET as attempted (`None`, or an explicit
+    items/object_absent/error outcome) -- never the sentinel.
+    """
+    violations = []
+    for vector in IDENTITY_CAPTURE_VECTORS:
+        is_not_reached = vector["csv_get"] == _CSV_GET_NOT_REACHED
+        csv_list_is_items = vector["csv_list"].get("read") == "items"
+        should_be_not_reached = (not csv_list_is_items) or (vector["id"] in _PRE_CSV_GET_ITEMS_VECTOR_IDS)
+        if is_not_reached != should_be_not_reached:
+            violations.append(
+                f"{vector['id']}: csv_get not_reached={is_not_reached} but expected {should_be_not_reached}"
+            )
+    assert not violations, "csv_get not_reached sentinel drift:\n  " + "\n  ".join(violations)
 
 
 def test_vectors_are_json_compatible():
