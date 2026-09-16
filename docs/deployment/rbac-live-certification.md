@@ -64,13 +64,17 @@ The certification validates that the `acm-switchover-operator` service account h
 
 The shipped deployment binds the baseline operator ClusterRole and the optional decommission
 extension to the SAME service account, so a standalone `--decommission` run normally carries
-both. Where an operator instead certifies an identity that carries the decommission extension
-alone, the required SubjectAccessReview inventory for that identity additionally includes the
-cluster-scoped `get` on `multiclusterobservabilities`, which the observability teardown issues
-before its delete and again for the final absence proof. The profile-driven certification
-expansion above covers the baseline operator role, where that read is already part of the
-baseline cluster read surface; the extension-only identity is the case this line records.
-Nothing in this section asserts that a live certification run has been performed.
+both. Dual-bound certification therefore sees ManagedCluster `get`/`list` from the baseline
+operator surface and ManagedCluster `delete` from the decommission extension (the profile
+expansion above); the extension is not a complete standalone inventory role — `list` stays on
+baseline. Where an operator instead certifies an identity that carries the decommission
+extension alone, the required SubjectAccessReview inventory for that identity additionally
+includes the cluster-scoped `get` on both `managedclusters` and `multiclusterobservabilities`:
+standalone guarded teardown issues a strict named GET before each UID-preconditioned delete and
+again for the final absence proof. The profile-driven certification expansion above covers the
+baseline operator role, where those reads are already part of the baseline cluster read surface;
+the extension-only identity is the case this paragraph records. Nothing in this section asserts
+that a live certification run has been performed.
 
 ### Secondary Hub (Profile-Driven Scope)
 
