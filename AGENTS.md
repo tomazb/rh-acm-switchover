@@ -394,6 +394,57 @@ commit history.
   reconcile the new state before continuing. Do not overwrite, rebase away, or otherwise
   conceal an unexpected concurrent change.
 
+### Capability and reasoning-effort selection
+
+Model/capability choice and reasoning-effort choice are separate controls. Apply the
+repository authority hierarchy first: this file sets the repository-wide floor, while a
+governing issue, design, or specification may require a stricter model, capability,
+independence, or effort level for its slice. A stricter applicable requirement wins.
+Nothing in this section weakens another gate or authorizes an issue to relax this file.
+
+When no stricter requirement applies, choose the least costly / lowest-latency combination
+that can satisfy the task's evidence contract. Do not infer capability from branding or a
+model name, and do not treat higher reasoning effort as a substitute for an explicit
+capability requirement (or the reverse).
+
+A task may use a lower-cost/faster agent or lower effort when all of the following hold:
+
+- the dispatch is bounded and fully specified before execution: inputs, allowed scope,
+  expected output, and the acceptance check are explicit;
+- the returned output is advisory, mechanical, or independently checkable before reliance
+  (for example searches, inventories, transcript summaries, fixture/vector generation,
+  formatting, mechanical renames, or documentation guardrail maintenance);
+- a deterministic gate or a role meeting the governing capability/effort floor will verify
+  the result before it becomes evidence for a decision;
+- the delegated role does not make the final decision establishing identity,
+  authorization, mutation target, phase transition, RBAC grant, parity disposition,
+  protected-file authorization, release-certification eligibility, or terminal review
+  verdict.
+
+Lower-cost/faster agents may gather evidence for safety-sensitive work, but final authority
+remains with the role and capability/effort floor required by the governing policy. In
+particular, never downgrade a validator, advisor, resolver, release-certification decision,
+RBAC disposition, lab-mutation decision, or other role whose governing contract sets a
+specific floor.
+
+Escalate before relying on delegated output when any of these occurs: the task is ambiguous,
+outputs conflict, required evidence is missing, conclusions are unsupported, the task
+escapes its declared scope, the work turns out to be more safety-sensitive than classified,
+or a mandatory model/capability/effort setting cannot be selected or verified. Re-specify
+or rerun the necessary portion at the required floor; do not weaken the acceptance check.
+
+Where the execution environment exposes model/capability or reasoning-effort metadata and
+the governing contract makes those settings material, record the required floor and the
+actual selection in the evidence note. If the setting is mandatory but cannot be verified,
+treat that prerequisite as unmet.
+
+Delegated output has the same evidence posture as other generated or external review:
+verify it against source, tests, and the acceptance contract before treating it as fact.
+Tier/effort selection never waives a gate, shortens a mandatory review, substitutes for
+independent validation, or replaces exact-head CI.
+
+Tool-specific mechanics belong in the tool's instruction file rather than here.
+
 Each role independently performs the mandatory start gate and the protected-file diff check.
 Each treats the previous role's conclusions as claims to verify, not as facts.
 
@@ -919,7 +970,7 @@ list the open `Phase 9` issues rather than trusting any status sentence written 
   source and tests before reporting it as a finding.
 - **External reviews are hypotheses until verified.** The operator-supplied Thermos Ansible
   review and any external or AI reviewer produce candidate findings; validate each against
-  source, tests, and documentation before treating it as a repository defect. Track Thermos
+  source, tests, and documentation before treating them as a repository defect. Track Thermos
   follow-up state in [`thermos-resolution-plan.md`](thermos-resolution-plan.md), one branch
   and one tracker row per PR, each based on the latest merged `ansible` unless the tracker
   records a stacked dependency.
