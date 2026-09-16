@@ -251,7 +251,7 @@ OLD_HUB_FINALIZATION_PERMISSIONS = [
 DECOMMISSION_CLUSTER_PERMISSIONS = [
     ("", "namespaces", ["get"]),
     (HIVE_OPENSHIFT_IO, HIVE_CLUSTERDEPLOYMENT_RESOURCE, ["list"]),
-    (CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO, "managedclusters", ["list", "delete"]),
+    (CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO, "managedclusters", ["get", "list", "delete"]),
     (OPERATOR_OPEN_CLUSTER_MANAGEMENT_IO, "multiclusterhubs", ["list", "delete"]),
     (
         OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO,

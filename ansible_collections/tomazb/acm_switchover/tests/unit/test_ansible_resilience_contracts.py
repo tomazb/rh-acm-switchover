@@ -217,7 +217,7 @@ def test_decommission_defaults_missing_execution_mode_to_dry_run_for_destructive
     """Missing execution.mode must not fall through to live deletes."""
     files = [
         DECOMMISSION_TASKS / "main.yml",
-        DECOMMISSION_TASKS / "delete_managed_clusters.yml",
+        DECOMMISSION_TASKS / "teardown_one_managed_cluster.yml",
         DECOMMISSION_TASKS / "delete_multiclusterhub.yml",
         DECOMMISSION_TASKS / "delete_observability.yml",
     ]
@@ -303,26 +303,21 @@ def test_argocd_manage_test_summary_uses_report_artifact_safe_path_policy():
 
 
 def test_decommission_waits_for_non_local_managed_clusters_before_mch_delete():
-    """ManagedCluster finalizers must drain before MultiClusterHub deletion starts."""
-    tasks = _load_yaml(DECOMMISSION_TASKS / "delete_managed_clusters.yml")
-    text = (DECOMMISSION_TASKS / "delete_managed_clusters.yml").read_text()
+    """ManagedCluster absence must be proved before MultiClusterHub deletion starts.
 
-    wait_tasks = [
-        task
-        for task in tasks
-        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster" and "until" in task
-    ]
+    R4-03 PR D moved polling into ``acm_uid_guarded_delete`` plus a final strict
+    named GET; family YAML no longer uses a post-delete ``k8s_info`` until loop.
+    """
+    family = (DECOMMISSION_TASKS / "delete_managed_clusters.yml").read_text()
+    one = (DECOMMISSION_TASKS / "teardown_one_managed_cluster.yml").read_text()
+    main = (DECOMMISSION_TASKS / "main.yml").read_text()
 
-    assert wait_tasks, "delete_managed_clusters.yml must poll ManagedClusters after delete requests"
-    wait_task = wait_tasks[-1]
-    assert "retries" in wait_task and "delay" in wait_task
-    until = str(wait_task.get("until", ""))
-    assert "local-cluster" in until
-    assert "| length" in until
-    assert "== 0" in until
-    assert text.index("Delete non-local ManagedClusters") < text.index(wait_task["name"])
-    assert isinstance(wait_task.get("when"), list)
-    assert any("_managed_cluster_delete_targets" in str(condition) for condition in wait_task["when"])
+    assert "acm_uid_guarded_delete" in one
+    assert "wait_timeout:" in one
+    assert "Re-read this ManagedCluster for final absence proof" in one
+    assert "local-cluster" in family
+    assert "include_tasks: teardown_one_managed_cluster.yml" in family
+    assert main.index("delete_managed_clusters.yml") < main.index("delete_multiclusterhub.yml")
 
 
 def test_decommission_checks_clusterdeployments_before_managedcluster_delete():
@@ -332,17 +327,21 @@ def test_decommission_checks_clusterdeployments_before_managedcluster_delete():
     text = (DECOMMISSION_TASKS / "delete_managed_clusters.yml").read_text()
 
     clusterdeployment_reads = [
-        task for task in flattened_tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ClusterDeployment"
+        task
+        for task in flattened_tasks
+        if task.get("tomazb.acm_switchover.acm_k8s_read_outcome", {}).get("kind") == "ClusterDeployment"
     ]
     fail_tasks = [task for task in flattened_tasks if task.get("ansible.builtin.fail")]
 
     assert clusterdeployment_reads, "delete_managed_clusters.yml must re-read Hive ClusterDeployments"
     assert fail_tasks, "delete_managed_clusters.yml must fail before unsafe deletes"
-    assert text.index("List Hive ClusterDeployments before ManagedCluster deletion") < text.index(
+    assert text.index("Read Hive ClusterDeployments before ManagedCluster deletion") < text.index(
         "Block unsafe ManagedCluster deletion"
     )
-    assert text.index("Block unsafe ManagedCluster deletion") < text.index("Delete non-local ManagedClusters")
-    assert "_managed_cluster_delete_targets" in text
+    assert text.index("Block unsafe ManagedCluster deletion") < text.index(
+        "Tear down each ManagedCluster in the work set"
+    )
+    assert "_acm_mc_live_names" in text
     assert "preserveOnDelete" in text
     assert "clusterMetadata" in text
     assert "clusterInstallRef" in text
@@ -365,8 +364,8 @@ def _render_clusterdeployment_delete_safety(clusterdeployments: list[dict], targ
     environment.filters["to_json"] = json.dumps
     environment.filters["unique"] = lambda values: list(dict.fromkeys(values))
     rendered = environment.from_string(expression).render(
-        _decommission_clusterdeployments={"resources": clusterdeployments},
-        _managed_cluster_delete_targets=[{"metadata": {"name": name}} for name in target_names],
+        acm_switchover_cd_read={"resources": clusterdeployments},
+        _acm_mc_live_names=target_names,
     )
 
     return json.loads(rendered)
@@ -450,12 +449,12 @@ def test_decommission_missing_clusterdeployment_api_fails_before_delete():
     """Missing Hive ClusterDeployment API must fail before ManagedCluster deletion."""
     text = (DECOMMISSION_TASKS / "delete_managed_clusters.yml").read_text()
 
-    assert "block:" in text and "rescue:" in text
+    assert "Unable to verify ClusterDeployment preserveOnDelete safety" in text
+    assert "kind_not_served" in text
     assert "Record verified absence of Hive ClusterDeployment API" not in text
     assert "_clusterdeployments_verified_absent" not in text
-    assert "Unable to verify ClusterDeployment preserveOnDelete safety" in text
     assert text.index("Unable to verify ClusterDeployment preserveOnDelete safety") < text.index(
-        "Delete non-local ManagedClusters"
+        "Tear down each ManagedCluster in the work set"
     )
 
 
@@ -516,19 +515,19 @@ def test_decommission_result_reports_actual_delete_changes():
     """Decommission result changed state must come from delete tasks, not status alone."""
     main_text = (DECOMMISSION_TASKS / "main.yml").read_text()
     managed_text = (DECOMMISSION_TASKS / "delete_managed_clusters.yml").read_text()
+    one_text = (DECOMMISSION_TASKS / "teardown_one_managed_cluster.yml").read_text()
     obs_text = (DECOMMISSION_TASKS / "delete_observability.yml").read_text()
     mch_text = (DECOMMISSION_TASKS / "delete_multiclusterhub.yml").read_text()
 
     assert "changed:" in main_text
-    for result_name in (
-        "_managed_cluster_delete_results",
-        "_multiclusterhub_delete_results",
-    ):
-        assert result_name in main_text
-        assert f"({result_name} | default({{}})).results | default([])" in main_text
-        assert "| selectattr('changed')" in main_text
+    assert "_acm_mc_changed" in main_text
+    assert "(_acm_mc_changed | default(false) | bool)" in main_text
+    assert "_multiclusterhub_delete_results" in main_text
+    assert "(_multiclusterhub_delete_results | default({})).results | default([])" in main_text
+    assert "| selectattr('changed')" in main_text
 
-    assert "register: _managed_cluster_delete_results" in managed_text
+    assert "acm_uid_guarded_delete" in one_text
+    assert "_acm_mc_changed" in managed_text
     assert "register: acm_switchover_mco_delete" in obs_text
     assert "acm_switchover_mco_delete.changed | default(false) | bool" in main_text
     assert "register: _multiclusterhub_delete_results" in mch_text

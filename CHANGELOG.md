@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- R4-03 PR D ManagedCluster teardown (Python + Collection): strict inventory, Hive
+  `preserveOnDelete` guard, durable UID before UID-preconditioned DELETE, no-drain
+  phase sequence, survivor aggregation, and dry-run/check-mode parity.
+- Decommission extension `managedclusters` named `get` (with existing `delete`) so
+  standalone teardown RBAC is self-consistent with UID/absence-proof reads; mirrored in
+  Python/Collection `DECOMMISSION_CLUSTER_PERMISSIONS`, bundled manifest, and Helm.
+
 ### Fixed
 
 - The Collection `decommission` role no longer reads the source

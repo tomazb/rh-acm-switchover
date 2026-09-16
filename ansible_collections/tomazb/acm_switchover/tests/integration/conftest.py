@@ -542,7 +542,23 @@ def run_noncore_fixture(tmp_path):
 
         mco_api = None
         if fixture_name == "decommission_dry_run.yml":
-            mco_api = FakeGuardedDeleteAPI(mco_object("fixture-mco-uid"))
+            mco_api = FakeGuardedDeleteAPI(
+                mco_object("fixture-mco-uid"),
+                served_empty_lists=[
+                    {
+                        "group": "cluster.open-cluster-management.io",
+                        "version": "v1",
+                        "plural": "managedclusters",
+                        "kind": "ManagedCluster",
+                    },
+                    {
+                        "group": "hive.openshift.io",
+                        "version": "v1",
+                        "plural": "clusterdeployments",
+                        "kind": "ClusterDeployment",
+                    },
+                ],
+            )
 
         # The `try` starts the instant the fake server is listening, so a failure in the
         # remaining setup -- a missing hub key, an unwritable kubeconfig, a YAML dump

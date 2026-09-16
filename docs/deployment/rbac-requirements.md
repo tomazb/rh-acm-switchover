@@ -263,7 +263,7 @@ The base deployment binds the baseline operator ClusterRole to the same service 
 - **ClusterRoleBinding**: `acm-switchover-decommission`
 - **Additional verbs**:
   - `list` on `clusterdeployments` for the just-in-time `preserveOnDelete` decommission safety check
-  - `delete` on `managedclusters`
+  - `get`, `delete` on `managedclusters`. `get` is the strict named read the standalone teardown performs before the UID-preconditioned delete and again for absence proof; `list` remains on the baseline operator role
   - `delete` on cluster-scoped `multiclusterhubs`
   - `get`, `delete` on `multiclusterobservabilities`. `delete` is also present in the baseline operator role for normal finalization. `get` is the strict named read the standalone teardown performs before deletion and again for the final absence proof, listed here so the extension is self-consistent with the calls that teardown makes.
 

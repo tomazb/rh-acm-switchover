@@ -62,7 +62,9 @@ VALIDATOR_CLUSTER_VERB_EXCEPTIONS: Dict[Tuple[str, str], FrozenSet[str]] = {
 }
 
 
-def _format_verb_removals(removals: Dict[Tuple[str, str], FrozenSet[str]]) -> Dict[Tuple[str, str], List[str]]:
+def _format_verb_removals(
+    removals: Dict[Tuple[str, str], FrozenSet[str]],
+) -> Dict[Tuple[str, str], List[str]]:
     """Render a removals mapping with deterministic ordering for error messages."""
     return {key: sorted(verbs) for key, verbs in sorted(removals.items())}
 
@@ -258,7 +260,11 @@ class RBACValidator:
     DECOMMISSION_CLUSTER_PERMISSIONS = [
         ("", "namespaces", ["get"]),
         (HIVE_CLUSTERDEPLOYMENT_API_GROUP, HIVE_CLUSTERDEPLOYMENT_PLURAL, ["list"]),
-        ("cluster.open-cluster-management.io", "managedclusters", ["list", "delete"]),
+        (
+            "cluster.open-cluster-management.io",
+            "managedclusters",
+            ["get", "list", "delete"],
+        ),
         ("operator.open-cluster-management.io", "multiclusterhubs", ["list", "delete"]),
         (
             "observability.open-cluster-management.io",
@@ -539,7 +545,11 @@ class RBACValidator:
 
             for api_group, resource, verbs in self.DECOMMISSION_PERMISSIONS:
                 if skip_observability and "observability" in api_group:
-                    logger.info("Skipping observability decommission permission: %s/%s", api_group, resource)
+                    logger.info(
+                        "Skipping observability decommission permission: %s/%s",
+                        api_group,
+                        resource,
+                    )
                     continue
 
                 for verb in verbs:
@@ -790,7 +800,10 @@ class RBACValidator:
             cluster_errors: List[str] = []
             namespace_errors: List[str] = []
 
-            logger.info("Validating standalone decommission RBAC permissions for role: %s", self.role)
+            logger.info(
+                "Validating standalone decommission RBAC permissions for role: %s",
+                self.role,
+            )
 
             check_observability = not skip_observability
             if check_observability and not self._namespace_exists_cached(OBSERVABILITY_NAMESPACE):
@@ -819,7 +832,10 @@ class RBACValidator:
             if cluster_errors:
                 all_errors["cluster"] = cluster_errors
 
-            for namespace, permissions in self.DECOMMISSION_NAMESPACE_PERMISSIONS.items():
+            for (
+                namespace,
+                permissions,
+            ) in self.DECOMMISSION_NAMESPACE_PERMISSIONS.items():
                 if namespace == OBSERVABILITY_NAMESPACE and not check_observability:
                     continue
 
@@ -1069,6 +1085,7 @@ def validate_rbac_permissions(
             continue
         if hub_role == HUB_ROLE_SECONDARY and client is None:
             continue
+        assert client is not None  # narrowed after the None skips above
         _validate_hub(
             hub_role,
             client,

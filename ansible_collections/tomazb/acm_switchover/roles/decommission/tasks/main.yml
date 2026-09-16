@@ -204,10 +204,7 @@
             {{
               (not ansible_check_mode)
               and (
-                (
-                  ((_managed_cluster_delete_results | default({})).results | default([])
-                  | selectattr('changed') | list | length) > 0
-                )
+                (_acm_mc_changed | default(false) | bool)
                 or (
                   acm_switchover_mco_delete.changed | default(false) | bool
                 )
@@ -217,7 +214,11 @@
                 )
               )
             }}
-          would_change: "{{ _acm_mco_would_change | default(false) | bool }}"
+          would_change: >-
+            {{
+              (_acm_mco_would_change | default(false) | bool)
+              or (_acm_mc_would_change | default(false) | bool)
+            }}
 
     - name: Normalize summary path input
       ansible.builtin.set_fact:

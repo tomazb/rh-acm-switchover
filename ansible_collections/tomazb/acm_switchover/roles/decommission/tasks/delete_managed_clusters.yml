@@ -1,47 +1,157 @@
 ---
-- name: Announce managed cluster deletion (dry_run)
-  ansible.builtin.debug:
-    msg: "[dry_run] Would delete all non-local ManagedCluster resources"
-  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+# ManagedCluster family teardown (R4-03 PR D).
+#
+# Mirrors Python Decommission.teardown_managed_clusters: strict inventory, Hive
+# preserveOnDelete safety before mutation, per-name no-drain UID-guarded teardown
+# via teardown_one_managed_cluster.yml, and one survivor aggregation failure.
+# local-cluster is filtered out of the work set and never receives a named get,
+# DELETE, or teardown record.
 
-- name: List ManagedClusters
-  kubernetes.core.k8s_info:
-    kind: ManagedCluster
-    api_version: cluster.open-cluster-management.io/v1
-    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
-  register: _managed_clusters
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-
-- name: Select non-local ManagedClusters for deletion
+- name: Initialize ManagedCluster family aggregation facts
   ansible.builtin.set_fact:
-    _managed_cluster_delete_targets: >-
-      {{
-        _managed_clusters.resources
-        | default([])
-        | rejectattr('metadata.name', 'equalto', 'local-cluster')
-        | list
-      }}
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    _acm_mc_survivors: []
+    _acm_mc_changed: false
+    _acm_mc_would_change: false
+    _acm_mc_live_names: []
+    _acm_mc_record_names: []
+    _acm_mc_work_set: []
 
-- name: Verify ClusterDeployment preserveOnDelete safety before ManagedCluster deletion
+- name: Load the durable ManagedCluster teardown records
+  tomazb.acm_switchover.checkpoint_phase:
+    checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+    read_facts: true
+  register: _acm_mc_checkpoint
+
+- name: Publish durable ManagedCluster teardown record names
+  ansible.builtin.set_fact:
+    _acm_mc_record_names: "{{ _acm_mc_record_names_json | from_json }}"
+  vars:
+    _acm_mc_record_names_json: >-
+      {%- set names = [] -%}
+      {%- for key in (_acm_mc_checkpoint.facts.teardown_records | default({}) | dict2items | map(attribute='key') | list) -%}
+      {%- set parts = key.rsplit('/', 3) -%}
+      {%- if parts | length == 4 -%}
+      {%- set api_version = parts[0] -%}
+      {%- set kind = parts[1] -%}
+      {%- set name = parts[3] -%}
+      {%- if kind == 'ManagedCluster'
+            and api_version == 'cluster.open-cluster-management.io/v1'
+            and name
+            and name != 'local-cluster' -%}
+      {%- set _ = names.append(name) -%}
+      {%- endif -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ names | unique | list | to_json }}
+
+- name: Read the source ManagedCluster inventory
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: list
+    api_version: cluster.open-cluster-management.io/v1
+    kind: ManagedCluster
+    resource_name: managedclusters
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: acm_switchover_mc_read
+  no_log: true
+
+- name: Fail closed when the source ManagedCluster inventory is unverifiable
+  ansible.builtin.fail:
+    msg: Cannot verify ManagedCluster inventory. Nothing was deleted.
+  when: acm_switchover_mc_read.read_status not in ['ok', 'kind_not_served']
+
+- name: Detect malformed ManagedCluster inventory items
+  ansible.builtin.set_fact:
+    _acm_mc_inventory_malformed: "{{ _acm_mc_inventory_malformed_json | from_json }}"
+  vars:
+    _acm_mc_inventory_malformed_json: >-
+      {%- set bad = [] -%}
+      {%- if acm_switchover_mc_read.read_status == 'ok' -%}
+      {%- for mc in (acm_switchover_mc_read.resources | default([])) -%}
+      {%- if mc is not mapping
+            or mc.metadata is not defined
+            or mc.metadata is not mapping
+            or mc.metadata.name is not string
+            or (mc.metadata.name | trim | length) == 0 -%}
+      {%- set _ = bad.append(1) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- endif -%}
+      {{ (bad | length > 0) | bool | to_json }}
+
+- name: Fail closed when ManagedCluster inventory items are malformed
+  ansible.builtin.fail:
+    msg: Cannot verify ManagedCluster inventory. Nothing was deleted.
+  when: _acm_mc_inventory_malformed | bool
+
+- name: Publish non-local live ManagedCluster names
+  ansible.builtin.set_fact:
+    _acm_mc_live_names: "{{ _acm_mc_live_names_json | from_json }}"
+  vars:
+    _acm_mc_live_names_json: >-
+      {%- set names = [] -%}
+      {%- if acm_switchover_mc_read.read_status == 'ok' -%}
+      {%- for mc in (acm_switchover_mc_read.resources | default([])) -%}
+      {%- set name = mc.metadata.name -%}
+      {%- if name != 'local-cluster' -%}
+      {%- set _ = names.append(name) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- endif -%}
+      {{ names | list | to_json }}
+
+- name: Publish the ManagedCluster work set
+  ansible.builtin.set_fact:
+    _acm_mc_work_set: "{{ ((_acm_mc_live_names | default([])) + (_acm_mc_record_names | default([]))) | unique | list | sort }}"
+
+- name: Fail closed when ManagedCluster kind is not served and no durable records exist
+  ansible.builtin.fail:
+    msg: Cannot verify ManagedCluster inventory. Nothing was deleted.
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-    - (_managed_cluster_delete_targets | default([]) | length) > 0
-  block:
-    - name: List Hive ClusterDeployments before ManagedCluster deletion
-      kubernetes.core.k8s_info:
-        kind: ClusterDeployment
-        api_version: hive.openshift.io/v1
-        kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-        context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
-      register: _decommission_clusterdeployments
-  rescue:
-    - name: Fail when ClusterDeployment safety cannot be verified
-      ansible.builtin.fail:
-        msg: >-
-          Unable to verify ClusterDeployment preserveOnDelete safety before deleting ManagedClusters:
-          {{ ansible_failed_result.msg | default('unknown API error') }}
+    - acm_switchover_mc_read.read_status == 'kind_not_served'
+    - (_acm_mc_work_set | length) == 0
+
+- name: Record the ManagedCluster precondition_noop outcome
+  ansible.builtin.set_fact:
+    acm_switchover_decommission_outcomes: >-
+      {{
+        acm_switchover_decommission_outcomes
+        | default({})
+        | combine({'managed_clusters': 'precondition_noop'})
+      }}
+  when:
+    - _acm_decommission_records_outcomes | default(false) | bool
+    - (_acm_mc_work_set | length) == 0
+
+- name: Read Hive ClusterDeployments before ManagedCluster deletion
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: list
+    api_version: hive.openshift.io/v1
+    kind: ClusterDeployment
+    resource_name: clusterdeployments
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: acm_switchover_cd_read
+  no_log: true
+  when:
+    - (_acm_mc_live_names | default([]) | length) > 0
+
+- name: Fail closed when ClusterDeployment safety cannot be verified
+  ansible.builtin.fail:
+    msg: >-
+      Unable to verify ClusterDeployment preserveOnDelete safety before deleting ManagedClusters:
+      {{
+        'Hive ClusterDeployment API is not served'
+        if acm_switchover_cd_read.read_status == 'kind_not_served'
+        else (
+          acm_switchover_cd_read.msg | default('inventory unreadable')
+          if acm_switchover_cd_read.read_status != 'ok'
+          else 'inventory unreadable'
+        )
+      }}
+  when:
+    - (_acm_mc_live_names | default([]) | length) > 0
+    - acm_switchover_cd_read.read_status != 'ok'
 
 - name: Classify matching ClusterDeployments before ManagedCluster deletion
   ansible.builtin.set_fact:
@@ -49,10 +159,10 @@
   vars:
     _clusterdeployment_delete_safety_json: >-
       {%- set safety = {'unsafe': [], 'unverified': []} -%}
-      {%- set target_names = _managed_cluster_delete_targets | default([]) | map(attribute='metadata.name') | list -%}
-      {%- for cd in (_decommission_clusterdeployments.resources | default([])) -%}
-      {%- set metadata = cd.get('metadata', {}) -%}
-      {%- set spec = cd.get('spec') or {} -%}
+      {%- set target_names = _acm_mc_live_names | default([]) -%}
+      {%- for cd in (acm_switchover_cd_read.resources | default([])) -%}
+      {%- set metadata = cd.get('metadata', {}) if cd is mapping else {} -%}
+      {%- set spec = (cd.get('spec') or {}) if cd is mapping else {} -%}
       {%- set cluster_metadata = spec.get('clusterMetadata') or {} -%}
       {%- set cluster_install_ref = spec.get('clusterInstallRef') or {} -%}
       {%- if cluster_metadata is not mapping -%}
@@ -107,8 +217,7 @@
       {%- endfor -%}
       {{ safety | to_json }}
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-    - (_managed_cluster_delete_targets | default([]) | length) > 0
+    - (_acm_mc_live_names | default([]) | length) > 0
 
 - name: Block unverified ClusterDeployment relationships before ManagedCluster deletion
   ansible.builtin.fail:
@@ -118,22 +227,14 @@
         (_clusterdeployment_delete_safety.unverified | default([])) | join(', ')
       }}. Review ClusterDeployment ownership and set explicit clusterName metadata before decommission.
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - (_acm_mc_live_names | default([]) | length) > 0
     - ((_clusterdeployment_delete_safety.unverified | default([])) | length) > 0
 
 - name: Identify unsafe matching ClusterDeployments before ManagedCluster deletion
   ansible.builtin.set_fact:
-    _unsafe_clusterdeployments_for_managedcluster_delete: "{{ _unsafe_clusterdeployments_for_managedcluster_delete_json | from_json }}"
-  vars:
-    _unsafe_clusterdeployments_for_managedcluster_delete_json: >-
-      {%- set unsafe = [] -%}
-      {%- for item in (_clusterdeployment_delete_safety.unsafe | default([])) -%}
-      {%- set _ = unsafe.append(item) -%}
-      {%- endfor -%}
-      {{ unsafe | to_json }}
+    _unsafe_clusterdeployments_for_managedcluster_delete: "{{ _clusterdeployment_delete_safety.unsafe | default([]) }}"
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-    - (_managed_cluster_delete_targets | default([]) | length) > 0
+    - (_acm_mc_live_names | default([]) | length) > 0
 
 - name: Block unsafe ManagedCluster deletion
   ansible.builtin.fail:
@@ -143,61 +244,38 @@
         _unsafe_clusterdeployments_for_managedcluster_delete | default([]) | join(', ')
       }}. Set preserveOnDelete=true before decommission.
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-    - (_unsafe_clusterdeployments_for_managedcluster_delete | default([]) | length) > 0
+    - (_acm_mc_live_names | default([]) | length) > 0
+    - ((_unsafe_clusterdeployments_for_managedcluster_delete | default([])) | length) > 0
 
-- name: Delete non-local ManagedClusters
-  kubernetes.core.k8s:
-    kind: ManagedCluster
-    api_version: cluster.open-cluster-management.io/v1
-    name: "{{ item.metadata.name }}"
-    state: absent
-    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
-  loop: "{{ _managed_cluster_delete_targets | default([]) }}"
+- name: Tear down each ManagedCluster in the work set
+  ansible.builtin.include_tasks: teardown_one_managed_cluster.yml
+  loop: "{{ _acm_mc_work_set }}"
   loop_control:
-    label: "{{ item.metadata.name }}"
-  register: _managed_cluster_delete_results
-  when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-    - not ansible_check_mode
+    loop_var: _acm_mc_target_name
+  when: (_acm_mc_work_set | length) > 0
 
-- name: Wait for ManagedCluster finalizers to complete
-  kubernetes.core.k8s_info:
-    kind: ManagedCluster
-    api_version: cluster.open-cluster-management.io/v1
-    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
-  register: _managed_clusters_after_delete
-  retries: 30
-  delay: 10
-  until: >-
-    {{
-      (
-        _managed_clusters_after_delete.resources
-        | default([])
-        | rejectattr('metadata.name', 'equalto', 'local-cluster')
-        | list
-        | length
-      ) == 0
-    }}
-  when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-    - not ansible_check_mode
-    - (_managed_cluster_delete_targets | default([]) | length) > 0
+- name: Fail when ManagedCluster teardown left survivors
+  ansible.builtin.fail:
+    msg: >-
+      ManagedCluster teardown incomplete; survivors: {{
+        _acm_mc_survivors | default([]) | join(', ')
+      }}
+  when: (_acm_mc_survivors | default([]) | length) > 0
 
-- name: Record the ManagedCluster substep outcome
+- name: Publish the ManagedCluster change inputs
+  ansible.builtin.set_fact:
+    _acm_mc_changed: "{{ _acm_mc_changed | default(false) | bool }}"
+    _acm_mc_would_change: "{{ _acm_mc_would_change | default(false) | bool }}"
+
+- name: Record the ManagedCluster completed outcome
   ansible.builtin.set_fact:
     acm_switchover_decommission_outcomes: >-
       {{
         acm_switchover_decommission_outcomes
         | default({})
-        | combine({
-            'managed_clusters': (
-              'completed'
-              if ((_managed_cluster_delete_targets | default([])) | length) > 0
-              else 'precondition_noop'
-            )
-          })
+        | combine({'managed_clusters': 'completed'})
       }}
-  when: _acm_decommission_records_outcomes | default(false) | bool
+  when:
+    - _acm_decommission_records_outcomes | default(false) | bool
+    - (_acm_mc_work_set | length) > 0
+    - (_acm_mc_survivors | default([]) | length) == 0

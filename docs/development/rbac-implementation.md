@@ -122,6 +122,7 @@ Users can choose from multiple deployment methods based on their requirements:
 - Namespace-scoped permissions where possible
 - Baseline operator RBAC includes `MultiClusterObservability` delete for normal old-hub finalization, while `ManagedCluster` and cluster-scoped `MultiClusterHub` decommission deletes remain in the optional extension
 - The decommission extension carries `MultiClusterObservability` get alongside its delete so the extension is self-consistent with the calls the standalone teardown makes -- a strict named read before deletion and a final absence proof afterwards -- even though the baseline operator ClusterRole bound to the same service account also grants that read
+- The same extension carries `ManagedCluster` get alongside its delete for the identical named-GET / absence-proof pattern used by UID-preconditioned ManagedCluster teardown. `list` remains on the baseline operator role; the extension must not grow `list`, `patch`, or wildcards on ManagedClusters
 - Explicit enumeration of all required verbs
 
 ### Risk Mitigation

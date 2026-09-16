@@ -1547,6 +1547,19 @@ class KubeClient:
             plural=MANAGED_CLUSTER_PLURAL,
         )
 
+    def list_managed_clusters_strict(self) -> StrictReadOutcome:
+        """Strictly list ManagedCluster resources, or fail closed.
+
+        Preserves the shared strict-list algebra: a positively empty inventory is
+        ``ITEMS`` with ``[]``; discovery/authorization/transport failures are never
+        reported as empty.
+        """
+        return self.list_custom_resources_strict(
+            group=MANAGED_CLUSTER_API_GROUP,
+            version=MANAGED_CLUSTER_API_VERSION,
+            plural=MANAGED_CLUSTER_PLURAL,
+        )
+
     def patch_managed_cluster(self, name: str, patch: Dict[str, Any]) -> Dict:
         """Patch a ManagedCluster resource."""
         return self.patch_custom_resource(

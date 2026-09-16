@@ -30,10 +30,21 @@ class FakeGuardedDeleteAPI:
     instead of hoped for.
     """
 
-    def __init__(self, obj: dict | None = None, *, delete_status: int = 200, on_delete=None) -> None:
+    def __init__(
+        self,
+        obj: dict | None = None,
+        *,
+        delete_status: int = 200,
+        on_delete=None,
+        served_empty_lists: list[dict] | None = None,
+    ) -> None:
         self.obj = copy.deepcopy(obj) if obj else None
         self.delete_status = delete_status
         self.on_delete = on_delete
+        # Optional additional cluster-scoped kinds served as positively empty inventories
+        # (group/version/plural/kind). Used by decommission dry-run fixtures that must
+        # exercise ManagedCluster inventory without inventing live targets.
+        self.served_empty_lists = list(served_empty_lists or [])
         self.requests: list[dict] = []
         #: The ``preconditions.uid`` of every DELETE body the server received, in order,
         #: with None for a body that carried none. Recorded because the *outcome* of a
@@ -88,19 +99,30 @@ class FakeGuardedDeleteAPI:
                 if path == "/api/v1":
                     return self._send(200, {"kind": "APIResourceList", "groupVersion": "v1", "resources": []})
                 if path == "/apis":
-                    return self._send(
-                        200,
+                    groups = [
                         {
-                            "kind": "APIGroupList",
-                            "groups": [
-                                {
-                                    "name": GROUP,
-                                    "versions": [{"groupVersion": f"{GROUP}/{VERSION}", "version": VERSION}],
-                                    "preferredVersion": {"groupVersion": f"{GROUP}/{VERSION}", "version": VERSION},
-                                }
-                            ],
-                        },
-                    )
+                            "name": GROUP,
+                            "versions": [{"groupVersion": f"{GROUP}/{VERSION}", "version": VERSION}],
+                            "preferredVersion": {"groupVersion": f"{GROUP}/{VERSION}", "version": VERSION},
+                        }
+                    ]
+                    for extra in api.served_empty_lists:
+                        groups.append(
+                            {
+                                "name": extra["group"],
+                                "versions": [
+                                    {
+                                        "groupVersion": f"{extra['group']}/{extra['version']}",
+                                        "version": extra["version"],
+                                    }
+                                ],
+                                "preferredVersion": {
+                                    "groupVersion": f"{extra['group']}/{extra['version']}",
+                                    "version": extra["version"],
+                                },
+                            }
+                        )
+                    return self._send(200, {"kind": "APIGroupList", "groups": groups})
                 if path == f"/apis/{GROUP}/{VERSION}":
                     return self._send(
                         200,
@@ -118,6 +140,38 @@ class FakeGuardedDeleteAPI:
                             ],
                         },
                     )
+                for extra in api.served_empty_lists:
+                    group = extra["group"]
+                    version = extra["version"]
+                    plural = extra["plural"]
+                    kind = extra["kind"]
+                    if path == f"/apis/{group}/{version}":
+                        return self._send(
+                            200,
+                            {
+                                "kind": "APIResourceList",
+                                "groupVersion": f"{group}/{version}",
+                                "resources": [
+                                    {
+                                        "name": plural,
+                                        "singularName": kind.lower(),
+                                        "namespaced": False,
+                                        "kind": kind,
+                                        "verbs": ["get", "list", "delete"],
+                                    }
+                                ],
+                            },
+                        )
+                    if path == f"/apis/{group}/{version}/{plural}":
+                        return self._send(
+                            200,
+                            {
+                                "apiVersion": f"{group}/{version}",
+                                "kind": f"{kind}List",
+                                "metadata": {"resourceVersion": "1"},
+                                "items": [],
+                            },
+                        )
                 if path == f"/apis/{GROUP}/{VERSION}/{PLURAL}":
                     return self._send(
                         200,

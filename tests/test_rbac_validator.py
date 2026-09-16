@@ -22,7 +22,11 @@ from lib.constants import (
     OBSERVABILITY_NAMESPACE,
 )
 from lib.exceptions import ValidationError
-from lib.rbac_validator import RBACValidator, validate_decommission_permissions, validate_rbac_permissions
+from lib.rbac_validator import (
+    RBACValidator,
+    validate_decommission_permissions,
+    validate_rbac_permissions,
+)
 
 #: Stand-in for the raw SelfSubjectAccessReview API payload. Denial reporting must surface the
 #: review's ``reason`` only, never the response body, so this sentinel must not reach any report.
@@ -191,7 +195,10 @@ class TestRBACValidator:
         denied_response.status.reason = "Forbidden"
 
         mock_api = MagicMock()
-        mock_api.create_self_subject_access_review.side_effect = [allowed_response, denied_response]
+        mock_api.create_self_subject_access_review.side_effect = [
+            allowed_response,
+            denied_response,
+        ]
         mock_k8s_client.AuthorizationV1Api.return_value = mock_api
 
         first = validator.check_permission("", "pods", "get", "default")
@@ -352,7 +359,11 @@ class TestRBACValidator:
         assert ("argoproj.io", "applications", "get") not in checked
         assert ("argoproj.io", "applications", "list") not in checked
         assert ("argoproj.io", "argocds", "get") not in checked
-        assert ("apiextensions.k8s.io", "customresourcedefinitions", "get") not in checked
+        assert (
+            "apiextensions.k8s.io",
+            "customresourcedefinitions",
+            "get",
+        ) not in checked
 
     def test_validate_cluster_permissions_requires_mco_delete_for_old_hub_finalization(self, validator):
         """Normal old-hub finalization deletes MCO when observability was detected."""
@@ -518,8 +529,16 @@ class TestRBACValidator:
         assert errors == []
         checked = {(c.args[0], c.args[1], c.args[2]) for c in validator.check_permission.call_args_list}
         # Base cluster permissions include multiclusterobservabilities get/list — both must be skipped.
-        assert ("observability.open-cluster-management.io", "multiclusterobservabilities", "get") not in checked
-        assert ("observability.open-cluster-management.io", "multiclusterobservabilities", "list") not in checked
+        assert (
+            "observability.open-cluster-management.io",
+            "multiclusterobservabilities",
+            "get",
+        ) not in checked
+        assert (
+            "observability.open-cluster-management.io",
+            "multiclusterobservabilities",
+            "list",
+        ) not in checked
 
     def test_validate_cluster_permissions_deduplicates_mco_delete_when_both_paths_request_it(self, validator):
         """MCO delete should be checked once when decommission and finalization both require it."""
@@ -604,8 +623,14 @@ class TestRBACValidator:
         validator.client.namespace_exists.return_value = True
         validator.check_permission = MagicMock(return_value=(True, ""))
 
-        assert validator.validate_namespace_permissions(skip_observability=True) == (True, [])
-        assert validator.validate_namespace_permissions(skip_observability=True) == (True, [])
+        assert validator.validate_namespace_permissions(skip_observability=True) == (
+            True,
+            [],
+        )
+        assert validator.validate_namespace_permissions(skip_observability=True) == (
+            True,
+            [],
+        )
 
         assert validator.client.namespace_exists.call_args_list.count(call(BACKUP_NAMESPACE)) == 1
         assert validator.client.namespace_exists.call_args_list.count(call(ACM_NAMESPACE)) == 1
@@ -791,14 +816,20 @@ class TestRBACValidator:
         validator.client.namespace_exists.return_value = True
         validator.check_permission = MagicMock(return_value=(True, ""))
 
-        assert validator.validate_decommission_permissions(skip_observability=True) == (True, {})
+        assert validator.validate_decommission_permissions(skip_observability=True) == (
+            True,
+            {},
+        )
         first_call_count = len(validator.check_permission.call_args_list)
         cached_valid, cached_errors = validator.validate_decommission_permissions(skip_observability=True)
         cached_errors["cluster"] = ["mutated cluster error"]
         cached_errors["namespaces"] = ["mutated namespace error"]
 
         assert cached_valid is True
-        assert validator.validate_decommission_permissions(skip_observability=True) == (True, {})
+        assert validator.validate_decommission_permissions(skip_observability=True) == (
+            True,
+            {},
+        )
         assert len(validator.check_permission.call_args_list) == first_call_count
         assert validator.client.namespace_exists.call_args_list.count(call(ACM_NAMESPACE)) == 1
 
@@ -942,7 +973,11 @@ class TestValidatorClusterTableDerivation:
         ("cluster.open-cluster-management.io", "managedclusters", ["get", "list"]),
         ("hive.openshift.io", "clusterdeployments", ["get", "list"]),
         ("operator.open-cluster-management.io", "multiclusterhubs", ["get", "list"]),
-        ("observability.open-cluster-management.io", "multiclusterobservabilities", ["get", "list"]),
+        (
+            "observability.open-cluster-management.io",
+            "multiclusterobservabilities",
+            ["get", "list"],
+        ),
     ]
 
     def test_validator_table_matches_pre_derivation_literal(self):
@@ -1371,7 +1406,10 @@ class TestValidateHubLoop:
     @patch("lib.rbac_validator.RBACValidator")
     def test_primary_failure_message_has_no_error_count(self, mock_validator_class, mock_primary_client):
         mock_validator = MagicMock()
-        mock_validator.validate_all_permissions.return_value = (False, {"cluster": ["err one"]})
+        mock_validator.validate_all_permissions.return_value = (
+            False,
+            {"cluster": ["err one"]},
+        )
         mock_validator.generate_permission_report.return_value = "Error report"
         mock_validator_class.return_value = mock_validator
         with pytest.raises(ValidationError) as exc_info:
@@ -1405,6 +1443,21 @@ class TestValidateDecommissionPermissions:
             skip_observability=True,
         )
 
+    def test_validate_decommission_permissions_fails_when_managedcluster_get_missing(self, mock_primary_client):
+        """Named GET is required on the standalone decommission surface (R4-03 PR D)."""
+        validator = RBACValidator(mock_primary_client)
+
+        def check_permission(api_group, resource, verb, namespace=None):
+            if api_group == "cluster.open-cluster-management.io" and resource == "managedclusters" and verb == "get":
+                return (False, "Permission denied")
+            return (True, "")
+
+        validator.check_permission = MagicMock(side_effect=check_permission)
+
+        with patch("lib.rbac_validator.RBACValidator", return_value=validator):
+            with pytest.raises(ValidationError, match="Decommission RBAC permission validation failed"):
+                validate_decommission_permissions(mock_primary_client, skip_observability=True)
+
     def test_validate_decommission_permissions_fails_when_teardown_namespace_permission_missing(
         self, mock_primary_client
     ):
@@ -1436,6 +1489,10 @@ class TestValidateDecommissionPermissions:
             validate_decommission_permissions(mock_primary_client, skip_observability=False)
 
         assert (
+            call("cluster.open-cluster-management.io", "managedclusters", "get", None)
+            in validator.check_permission.call_args_list
+        )
+        assert (
             call("cluster.open-cluster-management.io", "managedclusters", "delete", None)
             in validator.check_permission.call_args_list
         )
@@ -1466,8 +1523,24 @@ class TestValidateDecommissionPermissions:
 
         assert all_valid is True
         calls = validator.check_permission.call_args_list
-        assert call("observability.open-cluster-management.io", "multiclusterobservabilities", "list", None) in calls
-        assert call("observability.open-cluster-management.io", "multiclusterobservabilities", "delete", None) in calls
+        assert (
+            call(
+                "observability.open-cluster-management.io",
+                "multiclusterobservabilities",
+                "list",
+                None,
+            )
+            in calls
+        )
+        assert (
+            call(
+                "observability.open-cluster-management.io",
+                "multiclusterobservabilities",
+                "delete",
+                None,
+            )
+            in calls
+        )
         assert call("", "pods", "get", OBSERVABILITY_NAMESPACE) in calls
 
     def test_validate_decommission_rbac_succeeds_when_acm_namespace_missing(self, mock_primary_client):
@@ -1547,7 +1620,12 @@ class TestValidateDecommissionPermissions:
 
         # Cluster-scoped, collection-wide: namespace is None and no object name is asked
         # for, which is the authorization question the named GET actually depends on.
-        assert (OBSERVABILITY_API_GROUP, MULTICLUSTEROBSERVABILITIES_PLURAL, "get", None) in reviews
+        assert (
+            OBSERVABILITY_API_GROUP,
+            MULTICLUSTEROBSERVABILITIES_PLURAL,
+            "get",
+            None,
+        ) in reviews
 
         report = caplog.text
         assert (

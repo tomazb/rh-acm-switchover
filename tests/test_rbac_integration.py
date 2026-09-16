@@ -517,7 +517,7 @@ class TestRBACManifestConsistency:
         content = decommission_clusterrole_path.read_text(encoding="utf-8")
         required_snippets = [
             "name: acm-switchover-decommission",
-            'resources: ["managedclusters"]\n    verbs: ["delete"]',
+            'resources: ["managedclusters"]\n    verbs: ["get", "delete"]',
             'resources: ["multiclusterhubs"]\n    verbs: ["delete"]',
             'resources: ["multiclusterobservabilities"]\n    verbs: ["get", "delete"]',
             'resources: ["clusterdeployments"]\n    verbs: ["list"]',
@@ -525,6 +525,12 @@ class TestRBACManifestConsistency:
         for snippet in required_snippets:
             assert snippet in content
         assert 'resources: ["clusterdeployments"]\n    verbs: ["get", "list"]' not in content
+        # Extension isolation: ManagedCluster named-GET is required; list/patch/* must not appear.
+        mc_rule = content.split('resources: ["managedclusters"]', 1)[1].split("- apiGroups:", 1)[0]
+        assert 'verbs: ["get", "delete"]' in mc_rule
+        assert "list" not in mc_rule
+        assert "patch" not in mc_rule
+        assert '"*"' not in mc_rule
 
     def test_static_decommission_clusterrolebinding_exists(self, decommission_clusterrolebinding_path):
         """Test that static decommission binding exists for opt-in operator escalation."""
@@ -541,7 +547,7 @@ class TestRBACManifestConsistency:
         required_snippets = [
             ".Values.clusterRole.decommission.name",
             'resources: ["managedclusters"]',
-            'verbs: ["delete"]',
+            'verbs: ["get", "delete"]',
             'resources: ["clusterdeployments"]\n    verbs: ["list"]',
             'resources: ["multiclusterobservabilities"]\n    verbs: ["get", "delete"]',
         ]
@@ -549,6 +555,41 @@ class TestRBACManifestConsistency:
         for snippet in required_snippets:
             assert snippet in decommission_block
         assert 'resources: ["clusterdeployments"]\n    verbs: ["get", "list"]' not in decommission_block
+        mc_rule = decommission_block.split('resources: ["managedclusters"]', 1)[1].split("- apiGroups:", 1)[0]
+        assert 'verbs: ["get", "delete"]' in mc_rule
+        assert "list" not in mc_rule
+        assert "patch" not in mc_rule
+        assert '"*"' not in mc_rule
+
+    def test_bundled_decommission_clusterrole_matches_root_extension(self, decommission_clusterrole_path):
+        """Collection-bundled decommission extension must stay byte-aligned with the root manifest."""
+        bundled = (
+            Path(__file__).resolve().parents[1]
+            / "ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/files"
+            / "deploy/rbac/extensions/decommission/clusterrole.yaml"
+        )
+        assert bundled.exists()
+        assert bundled.read_text(encoding="utf-8") == decommission_clusterrole_path.read_text(encoding="utf-8")
+
+    def test_decommission_extension_managedcluster_verbs_are_get_delete_only(
+        self, decommission_clusterrole_path, helm_clusterrole_content
+    ):
+        """Negative coverage: extension isolation grants MC get+delete and nothing broader."""
+        for label, content in (
+            ("static", decommission_clusterrole_path.read_text(encoding="utf-8")),
+            (
+                "helm",
+                helm_clusterrole_content.split("# ClusterRole for ACM Switchover Decommission", 1)[1].split(
+                    "# ClusterRole for ACM Switchover Validator", 1
+                )[0],
+            ),
+        ):
+            mc_rule = content.split('resources: ["managedclusters"]', 1)[1].split("- apiGroups:", 1)[0]
+            assert 'verbs: ["get", "delete"]' in mc_rule, label
+            verbs_line = next(line for line in mc_rule.splitlines() if "verbs:" in line)
+            assert verbs_line.strip() == 'verbs: ["get", "delete"]', (label, verbs_line)
+            for forbidden in ("list", "patch", "update", "create", "watch", "*"):
+                assert forbidden not in verbs_line, (label, forbidden, verbs_line)
 
     def test_helm_namespace_template_marks_shared_resource_common(self, helm_namespace_content):
         """Helm namespace output must carry the same common marker used by role filtering."""
@@ -584,7 +625,14 @@ class TestRBACManifestConsistency:
         )
 
         result = subprocess.run(
-            [helm_binary, "template", "acm-switchover-rbac", str(helm_chart_dir), "-f", str(values_file)],
+            [
+                helm_binary,
+                "template",
+                "acm-switchover-rbac",
+                str(helm_chart_dir),
+                "-f",
+                str(values_file),
+            ],
             check=False,
             capture_output=True,
             text=True,
@@ -617,7 +665,14 @@ class TestRBACManifestConsistency:
         )
 
         result = subprocess.run(
-            [helm_binary, "template", "acm-switchover-rbac", str(helm_chart_dir), "-f", str(values_file)],
+            [
+                helm_binary,
+                "template",
+                "acm-switchover-rbac",
+                str(helm_chart_dir),
+                "-f",
+                str(values_file),
+            ],
             check=False,
             capture_output=True,
             text=True,
@@ -652,7 +707,14 @@ class TestRBACManifestConsistency:
         )
 
         result = subprocess.run(
-            [helm_binary, "template", "acm-switchover-rbac", str(helm_chart_dir), "-f", str(values_file)],
+            [
+                helm_binary,
+                "template",
+                "acm-switchover-rbac",
+                str(helm_chart_dir),
+                "-f",
+                str(values_file),
+            ],
             check=False,
             capture_output=True,
             text=True,
@@ -672,7 +734,14 @@ class TestRBACManifestConsistency:
         )
 
         result = subprocess.run(
-            [helm_binary, "template", "acm-switchover-rbac", str(helm_chart_dir), "-f", str(values_file)],
+            [
+                helm_binary,
+                "template",
+                "acm-switchover-rbac",
+                str(helm_chart_dir),
+                "-f",
+                str(values_file),
+            ],
             check=False,
             capture_output=True,
             text=True,
@@ -726,6 +795,48 @@ class TestRBACValidatorPermissionStructure:
             assert isinstance(verbs, list), f"Verbs should be list: {verbs}"
             # Decommission should include 'delete' verb
             assert "delete" in verbs, f"Expected 'delete' in decommission verbs: {verbs}"
+
+    def test_decommission_cluster_permissions_include_managedcluster_named_get(self):
+        """Standalone decommission table must require ManagedCluster get (named UID/proof reads)."""
+        mc = next(
+            (
+                p
+                for p in RBACValidator.DECOMMISSION_CLUSTER_PERMISSIONS
+                if p[0] == "cluster.open-cluster-management.io" and p[1] == "managedclusters"
+            ),
+            None,
+        )
+        assert mc is not None
+        assert mc[2] == ["get", "list", "delete"]
+        assert "patch" not in mc[2]
+        assert "*" not in mc[2]
+
+    def test_decommission_permissions_overlay_keeps_managedcluster_delete_only(self):
+        """Additive DECOMMISSION_PERMISSIONS must not grow ManagedCluster reads or wildcards."""
+        mc = next(
+            (
+                p
+                for p in RBACValidator.DECOMMISSION_PERMISSIONS
+                if p[0] == "cluster.open-cluster-management.io" and p[1] == "managedclusters"
+            ),
+            None,
+        )
+        assert mc is not None
+        assert mc[2] == ["delete"]
+
+    def test_baseline_operator_managedclusters_remain_without_delete(self):
+        """Baseline operator ClusterRole table must not absorb decommission ManagedCluster delete."""
+        mc = next(
+            (
+                p
+                for p in RBACValidator.OPERATOR_CLUSTER_PERMISSIONS
+                if p[0] == "cluster.open-cluster-management.io" and p[1] == "managedclusters"
+            ),
+            None,
+        )
+        assert mc is not None
+        assert mc[2] == ["get", "list", "patch"]
+        assert "delete" not in mc[2]
 
     def test_no_duplicate_permissions(self):
         """Test that there are no duplicate permission definitions."""

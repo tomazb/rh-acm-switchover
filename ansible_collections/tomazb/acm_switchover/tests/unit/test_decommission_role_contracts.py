@@ -12,6 +12,7 @@ These tests verify the structural safety contracts of decommission role tasks:
 
 import copy
 import json
+import os
 import pathlib
 import re
 import threading
@@ -20,6 +21,7 @@ from threading import Thread
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import unquote, urlsplit
 
+import pytest
 import yaml
 from yaml_contract_helpers import _flatten_tasks, _when_text
 
@@ -44,6 +46,7 @@ DECOMMISSION_MAIN = ROLES_DIR / "decommission" / "tasks" / "main.yml"
 DELETE_OBSERVABILITY = ROLES_DIR / "decommission" / "tasks" / "delete_observability.yml"
 DESTINATION_OBSERVABILITY_GATE = ROLES_DIR / "decommission" / "tasks" / "destination_observability_gate.yml"
 DELETE_MANAGED_CLUSTERS = ROLES_DIR / "decommission" / "tasks" / "delete_managed_clusters.yml"
+TEARDOWN_ONE_MANAGED_CLUSTER = ROLES_DIR / "decommission" / "tasks" / "teardown_one_managed_cluster.yml"
 DELETE_MCH = ROLES_DIR / "decommission" / "tasks" / "delete_multiclusterhub.yml"
 VALIDATE_RBAC = ROLES_DIR / "decommission" / "tasks" / "validate_rbac.yml"
 DECOMMISSION_TASKS_DIR = ROLES_DIR / "decommission" / "tasks"
@@ -116,6 +119,8 @@ _NAMED_TASK_FILES = {
     # publishes a decision fact, records no substep outcome and writes no checkpoint.
     "destination_observability_gate": DESTINATION_OBSERVABILITY_GATE,
     "managed_clusters": DELETE_MANAGED_CLUSTERS,
+    # Per-target no-drain include looped by managed_clusters (R4-03 PR D).
+    "teardown_one_managed_cluster": TEARDOWN_ONE_MANAGED_CLUSTER,
     "multiclusterhub": DELETE_MCH,
     "validate_rbac": VALIDATE_RBAC,
 }
@@ -712,58 +717,191 @@ class TestDestinationObservabilityGate:
 
 
 class TestDeleteManagedClusters:
-    """decommission/tasks/delete_managed_clusters.yml contract tests."""
+    """decommission/tasks/delete_managed_clusters.yml contract tests (R4-03 PR D)."""
 
     def setup_method(self):
-        self.tasks = yaml.safe_load(DELETE_MANAGED_CLUSTERS.read_text()) or []
+        self.tasks = _load_tasks(DELETE_MANAGED_CLUSTERS)
+        self.one = _load_tasks(TEARDOWN_ONE_MANAGED_CLUSTER) if TEARDOWN_ONE_MANAGED_CLUSTER.exists() else []
+        self.text = DELETE_MANAGED_CLUSTERS.read_text()
+        self.one_text = TEARDOWN_ONE_MANAGED_CLUSTER.read_text() if TEARDOWN_ONE_MANAGED_CLUSTER.exists() else ""
 
     def test_file_exists(self):
         assert DELETE_MANAGED_CLUSTERS.exists(), "decommission/tasks/delete_managed_clusters.yml must exist"
+        assert TEARDOWN_ONE_MANAGED_CLUSTER.exists(), "per-target ManagedCluster teardown include must exist"
 
-    def test_list_task_skipped_in_dry_run(self):
-        """ManagedCluster list task must be guarded by execute mode."""
-        k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        mc_list_tasks = [
-            t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"
+    def test_delete_goes_through_uid_guarded_module(self):
+        """A name-only delete can remove a replacement object under the same name."""
+        guarded = [task for task in self.one if "tomazb.acm_switchover.acm_uid_guarded_delete" in task]
+        assert len(guarded) == 1
+        for tasks in (self.tasks, self.one):
+            assert not [task for task in tasks if task.get("kubernetes.core.k8s", {}).get("state") == "absent"]
+
+    def test_guarded_delete_binds_identity_routing_and_bounds(self):
+        task = next(task for task in self.one if "tomazb.acm_switchover.acm_uid_guarded_delete" in task)
+        args = task["tomazb.acm_switchover.acm_uid_guarded_delete"]
+        assert args["api_version"] == "cluster.open-cluster-management.io/v1"
+        assert args["kind"] == "ManagedCluster"
+        assert args["resource_name"] == "managedclusters"
+        assert "expected_uid" in args
+        assert "_acm_mc_target_name" in str(args["name"])
+        assert "primary.kubeconfig" in str(args["kubeconfig"])
+        assert "primary.context" in str(args["context"])
+        for timeout in ("request_timeout", "wait_timeout", "wait_sleep"):
+            assert timeout in args
+            assert str(args[timeout]).strip()
+        assert task.get("no_log") is True
+        assert "ansible_check_mode" in str(task.get("check_mode", ""))
+        assert "dry_run" in str(task.get("check_mode", ""))
+
+    def test_every_discovery_backed_read_supplies_a_canonical_resource_name(self):
+        reads = read_outcome_tasks(self.tasks) + read_outcome_tasks(self.one)
+        assert reads
+        allowed = {"managedclusters", "clusterdeployments"}
+        for task in reads:
+            args = task["tomazb.acm_switchover.acm_k8s_read_outcome"]
+            assert args.get("resource_name") in allowed
+
+    def test_mc_inventory_read_fails_closed(self):
+        read = task_named(self.tasks, "Read the source ManagedCluster inventory")
+        assert read["tomazb.acm_switchover.acm_k8s_read_outcome"]["read_mode"] == "list"
+        assert read["tomazb.acm_switchover.acm_k8s_read_outcome"]["resource_name"] == "managedclusters"
+        failure = task_named(self.tasks, "Fail closed when the source ManagedCluster inventory is unverifiable")
+        when = _when_text(failure)
+        assert "read_status" in when
+        assert "ok" in when
+        assert "kind_not_served" in when
+        assert "not in" in when
+
+    def test_malformed_managed_cluster_inventory_items_fail_closed_before_name_publish(self):
+        """Empty/mapping-but-nameless inventory items must not become a false-empty work set."""
+        detect = task_named(self.tasks, "Detect malformed ManagedCluster inventory items")
+        failure = task_named(self.tasks, "Fail closed when ManagedCluster inventory items are malformed")
+        live = task_named(self.tasks, "Publish non-local live ManagedCluster names")
+        assert "Cannot verify ManagedCluster inventory" in failure["ansible.builtin.fail"]["msg"]
+        assert "_acm_mc_inventory_malformed" in _when_text(failure)
+        detect_text = str(detect)
+        assert "mc is not mapping" in detect_text or "is not mapping" in detect_text
+        assert "metadata.name" in detect_text
+        # Name publish must come after the malformed gate so silent drops cannot noop.
+        assert self.tasks.index(failure) < self.tasks.index(live)
+
+    def test_kind_not_served_without_durable_records_is_fatal(self):
+        """Binding ruling 3: discovery miss with no MC obligation is unverifiable, not empty."""
+        failure = task_named(
+            self.tasks,
+            "Fail closed when ManagedCluster kind is not served and no durable records exist",
+        )
+        when = _when_text(failure)
+        assert "kind_not_served" in when
+        assert "_acm_mc_work_set" in when
+
+    def test_local_cluster_excluded_from_work_set(self):
+        """local-cluster must never receive named get, delete, or teardown record."""
+        assert "local-cluster" in self.text
+        live = task_named(self.tasks, "Publish non-local live ManagedCluster names")
+        assert "local-cluster" in str(live)
+        records = task_named(self.tasks, "Publish durable ManagedCluster teardown record names")
+        assert "local-cluster" in str(records)
+        assert "_acm_mc_target_name" in self.one_text
+        assert "name: local-cluster" not in self.one_text
+        assert 'name: "local-cluster"' not in self.one_text
+
+    def test_per_target_rescue_aggregates_only_expected_operational_failures(self):
+        """Unexpected/programming failures must re-raise; only classified operational failures become survivors."""
+        assert "rescue:" in self.one_text
+        classify = task_named(self.one, "Classify whether this ManagedCluster failure is expected operational")
+        propagate = task_named(self.one, "Propagate unexpected ManagedCluster teardown failures")
+        survivor = task_named(self.one, "Record this ManagedCluster as a survivor")
+        assert "_acm_mc_expected_operational_failure" in str(classify)
+        assert "acm_uid_guarded_delete" in str(classify) or "reason" in str(classify)
+        assert "ansible.builtin.fail" in str(classify) or "fail" in str(classify)
+        assert "not (_acm_mc_expected_operational_failure" in _when_text(propagate) or (
+            "not" in _when_text(propagate) and "_acm_mc_expected_operational_failure" in _when_text(propagate)
+        )
+        assert "_acm_mc_expected_operational_failure" in _when_text(survivor)
+        assert "ignore_errors" not in self.one_text
+        assert "failed_when: false" not in self.one_text
+        assert "failed_when: False" not in self.one_text
+
+    def test_clusterdeployment_safety_uses_strict_read_before_mutation(self):
+        """Hive preserveOnDelete safety retained; inventory is strict, not k8s_info blindness."""
+        assert "ClusterDeployment" in self.text
+        assert "preserveOnDelete" in self.text
+        hive = task_named(self.tasks, "Read Hive ClusterDeployments before ManagedCluster deletion")
+        args = hive["tomazb.acm_switchover.acm_k8s_read_outcome"]
+        assert args["read_mode"] == "list"
+        assert args["resource_name"] == "clusterdeployments"
+        assert args["kind"] == "ClusterDeployment"
+        when = hive.get("when")
+        assert isinstance(when, list)
+        assert any("live" in str(clause) for clause in when)
+
+    def test_no_drain_reads_on_managed_cluster_path(self):
+        """IV-R403-01 case 3 inapplicable: ManagedCluster has no drain scope."""
+        combined = self.text + self.one_text
+        assert "drain_pending" not in combined
+        assert "open-cluster-management-observability" not in combined
+        writers = checkpoint_writer_tasks({"one": self.one})
+        phases = [
+            task[_CHECKPOINT_WRITER_MODULE]["teardown_record"]["phase"]
+            for task in writers
+            if "teardown_record" in task.get(_CHECKPOINT_WRITER_MODULE, {})
         ]
-        assert mc_list_tasks, "delete_managed_clusters.yml must list ManagedCluster resources"
-        list_task = mc_list_tasks[0]
-        assert "!= 'dry_run'" in _when_text(list_task), "ManagedCluster list must be guarded by execute-mode check"
+        assert "delete_started" in phases
+        assert "cr_absent" in phases
+        assert "completed" in phases
+        assert "drain_pending" not in phases
+        assert "drained" not in phases
 
-    def test_local_cluster_excluded_from_deletion_targets(self):
-        """local-cluster must always be excluded from the deletion targets.
-
-        Deleting the local-cluster ManagedCluster would decommission the hub cluster's own
-        ACM management, which is always the wrong behavior during decommission of spoke clusters.
-        """
-        set_fact_tasks = [t for t in self.tasks if "ansible.builtin.set_fact" in t]
-        # Only the task that BUILDS the target list, not every task that reads it.
-        target_selection = [
-            t for t in set_fact_tasks if "_managed_cluster_delete_targets" in t["ansible.builtin.set_fact"]
-        ]
+    def test_completed_evidence_is_empty_resource_versions_and_target_cr_only(self):
+        completed = task_named(self.one, "Record ManagedCluster completed")
+        record = completed[_CHECKPOINT_WRITER_MODULE]["teardown_record"]
         assert (
-            target_selection
-        ), "delete_managed_clusters.yml must have a set_fact task that builds the deletion targets list"
-        for task in target_selection:
-            task_text = str(task)
-            assert "local-cluster" in task_text, "Deletion target selection must explicitly exclude 'local-cluster'"
-            assert (
-                "rejectattr" in task_text
-            ), "Deletion target selection must use rejectattr to filter out local-cluster"
+            "{{ _acm_mc_resource_versions }}" in str(record["resource_versions"]) or record["resource_versions"] == {}
+        )
+        assert "{{ _acm_mc_absence_proofs }}" in str(record["absence_proofs"])
+        builder = task_named(self.one, "Build ManagedCluster completion evidence")
+        evidence = builder["ansible.builtin.set_fact"]
+        assert evidence["_acm_mc_resource_versions"] == {}
+        assert "target_cr" in str(evidence["_acm_mc_absence_proofs"])
+        assert "drain_namespace" not in str(evidence["_acm_mc_absence_proofs"])
 
-    def test_clusterdeployment_safety_verified_before_deletion(self):
-        """ClusterDeployment preserveOnDelete safety must be verified before deleting ManagedClusters.
+    def test_every_mc_checkpoint_writer_is_execute_and_check_mode_guarded(self):
+        writers = checkpoint_writer_tasks({"family": self.tasks, "one": self.one})
+        assert writers
+        for task in writers:
+            when = _when_text(task)
+            assert "not ansible_check_mode" in when
+            assert "execute" in when
 
-        Deleting a ManagedCluster whose matching Hive ClusterDeployment lacks preserveOnDelete=true
-        will deprovision the underlying cluster infrastructure. This is non-recoverable.
-        """
-        file_text = DELETE_MANAGED_CLUSTERS.read_text()
-        assert (
-            "ClusterDeployment" in file_text
-        ), "delete_managed_clusters.yml must verify ClusterDeployment safety before deleting ManagedClusters"
-        assert (
-            "preserveOnDelete" in file_text or "preserve_on_delete" in file_text.lower()
-        ), "ClusterDeployment safety check must verify preserveOnDelete=true"
+    def test_mc_checkpoint_calls_do_not_own_a_phase_lifecycle(self):
+        calls = checkpoint_writer_tasks({"family": self.tasks, "one": self.one})
+        assert calls
+        for task in calls:
+            args = task[_CHECKPOINT_WRITER_MODULE]
+            assert "phase" not in args or "teardown_record" in args
+            assert "status" not in args
+
+    def test_survivor_aggregation_fails_once_listing_all(self):
+        failure = task_named(self.tasks, "Fail when ManagedCluster teardown left survivors")
+        msg = str(failure["ansible.builtin.fail"]["msg"])
+        assert "_acm_mc_survivors" in msg
+        assert "survivors" in msg.lower()
+        assert "ignore_errors" not in self.text
+        assert "ignore_errors" not in self.one_text
+        assert "failed_when: false" not in self.text
+        assert "failed_when: false" not in self.one_text
+
+    def test_per_target_include_loops_the_work_set(self):
+        include = next(task for task in self.tasks if _include_file(task) == "teardown_one_managed_cluster.yml")
+        assert "{{ _acm_mc_work_set" in str(include.get("loop", ""))
+        assert include.get("loop_control", {}).get("loop_var") == "_acm_mc_target_name"
+
+    def test_family_publishes_changed_and_would_change_facts(self):
+        publish = task_named(self.tasks, "Publish the ManagedCluster change inputs")
+        facts = publish["ansible.builtin.set_fact"]
+        assert "_acm_mc_changed" in facts
+        assert "_acm_mc_would_change" in facts
 
 
 class TestDeleteMultiClusterHub:
@@ -1046,7 +1184,17 @@ class FakeDecommissionAPI:
         items = self.store.get(plural, [])
         selected = []
         for item in items:
-            metadata = item.get("metadata", {})
+            # Preserve malformed inventory objects on unfiltered list reads so role
+            # fail-closed contracts can observe them (PR D Blocker 2).
+            if not isinstance(item, dict):
+                if name is None and namespace is None:
+                    selected.append(item)
+                continue
+            metadata = item.get("metadata")
+            if not isinstance(metadata, dict):
+                if name is None and namespace is None:
+                    selected.append(item)
+                continue
             if namespace is not None and metadata.get("namespace") != namespace:
                 continue
             if name is not None and metadata.get("name") != name:
@@ -1313,11 +1461,15 @@ def _mch_object(name: str) -> dict:
     }
 
 
-def _managed_cluster_object(name: str) -> dict:
+def _managed_cluster_object(name: str, uid: Optional[str] = None) -> dict:
     return {
         "apiVersion": "cluster.open-cluster-management.io/v1",
         "kind": "ManagedCluster",
-        "metadata": {"name": name, "resourceVersion": "1"},
+        "metadata": {
+            "name": name,
+            "uid": uid or f"mc-uid-{name}",
+            "resourceVersion": "1",
+        },
     }
 
 
@@ -1404,6 +1556,7 @@ def run_decommission_role(
     mco_present: Optional[bool] = None,
     mch_present: Optional[bool] = None,
     managed_clusters: Optional[List[str]] = None,
+    managed_cluster_objects: Optional[List[dict]] = None,
     observability_namespace: str = "present",
     observability_read_status: int = 200,
     mco_inventory: Optional[List[dict]] = None,
@@ -1425,6 +1578,8 @@ def run_decommission_role(
     skip_gitops_check: bool = False,
     primary_cluster_uid: Optional[str] = "harness-standalone-primary-uid",
     seeded_operation_identity: Optional[dict] = None,
+    managed_cluster_teardown_records: Optional[Dict[str, dict]] = None,
+    checkpoint_dir_readonly: bool = False,
 ) -> dict:
     """Run the decommission role against declared fakes and return one canonical result.
 
@@ -1510,6 +1665,8 @@ def run_decommission_role(
 
     # --- managed cluster family ----------------------------------------------
     managed_clusters_delete_status = 200
+    if managed_cluster_objects is not None and managed_clusters is not None:
+        raise ValueError("pass managed_clusters names or managed_cluster_objects, not both")
     if managed_clusters_outcome is not None:
         _check_outcome("managed_clusters_outcome", managed_clusters_outcome)
         if managed_clusters_outcome == "not_requested":
@@ -1518,18 +1675,25 @@ def run_decommission_role(
                 "delete_managed_clusters.yml unconditionally."
             )
         if managed_clusters_outcome == "precondition_noop":
-            if managed_clusters:
-                _conflict("managed_clusters", managed_clusters_outcome, managed_clusters)
+            if managed_clusters or managed_cluster_objects:
+                _conflict(
+                    "managed_clusters",
+                    managed_clusters_outcome,
+                    managed_clusters or managed_cluster_objects,
+                )
             managed_clusters = []
+            managed_cluster_objects = []
         else:
-            if managed_clusters == []:
+            if managed_clusters == [] and managed_cluster_objects == []:
                 _conflict("managed_clusters", managed_clusters_outcome, managed_clusters)
-            if managed_clusters is None:
+            if managed_clusters is None and managed_cluster_objects is None:
                 managed_clusters = ["cluster-a"]
             if managed_clusters_outcome == "failed":
                 managed_clusters_delete_status = 500
-    if managed_clusters is None:
+    if managed_cluster_objects is None and managed_clusters is None:
         managed_clusters = ["cluster-a"]
+    if managed_clusters is None:
+        managed_clusters = []
 
     # --- multiclusterhub family ----------------------------------------------
     mch_delete_status = 200
@@ -1563,6 +1727,12 @@ def run_decommission_role(
     # the empty/malformed-uid refusal can be exercised against a real response.
     namespaces.append(_namespace_object("kube-system", uid=primary_cluster_uid))
 
+    managedcluster_store = (
+        copy.deepcopy(managed_cluster_objects)
+        if managed_cluster_objects is not None
+        else [_managed_cluster_object("local-cluster")] + [_managed_cluster_object(name) for name in managed_clusters]
+    )
+
     repo_root = ROLES_DIR.parents[3]
     workspace = pathlib.Path(tempfile.mkdtemp(prefix="acm-decommission-harness-"))
     api = FakeDecommissionAPI(
@@ -1572,8 +1742,7 @@ def run_decommission_role(
             else ([_mco_object("observability")] if mco_present else [])
         ),
         multiclusterhubs=[_mch_object("multiclusterhub")] if mch_present else [],
-        managedclusters=[_managed_cluster_object("local-cluster")]
-        + [_managed_cluster_object(name) for name in managed_clusters],
+        managedclusters=managedcluster_store,
         namespaces=namespaces,
         pods=[_observability_pod_object(name) for name in (observability_pods or [])],
         delete_status_by_plural={
@@ -1607,7 +1776,9 @@ def run_decommission_role(
             _write_fixture_kubeconfig(secondary_kubeconfig, "secondary-hub", destination_api.url)
 
         summary_path = workspace / "decommission-summary.json"
-        checkpoint_path = workspace / "checkpoint.json"
+        checkpoint_dir = workspace / "checkpoint-state"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint_path = checkpoint_dir / "checkpoint.json"
         seeded_operational_data: Dict[str, Any] = {"harness_seed": "unchanged"}
         if mco_record is not None:
             seeded_operational_data["decommission_teardown_records"] = {
@@ -1615,6 +1786,10 @@ def run_decommission_role(
                     mco_record
                 )
             }
+        if managed_cluster_teardown_records:
+            records = seeded_operational_data.setdefault("decommission_teardown_records", {})
+            for key, record in managed_cluster_teardown_records.items():
+                records[key] = copy.deepcopy(record)
         # A standalone run must establish its own primary-only identity from empty
         # state -- that is the whole acceptance case, and a pre-seeded
         # ``build_operation_identity`` payload is exactly the supplemental-only
@@ -1797,6 +1972,10 @@ def run_decommission_role(
         discovery_cache_dir = workspace / "discovery-cache"
         discovery_cache_dir.mkdir(parents=True, exist_ok=True)
 
+        if checkpoint_dir_readonly and checkpoint_available:
+            # Reads still succeed; per-target teardown-record writes must fail closed.
+            os.chmod(checkpoint_dir, 0o555)
+
         callback_dir = workspace / "callback_plugins"
         callback_dir.mkdir(parents=True, exist_ok=True)
         (callback_dir / "harness_record.py").write_text(_HARNESS_CALLBACK_SOURCE, encoding="utf-8")
@@ -1924,6 +2103,11 @@ def run_decommission_role(
         api.close()
         if destination_api is not None:
             destination_api.close()
+        if checkpoint_dir_readonly and checkpoint_available:
+            try:
+                os.chmod(checkpoint_dir, 0o755)
+            except OSError:
+                pass
         shutil.rmtree(workspace, ignore_errors=True)
 
 
@@ -2746,10 +2930,19 @@ def test_actual_change_is_never_derived_from_check_mode():
 
 
 def test_mco_prediction_is_aggregated_separately_from_actual_change():
-    """C4 contributes its fresh per-family prediction to the shared result."""
+    """C4/D4 contribute fresh per-family predictions to the shared result."""
     publish = task_named(decommission_task_files["main"], "Publish decommission result")
     result = publish["ansible.builtin.set_fact"]["acm_switchover_decommission_result"]
     assert "_acm_mco_would_change" in str(result["would_change"])
+    assert "_acm_mc_would_change" in str(result["would_change"])
+
+
+def test_managed_cluster_actual_change_uses_family_fact_not_k8s_loop_register():
+    """PR D retires `_managed_cluster_delete_results`; changed must read `_acm_mc_changed`."""
+    publish = task_named(decommission_task_files["main"], "Publish decommission result")
+    changed = str(publish["ansible.builtin.set_fact"]["acm_switchover_decommission_result"]["changed"])
+    assert "_acm_mc_changed" in changed
+    assert "_managed_cluster_delete_results" not in changed
 
 
 def test_summary_keeps_its_published_artifact_keys():
@@ -2905,6 +3098,314 @@ def test_check_mode_preserves_operational_data_and_records_no_outcome():
 def test_b_stage_check_mode_issues_no_delete():
     result = run_decommission_role(check_mode=True)
     assert result["delete_calls"] == []
+
+
+def test_managed_cluster_check_mode_issues_no_delete_and_predicts_change():
+    """PR D dry-run/check-mode: fresh MC reads, no writers, no DELETE, would_change only."""
+    result = run_decommission_role(
+        check_mode=True,
+        observability_outcome="precondition_noop",
+        multiclusterhub_outcome="precondition_noop",
+        managed_clusters=["spoke-a", "spoke-b"],
+    )
+    summary = result["acm_switchover_decommission_result"]
+    assert result["delete_calls"] == []
+    assert summary["changed"] is False
+    assert summary["would_change"] is True
+    assert summary["substeps"] == {}
+    assert result["returncode"] == 0
+    managed_gets = [
+        request for request in result["requests"] if request["method"] == "GET" and "managedclusters" in request["path"]
+    ]
+    assert managed_gets, "check mode must still perform a fresh ManagedCluster inventory read"
+
+
+def test_managed_cluster_empty_inventory_is_precondition_noop():
+    result = run_decommission_role(
+        managed_clusters_outcome="precondition_noop",
+        observability_outcome="precondition_noop",
+        multiclusterhub_outcome="precondition_noop",
+    )
+    summary = result["acm_switchover_decommission_result"]
+    assert summary["status"] == "pass"
+    assert summary["substeps"]["managed_clusters"] == "precondition_noop"
+    assert not [call for call in result["delete_calls"] if "managedclusters" in call["path"]]
+
+
+def test_managed_cluster_uid_guarded_delete_carries_recorded_uid():
+    result = run_decommission_role(
+        managed_clusters=["spoke-a"],
+        observability_outcome="precondition_noop",
+        multiclusterhub_outcome="precondition_noop",
+    )
+    mc_deletes = [call for call in result["delete_calls"] if "managedclusters/spoke-a" in call["path"]]
+    assert mc_deletes
+    assert mc_deletes[0]["expected_uid"] == "mc-uid-spoke-a"
+    assert "local-cluster" not in str(result["delete_calls"])
+    summary = result["acm_switchover_decommission_result"]
+    assert summary["substeps"]["managed_clusters"] == "completed"
+    assert summary["changed"] is True
+
+
+def test_managed_cluster_survivor_aggregation_lists_failures():
+    """A failed target is collected; the family fails once rather than raising mid-batch."""
+    result = run_decommission_role(
+        managed_clusters=["spoke-a", "spoke-b"],
+        managed_clusters_outcome="failed",
+        observability_outcome="precondition_noop",
+        multiclusterhub_outcome="precondition_noop",
+    )
+    summary = result["acm_switchover_decommission_result"]
+    assert summary["status"] == "fail"
+    assert summary["substeps"]["managed_clusters"] == "failed"
+    assert result["returncode"] != 0
+    # Both targets were attempted (aggregation), then the family failed closed.
+    assert {
+        call["path"].rsplit("/", 1)[-1] for call in result["delete_calls"] if "managedclusters/" in call["path"]
+    } == {
+        "spoke-a",
+        "spoke-b",
+    }
+    assert not [call for call in result["delete_calls"] if "multiclusterhubs" in call["path"]]
+    combined = " ".join(str(task.get("result", {}).get("msg", "")) for task in result["tasks"] if task.get("failed"))
+    assert "survivors" in combined.lower()
+    assert "spoke-a" in combined and "spoke-b" in combined
+
+
+def test_managed_cluster_mixed_success_and_expected_failure_preserves_changed():
+    """One UID-mismatch operational failure aggregates; a successful sibling keeps changed=true."""
+    result = run_decommission_role(
+        managed_clusters=["spoke-a", "spoke-b"],
+        observability_outcome="precondition_noop",
+        multiclusterhub_outcome="precondition_noop",
+        managed_cluster_teardown_records={
+            "cluster.open-cluster-management.io/v1/ManagedCluster//spoke-b": {
+                "expected_uid": "not-the-live-uid",
+                "phase": "delete_started",
+            }
+        },
+    )
+    summary = result["acm_switchover_decommission_result"]
+    assert result["returncode"] != 0
+    assert summary["status"] == "fail"
+    assert summary["substeps"]["managed_clusters"] == "failed"
+    assert summary["changed"] is True
+    deleted = {call["path"].rsplit("/", 1)[-1] for call in result["delete_calls"] if "managedclusters/" in call["path"]}
+    assert "spoke-a" in deleted
+    assert "spoke-b" not in deleted
+    combined = " ".join(str(task.get("result", {}).get("msg", "")) for task in result["tasks"] if task.get("failed"))
+    assert "survivors" in combined.lower()
+    assert "spoke-b" in combined
+
+
+def test_managed_cluster_checkpoint_write_failure_aborts_rather_than_surviving():
+    """A checkpoint persistence failure must not become a per-target survivor."""
+    result = run_decommission_role(
+        managed_clusters=["spoke-a", "spoke-b"],
+        observability_outcome="precondition_noop",
+        multiclusterhub_outcome="precondition_noop",
+        checkpoint_dir_readonly=True,
+    )
+    assert result["returncode"] != 0
+    deleted = [call for call in result["delete_calls"] if "managedclusters/" in call["path"]]
+    assert deleted == [], "unexpected checkpoint failure must abort before later destructive targets"
+    combined = " ".join(
+        str(task.get("result", {}).get("msg", "")) for task in result["tasks"] if task.get("failed")
+    ).lower()
+    assert "survivor" not in combined or "unexpected" in combined
+
+
+def _inject_mc_teardown_fault(fault: str):
+    """Temporarily insert an unexpected failure into the per-target include (restored by caller).
+
+    The fault is scoped to ``spoke-a`` so a blanket rescue that continues the loop would
+    still reach ``spoke-b`` and issue DELETE — the discrimination the contract needs.
+    """
+    path = TEARDOWN_ONE_MANAGED_CLUSTER
+    original = path.read_text(encoding="utf-8")
+    marker = "    - name: Define this ManagedCluster teardown identity\n"
+    if fault == "undefined":
+        injected = (
+            "    - name: Deliberate undefined variable for rescue-contract test\n"
+            "      ansible.builtin.set_fact:\n"
+            '        _acm_mc_contract_boom: "{{ definitely_undefined_mc_rescue_contract_var }}"\n'
+            "      when: _acm_mc_target_name == 'spoke-a'\n" + marker
+        )
+    elif fault == "unexpected_command":
+        injected = (
+            "    - name: Deliberate unexpected action failure for rescue-contract test\n"
+            "      ansible.builtin.command: /nonexistent-acm-mc-rescue-contract-binary\n"
+            "      when: _acm_mc_target_name == 'spoke-a'\n" + marker
+        )
+    else:
+        raise ValueError(fault)
+    assert marker in original
+    path.write_text(original.replace(marker, injected, 1), encoding="utf-8")
+    assert "rescue-contract test" in path.read_text(encoding="utf-8")
+    return path, original
+
+
+def test_managed_cluster_undefined_variable_failure_aborts_family():
+    path, original = _inject_mc_teardown_fault("undefined")
+    try:
+        result = run_decommission_role(
+            managed_clusters=["spoke-a", "spoke-b"],
+            observability_outcome="precondition_noop",
+            multiclusterhub_outcome="precondition_noop",
+        )
+        assert result["returncode"] != 0
+        deleted = [call for call in result["delete_calls"] if "managedclusters/" in call["path"]]
+        assert deleted == []
+        combined = " ".join(
+            str(task.get("result", {}).get("msg", "")) for task in result["tasks"] if task.get("failed")
+        ).lower()
+        assert "survivor" not in combined or "unexpected" in combined
+    finally:
+        path.write_text(original, encoding="utf-8")
+
+
+def test_managed_cluster_unexpected_action_failure_aborts_family():
+    path, original = _inject_mc_teardown_fault("unexpected_command")
+    try:
+        result = run_decommission_role(
+            managed_clusters=["spoke-a", "spoke-b"],
+            observability_outcome="precondition_noop",
+            multiclusterhub_outcome="precondition_noop",
+        )
+        assert result["returncode"] != 0
+        deleted = [call for call in result["delete_calls"] if "managedclusters/" in call["path"]]
+        assert deleted == []
+        combined = " ".join(
+            str(task.get("result", {}).get("msg", "")) for task in result["tasks"] if task.get("failed")
+        ).lower()
+        assert "survivor" not in combined or "unexpected" in combined
+    finally:
+        path.write_text(original, encoding="utf-8")
+
+
+def test_managed_cluster_blanket_rescue_must_not_continue_after_unclassified_failure():
+    """Kill-style regression: unclassified failure must not delete a later sibling."""
+    path, original = _inject_mc_teardown_fault("unexpected_command")
+    try:
+        result = run_decommission_role(
+            managed_clusters=["spoke-a", "spoke-b"],
+            observability_outcome="precondition_noop",
+            multiclusterhub_outcome="precondition_noop",
+        )
+        assert "spoke-b" not in {
+            call["path"].rsplit("/", 1)[-1] for call in result["delete_calls"] if "managedclusters/" in call["path"]
+        }
+    finally:
+        path.write_text(original, encoding="utf-8")
+
+
+def _assert_mc_inventory_fail_closed(result: dict) -> None:
+    summary = result["acm_switchover_decommission_result"]
+    assert result["returncode"] != 0
+    assert summary["status"] == "fail"
+    assert not [call for call in result["delete_calls"] if "managedclusters/" in call["path"]]
+    combined = " ".join(str(task.get("result", {}).get("msg", "")) for task in result["tasks"] if task.get("failed"))
+    assert "Cannot verify ManagedCluster inventory" in combined
+
+
+def test_managed_cluster_malformed_only_empty_object_fails_closed():
+    """items: [{}] must not become an empty work set / precondition_noop."""
+    result = run_decommission_role(
+        managed_cluster_objects=[{}],
+        observability_outcome="precondition_noop",
+        multiclusterhub_outcome="precondition_noop",
+    )
+    _assert_mc_inventory_fail_closed(result)
+    assert result["acm_switchover_decommission_result"]["substeps"].get("managed_clusters") != "precondition_noop"
+    assert result["acm_switchover_decommission_result"]["substeps"].get("managed_clusters") != "completed"
+
+
+def test_managed_cluster_malformed_missing_metadata_fails_closed():
+    result = run_decommission_role(
+        managed_cluster_objects=[{"apiVersion": "cluster.open-cluster-management.io/v1", "kind": "ManagedCluster"}],
+        observability_outcome="precondition_noop",
+        multiclusterhub_outcome="precondition_noop",
+    )
+    _assert_mc_inventory_fail_closed(result)
+
+
+def test_managed_cluster_malformed_non_mapping_metadata_fails_closed():
+    result = run_decommission_role(
+        managed_cluster_objects=[
+            {
+                "apiVersion": "cluster.open-cluster-management.io/v1",
+                "kind": "ManagedCluster",
+                "metadata": "not-a-mapping",
+            }
+        ],
+        observability_outcome="precondition_noop",
+        multiclusterhub_outcome="precondition_noop",
+    )
+    _assert_mc_inventory_fail_closed(result)
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [None, "", "   ", 123],
+    ids=["null", "empty", "whitespace", "non_string"],
+)
+def test_managed_cluster_malformed_metadata_name_fails_closed(bad_name):
+    result = run_decommission_role(
+        managed_cluster_objects=[
+            {
+                "apiVersion": "cluster.open-cluster-management.io/v1",
+                "kind": "ManagedCluster",
+                "metadata": {"name": bad_name, "uid": "mc-uid-bad"},
+            }
+        ],
+        observability_outcome="precondition_noop",
+        multiclusterhub_outcome="precondition_noop",
+    )
+    _assert_mc_inventory_fail_closed(result)
+
+
+def test_managed_cluster_mixed_valid_and_malformed_inventory_fails_closed():
+    """One malformed item makes the entire inventory unverifiable; no deletes."""
+    result = run_decommission_role(
+        managed_cluster_objects=[
+            _managed_cluster_object("local-cluster"),
+            _managed_cluster_object("spoke-a"),
+            {},
+        ],
+        observability_outcome="precondition_noop",
+        multiclusterhub_outcome="precondition_noop",
+    )
+    _assert_mc_inventory_fail_closed(result)
+    assert not [call for call in result["delete_calls"] if "managedclusters/spoke-a" in call["path"]]
+
+
+def test_managed_cluster_valid_inventory_still_tears_down():
+    result = run_decommission_role(
+        managed_cluster_objects=[
+            _managed_cluster_object("local-cluster"),
+            _managed_cluster_object("spoke-a"),
+        ],
+        observability_outcome="precondition_noop",
+        multiclusterhub_outcome="precondition_noop",
+    )
+    summary = result["acm_switchover_decommission_result"]
+    assert result["returncode"] == 0
+    assert summary["substeps"]["managed_clusters"] == "completed"
+    assert summary["changed"] is True
+    assert [call for call in result["delete_calls"] if "managedclusters/spoke-a" in call["path"]]
+    assert not [call for call in result["delete_calls"] if "managedclusters/local-cluster" in call["path"]]
+
+
+def test_managed_cluster_valid_local_cluster_only_remains_precondition_noop():
+    result = run_decommission_role(
+        managed_cluster_objects=[_managed_cluster_object("local-cluster")],
+        observability_outcome="precondition_noop",
+        multiclusterhub_outcome="precondition_noop",
+    )
+    summary = result["acm_switchover_decommission_result"]
+    assert result["returncode"] == 0
+    assert summary["substeps"]["managed_clusters"] == "precondition_noop"
+    assert not [call for call in result["delete_calls"] if "managedclusters/" in call["path"]]
 
 
 def test_dry_run_records_no_substep_outcome():

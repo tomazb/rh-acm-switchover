@@ -44,7 +44,8 @@ Successfully implemented a live RBAC bootstrap certification scenario that valid
 - `multicluster-engine`: configmaps
 
 **Decommission extensions:**
-- ManagedCluster delete
+- ManagedCluster get and delete (`get` because standalone UID-guarded teardown issues a named GET
+  before delete and again for absence proof; `list` remains on the baseline operator role)
 - MultiClusterHub delete
 - MultiClusterObservability get and delete (also for old-hub finalization; `get` because the standalone
   teardown reads the named resource before deleting it and again for the final absence proof)

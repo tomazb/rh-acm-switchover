@@ -216,9 +216,11 @@ the decommission `preserveOnDelete` safety gate as `list` plus the cluster-scope
 permissions needed to complete decommission. The extension grants `get` as well as
 `delete` on `multiclusterobservabilities` so that it is self-consistent with the calls the
 standalone teardown makes -- it reads the named MultiClusterObservability before deleting it
-and again for its final absence proof. The baseline operator ClusterRole is bound to the same
-service account and also grants that read; the extension lists it so a validator or
-certification run that inspects the extension alone still sees it.
+and again for its final absence proof. The same extension grants `get` as well as `delete` on
+`managedclusters` for the UID-preconditioned ManagedCluster teardown named-GET and absence-proof
+path (`list` stays on the baseline operator role). The baseline operator ClusterRole is bound to the same
+service account and also grants those reads; the extension lists them so a validator or
+certification run that inspects the extension alone still sees them.
 
 #### Step 4: Verify
 

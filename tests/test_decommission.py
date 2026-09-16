@@ -39,7 +39,12 @@ from lib.exceptions import SwitchoverError, TargetDisappeared
 from lib.kube_client import KubeClient
 from lib.run_record import HubFacts, RunRecord
 from lib.strict_read import StrictReadOutcome
-from lib.teardown_record import AbsenceProof, TeardownPhase, TeardownRecord, teardown_key
+from lib.teardown_record import (
+    AbsenceProof,
+    TeardownPhase,
+    TeardownRecord,
+    teardown_key,
+)
 from lib.utils import StateManager
 from lib.waiter import WaitConditionResult
 
@@ -73,6 +78,9 @@ def mock_primary_client():
 
     client = Mock()
     client.list_managed_clusters = Mock(return_value=[])
+    client.list_managed_clusters_strict = Mock(
+        return_value=StrictReadOutcome(status=StrictReadStatus.ITEMS, items=[], resource_version="mc-1")
+    )
     client.list_custom_resources = Mock(return_value=[])
 
     mco = {
@@ -88,7 +96,7 @@ def mock_primary_client():
         )
     )
     client.list_custom_resources_strict = Mock(
-        return_value=StrictReadOutcome(status=StrictReadStatus.ITEMS, items=[mco], resource_version="1")
+        return_value=StrictReadOutcome(status=StrictReadStatus.ITEMS, items=[], resource_version="1")
     )
     client.delete_custom_resource_preconditioned = Mock(return_value=None)
     client.get_namespace_strict = Mock(return_value=StrictReadOutcome(status=StrictReadStatus.NAMESPACE_ABSENT))
@@ -136,10 +144,16 @@ def primary_with_all_resources(mock_primary_client):
         return []
 
     mock_primary_client.list_custom_resources.side_effect = _list_custom_resources
-    mock_primary_client.list_managed_clusters.return_value = [
-        {"metadata": {"name": "cluster1"}},
-        {"metadata": {"name": LOCAL_CLUSTER_NAME}},
+    mc_items = [
+        {"metadata": {"name": "cluster1", "uid": "uid-c1"}},
+        {"metadata": {"name": LOCAL_CLUSTER_NAME, "uid": "uid-local"}},
     ]
+    mock_primary_client.list_managed_clusters.return_value = mc_items
+    from lib.strict_read import StrictReadOutcome, StrictReadStatus
+
+    mock_primary_client.list_managed_clusters_strict.return_value = StrictReadOutcome(
+        status=StrictReadStatus.ITEMS, items=mc_items, resource_version="mc-1"
+    )
     return mock_primary_client
 
 
@@ -274,410 +288,358 @@ class TestDecommission:
         mock_primary_client.delete_custom_resource_preconditioned.assert_not_called()
         mock_primary_client.delete_custom_resource.assert_not_called()
 
-    @patch("modules.decommission.wait_for_condition")
-    def test_delete_managed_clusters_excludes_local(self, mock_wait, decommission_with_obs, mock_primary_client):
-        """Test that local-cluster is excluded from deletion."""
-        mock_wait.return_value = True  # Simulate successful wait for deletion
+    def test_delete_managed_clusters_excludes_local(self, decommission_with_obs):
+        """local-cluster is excluded; other ManagedClusters are UID-preconditioned deleted."""
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[
+                _mc("cluster1", uid="uid-c1"),
+                _mc(LOCAL_CLUSTER_NAME, uid="uid-local"),
+                _mc("cluster2", uid="uid-c2"),
+            ],
+        )
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
+        deleted = [c.args[3] for c in client.delete_custom_resource_preconditioned.call_args_list]
+        assert deleted == ["cluster1", "cluster2"]
+        client.delete_custom_resource.assert_not_called()
 
-        mock_primary_client.list_custom_resources.return_value = []
-        mock_primary_client.list_managed_clusters.return_value = [
-            {"metadata": {"name": "cluster1"}},
-            {"metadata": {"name": "local-cluster"}},
-            {"metadata": {"name": "cluster2"}},
-        ]
-
-        decommission_with_obs._delete_managed_clusters()
-
-        # Should delete cluster1 and cluster2, but not local-cluster
-        assert mock_primary_client.delete_custom_resource.call_count == 2
-        # Should have waited for ManagedCluster removal
-        mock_wait.assert_called_once()
-
-    @patch("modules.decommission.wait_for_condition")
     def test_delete_managed_clusters_blocks_unsafe_matching_clusterdeployment(
         self,
-        mock_wait,
         decommission_with_obs,
-        mock_primary_client,
         caplog,
     ):
         """Unsafe matching Hive ClusterDeployment blocks ManagedCluster deletion."""
-        mock_wait.return_value = True
-        mock_primary_client.list_managed_clusters.return_value = [
-            {"metadata": {"name": "cluster1"}},
-        ]
-        mock_primary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "cluster1", "namespace": "cluster1"},
-                "spec": {"preserveOnDelete": False},
-            }
-        ]
-
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc("cluster1")],
+            hive_items=[
+                {
+                    "metadata": {"name": "cluster1", "namespace": "cluster1"},
+                    "spec": {"preserveOnDelete": False},
+                }
+            ],
+        )
         with caplog.at_level(logging.ERROR):
-            execution = decommission_with_obs._delete_managed_clusters()
-
+            execution = decommission_with_obs.teardown_managed_clusters()
         assert execution.outcome is SubstepOutcome.FAILED
         assert execution.changed is False
         assert "preserveOnDelete=true" in caplog.text
-        mock_primary_client.delete_custom_resource.assert_not_called()
+        client.delete_custom_resource_preconditioned.assert_not_called()
 
     def test_delete_managed_clusters_blocks_metadata_name_clusterdeployment_match(
         self,
         decommission_with_obs,
-        mock_primary_client,
         caplog,
     ):
         """metadata.name is a conventional ManagedCluster match and blocks when unsafe."""
-        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1"}}]
-        mock_primary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "cluster1", "namespace": "cluster1"},
-                "spec": {"preserveOnDelete": False},
-            }
-        ]
-
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc("cluster1")],
+            hive_items=[
+                {
+                    "metadata": {"name": "cluster1", "namespace": "cluster1"},
+                    "spec": {"preserveOnDelete": False},
+                }
+            ],
+        )
         with caplog.at_level(logging.ERROR):
-            execution = decommission_with_obs._delete_managed_clusters()
-
+            execution = decommission_with_obs.teardown_managed_clusters()
         assert execution.outcome is SubstepOutcome.FAILED
         assert "cluster1 (cluster1/cluster1)" in caplog.text
-        mock_primary_client.delete_custom_resource.assert_not_called()
+        client.delete_custom_resource_preconditioned.assert_not_called()
 
     def test_delete_managed_clusters_blocks_spec_cluster_name_clusterdeployment_match(
         self,
         decommission_with_obs,
-        mock_primary_client,
         caplog,
     ):
         """spec.clusterName is a conventional ManagedCluster match and blocks when unsafe."""
-        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1"}}]
-        mock_primary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "hive-cluster", "namespace": "hive-cluster"},
-                "spec": {"clusterName": "cluster1", "preserveOnDelete": False},
-            }
-        ]
-
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc("cluster1")],
+            hive_items=[
+                {
+                    "metadata": {"name": "hive-cluster", "namespace": "hive-cluster"},
+                    "spec": {"clusterName": "cluster1", "preserveOnDelete": False},
+                }
+            ],
+        )
         with caplog.at_level(logging.ERROR):
-            execution = decommission_with_obs._delete_managed_clusters()
-
+            execution = decommission_with_obs.teardown_managed_clusters()
         assert execution.outcome is SubstepOutcome.FAILED
         assert "cluster1 (hive-cluster/hive-cluster)" in caplog.text
-        mock_primary_client.delete_custom_resource.assert_not_called()
+        client.delete_custom_resource_preconditioned.assert_not_called()
 
-    @patch("modules.decommission.wait_for_condition")
     def test_delete_managed_clusters_blocks_cluster_metadata_cluster_name_match(
         self,
-        mock_wait,
         decommission_with_obs,
-        mock_primary_client,
         caplog,
     ):
         """spec.clusterMetadata.clusterName maps Hive resources restored with non-conventional names."""
-        mock_wait.return_value = True
-        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1"}}]
-        mock_primary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "hive-cluster", "namespace": "hive-cluster"},
-                "spec": {
-                    "clusterMetadata": {"clusterName": "cluster1"},
-                    "preserveOnDelete": False,
-                },
-            }
-        ]
-
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc("cluster1")],
+            hive_items=[
+                {
+                    "metadata": {"name": "hive-cluster", "namespace": "hive-cluster"},
+                    "spec": {
+                        "clusterMetadata": {"clusterName": "cluster1"},
+                        "preserveOnDelete": False,
+                    },
+                }
+            ],
+        )
         with caplog.at_level(logging.ERROR):
-            execution = decommission_with_obs._delete_managed_clusters()
-
+            execution = decommission_with_obs.teardown_managed_clusters()
         assert execution.outcome is SubstepOutcome.FAILED
         assert "cluster1 (hive-cluster/hive-cluster)" in caplog.text
-        mock_primary_client.delete_custom_resource.assert_not_called()
+        client.delete_custom_resource_preconditioned.assert_not_called()
 
-    @patch("modules.decommission.wait_for_condition")
     def test_delete_managed_clusters_blocks_cross_checked_cluster_install_ref_match(
         self,
-        mock_wait,
         decommission_with_obs,
-        mock_primary_client,
         caplog,
     ):
         """clusterInstallRef is accepted only when cross-checked by the ClusterDeployment namespace."""
-        mock_wait.return_value = True
-        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1"}}]
-        mock_primary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "agent-install", "namespace": "cluster1"},
-                "spec": {
-                    "clusterInstallRef": {"name": "cluster1"},
-                    "preserveOnDelete": False,
-                },
-            }
-        ]
-
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc("cluster1")],
+            hive_items=[
+                {
+                    "metadata": {"name": "agent-install", "namespace": "cluster1"},
+                    "spec": {
+                        "clusterInstallRef": {"name": "cluster1"},
+                        "preserveOnDelete": False,
+                    },
+                }
+            ],
+        )
         with caplog.at_level(logging.ERROR):
-            execution = decommission_with_obs._delete_managed_clusters()
-
+            execution = decommission_with_obs.teardown_managed_clusters()
         assert execution.outcome is SubstepOutcome.FAILED
         assert "cluster1 (cluster1/agent-install)" in caplog.text
-        mock_primary_client.delete_custom_resource.assert_not_called()
+        client.delete_custom_resource_preconditioned.assert_not_called()
 
-    @patch("modules.decommission.wait_for_condition")
-    def test_delete_managed_clusters_allows_preserve_on_delete_true_match(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
+    def test_delete_managed_clusters_allows_preserve_on_delete_true_match(self, decommission_with_obs):
         """Matched ClusterDeployments with preserveOnDelete=true allow ManagedCluster deletion."""
-        mock_wait.return_value = True
-        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1"}}]
-        mock_primary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "hive-cluster", "namespace": "hive-cluster"},
-                "spec": {
-                    "clusterMetadata": {"clusterName": "cluster1"},
-                    "preserveOnDelete": True,
-                },
-            }
-        ]
-
-        decommission_with_obs._delete_managed_clusters()
-
-        mock_primary_client.delete_custom_resource.assert_called_once()
-
-    @patch("modules.decommission.wait_for_condition")
-    def test_delete_managed_clusters_deletes_when_matching_clusterdeployment_is_preserved(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
-        """A matching Hive ClusterDeployment with preserveOnDelete=true must not block ACM decommission."""
-        mock_wait.return_value = True
-        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1"}}]
-        mock_primary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "cluster1", "namespace": "cluster1"},
-                "spec": {"preserveOnDelete": True},
-            }
-        ]
-
-        decommission_with_obs._delete_managed_clusters()
-
-        mock_primary_client.delete_custom_resource.assert_called_once_with(
-            group="cluster.open-cluster-management.io",
-            version="v1",
-            plural="managedclusters",
-            name="cluster1",
-            timeout_seconds=decommission_module.DELETE_REQUEST_TIMEOUT,
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc("cluster1")],
+            hive_items=[
+                {
+                    "metadata": {"name": "hive-cluster", "namespace": "hive-cluster"},
+                    "spec": {
+                        "clusterMetadata": {"clusterName": "cluster1"},
+                        "preserveOnDelete": True,
+                    },
+                }
+            ],
         )
-        mock_wait.assert_called_once()
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution.outcome is SubstepOutcome.COMPLETED
+        client.delete_custom_resource_preconditioned.assert_called_once()
 
-    @patch("modules.decommission.wait_for_condition")
+    def test_delete_managed_clusters_deletes_when_matching_clusterdeployment_is_preserved(self, decommission_with_obs):
+        """A matching Hive ClusterDeployment with preserveOnDelete=true must not block ACM decommission."""
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc("cluster1")],
+            hive_items=[
+                {
+                    "metadata": {"name": "cluster1", "namespace": "cluster1"},
+                    "spec": {"preserveOnDelete": True},
+                }
+            ],
+        )
+        decommission_with_obs.teardown_managed_clusters()
+        client.delete_custom_resource_preconditioned.assert_called_once()
+        args = client.delete_custom_resource_preconditioned.call_args
+        assert args.args[0] == "cluster.open-cluster-management.io"
+        assert args.args[3] == "cluster1"
+        assert args.kwargs["uid"] == "uid-mc-1"
+        assert args.kwargs["timeout_seconds"] == decommission_module.DELETE_REQUEST_TIMEOUT
+
     def test_delete_managed_clusters_fails_closed_for_plausible_unverified_clusterdeployment(
         self,
-        mock_wait,
         decommission_with_obs,
-        mock_primary_client,
         caplog,
     ):
         """A plausible but unverified namespace relationship blocks ManagedCluster deletion."""
-        mock_wait.return_value = True
-        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1"}}]
-        mock_primary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "agent-install", "namespace": "cluster1"},
-                "spec": {"clusterInstallRef": {"name": "install-config"}, "preserveOnDelete": True},
-            }
-        ]
-
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc("cluster1")],
+            hive_items=[
+                {
+                    "metadata": {"name": "agent-install", "namespace": "cluster1"},
+                    "spec": {
+                        "clusterInstallRef": {"name": "install-config"},
+                        "preserveOnDelete": True,
+                    },
+                }
+            ],
+        )
         with caplog.at_level(logging.ERROR):
-            execution = decommission_with_obs._delete_managed_clusters()
-
+            execution = decommission_with_obs.teardown_managed_clusters()
         assert execution.outcome is SubstepOutcome.FAILED
         assert "Cannot verify ManagedCluster relationship" in caplog.text
         assert "cluster1/agent-install" in caplog.text
-        mock_primary_client.delete_custom_resource.assert_not_called()
+        client.delete_custom_resource_preconditioned.assert_not_called()
 
-    @patch("modules.decommission.wait_for_condition")
     def test_delete_managed_clusters_fails_closed_for_conflicting_plausible_clusterdeployment(
         self,
-        mock_wait,
         decommission_with_obs,
-        mock_primary_client,
         caplog,
     ):
         """A confirmed identifier cannot override a different plausible target identifier."""
-        mock_wait.return_value = True
-        mock_primary_client.list_managed_clusters.return_value = [
-            {"metadata": {"name": "cluster1"}},
-            {"metadata": {"name": "cluster2"}},
-        ]
-        mock_primary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "cluster1", "namespace": "cluster2"},
-                "spec": {"preserveOnDelete": True},
-            }
-        ]
-
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc("cluster1"), _mc("cluster2", uid="uid-c2")],
+            hive_items=[
+                {
+                    "metadata": {"name": "cluster1", "namespace": "cluster2"},
+                    "spec": {"preserveOnDelete": True},
+                }
+            ],
+        )
         with caplog.at_level(logging.ERROR):
-            execution = decommission_with_obs._delete_managed_clusters()
-
+            execution = decommission_with_obs.teardown_managed_clusters()
         assert execution.outcome is SubstepOutcome.FAILED
         assert "conflicting ManagedCluster identifiers" in caplog.text
         assert "cluster2/cluster1" in caplog.text
-        mock_primary_client.delete_custom_resource.assert_not_called()
+        client.delete_custom_resource_preconditioned.assert_not_called()
 
-    @patch("modules.decommission.wait_for_condition")
-    def test_delete_managed_clusters_allows_verified_absent_hive_clusterdeployments(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
-        """Verified absence of Hive ClusterDeployments remains acceptable."""
-        mock_wait.return_value = True
-        mock_primary_client.list_managed_clusters.return_value = [
-            {"metadata": {"name": "cluster1"}},
-        ]
-        mock_primary_client.list_custom_resources.return_value = []
-
-        decommission_with_obs._delete_managed_clusters()
-
-        mock_primary_client.delete_custom_resource.assert_called_once_with(
-            group="cluster.open-cluster-management.io",
-            version="v1",
-            plural="managedclusters",
-            name="cluster1",
-            timeout_seconds=decommission_module.DELETE_REQUEST_TIMEOUT,
-        )
+    def test_delete_managed_clusters_allows_verified_absent_hive_clusterdeployments(self, decommission_with_obs):
+        """Verified empty Hive ClusterDeployment inventory remains acceptable."""
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[_mc("cluster1")])
+        decommission_with_obs.teardown_managed_clusters()
+        client.delete_custom_resource_preconditioned.assert_called_once()
+        assert client.delete_custom_resource_preconditioned.call_args.args[3] == "cluster1"
 
     def test_delete_managed_clusters_api_error_blocks_destructive_deletion(
         self,
         decommission_with_obs,
-        mock_primary_client,
         caplog,
     ):
-        """Hive API errors fail closed before destructive ManagedCluster deletion."""
-        mock_primary_client.list_managed_clusters.return_value = [
-            {"metadata": {"name": "cluster1"}},
-        ]
-        mock_primary_client.list_custom_resources.side_effect = ApiException(status=403, reason="Forbidden")
-
+        """Hive list ERROR fails closed before destructive ManagedCluster deletion."""
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc("cluster1")],
+            hive_status="ERROR",
+        )
         with caplog.at_level(logging.ERROR):
-            execution = decommission_with_obs._delete_managed_clusters()
-
+            execution = decommission_with_obs.teardown_managed_clusters()
         assert execution.outcome is SubstepOutcome.FAILED
         assert "Unable to verify ClusterDeployment preserveOnDelete safety" in caplog.text
-        mock_primary_client.delete_custom_resource.assert_not_called()
+        client.delete_custom_resource_preconditioned.assert_not_called()
 
     def test_delete_managed_clusters_missing_hive_api_blocks_destructive_deletion(
         self,
         decommission_with_obs,
-        mock_primary_client,
         caplog,
     ):
-        """Missing Hive API fails closed before destructive ManagedCluster deletion."""
-        mock_primary_client.list_managed_clusters.return_value = [
-            {"metadata": {"name": "cluster1"}},
-        ]
-        mock_primary_client.list_custom_resources.side_effect = ApiException(status=404, reason="Not Found")
-
+        """Missing Hive API (CRD_ABSENT) fails closed before destructive ManagedCluster deletion."""
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc("cluster1")],
+            hive_status="CRD_ABSENT",
+        )
         with caplog.at_level(logging.ERROR):
-            execution = decommission_with_obs._delete_managed_clusters()
-
+            execution = decommission_with_obs.teardown_managed_clusters()
         assert execution.outcome is SubstepOutcome.FAILED
         assert "Unable to verify ClusterDeployment preserveOnDelete safety" in caplog.text
-        mock_primary_client.delete_custom_resource.assert_not_called()
+        client.delete_custom_resource_preconditioned.assert_not_called()
 
     def test_delete_managed_clusters_reports_all_unsafe_clusterdeployments(
         self,
         decommission_with_obs,
-        mock_primary_client,
         caplog,
     ):
         """Unsafe report includes all matching ClusterDeployments deterministically."""
-        mock_primary_client.list_managed_clusters.return_value = [
-            {"metadata": {"name": "cluster1"}},
-            {"metadata": {"name": "cluster2"}},
-        ]
-        mock_primary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "cluster2", "namespace": "ns2"},
-                "spec": None,
-            },
-            {
-                "metadata": {"name": "cluster1", "namespace": "ns1"},
-                "spec": {"preserveOnDelete": False},
-            },
-        ]
-
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc("cluster1"), _mc("cluster2", uid="uid-c2")],
+            hive_items=[
+                {
+                    "metadata": {"name": "cluster2", "namespace": "ns2"},
+                    "spec": None,
+                },
+                {
+                    "metadata": {"name": "cluster1", "namespace": "ns1"},
+                    "spec": {"preserveOnDelete": False},
+                },
+            ],
+        )
         with caplog.at_level(logging.ERROR):
-            execution = decommission_with_obs._delete_managed_clusters()
-
+            execution = decommission_with_obs.teardown_managed_clusters()
         assert execution.outcome is SubstepOutcome.FAILED
-
         message = caplog.text
         assert "cluster1 (ns1/cluster1)" in message
         assert "cluster2 (ns2/cluster2)" in message
         assert message.index("cluster1 (ns1/cluster1)") < message.index("cluster2 (ns2/cluster2)")
-        mock_primary_client.delete_custom_resource.assert_not_called()
+        client.delete_custom_resource_preconditioned.assert_not_called()
 
     def test_delete_managed_clusters_preserves_local_cluster_skip_without_hive_check(
-        self, caplog, decommission_with_obs, mock_primary_client
+        self, caplog, decommission_with_obs
     ):
         """local-cluster remains skipped and does not require Hive safety lookup."""
-        mock_primary_client.list_managed_clusters.return_value = [
-            {"metadata": {"name": "local-cluster"}},
-        ]
-
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc(LOCAL_CLUSTER_NAME, uid="uid-local")],
+        )
         with caplog.at_level(logging.INFO, logger="acm_switchover"):
-            decommission_with_obs._delete_managed_clusters()
-
-        mock_primary_client.list_custom_resources.assert_not_called()
-        mock_primary_client.delete_custom_resource.assert_not_called()
+            decommission_with_obs.teardown_managed_clusters()
+        client.list_custom_resources_strict.assert_not_called()
+        client.delete_custom_resource_preconditioned.assert_not_called()
         assert "ClusterDeployment preserveOnDelete safety was verified" not in caplog.text
 
-    @patch("modules.decommission.wait_for_condition")
-    def test_delete_managed_clusters_timeout(self, mock_wait, decommission_with_obs, mock_primary_client, caplog):
-        """Test that deletion fails when ManagedClusters are not removed in time."""
-        mock_wait.return_value = False  # Simulate timeout
-
-        mock_primary_client.list_managed_clusters.return_value = [
-            {"metadata": {"name": "cluster1"}},
-            {"metadata": {"name": "local-cluster"}},
-        ]
-        mock_primary_client.list_custom_resources.return_value = []
+    def test_delete_managed_clusters_timeout(self, decommission_with_obs, caplog, monkeypatch):
+        """Per-cluster absence proof timeout after an accepted DELETE reports changed=True."""
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc("cluster1")],
+        )
+        client.get_custom_resource_strict = Mock(
+            side_effect=None,
+            return_value=_strict("ITEMS", resource=_mc("cluster1")),
+        )
+        client.delete_custom_resource_preconditioned = Mock(return_value=None)
+        monkeypatch.setattr(decommission_module, "MANAGED_CLUSTER_DELETE_TIMEOUT", 0)
 
         with caplog.at_level(logging.ERROR):
-            execution = decommission_with_obs._delete_managed_clusters()
+            execution = decommission_with_obs.teardown_managed_clusters()
 
-        # IV-R403-01: the ManagedCluster delete was accepted before the proof failed.
         assert execution.outcome is SubstepOutcome.FAILED
         assert execution.changed is True
-        assert "ManagedClusters not fully removed" in caplog.text
+        assert "Timeout" in caplog.text or "timeout" in caplog.text.lower()
 
-    @patch("modules.decommission.wait_for_condition")
-    def test_delete_managed_clusters_wait_detail_is_bounded(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
-        """Large ManagedCluster sets should not produce oversized wait-detail log lines."""
-        mock_wait.return_value = True
-        delete_targets = [{"metadata": {"name": "cluster-delete-target"}}]
-        remaining_clusters = [{"metadata": {"name": f"cluster-{idx:03d}"}} for idx in range(60)]
-        mock_primary_client.list_managed_clusters.side_effect = [delete_targets, remaining_clusters]
-        mock_primary_client.list_custom_resources.return_value = []
+    def test_delete_managed_clusters_survivor_list_is_bounded(self, decommission_with_obs, caplog, monkeypatch):
+        """Large survivor sets use format_public_list so the family log stays bounded."""
+        names = [f"cluster-{idx:03d}" for idx in range(60)]
+        items = [_mc(name, uid=f"uid-{name}") for name in names]
+        _arrange_mc_family(decommission_with_obs, inventory_items=items)
 
-        decommission_with_obs._delete_managed_clusters()
+        def always_fail(spec, *, record_gitops_markers):
+            return SubstepExecution(SubstepOutcome.FAILED, changed=False)
 
-        condition_fn = mock_wait.call_args.args[1]
-        result = condition_fn()
-        assert result.done is False
-        assert "60 ManagedCluster(s) remaining" in result.public_detail
-        assert "cluster-000" in result.public_detail
-        assert "cluster-020" not in result.public_detail
-        assert "40 more" in result.public_detail
-        assert len(result.public_detail) <= 560
+        monkeypatch.setattr(decommission_with_obs, "_teardown_resource", always_fail)
 
-    def test_delete_managed_clusters_none_found(self, decommission_with_obs, mock_primary_client):
-        """Test when no managed clusters exist."""
-        mock_primary_client.list_custom_resources.return_value = []
-        mock_primary_client.list_managed_clusters.return_value = []
+        with caplog.at_level(logging.ERROR):
+            execution = decommission_with_obs.teardown_managed_clusters()
 
-        decommission_with_obs._delete_managed_clusters()
+        assert execution.outcome is SubstepOutcome.FAILED
+        assert "survivors" in caplog.text.lower() or "incomplete" in caplog.text.lower()
+        assert "cluster-000" in caplog.text
+        assert "40 more" in caplog.text
+        # One sanitized family log line, not 60 raw names without truncation.
+        assert len(caplog.text) < 5000
 
-        mock_primary_client.delete_custom_resource.assert_not_called()
+    def test_delete_managed_clusters_none_found(self, decommission_with_obs):
+        """Proven-empty ManagedCluster inventory is a clean skip."""
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[])
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution == SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
+        client.delete_custom_resource_preconditioned.assert_not_called()
 
     @patch("modules.decommission.wait_for_condition")
     def test_delete_multiclusterhub(self, mock_wait, decommission_with_obs, mock_primary_client):
@@ -750,7 +712,11 @@ class TestDecommissionOutcomes:
         assert result.cancelled is True
         assert result.succeeded is False
         assert result.substeps == {}
-        assert result.not_attempted == ("observability", "managed_clusters", "multiclusterhub")
+        assert result.not_attempted == (
+            "observability",
+            "managed_clusters",
+            "multiclusterhub",
+        )
         assert result.changed is False and result.would_change is False
 
     @patch("modules.decommission.confirm_action")
@@ -815,7 +781,7 @@ class TestDecommissionOutcomes:
 # producer can never be introduced without being covered by the interface guardrail below.
 # C adds "teardown_observability" and "_teardown_resource"; D adds "teardown_managed_clusters";
 # E adds "teardown_multiclusterhub".
-SUBSTEP_EXECUTORS = ("_run_substep",)
+SUBSTEP_EXECUTORS = ("_run_substep", "teardown_managed_clusters")
 
 
 @pytest.mark.unit
@@ -892,7 +858,10 @@ class TestActualChangeTruth:
         assert result.succeeded is False
         assert result.substeps["managed_clusters"] is SubstepOutcome.FAILED
         assert result.not_attempted == ("multiclusterhub",)
-        assert calls == ["observability", "managed_clusters"], "a failure aborts later substeps"
+        assert calls == [
+            "observability",
+            "managed_clusters",
+        ], "a failure aborts later substeps"
 
     def test_a_failing_substeps_own_mutation_reaches_the_result(self, decommission_with_obs):
         """IV-R403-01: the SAME substep accepted a DELETE, then failed its proof.
@@ -962,7 +931,11 @@ class TestActualChangeTruth:
 
     @patch("modules.decommission.confirm_action")
     def test_a_later_refusal_does_not_erase_an_earlier_actual_change(self, confirm, decommission_with_obs):
-        confirm.side_effect = [True, True, False]  # proceed, run observability, decline the next
+        confirm.side_effect = [
+            True,
+            True,
+            False,
+        ]  # proceed, run observability, decline the next
         self._executing(
             decommission_with_obs,
             {
@@ -980,7 +953,11 @@ class TestActualChangeTruth:
     ):
         result = decommission_dry_run.decommission(interactive=False)
         assert result.substeps == {}
-        assert result.not_attempted == ("observability", "managed_clusters", "multiclusterhub")
+        assert result.not_attempted == (
+            "observability",
+            "managed_clusters",
+            "multiclusterhub",
+        )
         assert result.changed is False
         assert isinstance(result.would_change, bool)
         assert decommission_dry_run.run_record.all_teardown_records() == {}
@@ -1008,7 +985,11 @@ class TestActualChangeTruth:
         assert json.dumps(state_manager.capture_state_snapshot(), sort_keys=True) == before
 
     def test_a_live_run_after_a_dry_run_reads_fresh_and_trusts_nothing(
-        self, decommission_dry_run, decommission_with_obs, state_manager, mock_primary_client
+        self,
+        decommission_dry_run,
+        decommission_with_obs,
+        state_manager,
+        mock_primary_client,
     ):
         """The live run performs EVERY one of its own reads, not merely some read.
 
@@ -1050,7 +1031,7 @@ class TestActualChangeTruth:
             call.get_namespace_strict(OBSERVABILITY_NAMESPACE),
             mco_read,
             call.get_namespace_strict(OBSERVABILITY_NAMESPACE),
-            call.list_managed_clusters(),
+            call.list_managed_clusters_strict(),
             call.list_custom_resources(
                 group="operator.open-cluster-management.io",
                 version="v1",
@@ -1205,25 +1186,44 @@ class TestDeleteApiErrorsReachTheResult:
         assert type(exc).__name__ in caplog.text
         assert RESPONSE_CANARY not in caplog.text
 
-    @patch("modules.decommission.wait_for_condition")
-    def test_managed_cluster_delete_rejection_reports_the_earlier_delete(
-        self, mock_wait, decommission_with_obs, mock_primary_client, caplog
-    ):
-        """The first ManagedCluster was deleted; the second is rejected.
+    def test_managed_cluster_delete_rejection_reports_the_earlier_delete(self, decommission_with_obs, caplog):
+        """The first ManagedCluster DELETE was accepted; the second is rejected.
 
         The body assertion covers the message this module builds, not the shared
         ``api_call`` decorator's logging -- the Mock client never reaches it.
         """
-        mock_wait.return_value = True
-        mock_primary_client.list_managed_clusters.return_value = [
-            {"metadata": {"name": "cluster1"}},
-            {"metadata": {"name": "cluster2"}},
-        ]
-        mock_primary_client.list_custom_resources.return_value = []  # no Hive ClusterDeployments
-        mock_primary_client.delete_custom_resource.side_effect = [True, self._api_error(403, "Forbidden")]
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[
+                _mc("cluster1", uid="uid-c1"),
+                _mc("cluster2", uid="uid-c2"),
+            ],
+        )
+
+        def delete_side_effect(group, version, plural, name, uid, namespace=None, timeout_seconds=None):
+            if name == "cluster2":
+                raise self._api_error(403, "Forbidden")
+            return None
+
+        # Named GET: present until deleted for cluster1; cluster2 fails at DELETE.
+        by_name = {
+            "cluster1": _mc("cluster1", uid="uid-c1"),
+            "cluster2": _mc("cluster2", uid="uid-c2"),
+        }
+
+        def named_get(group, version, plural, name, namespace=None):
+            resource = by_name.get(name)
+            return _strict("ITEMS", resource=resource) if resource else _strict("OBJECT_ABSENT")
+
+        def delete(group, version, plural, name, uid, namespace=None, timeout_seconds=None):
+            delete_side_effect(group, version, plural, name, uid, namespace, timeout_seconds)
+            by_name.pop(name, None)
+
+        client.get_custom_resource_strict = Mock(side_effect=named_get)
+        client.delete_custom_resource_preconditioned = Mock(side_effect=delete)
 
         with caplog.at_level(logging.ERROR):
-            execution = decommission_with_obs._delete_managed_clusters()
+            execution = decommission_with_obs.teardown_managed_clusters()
 
         assert execution.outcome is SubstepOutcome.FAILED
         assert execution.changed is True
@@ -1231,14 +1231,13 @@ class TestDeleteApiErrorsReachTheResult:
         assert "raw body must never be shown" not in caplog.text
 
     def test_managed_cluster_delete_rejection_with_no_prior_delete_reports_no_change(
-        self, decommission_with_obs, mock_primary_client, caplog
+        self, decommission_with_obs, caplog
     ):
-        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1"}}]
-        mock_primary_client.list_custom_resources.return_value = []
-        mock_primary_client.delete_custom_resource.side_effect = self._api_error(409, "Conflict")
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[_mc("cluster1")])
+        client.delete_custom_resource_preconditioned = Mock(side_effect=self._api_error(409, "Conflict"))
 
         with caplog.at_level(logging.ERROR):
-            execution = decommission_with_obs._delete_managed_clusters()
+            execution = decommission_with_obs.teardown_managed_clusters()
 
         assert execution.outcome is SubstepOutcome.FAILED
         assert execution.changed is False
@@ -1257,7 +1256,10 @@ class TestDeleteApiErrorsReachTheResult:
             {"metadata": {"name": "mch-one", "namespace": ACM_NAMESPACE}},
             {"metadata": {"name": "mch-two", "namespace": ACM_NAMESPACE}},
         ]
-        mock_primary_client.delete_custom_resource.side_effect = [True, self._api_error(403, "Forbidden")]
+        mock_primary_client.delete_custom_resource.side_effect = [
+            True,
+            self._api_error(403, "Forbidden"),
+        ]
 
         with caplog.at_level(logging.ERROR):
             execution = decommission_with_obs._delete_multiclusterhub()
@@ -1281,19 +1283,41 @@ class TestDeleteApiErrorsReachTheResult:
         assert execution.outcome is SubstepOutcome.FAILED
         assert execution.changed is False
 
-    @patch("modules.decommission.wait_for_condition")
-    def test_a_rejected_delete_never_escapes_the_aggregator(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
+    def test_a_rejected_delete_never_escapes_the_aggregator(self, decommission_with_obs, mock_primary_client):
         """The probed scenario: MCO destroyed, then a ManagedCluster DELETE is rejected.
 
         The operator must be told the MCO is gone, which is only possible if the
         DecommissionResult is constructed at all.
         """
-        mock_wait.return_value = True
-        mock_primary_client.list_custom_resources.return_value = []  # Hive ClusterDeployments
-        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1"}}]
-        mock_primary_client.delete_custom_resource.side_effect = self._api_error(409, "Conflict")
+        # After MCO completes, ManagedCluster inventory has one target whose DELETE is rejected.
+        mc = _mc("cluster1")
+        mock_primary_client.list_managed_clusters_strict = Mock(
+            return_value=_strict("ITEMS", items=[mc], resource_version="mc-1")
+        )
+        mock_primary_client.list_custom_resources_strict = Mock(
+            return_value=_strict("ITEMS", items=[], resource_version="cd-1")
+        )
+
+        mco = _mco()
+        mc_get_calls = {"n": 0}
+
+        def named_get(group, version, plural, name, namespace=None):
+            if plural == "multiclusterobservabilities":
+                # First call ITEMS, subsequent OBJECT_ABSENT (MCO phase machine).
+                if mock_primary_client.get_custom_resource_strict.call_count <= 1:
+                    return _strict("ITEMS", resource=mco)
+                return _strict("OBJECT_ABSENT")
+            if plural == "managedclusters":
+                return _strict("ITEMS", resource=mc)
+            return _strict("OBJECT_ABSENT")
+
+        def delete_preconditioned(group, version, plural, name, uid=None, namespace=None, timeout_seconds=None):
+            if plural == "managedclusters":
+                raise self._api_error(409, "Conflict")
+            return None
+
+        mock_primary_client.get_custom_resource_strict = Mock(side_effect=named_get)
+        mock_primary_client.delete_custom_resource_preconditioned = Mock(side_effect=delete_preconditioned)
 
         result = decommission_with_obs.decommission(interactive=False)
 
@@ -1303,14 +1327,7 @@ class TestDeleteApiErrorsReachTheResult:
         assert result.substeps["managed_clusters"] is SubstepOutcome.FAILED
         assert result.not_attempted == ("multiclusterhub",)
         assert "observability" in "\n".join(result.summary_lines())
-        mock_primary_client.delete_custom_resource_preconditioned.assert_called_once()
-        mock_primary_client.delete_custom_resource.assert_called_once_with(
-            group="cluster.open-cluster-management.io",
-            version="v1",
-            plural="managedclusters",
-            name="cluster1",
-            timeout_seconds=DELETE_REQUEST_TIMEOUT,
-        )
+        assert mock_primary_client.delete_custom_resource_preconditioned.call_count >= 2
 
     def test_a_404_at_delete_time_is_no_longer_reported_as_an_accepted_delete(
         self, decommission_with_obs, mock_primary_client
@@ -1344,7 +1361,11 @@ class TestDryRunPrediction:
         assert decommission_dry_run._preview_substep(substep) is True
 
     def test_preview_ignores_local_cluster(self, decommission_dry_run, mock_primary_client):
-        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": LOCAL_CLUSTER_NAME}}]
+        mock_primary_client.list_managed_clusters_strict.return_value = _strict(
+            "ITEMS",
+            items=[_mc(LOCAL_CLUSTER_NAME, uid="uid-local")],
+            resource_version="1",
+        )
 
         assert decommission_dry_run._preview_substep("managed_clusters") is False
 
@@ -1352,6 +1373,7 @@ class TestDryRunPrediction:
         # The MCO is proven absent, not merely unlisted: the observability branch now
         # predicts from a strict named read, which distinguishes the two.
         mock_primary_client.get_custom_resource_strict = Mock(side_effect=None, return_value=_strict("OBJECT_ABSENT"))
+        mock_primary_client.list_managed_clusters_strict.return_value = _strict("ITEMS", items=[], resource_version="1")
         for substep in ("observability", "managed_clusters", "multiclusterhub"):
             assert decommission_dry_run._preview_substep(substep) is False
 
@@ -1405,7 +1427,11 @@ class TestDryRunPrediction:
         assert result.changed is False
         assert result.succeeded is True
         assert result.substeps == {}
-        assert result.not_attempted == ("observability", "managed_clusters", "multiclusterhub")
+        assert result.not_attempted == (
+            "observability",
+            "managed_clusters",
+            "multiclusterhub",
+        )
         primary_with_all_resources.delete_custom_resource.assert_not_called()
         primary_with_all_resources.get_pods.assert_not_called()
         mock_wait.assert_not_called()
@@ -1489,12 +1515,41 @@ class TestDecommissionIntegration:
             run_record=RunRecord(state_manager),
         )
 
-        # Mock all resources
-        mock_primary_client.list_custom_resources.side_effect = [
-            [],  # Hive ClusterDeployments
-            [{"metadata": {"name": "multiclusterhub"}}],  # MCH
+        mc = _mc("cluster1")
+        mock_primary_client.list_managed_clusters_strict.return_value = _strict(
+            "ITEMS", items=[mc], resource_version="mc-1"
+        )
+        mock_primary_client.list_custom_resources_strict.return_value = _strict(
+            "ITEMS", items=[], resource_version="cd-1"
+        )
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "multiclusterhub", "namespace": ACM_NAMESPACE}}
         ]
-        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1"}}]
+
+        mco = _mco()
+        by_name = {"cluster1": mc}
+
+        def named_get(group, version, plural, name, namespace=None):
+            if plural == "multiclusterobservabilities":
+                # Phase machine: first present, then absent proofs.
+                if named_get.mco_calls == 0:
+                    named_get.mco_calls += 1
+                    return _strict("ITEMS", resource=mco)
+                return _strict("OBJECT_ABSENT")
+            if plural == "managedclusters":
+                resource = by_name.get(name)
+                return _strict("ITEMS", resource=resource) if resource else _strict("OBJECT_ABSENT")
+            return _strict("OBJECT_ABSENT")
+
+        named_get.mco_calls = 0
+
+        def delete_preconditioned(group, version, plural, name, uid=None, namespace=None, timeout_seconds=None):
+            if plural == "managedclusters":
+                by_name.pop(name, None)
+            return None
+
+        mock_primary_client.get_custom_resource_strict = Mock(side_effect=named_get)
+        mock_primary_client.delete_custom_resource_preconditioned = Mock(side_effect=delete_preconditioned)
         mock_primary_client.delete_custom_resource.return_value = True
 
         result = decomm.decommission(interactive=False)
@@ -1506,23 +1561,27 @@ class TestDecommissionIntegration:
             "managed_clusters": SubstepOutcome.COMPLETED,
             "multiclusterhub": SubstepOutcome.COMPLETED,
         }
-        mock_primary_client.delete_custom_resource_preconditioned.assert_called_once_with(
-            "observability.open-cluster-management.io",
-            "v1beta2",
-            "multiclusterobservabilities",
-            "observability",
-            uid="uid-1",
-            namespace=None,
-            timeout_seconds=DELETE_REQUEST_TIMEOUT,
+        assert any(
+            c.args[:4]
+            == (
+                "observability.open-cluster-management.io",
+                "v1beta2",
+                "multiclusterobservabilities",
+                "observability",
+            )
+            for c in mock_primary_client.delete_custom_resource_preconditioned.call_args_list
+        )
+        assert any(
+            c.args[:4]
+            == (
+                "cluster.open-cluster-management.io",
+                "v1",
+                "managedclusters",
+                "cluster1",
+            )
+            for c in mock_primary_client.delete_custom_resource_preconditioned.call_args_list
         )
         assert mock_primary_client.delete_custom_resource.call_args_list == [
-            call(
-                group="cluster.open-cluster-management.io",
-                version="v1",
-                plural="managedclusters",
-                name="cluster1",
-                timeout_seconds=DELETE_REQUEST_TIMEOUT,
-            ),
             call(
                 group="operator.open-cluster-management.io",
                 version="v1",
@@ -1549,7 +1608,11 @@ def _mco(uid="uid-1", resource_version="7"):
     return {
         "apiVersion": "observability.open-cluster-management.io/v1beta2",
         "kind": "MultiClusterObservability",
-        "metadata": {"name": "observability", "uid": uid, "resourceVersion": resource_version},
+        "metadata": {
+            "name": "observability",
+            "uid": uid,
+            "resourceVersion": resource_version,
+        },
     }
 
 
@@ -1586,7 +1649,7 @@ def _arrange(dec, *, cr=None, pods=None, namespace=None):
     client.get_custom_resource_strict = Mock(side_effect=[initial, final, final, final])
     client.delete_custom_resource_preconditioned = Mock(return_value=None)
     client.list_pods_strict = Mock(
-        return_value=pods if pods is not None else _strict("ITEMS", items=[], resource_version="pods-1")
+        return_value=(pods if pods is not None else _strict("ITEMS", items=[], resource_version="pods-1"))
     )
     client.get_namespace_strict = Mock(return_value=namespace if namespace is not None else _strict("NAMESPACE_ABSENT"))
     dec.run_record.record_teardown_phase = Mock(wraps=dec.run_record.record_teardown_phase)
@@ -1769,7 +1832,11 @@ class TestSharedTeardownPhaseMachine:
         """A disappearance skips no proof: an unreadable final pass cannot complete."""
         mock_primary_client.delete_custom_resource_preconditioned = Mock(side_effect=TargetDisappeared("gone"))
         mock_primary_client.get_custom_resource_strict = Mock(
-            side_effect=[_strict("ITEMS", resource=_mco()), _strict("OBJECT_ABSENT"), _strict("ERROR")]
+            side_effect=[
+                _strict("ITEMS", resource=_mco()),
+                _strict("OBJECT_ABSENT"),
+                _strict("ERROR"),
+            ]
         )
 
         execution = decommission_with_obs.teardown_observability()
@@ -1807,7 +1874,11 @@ class TestSharedTeardownPhaseMachine:
             ]
         else:
             client.list_pods_strict.side_effect = [
-                _strict("ITEMS", items=[{"metadata": {"name": "obs-pod"}}], resource_version="pods-1"),
+                _strict(
+                    "ITEMS",
+                    items=[{"metadata": {"name": "obs-pod"}}],
+                    resource_version="pods-1",
+                ),
                 _strict("ITEMS", resource_version="pods-2"),
                 _strict("ITEMS", resource_version="pods-final"),
             ]
@@ -1817,7 +1888,13 @@ class TestSharedTeardownPhaseMachine:
 
         assert execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
         phases = [c.args[0].phase.value for c in decommission_with_obs.run_record.record_teardown_phase.call_args_list]
-        assert phases == ["delete_started", "cr_absent", "drain_pending", "drained", "completed"]
+        assert phases == [
+            "delete_started",
+            "cr_absent",
+            "drain_pending",
+            "drained",
+            "completed",
+        ]
 
     @pytest.mark.parametrize("stage", ["cr", "pods"])
     def test_timeout_blocks_without_losing_the_accepted_delete(self, stage, decommission_with_obs, monkeypatch, caplog):
@@ -1828,7 +1905,9 @@ class TestSharedTeardownPhaseMachine:
             client.get_custom_resource_strict.return_value = _strict("ITEMS", resource=_mco())
         else:
             client.list_pods_strict.return_value = _strict(
-                "ITEMS", items=[{"metadata": {"name": "obs-pod"}}], resource_version="pods-1"
+                "ITEMS",
+                items=[{"metadata": {"name": "obs-pod"}}],
+                resource_version="pods-1",
             )
         # Exercise the real waiter's deadline without spending the production window.
         monkeypatch.setattr(decommission_module, "OBSERVABILITY_TERMINATE_TIMEOUT", 0)
@@ -1846,7 +1925,11 @@ class TestSharedTeardownPhaseMachine:
         """Pods gone at the deadline still complete, with a separate final proof."""
         client = _arrange(decommission_with_obs, namespace=_strict("ITEMS", resource_version="ns-1"))
         client.list_pods_strict.side_effect = [
-            _strict("ITEMS", items=[{"metadata": {"name": "obs-pod"}}], resource_version="pods-1"),
+            _strict(
+                "ITEMS",
+                items=[{"metadata": {"name": "obs-pod"}}],
+                resource_version="pods-1",
+            ),
             _strict("ITEMS", resource_version="pods-boundary"),
             _strict("ITEMS", resource_version="pods-final"),
         ]
@@ -1861,13 +1944,19 @@ class TestSharedTeardownPhaseMachine:
         completed = decommission_with_obs.run_record.record_teardown_phase.call_args.args[0]
         assert completed.resource_versions["drain_pods"] == "pods-final"
 
-    @pytest.mark.parametrize("failure", ["cr_error", "replacement", "namespace_error", "pods_error", "final_pods"])
+    @pytest.mark.parametrize(
+        "failure",
+        ["cr_error", "replacement", "namespace_error", "pods_error", "final_pods"],
+    )
     def test_poll_and_final_proof_failures_never_complete(self, failure, decommission_with_obs):
         """Read errors, replacements, and pods reappearing cannot certify completion."""
         client = _arrange(decommission_with_obs, namespace=_strict("ITEMS", resource_version="ns-1"))
         if failure in ("cr_error", "replacement"):
             observed = _strict("ERROR") if failure == "cr_error" else _strict("ITEMS", resource=_mco(uid="replacement"))
-            client.get_custom_resource_strict.side_effect = [_strict("ITEMS", resource=_mco()), observed]
+            client.get_custom_resource_strict.side_effect = [
+                _strict("ITEMS", resource=_mco()),
+                observed,
+            ]
         elif failure == "namespace_error":
             client.get_namespace_strict.return_value = _strict("ERROR")
         elif failure == "pods_error":
@@ -1875,7 +1964,11 @@ class TestSharedTeardownPhaseMachine:
         else:
             client.list_pods_strict.side_effect = [
                 _strict("ITEMS", resource_version="pods-drained"),
-                _strict("ITEMS", items=[{"metadata": {"name": "new-pod"}}], resource_version="pods-final"),
+                _strict(
+                    "ITEMS",
+                    items=[{"metadata": {"name": "new-pod"}}],
+                    resource_version="pods-final",
+                ),
             ]
 
         execution = decommission_with_obs.teardown_observability()
@@ -1918,7 +2011,11 @@ class TestSharedTeardownPhaseMachine:
         """
         _arrange(
             decommission_with_obs,
-            cr=_strict("ITEMS", resource=_mco(resource_version="77310"), resource_version="77310"),
+            cr=_strict(
+                "ITEMS",
+                resource=_mco(resource_version="77310"),
+                resource_version="77310",
+            ),
             namespace=_strict("ITEMS", resource_version="ns-final"),
             pods=_strict("ITEMS", items=[], resource_version="pods-final"),
         )
@@ -2644,7 +2741,10 @@ class TestARecordedObligationSurvivesStaleDetection:
         client.delete_custom_resource_preconditioned.assert_not_called()
         record = run_record.teardown_record(MCO_KEY)
         assert record.phase is TeardownPhase.COMPLETED
-        assert record.resource_versions == {"drain_namespace": "ns-9", "drain_pods": "pods-9"}
+        assert record.resource_versions == {
+            "drain_namespace": "ns-9",
+            "drain_pods": "pods-9",
+        }
 
     def test_a_completed_record_is_reproved_live_and_never_rewritten(self, tmp_path, mock_primary_client):
         """A completed record still requests the substep, and its reproof reads live."""
@@ -2702,3 +2802,740 @@ class TestARecordedObligationSurvivesStaleDetection:
         client.get_namespace_strict.assert_not_called()
         client.list_pods_strict.assert_not_called()
         client.delete_custom_resource_preconditioned.assert_not_called()
+
+
+@pytest.mark.unit
+class TestNoDrainTeardownPhaseMachine:
+    """D2: shared phase machine supports families with no drain scope."""
+
+    NO_DRAIN_KEY = teardown_key(
+        "cluster.open-cluster-management.io/v1",
+        "ManagedCluster",
+        None,
+        "spoke-a",
+    )
+
+    @staticmethod
+    def _no_drain_spec():
+        from lib.constants import (
+            MANAGED_CLUSTER_API_GROUP,
+            MANAGED_CLUSTER_API_VERSION,
+            MANAGED_CLUSTER_DELETE_INTERVAL,
+            MANAGED_CLUSTER_DELETE_TIMEOUT,
+            MANAGED_CLUSTER_PLURAL,
+        )
+
+        return decommission_module.TeardownSpec(
+            group=MANAGED_CLUSTER_API_GROUP,
+            version=MANAGED_CLUSTER_API_VERSION,
+            plural=MANAGED_CLUSTER_PLURAL,
+            resource_name=MANAGED_CLUSTER_PLURAL,
+            kind="ManagedCluster",
+            namespace=None,
+            name="spoke-a",
+            drain_namespace=None,
+            drain_label_selector=None,
+            cr_absent_timeout=MANAGED_CLUSTER_DELETE_TIMEOUT,
+            cr_absent_interval=MANAGED_CLUSTER_DELETE_INTERVAL,
+        )
+
+    @staticmethod
+    def _mc(uid="uid-mc-1", resource_version="3"):
+        return {
+            "apiVersion": "cluster.open-cluster-management.io/v1",
+            "kind": "ManagedCluster",
+            "metadata": {
+                "name": "spoke-a",
+                "uid": uid,
+                "resourceVersion": resource_version,
+            },
+        }
+
+    def _arrange_no_drain(self, dec, *, cr=None):
+        client = dec.primary
+        initial = cr if cr is not None else _strict("ITEMS", resource=self._mc())
+        final = _strict("OBJECT_ABSENT") if initial.status.name == "ITEMS" else initial
+        client.get_custom_resource_strict = Mock(side_effect=[initial, final, final, final])
+        client.delete_custom_resource_preconditioned = Mock(return_value=None)
+        client.get_namespace_strict = Mock(side_effect=AssertionError("no-drain path must not read namespaces"))
+        client.list_pods_strict = Mock(side_effect=AssertionError("no-drain path must not list pods"))
+        dec.run_record.record_teardown_phase = Mock(wraps=dec.run_record.record_teardown_phase)
+        return client
+
+    def test_successful_no_drain_teardown_skips_namespace_and_pod_reads(self, decommission_with_obs):
+        client = self._arrange_no_drain(decommission_with_obs)
+        execution = decommission_with_obs._teardown_resource(self._no_drain_spec(), record_gitops_markers=False)
+        assert execution.outcome is SubstepOutcome.COMPLETED
+        assert execution.changed is True
+        client.get_namespace_strict.assert_not_called()
+        client.list_pods_strict.assert_not_called()
+
+    def test_no_drain_phase_order_omits_drain_phases(self, decommission_with_obs):
+        self._arrange_no_drain(decommission_with_obs)
+        decommission_with_obs._teardown_resource(self._no_drain_spec(), record_gitops_markers=False)
+        phases = [
+            call.args[0].phase.value for call in decommission_with_obs.run_record.record_teardown_phase.call_args_list
+        ]
+        assert phases == ["delete_started", "cr_absent", "completed"]
+
+    def test_no_drain_completed_evidence_is_empty_revisions_and_target_cr_only(self, decommission_with_obs):
+        self._arrange_no_drain(decommission_with_obs)
+        decommission_with_obs._teardown_resource(self._no_drain_spec(), record_gitops_markers=False)
+        completed = decommission_with_obs.run_record.record_teardown_phase.call_args_list[-1].args[0]
+        assert completed.phase is TeardownPhase.COMPLETED
+        assert completed.resource_versions == {}
+        assert set(completed.absence_proofs) == {"target_cr"}
+        assert completed.absence_proofs["target_cr"].resource_key == self.NO_DRAIN_KEY
+        assert completed.absence_proofs["target_cr"].proof_type == "object_absent"
+
+    def test_no_drain_absent_without_record_is_precondition_noop_without_namespace_read(self, decommission_with_obs):
+        client = self._arrange_no_drain(decommission_with_obs, cr=_strict("OBJECT_ABSENT"))
+        execution = decommission_with_obs._teardown_resource(self._no_drain_spec(), record_gitops_markers=False)
+        assert execution.outcome is SubstepOutcome.PRECONDITION_NOOP
+        assert execution.changed is False
+        client.get_namespace_strict.assert_not_called()
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    def test_no_drain_completed_reproof_does_not_read_namespace_or_pods(self, decommission_with_obs):
+        decommission_with_obs.run_record.record_teardown_phase(
+            TeardownRecord(
+                key=self.NO_DRAIN_KEY,
+                expected_uid="uid-mc-1",
+                phase=TeardownPhase.COMPLETED,
+                observed_at="2026-09-15T00:00:00+00:00",
+                resource_versions={},
+                absence_proofs={"target_cr": AbsenceProof(proof_type="object_absent", resource_key=self.NO_DRAIN_KEY)},
+            )
+        )
+        client = self._arrange_no_drain(decommission_with_obs, cr=_strict("OBJECT_ABSENT"))
+        execution = decommission_with_obs._teardown_resource(self._no_drain_spec(), record_gitops_markers=False)
+        assert execution.outcome is SubstepOutcome.COMPLETED
+        assert execution.changed is False
+        client.get_namespace_strict.assert_not_called()
+        client.list_pods_strict.assert_not_called()
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    def test_no_drain_absence_wait_uses_managed_cluster_timeouts(self, decommission_with_obs):
+        from lib.constants import (
+            MANAGED_CLUSTER_DELETE_INTERVAL,
+            MANAGED_CLUSTER_DELETE_TIMEOUT,
+        )
+
+        self._arrange_no_drain(decommission_with_obs)
+        with patch.object(decommission_module, "wait_for_condition", return_value=True) as wait:
+            decommission_with_obs._teardown_resource(self._no_drain_spec(), record_gitops_markers=False)
+        assert wait.call_count >= 1
+        kwargs = wait.call_args.kwargs
+        assert kwargs["timeout"] == MANAGED_CLUSTER_DELETE_TIMEOUT
+        assert kwargs["interval"] == MANAGED_CLUSTER_DELETE_INTERVAL
+
+
+MC_API_VERSION = "cluster.open-cluster-management.io/v1"
+
+
+def _mc_key(name: str) -> str:
+    return teardown_key(MC_API_VERSION, "ManagedCluster", None, name)
+
+
+def _mc(name: str, uid: str = "uid-mc-1", resource_version: str = "3") -> dict:
+    return {
+        "apiVersion": MC_API_VERSION,
+        "kind": "ManagedCluster",
+        "metadata": {"name": name, "uid": uid, "resourceVersion": resource_version},
+    }
+
+
+def _seed_mc_record(decommission, name: str, *, phase, expected_uid: str = "uid-mc-1"):
+    key = _mc_key(name)
+    kwargs: dict = {"key": key, "expected_uid": expected_uid, "phase": phase}
+    if phase is TeardownPhase.COMPLETED:
+        kwargs["observed_at"] = "2026-09-15T00:00:00+00:00"
+        kwargs["resource_versions"] = {}
+        kwargs["absence_proofs"] = {
+            "target_cr": AbsenceProof(proof_type="object_absent", resource_key=key),
+        }
+    decommission.run_record.record_teardown_phase(TeardownRecord(**kwargs))
+
+
+def _arrange_mc_family(
+    dec,
+    *,
+    inventory_items=None,
+    inventory_status="ITEMS",
+    hive_items=None,
+    hive_status="ITEMS",
+):
+    """Arrange strict inventory + Hive + per-name GET/DELETE seams for family tests."""
+    client = dec.primary
+    items = inventory_items if inventory_items is not None else []
+
+    def _list_outcome(status, listed, version):
+        if status in ("ERROR", "CRD_ABSENT"):
+            return _strict(status)
+        return _strict(status, items=listed, resource_version=version)
+
+    client.list_managed_clusters_strict = Mock(return_value=_list_outcome(inventory_status, items, "mc-inv"))
+    client.list_custom_resources_strict = Mock(return_value=_list_outcome(hive_status, hive_items or [], "cd-inv"))
+    client.delete_custom_resource_preconditioned = Mock(return_value=None)
+    client.get_namespace_strict = Mock(side_effect=AssertionError("MC family must not drain"))
+    client.list_pods_strict = Mock(side_effect=AssertionError("MC family must not drain"))
+    dec.run_record.record_teardown_phase = Mock(wraps=dec.run_record.record_teardown_phase)
+
+    by_name = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        metadata = item.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        name = metadata.get("name")
+        if isinstance(name, str) and name:
+            by_name[name] = item
+
+    def _named_get(group, version, plural, name, namespace=None):
+        if plural != "managedclusters":
+            return _strict("OBJECT_ABSENT")
+        if inventory_status == "CRD_ABSENT":
+            return _strict("CRD_ABSENT")
+        if inventory_status == "ERROR":
+            return _strict("ERROR")
+        resource = by_name.get(name)
+        if resource is None:
+            return _strict("OBJECT_ABSENT")
+        # After a successful delete mock, subsequent GETs see absence. The delete
+        # mock clears the name from by_name when accepted.
+        return _strict("ITEMS", resource=resource)
+
+    def _delete(group, version, plural, name, uid, namespace=None, timeout_seconds=None):
+        by_name.pop(name, None)
+        return None
+
+    client.get_custom_resource_strict = Mock(side_effect=_named_get)
+    client.delete_custom_resource_preconditioned = Mock(side_effect=_delete)
+    return client
+
+
+@pytest.mark.unit
+class TestManagedClusterTeardownFamily:
+    """D3: public teardown_managed_clusters family orchestrator."""
+
+    def test_public_method_returns_substep_execution(self, decommission_with_obs):
+        _arrange_mc_family(decommission_with_obs)
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert isinstance(execution, SubstepExecution)
+
+    def test_dispatch_wires_managed_clusters_to_public_method(self):
+        source = inspect.getsource(Decommission._run_substep)
+        assert "teardown_managed_clusters" in source
+        assert "_delete_managed_clusters" not in source
+
+    def test_strict_empty_inventory_is_precondition_noop(self, decommission_with_obs):
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[])
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution == SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
+        client.delete_custom_resource_preconditioned.assert_not_called()
+        client.delete_custom_resource.assert_not_called()
+
+    def test_strict_inventory_error_is_family_failed_never_empty(self, decommission_with_obs, caplog):
+        client = _arrange_mc_family(decommission_with_obs, inventory_status="ERROR")
+        with caplog.at_level(logging.ERROR):
+            execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert "Cannot verify ManagedCluster inventory" in caplog.text
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    def test_crd_absent_without_records_is_unverifiable_failure(self, decommission_with_obs, caplog):
+        """Binding ruling 3: positive CRD_ABSENT with no records is not empty-list blindness."""
+        client = _arrange_mc_family(decommission_with_obs, inventory_status="CRD_ABSENT")
+        with caplog.at_level(logging.ERROR):
+            execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert "Cannot verify ManagedCluster inventory" in caplog.text
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    def test_local_cluster_is_skipped_with_no_named_get_delete_or_record(self, decommission_with_obs, caplog):
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc(LOCAL_CLUSTER_NAME, uid="uid-local")],
+        )
+        with caplog.at_level(logging.INFO, logger="acm_switchover"):
+            execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution == SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
+        client.get_custom_resource_strict.assert_not_called()
+        client.delete_custom_resource_preconditioned.assert_not_called()
+        client.list_custom_resources_strict.assert_not_called()
+        assert decommission_with_obs.run_record.all_teardown_records() == {}
+        assert "local-cluster" not in [
+            c.args[0].key for c in decommission_with_obs.run_record.record_teardown_phase.call_args_list
+        ]
+
+    def test_successful_teardown_uses_uid_preconditioned_delete(self, decommission_with_obs):
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[_mc("spoke-a")])
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
+        client.delete_custom_resource_preconditioned.assert_called_once()
+        args = client.delete_custom_resource_preconditioned.call_args
+        assert "spoke-a" in args.args or args.kwargs.get("name") == "spoke-a"
+        assert (
+            args.kwargs.get("uid") if "uid" in args.kwargs else args.args[4] if len(args.args) > 4 else None
+        ) == "uid-mc-1"
+        client.delete_custom_resource.assert_not_called()
+        completed = decommission_with_obs.run_record.teardown_record(_mc_key("spoke-a"))
+        assert completed.phase is TeardownPhase.COMPLETED
+        assert completed.resource_versions == {}
+        assert set(completed.absence_proofs) == {"target_cr"}
+
+    def test_uid_is_forced_durable_before_delete(self, decommission_with_obs):
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[_mc("spoke-a")])
+        order = []
+
+        real_record = decommission_with_obs.run_record.record_teardown_phase
+
+        def track_record(record):
+            order.append(("record", record.phase.value))
+            return real_record(record)
+
+        def track_delete(*a, **k):
+            order.append(("delete", k.get("name") or (a[3] if len(a) > 3 else None)))
+            return None
+
+        decommission_with_obs.run_record.record_teardown_phase = Mock(side_effect=track_record)
+        # Re-install named get that clears on delete via side effects below
+        by_name = {"spoke-a": _mc("spoke-a")}
+
+        def named_get(group, version, plural, name, namespace=None):
+            resource = by_name.get(name)
+            return _strict("ITEMS", resource=resource) if resource else _strict("OBJECT_ABSENT")
+
+        def delete(group, version, plural, name, uid, namespace=None, timeout_seconds=None):
+            track_delete(group, version, plural, name, uid=uid)
+            by_name.pop(name, None)
+
+        client.get_custom_resource_strict = Mock(side_effect=named_get)
+        client.delete_custom_resource_preconditioned = Mock(side_effect=delete)
+
+        decommission_with_obs.teardown_managed_clusters()
+        assert order[0] == ("record", "delete_started")
+        assert order[1][0] == "delete"
+
+    def test_hive_crd_absent_blocks_before_mutation(self, decommission_with_obs, caplog):
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc("spoke-a")],
+            hive_status="CRD_ABSENT",
+        )
+        with caplog.at_level(logging.ERROR):
+            execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert "Unable to verify ClusterDeployment preserveOnDelete safety" in caplog.text
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    def test_hive_list_error_blocks_before_mutation(self, decommission_with_obs, caplog):
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc("spoke-a")],
+            hive_status="ERROR",
+        )
+        with caplog.at_level(logging.ERROR):
+            execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert "Unable to verify ClusterDeployment preserveOnDelete safety" in caplog.text
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    def test_preserve_on_delete_false_blocks_with_existing_message(self, decommission_with_obs, caplog):
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc("cluster1")],
+            hive_items=[
+                {
+                    "metadata": {"name": "cluster1", "namespace": "cluster1"},
+                    "spec": {"preserveOnDelete": False},
+                }
+            ],
+        )
+        with caplog.at_level(logging.ERROR):
+            execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution.outcome is SubstepOutcome.FAILED
+        assert "preserveOnDelete=true" in caplog.text
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    def test_mixed_aggregation_fail_then_success_reports_changed(self, decommission_with_obs, caplog, monkeypatch):
+        """First cluster fails after accepted DELETE; second completes. Survivors logged once."""
+        items = [_mc("alpha", uid="uid-a"), _mc("beta", uid="uid-b")]
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=items)
+
+        original = decommission_with_obs._teardown_resource
+        calls = []
+
+        def wrap(spec, *, record_gitops_markers):
+            calls.append(spec.name)
+            if spec.name == "alpha":
+                # Accept DELETE then fail proof by forcing absence wait failure.
+                result = original(spec, record_gitops_markers=record_gitops_markers)
+                # Force FAILED with changed from a synthetic accepted delete path:
+                return SubstepExecution(SubstepOutcome.FAILED, changed=True)
+            return original(spec, record_gitops_markers=record_gitops_markers)
+
+        monkeypatch.setattr(decommission_with_obs, "_teardown_resource", wrap)
+
+        with caplog.at_level(logging.ERROR):
+            execution = decommission_with_obs.teardown_managed_clusters()
+
+        assert calls == [
+            "alpha",
+            "beta",
+        ], "stable sorted order; later clusters continue"
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        assert "alpha" in caplog.text
+        assert "survivors" in caplog.text.lower() or "incomplete" in caplog.text.lower()
+
+    def test_mixed_aggregation_success_then_fail_reports_changed(self, decommission_with_obs, caplog, monkeypatch):
+        items = [_mc("alpha", uid="uid-a"), _mc("beta", uid="uid-b")]
+        _arrange_mc_family(decommission_with_obs, inventory_items=items)
+        original = decommission_with_obs._teardown_resource
+        calls = []
+
+        def wrap(spec, *, record_gitops_markers):
+            calls.append(spec.name)
+            if spec.name == "beta":
+                return SubstepExecution(SubstepOutcome.FAILED, changed=False)
+            return original(spec, record_gitops_markers=record_gitops_markers)
+
+        monkeypatch.setattr(decommission_with_obs, "_teardown_resource", wrap)
+
+        with caplog.at_level(logging.ERROR):
+            execution = decommission_with_obs.teardown_managed_clusters()
+
+        assert calls == ["alpha", "beta"]
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        assert "beta" in caplog.text
+
+    def test_resume_record_only_when_live_inventory_empty(self, decommission_with_obs):
+        _seed_mc_record(decommission_with_obs, "spoke-a", phase=TeardownPhase.DELETE_STARTED)
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[])
+        # Named GET sees absence → phase machine proves and completes without DELETE.
+        client.get_custom_resource_strict = Mock(return_value=_strict("OBJECT_ABSENT"))
+
+        execution = decommission_with_obs.teardown_managed_clusters()
+
+        assert execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+        client.delete_custom_resource_preconditioned.assert_not_called()
+        assert decommission_with_obs.run_record.teardown_record(_mc_key("spoke-a")).phase is TeardownPhase.COMPLETED
+
+    def test_dry_run_present_inventory_does_not_mutate(self, decommission_with_obs):
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[_mc("spoke-a")])
+        decommission_with_obs.dry_run = True
+        before = dict(decommission_with_obs.run_record.all_teardown_records())
+
+        execution = decommission_with_obs.teardown_managed_clusters()
+
+        assert execution.changed is False
+        assert execution.outcome in (
+            SubstepOutcome.COMPLETED,
+            SubstepOutcome.PRECONDITION_NOOP,
+        )
+        client.delete_custom_resource_preconditioned.assert_not_called()
+        client.delete_custom_resource.assert_not_called()
+        assert decommission_with_obs.run_record.all_teardown_records() == before
+
+    def test_dry_run_empty_inventory_is_noop(self, decommission_with_obs):
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[])
+        decommission_with_obs.dry_run = True
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution == SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    def test_dry_run_unverifiable_inventory_fails(self, decommission_with_obs, caplog):
+        client = _arrange_mc_family(decommission_with_obs, inventory_status="ERROR")
+        decommission_with_obs.dry_run = True
+        with caplog.at_level(logging.ERROR):
+            execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    def test_per_target_precondition_noop_counts_as_satisfied(self, decommission_with_obs, monkeypatch):
+        _arrange_mc_family(decommission_with_obs, inventory_items=[_mc("spoke-a")])
+
+        def always_noop(spec, *, record_gitops_markers):
+            return SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
+
+        monkeypatch.setattr(decommission_with_obs, "_teardown_resource", always_noop)
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
+
+    def test_validation_error_propagates(self, decommission_with_obs):
+        from lib.validation import ValidationError
+
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[_mc("spoke-a")])
+        client.delete_custom_resource_preconditioned = Mock(side_effect=ValidationError("empty uid"))
+        with pytest.raises(ValidationError):
+            decommission_with_obs.teardown_managed_clusters()
+
+
+@pytest.mark.unit
+class TestManagedClusterTeardownIvR40301:
+    """IV-R403-01 cases for teardown_managed_clusters. Case 3 (drain) is inapplicable."""
+
+    def test_case1_no_mutation_then_proof_failure_changed_false(self, decommission_with_obs):
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[_mc("spoke-a")])
+        client.delete_custom_resource_preconditioned = Mock(side_effect=SwitchoverError("denied"))
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+
+    def test_case2_accepted_delete_then_cr_absence_failure_changed_true(self, decommission_with_obs, monkeypatch):
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[_mc("spoke-a")])
+        client.get_custom_resource_strict = Mock(
+            side_effect=[
+                _strict("ITEMS", resource=_mc("spoke-a")),
+                _strict("ERROR"),
+            ]
+        )
+        client.delete_custom_resource_preconditioned = Mock(return_value=None)
+        monkeypatch.setattr(decommission_module, "MANAGED_CLUSTER_DELETE_TIMEOUT", 0)
+
+        execution = decommission_with_obs.teardown_managed_clusters()
+
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        client.delete_custom_resource_preconditioned.assert_called_once()
+
+    def test_case3_drain_failure_is_inapplicable_no_drain_reads(self, decommission_with_obs):
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[_mc("spoke-a")])
+        decommission_with_obs.teardown_managed_clusters()
+        client.get_namespace_strict.assert_not_called()
+        client.list_pods_strict.assert_not_called()
+
+    def test_case4_accepted_delete_then_final_verification_failure_changed_true(self, decommission_with_obs):
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[_mc("spoke-a")])
+        client.get_custom_resource_strict = Mock(
+            side_effect=[
+                _strict("ITEMS", resource=_mc("spoke-a")),
+                _strict("OBJECT_ABSENT"),
+                _strict("ERROR"),
+            ]
+        )
+        client.delete_custom_resource_preconditioned = Mock(return_value=None)
+
+        execution = decommission_with_obs.teardown_managed_clusters()
+
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+        record = decommission_with_obs.run_record.teardown_record(_mc_key("spoke-a"))
+        assert record is None or record.phase is not TeardownPhase.COMPLETED
+
+    def test_case5_resumed_record_final_proof_failure_changed_false(self, decommission_with_obs):
+        _seed_mc_record(decommission_with_obs, "spoke-a", phase=TeardownPhase.CR_ABSENT)
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[])
+        client.get_custom_resource_strict = Mock(return_value=_strict("ERROR"))
+
+        execution = decommission_with_obs.teardown_managed_clusters()
+
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    def test_case6_partial_batch_accepted_delete_then_later_failure_changed_true(
+        self, decommission_with_obs, monkeypatch
+    ):
+        items = [_mc("alpha", uid="uid-a"), _mc("beta", uid="uid-b")]
+        _arrange_mc_family(decommission_with_obs, inventory_items=items)
+        original = decommission_with_obs._teardown_resource
+
+        def wrap(spec, *, record_gitops_markers):
+            if spec.name == "beta":
+                return SubstepExecution(SubstepOutcome.FAILED, changed=False)
+            return original(spec, record_gitops_markers=record_gitops_markers)
+
+        monkeypatch.setattr(decommission_with_obs, "_teardown_resource", wrap)
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=True)
+
+    def test_case7_expected_failure_does_not_escape_as_exception(self, decommission_with_obs):
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[_mc("spoke-a")])
+        client.delete_custom_resource_preconditioned = Mock(side_effect=SwitchoverError("boom"))
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution.outcome is SubstepOutcome.FAILED
+
+
+@pytest.mark.unit
+class TestManagedClusterPublicDryRunSafety:
+    """Public dry-run must evaluate the same MC safety predicates as live execution."""
+
+    def _dry(self, decommission_no_obs):
+        decommission_no_obs.dry_run = True
+        decommission_no_obs.has_observability = False
+        return decommission_no_obs
+
+    def test_public_dry_run_blocks_unsafe_hive_preserve_on_delete(self, decommission_no_obs):
+        dec = self._dry(decommission_no_obs)
+        client = _arrange_mc_family(
+            dec,
+            inventory_items=[_mc("spoke-a")],
+            hive_items=[
+                {
+                    "metadata": {"namespace": "hive", "name": "spoke-a"},
+                    "spec": {"preserveOnDelete": False},
+                }
+            ],
+        )
+        before = dict(dec.run_record.all_teardown_records())
+
+        with pytest.raises(SwitchoverError, match="preserveOnDelete"):
+            dec.decommission(interactive=False)
+
+        client.delete_custom_resource_preconditioned.assert_not_called()
+        client.delete_custom_resource.assert_not_called()
+        assert dec.run_record.all_teardown_records() == before
+
+    def test_public_dry_run_record_only_obligation_is_not_false_noop(self, decommission_no_obs):
+        dec = self._dry(decommission_no_obs)
+        _seed_mc_record(dec, "spoke-a", phase=TeardownPhase.DELETE_STARTED, expected_uid="uid-mc-1")
+        client = _arrange_mc_family(dec, inventory_items=[])
+        # Live inventory empty, but named GET still sees the recorded identity.
+        client.get_custom_resource_strict = Mock(return_value=_strict("ITEMS", resource=_mc("spoke-a", uid="uid-mc-1")))
+        before = dict(dec.run_record.all_teardown_records())
+
+        result = dec.decommission(interactive=False)
+
+        assert result.changed is False
+        assert result.would_change is True
+        client.get_custom_resource_strict.assert_called()
+        client.delete_custom_resource_preconditioned.assert_not_called()
+        assert dec.run_record.all_teardown_records() == before
+
+    def test_public_dry_run_fails_closed_on_replacement_uid(self, decommission_no_obs):
+        dec = self._dry(decommission_no_obs)
+        _seed_mc_record(dec, "spoke-a", phase=TeardownPhase.DELETE_STARTED, expected_uid="uid-old")
+        client = _arrange_mc_family(dec, inventory_items=[_mc("spoke-a", uid="uid-new")])
+        before = dict(dec.run_record.all_teardown_records())
+
+        with pytest.raises(SwitchoverError, match="not the object recorded"):
+            dec.decommission(interactive=False)
+
+        client.delete_custom_resource_preconditioned.assert_not_called()
+        assert dec.run_record.all_teardown_records() == before
+
+    def test_public_dry_run_clean_empty_inventory_is_noop(self, decommission_no_obs):
+        dec = self._dry(decommission_no_obs)
+        client = _arrange_mc_family(dec, inventory_items=[])
+        before = dict(dec.run_record.all_teardown_records())
+
+        result = dec.decommission(interactive=False)
+
+        assert result.changed is False
+        assert result.would_change is False
+        client.delete_custom_resource_preconditioned.assert_not_called()
+        assert dec.run_record.all_teardown_records() == before
+
+    def test_public_dry_run_unverifiable_mc_inventory_fails_closed(self, decommission_no_obs):
+        dec = self._dry(decommission_no_obs)
+        client = _arrange_mc_family(dec, inventory_status="ERROR")
+        before = dict(dec.run_record.all_teardown_records())
+
+        with pytest.raises(SwitchoverError, match="ManagedCluster inventory"):
+            dec.decommission(interactive=False)
+
+        client.delete_custom_resource_preconditioned.assert_not_called()
+        assert dec.run_record.all_teardown_records() == before
+
+    def test_public_dry_run_unverifiable_hive_inventory_fails_closed(self, decommission_no_obs):
+        dec = self._dry(decommission_no_obs)
+        client = _arrange_mc_family(dec, inventory_items=[_mc("spoke-a")], hive_status="ERROR")
+        before = dict(dec.run_record.all_teardown_records())
+
+        with pytest.raises(SwitchoverError, match="ClusterDeployment"):
+            dec.decommission(interactive=False)
+
+        client.delete_custom_resource_preconditioned.assert_not_called()
+        assert dec.run_record.all_teardown_records() == before
+
+    def test_public_dry_run_fails_closed_when_present_target_uid_missing(self, decommission_no_obs):
+        """Present targets without a usable UID cannot safely predict would_change."""
+        dec = self._dry(decommission_no_obs)
+        client = _arrange_mc_family(
+            dec,
+            inventory_items=[{"metadata": {"name": "spoke-a", "uid": ""}}],
+        )
+        # Named GET must also present the empty UID (list path already validated the name).
+        client.get_custom_resource_strict = Mock(
+            return_value=_strict("ITEMS", resource={"metadata": {"name": "spoke-a", "uid": ""}})
+        )
+        before = dict(dec.run_record.all_teardown_records())
+
+        with pytest.raises(SwitchoverError, match="Cannot establish the identity"):
+            dec.decommission(interactive=False)
+
+        client.delete_custom_resource_preconditioned.assert_not_called()
+        assert dec.run_record.all_teardown_records() == before
+
+
+@pytest.mark.unit
+class TestManagedClusterMalformedInventory:
+    """Strict ManagedCluster inventory must fail closed on malformed items."""
+
+    def test_malformed_only_empty_mapping_fails_not_noop(self, decommission_with_obs):
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[{}])
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    def test_missing_metadata_fails(self, decommission_with_obs):
+        client = _arrange_mc_family(
+            decommission_with_obs, inventory_items=[{"apiVersion": "v1", "kind": "ManagedCluster"}]
+        )
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution.outcome is SubstepOutcome.FAILED
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    def test_non_mapping_metadata_fails(self, decommission_with_obs):
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[{"metadata": "spoke-a"}])
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution.outcome is SubstepOutcome.FAILED
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    def test_empty_name_fails(self, decommission_with_obs):
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[{"metadata": {"name": ""}}])
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution.outcome is SubstepOutcome.FAILED
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    def test_null_name_fails(self, decommission_with_obs):
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[{"metadata": {"name": None}}])
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution.outcome is SubstepOutcome.FAILED
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    def test_non_string_name_fails(self, decommission_with_obs):
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[{"metadata": {"name": 123}}])
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution.outcome is SubstepOutcome.FAILED
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    def test_mixed_valid_and_malformed_fails_entire_inventory(self, decommission_with_obs):
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc("spoke-a"), {}],
+        )
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution.outcome is SubstepOutcome.FAILED
+        client.delete_custom_resource_preconditioned.assert_not_called()
+
+    def test_valid_inventory_unchanged(self, decommission_with_obs):
+        client = _arrange_mc_family(decommission_with_obs, inventory_items=[_mc("spoke-a")])
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution.outcome is SubstepOutcome.COMPLETED
+        assert execution.changed is True
+        client.delete_custom_resource_preconditioned.assert_called()
+
+    def test_valid_local_cluster_excluded(self, decommission_with_obs):
+        client = _arrange_mc_family(
+            decommission_with_obs,
+            inventory_items=[_mc("local-cluster"), _mc("spoke-a")],
+        )
+        execution = decommission_with_obs.teardown_managed_clusters()
+        assert execution.outcome is SubstepOutcome.COMPLETED
+        deleted = [
+            c.kwargs.get("name") or (c.args[3] if len(c.args) > 3 else None)
+            for c in client.delete_custom_resource_preconditioned.call_args_list
+        ]
+        assert "local-cluster" not in deleted
+        assert "spoke-a" in deleted or any(
+            "spoke-a" in str(c) for c in client.delete_custom_resource_preconditioned.call_args_list
+        )

@@ -16,6 +16,9 @@ from kubernetes.config.config_exception import ConfigException
 from tenacity import wait_none
 
 from lib.constants import (
+    MANAGED_CLUSTER_API_GROUP,
+    MANAGED_CLUSTER_API_VERSION,
+    MANAGED_CLUSTER_PLURAL,
     STRICT_READ_MAX_PAGES,
     STRICT_READ_MAX_RESTARTS,
     STRICT_READ_PAGE_LIMIT,
@@ -74,7 +77,10 @@ class TestConfigMapAdvisoryReads:
     def test_configmap_advisory_returns_present_resource(self, kube_client, mock_k8s_apis):
         configmap = MagicMock()
         configmap.to_dict.return_value = {
-            "metadata": {"name": "import-controller-config", "namespace": "multicluster-engine"},
+            "metadata": {
+                "name": "import-controller-config",
+                "namespace": "multicluster-engine",
+            },
             "data": {"autoImportStrategy": "ImportOnly"},
         }
         mock_k8s_apis["core_api"].read_namespaced_config_map.return_value = configmap
@@ -240,7 +246,10 @@ class TestKubeClient:
         with patch.object(
             kube_client,
             "_get_custom_resource_raw",
-            side_effect=[ApiException(status=503, reason=private_reason), {"metadata": {"name": "crd"}}],
+            side_effect=[
+                ApiException(status=503, reason=private_reason),
+                {"metadata": {"name": "crd"}},
+            ],
         ) as raw_get, patch.object(
             KubeClient.get_custom_resource_advisory.retry,
             "wait",
@@ -1077,7 +1086,13 @@ class TestKubeClientInitialization:
             with pytest.raises(ConfigException):
                 KubeClient(context=context, log_config_errors=False)
 
-        for sentinel in ("raw-config-exception-sentinel", context, kubeconfig_path, token, credential):
+        for sentinel in (
+            "raw-config-exception-sentinel",
+            context,
+            kubeconfig_path,
+            token,
+            credential,
+        ):
             assert sentinel not in caplog.text
 
     @patch("lib.kube_client.config.load_kube_config")
@@ -1751,13 +1766,18 @@ class TestDiscoveryProver:
                 {
                     "kind": "APIResourceList",
                     "resources": [
-                        {"name": "multiclusterobservabilities", "kind": "MultiClusterObservability"},
+                        {
+                            "name": "multiclusterobservabilities",
+                            "kind": "MultiClusterObservability",
+                        },
                     ],
                 }
             )
         )
         outcome = self._client(call)._discovery_serves(
-            "observability.open-cluster-management.io", "v1beta2", "multiclusterobservabilities"
+            "observability.open-cluster-management.io",
+            "v1beta2",
+            "multiclusterobservabilities",
         )
         assert outcome.status is StrictReadStatus.ITEMS
 
@@ -1789,7 +1809,12 @@ class TestDiscoveryProver:
         def fake_request(method, url, **kwargs):
             seen["method"] = method
             seen["url"] = url
-            return _FakeRESTResponse({"kind": "APIResourceList", "resources": [{"name": "pods", "kind": "Pod"}]})
+            return _FakeRESTResponse(
+                {
+                    "kind": "APIResourceList",
+                    "resources": [{"name": "pods", "kind": "Pod"}],
+                }
+            )
 
         api_client = ApiClient()
         api_client.request = fake_request
@@ -1807,7 +1832,12 @@ class TestDiscoveryProver:
 
     def test_core_group_uses_the_core_discovery_path(self):
         call = Mock(
-            return_value=self._body({"kind": "APIResourceList", "resources": [{"name": "pods", "kind": "Pod"}]})
+            return_value=self._body(
+                {
+                    "kind": "APIResourceList",
+                    "resources": [{"name": "pods", "kind": "Pod"}],
+                }
+            )
         )
         self._client(call)._discovery_serves("", "v1", "pods")
         assert call.call_args[0][0] == "/api/v1"
@@ -1846,7 +1876,10 @@ class TestStrictCustomResourceReads:
                 "items": [{"metadata": {"name": "a"}}],
                 "metadata": {"continue": "tok", "resourceVersion": "100"},
             },
-            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "100"}},
+            {
+                "items": [{"metadata": {"name": "b"}}],
+                "metadata": {"resourceVersion": "100"},
+            },
         ]
         outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
         assert [i["metadata"]["name"] for i in outcome.items] == ["a", "b"]
@@ -1857,7 +1890,10 @@ class TestStrictCustomResourceReads:
                 "items": [{"metadata": {"name": "a"}}],
                 "metadata": {"continue": "tok", "resourceVersion": "100"},
             },
-            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "100"}},
+            {
+                "items": [{"metadata": {"name": "b"}}],
+                "metadata": {"resourceVersion": "100"},
+            },
         ]
         client = self._client(list_pages=pages)
         client.list_custom_resources_strict("g", "v1", "widgets")
@@ -1909,7 +1945,10 @@ class TestStrictCustomResourceReads:
                 "items": [{"metadata": {"name": "a"}}],
                 "metadata": {"continue": "tok", "resourceVersion": "200"},
             },
-            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "200"}},
+            {
+                "items": [{"metadata": {"name": "b"}}],
+                "metadata": {"resourceVersion": "200"},
+            },
         ]
         client = self._client(list_pages=pages)
         outcome = client.list_custom_resources_strict("g", "v1", "widgets")
@@ -1931,7 +1970,10 @@ class TestStrictCustomResourceReads:
                 "items": [{"metadata": {"name": "a"}}],
                 "metadata": {"continue": "tok", "resourceVersion": "200"},
             },
-            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "200"}},
+            {
+                "items": [{"metadata": {"name": "b"}}],
+                "metadata": {"resourceVersion": "200"},
+            },
         ]
         outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
         assert outcome.resource_version == "200", "the restarted read's page 1 owns the snapshot"
@@ -1943,7 +1985,10 @@ class TestStrictCustomResourceReads:
                 "items": [{"metadata": {"name": "a"}}],
                 "metadata": {"continue": "tok", "resourceVersion": "100"},
             },
-            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "100"}},
+            {
+                "items": [{"metadata": {"name": "b"}}],
+                "metadata": {"resourceVersion": "100"},
+            },
         ]
         outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
         assert outcome.status is StrictReadStatus.ITEMS
@@ -1956,7 +2001,10 @@ class TestStrictCustomResourceReads:
                 "items": [{"metadata": {"name": "a"}}],
                 "metadata": {"continue": "tok", "resourceVersion": "100"},
             },
-            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "999"}},
+            {
+                "items": [{"metadata": {"name": "b"}}],
+                "metadata": {"resourceVersion": "999"},
+            },
         ]
         outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
         assert outcome.status is StrictReadStatus.ERROR
@@ -1976,7 +2024,10 @@ class TestStrictCustomResourceReads:
                 "items": [{"metadata": {"name": "a"}}],
                 "metadata": {"continue": "tok", "resourceVersion": "200"},
             },
-            {"items": [{"metadata": {"name": "b"}}], "metadata": {"resourceVersion": "100"}},
+            {
+                "items": [{"metadata": {"name": "b"}}],
+                "metadata": {"resourceVersion": "100"},
+            },
         ]
         outcome = self._client(list_pages=pages).list_custom_resources_strict("g", "v1", "widgets")
         assert outcome.status is StrictReadStatus.ERROR
@@ -2068,7 +2119,11 @@ class TestStrictCustomResourceReads:
         [
             {"name": "mch", "uid": "u-1"},  # revision missing
             {"name": "mch", "uid": "u-1", "resourceVersion": ""},  # revision empty
-            {"name": "mch", "uid": "u-1", "resourceVersion": 77},  # revision not a string
+            {
+                "name": "mch",
+                "uid": "u-1",
+                "resourceVersion": 77,
+            },  # revision not a string
         ],
         ids=["missing", "empty", "non_string"],
     )
@@ -2093,7 +2148,10 @@ class TestStrictCustomResourceReads:
         assert outcome.status is StrictReadStatus.OBJECT_ABSENT
 
     def test_named_get_404_without_successful_discovery_is_never_object_absent(self):
-        client = self._client(get_error=ApiException(status=404, reason="Not Found"), discovery_served=False)
+        client = self._client(
+            get_error=ApiException(status=404, reason="Not Found"),
+            discovery_served=False,
+        )
         outcome = client.get_custom_resource_strict("g", "v1", "widgets", "mch")
         assert outcome.status is StrictReadStatus.CRD_ABSENT
 
@@ -2108,6 +2166,89 @@ class TestStrictCustomResourceReads:
         # The strict surface is additive; existing callers keep the current behavior.
         assert KubeClient.list_custom_resources.__doc__ is not None
         assert "max_items" in inspect.signature(KubeClient.list_custom_resources).parameters
+
+
+@pytest.mark.unit
+class TestListManagedClustersStrict:
+    """R4-03 PR D: plan-named ManagedCluster strict inventory wrapper."""
+
+    def _client(self, list_pages=None, discovery_served=True):
+        client = KubeClient.__new__(KubeClient)
+        client.request_timeout = 30
+        client.dry_run = False
+        client.custom_api = Mock()
+        client._discovery_serves = Mock(
+            return_value=(
+                StrictReadOutcome.from_items([])
+                if discovery_served
+                else StrictReadOutcome.crd_absent(STRICT_READ_REASON_KIND_NOT_SERVED)
+            )
+        )
+        if list_pages is not None:
+            client.custom_api.list_cluster_custom_object = Mock(side_effect=list_pages)
+        return client
+
+    def test_wrapper_targets_managedcluster_constants(self):
+        client = self._client(list_pages=[{"items": [], "metadata": {"resourceVersion": "1"}}])
+        client.list_managed_clusters_strict()
+        client._discovery_serves.assert_called_once_with(
+            MANAGED_CLUSTER_API_GROUP,
+            MANAGED_CLUSTER_API_VERSION,
+            MANAGED_CLUSTER_PLURAL,
+        )
+        client.custom_api.list_cluster_custom_object.assert_called_once()
+        kwargs = client.custom_api.list_cluster_custom_object.call_args.kwargs
+        assert kwargs["group"] == MANAGED_CLUSTER_API_GROUP
+        assert kwargs["version"] == MANAGED_CLUSTER_API_VERSION
+        assert kwargs["plural"] == MANAGED_CLUSTER_PLURAL
+
+    def test_proven_empty_inventory_is_items_not_absence(self):
+        outcome = self._client(
+            list_pages=[{"items": [], "metadata": {"resourceVersion": "1"}}]
+        ).list_managed_clusters_strict()
+        assert outcome.status is StrictReadStatus.ITEMS
+        assert outcome.items == []
+        assert outcome.proves_absence is False
+
+    def test_populated_inventory_returns_items(self):
+        pages = [
+            {
+                "items": [{"metadata": {"name": "spoke-a"}}],
+                "metadata": {"resourceVersion": "9"},
+            }
+        ]
+        outcome = self._client(list_pages=pages).list_managed_clusters_strict()
+        assert outcome.status is StrictReadStatus.ITEMS
+        assert [item["metadata"]["name"] for item in outcome.items] == ["spoke-a"]
+
+    def test_unserved_kind_is_crd_absent_never_empty_items(self):
+        client = self._client(list_pages=[], discovery_served=False)
+        outcome = client.list_managed_clusters_strict()
+        assert outcome.status is StrictReadStatus.CRD_ABSENT
+        assert outcome.proves_absence is True
+        client.custom_api.list_cluster_custom_object.assert_not_called()
+
+    def test_authorization_failure_is_error_not_empty(self):
+        outcome = self._client(list_pages=[ApiException(status=403, reason="Forbidden")]).list_managed_clusters_strict()
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.proves_absence is False
+
+    def test_later_page_failure_is_error_not_partial_or_empty(self):
+        pages = [
+            {
+                "items": [{"metadata": {"name": "spoke-a"}}],
+                "metadata": {"continue": "tok", "resourceVersion": "9"},
+            },
+            ApiException(status=500, reason="Internal Error"),
+        ]
+        outcome = self._client(list_pages=pages).list_managed_clusters_strict()
+        assert outcome.status is StrictReadStatus.ERROR
+        # ERROR outcomes carry the empty default list; callers must not treat it as inventory.
+        assert outcome.items == []
+        assert outcome.proves_absence is False
+
+    def test_wrapper_offers_no_truncation_parameter(self):
+        assert "max_items" not in inspect.signature(KubeClient.list_managed_clusters_strict).parameters
 
 
 class TestStrictCoreReads:
@@ -2221,7 +2362,10 @@ class TestStrictCoreReads:
         assert all(call.kwargs["_request_timeout"] == 30 for call in calls)
 
     def test_pod_later_page_failure_exposes_no_partial_inventory(self):
-        pages = [self._pod_page(["a"], continue_token="tok"), ApiException(status=500, reason="boom")]
+        pages = [
+            self._pod_page(["a"], continue_token="tok"),
+            ApiException(status=500, reason="boom"),
+        ]
         outcome = self._client(pod_pages=pages).list_pods_strict("acm")
         assert outcome.status is StrictReadStatus.ERROR
         assert outcome.items == []
@@ -2271,7 +2415,10 @@ class TestStrictCoreReads:
         assert outcome.resource_version == "200"
 
     def test_a_failed_pod_read_carries_no_revision(self):
-        pages = [self._pod_page(["a"], continue_token="tok"), ApiException(status=500, reason="boom")]
+        pages = [
+            self._pod_page(["a"], continue_token="tok"),
+            ApiException(status=500, reason="boom"),
+        ]
         outcome = self._client(pod_pages=pages).list_pods_strict("acm")
         assert outcome.status is StrictReadStatus.ERROR
         assert outcome.resource_version is None
@@ -2395,7 +2542,10 @@ class TestStrictAppsReads:
 
     @pytest.mark.parametrize(
         "kind, method",
-        [("deployment", "get_deployment_strict"), ("replicaset", "get_replicaset_strict")],
+        [
+            ("deployment", "get_deployment_strict"),
+            ("replicaset", "get_replicaset_strict"),
+        ],
     )
     def test_present_object_carries_identity(self, kind, method):
         client = self._client(result=self._object(), kind=kind)
@@ -2406,7 +2556,10 @@ class TestStrictAppsReads:
 
     @pytest.mark.parametrize(
         "kind, method",
-        [("deployment", "get_deployment_strict"), ("replicaset", "get_replicaset_strict")],
+        [
+            ("deployment", "get_deployment_strict"),
+            ("replicaset", "get_replicaset_strict"),
+        ],
     )
     def test_explicit_404_is_object_absent(self, kind, method):
         client = self._client(error=ApiException(status=404, reason="Not Found"), kind=kind)
