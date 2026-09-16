@@ -60,6 +60,30 @@
     msg: Cannot verify ManagedCluster inventory. Nothing was deleted.
   when: acm_switchover_mc_read.read_status not in ['ok', 'kind_not_served']
 
+- name: Detect malformed ManagedCluster inventory items
+  ansible.builtin.set_fact:
+    _acm_mc_inventory_malformed: "{{ _acm_mc_inventory_malformed_json | from_json }}"
+  vars:
+    _acm_mc_inventory_malformed_json: >-
+      {%- set bad = [] -%}
+      {%- if acm_switchover_mc_read.read_status == 'ok' -%}
+      {%- for mc in (acm_switchover_mc_read.resources | default([])) -%}
+      {%- if mc is not mapping
+            or mc.metadata is not defined
+            or mc.metadata is not mapping
+            or mc.metadata.name is not string
+            or (mc.metadata.name | trim | length) == 0 -%}
+      {%- set _ = bad.append(1) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- endif -%}
+      {{ (bad | length > 0) | bool | to_json }}
+
+- name: Fail closed when ManagedCluster inventory items are malformed
+  ansible.builtin.fail:
+    msg: Cannot verify ManagedCluster inventory. Nothing was deleted.
+  when: _acm_mc_inventory_malformed | bool
+
 - name: Publish non-local live ManagedCluster names
   ansible.builtin.set_fact:
     _acm_mc_live_names: "{{ _acm_mc_live_names_json | from_json }}"
@@ -68,8 +92,8 @@
       {%- set names = [] -%}
       {%- if acm_switchover_mc_read.read_status == 'ok' -%}
       {%- for mc in (acm_switchover_mc_read.resources | default([])) -%}
-      {%- set name = (mc.metadata.name | default('')) if (mc is mapping and mc.metadata is defined and mc.metadata is mapping) else '' -%}
-      {%- if name and name != 'local-cluster' -%}
+      {%- set name = mc.metadata.name -%}
+      {%- if name != 'local-cluster' -%}
       {%- set _ = names.append(name) -%}
       {%- endif -%}
       {%- endfor -%}

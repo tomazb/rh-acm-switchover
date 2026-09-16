@@ -24,13 +24,9 @@ from lib.utils import StateManager
 from modules.decommission import Decommission
 
 ROOT = Path(__file__).resolve().parents[1]
-COLLECTION_MC = (
-    ROOT
-    / "ansible_collections/tomazb/acm_switchover/roles/decommission/tasks/delete_managed_clusters.yml"
-)
+COLLECTION_MC = ROOT / "ansible_collections/tomazb/acm_switchover/roles/decommission/tasks/delete_managed_clusters.yml"
 COLLECTION_ONE = (
-    ROOT
-    / "ansible_collections/tomazb/acm_switchover/roles/decommission/tasks/teardown_one_managed_cluster.yml"
+    ROOT / "ansible_collections/tomazb/acm_switchover/roles/decommission/tasks/teardown_one_managed_cluster.yml"
 )
 
 
@@ -77,10 +73,7 @@ class TestManagedClusterTeardownStaticParity:
         family = COLLECTION_MC.read_text()
         one = COLLECTION_ONE.read_text()
         assert "acm_k8s_read_outcome" in family
-        assert (
-            "resource_name: managedclusters" in family
-            or "resource_name: managedclusters" in family
-        )
+        assert "resource_name: managedclusters" in family or "resource_name: managedclusters" in family
         assert "clusterdeployments" in family
         assert "acm_uid_guarded_delete" in one
         assert "state: absent" not in one
@@ -114,30 +107,18 @@ class TestManagedClusterTeardownStaticParity:
 class TestManagedClusterTeardownRequestSurface:
     """Exercise Python family and record the API shapes that feed D6 RBAC measurement."""
 
-    def test_python_success_path_exercises_list_get_delete_and_hive_list(
-        self, tmp_path
-    ):
+    def test_python_success_path_exercises_list_get_delete_and_hive_list(self, tmp_path):
         client = Mock()
         items = [_mc("spoke-a")]
-        client.list_managed_clusters_strict = Mock(
-            return_value=_strict("ITEMS", items=items, resource_version="mc-1")
-        )
-        client.list_custom_resources_strict = Mock(
-            return_value=_strict("ITEMS", items=[], resource_version="cd-1")
-        )
+        client.list_managed_clusters_strict = Mock(return_value=_strict("ITEMS", items=items, resource_version="mc-1"))
+        client.list_custom_resources_strict = Mock(return_value=_strict("ITEMS", items=[], resource_version="cd-1"))
         present = {"spoke-a": _mc("spoke-a")}
 
         def named_get(group, version, plural, name, namespace=None):
             resource = present.get(name)
-            return (
-                _strict("ITEMS", resource=resource)
-                if resource
-                else _strict("OBJECT_ABSENT")
-            )
+            return _strict("ITEMS", resource=resource) if resource else _strict("OBJECT_ABSENT")
 
-        def delete(
-            group, version, plural, name, uid, namespace=None, timeout_seconds=None
-        ):
+        def delete(group, version, plural, name, uid, namespace=None, timeout_seconds=None):
             present.pop(name, None)
 
         client.get_custom_resource_strict = Mock(side_effect=named_get)
@@ -170,18 +151,13 @@ class TestManagedClusterTeardownRequestSurface:
                 MANAGED_CLUSTER_API_VERSION,
                 MANAGED_CLUSTER_PLURAL,
             )
-            or (
-                c.kwargs.get("group") == MANAGED_CLUSTER_API_GROUP
-                and c.kwargs.get("plural") == MANAGED_CLUSTER_PLURAL
-            )
+            or (c.kwargs.get("group") == MANAGED_CLUSTER_API_GROUP and c.kwargs.get("plural") == MANAGED_CLUSTER_PLURAL)
             for c in get_calls
         )
         delete = client.delete_custom_resource_preconditioned.call_args
         assert delete.args[0] == MANAGED_CLUSTER_API_GROUP
         assert delete.args[2] == MANAGED_CLUSTER_PLURAL
-        assert delete.kwargs.get("uid") == "uid-1" or (
-            len(delete.args) > 4 and delete.args[4] == "uid-1"
-        )
+        assert delete.kwargs.get("uid") == "uid-1" or (len(delete.args) > 4 and delete.args[4] == "uid-1")
         client.get_namespace_strict.assert_not_called()
         client.list_pods_strict.assert_not_called()
 

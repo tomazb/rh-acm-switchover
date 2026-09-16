@@ -4,9 +4,9 @@
 # Loop variable: _acm_mc_target_name (never local-cluster; family filters first).
 # Phase table: delete_started -> cr_absent -> completed with
 # resource_versions={} and absence_proofs={target_cr} only. No drain reads.
-# Per-target expected failures are rescued into _acm_mc_survivors so the family
-# can fail once listing every survivor while preserving changed from any
-# accepted UID-guarded DELETE.
+# Per-target expected operational failures are rescued into _acm_mc_survivors so the
+# family can fail once listing every survivor while preserving changed from any
+# accepted UID-guarded DELETE. Unexpected/programming failures re-raise and abort.
 
 - name: Tear down one ManagedCluster
   block:
@@ -240,6 +240,36 @@
         - acm_switchover_mc_record is not mapping or acm_switchover_mc_record.phase != 'completed'
 
   rescue:
+    - name: Classify whether this ManagedCluster failure is expected operational
+      ansible.builtin.set_fact:
+        _acm_mc_expected_operational_failure: "{{ _acm_mc_expected_operational_failure_json | from_json }}"
+      vars:
+        # Expected operational failures are only:
+        # - intentional ansible.builtin.fail tasks in this file (UID/proof/inventory), or
+        # - acm_uid_guarded_delete failures that publish a structured reason field.
+        # Checkpoint/action/plugin/template/programming failures have neither signal and
+        # must propagate so later targets are not destroyed after an unclassified error.
+        _acm_mc_failed_action: "{{ ansible_failed_task.action | default('', true) | string }}"
+        _acm_mc_expected_operational_failure_json: >-
+          {{
+            (
+              (_acm_mc_failed_action == 'ansible.builtin.fail')
+              or (_acm_mc_failed_action == 'fail')
+              or (
+                ('acm_uid_guarded_delete' in _acm_mc_failed_action)
+                and (ansible_failed_result.reason is defined)
+                and ((ansible_failed_result.reason | string | trim | length) > 0)
+              )
+            ) | bool | to_json
+          }}
+
+    - name: Propagate unexpected ManagedCluster teardown failures
+      ansible.builtin.fail:
+        msg: >-
+          Unexpected ManagedCluster teardown failure for {{ _acm_mc_target_name }}:
+          {{ ansible_failed_result.msg | default('unknown error') }}
+      when: not (_acm_mc_expected_operational_failure | bool)
+
     - name: Record this ManagedCluster as a survivor
       ansible.builtin.set_fact:
         _acm_mc_survivors: "{{ (_acm_mc_survivors | default([])) + [_acm_mc_target_name] }}"
@@ -248,3 +278,4 @@
             (_acm_mc_changed | default(false) | bool)
             or (ansible_failed_result.changed | default(false) | bool)
           }}
+      when: _acm_mc_expected_operational_failure | bool

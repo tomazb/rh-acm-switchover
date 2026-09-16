@@ -30,9 +30,7 @@ from lib.rbac_validator import (
 
 #: Stand-in for the raw SelfSubjectAccessReview API payload. Denial reporting must surface the
 #: review's ``reason`` only, never the response body, so this sentinel must not reach any report.
-_RAW_SSAR_BODY_SENTINEL = (
-    "evaluation-error: raw ssar response body must not be reported"
-)
+_RAW_SSAR_BODY_SENTINEL = "evaluation-error: raw ssar response body must not be reported"
 
 
 class TestRBACValidator:
@@ -86,9 +84,7 @@ class TestRBACValidator:
         assert "Forbidden" in error
 
     @patch("kubernetes.client")
-    def test_check_permission_splits_subresource_for_ssar(
-        self, mock_k8s_client, validator
-    ):
+    def test_check_permission_splits_subresource_for_ssar(self, mock_k8s_client, validator):
         """Kubernetes SSAR resourceAttributes require resource and subresource to be separate fields."""
         mock_response = MagicMock()
         mock_response.status.allowed = True
@@ -98,9 +94,7 @@ class TestRBACValidator:
         mock_api.create_self_subject_access_review.return_value = mock_response
         mock_k8s_client.AuthorizationV1Api.return_value = mock_api
 
-        validator.check_permission(
-            "apps", "statefulsets/scale", "patch", OBSERVABILITY_NAMESPACE
-        )
+        validator.check_permission("apps", "statefulsets/scale", "patch", OBSERVABILITY_NAMESPACE)
 
         mock_k8s_client.V1ResourceAttributes.assert_called_once_with(
             verb="patch",
@@ -111,9 +105,7 @@ class TestRBACValidator:
         )
 
     @patch("kubernetes.client")
-    def test_check_permission_builds_resource_attributes_for_plain_resource(
-        self, mock_k8s_client, validator
-    ):
+    def test_check_permission_builds_resource_attributes_for_plain_resource(self, mock_k8s_client, validator):
         """Non-subresource checks must pass the real resource (not None) into the SSAR spec.
 
         Kills mutants that null out resource_name or resource_attributes: those would send a
@@ -141,9 +133,7 @@ class TestRBACValidator:
         )
 
     @patch("kubernetes.client")
-    def test_check_permission_raises_validation_error_on_api_failure(
-        self, mock_k8s_client, validator
-    ):
+    def test_check_permission_raises_validation_error_on_api_failure(self, mock_k8s_client, validator):
         """Infrastructure failures should not be reported as missing permissions."""
         mock_api = MagicMock()
         mock_api.create_self_subject_access_review.side_effect = ApiException(
@@ -151,15 +141,11 @@ class TestRBACValidator:
         )
         mock_k8s_client.AuthorizationV1Api.return_value = mock_api
 
-        with pytest.raises(
-            ValidationError, match="Unable to check permission get core/pods"
-        ):
+        with pytest.raises(ValidationError, match="Unable to check permission get core/pods"):
             validator.check_permission("", "pods", "get", "default")
 
     @patch("kubernetes.client")
-    def test_check_permission_cached_api_failure_reraises_fresh_validation_error(
-        self, mock_k8s_client, validator
-    ):
+    def test_check_permission_cached_api_failure_reraises_fresh_validation_error(self, mock_k8s_client, validator):
         """Cached infrastructure failures should keep the message but not reuse the same exception instance."""
         mock_api = MagicMock()
         mock_api.create_self_subject_access_review.side_effect = ApiException(
@@ -167,14 +153,10 @@ class TestRBACValidator:
         )
         mock_k8s_client.AuthorizationV1Api.return_value = mock_api
 
-        with pytest.raises(
-            ValidationError, match="Unable to check permission get core/pods"
-        ) as first_error:
+        with pytest.raises(ValidationError, match="Unable to check permission get core/pods") as first_error:
             validator.check_permission("", "pods", "get", "default")
 
-        with pytest.raises(
-            ValidationError, match="Unable to check permission get core/pods"
-        ) as second_error:
+        with pytest.raises(ValidationError, match="Unable to check permission get core/pods") as second_error:
             validator.check_permission("", "pods", "get", "default")
 
         assert str(first_error.value) == str(second_error.value)
@@ -182,9 +164,7 @@ class TestRBACValidator:
         assert mock_api.create_self_subject_access_review.call_count == 1
 
     @patch("kubernetes.client")
-    def test_check_permission_reuses_cached_ssar_result(
-        self, mock_k8s_client, validator
-    ):
+    def test_check_permission_reuses_cached_ssar_result(self, mock_k8s_client, validator):
         """Identical permission tuples should not trigger duplicate SSAR API calls."""
         mock_response = MagicMock()
         mock_response.status.allowed = True
@@ -200,9 +180,7 @@ class TestRBACValidator:
         assert mock_api.create_self_subject_access_review.call_count == 1
 
     @patch("kubernetes.client")
-    def test_check_permission_cache_is_keyed_by_full_permission_tuple(
-        self, mock_k8s_client, validator
-    ):
+    def test_check_permission_cache_is_keyed_by_full_permission_tuple(self, mock_k8s_client, validator):
         """Different permission tuples must not share a cache slot.
 
         Kills the cache_key = None mutant: a collapsed cache key would return the first-ever
@@ -242,20 +220,14 @@ class TestRBACValidator:
         # expected is built dynamically from the class constant; mutmut 3.x does not mutate class-level
         # attributes, only function bodies — so this correctly targets loop/iteration mutations in
         # validate_cluster_permissions while still asserting exact call shape and coverage.
-        expected = frozenset(
-            (ag, r, v)
-            for ag, r, verbs in RBACValidator.OPERATOR_CLUSTER_PERMISSIONS
-            for v in verbs
-        )
+        expected = frozenset((ag, r, v) for ag, r, verbs in RBACValidator.OPERATOR_CLUSTER_PERMISSIONS for v in verbs)
         all_calls = validator.check_permission.call_args_list
         assert all(
             len(c.args) == 3 for c in all_calls
         ), f"Unexpected check_permission call shape: {[len(c.args) for c in all_calls if len(c.args) != 3]}"
         actual = frozenset((c.args[0], c.args[1], c.args[2]) for c in all_calls)
         assert actual == expected, (
-            f"Permission set mismatch.\n"
-            f"  Missing: {expected - actual}\n"
-            f"  Unexpected: {actual - expected}"
+            f"Permission set mismatch.\n" f"  Missing: {expected - actual}\n" f"  Unexpected: {actual - expected}"
         )
 
     @pytest.mark.parametrize(
@@ -265,13 +237,9 @@ class TestRBACValidator:
             RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS,
         ],
     )
-    def test_cluster_permissions_require_namespace_list_for_preflight_discovery(
-        self, permissions
-    ):
+    def test_cluster_permissions_require_namespace_list_for_preflight_discovery(self, permissions):
         """Preflight lists Namespace objects, so RBAC validation must require list."""
-        namespace_rule = next(
-            rule for rule in permissions if rule[0] == "" and rule[1] == "namespaces"
-        )
+        namespace_rule = next(rule for rule in permissions if rule[0] == "" and rule[1] == "namespaces")
 
         assert "get" in namespace_rule[2]
         assert "list" in namespace_rule[2]
@@ -293,9 +261,7 @@ class TestRBACValidator:
         assert len(errors) > 0
         assert any("managedclusters" in error for error in errors)
 
-    def test_validate_cluster_permissions_argocd_none_does_not_check_argocd_permissions(
-        self, validator
-    ):
+    def test_validate_cluster_permissions_argocd_none_does_not_check_argocd_permissions(self, validator):
         """Test that argocd_mode=none does not add Argo CD permissions."""
         validator.check_permission = MagicMock(return_value=(True, ""))
 
@@ -303,16 +269,11 @@ class TestRBACValidator:
 
         assert all_valid is True
         assert len(errors) == 0
-        checked = {
-            (call.args[0], call.args[1], call.args[2])
-            for call in validator.check_permission.call_args_list
-        }
+        checked = {(call.args[0], call.args[1], call.args[2]) for call in validator.check_permission.call_args_list}
         assert ("argoproj.io", "applications", "get") not in checked
         assert ("argoproj.io", "applications", "patch") not in checked
 
-    def test_validate_cluster_permissions_argocd_check_adds_read_permissions(
-        self, validator
-    ):
+    def test_validate_cluster_permissions_argocd_check_adds_read_permissions(self, validator):
         """Test that argocd_mode=check validates Argo CD read-only permissions.
 
         This covers the auto-detection scenario where preflight discovers ArgoCD
@@ -326,10 +287,7 @@ class TestRBACValidator:
 
         assert all_valid is True
         assert len(errors) == 0
-        checked = {
-            (call.args[0], call.args[1], call.args[2])
-            for call in validator.check_permission.call_args_list
-        }
+        checked = {(call.args[0], call.args[1], call.args[2]) for call in validator.check_permission.call_args_list}
         assert ("argoproj.io", "applications", "get") in checked
         assert ("argoproj.io", "applications", "list") in checked
         assert ("argoproj.io", "argocds", "get") in checked
@@ -337,17 +295,11 @@ class TestRBACValidator:
         assert ("apiextensions.k8s.io", "customresourcedefinitions", "get") in checked
         assert ("argoproj.io", "applications", "patch") not in checked
 
-    def test_validate_cluster_permissions_argocd_manage_requires_patch_for_operator(
-        self, validator
-    ):
+    def test_validate_cluster_permissions_argocd_manage_requires_patch_for_operator(self, validator):
         """Test that argocd_mode=manage validates Application patch permission for operator role."""
 
         def mock_check(api_group, resource, verb, namespace=None):
-            if (
-                api_group == "argoproj.io"
-                and resource == "applications"
-                and verb == "patch"
-            ):
+            if api_group == "argoproj.io" and resource == "applications" and verb == "patch":
                 return (False, "Permission denied")
             return (True, "")
 
@@ -356,17 +308,10 @@ class TestRBACValidator:
         all_valid, errors = validator.validate_cluster_permissions(argocd_mode="manage")
 
         assert all_valid is False
-        assert any(
-            "Missing Argo CD permission: patch argoproj.io/applications" in error
-            for error in errors
-        )
+        assert any("Missing Argo CD permission: patch argoproj.io/applications" in error for error in errors)
 
-    @pytest.mark.parametrize(
-        "argocd_install_type", ["none", "vanilla", "operator", "unknown"]
-    )
-    def test_validate_cluster_permissions_argocd_manage_validator_role_raises(
-        self, mock_client, argocd_install_type
-    ):
+    @pytest.mark.parametrize("argocd_install_type", ["none", "vanilla", "operator", "unknown"])
+    def test_validate_cluster_permissions_argocd_manage_validator_role_raises(self, mock_client, argocd_install_type):
         """Validator role must reject argocd_mode=manage instead of silently downgrading it."""
         validator = RBACValidator(mock_client, role="validator")
 
@@ -381,9 +326,7 @@ class TestRBACValidator:
         with pytest.raises(ValueError):
             validator.validate_cluster_permissions(argocd_mode="invalid")
 
-    def test_validate_cluster_permissions_argocd_check_skips_operator_crd_for_vanilla(
-        self, validator
-    ):
+    def test_validate_cluster_permissions_argocd_check_skips_operator_crd_for_vanilla(self, validator):
         """Vanilla Argo CD installs must not require argocds.argoproj.io permissions."""
         validator.check_permission = MagicMock(return_value=(True, ""))
 
@@ -394,19 +337,14 @@ class TestRBACValidator:
 
         assert all_valid is True
         assert len(errors) == 0
-        checked = {
-            (call.args[0], call.args[1], call.args[2])
-            for call in validator.check_permission.call_args_list
-        }
+        checked = {(call.args[0], call.args[1], call.args[2]) for call in validator.check_permission.call_args_list}
         assert ("argoproj.io", "applications", "get") in checked
         assert ("argoproj.io", "applications", "list") in checked
         assert ("apiextensions.k8s.io", "customresourcedefinitions", "get") in checked
         assert ("argoproj.io", "argocds", "get") not in checked
         assert ("argoproj.io", "argocds", "list") not in checked
 
-    def test_validate_cluster_permissions_argocd_check_skips_all_checks_when_not_installed(
-        self, validator
-    ):
+    def test_validate_cluster_permissions_argocd_check_skips_all_checks_when_not_installed(self, validator):
         """Clusters without Argo CD must not validate any Argo CD permissions."""
         validator.check_permission = MagicMock(return_value=(True, ""))
 
@@ -417,10 +355,7 @@ class TestRBACValidator:
 
         assert all_valid is True
         assert len(errors) == 0
-        checked = {
-            (call.args[0], call.args[1], call.args[2])
-            for call in validator.check_permission.call_args_list
-        }
+        checked = {(call.args[0], call.args[1], call.args[2]) for call in validator.check_permission.call_args_list}
         assert ("argoproj.io", "applications", "get") not in checked
         assert ("argoproj.io", "applications", "list") not in checked
         assert ("argoproj.io", "argocds", "get") not in checked
@@ -430,15 +365,11 @@ class TestRBACValidator:
             "get",
         ) not in checked
 
-    def test_validate_cluster_permissions_requires_mco_delete_for_old_hub_finalization(
-        self, validator
-    ):
+    def test_validate_cluster_permissions_requires_mco_delete_for_old_hub_finalization(self, validator):
         """Normal old-hub finalization deletes MCO when observability was detected."""
         validator.check_permission = MagicMock(return_value=(True, ""))
 
-        all_valid, errors = validator.validate_cluster_permissions(
-            include_old_hub_finalization=True
-        )
+        all_valid, errors = validator.validate_cluster_permissions(include_old_hub_finalization=True)
 
         assert all_valid is True
         assert errors == []
@@ -451,9 +382,7 @@ class TestRBACValidator:
             in validator.check_permission.call_args_list
         )
 
-    def test_validate_cluster_permissions_skips_mco_delete_when_observability_absent(
-        self, validator
-    ):
+    def test_validate_cluster_permissions_skips_mco_delete_when_observability_absent(self, validator):
         """Verified observability absence must avoid requiring MCO delete."""
         validator.check_permission = MagicMock(return_value=(True, ""))
 
@@ -473,9 +402,7 @@ class TestRBACValidator:
             not in validator.check_permission.call_args_list
         )
 
-    def test_validate_cluster_permissions_skips_decommission_mco_delete_when_observability_absent(
-        self, validator
-    ):
+    def test_validate_cluster_permissions_skips_decommission_mco_delete_when_observability_absent(self, validator):
         """Decommission checks should not require MCO delete after verified observability absence."""
         validator.check_permission = MagicMock(return_value=(True, ""))
 
@@ -495,9 +422,7 @@ class TestRBACValidator:
             not in validator.check_permission.call_args_list
         )
 
-    def test_validate_cluster_permissions_decommission_checks_mco_delete_when_observability_present(
-        self, validator
-    ):
+    def test_validate_cluster_permissions_decommission_checks_mco_delete_when_observability_present(self, validator):
         """Decommission-only path (no old-hub finalization) must still check MCO delete by default.
 
         Isolates the decommission loop's skip_observability/api-group guard from the old-hub
@@ -506,9 +431,7 @@ class TestRBACValidator:
         """
         validator.check_permission = MagicMock(return_value=(True, ""))
 
-        all_valid, errors = validator.validate_cluster_permissions(
-            include_decommission=True
-        )
+        all_valid, errors = validator.validate_cluster_permissions(include_decommission=True)
 
         assert all_valid is True
         assert errors == []
@@ -521,9 +444,7 @@ class TestRBACValidator:
             in validator.check_permission.call_args_list
         )
 
-    def test_validate_cluster_permissions_decommission_failure_sets_all_valid_false(
-        self, validator
-    ):
+    def test_validate_cluster_permissions_decommission_failure_sets_all_valid_false(self, validator):
         """A missing decommission permission must flip all_valid, isolated from other permission paths.
 
         Kills all_valid inversion mutants inside the decommission block that survive when the
@@ -537,9 +458,7 @@ class TestRBACValidator:
 
         validator.check_permission = MagicMock(side_effect=mock_check)
 
-        all_valid, errors = validator.validate_cluster_permissions(
-            include_decommission=True
-        )
+        all_valid, errors = validator.validate_cluster_permissions(include_decommission=True)
 
         assert all_valid is False
         assert errors == [
@@ -547,9 +466,7 @@ class TestRBACValidator:
             "observability.open-cluster-management.io/multiclusterobservabilities - Permission denied"
         ]
 
-    def test_validate_cluster_permissions_old_hub_finalization_failure_sets_all_valid_false(
-        self, validator
-    ):
+    def test_validate_cluster_permissions_old_hub_finalization_failure_sets_all_valid_false(self, validator):
         """A missing old-hub finalization permission must flip all_valid, isolated from other paths."""
 
         def mock_check(api_group, resource, verb, namespace=None):
@@ -559,9 +476,7 @@ class TestRBACValidator:
 
         validator.check_permission = MagicMock(side_effect=mock_check)
 
-        all_valid, errors = validator.validate_cluster_permissions(
-            include_old_hub_finalization=True
-        )
+        all_valid, errors = validator.validate_cluster_permissions(include_old_hub_finalization=True)
 
         assert all_valid is False
         assert errors == [
@@ -569,9 +484,7 @@ class TestRBACValidator:
             "observability.open-cluster-management.io/multiclusterobservabilities - Permission denied"
         ]
 
-    def test_validate_cluster_permissions_decommission_dedupe_does_not_skip_later_verbs(
-        self, validator
-    ):
+    def test_validate_cluster_permissions_decommission_dedupe_does_not_skip_later_verbs(self, validator):
         """Deduplicating an already-checked permission must skip only that verb, not the rest of the list.
 
         Kills the `continue` -> `break` mutant in the decommission dedupe guard and the
@@ -589,9 +502,7 @@ class TestRBACValidator:
         assert calls.count(call("test.io", "widgets", "get")) == 1
         assert call("test.io", "widgets", "list") in calls
 
-    def test_validate_cluster_permissions_old_hub_dedupe_does_not_skip_later_verbs(
-        self, validator
-    ):
+    def test_validate_cluster_permissions_old_hub_dedupe_does_not_skip_later_verbs(self, validator):
         """Same dedupe guarantee as the decommission loop, for the old-hub finalization loop."""
         validator.OLD_HUB_FINALIZATION_PERMISSIONS = [
             ("test.io", "widgets", ["get", "get", "list"]),
@@ -604,9 +515,7 @@ class TestRBACValidator:
         assert calls.count(call("test.io", "widgets", "get")) == 1
         assert call("test.io", "widgets", "list") in calls
 
-    def test_validate_cluster_permissions_skips_base_observability_permissions(
-        self, validator
-    ):
+    def test_validate_cluster_permissions_skips_base_observability_permissions(self, validator):
         """skip_observability=True must filter out observability-tagged entries in the base cluster loop.
 
         The 'observability' string check guards the standard cluster_permissions loop (not just
@@ -614,16 +523,11 @@ class TestRBACValidator:
         """
         validator.check_permission = MagicMock(return_value=(True, ""))
 
-        all_valid, errors = validator.validate_cluster_permissions(
-            skip_observability=True
-        )
+        all_valid, errors = validator.validate_cluster_permissions(skip_observability=True)
 
         assert all_valid is True
         assert errors == []
-        checked = {
-            (c.args[0], c.args[1], c.args[2])
-            for c in validator.check_permission.call_args_list
-        }
+        checked = {(c.args[0], c.args[1], c.args[2]) for c in validator.check_permission.call_args_list}
         # Base cluster permissions include multiclusterobservabilities get/list — both must be skipped.
         assert (
             "observability.open-cluster-management.io",
@@ -636,9 +540,7 @@ class TestRBACValidator:
             "list",
         ) not in checked
 
-    def test_validate_cluster_permissions_deduplicates_mco_delete_when_both_paths_request_it(
-        self, validator
-    ):
+    def test_validate_cluster_permissions_deduplicates_mco_delete_when_both_paths_request_it(self, validator):
         """MCO delete should be checked once when decommission and finalization both require it."""
         validator.check_permission = MagicMock(return_value=(True, ""))
 
@@ -682,9 +584,7 @@ class TestRBACValidator:
         assert all(
             len(c.args) == 4 for c in all_calls
         ), f"Unexpected check_permission call shape: {[len(c.args) for c in all_calls if len(c.args) != 4]}"
-        actual = frozenset(
-            (c.args[0], c.args[1], c.args[2], c.args[3]) for c in all_calls
-        )
+        actual = frozenset((c.args[0], c.args[1], c.args[2], c.args[3]) for c in all_calls)
         assert actual == expected, (
             f"Namespace permission set mismatch.\n"
             f"  Missing: {expected - actual}\n"
@@ -709,24 +609,16 @@ class TestRBACValidator:
         validator.client.namespace_exists.return_value = True
         validator.check_permission = MagicMock(return_value=(True, ""))
 
-        all_valid, errors = validator.validate_namespace_permissions(
-            skip_observability=True
-        )
+        all_valid, errors = validator.validate_namespace_permissions(skip_observability=True)
 
         assert all_valid is True
         # Should not check observability namespace
-        validator.client.namespace_exists.assert_any_call(
-            "open-cluster-management-backup"
-        )
+        validator.client.namespace_exists.assert_any_call("open-cluster-management-backup")
         # This will not be called for observability namespace when skipped
-        namespaces_checked = [
-            call[0][0] for call in validator.client.namespace_exists.call_args_list
-        ]
+        namespaces_checked = [call[0][0] for call in validator.client.namespace_exists.call_args_list]
         assert "open-cluster-management-observability" not in namespaces_checked
 
-    def test_validate_namespace_permissions_reuses_cached_namespace_exists_results(
-        self, validator
-    ):
+    def test_validate_namespace_permissions_reuses_cached_namespace_exists_results(self, validator):
         """Repeated namespace validation should not re-probe the same namespaces."""
         validator.client.namespace_exists.return_value = True
         validator.check_permission = MagicMock(return_value=(True, ""))
@@ -740,20 +632,9 @@ class TestRBACValidator:
             [],
         )
 
-        assert (
-            validator.client.namespace_exists.call_args_list.count(
-                call(BACKUP_NAMESPACE)
-            )
-            == 1
-        )
-        assert (
-            validator.client.namespace_exists.call_args_list.count(call(ACM_NAMESPACE))
-            == 1
-        )
-        assert (
-            validator.client.namespace_exists.call_args_list.count(call(MCE_NAMESPACE))
-            == 1
-        )
+        assert validator.client.namespace_exists.call_args_list.count(call(BACKUP_NAMESPACE)) == 1
+        assert validator.client.namespace_exists.call_args_list.count(call(ACM_NAMESPACE)) == 1
+        assert validator.client.namespace_exists.call_args_list.count(call(MCE_NAMESPACE)) == 1
 
     def test_validator_role_gets_read_only_namespace_permissions(self, mock_client):
         """Validator role must receive read-only namespace permissions, not operator write permissions."""
@@ -770,23 +651,14 @@ class TestRBACValidator:
             (
                 rule
                 for rule in backup_ns_perms
-                if rule[0] == "cluster.open-cluster-management.io"
-                and rule[1] == "backupschedules"
+                if rule[0] == "cluster.open-cluster-management.io" and rule[1] == "backupschedules"
             ),
             None,
         )
-        assert (
-            backup_schedule_rule is not None
-        ), "backupschedules rule missing from validator permissions"
-        assert (
-            "create" not in backup_schedule_rule[2]
-        ), "validator must not have create on backupschedules"
-        assert (
-            "patch" not in backup_schedule_rule[2]
-        ), "validator must not have patch on backupschedules"
-        assert (
-            "delete" not in backup_schedule_rule[2]
-        ), "validator must not have delete on backupschedules"
+        assert backup_schedule_rule is not None, "backupschedules rule missing from validator permissions"
+        assert "create" not in backup_schedule_rule[2], "validator must not have create on backupschedules"
+        assert "patch" not in backup_schedule_rule[2], "validator must not have patch on backupschedules"
+        assert "delete" not in backup_schedule_rule[2], "validator must not have delete on backupschedules"
 
     def test_validator_role_gets_read_only_cluster_permissions(self, mock_client):
         """Validator role must receive read-only cluster permissions, not operator write permissions."""
@@ -800,23 +672,12 @@ class TestRBACValidator:
 
         # Spot-check: validator must NOT have delete on managedclusters (an operator-only write permission)
         mc_rule = next(
-            (
-                r
-                for r in perms
-                if r[0] == "cluster.open-cluster-management.io"
-                and r[1] == "managedclusters"
-            ),
+            (r for r in perms if r[0] == "cluster.open-cluster-management.io" and r[1] == "managedclusters"),
             None,
         )
-        assert (
-            mc_rule is not None
-        ), "managedclusters rule missing from validator cluster permissions"
-        assert (
-            "delete" not in mc_rule[2]
-        ), "validator must not have delete on managedclusters"
-        assert (
-            "patch" not in mc_rule[2]
-        ), "validator must not have patch on managedclusters"
+        assert mc_rule is not None, "managedclusters rule missing from validator cluster permissions"
+        assert "delete" not in mc_rule[2], "validator must not have delete on managedclusters"
+        assert "patch" not in mc_rule[2], "validator must not have patch on managedclusters"
 
     def test_validate_all_permissions_success(self, validator):
         """Test validate_all_permissions when all checks pass."""
@@ -886,9 +747,7 @@ class TestRBACValidator:
         assert "deploy/rbac/extensions/decommission/" in report
         assert "rbac.includeDecommissionClusterRole=true" in report
 
-    def test_generate_permission_report_reuses_cached_validation_summary(
-        self, validator
-    ):
+    def test_generate_permission_report_reuses_cached_validation_summary(self, validator):
         """Report generation should reuse the prior full validation result on the same validator."""
         validator.client.namespace_exists.return_value = True
 
@@ -901,17 +760,13 @@ class TestRBACValidator:
 
         validator.check_permission = MagicMock(side_effect=mock_check)
 
-        all_valid, all_errors = validator.validate_all_permissions(
-            skip_observability=True
-        )
+        all_valid, all_errors = validator.validate_all_permissions(skip_observability=True)
         first_call_count = len(validator.check_permission.call_args_list)
         all_errors["cluster"][0] = "mutated cluster error"
         all_errors["namespaces"][0] = "mutated namespace error"
         all_errors["extra"] = ["mutated extra error"]
 
-        second_valid, second_errors = validator.validate_all_permissions(
-            skip_observability=True
-        )
+        second_valid, second_errors = validator.validate_all_permissions(skip_observability=True)
 
         report = validator.generate_permission_report(skip_observability=True)
 
@@ -922,26 +777,16 @@ class TestRBACValidator:
         assert second_errors["cluster"] == [
             "Missing permission: get cluster.open-cluster-management.io/managedclusters - Denied"
         ]
-        assert second_errors["namespaces"] == [
-            f"Missing permission in {BACKUP_NAMESPACE}: get core/pods - Denied"
-        ]
+        assert second_errors["namespaces"] == [f"Missing permission in {BACKUP_NAMESPACE}: get core/pods - Denied"]
         assert "extra" not in second_errors
         assert len(validator.check_permission.call_args_list) == first_call_count
-        assert (
-            "Missing permission: get cluster.open-cluster-management.io/managedclusters - Denied"
-            in report
-        )
-        assert (
-            f"Missing permission in {BACKUP_NAMESPACE}: get core/pods - Denied"
-            in report
-        )
+        assert "Missing permission: get cluster.open-cluster-management.io/managedclusters - Denied" in report
+        assert f"Missing permission in {BACKUP_NAMESPACE}: get core/pods - Denied" in report
         assert "mutated cluster error" not in report
         assert "mutated namespace error" not in report
         assert "mutated extra error" not in report
 
-    def test_generate_permission_report_forwards_all_kwargs_to_validate_all_permissions(
-        self, validator
-    ):
+    def test_generate_permission_report_forwards_all_kwargs_to_validate_all_permissions(self, validator):
         """generate_permission_report must forward all keyword arguments unchanged to validate_all_permissions.
 
         Mutations that drop or replace an argument (e.g. include_decommission=None instead of
@@ -976,9 +821,7 @@ class TestRBACValidator:
             {},
         )
         first_call_count = len(validator.check_permission.call_args_list)
-        cached_valid, cached_errors = validator.validate_decommission_permissions(
-            skip_observability=True
-        )
+        cached_valid, cached_errors = validator.validate_decommission_permissions(skip_observability=True)
         cached_errors["cluster"] = ["mutated cluster error"]
         cached_errors["namespaces"] = ["mutated namespace error"]
 
@@ -988,14 +831,9 @@ class TestRBACValidator:
             {},
         )
         assert len(validator.check_permission.call_args_list) == first_call_count
-        assert (
-            validator.client.namespace_exists.call_args_list.count(call(ACM_NAMESPACE))
-            == 1
-        )
+        assert validator.client.namespace_exists.call_args_list.count(call(ACM_NAMESPACE)) == 1
 
-    def test_validate_decommission_permissions_checks_exact_permission_set(
-        self, validator
-    ):
+    def test_validate_decommission_permissions_checks_exact_permission_set(self, validator):
         """validate_decommission_permissions must check the complete DECOMMISSION permission sets.
 
         Mutations that skip loop iterations, change permission names/verbs, or alter namespace
@@ -1004,17 +842,13 @@ class TestRBACValidator:
         validator.client.namespace_exists.return_value = True
         validator.check_permission = MagicMock(return_value=(True, ""))
 
-        all_valid, errors = validator.validate_decommission_permissions(
-            skip_observability=False
-        )
+        all_valid, errors = validator.validate_decommission_permissions(skip_observability=False)
 
         assert all_valid is True
         assert errors == {}
 
         expected = frozenset(
-            (ag, r, v, None)
-            for ag, r, vbs in RBACValidator.DECOMMISSION_CLUSTER_PERMISSIONS
-            for v in vbs
+            (ag, r, v, None) for ag, r, vbs in RBACValidator.DECOMMISSION_CLUSTER_PERMISSIONS for v in vbs
         ) | frozenset(
             (ag, r, v, ns)
             for ns, perms in RBACValidator.DECOMMISSION_NAMESPACE_PERMISSIONS.items()
@@ -1042,13 +876,9 @@ class TestRBACValidator:
         assert all_valid is True
         assert len(errors) == 0
         # Verify it checked the agent namespace
-        validator.client.namespace_exists.assert_called_with(
-            "open-cluster-management-agent"
-        )
+        validator.client.namespace_exists.assert_called_with("open-cluster-management-agent")
 
-    def test_validate_managed_cluster_permissions_checks_exact_permission_set(
-        self, validator
-    ):
+    def test_validate_managed_cluster_permissions_checks_exact_permission_set(self, validator):
         """validate_managed_cluster_permissions must check the exact OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS set."""
         validator.client.namespace_exists.return_value = True
         validator.check_permission = MagicMock(return_value=(True, ""))
@@ -1105,9 +935,7 @@ class TestRBACValidator:
 
     def test_operator_managed_cluster_secret_permissions_patch_without_delete(self):
         """Operator remediation should patch or create bootstrap secrets, not delete them."""
-        perms = RBACValidator.OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS[
-            MANAGED_CLUSTER_AGENT_NAMESPACE
-        ]
+        perms = RBACValidator.OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS[MANAGED_CLUSTER_AGENT_NAMESPACE]
         secrets_perm = next((p for p in perms if p[1] == "secrets"), None)
 
         assert secrets_perm is not None
@@ -1127,9 +955,7 @@ class TestRBACValidator:
         assert all_valid is True
         # Validator should only check get verbs, not create/delete
         calls = validator.check_permission.call_args_list
-        verbs_checked = [
-            c.args[2] if len(c.args) > 2 else c.kwargs.get("verb") for c in calls
-        ]
+        verbs_checked = [c.args[2] if len(c.args) > 2 else c.kwargs.get("verb") for c in calls]
         assert "create" not in verbs_checked
         assert "patch" not in verbs_checked
         assert "delete" not in verbs_checked
@@ -1156,9 +982,7 @@ class TestValidatorClusterTableDerivation:
 
     def test_validator_table_matches_pre_derivation_literal(self):
         """Regression pin: derived table equals the exact table shipped before H1."""
-        assert (
-            RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS == self.EXPECTED_VALIDATOR_TABLE
-        )
+        assert RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS == self.EXPECTED_VALIDATOR_TABLE
 
     def test_validator_table_is_derived_from_operator_table(self):
         derived = rbac_validator._derive_read_only_permissions(
@@ -1234,9 +1058,7 @@ class TestValidateRBACPermissions:
         return client
 
     @patch("lib.rbac_validator.RBACValidator")
-    def test_validate_primary_only_success(
-        self, mock_validator_class, mock_primary_client
-    ):
+    def test_validate_primary_only_success(self, mock_validator_class, mock_primary_client):
         """Test validate_rbac_permissions with only primary hub."""
         mock_validator = MagicMock()
         mock_validator.validate_all_permissions.return_value = (True, {})
@@ -1246,9 +1068,7 @@ class TestValidateRBACPermissions:
         validate_rbac_permissions(mock_primary_client)
 
     @patch("lib.rbac_validator.RBACValidator")
-    def test_validate_both_hubs_success(
-        self, mock_validator_class, mock_primary_client, mock_secondary_client
-    ):
+    def test_validate_both_hubs_success(self, mock_validator_class, mock_primary_client, mock_secondary_client):
         """Test validate_rbac_permissions with both hubs."""
         mock_validator = MagicMock()
         mock_validator.validate_all_permissions.return_value = (True, {})
@@ -1274,9 +1094,7 @@ class TestValidateRBACPermissions:
         assert "primary hub" in str(exc_info.value)
 
     @patch("lib.rbac_validator.RBACValidator")
-    def test_validate_secondary_failure(
-        self, mock_validator_class, mock_primary_client, mock_secondary_client
-    ):
+    def test_validate_secondary_failure(self, mock_validator_class, mock_primary_client, mock_secondary_client):
         """Test validate_rbac_permissions when secondary validation fails."""
 
         # Primary succeeds, secondary fails
@@ -1305,9 +1123,7 @@ class TestValidateRBACPermissions:
         assert "secondary hub" in str(exc_info.value)
 
     @patch("lib.rbac_validator.RBACValidator")
-    def test_validate_with_decommission(
-        self, mock_validator_class, mock_primary_client
-    ):
+    def test_validate_with_decommission(self, mock_validator_class, mock_primary_client):
         """Test validate_rbac_permissions with decommission permissions."""
         mock_validator = MagicMock()
         mock_validator.validate_all_permissions.return_value = (True, {})
@@ -1357,19 +1173,13 @@ class TestValidateRBACPermissions:
         )
 
     @patch("lib.rbac_validator.RBACValidator")
-    def test_validate_primary_checker_failure_raises_contextual_error(
-        self, mock_validator_class, mock_primary_client
-    ):
+    def test_validate_primary_checker_failure_raises_contextual_error(self, mock_validator_class, mock_primary_client):
         """Infrastructure failures should bubble with primary-hub context."""
         mock_validator = MagicMock()
-        mock_validator.validate_all_permissions.side_effect = ValidationError(
-            "auth check failed"
-        )
+        mock_validator.validate_all_permissions.side_effect = ValidationError("auth check failed")
         mock_validator_class.return_value = mock_validator
 
-        with pytest.raises(
-            ValidationError, match="could not be completed on primary hub"
-        ):
+        with pytest.raises(ValidationError, match="could not be completed on primary hub"):
             validate_rbac_permissions(mock_primary_client)
 
     @patch("lib.rbac_validator.RBACValidator")
@@ -1380,20 +1190,14 @@ class TestValidateRBACPermissions:
         primary_validator = MagicMock()
         primary_validator.validate_all_permissions.return_value = (True, {})
         secondary_validator = MagicMock()
-        secondary_validator.validate_all_permissions.side_effect = ValidationError(
-            "auth check failed"
-        )
+        secondary_validator.validate_all_permissions.side_effect = ValidationError("auth check failed")
         mock_validator_class.side_effect = [primary_validator, secondary_validator]
 
-        with pytest.raises(
-            ValidationError, match="could not be completed on secondary hub"
-        ):
+        with pytest.raises(ValidationError, match="could not be completed on secondary hub"):
             validate_rbac_permissions(mock_primary_client, mock_secondary_client)
 
     @patch("lib.rbac_validator.RBACValidator")
-    def test_validate_skip_observability(
-        self, mock_validator_class, mock_primary_client
-    ):
+    def test_validate_skip_observability(self, mock_validator_class, mock_primary_client):
         """Test validate_rbac_permissions with skip_observability."""
         mock_validator = MagicMock()
         mock_validator.validate_all_permissions.return_value = (True, {})
@@ -1411,9 +1215,7 @@ class TestValidateRBACPermissions:
         )
 
     @patch("lib.rbac_validator.RBACValidator")
-    def test_validate_argocd_mode_manage(
-        self, mock_validator_class, mock_primary_client
-    ):
+    def test_validate_argocd_mode_manage(self, mock_validator_class, mock_primary_client):
         """Test validate_rbac_permissions forwards argocd_mode to validators."""
         mock_validator = MagicMock()
         mock_validator.validate_all_permissions.return_value = (True, {})
@@ -1464,9 +1266,7 @@ class TestValidateRBACPermissions:
         )
 
     @patch("lib.rbac_validator.RBACValidator")
-    def test_validate_invalid_argocd_mode_raises(
-        self, mock_validator_class, mock_primary_client
-    ):
+    def test_validate_invalid_argocd_mode_raises(self, mock_validator_class, mock_primary_client):
         """Test validate_rbac_permissions rejects invalid argocd_mode values."""
         with pytest.raises(ValueError):
             validate_rbac_permissions(mock_primary_client, argocd_mode="invalid")
@@ -1474,24 +1274,16 @@ class TestValidateRBACPermissions:
 
     def test_validate_both_clients_none_raises(self):
         """Test validate_rbac_permissions raises ValueError when both clients are None."""
-        with pytest.raises(
-            ValueError, match="At least one of primary_client or secondary_client"
-        ):
+        with pytest.raises(ValueError, match="At least one of primary_client or secondary_client"):
             validate_rbac_permissions(None, None)
 
     def test_validate_decommission_without_primary_raises(self, mock_secondary_client):
         """Test validate_rbac_permissions raises ValueError for decommission without primary."""
-        with pytest.raises(
-            ValueError, match="include_decommission requires primary_client"
-        ):
-            validate_rbac_permissions(
-                None, mock_secondary_client, include_decommission=True
-            )
+        with pytest.raises(ValueError, match="include_decommission requires primary_client"):
+            validate_rbac_permissions(None, mock_secondary_client, include_decommission=True)
 
     @patch("lib.rbac_validator.RBACValidator")
-    def test_validate_secondary_only_success(
-        self, mock_validator_class, mock_secondary_client
-    ):
+    def test_validate_secondary_only_success(self, mock_validator_class, mock_secondary_client):
         """Test validate_rbac_permissions with only secondary hub (restore-only mode)."""
         mock_validator = MagicMock()
         mock_validator.validate_all_permissions.return_value = (True, {})
@@ -1503,9 +1295,7 @@ class TestValidateRBACPermissions:
         mock_validator_class.assert_called_once_with(mock_secondary_client)
 
     @patch("lib.rbac_validator.RBACValidator")
-    def test_validate_secondary_only_failure(
-        self, mock_validator_class, mock_secondary_client
-    ):
+    def test_validate_secondary_only_failure(self, mock_validator_class, mock_secondary_client):
         """Test validate_rbac_permissions fails when secondary-only RBAC check fails."""
         mock_validator = MagicMock()
         mock_validator.validate_all_permissions.return_value = (
@@ -1574,24 +1364,18 @@ class TestValidateHubLoop:
             assert kwargs["skip_observability"] is True
             assert kwargs["argocd_mode"] == "check"
 
-    def test_secondary_install_type_falls_back_to_primary_install_type(
-        self, mock_secondary_client, monkeypatch
-    ):
+    def test_secondary_install_type_falls_back_to_primary_install_type(self, mock_secondary_client, monkeypatch):
         calls = []
         monkeypatch.setattr(
             rbac_validator,
             "_validate_hub",
             lambda hub_role, client, **kwargs: calls.append((hub_role, kwargs)),
         )
-        validate_rbac_permissions(
-            None, mock_secondary_client, argocd_install_type="operator"
-        )
+        validate_rbac_permissions(None, mock_secondary_client, argocd_install_type="operator")
         assert calls[0][0] == "secondary"
         assert calls[0][1]["argocd_install_type"] == "operator"
 
-    def test_primary_absent_logs_skip_and_still_validates_secondary(
-        self, mock_secondary_client, monkeypatch, caplog
-    ):
+    def test_primary_absent_logs_skip_and_still_validates_secondary(self, mock_secondary_client, monkeypatch, caplog):
         calls = []
         monkeypatch.setattr(
             rbac_validator,
@@ -1601,14 +1385,10 @@ class TestValidateHubLoop:
         with caplog.at_level(logging.INFO, logger="acm_switchover"):
             validate_rbac_permissions(None, mock_secondary_client)
         assert calls == ["secondary"]
-        assert (
-            "Primary hub not available; skipping primary RBAC validation" in caplog.text
-        )
+        assert "Primary hub not available; skipping primary RBAC validation" in caplog.text
 
     @patch("lib.rbac_validator.RBACValidator")
-    def test_secondary_failure_message_includes_error_count(
-        self, mock_validator_class, mock_secondary_client
-    ):
+    def test_secondary_failure_message_includes_error_count(self, mock_validator_class, mock_secondary_client):
         mock_validator = MagicMock()
         mock_validator.validate_all_permissions.return_value = (
             False,
@@ -1624,9 +1404,7 @@ class TestValidateHubLoop:
         )
 
     @patch("lib.rbac_validator.RBACValidator")
-    def test_primary_failure_message_has_no_error_count(
-        self, mock_validator_class, mock_primary_client
-    ):
+    def test_primary_failure_message_has_no_error_count(self, mock_validator_class, mock_primary_client):
         mock_validator = MagicMock()
         mock_validator.validate_all_permissions.return_value = (
             False,
@@ -1636,10 +1414,7 @@ class TestValidateHubLoop:
         mock_validator_class.return_value = mock_validator
         with pytest.raises(ValidationError) as exc_info:
             validate_rbac_permissions(mock_primary_client)
-        assert (
-            str(exc_info.value)
-            == "RBAC permission validation failed on primary hub. See report above for details."
-        )
+        assert str(exc_info.value) == "RBAC permission validation failed on primary hub. See report above for details."
 
 
 class TestValidateDecommissionPermissions:
@@ -1668,30 +1443,20 @@ class TestValidateDecommissionPermissions:
             skip_observability=True,
         )
 
-    def test_validate_decommission_permissions_fails_when_managedcluster_get_missing(
-        self, mock_primary_client
-    ):
+    def test_validate_decommission_permissions_fails_when_managedcluster_get_missing(self, mock_primary_client):
         """Named GET is required on the standalone decommission surface (R4-03 PR D)."""
         validator = RBACValidator(mock_primary_client)
 
         def check_permission(api_group, resource, verb, namespace=None):
-            if (
-                api_group == "cluster.open-cluster-management.io"
-                and resource == "managedclusters"
-                and verb == "get"
-            ):
+            if api_group == "cluster.open-cluster-management.io" and resource == "managedclusters" and verb == "get":
                 return (False, "Permission denied")
             return (True, "")
 
         validator.check_permission = MagicMock(side_effect=check_permission)
 
         with patch("lib.rbac_validator.RBACValidator", return_value=validator):
-            with pytest.raises(
-                ValidationError, match="Decommission RBAC permission validation failed"
-            ):
-                validate_decommission_permissions(
-                    mock_primary_client, skip_observability=True
-                )
+            with pytest.raises(ValidationError, match="Decommission RBAC permission validation failed"):
+                validate_decommission_permissions(mock_primary_client, skip_observability=True)
 
     def test_validate_decommission_permissions_fails_when_teardown_namespace_permission_missing(
         self, mock_primary_client
@@ -1699,28 +1464,17 @@ class TestValidateDecommissionPermissions:
         validator = RBACValidator(mock_primary_client)
 
         def check_permission(api_group, resource, verb, namespace=None):
-            if (
-                namespace == ACM_NAMESPACE
-                and api_group == ""
-                and resource == "pods"
-                and verb == "get"
-            ):
+            if namespace == ACM_NAMESPACE and api_group == "" and resource == "pods" and verb == "get":
                 return (False, "Permission denied")
             return (True, "")
 
         validator.check_permission = MagicMock(side_effect=check_permission)
 
         with patch("lib.rbac_validator.RBACValidator", return_value=validator):
-            with pytest.raises(
-                ValidationError, match="Decommission RBAC permission validation failed"
-            ):
-                validate_decommission_permissions(
-                    mock_primary_client, skip_observability=True
-                )
+            with pytest.raises(ValidationError, match="Decommission RBAC permission validation failed"):
+                validate_decommission_permissions(mock_primary_client, skip_observability=True)
 
-    def test_validate_decommission_permissions_checks_only_teardown_surface(
-        self, mock_primary_client
-    ):
+    def test_validate_decommission_permissions_checks_only_teardown_surface(self, mock_primary_client):
         validator = RBACValidator(mock_primary_client)
         validator.check_permission = MagicMock(return_value=(True, ""))
 
@@ -1732,42 +1486,30 @@ class TestValidateDecommissionPermissions:
         mock_primary_client.namespace_exists.side_effect = namespace_exists
 
         with patch("lib.rbac_validator.RBACValidator", return_value=validator):
-            validate_decommission_permissions(
-                mock_primary_client, skip_observability=False
-            )
+            validate_decommission_permissions(mock_primary_client, skip_observability=False)
 
         assert (
             call("cluster.open-cluster-management.io", "managedclusters", "get", None)
             in validator.check_permission.call_args_list
         )
         assert (
-            call(
-                "cluster.open-cluster-management.io", "managedclusters", "delete", None
-            )
+            call("cluster.open-cluster-management.io", "managedclusters", "delete", None)
             in validator.check_permission.call_args_list
         )
         assert (
-            call(
-                "operator.open-cluster-management.io", "multiclusterhubs", "list", None
-            )
+            call("operator.open-cluster-management.io", "multiclusterhubs", "list", None)
             in validator.check_permission.call_args_list
         )
         assert (
-            call("hive.openshift.io", "clusterdeployments", "list", None)
-            in validator.check_permission.call_args_list
+            call("hive.openshift.io", "clusterdeployments", "list", None) in validator.check_permission.call_args_list
         )
         assert (
             call("hive.openshift.io", "clusterdeployments", "get", None)
             not in validator.check_permission.call_args_list
         )
-        assert (
-            call("", "pods", "get", OBSERVABILITY_NAMESPACE)
-            in validator.check_permission.call_args_list
-        )
+        assert call("", "pods", "get", OBSERVABILITY_NAMESPACE) in validator.check_permission.call_args_list
 
-    def test_validate_decommission_permissions_default_checks_observability_when_present(
-        self, mock_primary_client
-    ):
+    def test_validate_decommission_permissions_default_checks_observability_when_present(self, mock_primary_client):
         """RBACValidator.validate_decommission_permissions() must check observability permissions by
         default (skip_observability defaults to False) when the observability namespace exists.
 
@@ -1801,9 +1543,7 @@ class TestValidateDecommissionPermissions:
         )
         assert call("", "pods", "get", OBSERVABILITY_NAMESPACE) in calls
 
-    def test_validate_decommission_rbac_succeeds_when_acm_namespace_missing(
-        self, mock_primary_client
-    ):
+    def test_validate_decommission_rbac_succeeds_when_acm_namespace_missing(self, mock_primary_client):
         """Missing ACM namespace on rerun should NOT fail validation (idempotent)."""
         mock_primary_client.namespace_exists.side_effect = lambda ns: {
             "open-cluster-management": False,
@@ -1852,23 +1592,14 @@ class TestValidateDecommissionPermissions:
         """
         reviews: list[tuple] = []
 
-        mock_k8s_client.V1ResourceAttributes.side_effect = (
-            lambda **kwargs: SimpleNamespace(**kwargs)
-        )
-        mock_k8s_client.V1SelfSubjectAccessReviewSpec.side_effect = (
-            lambda **kwargs: SimpleNamespace(**kwargs)
-        )
-        mock_k8s_client.V1SelfSubjectAccessReview.side_effect = (
-            lambda **kwargs: SimpleNamespace(**kwargs)
-        )
+        mock_k8s_client.V1ResourceAttributes.side_effect = lambda **kwargs: SimpleNamespace(**kwargs)
+        mock_k8s_client.V1SelfSubjectAccessReviewSpec.side_effect = lambda **kwargs: SimpleNamespace(**kwargs)
+        mock_k8s_client.V1SelfSubjectAccessReview.side_effect = lambda **kwargs: SimpleNamespace(**kwargs)
 
         def create_self_subject_access_review(body):
             attrs = body.spec.resource_attributes
             reviews.append((attrs.group, attrs.resource, attrs.verb, attrs.namespace))
-            allowed = not (
-                attrs.resource == MULTICLUSTEROBSERVABILITIES_PLURAL
-                and attrs.verb == "get"
-            )
+            allowed = not (attrs.resource == MULTICLUSTEROBSERVABILITIES_PLURAL and attrs.verb == "get")
             return SimpleNamespace(
                 status=SimpleNamespace(
                     allowed=allowed,
@@ -1880,18 +1611,12 @@ class TestValidateDecommissionPermissions:
             )
 
         authorization_api = MagicMock()
-        authorization_api.create_self_subject_access_review.side_effect = (
-            create_self_subject_access_review
-        )
+        authorization_api.create_self_subject_access_review.side_effect = create_self_subject_access_review
         mock_k8s_client.AuthorizationV1Api.return_value = authorization_api
 
         with caplog.at_level(logging.ERROR, logger="lib.rbac_validator"):
-            with pytest.raises(
-                ValidationError, match="Decommission RBAC permission validation failed"
-            ):
-                validate_decommission_permissions(
-                    mock_primary_client, skip_observability=False
-                )
+            with pytest.raises(ValidationError, match="Decommission RBAC permission validation failed"):
+                validate_decommission_permissions(mock_primary_client, skip_observability=False)
 
         # Cluster-scoped, collection-wide: namespace is None and no object name is asked
         # for, which is the authorization question the named GET actually depends on.

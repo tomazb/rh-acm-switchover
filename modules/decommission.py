@@ -50,7 +50,7 @@ from lib.exceptions import SwitchoverError, TargetDisappeared
 from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.run_record import RunRecord
-from lib.strict_read import StrictReadStatus
+from lib.strict_read import StrictReadOutcome, StrictReadStatus
 from lib.teardown_record import (
     AbsenceProof,
     TeardownPhase,
@@ -96,15 +96,9 @@ class TeardownSpec:
         drain_ns = self.drain_namespace
         drain_sel = self.drain_label_selector
         if (drain_ns is None) != (drain_sel is None):
-            raise ValueError(
-                "drain_namespace and drain_label_selector must both be set or both be None"
-            )
-        if drain_ns is not None and (
-            not drain_ns.strip() or not (drain_sel or "").strip()
-        ):
-            raise ValueError(
-                "drain_namespace and drain_label_selector must be non-empty when drain is enabled"
-            )
+            raise ValueError("drain_namespace and drain_label_selector must both be set or both be None")
+        if drain_ns is not None and (not drain_ns.strip() or not (drain_sel or "").strip()):
+            raise ValueError("drain_namespace and drain_label_selector must be non-empty when drain is enabled")
 
     @property
     def api_version(self) -> str:
@@ -126,18 +120,10 @@ class TeardownSpec:
         return self.drain_namespace, self.drain_label_selector
 
     def absence_wait_timeout(self) -> int:
-        return (
-            self.cr_absent_timeout
-            if self.cr_absent_timeout is not None
-            else OBSERVABILITY_TERMINATE_TIMEOUT
-        )
+        return self.cr_absent_timeout if self.cr_absent_timeout is not None else OBSERVABILITY_TERMINATE_TIMEOUT
 
     def absence_wait_interval(self) -> int:
-        return (
-            self.cr_absent_interval
-            if self.cr_absent_interval is not None
-            else OBSERVABILITY_TERMINATE_INTERVAL
-        )
+        return self.cr_absent_interval if self.cr_absent_interval is not None else OBSERVABILITY_TERMINATE_INTERVAL
 
 
 OBSERVABILITY_TEARDOWN = TeardownSpec(
@@ -182,9 +168,7 @@ class Decommission:
         # decommission has no destination, so the July section 4 gate is not called at
         # all rather than called and defaulted.
         self.secondary = secondary_client
-        self.acknowledge_observability_not_migrated = (
-            acknowledge_observability_not_migrated
-        )
+        self.acknowledge_observability_not_migrated = acknowledge_observability_not_migrated
         # Keyword-only and required on purpose: a default would let a caller
         # silently opt out of the durable channel. This task opens the channel;
         # it writes no teardown record through it yet.
@@ -241,9 +225,7 @@ class Decommission:
                 outcomes[substep] = SubstepOutcome.NOT_REQUESTED
                 continue
 
-            if interactive and not confirm_action(
-                self._PROMPTS[substep], default=False
-            ):
+            if interactive and not confirm_action(self._PROMPTS[substep], default=False):
                 logger.error("Refused by operator: %s. Aborting decommission.", substep)
                 outcomes[substep] = SubstepOutcome.REFUSED
                 return DecommissionResult(
@@ -290,9 +272,7 @@ class Decommission:
         which is what the collection does for any mapping record.
         """
         if substep == "observability":
-            return self.has_observability or self._has_teardown_record(
-                OBSERVABILITY_TEARDOWN
-            )
+            return self.has_observability or self._has_teardown_record(OBSERVABILITY_TEARDOWN)
         return True
 
     @staticmethod
@@ -312,17 +292,11 @@ class Decommission:
         return self.run_record.teardown_record(self._teardown_key(spec)) is not None
 
     def _requested_substeps(self) -> tuple[str, ...]:
-        return tuple(
-            substep for substep in self._SUBSTEPS if self._substep_requested(substep)
-        )
+        return tuple(substep for substep in self._SUBSTEPS if self._substep_requested(substep))
 
     def _remaining_after(self, index: int) -> tuple[str, ...]:
         """The requested substeps after ``index``, which an abort leaves unattempted."""
-        return tuple(
-            substep
-            for substep in self._SUBSTEPS[index + 1 :]
-            if self._substep_requested(substep)
-        )
+        return tuple(substep for substep in self._SUBSTEPS[index + 1 :] if self._substep_requested(substep))
 
     def _run_substep(self, substep: str) -> SubstepExecution:
         """Dispatch one substep to its family method and return its execution unchanged.
@@ -358,52 +332,14 @@ class Decommission:
                 namespace=spec.namespace,
             )
             if cr.status is StrictReadStatus.ERROR:
-                raise SwitchoverError(
-                    f"Cannot verify {spec.kind} {spec.name} for the dry-run preview"
-                )
+                raise SwitchoverError(f"Cannot verify {spec.kind} {spec.name} for the dry-run preview")
             if cr.status is StrictReadStatus.ITEMS:
                 logger.info("[DRY-RUN] Would delete %s %s", spec.kind, spec.name)
                 return True
             return False
 
         if substep == "managed_clusters":
-            inventory = self.primary.list_managed_clusters_strict()
-            if inventory.status is StrictReadStatus.ERROR:
-                raise SwitchoverError(
-                    "Cannot verify ManagedCluster inventory for the dry-run preview"
-                )
-            if inventory.status is StrictReadStatus.CRD_ABSENT:
-                # Binding ruling 3: kind-not-served without a live ITEMS proof is
-                # unverifiable for prediction, not a confident empty skip.
-                raise SwitchoverError(
-                    "Cannot verify ManagedCluster inventory for the dry-run preview"
-                )
-            if inventory.status is not StrictReadStatus.ITEMS:
-                raise SwitchoverError(
-                    "Cannot verify ManagedCluster inventory for the dry-run preview"
-                )
-            names = [
-                name
-                for name in self._resource_names(inventory.items)
-                if name and name != LOCAL_CLUSTER_NAME
-            ]
-            if names:
-                cds = self.primary.list_custom_resources_strict(
-                    group=HIVE_CLUSTERDEPLOYMENT_API_GROUP,
-                    version=HIVE_CLUSTERDEPLOYMENT_API_VERSION,
-                    plural=HIVE_CLUSTERDEPLOYMENT_PLURAL,
-                )
-                if cds.status is not StrictReadStatus.ITEMS:
-                    raise SwitchoverError(
-                        "Unable to verify ClusterDeployment preserveOnDelete safety before deleting "
-                        "ManagedClusters for the dry-run preview"
-                    )
-                logger.info(
-                    "[DRY-RUN] Would delete %s ManagedCluster(s): %s",
-                    len(names),
-                    format_public_list(names),
-                )
-            return bool(names)
+            return self._preview_managed_clusters()
 
         if substep == "multiclusterhub":
             names = self._resource_names(
@@ -426,22 +362,16 @@ class Decommission:
     @staticmethod
     def _resource_names(resources) -> list:
         """Names of the listed resources, tolerating a None list answer."""
-        return [
-            resource.get("metadata", {}).get("name") for resource in resources or []
-        ]
+        return [resource.get("metadata", {}).get("name") for resource in resources or []]
 
-    def teardown_observability(
-        self, *, record_gitops_markers: bool = False
-    ) -> SubstepExecution:
+    def teardown_observability(self, *, record_gitops_markers: bool = False) -> SubstepExecution:
         """Tear down MultiClusterObservability through the shared phase machine.
 
         The one MCO algorithm. ``Finalization`` reaches it through this same method
         with ``record_gitops_markers=True``; it owns no MCO deletion logic of its own
         (GLM-H6).
         """
-        return self._teardown_resource(
-            OBSERVABILITY_TEARDOWN, record_gitops_markers=record_gitops_markers
-        )
+        return self._teardown_resource(OBSERVABILITY_TEARDOWN, record_gitops_markers=record_gitops_markers)
 
     def destination_observability_gate(self) -> ObservabilityGateResult:
         """July section 4: may source observability be deleted at all right now?
@@ -478,31 +408,19 @@ class Decommission:
 
         if StrictReadStatus.ERROR in (source_cr.status, source_namespace.status):
             # An unverifiable source is never read as "nothing to delete".
-            return self._blocked(
-                GATE_REASON_SOURCE_UNVERIFIABLE, "the source hub's observability state"
-            )
+            return self._blocked(GATE_REASON_SOURCE_UNVERIFIABLE, "the source hub's observability state")
 
-        if (
-            source_cr.proves_absence
-            and source_namespace.status is StrictReadStatus.NAMESPACE_ABSENT
-        ):
+        if source_cr.proves_absence and source_namespace.status is StrictReadStatus.NAMESPACE_ABSENT:
             logger.info(
                 "No %s and no %s namespace on the source hub: the destination gate does not apply",
                 spec.kind,
                 drain_ns,
             )
-            return ObservabilityGateResult(
-                decision=ObservabilityGateDecision.NOT_APPLICABLE
-            )
+            return ObservabilityGateResult(decision=ObservabilityGateDecision.NOT_APPLICABLE)
 
-        if not (
-            source_cr.status is StrictReadStatus.ITEMS
-            and source_namespace.status is StrictReadStatus.ITEMS
-        ):
+        if not (source_cr.status is StrictReadStatus.ITEMS and source_namespace.status is StrictReadStatus.ITEMS):
             # Half-removed: an absent CRD with a live namespace, or the reverse.
-            return self._blocked(
-                GATE_REASON_SOURCE_AMBIGUOUS, "the source hub's observability state"
-            )
+            return self._blocked(GATE_REASON_SOURCE_AMBIGUOUS, "the source hub's observability state")
 
         destination_cr = self.secondary.list_custom_resources_strict(
             group=spec.group,
@@ -521,15 +439,11 @@ class Decommission:
             )
 
         namespace_present = destination_namespace.status is StrictReadStatus.ITEMS
-        namespace_absent = (
-            destination_namespace.status is StrictReadStatus.NAMESPACE_ABSENT
-        )
+        namespace_absent = destination_namespace.status is StrictReadStatus.NAMESPACE_ABSENT
         # A complete inventory with no items is a positive absence proof; the source's
         # clean-skip rule is deliberately NOT reused, so nothing here treats a missing
         # CRD or namespace as harmless.
-        cr_present = destination_cr.status is StrictReadStatus.ITEMS and bool(
-            destination_cr.items
-        )
+        cr_present = destination_cr.status is StrictReadStatus.ITEMS and bool(destination_cr.items)
         cr_absent = destination_cr.proves_absence or (
             destination_cr.status is StrictReadStatus.ITEMS and not destination_cr.items
         )
@@ -548,9 +462,7 @@ class Decommission:
                     "Destination observability is proven absent and the operator acknowledged it: "
                     "metrics continuity ends with this deletion"
                 )
-                return ObservabilityGateResult(
-                    decision=ObservabilityGateDecision.PROCEED
-                )
+                return ObservabilityGateResult(decision=ObservabilityGateDecision.PROCEED)
             return self._blocked(
                 GATE_REASON_DESTINATION_ABSENT,
                 "the destination hub has no observability, so metrics continuity ends here",
@@ -573,9 +485,7 @@ class Decommission:
             reason,
             detail,
         )
-        return ObservabilityGateResult(
-            decision=ObservabilityGateDecision.BLOCKED, reason=reason
-        )
+        return ObservabilityGateResult(decision=ObservabilityGateDecision.BLOCKED, reason=reason)
 
     def _teardown_resource(  # noqa: C901 - one linear phase table; splitting it hides the order
         self, spec: TeardownSpec, *, record_gitops_markers: bool
@@ -611,9 +521,7 @@ class Decommission:
                 namespace=spec.namespace,
             )
             if cr.status is StrictReadStatus.ERROR:
-                raise SwitchoverError(
-                    f"Cannot verify {spec.kind} {spec.name}: inventory unreadable"
-                )
+                raise SwitchoverError(f"Cannot verify {spec.kind} {spec.name}: inventory unreadable")
 
             if record is None:
                 noop = self._precondition_noop(spec, cr)
@@ -635,40 +543,28 @@ class Decommission:
             # record whose target is already gone owes a drain and a final proof, and
             # gating that would block the resume on a source the gate itself reads as
             # half-removed.
-            if (
-                spec is OBSERVABILITY_TEARDOWN
-                and self.secondary is not None
-                and cr.status is StrictReadStatus.ITEMS
-            ):
+            if spec is OBSERVABILITY_TEARDOWN and self.secondary is not None and cr.status is StrictReadStatus.ITEMS:
                 gate = self.destination_observability_gate()
                 if gate.decision is ObservabilityGateDecision.BLOCKED:
                     # No write has happened yet, in a live run or a preview, so
                     # `changed` is necessarily false. A predicted blocker is a real
                     # preview result, which is why dry run takes this path too.
                     return SubstepExecution(SubstepOutcome.FAILED, changed=False)
-                if (
-                    gate.decision is ObservabilityGateDecision.NOT_APPLICABLE
-                    and record is None
-                ):
+                if gate.decision is ObservabilityGateDecision.NOT_APPLICABLE and record is None:
                     # Reachable only because the object disappeared between this
                     # machine's read and the gate's own: the machine saw ITEMS or the
                     # gate would not have run. With a record the same race falls
                     # through to the UID-preconditioned DELETE, whose TargetDisappeared
                     # arm hands the absence proof to the poll.
-                    return SubstepExecution(
-                        SubstepOutcome.PRECONDITION_NOOP, changed=False
-                    )
+                    return SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
 
-            expected_uid = (
-                record.expected_uid if record is not None else self._live_uid(spec, cr)
-            )
+            expected_uid = record.expected_uid if record is not None else self._live_uid(spec, cr)
 
             if cr.status is StrictReadStatus.ITEMS:
                 live_uid = (cr.resource or {}).get("metadata", {}).get("uid")
                 if live_uid != expected_uid:
                     raise SwitchoverError(
-                        f"{spec.kind} {spec.name} is not the object recorded for teardown; "
-                        "it was left intact"
+                        f"{spec.kind} {spec.name} is not the object recorded for teardown; " "it was left intact"
                     )
 
                 if record_gitops_markers:
@@ -753,9 +649,7 @@ class Decommission:
                     return WaitConditionResult.complete("resource absent")
                 if observed.status is StrictReadStatus.ITEMS:
                     if self._live_uid(spec, observed) != expected_uid:
-                        raise SwitchoverError(
-                            f"{spec.kind} {spec.name} was replaced; it was left intact"
-                        )
+                        raise SwitchoverError(f"{spec.kind} {spec.name} was replaced; it was left intact")
                     return WaitConditionResult.pending("resource still present")
                 raise SwitchoverError(f"Cannot verify {spec.kind} {spec.name} absence")
 
@@ -767,9 +661,7 @@ class Decommission:
                 allow_success_after_timeout=True,
                 logger=logger,
             ):
-                raise SwitchoverError(
-                    f"Timeout waiting for {spec.kind} {spec.name} removal"
-                )
+                raise SwitchoverError(f"Timeout waiting for {spec.kind} {spec.name} removal")
             self._record(spec, key, expected_uid, TeardownPhase.CR_ABSENT)
 
             if spec.has_drain:
@@ -781,21 +673,13 @@ class Decommission:
                     if namespace.status is StrictReadStatus.NAMESPACE_ABSENT:
                         return WaitConditionResult.complete("namespace absent")
                     if namespace.status is not StrictReadStatus.ITEMS:
-                        self._record(
-                            spec, key, expected_uid, TeardownPhase.RECOVERY_REQUIRED
-                        )
-                        raise SwitchoverError(
-                            f"The {drain_ns} namespace state is ambiguous"
-                        )
-                    pods = self.primary.list_pods_strict(
-                        drain_ns, label_selector=drain_sel
-                    )
+                        self._record(spec, key, expected_uid, TeardownPhase.RECOVERY_REQUIRED)
+                        raise SwitchoverError(f"The {drain_ns} namespace state is ambiguous")
+                    pods = self.primary.list_pods_strict(drain_ns, label_selector=drain_sel)
                     if pods.status is not StrictReadStatus.ITEMS:
                         raise SwitchoverError(f"Cannot verify the {drain_ns} drain")
                     if pods.items:
-                        return WaitConditionResult.pending(
-                            f"{len(pods.items)} pod(s) still running"
-                        )
+                        return WaitConditionResult.pending(f"{len(pods.items)} pod(s) still running")
                     return WaitConditionResult.complete("no pods remaining")
 
                 if not wait_for_condition(
@@ -820,22 +704,14 @@ class Decommission:
                 namespace=spec.namespace,
             )
             if final_cr.status is StrictReadStatus.ITEMS:
-                raise SwitchoverError(
-                    f"{spec.kind} {spec.name} is still present after its delete"
-                )
+                raise SwitchoverError(f"{spec.kind} {spec.name} is still present after its delete")
             if final_cr.status is StrictReadStatus.ERROR:
-                raise SwitchoverError(
-                    f"Cannot re-prove {spec.kind} {spec.name} absence"
-                )
+                raise SwitchoverError(f"Cannot re-prove {spec.kind} {spec.name} absence")
 
             resource_versions: dict = {}
             absence_proofs = {
                 "target_cr": AbsenceProof(
-                    proof_type=(
-                        "crd_absent"
-                        if final_cr.status is StrictReadStatus.CRD_ABSENT
-                        else "object_absent"
-                    ),
+                    proof_type=("crd_absent" if final_cr.status is StrictReadStatus.CRD_ABSENT else "object_absent"),
                     resource_key=key,
                 )
             }
@@ -851,26 +727,16 @@ class Decommission:
                         resource_key=f"v1/Namespace//{drain_ns}",
                     )
                 elif namespace_read.status is StrictReadStatus.ITEMS:
-                    pods = self.primary.list_pods_strict(
-                        drain_ns, label_selector=drain_sel
-                    )
+                    pods = self.primary.list_pods_strict(drain_ns, label_selector=drain_sel)
                     if pods.status is not StrictReadStatus.ITEMS:
                         raise SwitchoverError(f"Cannot verify the {drain_ns} drain")
                     if pods.items:
-                        raise SwitchoverError(
-                            f"{len(pods.items)} pod(s) still running in {drain_ns}"
-                        )
-                    resource_versions["drain_namespace"] = (
-                        namespace_read.resource_version
-                    )
+                        raise SwitchoverError(f"{len(pods.items)} pod(s) still running in {drain_ns}")
+                    resource_versions["drain_namespace"] = namespace_read.resource_version
                     resource_versions["drain_pods"] = pods.resource_version
                 else:
-                    self._record(
-                        spec, key, expected_uid, TeardownPhase.RECOVERY_REQUIRED
-                    )
-                    raise SwitchoverError(
-                        f"The {drain_ns} namespace state is ambiguous"
-                    )
+                    self._record(spec, key, expected_uid, TeardownPhase.RECOVERY_REQUIRED)
+                    raise SwitchoverError(f"The {drain_ns} namespace state is ambiguous")
 
             if not self.dry_run:
                 self.run_record.record_teardown_phase(
@@ -899,18 +765,12 @@ class Decommission:
             logger.error("%s teardown failed: %s", spec.kind, exc)
             return SubstepExecution(SubstepOutcome.FAILED, changed=changed)
 
-    def _reprove_completed(
-        self, spec: TeardownSpec, cr, record: TeardownRecord
-    ) -> SubstepExecution:
+    def _reprove_completed(self, spec: TeardownSpec, cr, record: TeardownRecord) -> SubstepExecution:
         """Revalidate a completed record without rewriting its immutable evidence."""
         if cr.status is StrictReadStatus.ITEMS:
             if self._live_uid(spec, cr) != record.expected_uid:
-                raise SwitchoverError(
-                    f"{spec.kind} {spec.name} was replaced; it was left intact"
-                )
-            raise SwitchoverError(
-                f"{spec.kind} {spec.name} is still present after its completed teardown"
-            )
+                raise SwitchoverError(f"{spec.kind} {spec.name} was replaced; it was left intact")
+            raise SwitchoverError(f"{spec.kind} {spec.name} is still present after its completed teardown")
 
         if not spec.has_drain:
             return SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
@@ -926,9 +786,7 @@ class Decommission:
         if pods.status is not StrictReadStatus.ITEMS:
             raise SwitchoverError(f"Cannot verify the {drain_ns} drain")
         if pods.items:
-            raise SwitchoverError(
-                f"{len(pods.items)} pod(s) still running in {drain_ns}"
-            )
+            raise SwitchoverError(f"{len(pods.items)} pod(s) still running in {drain_ns}")
         return SubstepExecution(SubstepOutcome.COMPLETED, changed=False)
 
     def _precondition_noop(self, spec: TeardownSpec, cr) -> Optional[SubstepExecution]:
@@ -959,30 +817,20 @@ class Decommission:
             )
             return SubstepExecution(SubstepOutcome.PRECONDITION_NOOP, changed=False)
         if namespace_read.status is StrictReadStatus.ITEMS:
-            raise SwitchoverError(
-                f"{spec.kind} is absent but the {drain_ns} namespace is still present"
-            )
+            raise SwitchoverError(f"{spec.kind} is absent but the {drain_ns} namespace is still present")
         raise SwitchoverError(f"Cannot verify the {drain_ns} namespace")
 
     def _live_uid(self, spec: TeardownSpec, cr) -> str:
-        uid = (
-            (cr.resource or {}).get("metadata", {}).get("uid") if cr.resource else None
-        )
+        uid = (cr.resource or {}).get("metadata", {}).get("uid") if cr.resource else None
         if not isinstance(uid, str) or not uid.strip():
-            raise SwitchoverError(
-                f"Cannot establish the identity of {spec.kind} {spec.name}"
-            )
+            raise SwitchoverError(f"Cannot establish the identity of {spec.kind} {spec.name}")
         return uid
 
-    def _record(
-        self, spec: TeardownSpec, key: str, expected_uid: str, phase: TeardownPhase
-    ) -> None:
+    def _record(self, spec: TeardownSpec, key: str, expected_uid: str, phase: TeardownPhase) -> None:
         """One durable phase write. Dry run never reaches here."""
         if self.dry_run:
             return
-        self.run_record.record_teardown_phase(
-            TeardownRecord(key=key, expected_uid=expected_uid, phase=phase)
-        )
+        self.run_record.record_teardown_phase(TeardownRecord(key=key, expected_uid=expected_uid, phase=phase))
 
     def _managed_cluster_teardown_spec(self, name: str) -> TeardownSpec:
         """No-drain TeardownSpec for one ManagedCluster name."""
@@ -1010,14 +858,106 @@ class Decommission:
             api_version, kind, _namespace, name = parts
             if kind != "ManagedCluster":
                 continue
-            if (
-                api_version
-                != f"{MANAGED_CLUSTER_API_GROUP}/{MANAGED_CLUSTER_API_VERSION}"
-            ):
+            if api_version != f"{MANAGED_CLUSTER_API_GROUP}/{MANAGED_CLUSTER_API_VERSION}":
                 continue
             if name and name != LOCAL_CLUSTER_NAME:
                 names.add(name)
         return names
+
+    def _managed_cluster_live_names_from_inventory(self, inventory: StrictReadOutcome) -> list[str]:
+        """Non-local ManagedCluster names from a strict ITEMS inventory.
+
+        Every returned item must be a mapping with mapping ``metadata`` and a
+        non-empty string ``metadata.name``. Any malformed item makes the whole
+        inventory unverifiable — nothing is dropped silently.
+        """
+        live_names: list[str] = []
+        for mc in inventory.items or []:
+            if not isinstance(mc, dict):
+                raise SwitchoverError("Cannot verify ManagedCluster inventory")
+            metadata = mc.get("metadata")
+            if not isinstance(metadata, dict):
+                raise SwitchoverError("Cannot verify ManagedCluster inventory")
+            mc_name = metadata.get("name")
+            if not isinstance(mc_name, str) or not mc_name.strip():
+                raise SwitchoverError("Cannot verify ManagedCluster inventory")
+            if mc_name == LOCAL_CLUSTER_NAME:
+                logger.info("Skipping local-cluster")
+                continue
+            live_names.append(mc_name)
+        return live_names
+
+    def _resolve_managed_cluster_work_set(self, *, preview: bool = False) -> tuple[list[str], list[str]]:
+        """Resolve live names and the effective work set, or raise SwitchoverError.
+
+        Shared by live teardown and dry-run preview so inventory / durable-record
+        union / CRD_ABSENT rules cannot drift.
+        """
+        inventory_error = (
+            "Cannot verify ManagedCluster inventory for the dry-run preview"
+            if preview
+            else "Cannot verify ManagedCluster inventory"
+        )
+        inventory = self.primary.list_managed_clusters_strict()
+        if inventory.status is StrictReadStatus.ERROR:
+            raise SwitchoverError(inventory_error)
+        if inventory.status is StrictReadStatus.CRD_ABSENT:
+            live_names: list[str] = []
+        elif inventory.status is StrictReadStatus.ITEMS:
+            live_names = self._managed_cluster_live_names_from_inventory(inventory)
+        else:
+            raise SwitchoverError(inventory_error)
+
+        work_set = sorted(set(live_names) | self._managed_cluster_record_names())
+        if inventory.status is StrictReadStatus.CRD_ABSENT and not work_set:
+            raise SwitchoverError(inventory_error)
+        return live_names, work_set
+
+    def _preview_managed_cluster_target_would_change(self, name: str) -> bool:
+        """Read-only: would this ManagedCluster still require a DELETE?"""
+        spec = self._managed_cluster_teardown_spec(name)
+        key = self._teardown_key(spec)
+        record = self.run_record.teardown_record(key)
+        cr = self.primary.get_custom_resource_strict(
+            group=spec.group,
+            version=spec.version,
+            plural=spec.plural,
+            name=spec.name,
+            namespace=spec.namespace,
+        )
+        if cr.status is StrictReadStatus.ERROR:
+            raise SwitchoverError(f"Cannot verify ManagedCluster {name} for the dry-run preview")
+        if cr.status is StrictReadStatus.ITEMS:
+            live_uid = self._live_uid(spec, cr)
+            if record is not None and live_uid != record.expected_uid:
+                raise SwitchoverError(
+                    f"ManagedCluster {name} is not the object recorded for teardown; " "it was left intact"
+                )
+            if record is not None and record.phase is TeardownPhase.COMPLETED:
+                raise SwitchoverError(f"ManagedCluster {name} is still present after its completed teardown")
+            return True
+        if cr.status in (
+            StrictReadStatus.OBJECT_ABSENT,
+            StrictReadStatus.CRD_ABSENT,
+        ):
+            return False
+        raise SwitchoverError(f"Cannot verify ManagedCluster {name} for the dry-run preview")
+
+    def _preview_managed_clusters(self) -> bool:
+        """Dry-run ManagedCluster prediction using the live pre-mutation safety path."""
+        live_names, work_set = self._resolve_managed_cluster_work_set(preview=True)
+        if not work_set:
+            return False
+        if live_names:
+            self._verify_managed_cluster_delete_safety(live_names)
+        would_change_names = [name for name in work_set if self._preview_managed_cluster_target_would_change(name)]
+        if would_change_names:
+            logger.info(
+                "[DRY-RUN] Would delete %s ManagedCluster(s): %s",
+                len(would_change_names),
+                format_public_list(would_change_names),
+            )
+        return bool(would_change_names)
 
     def teardown_managed_clusters(self) -> SubstepExecution:
         """Tear down ManagedClusters through the shared no-drain phase machine.
@@ -1029,30 +969,7 @@ class Decommission:
         changed = False
 
         try:
-            inventory = self.primary.list_managed_clusters_strict()
-            if inventory.status is StrictReadStatus.ERROR:
-                raise SwitchoverError("Cannot verify ManagedCluster inventory")
-            if inventory.status is StrictReadStatus.CRD_ABSENT:
-                live_names: list[str] = []
-            elif inventory.status is StrictReadStatus.ITEMS:
-                live_names = []
-                for mc in inventory.items or []:
-                    mc_name = (mc.get("metadata") or {}).get("name")
-                    if not mc_name:
-                        continue
-                    if mc_name == LOCAL_CLUSTER_NAME:
-                        logger.info("Skipping local-cluster")
-                        continue
-                    live_names.append(mc_name)
-            else:
-                raise SwitchoverError("Cannot verify ManagedCluster inventory")
-
-            work_set = sorted(set(live_names) | self._managed_cluster_record_names())
-
-            if inventory.status is StrictReadStatus.CRD_ABSENT and not work_set:
-                # Binding ruling 3: kind-not-served with no durable obligation is
-                # unverifiable inventory, not a clean empty skip.
-                raise SwitchoverError("Cannot verify ManagedCluster inventory")
+            live_names, work_set = self._resolve_managed_cluster_work_set(preview=False)
 
             if not work_set:
                 logger.info("No ManagedClusters found")
@@ -1093,9 +1010,7 @@ class Decommission:
 
         return SubstepExecution(SubstepOutcome.COMPLETED, changed=changed)
 
-    def _verify_managed_cluster_delete_safety(
-        self, managed_cluster_names: list[str]
-    ) -> None:
+    def _verify_managed_cluster_delete_safety(self, managed_cluster_names: list[str]) -> None:
         """Verify matching Hive ClusterDeployments are safe before deleting ManagedClusters."""
         outcome = self.primary.list_custom_resources_strict(
             group=HIVE_CLUSTERDEPLOYMENT_API_GROUP,
@@ -1124,11 +1039,9 @@ class Decommission:
         unsafe_matches = set()
         unverified_relationships = set()
         for cluster_deployment in cluster_deployments:
-            matching_cluster_name, unverified_reason = (
-                self._cluster_deployment_relationship(
-                    cluster_deployment,
-                    managed_cluster_name_set,
-                )
+            matching_cluster_name, unverified_reason = self._cluster_deployment_relationship(
+                cluster_deployment,
+                managed_cluster_name_set,
             )
             if unverified_reason:
                 metadata = cluster_deployment.get("metadata") or {}
@@ -1199,9 +1112,7 @@ class Decommission:
         namespace = metadata.get("namespace")
         install_ref_name = cluster_install_ref.get("name")
         if namespace in managed_cluster_names and install_ref_name == namespace:
-            confirmed_candidates.append(
-                ("metadata.namespace/spec.clusterInstallRef.name", namespace)
-            )
+            confirmed_candidates.append(("metadata.namespace/spec.clusterInstallRef.name", namespace))
 
         confirmed_names = sorted({candidate for _, candidate in confirmed_candidates})
         if len(confirmed_names) == 1:
@@ -1209,28 +1120,17 @@ class Decommission:
             conflicting_plausible = []
             if namespace in managed_cluster_names and namespace != confirmed_name:
                 conflicting_plausible.append(f"metadata.namespace={namespace}")
-            if (
-                install_ref_name in managed_cluster_names
-                and install_ref_name != confirmed_name
-            ):
-                conflicting_plausible.append(
-                    f"spec.clusterInstallRef.name={install_ref_name}"
-                )
+            if install_ref_name in managed_cluster_names and install_ref_name != confirmed_name:
+                conflicting_plausible.append(f"spec.clusterInstallRef.name={install_ref_name}")
             if conflicting_plausible:
-                sources = ", ".join(
-                    f"{source}={candidate}"
-                    for source, candidate in confirmed_candidates
-                )
+                sources = ", ".join(f"{source}={candidate}" for source, candidate in confirmed_candidates)
                 return (
                     None,
-                    "conflicting ManagedCluster identifiers "
-                    f"({sources}; {', '.join(conflicting_plausible)})",
+                    "conflicting ManagedCluster identifiers " f"({sources}; {', '.join(conflicting_plausible)})",
                 )
             return confirmed_names[0], None
         if len(confirmed_names) > 1:
-            sources = ", ".join(
-                f"{source}={candidate}" for source, candidate in confirmed_candidates
-            )
+            sources = ", ".join(f"{source}={candidate}" for source, candidate in confirmed_candidates)
             return None, f"conflicting ManagedCluster identifiers ({sources})"
 
         plausible_sources = []
@@ -1269,9 +1169,7 @@ class Decommission:
             if not mchs:
                 # PR E makes this absence proof strict; today it is the existing
                 # non-strict list, taken at face value.
-                logger.info(
-                    "No MultiClusterHub resources found (already deleted or never created)"
-                )
+                logger.info("No MultiClusterHub resources found (already deleted or never created)")
                 logger.info(
                     "Note: ACM operator pods (%s-*) may still be running - "
                     "this is expected as the operator is installed separately",
@@ -1309,20 +1207,14 @@ class Decommission:
                     return WaitConditionResult.complete("all ACM pods removed")
                 # Filter out operator pods - they remain after MCH deletion
                 non_operator_pods = [
-                    p
-                    for p in pods
-                    if not p.get("metadata", {})
-                    .get("name", "")
-                    .startswith(ACM_OPERATOR_POD_PREFIX)
+                    p for p in pods if not p.get("metadata", {}).get("name", "").startswith(ACM_OPERATOR_POD_PREFIX)
                 ]
                 if not non_operator_pods:
                     operator_count = len(pods)
                     return WaitConditionResult.complete(
                         f"all ACM pods removed (except {operator_count} operator pod(s) which remain)"
                     )
-                return WaitConditionResult.pending(
-                    f"{len(non_operator_pods)} non-operator pod(s) remaining"
-                )
+                return WaitConditionResult.pending(f"{len(non_operator_pods)} non-operator pod(s) remaining")
 
             success = wait_for_condition(
                 "ACM pod removal",
@@ -1343,9 +1235,7 @@ class Decommission:
                     ACM_OPERATOR_POD_PREFIX,
                 )
 
-            logger.info(
-                "Decommission complete. Backup data in object storage remains available for the new hub."
-            )
+            logger.info("Decommission complete. Backup data in object storage remains available for the new hub.")
         except SwitchoverError as exc:
             logger.error("MultiClusterHub teardown failed: %s", exc)
             return SubstepExecution(SubstepOutcome.FAILED, changed=changed)
