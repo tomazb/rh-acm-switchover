@@ -1082,24 +1082,6 @@ def _render_csv(csv):
     }
 
 
-def _select_unchanged_csv(csv_list_spec, vector_id):
-    """The candidate a correct implementation would select from `csv_list["items"]`.
-
-    Used only to render a `csv_get: null` ("the named GET returns the selected LIST
-    candidate unchanged") response -- never to decide the vector's expected outcome.
-    """
-    items = csv_list_spec["items"]
-    candidates = [
-        item
-        for item in items
-        if isinstance(item.get("owned_crds"), list)
-        and MCH_CRD in item["owned_crds"]
-        and item.get("phase") == "Succeeded"
-    ]
-    assert len(candidates) == 1, f"{vector_id}: ambiguous unchanged-CSV selection: {candidates}"
-    return candidates[0]
-
-
 class _FakeIdentityClient:
     """Records every strict-read call; renders vector shapes into real API shapes."""
 
@@ -1136,8 +1118,13 @@ class _FakeIdentityClient:
         if spec == _CSV_GET_NOT_REACHED:
             raise AssertionError(f"{self.vector['id']}: get_custom_resource_strict must not be called")
         if spec is None:
-            csv = _select_unchanged_csv(self.vector["csv_list"], self.vector["id"])
-            return StrictReadOutcome.from_resource(_render_csv(csv), resource_version="1")
+            # "unchanged": honour the `name` actually received, mirroring the real API
+            # contract, rather than re-deriving which LIST candidate should have been
+            # selected -- a wrong production selection must be visible in the result.
+            matches = [csv for csv in self.vector["csv_list"].get("items", []) if csv["name"] == name]
+            if not matches:
+                return StrictReadOutcome.object_absent(STRICT_READ_REASON_OBJECT_NOT_FOUND)
+            return StrictReadOutcome.from_resource(_render_csv(matches[0]), resource_version="1")
         read = spec["read"]
         if read == "items":
             return StrictReadOutcome.from_resource(_render_csv(spec["csv"]), resource_version="1")
@@ -1303,9 +1290,23 @@ def test_capture_request_provenance_for_the_valid_vector():
         "get_deployment_strict",
     ]
     list_call, get_call, deployment_call = client.calls
-    assert list_call[1]["namespace"] == ACM_NS
-    assert get_call[1]["namespace"] == ACM_NS
-    assert deployment_call[1]["namespace"] == ACM_NS
+    assert list_call[1] == {
+        "group": py_constants.CSV_API_GROUP,
+        "version": py_constants.CSV_API_VERSION,
+        "plural": py_constants.CSV_PLURAL,
+        "namespace": py_constants.ACM_NAMESPACE,
+    }
+    assert get_call[1] == {
+        "group": py_constants.CSV_API_GROUP,
+        "version": py_constants.CSV_API_VERSION,
+        "plural": py_constants.CSV_PLURAL,
+        "name": _csv()["name"],
+        "namespace": py_constants.ACM_NAMESPACE,
+    }
+    assert deployment_call[1] == {
+        "name": RECORDED_DEPLOYMENT_NAME,
+        "namespace": py_constants.ACM_NAMESPACE,
+    }
 
 
 def test_deployment_get_uses_the_csv_get_body_install_deployment_name_not_the_stale_list_name():
@@ -1356,8 +1357,52 @@ def test_invalid_install_deployment_name_is_unavailable_without_a_deployment_get
     assert not any(call[0] == "get_deployment_strict" for call in client.calls)
 
 
-def test_fatal_message_is_sanitized_and_omits_the_raw_read_layer_reason_code():
-    vector = _find_capture_vector("capture_csv_list_error")
+_FATAL_CAPTURE_VECTORS = tuple(v for v in IDENTITY_CAPTURE_VECTORS if v["expected"]["outcome"] == "fatal")
+
+
+def _server_supplied_strings_for(vector):
+    """Every non-empty server-supplied CSV name/uid the fake could return for this vector."""
+    strings = set()
+    for csv in vector["csv_list"].get("items", []):
+        if csv.get("name"):
+            strings.add(csv["name"])
+        if csv.get("uid"):
+            strings.add(csv["uid"])
+    csv_get = vector["csv_get"]
+    if isinstance(csv_get, dict) and csv_get.get("read") == "items":
+        csv = csv_get["csv"]
+        if csv.get("name"):
+            strings.add(csv["name"])
+        if csv.get("uid"):
+            strings.add(csv["uid"])
+    return strings
+
+
+def _read_layer_reasons_for(vector):
+    """Every StrictReadOutcome.reason the fake could return while running this vector."""
+    reasons = set()
+    csv_list = vector["csv_list"]
+    if csv_list["read"] == "crd_absent":
+        reasons.add(STRICT_READ_REASON_KIND_NOT_SERVED)
+    elif csv_list["read"] == "error":
+        reasons.add(STRICT_READ_REASON_READ_FAILED)
+    csv_get = vector["csv_get"]
+    if isinstance(csv_get, dict):
+        if csv_get.get("read") == "object_absent":
+            reasons.add(STRICT_READ_REASON_OBJECT_NOT_FOUND)
+        elif csv_get.get("read") == "error":
+            reasons.add(STRICT_READ_REASON_READ_FAILED)
+    deployment_get = vector["deployment_get"]
+    if isinstance(deployment_get, dict):
+        if deployment_get.get("read") == "object_absent":
+            reasons.add(STRICT_READ_REASON_OBJECT_NOT_FOUND)
+        elif deployment_get.get("read") == "error":
+            reasons.add(STRICT_READ_REASON_READ_FAILED)
+    return reasons
+
+
+@pytest.mark.parametrize("vector", _FATAL_CAPTURE_VECTORS, ids=lambda v: v["id"])
+def test_fatal_message_is_sanitized_and_omits_the_raw_read_layer_reason_code(vector):
     client = _FakeIdentityClient(vector)
     with pytest.raises(SwitchoverError) as exc_info:
         capture_operator_identity(
@@ -1366,8 +1411,15 @@ def test_fatal_message_is_sanitized_and_omits_the_raw_read_layer_reason_code():
     message = str(exc_info.value)
     lowered = message.lower()
     for needle in _SANITIZATION_FORBIDDEN_SUBSTRINGS:
-        assert needle not in lowered, f"forbidden substring {needle!r} in fatal message: {message!r}"
-    assert STRICT_READ_REASON_READ_FAILED not in message
+        assert needle not in lowered, f"{vector['id']}: forbidden substring {needle!r} in fatal message: {message!r}"
+    for reason in _read_layer_reasons_for(vector):
+        assert (
+            reason not in message
+        ), f"{vector['id']}: raw read-layer reason code {reason!r} leaked into fatal message: {message!r}"
+    for needle in _server_supplied_strings_for(vector):
+        assert (
+            needle not in message
+        ), f"{vector['id']}: server-supplied string {needle!r} leaked into fatal message: {message!r}"
 
 
 def test_evidence_summary_covers_the_closed_reason_vocabulary_and_is_sanitized():
