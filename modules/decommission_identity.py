@@ -1,21 +1,27 @@
-"""MCH operator identity capture through OLM CSV provenance (R4-03 PR E, task E2).
+"""MCH operator identity capture and Pod classification (R4-03 PR E, tasks E2-E3).
 
-This module owns exactly one thing: producing the read-side operator-identity
-value described by plan §10.2.2 (`operator_deployment`) and §10.2.3
-(`operator_identity_unavailable`), shaped for `lib.teardown_record.TeardownRecord`.
-It performs no persistence, no mutation, and no orchestration -- those stay in
+This module owns two things: producing the read-side operator-identity value
+described by plan §10.2.2 (`operator_deployment`) and §10.2.3
+(`operator_identity_unavailable`), shaped for `lib.teardown_record.TeardownRecord`
+(`capture_operator_identity`); and classifying an already-fetched Pod inventory
+against that identity's controller chain, back to the exact recorded operator
+Deployment UID (`classify_pods`, plan §11C.2/§11C.3). It performs no
+persistence, no mutation, and no orchestration -- those stay in
 `modules/decommission.py`. In particular this module does not own teardown
 phases, RunRecord/StateManager access, checkpoints, DELETE, waits, namespace
 reads, Pod-list orchestration, dry-run policy, or completion transitions.
 
 The identity is discovered by finding the one `Succeeded` ClusterServiceVersion
 that owns the MultiClusterHub CRD (`lib.teardown_record.MCH_OWNED_CRD`), then by
-resolving its install-strategy Deployment. A Pod classifier lands separately
-(task E3) in this same module; nothing here is pre-built for it.
+resolving its install-strategy Deployment. `classify_pods` consumes that
+identity together with an already-fetched Pod inventory, resolving each Pod
+through its controller ReplicaSet to the recorded operator Deployment UID; it
+never lists Pods, reads Namespaces, or decides Pod-list-read policy -- that is
+the caller's responsibility (task E4).
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, NoReturn, Optional
+from typing import Any, Dict, Mapping, NoReturn, Optional, Sequence, Tuple
 
 from lib.constants import (
     ACM_NAMESPACE,
@@ -26,9 +32,13 @@ from lib.constants import (
     CSV_PLURAL,
     OPERATOR_IDENTITY_DISCOVERY_METHOD,
     OPERATOR_IDENTITY_UNAVAILABLE_REASONS,
+    POD_CLASSIFICATION_DRAIN_BLOCKING,
+    POD_CLASSIFICATION_IDENTITY_INCONSISTENT,
+    POD_CLASSIFICATION_IDENTITY_UNAVAILABLE,
+    POD_CLASSIFICATION_OPERATOR_OWNED,
 )
 from lib.exceptions import SwitchoverError, ValidationError
-from lib.strict_read import StrictReadStatus
+from lib.strict_read import StrictReadOutcome, StrictReadStatus
 from lib.teardown_record import MCH_OWNED_CRD
 from lib.validation import InputValidator
 
@@ -70,6 +80,151 @@ class OperatorIdentity:
     @property
     def available(self) -> bool:
         return self.operator_deployment is not None
+
+
+@dataclass(frozen=True)
+class PodDecision:
+    """One Pod's classification decision (task E3, plan §11C.2/§11C.3)."""
+
+    name: str
+    decision: str
+
+
+@dataclass(frozen=True)
+class ClassificationPass:
+    """The result of one `classify_pods` call over one Pod inventory snapshot."""
+
+    decisions: Tuple[PodDecision, ...]
+    identity_status: Optional[str]
+    operator_deployment_resource_version: Optional[str]
+
+    @property
+    def blocking(self) -> Tuple[PodDecision, ...]:
+        return tuple(d for d in self.decisions if d.decision == POD_CLASSIFICATION_DRAIN_BLOCKING)
+
+
+def classify_pods(client: Any, pods: Sequence[Mapping[str, Any]], identity: OperatorIdentity) -> ClassificationPass:
+    """Classify an already-fetched Pod inventory by controller chain (task E3).
+
+    Does not list Pods, read Namespaces, or handle Pod-list-read failures --
+    those are the caller's (task E4) policy.
+    """
+    if not identity.available:
+        decisions = tuple(_blocking_decision(pod) for pod in pods)
+        return ClassificationPass(
+            decisions=decisions,
+            identity_status=POD_CLASSIFICATION_IDENTITY_UNAVAILABLE,
+            operator_deployment_resource_version=None,
+        )
+
+    recorded = identity.operator_deployment
+    assert recorded is not None  # guaranteed by OperatorIdentity's exactly-one invariant
+    recorded_name = recorded["name"]
+    recorded_namespace = recorded["namespace"]
+    recorded_uid = recorded["uid"]
+
+    verified_resource_version: Optional[str] = None
+    if _is_valid_name(recorded_name):
+        outcome = client.get_deployment_strict(name=recorded_name, namespace=recorded_namespace)
+        if outcome.status is StrictReadStatus.ITEMS:
+            resource_metadata = outcome.resource.get("metadata") if isinstance(outcome.resource, dict) else None
+            live_uid = resource_metadata.get("uid") if isinstance(resource_metadata, dict) else None
+            if isinstance(live_uid, str) and live_uid == recorded_uid:
+                verified_resource_version = outcome.resource_version
+
+    if verified_resource_version is None:
+        decisions = tuple(_blocking_decision(pod) for pod in pods)
+        return ClassificationPass(
+            decisions=decisions,
+            identity_status=POD_CLASSIFICATION_IDENTITY_INCONSISTENT,
+            operator_deployment_resource_version=None,
+        )
+
+    memo: Dict[Any, StrictReadOutcome] = {}
+    decisions = tuple(_classify_pod(client, pod, recorded, memo) for pod in pods)
+    return ClassificationPass(
+        decisions=decisions,
+        identity_status=None,
+        operator_deployment_resource_version=verified_resource_version,
+    )
+
+
+def _blocking_decision(pod: Mapping[str, Any]) -> PodDecision:
+    return PodDecision(name=_pod_name(pod), decision=POD_CLASSIFICATION_DRAIN_BLOCKING)
+
+
+def _pod_name(pod: Mapping[str, Any]) -> str:
+    metadata = pod.get("metadata") if isinstance(pod, dict) else None
+    if not isinstance(metadata, dict):
+        return ""
+    name = metadata.get("name")
+    return name if isinstance(name, str) else ""
+
+
+def _classify_pod(
+    client: Any,
+    pod: Mapping[str, Any],
+    recorded: Dict[str, Any],
+    memo: Dict[Any, StrictReadOutcome],
+) -> PodDecision:
+    name = _pod_name(pod)
+    metadata = pod.get("metadata") if isinstance(pod, dict) else None
+    if not isinstance(metadata, dict):
+        return PodDecision(name=name, decision=POD_CLASSIFICATION_DRAIN_BLOCKING)
+
+    owned = PodDecision(name=name, decision=POD_CLASSIFICATION_OPERATOR_OWNED)
+    blocked = PodDecision(name=name, decision=POD_CLASSIFICATION_DRAIN_BLOCKING)
+
+    if metadata.get("namespace") != recorded["namespace"]:
+        return blocked
+
+    controller_ref = _sole_controller_ref(metadata.get("owner_references"))
+    if controller_ref is None:
+        return blocked
+    if controller_ref.get("api_version") != "apps/v1" or controller_ref.get("kind") != "ReplicaSet":
+        return blocked
+
+    ref_name = controller_ref.get("name")
+    if not isinstance(ref_name, str) or not ref_name or not _is_valid_name(ref_name):
+        return blocked
+    ref_uid = controller_ref.get("uid")
+    if not isinstance(ref_uid, str) or not ref_uid:
+        return blocked
+
+    namespace = metadata["namespace"]
+    memo_key = (namespace, "ReplicaSet", ref_name, ref_uid)
+    if memo_key not in memo:
+        memo[memo_key] = client.get_replicaset_strict(name=ref_name, namespace=namespace)
+    rs_outcome = memo[memo_key]
+
+    if rs_outcome.status is not StrictReadStatus.ITEMS:
+        return blocked
+    rs_resource = rs_outcome.resource
+    rs_metadata = rs_resource.get("metadata") if isinstance(rs_resource, dict) else None
+    if not isinstance(rs_metadata, dict) or rs_metadata.get("uid") != ref_uid:
+        return blocked
+
+    rs_controller_ref = _sole_controller_ref(rs_metadata.get("owner_references"))
+    if rs_controller_ref is None:
+        return blocked
+    if rs_controller_ref.get("api_version") != "apps/v1" or rs_controller_ref.get("kind") != "Deployment":
+        return blocked
+    if rs_controller_ref.get("name") != recorded["name"] or rs_controller_ref.get("uid") != recorded["uid"]:
+        return blocked
+
+    return owned
+
+
+def _sole_controller_ref(owner_references: Any) -> Optional[Dict[str, Any]]:
+    """The exactly-one `controller is True` entry, or None (absent/invalid/ambiguous)."""
+    if not isinstance(owner_references, list):
+        return None
+    if not all(isinstance(ref, dict) for ref in owner_references):
+        return None
+    controllers = [ref for ref in owner_references if ref.get("controller") is True]
+    if len(controllers) != 1:
+        return None
+    return controllers[0]
 
 
 def capture_operator_identity(

@@ -21,6 +21,7 @@ task E2 tests below (the Python capture producer) do import it, and that
 module has no ansible-core dependency either, so import safety still holds.
 """
 
+import ast
 import json
 import subprocess
 import sys
@@ -48,7 +49,14 @@ from lib.teardown_record import (
     validate,
     validate_stored,
 )
-from modules.decommission_identity import EVIDENCE_SUMMARY_BY_REASON, OperatorIdentity, capture_operator_identity
+from modules.decommission_identity import (
+    EVIDENCE_SUMMARY_BY_REASON,
+    ClassificationPass,
+    OperatorIdentity,
+    PodDecision,
+    capture_operator_identity,
+    classify_pods,
+)
 
 _MISSING = object()
 
@@ -1472,3 +1480,392 @@ def test_operator_identity_requires_exactly_one_of_the_two_values():
         OperatorIdentity(operator_deployment={"a": 1}, operator_identity_unavailable={"b": 2})
     assert OperatorIdentity(operator_deployment={"a": 1}).available is True
     assert OperatorIdentity(operator_identity_unavailable={"b": 2}).available is False
+
+
+# ---------------------------------------------------------------------------
+# E3. Python owner-chain Pod classifier (modules/decommission_identity.py)
+# ---------------------------------------------------------------------------
+#
+# `_FakeClassifierClient` renders each `OWNER_CHAIN_VECTORS` entry's abstract
+# `passes[i].recorded_deployment` / `replicasets` shapes into the real
+# `get_deployment_strict` / `get_replicaset_strict` StrictReadOutcome shapes,
+# recording every call as `(method, kwargs)` so tests can assert both the
+# outcome and exact call counts/provenance.
+
+_CLASSIFIER_SKIPPED_VECTOR_ID = "row13_pod_list_read_error"
+_CLASSIFIER_VECTORS = tuple(v for v in OWNER_CHAIN_VECTORS if v["id"] != _CLASSIFIER_SKIPPED_VECTOR_ID)
+
+
+def _render_deployment_get(name, namespace, spec, index):
+    read = spec["read"]
+    if read == "items":
+        revision = f"rv-dep-{index}"
+        resource = {
+            "metadata": {"name": name, "namespace": namespace, "uid": spec["uid"], "resource_version": revision}
+        }
+        return StrictReadOutcome.from_resource(resource, resource_version=revision)
+    if read == "object_absent":
+        return StrictReadOutcome.object_absent(STRICT_READ_REASON_OBJECT_NOT_FOUND)
+    if read == "error":
+        return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
+    raise AssertionError(f"unknown recorded_deployment read {read!r}")
+
+
+def _render_replicaset_get(name, namespace, spec):
+    read = spec["read"]
+    if read == "items":
+        resource = {
+            "metadata": {
+                "name": name,
+                "namespace": namespace,
+                "uid": spec["uid"],
+                "owner_references": spec["owner_references"],
+                "resource_version": f"rv-rs-{name}",
+            }
+        }
+        return StrictReadOutcome.from_resource(resource, resource_version=f"rv-rs-{name}")
+    if read == "object_absent":
+        return StrictReadOutcome.object_absent(STRICT_READ_REASON_OBJECT_NOT_FOUND)
+    if read == "error":
+        return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
+    raise AssertionError(f"unknown replicaset read {read!r}")
+
+
+def _render_pods(pods):
+    return [
+        {"metadata": {"name": pod["name"], "namespace": pod["namespace"], "owner_references": pod["owner_references"]}}
+        for pod in pods
+    ]
+
+
+class _FakeClassifierClient:
+    """Records every strict-read call `classify_pods` makes.
+
+    `recorded_deployment_reads` supplies one abstract read spec per expected
+    `get_deployment_strict` call, consumed in call order (index N answers the
+    (N+1)-th call); any call beyond the supplied list is a bug under test and
+    raises. `replicasets` is looked up by the received `name` kwarg; a name
+    with no entry renders `object_absent`, matching the brief's "missing RS
+    name in vector -> object_absent" instruction.
+    """
+
+    def __init__(self, *, recorded_deployment_reads, replicasets, vector_id="adhoc"):
+        self.recorded_deployment_reads = list(recorded_deployment_reads)
+        self.replicasets = dict(replicasets)
+        self.vector_id = vector_id
+        self.calls = []
+        self._deployment_get_count = 0
+
+    def get_deployment_strict(self, *, name, namespace):
+        self.calls.append(("get_deployment_strict", {"name": name, "namespace": namespace}))
+        index = self._deployment_get_count
+        self._deployment_get_count += 1
+        if index >= len(self.recorded_deployment_reads):
+            raise AssertionError(f"{self.vector_id}: unexpected get_deployment_strict call #{index}")
+        return _render_deployment_get(name, namespace, self.recorded_deployment_reads[index], index)
+
+    def get_replicaset_strict(self, *, name, namespace):
+        self.calls.append(("get_replicaset_strict", {"name": name, "namespace": namespace}))
+        spec = self.replicasets.get(name)
+        if spec is None:
+            return StrictReadOutcome.object_absent(STRICT_READ_REASON_OBJECT_NOT_FOUND)
+        return _render_replicaset_get(name, namespace, spec)
+
+
+def _client_for_vector(vector):
+    reads = (
+        [one_pass["recorded_deployment"] for one_pass in vector["passes"]] if vector["identity"] == "captured" else []
+    )
+    return _FakeClassifierClient(
+        recorded_deployment_reads=reads, replicasets=vector["replicasets"], vector_id=vector["id"]
+    )
+
+
+def _valid_operator_deployment(name=RECORDED_DEPLOYMENT_NAME, uid=RECORDED_DEPLOYMENT_UID, namespace=ACM_NS):
+    """A §10.2.2-valid `operator_deployment` dict naming the recorded identity."""
+    return {
+        "namespace": namespace,
+        "name": name,
+        "uid": uid,
+        "discovery_method": OPERATOR_IDENTITY_DISCOVERY_METHOD,
+        "captured_at": CAPTURED_AT,
+        "csv": {
+            "namespace": namespace,
+            "name": "advanced-cluster-management.v2.13.0",
+            "uid": "uid-csv-acm",
+            "owned_crd": MCH_CRD,
+        },
+        "mch_teardown_key": MCH_KEY,
+        "mch_expected_uid": MCH_EXPECTED_UID,
+    }
+
+
+def _valid_operator_identity_unavailable(reason="csv_absent"):
+    """A §10.2.3-valid `operator_identity_unavailable` dict."""
+    return {
+        "reason": reason,
+        "discovery_method": OPERATOR_IDENTITY_DISCOVERY_METHOD,
+        "captured_at": CAPTURED_AT,
+        "evidence_summary": EVIDENCE_SUMMARY_BY_REASON[reason],
+        "mch_teardown_key": MCH_KEY,
+        "mch_expected_uid": MCH_EXPECTED_UID,
+    }
+
+
+def _identity_for(vector):
+    if vector["identity"] == "captured":
+        return OperatorIdentity(operator_deployment=_valid_operator_deployment())
+    assert vector["identity"] == "unavailable", vector["id"]
+    return OperatorIdentity(operator_identity_unavailable=_valid_operator_identity_unavailable())
+
+
+def test_row13_pod_list_read_error_is_caller_only_and_out_of_scope_for_classify_pods():
+    """Row 13 (`pod_list_read: "error"`) is E4's Pod-list-read policy, not the
+    classifier's: `classify_pods` never lists Pods, so it never sees this
+    failure. It is excluded from `_CLASSIFIER_VECTORS`; this pins that its
+    `passes` is empty, i.e. it never claims a classifier expectation."""
+    vector = next(v for v in OWNER_CHAIN_VECTORS if v["id"] == _CLASSIFIER_SKIPPED_VECTOR_ID)
+    assert vector["passes"] == []
+
+
+@pytest.mark.parametrize("vector", _CLASSIFIER_VECTORS, ids=lambda v: v["id"])
+def test_classify_pods_owner_chain_vectors(vector):
+    identity = _identity_for(vector)
+    client = _client_for_vector(vector)
+    rendered_pods = _render_pods(vector["pods"])
+    for i, one_pass in enumerate(vector["passes"]):
+        result = classify_pods(client, rendered_pods, identity)
+        assert isinstance(result, ClassificationPass)
+        assert result.identity_status == one_pass["expected_status"], vector["id"]
+        assert [d.name for d in result.decisions] == [pod["name"] for pod in vector["pods"]], vector["id"]
+        actual_decisions = {d.name: d.decision for d in result.decisions}
+        assert actual_decisions == one_pass["expected_decisions"], vector["id"]
+        if one_pass["expected_status"] is None:
+            assert result.operator_deployment_resource_version == f"rv-dep-{i}", vector["id"]
+        else:
+            assert result.operator_deployment_resource_version is None, vector["id"]
+
+
+def test_recorded_deployment_reread_happens_even_with_zero_pods():
+    vector = next(v for v in OWNER_CHAIN_VECTORS if v["id"] == "row01_zero_pods_verified_empty")
+    identity = _identity_for(vector)
+    client = _client_for_vector(vector)
+    result = classify_pods(client, [], identity)
+    assert result.decisions == ()
+    assert len([c for c in client.calls if c[0] == "get_deployment_strict"]) == 1
+    assert len([c for c in client.calls if c[0] == "get_replicaset_strict"]) == 0
+
+
+def test_inconsistent_pass_performs_zero_replicaset_reads():
+    vector = next(v for v in OWNER_CHAIN_VECTORS if v["id"] == "row12_recorded_deployment_object_absent")
+    identity = _identity_for(vector)
+    client = _client_for_vector(vector)
+    result = classify_pods(client, _render_pods(vector["pods"]), identity)
+    assert result.identity_status == _IDENTITY_INCONSISTENT
+    assert not any(c[0] == "get_replicaset_strict" for c in client.calls)
+
+
+def test_unavailable_identity_performs_zero_client_calls():
+    vector = next(v for v in OWNER_CHAIN_VECTORS if v["id"] == "row15_unavailable_identity_valid_chain_pod")
+    identity = _identity_for(vector)
+    client = _client_for_vector(vector)
+    result = classify_pods(client, _render_pods(vector["pods"]), identity)
+    assert result.identity_status == _IDENTITY_UNAVAILABLE
+    assert client.calls == []
+
+
+def test_same_pass_memo_dedupes_identical_replicaset_key_but_not_different_uid():
+    replicasets = {"rs-shared": _rs_items("uid-rs-shared", [_deployment_owner_ref()])}
+    identity = OperatorIdentity(operator_deployment=_valid_operator_deployment())
+
+    same_uid_pods = [
+        _pod("pod-shared-a", owner_references=[_owner_ref(name="rs-shared", uid="uid-rs-shared")]),
+        _pod("pod-shared-b", owner_references=[_owner_ref(name="rs-shared", uid="uid-rs-shared")]),
+    ]
+    client_same = _FakeClassifierClient(
+        recorded_deployment_reads=[_recorded_ok()], replicasets=replicasets, vector_id="memo-same-uid"
+    )
+    result_same = classify_pods(client_same, _render_pods(same_uid_pods), identity)
+    assert result_same.blocking == ()
+    assert len([c for c in client_same.calls if c[0] == "get_replicaset_strict"]) == 1
+
+    diff_uid_pods = [
+        _pod("pod-diff-a", owner_references=[_owner_ref(name="rs-shared", uid="uid-rs-shared")]),
+        _pod("pod-diff-b", owner_references=[_owner_ref(name="rs-shared", uid="uid-rs-other")]),
+    ]
+    client_diff = _FakeClassifierClient(
+        recorded_deployment_reads=[_recorded_ok()], replicasets=replicasets, vector_id="memo-diff-uid"
+    )
+    classify_pods(client_diff, _render_pods(diff_uid_pods), identity)
+    assert len([c for c in client_diff.calls if c[0] == "get_replicaset_strict"]) == 2
+
+
+def test_calling_classify_pods_twice_reissues_both_gets():
+    vector = next(v for v in OWNER_CHAIN_VECTORS if v["id"] == "row01_prefixed_pod_owned")
+    identity = _identity_for(vector)
+    recorded_read = vector["passes"][0]["recorded_deployment"]
+    client = _FakeClassifierClient(
+        recorded_deployment_reads=[recorded_read, recorded_read],
+        replicasets=vector["replicasets"],
+        vector_id="cross-pass",
+    )
+    rendered_pods = _render_pods(vector["pods"])
+    classify_pods(client, rendered_pods, identity)
+    classify_pods(client, rendered_pods, identity)
+    assert len([c for c in client.calls if c[0] == "get_deployment_strict"]) == 2
+    assert len([c for c in client.calls if c[0] == "get_replicaset_strict"]) == 2
+
+
+def test_rolling_update_issues_one_replicaset_get_per_distinct_replicaset():
+    vector = next(v for v in OWNER_CHAIN_VECTORS if v["id"] == "row08_rolling_update_two_replicasets_owned")
+    identity = _identity_for(vector)
+    client = _client_for_vector(vector)
+    result = classify_pods(client, _render_pods(vector["pods"]), identity)
+    assert result.blocking == ()
+    rs_calls = sorted((c[1]["name"], c[1]["namespace"]) for c in client.calls if c[0] == "get_replicaset_strict")
+    assert rs_calls == [("rs-a", ACM_NS), ("rs-b", ACM_NS)]
+
+
+def test_mixed_chains_blocking_property_reports_only_blocking_pods():
+    vector = next(v for v in OWNER_CHAIN_VECTORS if v["id"] == "row08_mixed_chains_partial_owned")
+    identity = _identity_for(vector)
+    client = _client_for_vector(vector)
+    result = classify_pods(client, _render_pods(vector["pods"]), identity)
+    assert [d.name for d in result.blocking] == ["multiclusterhub-operator-pod-d"]
+
+
+def test_row17_prefix_is_irrelevant_to_classification():
+    vector = next(v for v in OWNER_CHAIN_VECTORS if v["id"] == "row17_prefix_irrelevant_both_job_owned")
+    identity = _identity_for(vector)
+    client = _client_for_vector(vector)
+    result = classify_pods(client, _render_pods(vector["pods"]), identity)
+    decisions = {d.name: d.decision for d in result.decisions}
+    assert decisions["job-worker-abc"] == decisions["multiclusterhub-operator-abc"]
+
+
+def test_row01_owned_pod_renamed_without_the_prefix_stays_owned():
+    vector = next(v for v in OWNER_CHAIN_VECTORS if v["id"] == "row01_prefixed_pod_owned")
+    identity = _identity_for(vector)
+    client = _client_for_vector(vector)
+    pods = [dict(pod) for pod in vector["pods"]]
+    pods[0]["name"] = "no-prefix-name"
+    result = classify_pods(client, _render_pods(pods), identity)
+    assert result.decisions == (PodDecision(name="no-prefix-name", decision=_OPERATOR_OWNED),)
+
+
+def test_row03_job_owned_pod_renamed_with_the_prefix_stays_blocking():
+    vector = next(v for v in OWNER_CHAIN_VECTORS if v["id"] == "row03_job_controller_blocking")
+    identity = _identity_for(vector)
+    client = _client_for_vector(vector)
+    pods = [dict(pod) for pod in vector["pods"]]
+    pods[0]["name"] = "multiclusterhub-operator-prefixed-rename"
+    result = classify_pods(client, _render_pods(pods), identity)
+    assert result.decisions == (PodDecision(name="multiclusterhub-operator-prefixed-rename", decision=_DRAIN_BLOCKING),)
+
+
+def test_get_deployment_strict_is_only_ever_called_with_the_recorded_name():
+    for vector in _CLASSIFIER_VECTORS:
+        if vector["identity"] != "captured":
+            continue
+        identity = _identity_for(vector)
+        client = _client_for_vector(vector)
+        rendered_pods = _render_pods(vector["pods"])
+        for _one_pass in vector["passes"]:
+            classify_pods(client, rendered_pods, identity)
+        for call in client.calls:
+            if call[0] == "get_deployment_strict":
+                assert call[1] == {"name": RECORDED_DEPLOYMENT_NAME, "namespace": ACM_NS}, vector["id"]
+
+
+def test_invalid_replicaset_ref_name_never_raises_and_never_reads():
+    vector = next(v for v in OWNER_CHAIN_VECTORS if v["id"] == "row10_pod_rs_ref_name_invalid_dns")
+    identity = _identity_for(vector)
+    client = _client_for_vector(vector)
+    result = classify_pods(client, _render_pods(vector["pods"]), identity)
+    assert result.decisions == (PodDecision(name="multiclusterhub-operator-badname", decision=_DRAIN_BLOCKING),)
+    assert not any(c[0] == "get_replicaset_strict" for c in client.calls)
+
+
+# ---------------------------------------------------------------------------
+# E3. Ownership-boundary guard (semantic, ast-based)
+# ---------------------------------------------------------------------------
+
+_IDENTITY_MODULE_PATH = Path(__file__).resolve().parents[1] / "modules" / "decommission_identity.py"
+
+_GUARD_FORBIDDEN_IMPORT_MODULES = frozenset(
+    {
+        "lib.run_record",
+        "lib.utils",
+        "lib.waiter",
+        "lib.decommission_outcome",
+        "lib.gitops_detector",
+        "modules.decommission",
+        "modules.finalization",
+    }
+)
+_GUARD_FORBIDDEN_IMPORTED_NAMES = frozenset({"RunRecord", "StateManager", "wait_for_condition", "TeardownSpec"})
+_GUARD_ALLOWED_STRICT_METHODS = frozenset(
+    {
+        "list_custom_resources_strict",
+        "get_custom_resource_strict",
+        "get_deployment_strict",
+        "get_replicaset_strict",
+    }
+)
+_GUARD_FORBIDDEN_ATTRIBUTE_NAMES = frozenset(
+    {
+        "record_teardown_phase",
+        "mark_step_completed",
+        "save_state",
+        "flush_state",
+        "set_config",
+        "wait_for_condition",
+        "dry_run",
+    }
+)
+_GUARD_FORBIDDEN_ATTRIBUTE_PREFIXES = ("delete_", "patch_", "create_", "replace_", "scale_")
+
+
+def test_identity_module_owns_only_read_side_identity():
+    """Semantic ownership-boundary guard (task E3): `modules/decommission_identity.py`
+    stays a pure read-side identity/classification module -- no state/RunRecord
+    persistence, no mutation calls, no orchestration imports. The kill-condition
+    proof recorded in the task report demonstrates this guard actually detects a
+    violation, not merely that it passes today."""
+    source = _IDENTITY_MODULE_PATH.read_text()
+    tree = ast.parse(source, filename=str(_IDENTITY_MODULE_PATH))
+    violations = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in _GUARD_FORBIDDEN_IMPORT_MODULES:
+                    violations.append(f"line {node.lineno}: forbidden import {alias.name!r}")
+        elif isinstance(node, ast.ImportFrom):
+            # `node.level > 0` is a relative import (`from . import x`, `from .decommission
+            # import y`). This module lives in `modules/`, so a bare `from . import
+            # decommission` names `modules.decommission` just as surely as the absolute form.
+            module = node.module or ""
+            base = f"modules.{module}" if (node.level > 0 and module) else ("modules" if node.level > 0 else module)
+            if base in _GUARD_FORBIDDEN_IMPORT_MODULES:
+                violations.append(f"line {node.lineno}: forbidden import from {base!r}")
+            for alias in node.names:
+                if alias.name in _GUARD_FORBIDDEN_IMPORTED_NAMES or (
+                    alias.asname and alias.asname in _GUARD_FORBIDDEN_IMPORTED_NAMES
+                ):
+                    violations.append(f"line {node.lineno}: forbidden imported name {alias.name!r}")
+                # Catches the `from lib import run_record` / `from modules import decommission`
+                # spelling, where the forbidden module is the imported *name*, not `node.module`.
+                qualified = f"{base}.{alias.name}" if base else alias.name
+                if qualified in _GUARD_FORBIDDEN_IMPORT_MODULES:
+                    violations.append(f"line {node.lineno}: forbidden import {qualified!r}")
+        elif isinstance(node, ast.Attribute):
+            attr = node.attr
+            if attr.endswith("_strict") and attr not in _GUARD_ALLOWED_STRICT_METHODS:
+                violations.append(f"line {node.lineno}: forbidden strict-read method {attr!r}")
+            if attr in _GUARD_FORBIDDEN_ATTRIBUTE_NAMES:
+                violations.append(f"line {node.lineno}: forbidden attribute {attr!r}")
+            if any(attr.startswith(prefix) for prefix in _GUARD_FORBIDDEN_ATTRIBUTE_PREFIXES):
+                violations.append(f"line {node.lineno}: forbidden attribute prefix {attr!r}")
+    assert not violations, "Ownership-boundary violations in modules/decommission_identity.py:\n  " + "\n  ".join(
+        violations
+    )
