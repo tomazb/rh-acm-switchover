@@ -916,6 +916,51 @@ class TestDeleteManagedClusters:
         assert "_acm_mc_would_change" in facts
 
 
+class _GuardStub:
+    """A stand-in for any fact a task condition names, fixed to one classify outcome.
+
+    Attribute and item lookups answer the classify pass's own fields -- ``read_status``
+    is always ``error`` and ``read_error_stage`` is the stage under test -- and anything
+    else resolves to another truthy stub, so an unrelated clause never decides the
+    verdict. ``mode`` answers ``execute`` so an execution-mode guard passes.
+    """
+
+    def __init__(self, stage: Optional[str]):
+        self._stage = stage
+
+    def _resolve(self, name: str):
+        if name == "read_status":
+            return "error"
+        if name == "read_error_stage":
+            return self._stage
+        if name == "mode":
+            return "execute"
+        return _GuardStub(self._stage)
+
+    def __getattr__(self, name: str):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return self._resolve(name)
+
+    def __getitem__(self, name):
+        return self._resolve(str(name))
+
+    def get(self, name, default=None):
+        return self._resolve(str(name))
+
+    def __bool__(self) -> bool:
+        return True
+
+    def __eq__(self, other) -> bool:
+        return False
+
+    def __ne__(self, other) -> bool:
+        return True
+
+    def __hash__(self) -> int:
+        return id(self)
+
+
 class TestDeleteMultiClusterHubPhaseTable:
     """decommission/tasks/delete_multiclusterhub.yml contract tests (R4-03 PR E / E6).
 
@@ -978,6 +1023,9 @@ class TestDeleteMultiClusterHubPhaseTable:
             assert "ignore_errors" not in task, f"task {task.get('name')!r} absorbs its own failure"
             decisions = self._decision_expressions(task)
             assert "default([])" not in decisions, f"task {task.get('name')!r} decides on a defaulted-empty read"
+        # A block-level `ignore_errors` never reaches a flattened task, so the parsed
+        # check alone cannot see it.
+        assert "ignore_errors" not in self.text
 
     def test_target_resolution_binds_the_strict_read_arguments(self):
         """§7: a namespaced strict LIST, then a strict named GET, of the MCH resource."""
@@ -1027,9 +1075,10 @@ class TestDeleteMultiClusterHubPhaseTable:
     def test_every_durable_phase_of_the_table_is_written(self):
         """§10, §12, §14, §15: the phase vocabulary the resume matrix depends on.
 
-        One parametrised write task whose `phase` is templated is a valid section 25
-        shape, so a template satisfies this too. The runtime tests carry the real
-        guarantee about which phase is actually persisted when.
+        Lead ruling: the six phases must appear as LITERAL `teardown_record.phase`
+        values across the writer tasks. A templated phase would make the static
+        vocabulary -- and the guard analysis the recovery_required ruling rests on --
+        unreadable, so Task 2 is bound to one writer task per phase.
         """
         writers = checkpoint_writer_tasks({"mch": self.tasks})
         phases = {
@@ -1038,8 +1087,9 @@ class TestDeleteMultiClusterHubPhaseTable:
             if "teardown_record" in task.get(_CHECKPOINT_WRITER_MODULE, {})
         }
         assert phases, "the MultiClusterHub teardown must write durable records"
+        assert not [phase for phase in phases if "{{" in phase], "each durable phase needs its own literal writer task"
         literal = {"delete_started", "cr_absent", "drain_pending", "drained", "completed", "recovery_required"}
-        assert literal <= phases or any("{{" in phase for phase in phases)
+        assert literal <= phases
 
     def test_the_durable_write_precedes_the_delete(self):
         """§10: the delete_started record must exist before the cluster is mutated."""
@@ -1069,8 +1119,8 @@ class TestDeleteMultiClusterHubPhaseTable:
             # drain at 30 seconds. The budget has to be declared, not inherited.
             assert "retries" in task, "the drain loop must declare its retries, not inherit Ansible's default of 3"
             assert "delay" in task, "the drain loop must declare its delay"
-            retries = int(environment.from_string(str(task.get("retries", 3))).render())
-            delay = int(environment.from_string(str(task.get("delay", 5))).render())
+            retries = int(environment.from_string(str(task["retries"])).render())
+            delay = int(environment.from_string(str(task["delay"])).render())
             assert delay == 30
             assert retries * delay == 1200
 
@@ -1093,30 +1143,111 @@ class TestDeleteMultiClusterHubPhaseTable:
             assert "blocking_count" in until
             assert "failed_when" not in task or "read_status" not in str(task.get("failed_when"))
 
-    def test_a_stage_less_classify_error_is_ruled_on_where_the_recovery_write_is_guarded(self):
-        """§14 and the lead ruling, pinned statically because no harness input reaches it.
+    def test_a_stage_less_classify_error_reaches_the_recovery_write_and_a_pod_error_does_not(self):
+        """§14 and the lead ruling, pinned by EVALUATING the guard, not by reading it.
 
         `read_error_stage` is `null` only when the classify module never reached a read:
         client construction failed (`acm_pod_owner_classify.py:245-246`) or an unexpected
-        exception escaped (`:285-286`). Both route through the SHARED primary kubeconfig
-        and context, so in a role run every earlier strict read fails closed first, and
-        `strict_read` itself raises nothing -- it returns `error`, and `classify_pass`
-        then always sets `namespace` or `pods` (`pod_owner_classify.py:352,357`).
+        exception escaped (`:285-286`). Both go through the SHARED primary kubeconfig and
+        context, so in a role run every earlier strict read fails closed first;
+        `strict_read` itself raises nothing (`k8s_read.py:214-260`), so `classify_pass`
+        always sets `namespace` or `pods` on an error it produced
+        (`pod_owner_classify.py:352,357`). A partial recorded identity cannot reach the
+        raw `recorded["name"]` indexing either: `checkpoint.py:504` requires the exact
+        `operator_deployment` field set and `:506` requires non-empty strings, and
+        `acm_pod_owner_classify.py:211-212` fails the task outright. The case is
+        therefore unreachable from any harness input and is pinned statically.
 
-        The ruling is therefore pinned on the guard instead: the recovery_required write
-        must be decided from `read_error_stage`, and must exclude the `pods` stage --
-        which means the stage-less and `namespace` cases both reach it.
+        `when:` is the only admissible place for this decision: `failed_when` re-labels a
+        task's outcome after it ran, and module arguments cannot stop a write -- only the
+        task condition decides whether the recovery_required record is persisted at all.
         """
+        writers = self._recovery_required_writers()
+        for task in writers:
+            for stage, expected in (("pods", False), ("namespace", True), (None, True)):
+                rendered = self._render_guard(task, stage)
+                assert rendered is expected, (
+                    f"task {task.get('name')!r}: with read_error_stage={stage!r} the recovery_required write "
+                    f"is {'reached' if rendered else 'skipped'}; the ruling says it must be "
+                    f"{'reached' if expected else 'skipped'}"
+                )
+
+    def test_the_recovery_guard_analysis_rejects_the_inverse_ruling(self):
+        """A self-test of the machinery the ruling above rests on.
+
+        This one passes on arrival on purpose: it proves the guard renderer can tell the
+        ruling from its inverse, which a substring search could not. The kill condition
+        is the renderer answering the same verdicts for all three guards below.
+        """
+
+        def verdicts(*clauses):
+            task = {
+                "name": "synthetic",
+                "when": list(clauses),
+                _CHECKPOINT_WRITER_MODULE: {"teardown_record": {"phase": "recovery_required"}},
+            }
+            return [self._render_guard(task, stage) for stage in ("pods", "namespace", None)]
+
+        # The ruling: a Pod-stage error is skipped, `namespace` and stage-less both write.
+        assert verdicts(
+            "acm_switchover_execution.mode == 'execute'",
+            "not ansible_check_mode",
+            "_acm_mch_pass.read_status == 'error'",
+            "_acm_mch_pass.read_error_stage != 'pods'",
+        ) == [False, True, True]
+        # Its exact inverse, which the retired substring assertions accepted.
+        assert verdicts("_acm_mch_pass.read_error_stage == 'pods'") == [True, False, False]
+        # Namespace-only: the stage-less pass would silently lose its recovery transition.
+        assert verdicts("_acm_mch_pass.read_error_stage == 'namespace'") == [False, True, False]
+        # The Ansible filter spellings a real guard may use still render.
+        assert verdicts(
+            "(_acm_mch_pass.read_error_stage | default('', true)) != 'pods'",
+            "not (ansible_check_mode | bool)",
+        ) == [False, True, True]
+
+    def _recovery_required_writers(self) -> list:
         writers = [
             task
             for task in checkpoint_writer_tasks({"mch": self.tasks})
-            if "recovery_required" in str(task[_CHECKPOINT_WRITER_MODULE].get("teardown_record", {}).get("phase", ""))
+            if str(task[_CHECKPOINT_WRITER_MODULE].get("teardown_record", {}).get("phase", "")) == "recovery_required"
         ]
         assert writers, "no recovery_required write found"
-        for task in writers:
-            guard = _when_text(task)
-            assert "read_error_stage" in guard, "the recovery transition must be decided from the read stage"
-            assert "pods" in guard, "a Pod-stage error must not reach the recovery transition"
+        return writers
+
+    def _render_guard(self, task: dict, stage: Optional[str]) -> bool:
+        """Evaluate one task's `when` clauses for a classify error carrying ``stage``.
+
+        Every fact the expression names is stubbed: the classify result reports
+        ``read_status == 'error'`` with the stage under test, execution is a real
+        execute-mode run, and anything else the guard happens to consult is truthy. So
+        the only thing that can vary the verdict is the read stage.
+        """
+        import jinja2
+        from jinja2 import meta
+
+        clauses = task.get("when", [])
+        if not isinstance(clauses, list):
+            clauses = [clauses]
+        assert clauses, f"task {task.get('name')!r} writes recovery_required unconditionally"
+
+        environment = jinja2.Environment()
+        # `bool` and `ternary` are Ansible filters, not Jinja builtins; a guard is allowed
+        # to use them, so the shim supplies them rather than failing to render.
+        environment.filters["bool"] = lambda value: bool(value) and str(value).lower() not in ("false", "no", "0")
+        environment.filters["ternary"] = lambda condition, yes, no=None: yes if condition else no
+        environment.tests["truthy"] = bool
+        environment.tests["falsy"] = lambda value: not value
+
+        for clause in clauses:
+            source = "{{ (" + str(clause) + ") }}"
+            names = meta.find_undeclared_variables(environment.parse(source))
+            context = {name: _GuardStub(stage) for name in names}
+            for name in names:
+                if "check_mode" in name:
+                    context[name] = False
+            if str(environment.from_string(source).render(**context)).strip() != "True":
+                return False
+        return True
 
     def test_the_family_publishes_its_change_and_prediction_facts(self):
         """§19: the role summary aggregates facts, not a delete loop's register."""
@@ -1842,8 +1973,9 @@ def _operator_replicaset(
 def _acm_pod_object(name: str, owner: Optional[dict] = None, *, unprefixed: bool = False) -> dict:
     """One Pod in the ACM namespace, with an optional single controller owner reference.
 
-    EVERY ACM-namespace Pod this harness seeds must keep the
-    ``multiclusterhub-operator`` name prefix, and ``_acm_pod_name`` enforces it. The
+    Every ACM-namespace Pod this harness seeds keeps the ``multiclusterhub-operator``
+    name prefix unless the caller passes ``unprefixed=True``, which is admissible only
+    on a run that resolves no live MultiClusterHub (see ``_acm_pod_name``). The
     LEGACY role waits for Pods with ``retries: 120, delay: 10`` and excludes only names
     matching that prefix, so one differently named Pod makes the role poll for 1200s and
     blow the 600s subprocess timeout -- a fixture-level RuntimeError instead of a failing
