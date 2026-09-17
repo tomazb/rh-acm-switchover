@@ -458,8 +458,13 @@ def test_decommission_missing_clusterdeployment_api_fails_before_delete():
     )
 
 
-def test_decommission_uses_fixed_guarded_mco_and_discovered_mch_targets():
-    """MCO has one canonical identity; the older MCH path still enumerates resources."""
+def test_decommission_uses_fixed_guarded_mco_and_strictly_resolved_mch_targets():
+    """Both families delete exactly one UID-guarded target; neither loops a discovery.
+
+    Inverted for R4-03 PR E / E6: the MCH path no longer enumerates resources with
+    `k8s_info` and deletes them by name in a loop. It resolves one target strictly and
+    deletes it through the guarded module, like MCO.
+    """
     mco_tasks = _load_yaml(DECOMMISSION_TASKS / "delete_observability.yml")
     guarded = [task for task in mco_tasks if "tomazb.acm_switchover.acm_uid_guarded_delete" in task]
     assert len(guarded) == 1
@@ -469,14 +474,15 @@ def test_decommission_uses_fixed_guarded_mco_and_discovered_mch_targets():
     assert "loop" not in guarded[0]
 
     mch_tasks = _load_yaml(DECOMMISSION_TASKS / "delete_multiclusterhub.yml")
-    discovery_tasks = [
-        task for task in mch_tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "MultiClusterHub"
-    ]
-    delete_tasks = [task for task in mch_tasks if task.get("kubernetes.core.k8s", {}).get("kind") == "MultiClusterHub"]
-    assert discovery_tasks
-    assert delete_tasks
-    assert "{{ item.metadata.name }}" in str(delete_tasks[0]["kubernetes.core.k8s"]["name"])
-    assert "loop" in delete_tasks[0]
+    assert not [task for task in mch_tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "MultiClusterHub"]
+    assert not [task for task in mch_tasks if task.get("kubernetes.core.k8s", {}).get("kind") == "MultiClusterHub"]
+    mch_guarded = [task for task in mch_tasks if "tomazb.acm_switchover.acm_uid_guarded_delete" in task]
+    assert len(mch_guarded) == 1
+    mch_args = mch_guarded[0]["tomazb.acm_switchover.acm_uid_guarded_delete"]
+    assert mch_args["resource_name"] == "multiclusterhubs"
+    assert "expected_uid" in mch_args
+    assert "{{ item.metadata.name }}" not in str(mch_args["name"])
+    assert "loop" not in mch_guarded[0]
 
 
 def test_decommission_waits_for_observability_and_acm_workload_pods():
@@ -498,17 +504,22 @@ def test_decommission_waits_for_observability_and_acm_workload_pods():
     assert "ignore_errors" not in obs_pod_wait
     assert "Fail closed when the scoped observability pod inventory is unverifiable" in obs_text
     assert "open-cluster-management-observability" in obs_text
-    assert "kind: Pod" in mch_text
-    assert "until" in mch_text
-    assert "failed_when" in mch_text
-    assert "Some ACM pods still running" in mch_text
-    assert "multiclusterhub-operator" in mch_text
-    pod_wait = next(
+    # E6 inverts the MultiClusterHub half: the drain is a bounded classifier loop whose
+    # timeout FAILS, not a raw Pod wait that warns. A lingering ACM Pod is unfinished
+    # teardown, and the name prefix proves nothing about ownership.
+    assert not [task for task in mch_tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "Pod"]
+    assert "rejectattr" not in mch_text
+    assert "Some ACM pods still running" not in mch_text
+    classify = [
         task
         for task in mch_tasks
-        if task.get("name") == "Wait for ACM workload pods to terminate after MultiClusterHub deletion"
-    )
-    assert pod_wait.get("failed_when") is False
+        if task.get("tomazb.acm_switchover.acm_pod_owner_classify", {}).get("operation") == "classify"
+    ]
+    assert classify
+    drain = [task for task in classify if "until" in task]
+    assert drain, "the MCH drain must be a bounded until loop over classification passes"
+    for task in drain:
+        assert task.get("failed_when") is not False
 
 
 def test_decommission_result_reports_actual_delete_changes():
@@ -522,15 +533,17 @@ def test_decommission_result_reports_actual_delete_changes():
     assert "changed:" in main_text
     assert "_acm_mc_changed" in main_text
     assert "(_acm_mc_changed | default(false) | bool)" in main_text
-    assert "_multiclusterhub_delete_results" in main_text
-    assert "(_multiclusterhub_delete_results | default({})).results | default([])" in main_text
+    assert "_multiclusterhub_delete_results" not in main_text
+    assert "_acm_mch_changed" in main_text
+    assert "_acm_mch_would_change" in main_text
     assert "| selectattr('changed')" in main_text
 
     assert "acm_uid_guarded_delete" in one_text
     assert "_acm_mc_changed" in managed_text
     assert "register: acm_switchover_mco_delete" in obs_text
     assert "acm_switchover_mco_delete.changed | default(false) | bool" in main_text
-    assert "register: _multiclusterhub_delete_results" in mch_text
+    assert "_multiclusterhub_delete_results" not in mch_text
+    assert "_acm_mch_changed" in mch_text
 
 
 def test_rbac_bootstrap_defaults_missing_execution_mode_to_dry_run_for_mutations():

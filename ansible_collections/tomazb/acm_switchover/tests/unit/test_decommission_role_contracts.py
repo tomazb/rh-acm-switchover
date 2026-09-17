@@ -69,6 +69,7 @@ DECOMMISSION_TASKS_DIR = ROLES_DIR / "decommission" / "tasks"
 CHECK_MODE_NATIVE_MODULES = frozenset(
     {
         "tomazb.acm_switchover.acm_k8s_read_outcome",
+        "tomazb.acm_switchover.acm_pod_owner_classify",
         "tomazb.acm_switchover.acm_uid_guarded_delete",
     }
 )
@@ -95,6 +96,10 @@ _READ_ONLY_ACTIONS = frozenset(
         "tomazb.acm_switchover.acm_rbac_validate",
         # Read-only by module contract, and it must keep running in check mode.
         "tomazb.acm_switchover.acm_k8s_read_outcome",
+        # Same terms: read-only by module contract, and section 8 requires the
+        # capture pass to keep running under --check so preview can predict. Its
+        # check-mode run is proved in tests/integration/test_pod_owner_classify_runtime.py.
+        "tomazb.acm_switchover.acm_pod_owner_classify",
     }
 )
 
@@ -911,73 +916,155 @@ class TestDeleteManagedClusters:
         assert "_acm_mc_would_change" in facts
 
 
-class TestDeleteMultiClusterHub:
-    """decommission/tasks/delete_multiclusterhub.yml contract tests."""
+class TestDeleteMultiClusterHubPhaseTable:
+    """decommission/tasks/delete_multiclusterhub.yml contract tests (R4-03 PR E / E6).
+
+    Replaces the retired ``TestDeleteMultiClusterHub``, whose every assertion pinned the
+    mechanism E6 removes: ``kubernetes.core.k8s_info`` discovery, a generic name-only
+    ``kubernetes.core.k8s`` delete, Pod-name prefix filtering as the drain predicate, and
+    ``failed_when: false`` absorbing the wait. Those are inverted here into absence
+    assertions; the safety properties themselves are proved at runtime by
+    ``TestDeleteMultiClusterHubDurable``.
+    """
 
     def setup_method(self):
-        self.tasks = yaml.safe_load(DELETE_MCH.read_text()) or []
+        self.tasks = _load_tasks(DELETE_MCH)
+        self.text = DELETE_MCH.read_text()
+
+    def _module_tasks(self, module: str) -> list:
+        return [task for task in self.tasks if module in _task_actions(task)]
 
     def test_file_exists(self):
         assert DELETE_MCH.exists(), "decommission/tasks/delete_multiclusterhub.yml must exist"
 
-    def test_list_and_delete_guarded_by_execute_mode(self):
-        """MCH list and delete operations must not run in dry-run mode."""
-        # list task
-        k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        mch_list_tasks = [
-            t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "MultiClusterHub"
+    def test_no_generic_multiclusterhub_discovery_or_delete_remains(self):
+        """§5: a name-only delete can remove a replacement; k8s_info cannot fail closed."""
+        assert not [
+            task for task in self.tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "MultiClusterHub"
         ]
-        assert mch_list_tasks, "delete_multiclusterhub.yml must list MultiClusterHub resources"
-        for task in mch_list_tasks:
-            assert "!= 'dry_run'" in _when_text(task), "MCH list must be guarded by execute-mode check"
+        assert not [task for task in self.tasks if task.get("kubernetes.core.k8s", {}).get("kind") == "MultiClusterHub"]
+        assert not [task for task in self.tasks if task.get("kubernetes.core.k8s", {}).get("state") == "absent"]
 
-        # delete task
-        k8s_tasks = [t for t in self.tasks if "kubernetes.core.k8s" in t and "kubernetes.core.k8s_info" not in t]
-        mch_delete_tasks = [t for t in k8s_tasks if t.get("kubernetes.core.k8s", {}).get("kind") == "MultiClusterHub"]
-        assert mch_delete_tasks, "delete_multiclusterhub.yml must have a MultiClusterHub delete task"
-        for task in mch_delete_tasks:
-            assert "!= 'dry_run'" in _when_text(task), "MCH delete must be guarded by execute-mode check"
-
-    def test_mch_operations_use_primary_hub(self):
-        """All MCH operations must target the primary hub (old hub being decommissioned)."""
+    def test_no_pod_name_prefix_filter_decides_anything(self):
+        """§5: ownership is decided by the classifier, never by a name prefix."""
         for task in self.tasks:
-            for module in ("kubernetes.core.k8s_info", "kubernetes.core.k8s"):
-                if module in task:
-                    params = task[module]
-                    if isinstance(params, dict) and params.get("kind") in (
-                        "MultiClusterHub",
-                        "Pod",
-                    ):
-                        kubeconfig = str(params.get("kubeconfig", ""))
-                        assert (
-                            "primary" in kubeconfig
-                        ), f"Task '{task.get('name')}' must use primary hub kubeconfig for MCH operations"
+            expression = str(task.get("until", "")) + str({k: v for k, v in task.items() if k != "name"})
+            assert "rejectattr" not in expression, f"task {task.get('name')!r} still filters by name"
+            assert (
+                ACM_OPERATOR_POD_PREFIX not in expression
+            ), f"task {task.get('name')!r} still treats the operator name prefix as a signal"
 
-    def test_pod_wait_uses_failed_when_false(self):
-        """ACM pod wait must use failed_when: false to warn rather than fail when pods linger.
+    def test_no_authoritative_read_is_absorbed_or_defaulted_to_empty(self):
+        """§5: `failed_when: false` and `default([])` both turn a failed read into 'nothing'."""
+        for task in self.tasks:
+            assert task.get("failed_when") is not False, f"task {task.get('name')!r} absorbs its own failure"
+        assert "ignore_errors" not in self.text
+        assert "| default([])" not in self.text
 
-        The pod watch may time out when some ACM components take unexpectedly long to
-        terminate. Failing hard here is unhelpful — the MCH is already deleted; the operator
-        should be warned and can verify manually.
+    def test_target_resolution_uses_the_strict_read_in_both_modes(self):
+        """§7: a namespaced strict LIST, then a strict named GET, of the MCH resource."""
+        reads = [
+            task
+            for task in read_outcome_tasks(self.tasks)
+            if task["tomazb.acm_switchover.acm_k8s_read_outcome"].get("resource_name") == "multiclusterhubs"
+        ]
+        assert reads, "MultiClusterHub discovery must use acm_k8s_read_outcome"
+        modes = {task["tomazb.acm_switchover.acm_k8s_read_outcome"].get("read_mode") for task in reads}
+        assert {"list", "get"} <= modes
+        for task in reads:
+            args = task["tomazb.acm_switchover.acm_k8s_read_outcome"]
+            assert args["api_version"] == "operator.open-cluster-management.io/v1"
+            assert args["kind"] == "MultiClusterHub"
+            assert args["namespace"] == ACM_NAMESPACE
+            assert "primary.kubeconfig" in str(args["kubeconfig"])
+
+    def test_identity_capture_and_classification_go_through_the_e5_module(self):
+        """§9 and §13: one classifier owns every ownership decision, and it is no_log."""
+        classifiers = self._module_tasks("tomazb.acm_switchover.acm_pod_owner_classify")
+        operations = [task["tomazb.acm_switchover.acm_pod_owner_classify"].get("operation") for task in classifiers]
+        assert operations.count("capture_identity") == 1
+        assert operations.count("classify") >= 2, "the drain loop and the final proof are separate passes"
+        for task in classifiers:
+            args = task["tomazb.acm_switchover.acm_pod_owner_classify"]
+            assert args["namespace"] == ACM_NAMESPACE
+            assert "primary.kubeconfig" in str(args["kubeconfig"])
+            assert task.get("no_log") is True
+
+    def test_the_delete_is_uid_guarded_and_bound_to_the_durable_identity(self):
+        """§11: the expected UID precondition is what makes the delete safe."""
+        guarded = self._module_tasks("tomazb.acm_switchover.acm_uid_guarded_delete")
+        assert len(guarded) == 1
+        args = guarded[0]["tomazb.acm_switchover.acm_uid_guarded_delete"]
+        assert args["api_version"] == "operator.open-cluster-management.io/v1"
+        assert args["kind"] == "MultiClusterHub"
+        assert args["resource_name"] == "multiclusterhubs"
+        assert args["namespace"] == ACM_NAMESPACE
+        assert "expected_uid" in args
+        assert "primary.kubeconfig" in str(args["kubeconfig"])
+        for timeout in ("request_timeout", "wait_timeout", "wait_sleep"):
+            assert str(args.get(timeout, "")).strip()
+
+    def test_every_durable_phase_of_the_table_is_written(self):
+        """§10, §12, §14, §15: the phase vocabulary the resume matrix depends on."""
+        writers = checkpoint_writer_tasks({"mch": self.tasks})
+        phases = {
+            task[_CHECKPOINT_WRITER_MODULE]["teardown_record"]["phase"]
+            for task in writers
+            if "teardown_record" in task.get(_CHECKPOINT_WRITER_MODULE, {})
+        }
+        assert {"delete_started", "cr_absent", "drain_pending", "drained", "completed", "recovery_required"} <= phases
+
+    def test_the_durable_write_precedes_the_delete(self):
+        """§10: the delete_started record must exist before the cluster is mutated."""
+        delete_index = index_of_task_using(self.tasks, "tomazb.acm_switchover.acm_uid_guarded_delete")
+        writes = [
+            index
+            for index, task in enumerate(self.tasks)
+            if _CHECKPOINT_WRITER_MODULE in _task_actions(task)
+            and task[_CHECKPOINT_WRITER_MODULE].get("teardown_record", {}).get("phase") == "delete_started"
+        ]
+        assert writes, "no delete_started write found"
+        assert min(writes) < delete_index
+
+    def test_the_drain_loop_is_bounded_by_the_1200_second_contract(self):
+        """§13: `retries: N` is N+1 attempts with N delays, so N x delay is the budget.
+
+        Verified against ansible-core 2.16.14 (`ansible/executor/task_executor.py:626-638`).
+        The two overridable variables are resolved here the way Ansible resolves them, so
+        the pinned budget is the DEFAULT budget rather than a literal in the task file.
         """
-        k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        pod_wait_tasks = [t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Pod"]
-        assert pod_wait_tasks, "delete_multiclusterhub.yml must have a Pod wait task"
-        for task in pod_wait_tasks:
-            assert task.get("failed_when") is False, (
-                "ACM pod wait must use 'failed_when: false' — lingering pods should warn, "
-                "not abort the decommission. The MCH is already deleted at this point."
-            )
+        import jinja2
 
-    def test_pod_wait_has_retries_delay_until(self):
-        """MCH pod wait must use polling with retries and delay."""
-        k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        pod_wait_tasks = [t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Pod"]
-        assert pod_wait_tasks
-        for task in pod_wait_tasks:
-            assert "retries" in task, "Pod wait must specify retries"
-            assert "delay" in task, "Pod wait must specify delay"
-            assert "until" in task, "Pod wait must specify until condition"
+        loops = [task for task in self._module_tasks("tomazb.acm_switchover.acm_pod_owner_classify") if "until" in task]
+        assert loops, "the drain pass must retry under an `until` condition"
+        environment = jinja2.Environment()
+        for task in loops:
+            retries = int(environment.from_string(str(task["retries"])).render())
+            delay = int(environment.from_string(str(task["delay"])).render())
+            assert delay == 30
+            assert retries * delay == 1200
+
+    def test_the_drain_loop_stops_on_every_terminal_condition(self):
+        """§13: only ok + consistent identity + blocking Pods may retry."""
+        loops = [task for task in self._module_tasks("tomazb.acm_switchover.acm_pod_owner_classify") if "until" in task]
+        assert loops, "the drain pass must retry under an `until` condition"
+        for task in loops:
+            until = str(task["until"])
+            assert "read_status" in until
+            assert "identity_status" in until
+            assert "blocking_count" in until
+            assert "failed_when" not in task or "read_status" not in str(task.get("failed_when"))
+
+    def test_the_family_publishes_its_change_and_prediction_facts(self):
+        """§19: the role summary aggregates facts, not a delete loop's register."""
+        published = {
+            name
+            for task in self.tasks
+            for name in (task.get("ansible.builtin.set_fact") or {})
+            if name in ("_acm_mch_changed", "_acm_mch_would_change")
+        }
+        assert published == {"_acm_mch_changed", "_acm_mch_would_change"}
+        assert "_multiclusterhub_delete_results" not in self.text
 
 
 def test_summary_status_is_not_hardcoded():
@@ -3328,6 +3415,7 @@ def test_mco_prediction_is_aggregated_separately_from_actual_change():
     result = publish["ansible.builtin.set_fact"]["acm_switchover_decommission_result"]
     assert "_acm_mco_would_change" in str(result["would_change"])
     assert "_acm_mc_would_change" in str(result["would_change"])
+    assert "_acm_mch_would_change" in str(result["would_change"])
 
 
 def test_managed_cluster_actual_change_uses_family_fact_not_k8s_loop_register():
@@ -3336,6 +3424,14 @@ def test_managed_cluster_actual_change_uses_family_fact_not_k8s_loop_register():
     changed = str(publish["ansible.builtin.set_fact"]["acm_switchover_decommission_result"]["changed"])
     assert "_acm_mc_changed" in changed
     assert "_managed_cluster_delete_results" not in changed
+
+
+def test_multiclusterhub_actual_change_uses_family_fact_not_k8s_loop_register():
+    """E6 retires `_multiclusterhub_delete_results`; changed must read `_acm_mch_changed`."""
+    publish = task_named(decommission_task_files["main"], "Publish decommission result")
+    changed = str(publish["ansible.builtin.set_fact"]["acm_switchover_decommission_result"]["changed"])
+    assert "_acm_mch_changed" in changed
+    assert "_multiclusterhub_delete_results" not in changed
 
 
 def test_summary_keeps_its_published_artifact_keys():
