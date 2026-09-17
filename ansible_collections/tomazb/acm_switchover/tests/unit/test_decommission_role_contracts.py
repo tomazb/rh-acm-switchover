@@ -29,14 +29,21 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint i
     KNOWN_PHASES,
     build_operation_identity,
     reset_completed_phases_from,
+    teardown_key,
 )
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    ACM_NAMESPACE,
+    ACM_OPERATOR_POD_PREFIX,
+    CSV_API_GROUP,
+    CSV_API_VERSION,
     DECOMMISSION_SUBSTEP_OUTCOMES,
     GATE_REASON_ACK_NOT_APPLICABLE,
     GATE_REASON_DESTINATION_ABSENT,
     GATE_REASON_DESTINATION_UNVERIFIABLE,
     GATE_REASON_SOURCE_AMBIGUOUS,
     GATE_REASON_SOURCE_UNVERIFIABLE,
+    MCH_OWNED_CRD,
+    OPERATOR_IDENTITY_DISCOVERY_METHOD,
 )
 
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
@@ -1060,6 +1067,40 @@ _GROUP_API_RESOURCES = {
             }
         ],
     ),
+    # The MultiClusterHub operator-identity surface: the CSV that owns the MCH CRD, the
+    # install-strategy Deployment it names, and the ReplicaSet an owned Pod's controller
+    # chain walks through. `acm_pod_owner_classify` reads all three and nothing else.
+    "apps": (
+        "v1",
+        [
+            {
+                "name": "deployments",
+                "singularName": "deployment",
+                "namespaced": True,
+                "kind": "Deployment",
+                "verbs": ["get", "list"],
+            },
+            {
+                "name": "replicasets",
+                "singularName": "replicaset",
+                "namespaced": True,
+                "kind": "ReplicaSet",
+                "verbs": ["get", "list"],
+            },
+        ],
+    ),
+    "operators.coreos.com": (
+        "v1alpha1",
+        [
+            {
+                "name": "clusterserviceversions",
+                "singularName": "clusterserviceversion",
+                "namespaced": True,
+                "kind": "ClusterServiceVersion",
+                "verbs": ["get", "list"],
+            }
+        ],
+    ),
 }
 
 _KIND_BY_PLURAL: Dict[str, str] = {"pods": "Pod", "namespaces": "Namespace"}
@@ -1125,10 +1166,16 @@ class FakeDecommissionAPI:
         delete_status_by_plural: dict,
         read_status_by_plural: dict,
         pods: Optional[list] = None,
+        deployments: Optional[list] = None,
+        replicasets: Optional[list] = None,
+        clusterserviceversions: Optional[list] = None,
         named_read_status_by_plural: Optional[dict] = None,
+        named_read_status_by_object: Optional[dict] = None,
         retain_after_delete_by_plural: Optional[dict] = None,
         post_delete_read_status_by_plural: Optional[dict] = None,
         read_status_sequences_by_plural: Optional[dict] = None,
+        list_inventory_sequences_by_plural: Optional[dict] = None,
+        list_revision_sequences_by_plural: Optional[dict] = None,
         api_resources_by_group: Optional[dict] = None,
     ):
         #: Overridable so a hub can serve a group/version that positively does NOT
@@ -1143,14 +1190,34 @@ class FakeDecommissionAPI:
             "namespaces": copy.deepcopy(namespaces),
             "clusterdeployments": [],
             "pods": copy.deepcopy(pods or []),
+            "deployments": copy.deepcopy(deployments or []),
+            "replicasets": copy.deepcopy(replicasets or []),
+            "clusterserviceversions": copy.deepcopy(clusterserviceversions or []),
         }
         self.delete_status_by_plural = dict(delete_status_by_plural)
         self.read_status_by_plural = dict(read_status_by_plural)
         self.named_read_status_by_plural = dict(named_read_status_by_plural or {})
+        #: Per-OBJECT named-GET status, keyed ``"<plural>/<name>"``. The per-plural map
+        #: cannot express "this one Namespace read fails": refusing every ``namespaces``
+        #: GET also refuses the standalone kube-system identity read.
+        self.named_read_status_by_object = dict(named_read_status_by_object or {})
         self.retain_after_delete_by_plural = dict(retain_after_delete_by_plural or {})
         self.post_delete_read_status_by_plural = dict(post_delete_read_status_by_plural or {})
         self.read_status_sequences_by_plural = {
             plural: list(statuses) for plural, statuses in (read_status_sequences_by_plural or {}).items()
+        }
+        #: Per-LIST inventories, popped one per unfiltered list read, so a Pod that
+        #: appears only in a later pass can be served. The popped value replaces the
+        #: whole store for that plural; the last one stays in effect.
+        self.list_inventory_sequences_by_plural = {
+            plural: [copy.deepcopy(items) for items in inventories]
+            for plural, inventories in (list_inventory_sequences_by_plural or {}).items()
+        }
+        #: Per-LIST ``metadata.resourceVersion`` values, popped the same way. Without
+        #: these every list read reports the same revision, so "the completed record
+        #: carries the FINAL pass's revision" cannot be told from "any pass's".
+        self.list_revision_sequences_by_plural = {
+            plural: list(revisions) for plural, revisions in (list_revision_sequences_by_plural or {}).items()
         }
         self._requests: List[dict] = []
         self._lock = threading.Lock()
@@ -1276,18 +1343,22 @@ class FakeDecommissionAPI:
                     return
                 if name is None and api.read_status_sequences_by_plural.get(plural):
                     read_status = api.read_status_sequences_by_plural[plural].pop(0)
-                else:
-                    read_status = (
-                        api.named_read_status_by_plural.get(plural, 200)
-                        if name is not None
-                        else api.read_status_by_plural.get(plural, 200)
+                elif name is not None:
+                    read_status = api.named_read_status_by_object.get(
+                        f"{plural}/{name}",
+                        api.named_read_status_by_plural.get(plural, 200),
                     )
+                else:
+                    read_status = api.read_status_by_plural.get(plural, 200)
                 if read_status != 200:
                     self._write_json(
                         _status_body(read_status, f"fixture refused GET of {plural}"),
                         status=read_status,
                     )
                     return
+                if name is None and api.list_inventory_sequences_by_plural.get(plural):
+                    with api._lock:
+                        api.store[plural] = api.list_inventory_sequences_by_plural[plural].pop(0)
                 selected = api._select(plural, namespace, name)
                 if name is not None:
                     if not selected:
@@ -1295,11 +1366,12 @@ class FakeDecommissionAPI:
                         return
                     self._write_json(copy.deepcopy(selected[0]))
                     return
+                revisions = api.list_revision_sequences_by_plural.get(plural)
                 self._write_json(
                     {
                         "apiVersion": _API_VERSION_BY_PLURAL[plural],
                         "kind": f"{_KIND_BY_PLURAL[plural]}List",
-                        "metadata": {"resourceVersion": "1"},
+                        "metadata": {"resourceVersion": revisions.pop(0) if revisions else "1"},
                         "items": copy.deepcopy(selected),
                     }
                 )
@@ -1336,7 +1408,12 @@ class FakeDecommissionAPI:
                     return
                 victim = selected[0]
                 actual_uid = victim.get("metadata", {}).get("uid")
-                if expected_uid != actual_uid:
+                # The real API server enforces a precondition only when the request
+                # carries one. A DELETE with no ``preconditions.uid`` is name-only --
+                # exactly what the guarded-delete module exists to replace -- and the
+                # fake must serve it rather than answering 409, or "a name-only delete
+                # removes a replacement" becomes unprovable here.
+                if expected_uid is not None and expected_uid != actual_uid:
                     self._write_json(
                         _status_body(
                             409,
@@ -1449,16 +1526,270 @@ def _mco_object(name: str, uid: str = "mco-uid-1") -> dict:
     }
 
 
-def _mch_object(name: str) -> dict:
+#: The fixture MultiClusterHub identity. A live MCH always has a UID, and the guarded
+#: delete's whole contract is the precondition it carries, so the fixture object must
+#: carry one too.
+MCH_UID = "mch-uid-1"
+#: The fixture operator-identity UIDs, shared by the Deployment/ReplicaSet/CSV builders
+#: and by the recorded identity a durable record seeds.
+OPERATOR_DEPLOYMENT_NAME = "multiclusterhub-operator"
+OPERATOR_DEPLOYMENT_UID = "operator-deployment-uid-1"
+OPERATOR_REPLICASET_NAME = "multiclusterhub-operator-7d9f"
+OPERATOR_REPLICASET_UID = "operator-replicaset-uid-1"
+OPERATOR_CSV_NAME = "advanced-cluster-management.v2.13.0"
+OPERATOR_CSV_UID = "operator-csv-uid-1"
+
+
+def _mch_object(name: str, uid: str = MCH_UID) -> dict:
     return {
         "apiVersion": "operator.open-cluster-management.io/v1",
         "kind": "MultiClusterHub",
         "metadata": {
             "name": name,
-            "namespace": "open-cluster-management",
+            "namespace": ACM_NAMESPACE,
+            "uid": uid,
             "resourceVersion": "1",
         },
     }
+
+
+#: The canonical MultiClusterHub teardown record key, built through the real helper.
+MCH_KEY = teardown_key("operator.open-cluster-management.io/v1", "MultiClusterHub", ACM_NAMESPACE, "multiclusterhub")
+
+
+def mch_operator_deployment_identity(
+    *,
+    key: str = MCH_KEY,
+    expected_uid: str = MCH_UID,
+    deployment_uid: str = OPERATOR_DEPLOYMENT_UID,
+) -> dict:
+    """A durable ``operator_deployment`` identity in the exact §10.2.2 record shape."""
+    return {
+        "namespace": ACM_NAMESPACE,
+        "name": OPERATOR_DEPLOYMENT_NAME,
+        "uid": deployment_uid,
+        "discovery_method": OPERATOR_IDENTITY_DISCOVERY_METHOD,
+        "captured_at": "2026-09-17T00:00:00+00:00",
+        "csv": {
+            "namespace": ACM_NAMESPACE,
+            "name": OPERATOR_CSV_NAME,
+            "uid": OPERATOR_CSV_UID,
+            "owned_crd": MCH_OWNED_CRD,
+        },
+        "mch_teardown_key": key,
+        "mch_expected_uid": expected_uid,
+    }
+
+
+def mch_identity_unavailable(
+    *,
+    key: str = MCH_KEY,
+    expected_uid: str = MCH_UID,
+    reason: str = "csv_absent",
+) -> dict:
+    """A durable ``operator_identity_unavailable`` outcome in the exact §10.2.3 shape."""
+    return {
+        "reason": reason,
+        "discovery_method": OPERATOR_IDENTITY_DISCOVERY_METHOD,
+        "captured_at": "2026-09-17T00:00:00+00:00",
+        "evidence_summary": "No ClusterServiceVersion owning the MultiClusterHub CRD was found.",
+        "mch_teardown_key": key,
+        "mch_expected_uid": expected_uid,
+    }
+
+
+def mch_teardown_record(
+    phase: str, *, identity: Optional[dict] = None, expected_uid: str = MCH_UID, **evidence
+) -> dict:
+    """One durable MCH teardown record the real validator accepts.
+
+    An MCH record carries exactly one identity outcome at EVERY phase, so a seeded
+    record without one fails validation at the checkpoint enter -- before the role
+    reaches any MCH task.
+    """
+    record: Dict[str, Any] = {"expected_uid": expected_uid, "phase": phase}
+    identity = identity if identity is not None else mch_operator_deployment_identity(expected_uid=expected_uid)
+    if "reason" in identity:
+        record["operator_identity_unavailable"] = identity
+    else:
+        record["operator_deployment"] = identity
+    record.update(evidence)
+    return record
+
+
+def _operator_csv(
+    *,
+    name: str = OPERATOR_CSV_NAME,
+    uid: str = OPERATOR_CSV_UID,
+    deployment_names: Optional[List[str]] = None,
+    owned_crd: str = MCH_OWNED_CRD,
+    phase: str = "Succeeded",
+) -> dict:
+    """The OLM ClusterServiceVersion that identifies the MCH operator Deployment.
+
+    The shape is the one proven on the real client in
+    ``tests/integration/test_pod_owner_classify_runtime.py`` -- owned-CRD list, install
+    strategy ``deployment``, ``status.phase`` -- not a new one.
+    """
+    deployments = [{"name": deployment} for deployment in (deployment_names or [OPERATOR_DEPLOYMENT_NAME])]
+    return {
+        "apiVersion": f"{CSV_API_GROUP}/{CSV_API_VERSION}",
+        "kind": "ClusterServiceVersion",
+        "metadata": {"name": name, "namespace": ACM_NAMESPACE, "uid": uid, "resourceVersion": "csv-3"},
+        "spec": {
+            "customresourcedefinitions": {"owned": [{"name": owned_crd}]},
+            "install": {"strategy": "deployment", "spec": {"deployments": deployments}},
+        },
+        "status": {"phase": phase},
+    }
+
+
+def _operator_deployment(
+    *,
+    name: str = OPERATOR_DEPLOYMENT_NAME,
+    uid: Optional[str] = OPERATOR_DEPLOYMENT_UID,
+    resource_version: str = "deploy-7",
+) -> dict:
+    metadata: Dict[str, Any] = {"name": name, "namespace": ACM_NAMESPACE, "resourceVersion": resource_version}
+    if uid is not None:
+        metadata["uid"] = uid
+    return {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": metadata}
+
+
+def _operator_replicaset(
+    *,
+    name: str = OPERATOR_REPLICASET_NAME,
+    uid: str = OPERATOR_REPLICASET_UID,
+    deployment_name: str = OPERATOR_DEPLOYMENT_NAME,
+    deployment_uid: str = OPERATOR_DEPLOYMENT_UID,
+) -> dict:
+    return {
+        "apiVersion": "apps/v1",
+        "kind": "ReplicaSet",
+        "metadata": {
+            "name": name,
+            "namespace": ACM_NAMESPACE,
+            "uid": uid,
+            "resourceVersion": "rs-5",
+            "ownerReferences": [
+                {
+                    "apiVersion": "apps/v1",
+                    "kind": "Deployment",
+                    "name": deployment_name,
+                    "uid": deployment_uid,
+                    "controller": True,
+                }
+            ],
+        },
+    }
+
+
+def _acm_pod_object(name: str, owner: Optional[dict] = None) -> dict:
+    """One Pod in the ACM namespace, with an optional single controller owner reference.
+
+    EVERY ACM-namespace Pod this harness seeds must keep the
+    ``multiclusterhub-operator`` name prefix, and ``_acm_pod_name`` enforces it. The
+    LEGACY role waits for Pods with ``retries: 120, delay: 10`` and excludes only names
+    matching that prefix, so one differently named Pod makes the role poll for 1200s and
+    blow the 600s subprocess timeout -- a fixture-level RuntimeError instead of a failing
+    assertion. The prefix is exactly what E6 retires as an ownership signal, so a spoof
+    Pod that carries it is also the sharper fixture.
+    """
+    metadata: Dict[str, Any] = {"name": _acm_pod_name(name), "namespace": ACM_NAMESPACE, "resourceVersion": "1"}
+    if owner is not None:
+        metadata["ownerReferences"] = [owner]
+    return {"apiVersion": "v1", "kind": "Pod", "metadata": metadata}
+
+
+def _acm_pod_name(name: str) -> str:
+    if not name.startswith(ACM_OPERATOR_POD_PREFIX):
+        raise ValueError(
+            f"ACM-namespace fixture Pod {name!r} must keep the {ACM_OPERATOR_POD_PREFIX!r} prefix; "
+            "see _acm_pod_object for why"
+        )
+    return name
+
+
+def _operator_owned_pod(name: str = "multiclusterhub-operator-7d9f-abcde") -> dict:
+    """A Pod whose controller chain really reaches the recorded operator Deployment."""
+    return _acm_pod_object(
+        name,
+        owner={
+            "apiVersion": "apps/v1",
+            "kind": "ReplicaSet",
+            "name": OPERATOR_REPLICASET_NAME,
+            "uid": OPERATOR_REPLICASET_UID,
+            "controller": True,
+        },
+    )
+
+
+def _spoof_pod(name: str = "multiclusterhub-operator-spoof") -> dict:
+    """The operator NAME with no owner chain at all: blocking, whatever the prefix says."""
+    return _acm_pod_object(name)
+
+
+def _job_owned_pod(name: str = "multiclusterhub-operator-backup-job-x") -> dict:
+    return _acm_pod_object(
+        name,
+        owner={"apiVersion": "batch/v1", "kind": "Job", "name": "mch-backup", "uid": "job-uid-1", "controller": True},
+    )
+
+
+def _statefulset_owned_pod(name: str = "multiclusterhub-operator-sts-0") -> dict:
+    return _acm_pod_object(
+        name,
+        owner={
+            "apiVersion": "apps/v1",
+            "kind": "StatefulSet",
+            "name": "mch-sts",
+            "uid": "sts-uid-1",
+            "controller": True,
+        },
+    )
+
+
+def _unrelated_replicaset_pod(name: str = "multiclusterhub-operator-other-rs-1") -> dict:
+    """Owned by a ReplicaSet that exists but is controlled by another Deployment."""
+    return _acm_pod_object(
+        name,
+        owner={
+            "apiVersion": "apps/v1",
+            "kind": "ReplicaSet",
+            "name": "unrelated-rs",
+            "uid": "unrelated-rs-uid",
+            "controller": True,
+        },
+    )
+
+
+def _unrelated_replicaset() -> dict:
+    return _operator_replicaset(
+        name="unrelated-rs",
+        uid="unrelated-rs-uid",
+        deployment_name="some-other-operator",
+        deployment_uid="some-other-uid",
+    )
+
+
+def _request_shape(request: dict) -> tuple:
+    """``(VERB, API_GROUP, RESOURCE_PLURAL, NAMESPACE_OR_NONE)`` for one logged request.
+
+    Identical to the normaliser ``tests/test_decommission.py`` builds the measured
+    Python MCH request table from, so the two measured sets are directly comparable as
+    sets rather than through a hand-written table. A LIST is a GET with no object name.
+    """
+    path = request["path"]
+    parsed = _split_resource_path(path)
+    if parsed is None:
+        return (request["method"], None, None, None)
+    plural, namespace, name = parsed
+    segments = [segment for segment in path.split("/") if segment]
+    group = "" if segments[0] == "api" else segments[1]
+    verb = request["method"]
+    if verb == "GET" and name is None:
+        verb = "LIST"
+    return (verb, group, plural, namespace)
 
 
 def _managed_cluster_object(name: str, uid: Optional[str] = None) -> dict:
@@ -1580,6 +1911,23 @@ def run_decommission_role(
     seeded_operation_identity: Optional[dict] = None,
     managed_cluster_teardown_records: Optional[Dict[str, dict]] = None,
     checkpoint_dir_readonly: bool = False,
+    mch_inventory: Optional[List[dict]] = None,
+    mch_record: Optional[dict] = None,
+    mch_teardown_records: Optional[Dict[str, dict]] = None,
+    mch_read_status: int = 200,
+    mch_named_read_status: int = 200,
+    mch_post_delete_read_status: Optional[int] = None,
+    mch_drain_retries: Optional[int] = None,
+    mch_drain_delay: Optional[int] = None,
+    acm_pods: Optional[List[dict]] = None,
+    acm_pod_passes: Optional[List[List[dict]]] = None,
+    pod_list_revisions: Optional[List[str]] = None,
+    namespace_list_revisions: Optional[List[str]] = None,
+    operator_csvs: Optional[List[dict]] = None,
+    operator_deployments: Optional[List[dict]] = None,
+    operator_replicasets: Optional[List[dict]] = None,
+    csv_read_status: int = 200,
+    object_read_statuses: Optional[Dict[str, int]] = None,
 ) -> dict:
     """Run the decommission role against declared fakes and return one canonical result.
 
@@ -1716,6 +2064,12 @@ def run_decommission_role(
                 mch_delete_status = 500
     if mch_present is None:
         mch_present = True
+    if mch_inventory is not None and mch_present is not True:
+        raise ValueError("mch_inventory supplies the inventory and requires mch_present=True")
+    if mch_record is not None and mch_teardown_records is not None:
+        raise ValueError("pass one mch_record or the mch_teardown_records mapping, not both")
+    if acm_pods is not None and acm_pod_passes is not None:
+        raise ValueError("pass a fixed acm_pods inventory or the acm_pod_passes sequence, not both")
 
     namespaces = [_namespace_object("open-cluster-management")]
     if observability_namespace == "present":
@@ -1727,6 +2081,12 @@ def run_decommission_role(
     # the empty/malformed-uid refusal can be exercised against a real response.
     namespaces.append(_namespace_object("kube-system", uid=primary_cluster_uid))
 
+    observability_pod_store = [_observability_pod_object(name) for name in (observability_pods or [])]
+    post_delete_read_statuses: Dict[str, int] = {}
+    if mco_post_delete_read_status is not None:
+        post_delete_read_statuses["multiclusterobservabilities"] = mco_post_delete_read_status
+    if mch_post_delete_read_status is not None:
+        post_delete_read_statuses["multiclusterhubs"] = mch_post_delete_read_status
     managedcluster_store = (
         copy.deepcopy(managed_cluster_objects)
         if managed_cluster_objects is not None
@@ -1741,23 +2101,45 @@ def run_decommission_role(
             if mco_inventory is not None
             else ([_mco_object("observability")] if mco_present else [])
         ),
-        multiclusterhubs=[_mch_object("multiclusterhub")] if mch_present else [],
+        multiclusterhubs=(
+            copy.deepcopy(mch_inventory)
+            if mch_inventory is not None
+            else ([_mch_object("multiclusterhub")] if mch_present else [])
+        ),
         managedclusters=managedcluster_store,
         namespaces=namespaces,
-        pods=[_observability_pod_object(name) for name in (observability_pods or [])],
+        pods=observability_pod_store + copy.deepcopy(acm_pods or []),
+        deployments=copy.deepcopy(
+            operator_deployments if operator_deployments is not None else [_operator_deployment()]
+        ),
+        replicasets=copy.deepcopy(
+            operator_replicasets if operator_replicasets is not None else [_operator_replicaset()]
+        ),
+        clusterserviceversions=copy.deepcopy(operator_csvs if operator_csvs is not None else [_operator_csv()]),
+        named_read_status_by_object=dict(object_read_statuses or {}),
+        list_inventory_sequences_by_plural=(
+            {"pods": [observability_pod_store + pass_pods for pass_pods in acm_pod_passes]} if acm_pod_passes else {}
+        ),
+        list_revision_sequences_by_plural={
+            "pods": list(pod_list_revisions or []),
+            "namespaces": list(namespace_list_revisions or []),
+        },
         delete_status_by_plural={
             "multiclusterobservabilities": obs_delete_status,
             "managedclusters": managed_clusters_delete_status,
             "multiclusterhubs": mch_delete_status,
         },
-        read_status_by_plural={"multiclusterobservabilities": observability_read_status},
-        named_read_status_by_plural={"multiclusterobservabilities": mco_named_read_status},
+        read_status_by_plural={
+            "multiclusterobservabilities": observability_read_status,
+            "multiclusterhubs": mch_read_status,
+            "clusterserviceversions": csv_read_status,
+        },
+        named_read_status_by_plural={
+            "multiclusterobservabilities": mco_named_read_status,
+            "multiclusterhubs": mch_named_read_status,
+        },
         retain_after_delete_by_plural={"multiclusterobservabilities": mco_retain_after_delete},
-        post_delete_read_status_by_plural=(
-            {"multiclusterobservabilities": mco_post_delete_read_status}
-            if mco_post_delete_read_status is not None
-            else {}
-        ),
+        post_delete_read_status_by_plural=post_delete_read_statuses,
         read_status_sequences_by_plural={
             "pods": pod_read_statuses or [],
             # Per-list-read statuses on the source hub, so the gate's own fresh read
@@ -1789,6 +2171,13 @@ def run_decommission_role(
         if managed_cluster_teardown_records:
             records = seeded_operational_data.setdefault("decommission_teardown_records", {})
             for key, record in managed_cluster_teardown_records.items():
+                records[key] = copy.deepcopy(record)
+        seeded_mch_records = (
+            {MCH_KEY: mch_record} if mch_record is not None else copy.deepcopy(mch_teardown_records or {})
+        )
+        if seeded_mch_records:
+            records = seeded_operational_data.setdefault("decommission_teardown_records", {})
+            for key, record in seeded_mch_records.items():
                 records[key] = copy.deepcopy(record)
         # A standalone run must establish its own primary-only identity from empty
         # state -- that is the whole acceptance case, and a pre-seeded
@@ -1864,6 +2253,10 @@ def run_decommission_role(
                 "acknowledge_observability_not_migrated": acknowledge_observability_not_migrated,
             },
         }
+        if mch_drain_retries is not None:
+            vars_payload["acm_switchover_mch_drain_retries"] = mch_drain_retries
+        if mch_drain_delay is not None:
+            vars_payload["acm_switchover_mch_drain_delay"] = mch_drain_delay
         if destination_api is not None:
             vars_payload["acm_switchover_hubs"]["secondary"] = {
                 "context": "secondary-hub",
@@ -3446,3 +3839,4 @@ def test_only_the_standalone_playbook_declares_the_standalone_discriminator():
 
     assert yaml_files
     assert offenders == []
+
