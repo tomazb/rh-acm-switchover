@@ -15,8 +15,10 @@
         namespace: open-cluster-management
         mch_teardown_key: "{{ poc_mch_teardown_key | default(omit) }}"
         mch_expected_uid: "{{ poc_mch_expected_uid | default(omit) }}"
-        operator_deployment: "{{ poc_operator_deployment | default(omit) }}"
-        operator_identity_unavailable: "{{ poc_operator_identity_unavailable | default(omit) }}"
+        # `default(omit, true)`: a record carries both identity keys with one null, and a
+        # templated null is not omitted by plain `default(omit)`.
+        operator_deployment: "{{ poc_operator_deployment | default(omit, true) }}"
+        operator_identity_unavailable: "{{ poc_operator_identity_unavailable | default(omit, true) }}"
       register: poc_result
       ignore_errors: true
       # The shipped invocation contract: the arguments carry a kubeconfig path.

@@ -82,8 +82,9 @@ EXAMPLES = r"""
     kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.primary.context }}"
     namespace: open-cluster-management
-    operator_deployment: "{{ _acm_mch_record.operator_deployment | default(omit) }}"
-    operator_identity_unavailable: "{{ _acm_mch_record.operator_identity_unavailable | default(omit) }}"
+    # A record carries both identity keys with one null; omit the null one.
+    operator_deployment: "{{ _acm_mch_record.operator_deployment | default(omit, true) }}"
+    operator_identity_unavailable: "{{ _acm_mch_record.operator_identity_unavailable | default(omit, true) }}"
   register: _acm_mch_pass
   no_log: true
 """
@@ -261,11 +262,10 @@ def run_module(module: AnsibleModule) -> None:
 
 
 def main() -> None:
-    module = AnsibleModule(
-        argument_spec=_argument_spec(),
-        supports_check_mode=True,
-        mutually_exclusive=[("operator_deployment", "operator_identity_unavailable")],
-    )
+    # No ansible-core mutually_exclusive on the identity pair: it counts present keys, and a
+    # teardown record or capture result carries both with one null. `_argument_error` enforces
+    # exactly one non-null identity instead.
+    module = AnsibleModule(argument_spec=_argument_spec(), supports_check_mode=True)
     try:
         run_module(module)
     except SystemExit:

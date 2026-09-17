@@ -98,6 +98,16 @@ class _Resource:
         self.kind = kind
 
 
+class _PositiveDiscovery:
+    """A discovery document that validates and serves none of the kinds under test."""
+
+    def request(self, method, path, **params):
+        class _Raw:
+            data = b'{"kind": "APIResourceList", "resources": [{"name": "unrelated", "kind": "Unrelated"}]}'
+
+        return _Raw()
+
+
 class _FakeK8sClient:
     """A kubernetes.core K8SClient stand-in keyed by (verb, kind, name).
 
@@ -106,12 +116,24 @@ class _FakeK8sClient:
     the shipped strict read sent, so bounds and routing can be asserted.
     """
 
-    def __init__(self, responses: dict[tuple[str, str, str | None], list[Any]]):
+    def __init__(
+        self,
+        responses: dict[tuple[str, str, str | None], list[Any]],
+        unserved_from: dict[str, int] | None = None,
+    ):
         self._responses = {key: list(values) for key, values in responses.items()}
         self.requests: list[dict] = []
-        self.client = None  # discovery is never needed: every scripted kind resolves
+        # `unserved_from[kind] = n`: from the n-th resolution of `kind` (0-based) the kind no
+        # longer resolves, and discovery positively lists nothing for it (kind_not_served).
+        self._unserved_from = dict(unserved_from or {})
+        self._resolutions: dict[str, int] = {}
+        self.client = _PositiveDiscovery()
 
     def resource(self, kind, api_version):
+        index = self._resolutions.get(kind, 0)
+        self._resolutions[kind] = index + 1
+        if kind in self._unserved_from and index >= self._unserved_from[kind]:
+            raise LookupError(f"{kind} is not served")
         return _Resource(api_version, kind)
 
     def get(self, resource, **params):
@@ -374,6 +396,33 @@ def test_a_csv_read_error_is_an_error_never_absence(monkeypatch, key, error):
     assert result["capture_status"] == "error"
     assert result["operator_deployment"] is None and result["operator_identity_unavailable"] is None
     assert client.count("GET", "Deployment") == 0
+
+
+def test_a_csv_kind_no_longer_served_at_the_named_get_is_unavailable_csv_absent(monkeypatch):
+    client = _FakeK8sClient(
+        {("LIST", "ClusterServiceVersion", None): [_list("ClusterServiceVersion", [_csv()])]},
+        unserved_from={"ClusterServiceVersion": 1},
+    )
+
+    result = _capture(monkeypatch, client)
+
+    assert result["capture_status"] == "operator_identity_unavailable"
+    assert result["operator_identity_unavailable"]["reason"] == "csv_absent"
+
+
+def test_an_unserved_deployment_kind_is_deployment_read_failed_never_absence(monkeypatch):
+    client = _FakeK8sClient(
+        {
+            ("LIST", "ClusterServiceVersion", None): [_list("ClusterServiceVersion", [_csv()])],
+            ("GET", "ClusterServiceVersion", CSV_NAME): [_csv()],
+        },
+        unserved_from={"Deployment": 0},
+    )
+
+    result = _capture(monkeypatch, client)
+
+    assert result["capture_status"] == "operator_identity_unavailable"
+    assert result["operator_identity_unavailable"]["reason"] == "deployment_read_failed"
 
 
 def test_a_csv_named_get_404_is_unavailable_csv_absent(monkeypatch):
@@ -715,6 +764,44 @@ def test_invalid_arguments_fail_before_any_read(monkeypatch, params):
     assert result["_failed"] is True
     assert result["changed"] is False
     assert client.requests == [] and result["_routed"] == {}
+
+
+@pytest.mark.parametrize("present", ["operator_deployment", "operator_identity_unavailable"])
+def test_ansible_argument_validation_accepts_the_record_shape_with_the_other_identity_null(monkeypatch, present):
+    """The fake module above bypasses ansible-core's argument checks, so run them here.
+
+    A teardown record and a capture result carry both identity keys with one of them null;
+    ansible-core's constraint checks count present keys, so any key-presence constraint on
+    the pair would refuse the module's own record shape before run_module could decide.
+    """
+    from ansible.module_utils.common.arg_spec import ArgumentSpecValidator
+
+    constructed: dict = {}
+
+    class CaptureConstruction:
+        def __init__(self, *args, **kwargs):
+            constructed.update(kwargs)
+            raise SystemExit(0)
+
+    monkeypatch.setattr(acm_pod_owner_classify, "AnsibleModule", CaptureConstruction)
+    with pytest.raises(SystemExit):
+        acm_pod_owner_classify.main()
+    spec = constructed.pop("argument_spec")
+    constructed.pop("supports_check_mode", None)
+    identities = {"operator_deployment": _operator_deployment_identity(), "operator_identity_unavailable": None}
+    if present == "operator_identity_unavailable":
+        identities = {"operator_deployment": None, "operator_identity_unavailable": _unavailable_identity()}
+    params = {
+        "operation": "classify",
+        "kubeconfig": "/fixture/kubeconfig",
+        "context": "source-hub",
+        "namespace": ACM_NS,
+        **identities,
+    }
+
+    result = ArgumentSpecValidator(spec, **constructed).validate(params)
+
+    assert result.error_messages == []
 
 
 def test_the_module_imports_nothing_from_the_python_cli():

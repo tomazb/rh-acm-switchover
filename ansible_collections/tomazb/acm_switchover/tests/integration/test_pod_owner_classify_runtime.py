@@ -256,6 +256,32 @@ def test_classify_excludes_only_the_owned_pod_through_the_real_client(tmp_path):
     assert {r["method"] for r in api.requests} == {"GET"}
 
 
+def test_classify_accepts_the_record_shape_with_the_other_identity_null(tmp_path):
+    """A teardown record and a capture result carry BOTH identity keys, one of them null.
+
+    Through the shipped invocation (`default(omit, true)`) that record shape classifies. The
+    unit test on ansible-core's ArgumentSpecValidator covers a literal null argument, which
+    must reach the module's own exactly-one check rather than a key-presence constraint.
+    """
+    api = FakePodOwnerAPI(_classify_routes())
+    try:
+        result = _run(
+            tmp_path,
+            api,
+            {
+                "poc_operation": "classify",
+                "poc_operator_deployment": _recorded_identity(),
+                "poc_operator_identity_unavailable": None,
+            },
+        )
+    finally:
+        api.close()
+
+    assert result.get("failed") is not True, result
+    assert result["read_status"] == "ok"
+    assert result["deployment_status"] == "matched"
+
+
 def test_a_positively_absent_namespace_reads_nothing_else(tmp_path):
     api = FakePodOwnerAPI(_classify_routes(namespace=(404, None)))
     try:

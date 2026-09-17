@@ -128,7 +128,7 @@ class _CollectionCaptureReader:
         self.calls = []
 
     def __call__(self, read_mode, api_version, kind, resource_name, namespace=None, name=None):
-        self.calls.append((read_mode, kind))
+        self.calls.append((read_mode, kind, name))
         if kind == "ClusterServiceVersion" and read_mode == "list":
             spec = self.vector["csv_list"]
             if spec["read"] == "items":
@@ -238,7 +238,7 @@ def test_python_and_collection_capture_agree_over_every_shared_vector(vector):
         }
         if vector["expected"]["outcome"] == "operator_identity_unavailable":
             assert collection_identity["operator_identity_unavailable"]["reason"] == vector["expected"]["reason"]
-    assert [call[1] for call in reader.calls] == [_PYTHON_READ_KINDS[m][1] for m, _ in python_client.calls]
+    assert [(kind, name) for _, kind, name in reader.calls] == _python_reads(python_client.calls)
 
 
 @pytest.mark.parametrize(
