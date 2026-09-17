@@ -473,7 +473,10 @@ def test_decommission_uses_fixed_guarded_mco_and_strictly_resolved_mch_targets()
     assert guarded_args["resource_name"] == "multiclusterobservabilities"
     assert "loop" not in guarded[0]
 
-    mch_tasks = _load_yaml(DECOMMISSION_TASKS / "delete_multiclusterhub.yml")
+    # Flattened: E6 wraps the guarded delete in the block/rescue section 11 requires to
+    # preserve an accepted DELETE's `changed` across the module failure, and an
+    # unflattened load cannot see a task inside a block.
+    mch_tasks = _flatten_tasks(_load_yaml(DECOMMISSION_TASKS / "delete_multiclusterhub.yml"))
     assert not [task for task in mch_tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "MultiClusterHub"]
     assert not [task for task in mch_tasks if task.get("kubernetes.core.k8s", {}).get("kind") == "MultiClusterHub"]
     mch_guarded = [task for task in mch_tasks if "tomazb.acm_switchover.acm_uid_guarded_delete" in task]
@@ -493,7 +496,7 @@ def test_decommission_drains_observability_pods_and_classifies_acm_pods():
     obs_text = (DECOMMISSION_TASKS / "delete_observability.yml").read_text()
     obs_tasks = _load_yaml(DECOMMISSION_TASKS / "delete_observability.yml")
     mch_text = (DECOMMISSION_TASKS / "delete_multiclusterhub.yml").read_text()
-    mch_tasks = _load_yaml(DECOMMISSION_TASKS / "delete_multiclusterhub.yml")
+    mch_tasks = _flatten_tasks(_load_yaml(DECOMMISSION_TASKS / "delete_multiclusterhub.yml"))
 
     assert "kind: Pod" in obs_text
     assert "until" in obs_text
@@ -539,7 +542,6 @@ def test_decommission_result_reports_actual_delete_changes():
     assert "_multiclusterhub_delete_results" not in main_text
     assert "_acm_mch_changed" in main_text
     assert "_acm_mch_would_change" in main_text
-    assert "| selectattr('changed')" in main_text
 
     assert "acm_uid_guarded_delete" in one_text
     assert "_acm_mc_changed" in managed_text

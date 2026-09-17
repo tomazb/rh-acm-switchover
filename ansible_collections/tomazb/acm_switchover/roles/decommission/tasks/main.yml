@@ -208,16 +208,14 @@
                 or (
                   acm_switchover_mco_delete.changed | default(false) | bool
                 )
-                or (
-                  ((_multiclusterhub_delete_results | default({})).results | default([])
-                  | selectattr('changed') | list | length) > 0
-                )
+                or (_acm_mch_changed | default(false) | bool)
               )
             }}
           would_change: >-
             {{
               (_acm_mco_would_change | default(false) | bool)
               or (_acm_mc_would_change | default(false) | bool)
+              or (_acm_mch_would_change | default(false) | bool)
             }}
 
     - name: Normalize summary path input
