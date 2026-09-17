@@ -566,6 +566,7 @@ def run_noncore_fixture(tmp_path):
                         "plural": "multiclusterhubs",
                         "kind": "MultiClusterHub",
                         "namespaced": True,
+                        "namespace": "open-cluster-management",
                     },
                 ],
             )

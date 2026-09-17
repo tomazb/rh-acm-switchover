@@ -2179,6 +2179,7 @@ def run_decommission_role(
     *,
     check_mode: bool = False,
     execution_mode: str = "execute",
+    allow_unknown_execution_mode: bool = False,
     observability_outcome: Optional[str] = None,
     managed_clusters_outcome: Optional[str] = None,
     multiclusterhub_outcome: Optional[str] = None,
@@ -2241,7 +2242,7 @@ def run_decommission_role(
         _write_fixture_kubeconfig,
     )
 
-    if execution_mode not in ("execute", "validate", "dry_run"):
+    if not allow_unknown_execution_mode and execution_mode not in ("execute", "validate", "dry_run"):
         raise ValueError(f"execution_mode={execution_mode!r} is not one of ('execute', 'validate', 'dry_run')")
     entry_points = [standalone_playbook, integrated_finalization, integrated_finalization_secondary]
     if sum(1 for flag in entry_points if flag) > 1:
@@ -4221,6 +4222,15 @@ def _acm_pod_lists(result: dict) -> list:
     return [request for request in result["requests"] if request["path"] == _ACM_PODS_PATH]
 
 
+def _operator_identity_reads(result: dict) -> list:
+    """Every Deployment/ReplicaSet read -- the ownership chain the classifier walks."""
+    return [
+        request
+        for request in result["requests"]
+        if "/deployments" in request["path"] or "/replicasets" in request["path"]
+    ]
+
+
 def _teardown_records(result: dict, *, before: bool = False) -> dict:
     data = result["checkpoint"]["before_operational_data" if before else "operational_data"]
     return data.get("decommission_teardown_records", {})
@@ -4661,3 +4671,85 @@ class TestDeleteMultiClusterHubDurable:
             NAMESPACE_GET_SHAPE,
             POD_LIST_SHAPE,
         }
+
+    def test_an_unknown_execution_mode_is_a_preview_not_an_unrecorded_delete(self):
+        """§10: every durable writer is gated on `execute`, so the delete must be too.
+
+        A `!= 'dry_run'` check-mode gate on the guarded delete treats an unknown mode
+        string as a live run while every `== 'execute'` writer stays skipped -- a DELETE
+        with no `delete_started` record, which is the one ordering section 10 forbids.
+        """
+        result = run_mch_role(execution_mode="bogus", allow_unknown_execution_mode=True)
+
+        assert _strict_mch_reads(result), "an unknown mode must still perform strict discovery"
+        assert _mch_deletes(result) == [], "only execute mode may delete"
+        assert _mch_record_of(result) is None
+        assert result["checkpoint"]["operational_data"] == result["checkpoint"]["before_operational_data"]
+
+    def test_a_preview_of_a_completed_record_classifies_nothing(self):
+        """§8 and §16: a preview reads the target strictly and stops.
+
+        The completed reproof classifies Pods, and section 8 forbids a preview from
+        classifying anything, so the reproof is execute-mode work like every other pass.
+        """
+        completed = _completed_mch_record()
+        result = run_mch_role(check_mode=True, mch_present=False, mch_record=completed, acm_pods=[])
+
+        assert _strict_mch_reads(result), "the strict target reads still run under --check"
+        assert _acm_pod_lists(result) == [], "a preview must classify no Pod"
+        assert _csv_requests(result) == []
+        assert _operator_identity_reads(result) == []
+        assert result["facts"].get("_acm_mch_would_change") is False
+        assert result["returncode"] == 0
+        assert _mch_record_of(result) == completed
+        assert _teardown_records(result) == _teardown_records(result, before=True)
+
+    def test_a_recovery_required_marker_is_never_demoted_before_new_evidence(self):
+        """§17: resume retries the outstanding proof; it does not overwrite the marker.
+
+        Writing `drain_pending` on the way in demotes the record BEFORE the pass that
+        would justify it, so a Pod-stage error -- which deliberately writes no recovery
+        transition -- leaves a weaker obligation recorded than the one the run started
+        with.
+        """
+        pods = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("recovery_required"),
+            pod_read_statuses=[403],
+        )
+
+        assert pods["returncode"] != 0
+        assert _mch_record_of(pods)["phase"] == "recovery_required"
+
+        namespace = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("recovery_required"),
+            object_read_statuses={f"namespaces/{ACM_NAMESPACE}": 500},
+        )
+
+        assert namespace["returncode"] != 0
+        assert _mch_record_of(namespace)["phase"] == "recovery_required"
+
+    def test_resume_from_drained_runs_the_final_proof_only(self):
+        """§17: a `drained` record owes the final proof, not another drain loop.
+
+        Re-running the bounded loop there spends a second classification pass on evidence
+        the record already carries, and lets a transient namespace error demote it.
+        """
+        result = run_mch_role(mch_present=False, mch_record=mch_teardown_record("drained"), acm_pods=[])
+
+        assert len(_acm_pod_lists(result)) == 1, "the final verification pass is the only pass a drained record owes"
+        assert _mch_record_of(result)["phase"] == "completed"
+        assert result["returncode"] == 0
+
+    def test_a_namespace_error_resuming_from_drained_records_recovery_required(self):
+        """§15: an unverifiable namespace in the FINAL proof is the recovery transition."""
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drained"),
+            object_read_statuses={f"namespaces/{ACM_NAMESPACE}": 500},
+        )
+
+        assert result["returncode"] != 0
+        assert _mch_record_of(result)["phase"] == "recovery_required"
+        assert _acm_pod_lists(result) == [], "the namespace read failed before any Pod was listed"

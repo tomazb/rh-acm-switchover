@@ -163,23 +163,28 @@ class FakeGuardedDeleteAPI:
                                 ],
                             },
                         )
-                    # A namespaced kind is listed through its namespace route, and the
-                    # dynamic client builds that route from the discovery document
-                    # above -- so both spellings answer the same empty inventory.
-                    if path == f"/apis/{group}/{version}/{plural}" or (
-                        extra.get("namespaced", False)
-                        and path.startswith(f"/apis/{group}/{version}/namespaces/")
-                        and path.endswith(f"/{plural}")
-                    ):
-                        return self._send(
-                            200,
-                            {
-                                "apiVersion": f"{group}/{version}",
-                                "kind": f"{kind}List",
-                                "metadata": {"resourceVersion": "1"},
-                                "items": [],
-                            },
-                        )
+                    # A namespaced kind answers ONLY its configured namespace route.
+                    # The cluster-scoped route 404s instead of serving the same empty
+                    # inventory, so a caller that silently regressed to a cluster-scoped
+                    # list is detectable here rather than assumed away -- which is what
+                    # makes the section 20 MultiClusterHub scope question measurable.
+                    empty_list = {
+                        "apiVersion": f"{group}/{version}",
+                        "kind": f"{kind}List",
+                        "metadata": {"resourceVersion": "1"},
+                        "items": [],
+                    }
+                    if extra.get("namespaced", False):
+                        namespace = extra.get("namespace", "")
+                        if path == f"/apis/{group}/{version}/namespaces/{namespace}/{plural}":
+                            return self._send(200, empty_list)
+                        if path == f"/apis/{group}/{version}/{plural}" or path.endswith(f"/{plural}"):
+                            return self._send(
+                                404,
+                                {"kind": "Status", "code": 404, "reason": "NotFound"},
+                            )
+                    elif path == f"/apis/{group}/{version}/{plural}":
+                        return self._send(200, empty_list)
                 if path == f"/apis/{GROUP}/{VERSION}/{PLURAL}":
                     return self._send(
                         200,

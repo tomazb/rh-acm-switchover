@@ -39,9 +39,9 @@
   ansible.builtin.set_fact:
     _acm_mch_records: >-
       {{
-        (_acm_mch_checkpoint.facts.teardown_records | default({}))
+        _acm_mch_checkpoint.facts.teardown_records
         | dict2items
-        | selectattr('key', 'match', _acm_mch_key_prefix)
+        | selectattr('key', 'match', _acm_mch_key_prefix | regex_escape)
         | list
       }}
 
@@ -305,7 +305,7 @@
         wait_sleep: 30
       register: acm_switchover_mch_delete
       check_mode: >-
-        {{ ansible_check_mode or (acm_switchover_execution.mode | default('dry_run')) == 'dry_run' }}
+        {{ ansible_check_mode or (acm_switchover_execution.mode | default('dry_run')) != 'execute' }}
       no_log: true
       when:
         - not (_acm_mch_clean_skip | bool)
@@ -329,6 +329,8 @@
         msg: >-
           The guarded MultiClusterHub delete failed:
           {{ ansible_failed_result.msg | default('unknown error') }}
+          {{ '(reason=' ~ ansible_failed_result.reason ~ ')' if ansible_failed_result.reason is defined else '' }}
+          {{ '(stage=' ~ ansible_failed_result.stage ~ ')' if ansible_failed_result.stage is defined else '' }}
 
 - name: Publish whether this run must prove the MultiClusterHub teardown
   ansible.builtin.set_fact:
@@ -344,13 +346,30 @@
           or acm_switchover_mch_record.phase != 'completed'
         )
       }}
-    # A completed record is immutable: it is re-proved read-only, in any mode, and every
-    # writer below excludes it.
+    # A completed record is immutable: it is re-proved read-only, and every writer below
+    # excludes it. Execute mode only all the same -- the reproof classifies Pods, and
+    # section 8 forbids a preview from classifying anything.
     _acm_mch_reproof: >-
       {{
         (not (_acm_mch_clean_skip | bool))
+        and (not ansible_check_mode)
+        and (acm_switchover_execution.mode | default('dry_run')) == 'execute'
         and (acm_switchover_mch_record is mapping)
         and (acm_switchover_mch_record.phase | default('')) == 'completed'
+      }}
+    # M4/section 17: `drained` and `completed` owe the final proof only. Re-running the
+    # drain loop there would let a transient namespace error demote a record that already
+    # carries its drain evidence.
+    _acm_mch_drain_required: >-
+      {{
+        (not (_acm_mch_clean_skip | bool))
+        and (not ansible_check_mode)
+        and (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+        and (
+          acm_switchover_mch_record is not mapping
+          or acm_switchover_mch_record.phase in
+          ['delete_started', 'cr_absent', 'drain_pending', 'recovery_required']
+        )
       }}
 
 - name: Record MultiClusterHub cr_absent
@@ -383,7 +402,7 @@
     - _acm_mch_prove | bool
     - >-
       acm_switchover_mch_record is not mapping
-      or acm_switchover_mch_record.phase in ['delete_started', 'cr_absent', 'recovery_required']
+      or acm_switchover_mch_record.phase in ['delete_started', 'cr_absent']
 
 # One module call is one complete classification pass; this file owns the bounded
 # repetition. `retries` x `delay` is the 1200-second budget: ansible-core runs
@@ -413,14 +432,16 @@
         or _acm_mch_drain.identity_status == 'operator_identity_inconsistent'
         or (_acm_mch_drain.blocking_count | int) == 0
       no_log: true
-      when: _acm_mch_prove | bool
+      when: _acm_mch_drain_required | bool
   rescue:
     - name: Propagate an unexpected MultiClusterHub drain failure
       ansible.builtin.fail:
         msg: >-
           Unexpected MultiClusterHub drain failure:
           {{ ansible_failed_result.msg | default('unknown error') }}
-      when: _acm_mch_drain.read_status is not defined
+      when: >-
+        _acm_mch_drain.read_status is not defined
+        or _acm_mch_drain.attempts is not defined
 
 - name: Record MultiClusterHub recovery_required after an unprovable drain pass
   tomazb.acm_switchover.checkpoint_phase:
@@ -440,6 +461,7 @@
     - not ansible_check_mode
     - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
     - _acm_mch_prove | bool
+    - _acm_mch_drain.read_status is defined
     - >-
       (
         _acm_mch_drain.read_status == 'error'
@@ -455,6 +477,7 @@
     msg: The ACM namespace state could not be verified during the MultiClusterHub drain.
   when:
     - _acm_mch_prove | bool
+    - _acm_mch_drain.read_status is defined
     - _acm_mch_drain.read_status == 'error'
 
 - name: Fail closed when the recorded MultiClusterHub operator identity is inconsistent
@@ -464,6 +487,7 @@
       Deployment. The drain cannot be certified.
   when:
     - _acm_mch_prove | bool
+    - _acm_mch_drain.read_status is defined
     - _acm_mch_drain.read_status == 'ok'
     - _acm_mch_drain.identity_status == 'operator_identity_inconsistent'
 
@@ -474,6 +498,7 @@
       drain budget expired.
   when:
     - _acm_mch_prove | bool
+    - _acm_mch_drain.read_status is defined
     - _acm_mch_drain.read_status == 'ok'
     - (_acm_mch_drain.blocking_count | int) > 0
 
@@ -490,6 +515,7 @@
     - not ansible_check_mode
     - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
     - _acm_mch_prove | bool
+    - _acm_mch_drain.read_status is defined
     - >-
       _acm_mch_drain.read_status == 'namespace_absent'
       or (_acm_mch_drain.read_status == 'ok' and (_acm_mch_drain.blocking_count | int) == 0)
