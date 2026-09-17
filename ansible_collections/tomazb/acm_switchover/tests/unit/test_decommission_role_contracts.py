@@ -945,21 +945,39 @@ class TestDeleteMultiClusterHubPhaseTable:
         assert not [task for task in self.tasks if task.get("kubernetes.core.k8s", {}).get("kind") == "MultiClusterHub"]
         assert not [task for task in self.tasks if task.get("kubernetes.core.k8s", {}).get("state") == "absent"]
 
+    def _decision_expressions(self, task: dict) -> str:
+        """Everything this task DECIDES with: its loop condition, its guards, its args.
+
+        Diagnostic text -- a `fail`/`debug` message -- is deliberately excluded: naming
+        the operator Deployment in an error message is not a filter.
+        """
+        parts = [str(task.get("until", "")), _when_text(task), str(task.get("failed_when", ""))]
+        for action in _task_actions(task):
+            if action in ("ansible.builtin.fail", "ansible.builtin.debug"):
+                continue
+            parts.append(str(task[action]))
+        return " ".join(parts)
+
     def test_no_pod_name_prefix_filter_decides_anything(self):
         """§5: ownership is decided by the classifier, never by a name prefix."""
         for task in self.tasks:
-            expression = str(task.get("until", "")) + str({k: v for k, v in task.items() if k != "name"})
+            expression = self._decision_expressions(task)
             assert "rejectattr" not in expression, f"task {task.get('name')!r} still filters by name"
             assert (
                 ACM_OPERATOR_POD_PREFIX not in expression
             ), f"task {task.get('name')!r} still treats the operator name prefix as a signal"
 
     def test_no_authoritative_read_is_absorbed_or_defaulted_to_empty(self):
-        """§5: `failed_when: false` and `default([])` both turn a failed read into 'nothing'."""
+        """§5: `failed_when: false` and `default([])` both turn a failed read into 'nothing'.
+
+        The `default([])` ban is scoped to what a task DECIDES with -- an authoritative
+        read turned into an empty inventory -- not to the whole file text.
+        """
         for task in self.tasks:
             assert task.get("failed_when") is not False, f"task {task.get('name')!r} absorbs its own failure"
+            decisions = str(task.get("until", "")) + _when_text(task) + str(task.get("failed_when", ""))
+            assert "default([])" not in decisions, f"task {task.get('name')!r} decides on a defaulted-empty read"
         assert "ignore_errors" not in self.text
-        assert "| default([])" not in self.text
 
     def test_target_resolution_uses_the_strict_read_in_both_modes(self):
         """§7: a namespaced strict LIST, then a strict named GET, of the MCH resource."""
@@ -4009,7 +4027,9 @@ def _mch_record_of(result: dict, key: str = MCH_KEY):
 
 
 def _tasks_using(result: dict, module: str) -> list:
-    return [task for task in result["tasks"] if task["module"] == module]
+    """Every task that RAN the module. The callback records skipped tasks too, and a
+    skipped strict read proves nothing about what the run actually did."""
+    return [task for task in result["tasks"] if task["module"] == module and not task["skipped"]]
 
 
 def _strict_mch_reads(result: dict) -> list:
@@ -4351,7 +4371,13 @@ class TestDeleteMultiClusterHubDurable:
         assert result["returncode"] != 0
 
     def test_a_same_name_replacement_uid_is_refused(self):
-        """§11: the replacement is left intact; a name-only delete would have removed it."""
+        """§11: the replacement is left intact; a name-only delete would have removed it.
+
+        `acm_uid_guarded_delete` reads and compares the UID before it issues anything
+        (`module_utils/uid_guarded_delete.py: run_guarded_delete` raises
+        `REASON_UID_MISMATCH` at `STAGE_UID_MISMATCH`), so a correct implementation
+        issues NO DELETE at all here -- the empty log is reachable, not merely desirable.
+        """
         result = run_mch_role(
             mch_record=mch_teardown_record("delete_started"),
             mch_inventory=[_mch_object("multiclusterhub", uid="mch-uid-replacement")],
