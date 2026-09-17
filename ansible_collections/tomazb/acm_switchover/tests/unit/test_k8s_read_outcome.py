@@ -999,6 +999,19 @@ def test_shipped_examples_supply_the_required_resource_name():
         assert args["resource_name"] == canonical_plural[args["kind"]]
 
 
+def test_the_strict_read_helpers_have_one_owner_in_module_utils():
+    """The read algebra moved to module_utils/k8s_read.py; this module keeps no second copy.
+
+    `_discovery_serves` stays reachable here for existing callers, as the same object.
+    """
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils import k8s_read
+
+    assert acm_k8s_read_outcome._discovery_serves is k8s_read._discovery_serves
+    assert acm_k8s_read_outcome.strict_read is k8s_read.strict_read
+    for moved in ("_drain_list", "_drain_list_once", "_strict_list_page", "_normalize_resources", "_object_revision"):
+        assert not hasattr(acm_k8s_read_outcome, moved), moved
+
+
 def test_a_named_get_is_bounded(monkeypatch):
     """§9.1 per-call timeout: the collection bounds EVERY strict request, not just list pages.
 
