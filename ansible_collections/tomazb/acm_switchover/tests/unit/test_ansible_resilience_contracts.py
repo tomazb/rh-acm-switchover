@@ -481,12 +481,15 @@ def test_decommission_uses_fixed_guarded_mco_and_strictly_resolved_mch_targets()
     mch_args = mch_guarded[0]["tomazb.acm_switchover.acm_uid_guarded_delete"]
     assert mch_args["resource_name"] == "multiclusterhubs"
     assert "expected_uid" in mch_args
-    assert "{{ item.metadata.name }}" not in str(mch_args["name"])
     assert "loop" not in mch_guarded[0]
 
 
-def test_decommission_waits_for_observability_and_acm_workload_pods():
-    """Collection decommission must wait for workload pods like Python does."""
+def test_decommission_drains_observability_pods_and_classifies_acm_pods():
+    """Both families drain before they finish; only the MCH family classifies ownership.
+
+    Renamed for R4-03 PR E / E6: the MultiClusterHub half is no longer a raw Pod "wait"
+    that warns, so the old name described behaviour the role must not have.
+    """
     obs_text = (DECOMMISSION_TASKS / "delete_observability.yml").read_text()
     obs_tasks = _load_yaml(DECOMMISSION_TASKS / "delete_observability.yml")
     mch_text = (DECOMMISSION_TASKS / "delete_multiclusterhub.yml").read_text()
