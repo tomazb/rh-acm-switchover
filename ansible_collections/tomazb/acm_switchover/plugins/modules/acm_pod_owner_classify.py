@@ -123,8 +123,9 @@ read_error_stage:
     - Which read an C(error) pass could not verify, so the caller can apply its recovery policy.
     - C(namespace) when the Namespace GET was unverifiable; no Pod was listed.
     - C(pods) when the namespace was present but the Pod list was unverifiable.
-    - None for C(ok) and C(namespace_absent), and for an C(error) raised before any read, such as
-      client construction. Carries no reason code or server text.
+    - None for C(ok) and C(namespace_absent), and for an C(error) that no read classified (client
+      construction, or an unexpected module failure). A caller must treat an C(error) with no stage
+      conservatively. Carries no reason code or server text.
   type: str
   returned: when operation is classify
   choices: [namespace, pods]

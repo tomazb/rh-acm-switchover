@@ -317,3 +317,6 @@ def test_the_unverifiable_read_stage_is_reported_through_the_real_client(tmp_pat
     assert result.get("read_error_stage", "<absent>") == stage
     assert result["blocking_count"] is None and result["decisions"] == []
     assert "E5C-SENTINEL" not in json.dumps(result)
+    if stage == "namespace":
+        object_paths = [r["path"] for r in api.requests if f"/namespaces/{ACM_NS}/" in r["path"]]
+        assert object_paths == [], "no Pod, Deployment or ReplicaSet read follows an unverifiable namespace"
