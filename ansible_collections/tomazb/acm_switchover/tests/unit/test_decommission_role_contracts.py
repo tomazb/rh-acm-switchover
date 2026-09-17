@@ -4760,6 +4760,10 @@ class TestDeleteMultiClusterHubDurable:
         A `!= 'dry_run'` check-mode gate on the guarded delete treats an unknown mode
         string as a live run while every `== 'execute'` writer stays skipped -- a DELETE
         with no `delete_started` record, which is the one ordering section 10 forbids.
+
+        The substep outcome is the same trap seen from the other end: main.yml records
+        outcomes for every mode that is not `dry_run`, so an out-of-contract mode string
+        would report `completed` for a preview that deleted nothing and proved nothing.
         """
         result = run_mch_role(execution_mode="bogus", allow_unknown_execution_mode=True)
 
@@ -4767,6 +4771,9 @@ class TestDeleteMultiClusterHubDurable:
         assert _mch_deletes(result) == [], "only execute mode may delete"
         assert _mch_record_of(result) is None
         assert result["checkpoint"]["operational_data"] == result["checkpoint"]["before_operational_data"]
+        assert (
+            result["acm_switchover_decommission_result"]["substeps"].get("multiclusterhub") is None
+        ), "a preview that proved nothing must record no MultiClusterHub outcome"
 
     def test_a_preview_of_a_completed_record_classifies_nothing(self):
         """§8 and §16: a preview reads the target strictly and stops.
@@ -4815,14 +4822,37 @@ class TestDeleteMultiClusterHubDurable:
     def test_resume_from_drained_runs_the_final_proof_only(self):
         """§17: a `drained` record owes the final proof, not another drain loop.
 
-        Re-running the bounded loop there spends a second classification pass on evidence
-        the record already carries, and lets a transient namespace error demote it.
+        Re-running the bounded loop there spends a second 20-minute drain budget on
+        evidence the record already carries. The final proof still records
+        `recovery_required` on an unverifiable namespace, which is the intended §15
+        transition and is covered by the test below.
         """
         result = run_mch_role(mch_present=False, mch_record=mch_teardown_record("drained"), acm_pods=[])
 
         assert len(_acm_pod_lists(result)) == 1, "the final verification pass is the only pass a drained record owes"
         assert _mch_record_of(result)["phase"] == "completed"
         assert result["returncode"] == 0
+
+    def test_a_kind_that_stopped_being_served_completes_a_durable_record_as_crd_absent(self):
+        """§15: the kind not being served at the FINAL GET is positive absence, not an error.
+
+        The CRD goes away with the operator, so a resumed record routinely meets a hub
+        that no longer serves `MultiClusterHub`. That is the strongest absence proof the
+        final pass can obtain, and it is recorded as `crd_absent` rather than as the
+        `object_absent` proof a named 404 produces.
+        """
+        result = run_mch_role(
+            mch_present=False,
+            mch_kind_served=False,
+            mch_record=mch_teardown_record("drained"),
+            acm_pods=[],
+        )
+
+        assert result["returncode"] == 0
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["phase"] == "completed"
+        assert record["absence_proofs"]["target_cr"]["proof_type"] == "crd_absent"
 
     def test_a_namespace_error_resuming_from_drained_records_recovery_required(self):
         """§15: an unverifiable namespace in the FINAL proof is the recovery transition."""
