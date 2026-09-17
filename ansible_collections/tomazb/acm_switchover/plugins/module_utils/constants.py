@@ -214,5 +214,15 @@ DRAIN_NAMESPACE_BY_KIND = {
 # The CRD whose owning CSV identifies the MultiClusterHub operator Deployment.
 MCH_OWNED_CRD = "multiclusterhubs.operator.open-cluster-management.io"
 
+# R4-03 MCH operator identity capture: the OLM ClusterServiceVersion contract (plan §11C.2).
+# Mirrors lib/constants.py; tests/test_constants_parity.py holds every pair equal. CSV_KIND is
+# collection-only: the collection's strict read resolves a resource by kind, Python by plural.
+CSV_API_GROUP = "operators.coreos.com"
+CSV_API_VERSION = "v1alpha1"
+CSV_PLURAL = "clusterserviceversions"
+CSV_KIND = "ClusterServiceVersion"
+CSV_PHASE_SUCCEEDED = "Succeeded"
+CSV_INSTALL_STRATEGY_DEPLOYMENT = "deployment"
+
 NAMESPACE_API_VERSION = "v1"
 NAMESPACE_KIND = "Namespace"
