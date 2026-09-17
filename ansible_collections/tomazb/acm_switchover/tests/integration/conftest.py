@@ -557,6 +557,16 @@ def run_noncore_fixture(tmp_path):
                         "plural": "clusterdeployments",
                         "kind": "ClusterDeployment",
                     },
+                    # E6: a dry run performs the same strict MultiClusterHub discovery an
+                    # execute run does, so the fixture hub must positively serve the kind
+                    # with an empty inventory instead of leaving it unverifiable.
+                    {
+                        "group": "operator.open-cluster-management.io",
+                        "version": "v1",
+                        "plural": "multiclusterhubs",
+                        "kind": "MultiClusterHub",
+                        "namespaced": True,
+                    },
                 ],
             )
 
