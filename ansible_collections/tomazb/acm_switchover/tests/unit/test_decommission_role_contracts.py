@@ -1529,6 +1529,16 @@ class FakeDecommissionAPI:
             self._requests.append({"method": method, "path": path, **details})
 
     def _select(self, plural: str, namespace, name):
+        """The objects one read selects.
+
+        A named read filters by namespace and name. A LIST filters by namespace, EXCEPT
+        that malformed members -- a non-mapping item, or an item whose ``metadata`` is
+        not a mapping -- are served by every LIST regardless of its namespace, because
+        such an object carries no namespace to filter on and the role's fail-closed
+        contracts exist precisely to observe it. This is wider than the original
+        cluster-scoped-only rule, so a namespaced fixture (the MultiClusterHub LIST) now
+        sees malformed members it previously never received.
+        """
         items = self.store.get(plural, [])
         selected = []
         for item in items:
@@ -4199,20 +4209,44 @@ REPLICASET_GET_SHAPE = ("GET", "apps", "replicasets", ACM_NAMESPACE)
 NAMESPACE_GET_SHAPE = ("GET", "", "namespaces", None)
 POD_LIST_SHAPE = ("LIST", "", "pods", ACM_NAMESPACE)
 
+#: §20 scenario 1 -- a fresh captured identity carried to `completed`. The nine shapes
+#: are exactly the Python E4 set measured by
+#: ``tests/test_decommission.py::TestMultiClusterHubRequestShapes::
+#: test_fresh_captured_identity_with_a_rolling_update`` (lines 4856-4881).
+_SCENARIO_ONE_SURFACE = {
+    MCH_LIST_SHAPE,
+    MCH_GET_SHAPE,
+    MCH_GUARDED_DELETE_SHAPE,
+    CSV_LIST_SHAPE,
+    CSV_GET_SHAPE,
+    DEPLOYMENT_GET_SHAPE,
+    REPLICASET_GET_SHAPE,
+    NAMESPACE_GET_SHAPE,
+    POD_LIST_SHAPE,
+}
+
+
+#: The ACM-namespace route of the ``apps/v1`` group, i.e. where the operator identity
+#: chain is read. Deployments and ReplicaSets exist in other namespaces too (the
+#: observability family patches some), so they are matched on this prefix, never on the
+#: plural alone.
+_ACM_APPS_PREFIX = f"/apis/apps/v1/namespaces/{ACM_NAMESPACE}/"
+
 
 def _is_mch_measured(request: dict) -> bool:
     """Whether one logged request belongs to the MultiClusterHub teardown's own surface.
 
-    Pods and Namespaces are matched on the EXACT ACM paths: a plural-only filter also
-    catches the observability namespace's Pod reads and the kube-system identity read,
-    which belong to other families.
+    Pods and Namespaces are matched on the EXACT ACM paths and the identity chain on the
+    ACM-namespace ``apps/v1`` prefix: a plural-only filter also catches the observability
+    namespace's Pod and Deployment reads and the kube-system identity read, which belong
+    to other families.
     """
     path = request["path"]
     if path in (_ACM_PODS_PATH, _ACM_NAMESPACE_PATH):
         return True
-    return any(
-        f"/{plural}" in path for plural in ("multiclusterhubs", "clusterserviceversions", "deployments", "replicasets")
-    )
+    if path.startswith(f"{_ACM_APPS_PREFIX}deployments") or path.startswith(f"{_ACM_APPS_PREFIX}replicasets"):
+        return True
+    return any(f"/{plural}" in path for plural in ("multiclusterhubs", "clusterserviceversions"))
 
 
 def run_mch_role(**kwargs) -> dict:
@@ -4270,6 +4304,34 @@ def _tasks_using(result: dict, module: str) -> list:
     """Every task that RAN the module. The callback records skipped tasks too, and a
     skipped strict read proves nothing about what the run actually did."""
     return [task for task in result["tasks"] if task["module"] == module and not task["skipped"]]
+
+
+def _teardown_record_writes(result: dict) -> list:
+    """Every ``checkpoint_phase`` task that RAN and carried a durable teardown record.
+
+    The record LOAD is a ``checkpoint_phase`` call too (``read_facts: true``), and the
+    playbook's own phase transitions are others, so "wrote nothing" has to be asserted on
+    the tasks that carry a ``teardown_record`` argument rather than on the module.
+    """
+    return [
+        task
+        for task in _tasks_using(result, _CHECKPOINT_WRITER_MODULE)
+        if "teardown_record" in (task.get("task_args") or {})
+    ]
+
+
+def _failed_task_names(result: dict) -> list:
+    """Every failed task name, in order. Includes rescued failures -- an exhausted drain
+    loop is recorded failed before its rescue decides what the exhaustion meant."""
+    return [task["name"] for task in result["tasks"] if task["failed"]]
+
+
+def _first_failed_task(result: dict) -> str:
+    """The name of the FIRST task that failed. The substep rescue in main.yml re-fails
+    afterwards, so only the first failure identifies the refusal that decided the run."""
+    failed = _failed_task_names(result)
+    assert failed, "the run recorded no failed task"
+    return failed[0]
 
 
 def _strict_mch_reads(result: dict) -> list:
@@ -4591,6 +4653,11 @@ class TestDeleteMultiClusterHubDurable:
         result = run_mch_role(mch_present=False, mch_record=completed, acm_pods=[])
 
         assert _acm_pod_lists(result), "a completed reproof with a live namespace must classify a fresh pass"
+        # Asserted before the outcome, so a reproof that reaches a durable writer at all
+        # is caught here rather than incidentally on the return code the writer's own
+        # failure produces. Content equality would also hold if a writer ran and rewrote
+        # the identical record; no writer may RUN.
+        assert _teardown_record_writes(result) == []
         assert result["returncode"] == 0
         assert _mch_record_of(result) == completed
         # Scoped to the durable records rather than the whole operational_data map: the
@@ -4851,9 +4918,7 @@ class TestDeleteMultiClusterHubDurable:
         result = run_mch_role(mch_inventory=[member])
 
         assert result["returncode"] != 0
-        # The substep rescue in main.yml re-fails afterwards, so only the FIRST failure
-        # identifies the refusal.
-        assert [task["name"] for task in result["tasks"] if task["failed"]][0] == refusing_task
+        assert _first_failed_task(result) == refusing_task
         assert _mch_deletes(result) == []
         assert _mch_record_of(result) is None
         assert _csv_requests(result) == []
@@ -4949,6 +5014,9 @@ class TestDeleteMultiClusterHubDurable:
         assert requests.index(csv[-1]) < requests.index(delete[0])
 
         names = [task["name"] for task in result["tasks"] if not task["skipped"]]
+        assert names.index("Capture the MultiClusterHub operator identity") < names.index(
+            "Record MultiClusterHub delete_started"
+        )
         assert names.index("Record MultiClusterHub delete_started") < names.index("Delete the recorded MultiClusterHub")
 
     def test_a_rolling_update_of_the_operator_deployment_drains_cleanly(self):
@@ -4970,6 +5038,13 @@ class TestDeleteMultiClusterHubDurable:
             ],
         )
 
+        # Ownership first, so a role that stops establishing it is killed HERE rather
+        # than incidentally on the return code: both owner chains must really be walked.
+        # Without this, a run that resolved one ReplicaSet and assumed the rest of the
+        # inventory belonged to the same Deployment would still reach `completed`.
+        read_paths = [request["path"] for request in _operator_identity_reads(result)]
+        assert [path for path in read_paths if path.endswith("/replicasets/mch-op-old")]
+        assert [path for path in read_paths if path.endswith("/replicasets/mch-op-new")]
         assert result["returncode"] == 0
         record = _mch_record_of(result)
         assert record["phase"] == "completed", "both generations of the same Deployment are owned"
@@ -5017,6 +5092,11 @@ class TestDeleteMultiClusterHubDurable:
         )
 
         assert result["returncode"] != 0, "a Pod whose ReplicaSet cannot be read must block the drain"
+        # The phase alone is also what a run that failed for any other reason leaves
+        # behind; the blocking-workload refusal has to be the one that stopped this run.
+        # Membership, not first: the exhausted drain loop is itself recorded failed (and
+        # then rescued) before the branch tasks read its result.
+        assert "Fail closed when ACM workload still blocks the MultiClusterHub drain" in _failed_task_names(result)
         assert _mch_record_of(result)["phase"] == "drain_pending"
 
     @pytest.mark.parametrize(
@@ -5039,6 +5119,7 @@ class TestDeleteMultiClusterHubDurable:
         )
 
         assert result["returncode"] != 0
+        assert "Fail closed when ACM workload still blocks the MultiClusterHub drain" in _failed_task_names(result)
         assert _mch_record_of(result)["phase"] == "drain_pending"
 
     def test_a_final_pass_identity_inconsistency_blocks_completion(self):
@@ -5066,6 +5147,7 @@ class TestDeleteMultiClusterHubDurable:
             object_read_statuses={f"namespaces/{ACM_NAMESPACE}": 404},
         )
 
+        assert _teardown_record_writes(result) == [], "a reproof may run no durable writer at all"
         assert result["returncode"] == 0
         assert _mch_record_of(result) == completed
         assert _acm_pod_lists(result) == [], "an absent namespace ends the pass before any Pod LIST"
@@ -5079,12 +5161,11 @@ class TestDeleteMultiClusterHubDurable:
         assert result["returncode"] != 0, "a recorded, completed MultiClusterHub that is live again is a contradiction"
         # Named, because the reproof's own absence proof would refuse this too, one stage
         # later: the contradiction must be caught before the record is acted on at all.
-        assert [task["name"] for task in result["tasks"] if task["failed"]][0] == (
-            "Refuse a post-delete MultiClusterHub record whose target is present again"
-        )
+        assert _first_failed_task(result) == "Refuse a post-delete MultiClusterHub record whose target is present again"
         assert _mch_deletes(result) == []
         assert _mch_record_of(result) == completed
         assert _teardown_records(result) == _teardown_records(result, before=True)
+        assert _teardown_record_writes(result) == []
 
     def test_a_completed_reproof_refuses_a_blocking_pod(self):
         """§16: the reproof classifies, so unowned ACM workload fails it -- read-only."""
@@ -5092,8 +5173,10 @@ class TestDeleteMultiClusterHubDurable:
         result = run_mch_role(mch_present=False, mch_record=completed, acm_pods=[_spoof_pod()])
 
         assert result["returncode"] != 0
+        assert _first_failed_task(result) == "Fail closed when a MultiClusterHub-unowned Pod survives the final proof"
         assert _mch_record_of(result) == completed
         assert _teardown_records(result) == _teardown_records(result, before=True)
+        assert _teardown_record_writes(result) == []
 
     def test_a_dry_run_without_check_mode_reproves_nothing_against_a_completed_record(self):
         """§8 and §16: the reproof gate's `mode == 'execute'` half, without `--check`.
@@ -5104,6 +5187,7 @@ class TestDeleteMultiClusterHubDurable:
         completed = _completed_mch_record()
         result = run_mch_role(execution_mode="dry_run", mch_present=False, mch_record=completed, acm_pods=[])
 
+        assert _teardown_record_writes(result) == []
         assert result["returncode"] == 0
         assert _acm_pod_lists(result) == [], "a dry run must classify no Pod"
         assert _csv_requests(result) == []
@@ -5145,30 +5229,50 @@ class TestDeleteMultiClusterHubDurable:
         assert preview["checkpoint"]["operational_data"] == preview["checkpoint"]["before_operational_data"]
         assert _mch_deletes(preview) == []
 
-        live = run_mch_role(acm_pods=[])
+        live = run_mch_role(acm_pods=[_operator_owned_pod()])
 
         measured = {_request_shape(request) for request in live["requests"] if _is_mch_measured(request)}
-        assert {
-            MCH_LIST_SHAPE,
-            MCH_GET_SHAPE,
-            CSV_LIST_SHAPE,
-            CSV_GET_SHAPE,
-            DEPLOYMENT_GET_SHAPE,
-            MCH_GUARDED_DELETE_SHAPE,
-        } <= measured
+        assert measured == _SCENARIO_ONE_SURFACE, "the execute run owes the whole authoritative surface itself"
         assert _mch_record_of(live)["phase"] == "completed"
 
-    #: The seven §20 measurement scenarios, each with the request surface MEASURED on
-    #: the shipped role (see `.superpowers/sdd/e6-plan/e6-request-measurement.md`).
-    #: Scenarios 1-6a have a Python E4 counterpart in
+    #: The §20 measurement scenarios: ``(id, fixture factory, measured surface, outcome)``.
+    #: Every surface below was MEASURED on the shipped role
+    #: (see `.superpowers/sdd/e6-plan/e6-request-measurement.md`). Scenarios 1-6a have a
+    #: Python E4 counterpart in
     #: ``tests/test_decommission.py::TestMultiClusterHubRequestShapes`` (lines 4853-4958)
-    #: and the expected set below is that measured Python set, so a Collection surface
-    #: that drifts from it fails here. Scenarios 6b and 7 are Collection-only and are
-    #: labelled as such in the measurement file; no Python counterpart is claimed.
+    #: and the expected set is that measured Python set, so a Collection surface that
+    #: drifts from it fails here. Scenarios 6b and 7 are Collection-only and are labelled
+    #: as such in the measurement file; no Python counterpart is claimed.
+    #:
+    #: The fixtures are FACTORIES: a row's record and Pod objects would otherwise be one
+    #: shared mutable object across every run of the parametrised test.
+    #: ``outcome`` is the substep outcome the run must reach (``None`` for a preview,
+    #: which records none, and ``"failed"`` for a run that must not succeed), so a
+    #: scenario cannot be satisfied by an early failure that happens to issue the right
+    #: requests -- 6b's empty set most of all.
     _MEASURED_SURFACES = [
         (
+            "1-fresh-captured-rolling-update",
+            lambda: dict(
+                acm_pods=[
+                    _operator_owned_pod(
+                        "multiclusterhub-operator-old-1", replicaset_name="mch-op-old", replicaset_uid="uid-rs-old"
+                    ),
+                    _operator_owned_pod(
+                        "multiclusterhub-operator-new-1", replicaset_name="mch-op-new", replicaset_uid="uid-rs-new"
+                    ),
+                ],
+                operator_replicasets=[
+                    _operator_replicaset(name="mch-op-old", uid="uid-rs-old"),
+                    _operator_replicaset(name="mch-op-new", uid="uid-rs-new"),
+                ],
+            ),
+            _SCENARIO_ONE_SURFACE,
+            "completed",
+        ),
+        (
             "2-fresh-unavailable-identity",
-            dict(operator_csvs=[], acm_pods=[]),
+            lambda: dict(operator_csvs=[], acm_pods=[]),
             {
                 MCH_LIST_SHAPE,
                 MCH_GET_SHAPE,
@@ -5177,10 +5281,11 @@ class TestDeleteMultiClusterHubDurable:
                 POD_LIST_SHAPE,
                 MCH_GUARDED_DELETE_SHAPE,
             },
+            "completed",
         ),
         (
             "3-resume-drain-pending",
-            dict(
+            lambda: dict(
                 mch_present=False,
                 mch_record=mch_teardown_record("drain_pending"),
                 acm_pods=[_operator_owned_pod()],
@@ -5193,10 +5298,11 @@ class TestDeleteMultiClusterHubDurable:
                 NAMESPACE_GET_SHAPE,
                 POD_LIST_SHAPE,
             },
+            "completed",
         ),
         (
             "4-completed-reproof",
-            dict(
+            lambda: dict(
                 mch_present=False,
                 mch_record=_completed_mch_record(),
                 acm_pods=[_operator_owned_pod()],
@@ -5209,51 +5315,64 @@ class TestDeleteMultiClusterHubDurable:
                 DEPLOYMENT_GET_SHAPE,
                 REPLICASET_GET_SHAPE,
             },
+            "completed",
         ),
         (
             "5-dry-run-preview",
-            dict(execution_mode="dry_run"),
+            lambda: dict(execution_mode="dry_run"),
             {MCH_LIST_SHAPE, MCH_GET_SHAPE, CSV_LIST_SHAPE, CSV_GET_SHAPE, DEPLOYMENT_GET_SHAPE},
+            None,
         ),
-        ("6a-no-target-empty-list", dict(mch_present=False), {MCH_LIST_SHAPE}),
+        ("6a-no-target-empty-list", lambda: dict(mch_present=False), {MCH_LIST_SHAPE}, "precondition_noop"),
         # Collection-only: discovery positively refuses the kind, so the LIST is never
         # issued at all. Python's `test_no_target_clean_skip` measures {MCH_LIST_SHAPE}.
-        ("6b-no-target-kind-not-served", dict(mch_present=False, mch_kind_served=False), set()),
+        (
+            "6b-no-target-kind-not-served",
+            lambda: dict(mch_present=False, mch_kind_served=False),
+            set(),
+            "precondition_noop",
+        ),
         # Collection-only: §20 scenario 7 has no Python precedent, so this set stands on
         # its own rather than being compared.
         (
             "7a-recovery-required",
-            dict(
+            lambda: dict(
                 mch_present=False,
                 mch_record=mch_teardown_record("drain_pending"),
                 object_read_statuses={f"namespaces/{ACM_NAMESPACE}": 500},
             ),
             {MCH_LIST_SHAPE, MCH_GET_SHAPE, NAMESPACE_GET_SHAPE},
+            "failed",
         ),
         (
             "7b-recovery-required-resume",
-            dict(
+            lambda: dict(
                 mch_present=False,
                 mch_record=mch_teardown_record("recovery_required"),
                 acm_pods=[],
             ),
             {MCH_LIST_SHAPE, MCH_GET_SHAPE, NAMESPACE_GET_SHAPE, POD_LIST_SHAPE, DEPLOYMENT_GET_SHAPE},
+            "completed",
         ),
     ]
 
     @pytest.mark.parametrize(
-        "kwargs, expected", [row[1:] for row in _MEASURED_SURFACES], ids=[row[0] for row in _MEASURED_SURFACES]
+        "fixture, expected, outcome",
+        [row[1:] for row in _MEASURED_SURFACES],
+        ids=[row[0] for row in _MEASURED_SURFACES],
     )
-    def test_the_measured_request_surface_of_every_scenario(self, kwargs, expected):
+    def test_the_measured_request_surface_of_every_scenario(self, fixture, expected, outcome):
         """§20: the measured Collection surface of each scenario, scenario by scenario.
 
-        The scenario-1 row is
-        ``test_the_measured_request_surface_matches_the_python_e4_shapes``; these are the
-        other six §20 scenarios plus the `kind_not_served` half of the clean skip. Each
-        expected set is the MEASURED one, and for scenarios 2-6a it is also the measured
-        Python E4 set, so a Collection-only or Python-only request shows up here.
+        Every §20 scenario is here, including scenario 1 with the rolling-update fixture
+        Python measures it with. Each expected set is the MEASURED one, and for scenarios
+        2-6a it is also the measured Python E4 set, so a Collection-only or Python-only
+        request shows up here. The outcome is asserted alongside the surface: a set alone
+        can be produced by a run that failed before it did the work.
         """
-        result = run_mch_role(**kwargs)
+        result = run_mch_role(**fixture())
 
+        assert result["acm_switchover_decommission_result"]["substeps"].get("multiclusterhub") == outcome
+        assert (result["returncode"] == 0) is (outcome != "failed")
         measured = {_request_shape(request) for request in result["requests"] if _is_mch_measured(request)}
         assert measured == expected
