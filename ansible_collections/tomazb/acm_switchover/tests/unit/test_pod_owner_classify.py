@@ -474,6 +474,32 @@ def test_capture_client_construction_failure_is_a_sanitized_error(monkeypatch):
     assert SENTINEL not in repr(result)
 
 
+def test_classify_client_construction_failure_claims_no_read_stage(monkeypatch):
+    result = _run(
+        monkeypatch,
+        params={"operation": "classify", "operator_deployment": _operator_deployment_identity()},
+        client_error=Exception(f"kubeconfig token={SENTINEL}"),
+    )
+
+    assert result["read_status"] == "error"
+    assert result.get("read_error_stage", "<absent>") is None, "no Namespace or Pod read was performed"
+    assert SENTINEL not in repr({k: v for k, v in result.items() if k != "_routed"})
+
+
+def test_an_unexpected_failure_after_client_construction_claims_no_read_stage(monkeypatch):
+    """The module's outer catch-all returns the generic classify error without inventing a stage."""
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError(f"programmer surprise {SENTINEL}")
+
+    monkeypatch.setattr(acm_pod_owner_classify, "classify_pass", explode)
+    result = _classify(monkeypatch, _classify_client([]))
+
+    assert result["read_status"] == "error"
+    assert result.get("read_error_stage", "<absent>") is None
+    assert SENTINEL not in repr({k: v for k, v in result.items() if k != "_routed"})
+
+
 # --------------------------------------------------------------------------------------- classify
 
 
@@ -487,6 +513,7 @@ def test_a_pod_owned_through_the_recorded_chain_is_operator_owned(monkeypatch):
 
     assert result["changed"] is False
     assert result["read_status"] == "ok"
+    assert result.get("read_error_stage", "<absent>") is None
     assert result["identity_status"] is None
     assert result["deployment_status"] == "matched"
     assert _decisions(result) == {"multiclusterhub-operator-abc": "operator_owned"}
@@ -585,6 +612,7 @@ def test_an_unavailable_identity_excludes_no_pod_and_reads_no_ownership(monkeypa
     result = _classify(monkeypatch, client, identity="unavailable")
 
     assert result["read_status"] == "ok"
+    assert result.get("read_error_stage", "<absent>") is None
     assert result["identity_status"] == "operator_identity_unavailable"
     assert result["deployment_status"] == "not_applicable"
     assert _decisions(result) == {"multiclusterhub-operator-abc": "drain_blocking"}
@@ -636,27 +664,42 @@ def test_a_positively_absent_namespace_is_namespace_absent_with_no_further_reads
     result = _classify(monkeypatch, client)
 
     assert result["read_status"] == "namespace_absent"
+    assert result.get("read_error_stage", "<absent>") is None
     assert result["blocking_count"] is None and result["decisions"] == []
     assert result["deployment_status"] == "not_applicable"
     assert [r["kind"] for r in client.requests] == ["Namespace"]
 
 
 @pytest.mark.parametrize(
-    "overrides",
+    "overrides, stage",
     [
-        {("GET", "Namespace", ACM_NS): [_api_error(ForbiddenError, 403)]},
-        {("LIST", "Pod", None): [_api_error(NotFoundError, 404)]},
-        {("LIST", "Pod", None): [_api_error(InternalServerError, 500)]},
-        {("LIST", "Pod", None): [{"kind": "PodList", "items": [], "metadata": {}}]},
+        ({("GET", "Namespace", ACM_NS): [_api_error(ForbiddenError, 403)]}, "namespace"),
+        ({("GET", "Namespace", ACM_NS): [_api_error(InternalServerError, 500)]}, "namespace"),
+        ({("GET", "Namespace", ACM_NS): [{"kind": "Namespace", "metadata": {"name": ACM_NS}}]}, "namespace"),
+        ({("LIST", "Pod", None): [_api_error(NotFoundError, 404)]}, "pods"),
+        ({("LIST", "Pod", None): [_api_error(InternalServerError, 500)]}, "pods"),
+        ({("LIST", "Pod", None): [{"kind": "PodList", "items": [], "metadata": {}}]}, "pods"),
     ],
-    ids=["namespace-forbidden", "pod-list-404", "pod-list-500", "pod-list-malformed"],
+    ids=[
+        "namespace-forbidden",
+        "namespace-500",
+        "namespace-malformed",
+        "pod-list-404",
+        "pod-list-500",
+        "pod-list-malformed",
+    ],
 )
-def test_an_unverifiable_namespace_or_pod_read_is_error_never_absence_or_empty(monkeypatch, overrides):
+def test_an_unverifiable_namespace_or_pod_read_is_error_never_absence_or_empty(monkeypatch, overrides, stage):
+    """The stage is caller-policy evidence: Python E4 records recovery_required for an unreadable
+    namespace but leaves the durable phase untouched for an unreadable Pod inventory."""
     client = _classify_client([], overrides=overrides)
 
     result = _classify(monkeypatch, client)
 
     assert result["read_status"] == "error"
+    assert result.get("read_error_stage", "<absent>") == stage
+    if stage == "namespace":
+        assert client.count("LIST", "Pod") == 0, "no Pod inventory is read after an unverifiable namespace"
     assert result["blocking_count"] is None and result["decisions"] == []
     assert result["pods_resource_version"] is None
     assert client.count("GET", "Deployment") == 0
@@ -705,6 +748,7 @@ def test_outputs_are_sanitized_and_use_a_closed_key_set(monkeypatch):
     assert set(classify) - {"_routed", "_failed"} == {
         "changed",
         "read_status",
+        "read_error_stage",
         "namespace_resource_version",
         "pods_resource_version",
         "deployment_resource_version",

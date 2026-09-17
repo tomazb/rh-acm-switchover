@@ -118,6 +118,16 @@ read_status:
   type: str
   returned: when operation is classify
   choices: [ok, namespace_absent, error]
+read_error_stage:
+  description:
+    - Which read an C(error) pass could not verify, so the caller can apply its recovery policy.
+    - C(namespace) when the Namespace GET was unverifiable; no Pod was listed.
+    - C(pods) when the namespace was present but the Pod list was unverifiable.
+    - None for C(ok) and C(namespace_absent), and for an C(error) raised before any read, such as
+      client construction. Carries no reason code or server text.
+  type: str
+  returned: when operation is classify
+  choices: [namespace, pods]
 namespace_resource_version:
   description: Revision of the Namespace GET on C(ok), otherwise none.
   type: str

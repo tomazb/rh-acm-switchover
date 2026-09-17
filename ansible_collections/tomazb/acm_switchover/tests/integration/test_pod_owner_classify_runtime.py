@@ -13,6 +13,7 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from ansible_collections.tomazb.acm_switchover.tests.conftest import _ansible_env
@@ -245,6 +246,7 @@ def test_classify_excludes_only_the_owned_pod_through_the_real_client(tmp_path):
         assert outcome.get("failed") is not True, outcome
         assert outcome["changed"] is False
         assert outcome["read_status"] == "ok"
+        assert outcome.get("read_error_stage", "<absent>") is None
         assert outcome["deployment_status"] == "matched"
         assert {d["name"]: d["decision"] for d in outcome["decisions"]} == {
             "multiclusterhub-operator-7d9f-abcde": "operator_owned",
@@ -290,5 +292,28 @@ def test_a_positively_absent_namespace_reads_nothing_else(tmp_path):
         api.close()
 
     assert result["read_status"] == "namespace_absent", result
+    assert result.get("read_error_stage", "<absent>") is None
     object_paths = [r["path"] for r in api.requests if f"/namespaces/{ACM_NS}/" in r["path"]]
     assert object_paths == [], "no Pod, Deployment or ReplicaSet read follows a positive namespace absence"
+
+
+@pytest.mark.parametrize(
+    "failing, stage",
+    [("namespace", "namespace"), ("pods", "pods")],
+)
+def test_the_unverifiable_read_stage_is_reported_through_the_real_client(tmp_path, failing, stage):
+    """A server failure on the Namespace GET and one on the Pod LIST stay distinguishable, sanitized."""
+    routes = _classify_routes()
+    path = f"/api/v1/namespaces/{ACM_NS}" + ("/pods" if failing == "pods" else "")
+    routes[path] = (500, {"kind": "Status", "code": 500, "reason": "InternalError", "message": "E5C-SENTINEL"})
+    api = FakePodOwnerAPI(routes)
+    try:
+        result = _run(tmp_path, api, {"poc_operation": "classify", "poc_operator_deployment": _recorded_identity()})
+    finally:
+        api.close()
+
+    assert result.get("failed") is not True, result
+    assert result["read_status"] == "error"
+    assert result.get("read_error_stage", "<absent>") == stage
+    assert result["blocking_count"] is None and result["decisions"] == []
+    assert "E5C-SENTINEL" not in json.dumps(result)

@@ -215,6 +215,7 @@ def test_row13_an_unreadable_pod_list_is_an_error_pass_never_an_empty_inventory(
     result = collection.classify_pass(reader, _collection_identity(vector), namespace=ACM_NS)
 
     assert result["read_status"] == "error"
+    assert result.get("read_error_stage", "<absent>") == "pods"
     assert result["decisions"] == [] and result["blocking_count"] is None
 
 

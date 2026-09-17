@@ -63,6 +63,12 @@ READ_STATUS_OK = "ok"
 READ_STATUS_NAMESPACE_ABSENT = "namespace_absent"
 READ_STATUS_ERROR = "error"
 
+# Which read of a classification pass could not be verified; None whenever read_status is not
+# ``error``, and for an ``error`` that no read produced. Collection caller metadata: the Python CLI
+# records recovery_required for an unverifiable namespace but not for an unverifiable Pod inventory.
+READ_ERROR_STAGE_NAMESPACE = "namespace"
+READ_ERROR_STAGE_PODS = "pods"
+
 DEPLOYMENT_STATUS_MATCHED = "matched"
 DEPLOYMENT_STATUS_INCONSISTENT = "inconsistent"
 DEPLOYMENT_STATUS_NOT_APPLICABLE = "not_applicable"
@@ -312,9 +318,10 @@ def classify_pods(read: Reader, pods: list, identity: dict, *, namespace: str) -
 
 
 def classify_error_result() -> dict:
-    """The classify-pass result for a pass that proved nothing."""
+    """The classify-pass result for a pass that proved nothing. No read stage is claimed."""
     return {
         "read_status": READ_STATUS_ERROR,
+        "read_error_stage": None,
         "namespace_resource_version": None,
         "pods_resource_version": None,
         "deployment_resource_version": None,
@@ -331,6 +338,8 @@ def classify_pass(read: Reader, identity: dict, *, namespace: str) -> dict:
     ``read_status`` is ``namespace_absent`` only on a named Namespace GET 404, with no Pod or
     Deployment read after it. A Pod LIST that is not a complete inventory -- a 404 included --
     is ``error``, never an empty one. ``blocking_count`` is None unless the pass is ``ok``.
+    ``read_error_stage`` names the unverifiable read of an ``error`` pass (``namespace`` or
+    ``pods``) and is None otherwise; it carries no reason or server text.
     """
     result = classify_error_result()
     status, _items, namespace_revision = read(
@@ -340,10 +349,12 @@ def classify_pass(read: Reader, identity: dict, *, namespace: str) -> dict:
         result["read_status"] = READ_STATUS_NAMESPACE_ABSENT
         return result
     if status != READ_STATUS_OK:
+        result["read_error_stage"] = READ_ERROR_STAGE_NAMESPACE
         return result
 
     status, pods, pods_revision = read("list", "v1", "Pod", "pods", namespace)
     if status != READ_STATUS_OK:
+        result["read_error_stage"] = READ_ERROR_STAGE_PODS
         return result
 
     classified = classify_pods(read, pods, identity, namespace=namespace)
