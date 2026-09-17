@@ -1235,13 +1235,13 @@ class TestDeleteMultiClusterHubPhaseTable:
         # to use them, so the shim supplies them rather than failing to render.
         environment.filters["bool"] = lambda value: bool(value) and str(value).lower() not in ("false", "no", "0")
         environment.filters["ternary"] = lambda condition, yes, no=None: yes if condition else no
-        environment.tests["truthy"] = bool
+        environment.tests["truthy"] = lambda value: bool(value)
         environment.tests["falsy"] = lambda value: not value
 
         for clause in clauses:
             source = "{{ (" + str(clause) + ") }}"
             names = meta.find_undeclared_variables(environment.parse(source))
-            context = {name: _GuardStub(stage) for name in names}
+            context: Dict[str, Any] = {name: _GuardStub(stage) for name in names}
             for name in names:
                 if "check_mode" in name:
                     context[name] = False
@@ -2569,7 +2569,7 @@ def run_decommission_role(
                 "backend": "file",
                 "path": str(checkpoint_path),
             }
-        vars_payload = {
+        vars_payload: Dict[str, Any] = {
             "acm_switchover_hubs": {"primary": {"context": "primary-hub", "kubeconfig": str(kubeconfig)}},
             "acm_switchover_execution": execution,
             "acm_switchover_features": {
@@ -4752,17 +4752,7 @@ class TestDeleteMultiClusterHubDurable:
         result = run_mch_role(acm_pods=[_operator_owned_pod()])
 
         measured = {_request_shape(request) for request in result["requests"] if _is_mch_measured(request)}
-        assert measured == {
-            MCH_LIST_SHAPE,
-            MCH_GET_SHAPE,
-            MCH_GUARDED_DELETE_SHAPE,
-            CSV_LIST_SHAPE,
-            CSV_GET_SHAPE,
-            DEPLOYMENT_GET_SHAPE,
-            REPLICASET_GET_SHAPE,
-            NAMESPACE_GET_SHAPE,
-            POD_LIST_SHAPE,
-        }
+        assert measured == _SCENARIO_ONE_SURFACE
 
     def test_an_unknown_execution_mode_is_a_preview_not_an_unrecorded_delete(self):
         """§10: every durable writer is gated on `execute`, so the delete must be too.
