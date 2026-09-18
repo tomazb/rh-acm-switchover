@@ -544,13 +544,15 @@ family is identity, not orchestration:
 - **Final live proof and completed reproof.** Completion evidence — `observed_at`, `resource_versions`,
   `absence_proofs` — is written only from the final pass, in the proof mode `lib/teardown_record.py`
   permits for the observed drain namespace and identity outcome. A `completed` record is re-proved live
-  on the next run and never rewritten. `ACM_OPERATOR_POD_PREFIX` survives as a diagnostic label only; it
-  authorizes nothing.
+  on the next run and never rewritten. `ACM_OPERATOR_POD_PREFIX` survives only as a parity-pinned
+  constant with no remaining production reference; it authorizes nothing.
 
-The Collection mirrors the read side in the `acm_pod_owner_classify` module over
-`plugins/module_utils/pod_owner_classify.py` (both operations always report `changed: false` and read
-only in check mode), and the orchestration in `roles/decommission/tasks/delete_multiclusterhub.yml`,
-which drives the same phase vocabulary over checkpoint-backed durable state and `acm_uid_guarded_delete`.
+The Collection mirrors the same identity and ownership decisions in the `acm_pod_owner_classify`
+module (over `plugins/module_utils/pod_owner_classify.py`; both operations always report
+`changed: false` and read only in check mode), which additionally owns its own Namespace read and
+Pod list inside the `classify` operation, unlike the Python helper. It also mirrors the
+orchestration in `roles/decommission/tasks/delete_multiclusterhub.yml`, which drives the same
+phase vocabulary over checkpoint-backed durable state and `acm_uid_guarded_delete`.
 The strict-read helpers behind both module sides now live in `plugins/module_utils/k8s_read.py`, with
 `acm_k8s_read_outcome` reduced to a thin module wrapper over them. Neither form factor imports the
 other; the shared identity vectors in `tests/test_mch_identity_parity.py` hold the behavior equal.

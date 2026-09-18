@@ -1934,6 +1934,7 @@ _GUARD_FORBIDDEN_ATTRIBUTE_NAMES = frozenset(
         "wait_for_condition",
         "dry_run",
         "sleep",
+        "wait",  # wait orchestration; wait_for_condition already listed
     }
 )
 _GUARD_FORBIDDEN_ATTRIBUTE_PREFIXES = ("delete_", "patch_", "create_", "replace_", "scale_")
@@ -1944,7 +1945,7 @@ _GUARD_FORBIDDEN_ATTRIBUTE_PREFIXES = ("delete_", "patch_", "create_", "replace_
 _GUARD_FORBIDDEN_BARE_CALL_NAMES = frozenset({"sleep"})
 
 
-def _ownership_violations(source: str) -> list[str]:
+def _ownership_violations(source: str, filename: str = str(_IDENTITY_MODULE_PATH)) -> list[str]:
     """AST-walk `source` for the same ownership-boundary rules
     `test_identity_module_owns_only_read_side_identity` enforces on the real
     `modules/decommission_identity.py` source: no state/RunRecord persistence, no
@@ -1954,7 +1955,7 @@ def _ownership_violations(source: str) -> list[str]:
     """
     from lib.kube_client import KubeClient
 
-    tree = ast.parse(source)
+    tree = ast.parse(source, filename=filename)
     kube_client_public_members = frozenset(name for name in dir(KubeClient) if not name.startswith("_"))
     violations = []
     for node in ast.walk(tree):
@@ -2069,13 +2070,29 @@ _OWNERSHIP_GUARD_KILL_CASES = (
         "run_record",
         id="indirect_form_from_lib_import_run_record",
     ),
+    # Isolates the bare-call rule (`_GUARD_FORBIDDEN_BARE_CALL_NAMES`) from any import
+    # handling: no `import`/`from` line precedes the call, so only the bare-name `ast.Call`
+    # branch can catch it.
+    pytest.param(
+        "\n\ndef _identity_guard_kill_leg_d():\n    sleep(1)\n",
+        "sleep",
+        id="identity_guard_kill_leg_d_bare_call_no_import",
+    ),
+    # `threading.Event().wait()` is wait orchestration reached only through the attribute
+    # form -- not the bare-call rule (the call target is an attribute, not a bare name).
+    pytest.param(
+        "\n\ndef _identity_guard_kill_leg_e():\n    import threading\n\n    threading.Event().wait(1)\n",
+        "wait",
+        id="identity_guard_kill_leg_e_threading_event_wait",
+    ),
 )
 
 
 @pytest.mark.parametrize("appended_snippet, expected_violation_substring", _OWNERSHIP_GUARD_KILL_CASES)
 def test_ownership_guard_detects_sleep_orchestration(appended_snippet, expected_violation_substring):
     """Kill-condition proof (task E3 hardening) that the ownership-boundary guard
-    actually detects an inserted `time.sleep(...)` -- not merely that it passes on
+    actually detects inserted sleep/wait orchestration (`time.sleep(...)`, a bare
+    `sleep(...)`, `threading.Event().wait(...)`) -- not merely that it passes on
     today's real module source. The contract is specifically wait/sleep
     orchestration, not the `time` module: harmless `time` usage (`time.monotonic()`)
     must NOT be flagged.

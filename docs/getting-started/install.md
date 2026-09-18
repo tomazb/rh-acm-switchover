@@ -208,7 +208,11 @@ kubectl apply -f deploy/rbac/extensions/decommission/clusterrole.yaml
 kubectl apply -f deploy/rbac/extensions/decommission/clusterrolebinding.yaml
 
 # Verify deployment
-kubectl get sa,clusterrole,role -n acm-switchover
+kubectl get sa -n acm-switchover
+kubectl get clusterrole acm-switchover-operator
+kubectl get role acm-switchover-operator -n open-cluster-management
+# Only after applying the decommission extension above:
+kubectl get clusterrole acm-switchover-decommission
 ```
 
 Decommission additionally reads ClusterServiceVersions, Deployments and ReplicaSets in the
@@ -224,11 +228,7 @@ For automated execution:
 # Create namespace (if not already present)
 kubectl apply -f deploy/rbac/namespace.yaml
 
-# Create the service account and bind the shipped ClusterRole
-# (deploy/rbac/serviceaccount.yaml creates acm-switchover-operator in acm-switchover;
-#  deploy/rbac/clusterrolebinding.yaml binds it to the acm-switchover-operator ClusterRole)
-kubectl apply -f deploy/rbac/serviceaccount.yaml
-kubectl apply -f deploy/rbac/clusterrolebinding.yaml
+# The manifests applied above already created the operator and validator ServiceAccounts and bindings.
 
 # Get token
 kubectl create token acm-switchover-operator -n acm-switchover --duration=24h

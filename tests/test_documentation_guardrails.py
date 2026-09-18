@@ -2309,6 +2309,19 @@ def _table_row(path: str, prefix: str) -> str:
     return rows[0]
 
 
+def _decommission_variable_section() -> str:
+    """The `### acm_switchover_decommission` section of the variable reference doc, from that
+    heading to the next line starting with `### `."""
+    heading = "### `acm_switchover_decommission`"
+    content = _read(VARIABLE_REFERENCE_DOC)
+    start = content.index(heading)
+    tail = content[start + len(heading) :]
+    next_heading = re.search(r"^### ", tail, re.MULTILINE)
+    section = tail[: next_heading.start()] if next_heading else tail
+    assert section.strip(), f"{VARIABLE_REFERENCE_DOC} has an empty {heading!r} section"
+    return section
+
+
 @pytest.mark.parametrize(
     "path, row_prefix",
     [
@@ -2319,7 +2332,7 @@ def _table_row(path: str, prefix: str) -> str:
 )
 def test_mch_teardown_docs_do_not_regress_to_warning_only(path, row_prefix):
     """MultiClusterHub teardown is a fail-closed contract; no doc may sell it as a warning (#290)."""
-    text = _read(path) if row_prefix is None else _table_row(path, row_prefix)
+    text = _decommission_variable_section() if path == VARIABLE_REFERENCE_DOC else _table_row(path, row_prefix)
 
     for forbidden in ("does not fail that substep", "only warns on timeout", "warns and continues"):
         assert forbidden not in text, f"{path} still describes MultiClusterHub teardown as warning-only: {forbidden!r}"
@@ -2394,7 +2407,9 @@ def test_rbac_requirements_document_decommission_namespace_reads():
 
 def test_changelog_unreleased_records_mch_identity_teardown():
     """The active changelog section must carry the MultiClusterHub identity teardown and its RBAC upgrade note."""
-    unreleased = _read("CHANGELOG.md").split("## [Unreleased]", 1)[1].split("\n## [", 1)[0]
+    text = _read("CHANGELOG.md")
+    assert "## [Unreleased]" in text
+    unreleased = text.split("## [Unreleased]", 1)[1].split("\n## [", 1)[0]
 
     for token in ("MultiClusterHub", "clusterserviceversions", "#290", "Upgrade note"):
         assert token in unreleased, f"CHANGELOG [Unreleased] must record {token!r} for the R4-03 teardown work"
