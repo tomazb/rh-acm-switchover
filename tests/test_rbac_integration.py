@@ -518,7 +518,7 @@ class TestRBACManifestConsistency:
         required_snippets = [
             "name: acm-switchover-decommission",
             'resources: ["managedclusters"]\n    verbs: ["get", "delete"]',
-            'resources: ["multiclusterhubs"]\n    verbs: ["delete"]',
+            'resources: ["multiclusterhubs"]\n    verbs: ["get", "delete"]',
             'resources: ["multiclusterobservabilities"]\n    verbs: ["get", "delete"]',
             'resources: ["clusterdeployments"]\n    verbs: ["list"]',
         ]
@@ -924,3 +924,291 @@ class TestRBACValidatorRoleAware:
         assert OBSERVABILITY_NAMESPACE in RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS
         assert MCE_NAMESPACE in RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS
         assert MANAGED_CLUSTER_AGENT_NAMESPACE in RBACValidator.OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
+
+
+# ---------------------------------------------------------------------------
+# Measured decommission read surface (E7): the operator-identity capture and
+# drain classification reads must be granted identically by every shipped form
+# of the RBAC manifests, and by none of the read-only or baseline forms.
+# ---------------------------------------------------------------------------
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_RBAC_DIR = _REPO_ROOT / "deploy" / "rbac"
+_BUNDLED_RBAC_DIR = (
+    _REPO_ROOT / "ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/files" / "deploy" / "rbac"
+)
+_HELM_CHART_DIR = _REPO_ROOT / "deploy" / "helm" / "acm-switchover-rbac"
+_POLICY_PATH = _REPO_ROOT / "deploy" / "acm-policies" / "policy-rbac.yaml"
+
+_BASELINE_MANIFESTS = (
+    "namespace.yaml",
+    "serviceaccount.yaml",
+    "clusterrole.yaml",
+    "clusterrolebinding.yaml",
+    "role.yaml",
+    "rolebinding.yaml",
+)
+_EXTENSION_MANIFESTS = (
+    "extensions/decommission/clusterrole.yaml",
+    "extensions/decommission/clusterrolebinding.yaml",
+)
+
+_ACM_OPERATOR_ROLE = ("Role", "open-cluster-management", "acm-switchover-operator")
+_ACM_VALIDATOR_ROLE = ("Role", "open-cluster-management", "acm-switchover-validator")
+_OPERATOR_CLUSTERROLE = ("ClusterRole", "", "acm-switchover-operator")
+_VALIDATOR_CLUSTERROLE = ("ClusterRole", "", "acm-switchover-validator")
+_DECOMMISSION_CLUSTERROLE = ("ClusterRole", "", "acm-switchover-decommission")
+
+# The complete, exact permission surface of the operator Role in the ACM namespace
+# after E7. Equality (not membership) is the point: an accidental extra grant fails.
+_ACM_OPERATOR_ROLE_PERMISSIONS = frozenset(
+    {
+        ("", "pods", "get"),
+        ("", "pods", "list"),
+        ("operator.open-cluster-management.io", "multiclusterhubs", "list"),
+        ("operators.coreos.com", "clusterserviceversions", "get"),
+        ("operators.coreos.com", "clusterserviceversions", "list"),
+        ("apps", "deployments", "get"),
+        ("apps", "replicasets", "get"),
+    }
+)
+
+# The three rules E7 adds, and nothing else, expanded to (group, resource, verb).
+_E7_OPERATOR_ONLY_PERMISSIONS = frozenset(
+    {
+        ("operators.coreos.com", "clusterserviceversions", "get"),
+        ("operators.coreos.com", "clusterserviceversions", "list"),
+        ("apps", "deployments", "get"),
+        ("apps", "replicasets", "get"),
+    }
+)
+_E7_OPERATOR_ONLY_RESOURCES = frozenset({"clusterserviceversions", "deployments", "replicasets"})
+
+_ACM_VALIDATOR_ROLE_PERMISSIONS = frozenset({("", "pods", "get"), ("", "pods", "list")})
+
+_MCH_DECOMMISSION_VERBS = ["get", "delete"]
+
+_OPERATOR_SUBJECTS = frozenset({("ServiceAccount", "acm-switchover", "acm-switchover-operator")})
+_VALIDATOR_SUBJECTS = frozenset({("ServiceAccount", "acm-switchover", "acm-switchover-validator")})
+_BASELINE_BINDINGS = frozenset(
+    {
+        ("ClusterRoleBinding", "", "acm-switchover-operator", "acm-switchover-operator", _OPERATOR_SUBJECTS),
+        ("ClusterRoleBinding", "", "acm-switchover-validator", "acm-switchover-validator", _VALIDATOR_SUBJECTS),
+    }
+    | {
+        ("RoleBinding", namespace, f"acm-switchover-{role}", f"acm-switchover-{role}", subjects)
+        for namespace in (
+            "open-cluster-management",
+            "open-cluster-management-backup",
+            "open-cluster-management-observability",
+            "multicluster-engine",
+        )
+        for role, subjects in (("operator", _OPERATOR_SUBJECTS), ("validator", _VALIDATOR_SUBJECTS))
+    }
+)
+_DECOMMISSION_BINDING = (
+    "ClusterRoleBinding",
+    "",
+    "acm-switchover-decommission",
+    "acm-switchover-decommission",
+    _OPERATOR_SUBJECTS,
+)
+
+
+def _permission_tuples(rules) -> frozenset:
+    """Expand RBAC rules into (apiGroup, resource, verb) triples.
+
+    Helm groups some resources into a single rule where the raw manifests use one
+    rule per resource; only the expanded triples are comparable across forms.
+    """
+    return frozenset(
+        (group, resource, verb)
+        for rule in rules or []
+        for group in rule.get("apiGroups", [])
+        for resource in rule.get("resources", [])
+        for verb in rule.get("verbs", [])
+    )
+
+
+def _index_objects(docs) -> dict:
+    """Key parsed Kubernetes objects by (kind, namespace, name)."""
+    indexed = {}
+    for doc in docs:
+        if not doc:
+            continue
+        metadata = doc["metadata"]
+        indexed[(doc["kind"], metadata.get("namespace", ""), metadata["name"])] = doc
+    return indexed
+
+
+def _load_manifest_dir(directory: Path, include_extension: bool) -> dict:
+    names = _BASELINE_MANIFESTS + (_EXTENSION_MANIFESTS if include_extension else ())
+    docs = []
+    for name in names:
+        docs.extend(yaml.safe_load_all((directory / name).read_text(encoding="utf-8")))
+    return _index_objects(docs)
+
+
+def _load_policy_objects() -> dict:
+    policy = next(
+        doc for doc in yaml.safe_load_all(_POLICY_PATH.read_text(encoding="utf-8")) if doc.get("kind") == "Policy"
+    )
+    return _index_objects(
+        object_template["objectDefinition"]
+        for template in policy["spec"]["policy-templates"]
+        for object_template in template["objectDefinition"]["spec"]["object-templates"]
+    )
+
+
+def _render_chart(*set_values: str) -> dict:
+    helm = shutil.which("helm")
+    if not helm:
+        pytest.skip("helm binary not available")
+    command = [helm, "template", "acm-switchover-rbac", str(_HELM_CHART_DIR)]
+    for value in set_values:
+        command.extend(["--set", value])
+    result = subprocess.run(command, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    return _index_objects(yaml.safe_load_all(result.stdout))
+
+
+@pytest.fixture(scope="module")
+def helm_objects() -> dict:
+    """Chart rendered with the optional decommission ClusterRole enabled."""
+    return _render_chart("rbac.includeDecommissionClusterRole=true")
+
+
+@pytest.fixture(scope="module")
+def helm_default_objects() -> dict:
+    """Chart rendered with default values (decommission extension disabled)."""
+    return _render_chart()
+
+
+@pytest.fixture(params=["raw", "bundled", "helm", "policy"])
+def rbac_objects(request) -> dict:
+    """Every shipped form of the baseline RBAC objects, parsed and keyed."""
+    if request.param == "raw":
+        return _load_manifest_dir(_RBAC_DIR, include_extension=True)
+    if request.param == "bundled":
+        return _load_manifest_dir(_BUNDLED_RBAC_DIR, include_extension=True)
+    if request.param == "helm":
+        return request.getfixturevalue("helm_objects")
+    return _load_policy_objects()
+
+
+class TestMeasuredDecommissionReadSurface:
+    """Every shipped manifest form must grant exactly the approved operator reads."""
+
+    def test_acm_operator_role_grants_exactly_the_measured_surface(self, rbac_objects):
+        """Operator Role in the ACM namespace: exact permission set, no extra grant."""
+        role = rbac_objects[_ACM_OPERATOR_ROLE]
+        assert _permission_tuples(role["rules"]) == _ACM_OPERATOR_ROLE_PERMISSIONS
+
+    def test_acm_operator_role_satisfies_the_decommission_namespace_table(self, rbac_objects):
+        """The manifests must grant what the decommission validators now require."""
+        required = _permission_tuples(
+            [
+                {"apiGroups": [group], "resources": [resource], "verbs": list(verbs)}
+                for group, resource, verbs in RBACValidator.DECOMMISSION_NAMESPACE_PERMISSIONS[ACM_NAMESPACE]
+            ]
+        )
+        granted = _permission_tuples(rbac_objects[_ACM_OPERATOR_ROLE]["rules"])
+        assert required <= granted, sorted(required - granted)
+
+    def test_acm_validator_role_excludes_the_measured_operator_reads(self, rbac_objects):
+        """Read-only validator Role must stay pods-only in the ACM namespace."""
+        granted = _permission_tuples(rbac_objects[_ACM_VALIDATOR_ROLE]["rules"])
+        assert granted == _ACM_VALIDATOR_ROLE_PERMISSIONS
+        assert not granted & _E7_OPERATOR_ONLY_PERMISSIONS
+
+    @pytest.mark.parametrize("clusterrole_key", [_OPERATOR_CLUSTERROLE, _VALIDATOR_CLUSTERROLE])
+    def test_baseline_clusterroles_stay_clear_of_the_decommission_surface(self, rbac_objects, clusterrole_key):
+        """Operator identity reads are namespace-scoped; MCH delete stays in the extension."""
+        granted = _permission_tuples(rbac_objects[clusterrole_key]["rules"])
+        assert not {resource for _, resource, _ in granted} & _E7_OPERATOR_ONLY_RESOURCES
+        assert ("operator.open-cluster-management.io", "multiclusterhubs", "delete") not in granted
+
+    def test_no_wildcard_grants_anywhere(self, rbac_objects):
+        """No wildcard apiGroup, resource or verb in any shipped Role or ClusterRole."""
+        for (kind, namespace, name), obj in rbac_objects.items():
+            if kind not in ("Role", "ClusterRole"):
+                continue
+            for rule in obj.get("rules") or []:
+                for field in ("apiGroups", "resources", "verbs"):
+                    assert "*" not in rule.get(field, []), (kind, namespace, name, field)
+
+    def test_binding_set_is_unchanged(self, request, rbac_objects):
+        """The delta grants permissions; it must not add or retarget any binding."""
+        expected = _BASELINE_BINDINGS
+        if request.node.callspec.params["rbac_objects"] != "policy":
+            expected = expected | {_DECOMMISSION_BINDING}
+        actual = {
+            (
+                kind,
+                namespace,
+                name,
+                obj["roleRef"]["name"],
+                frozenset(
+                    (subject["kind"], subject.get("namespace", ""), subject["name"]) for subject in obj["subjects"]
+                ),
+            )
+            for (kind, namespace, name), obj in rbac_objects.items()
+            if kind in ("RoleBinding", "ClusterRoleBinding")
+        }
+        assert actual == expected
+
+
+class TestDecommissionExtensionMultiClusterHubVerbs:
+    """The optional extension must grant MCH get+delete and nothing broader."""
+
+    @pytest.fixture(params=["raw", "bundled", "helm"])
+    def decommission_clusterrole(self, request) -> dict:
+        if request.param == "helm":
+            return request.getfixturevalue("helm_objects")[_DECOMMISSION_CLUSTERROLE]
+        directory = _RBAC_DIR if request.param == "raw" else _BUNDLED_RBAC_DIR
+        return _load_manifest_dir(directory, include_extension=True)[_DECOMMISSION_CLUSTERROLE]
+
+    def test_multiclusterhub_verbs_are_get_delete_only(self, decommission_clusterrole):
+        """Named GET before the UID-preconditioned delete, and for the absence proof."""
+        mch_rule = next(
+            rule
+            for rule in decommission_clusterrole["rules"]
+            if rule["apiGroups"] == ["operator.open-cluster-management.io"] and "multiclusterhubs" in rule["resources"]
+        )
+        assert mch_rule["verbs"] == _MCH_DECOMMISSION_VERBS
+        assert set(mch_rule["verbs"]) == {"get", "delete"}
+
+    def test_extension_grants_no_operator_identity_reads(self, decommission_clusterrole):
+        """Operator identity capture is namespace-scoped; the extension must not grow it."""
+        granted = _permission_tuples(decommission_clusterrole["rules"])
+        assert not {resource for _, resource, _ in granted} & _E7_OPERATOR_ONLY_RESOURCES
+
+
+class TestHelmRenderMatchesRawManifests:
+    """Rendered chart semantics must match the raw manifests under the same configuration."""
+
+    def test_rendered_permissions_match_raw_manifests(self, helm_objects):
+        """Full-set comparison of every rendered Role/ClusterRole against the raw form."""
+        raw = _load_manifest_dir(_RBAC_DIR, include_extension=True)
+        raw_rules = {
+            key: _permission_tuples(obj["rules"]) for key, obj in raw.items() if key[0] in ("Role", "ClusterRole")
+        }
+        rendered_rules = {
+            key: _permission_tuples(obj["rules"])
+            for key, obj in helm_objects.items()
+            if key[0] in ("Role", "ClusterRole")
+        }
+        assert set(rendered_rules) == set(raw_rules)
+        mismatched = {
+            key: (raw_rules[key], rendered_rules[key]) for key in raw_rules if raw_rules[key] != rendered_rules[key]
+        }
+        assert not mismatched
+
+    def test_default_render_omits_the_decommission_clusterrole(self, helm_default_objects):
+        """The extension stays opt-in: default values grant no MCH delete anywhere."""
+        assert _DECOMMISSION_CLUSTERROLE not in helm_default_objects
+        for key, obj in helm_default_objects.items():
+            if key[0] not in ("Role", "ClusterRole"):
+                continue
+            granted = _permission_tuples(obj["rules"])
+            assert ("operator.open-cluster-management.io", "multiclusterhubs", "delete") not in granted
