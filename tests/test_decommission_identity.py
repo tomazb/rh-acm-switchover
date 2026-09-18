@@ -1913,7 +1913,9 @@ _GUARD_FORBIDDEN_IMPORT_MODULES = frozenset(
         "modules.finalization",
     }
 )
-_GUARD_FORBIDDEN_IMPORTED_NAMES = frozenset({"RunRecord", "StateManager", "wait_for_condition", "TeardownSpec"})
+_GUARD_FORBIDDEN_IMPORTED_NAMES = frozenset(
+    {"RunRecord", "StateManager", "wait_for_condition", "TeardownSpec", "sleep"}
+)
 _GUARD_ALLOWED_STRICT_METHODS = frozenset(
     {
         "list_custom_resources_strict",
@@ -1931,33 +1933,30 @@ _GUARD_FORBIDDEN_ATTRIBUTE_NAMES = frozenset(
         "set_config",
         "wait_for_condition",
         "dry_run",
+        "sleep",
     }
 )
 _GUARD_FORBIDDEN_ATTRIBUTE_PREFIXES = ("delete_", "patch_", "create_", "replace_", "scale_")
+# Bare (unqualified) call names that are forbidden wait orchestration regardless of
+# where they came from, e.g. `from time import sleep` followed by `sleep(1)`. This is
+# deliberately narrow: it does not ban `time` itself (harmless uses like
+# `time.monotonic()` are not orchestration), only the specific wait primitive.
+_GUARD_FORBIDDEN_BARE_CALL_NAMES = frozenset({"sleep"})
 
 
-def test_identity_module_owns_only_read_side_identity():
-    """Semantic ownership-boundary guard (task E3): `modules/decommission_identity.py`
-    stays a pure read-side identity/classification module -- no state/RunRecord
-    persistence, no mutation calls, no orchestration imports. The kill-condition
-    proof recorded in the task report demonstrates this guard actually detects a
-    violation, not merely that it passes today.
-
-    The client-surface rule below checks the *contract*, not a naming convention: every
-    `ast.Attribute` whose name is a public `KubeClient` member (`dir(KubeClient)`, no
-    leading underscore) must be one of the four allowed strict reads. A `_strict`-suffix
-    check alone would miss `client.list_pods(...)`, `client.get_namespace(...)`, or
-    `client.wait_for_pods_ready(...)` -- real `KubeClient` methods with no `_strict`
-    suffix that this module must never call (Pod-list orchestration, namespace reads,
-    and wait orchestration all belong to task E4).
+def _ownership_violations(source: str) -> list[str]:
+    """AST-walk `source` for the same ownership-boundary rules
+    `test_identity_module_owns_only_read_side_identity` enforces on the real
+    `modules/decommission_identity.py` source: no state/RunRecord persistence, no
+    mutation calls, no orchestration imports, no wait/sleep orchestration. Extracted
+    from the original inline walk so the kill-condition test can drive the same
+    rules against mutated source without duplicating them.
     """
     from lib.kube_client import KubeClient
 
-    source = _IDENTITY_MODULE_PATH.read_text()
-    tree = ast.parse(source, filename=str(_IDENTITY_MODULE_PATH))
+    tree = ast.parse(source)
     kube_client_public_members = frozenset(name for name in dir(KubeClient) if not name.startswith("_"))
     violations = []
-    touched_kube_client_members: set = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -1984,19 +1983,106 @@ def test_identity_module_owns_only_read_side_identity():
         elif isinstance(node, ast.Attribute):
             attr = node.attr
             if attr in kube_client_public_members:
-                touched_kube_client_members.add(attr)
                 if attr not in _GUARD_ALLOWED_STRICT_METHODS:
                     violations.append(f"line {node.lineno}: forbidden KubeClient member {attr!r}")
             if attr in _GUARD_FORBIDDEN_ATTRIBUTE_NAMES:
                 violations.append(f"line {node.lineno}: forbidden attribute {attr!r}")
             if any(attr.startswith(prefix) for prefix in _GUARD_FORBIDDEN_ATTRIBUTE_PREFIXES):
                 violations.append(f"line {node.lineno}: forbidden attribute prefix {attr!r}")
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            # Catches the bare-name call form left by `from time import sleep` --
+            # `node.func` is an `ast.Name`, not an `ast.Attribute`, so the attribute
+            # rules above never see it.
+            if node.func.id in _GUARD_FORBIDDEN_BARE_CALL_NAMES:
+                violations.append(f"line {node.lineno}: forbidden wait orchestration {node.func.id!r}")
+    return violations
+
+
+def _touched_kube_client_members(source: str) -> frozenset:
+    """The set of public `KubeClient` members (`dir(KubeClient)`, no leading
+    underscore) that `source` references as an `ast.Attribute` name. Split out of
+    `_ownership_violations` so the pinned client-surface assertion below can compare
+    against it without `_ownership_violations` returning anything but violations.
+    """
+    from lib.kube_client import KubeClient
+
+    tree = ast.parse(source)
+    kube_client_public_members = frozenset(name for name in dir(KubeClient) if not name.startswith("_"))
+    return frozenset(
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and node.attr in kube_client_public_members
+    )
+
+
+def test_identity_module_owns_only_read_side_identity():
+    """Semantic ownership-boundary guard (task E3): `modules/decommission_identity.py`
+    stays a pure read-side identity/classification module -- no state/RunRecord
+    persistence, no mutation calls, no orchestration imports, no wait/sleep
+    orchestration. `test_ownership_guard_detects_sleep_orchestration` is the executable
+    kill-condition proof that this guard detects an inserted violation, not merely that
+    it passes today.
+
+    The client-surface rule below checks the *contract*, not a naming convention: every
+    `ast.Attribute` whose name is a public `KubeClient` member (`dir(KubeClient)`, no
+    leading underscore) must be one of the four allowed strict reads. A `_strict`-suffix
+    check alone would miss `client.list_pods(...)`, `client.get_namespace(...)`, or
+    `client.wait_for_pods_ready(...)` -- real `KubeClient` methods with no `_strict`
+    suffix that this module must never call (Pod-list orchestration, namespace reads,
+    and wait orchestration all belong to task E4).
+    """
+    source = _IDENTITY_MODULE_PATH.read_text()
+    violations = _ownership_violations(source)
     assert not violations, "Ownership-boundary violations in modules/decommission_identity.py:\n  " + "\n  ".join(
         violations
     )
     # Pin the measured client surface: today it must be exactly the four allowed strict reads --
     # no more, no fewer. A future addition or removal must show up here as a deliberate change.
+    touched_kube_client_members = _touched_kube_client_members(source)
     assert touched_kube_client_members == _GUARD_ALLOWED_STRICT_METHODS, (
         "modules/decommission_identity.py touches an unexpected KubeClient public-member set: "
         f"{sorted(touched_kube_client_members)} (expected {sorted(_GUARD_ALLOWED_STRICT_METHODS)})"
     )
+
+
+_OWNERSHIP_GUARD_KILL_CASES = (
+    pytest.param(
+        "\n\ndef _identity_guard_kill_leg_a():\n    import time\n\n    time.sleep(1)\n",
+        "sleep",
+        id="attribute_form_time_dot_sleep",
+    ),
+    pytest.param(
+        "\n\ndef _identity_guard_kill_leg_b():\n    from time import sleep\n\n    sleep(1)\n",
+        "sleep",
+        id="bare_call_form_from_time_import_sleep",
+    ),
+    pytest.param(
+        "\n\ndef _identity_guard_kill_leg_c():\n    import time\n\n    time.monotonic()\n",
+        None,
+        id="harmless_time_usage_is_not_banned",
+    ),
+    # Additive proof (not part of the sleep kill-condition): the pre-existing indirect
+    # import-form handling (`qualified` check above) already catches this spelling --
+    # this leg just pins that it stays caught.
+    pytest.param(
+        "\n\nfrom lib import run_record\n",
+        "run_record",
+        id="indirect_form_from_lib_import_run_record",
+    ),
+)
+
+
+@pytest.mark.parametrize("appended_snippet, expected_violation_substring", _OWNERSHIP_GUARD_KILL_CASES)
+def test_ownership_guard_detects_sleep_orchestration(appended_snippet, expected_violation_substring):
+    """Kill-condition proof (task E3 hardening) that the ownership-boundary guard
+    actually detects an inserted `time.sleep(...)` -- not merely that it passes on
+    today's real module source. The contract is specifically wait/sleep
+    orchestration, not the `time` module: harmless `time` usage (`time.monotonic()`)
+    must NOT be flagged.
+    """
+    source = _IDENTITY_MODULE_PATH.read_text() + appended_snippet
+    violations = _ownership_violations(source)
+    if expected_violation_substring is None:
+        assert violations == []
+    else:
+        assert any(expected_violation_substring in v for v in violations), violations
