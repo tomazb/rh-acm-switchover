@@ -214,7 +214,9 @@ namespaced `multiclusterhubs` list rule plus the decommission reads: `get` and `
 ClusterServiceVersion and Deployment reads capture the ACM operator identity before
 teardown mutates anything and the ReplicaSet read classifies Pod ownership during the
 drain; all three rules are read-only and operator-only, and
-the validator Role in that namespace has none of them. The baseline ClusterRole includes
+the validator Role in that namespace has none of them. No baseline namespace Role carries
+any `delete` verb for the decommission families (`managedclusters`, `multiclusterhubs`,
+`multiclusterobservabilities`). The baseline ClusterRole includes
 `delete` on `multiclusterobservabilities` for normal finalization cleanup, and
 the optional extension also carries the Hive `clusterdeployments` read used by
 the decommission `preserveOnDelete` safety gate as `list` plus the named reads and
