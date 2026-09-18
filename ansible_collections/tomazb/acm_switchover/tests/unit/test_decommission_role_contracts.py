@@ -5396,3 +5396,61 @@ class TestDeleteMultiClusterHubDurable:
         assert (result["returncode"] == 0) is (outcome != "failed")
         measured = {_request_shape(request) for request in result["requests"] if _is_mch_measured(request)}
         assert measured == expected
+
+
+class TestDeleteMultiClusterHubDeniedReads:
+    """Runtime denial contracts: one read refused with 403 after RBAC validation passed."""
+
+    def test_a_denied_named_csv_read_blocks_the_durable_write_and_the_delete(self):
+        """A 403 on the named CSV GET that follows a successful LIST is fatal.
+
+        The LIST and the named GET are asserted present first: without them a run that
+        failed earlier would satisfy "no record, no DELETE" vacuously and prove nothing
+        about the read that was actually refused.
+        """
+        result = run_mch_role(object_read_statuses={f"clusterserviceversions/{OPERATOR_CSV_NAME}": 403})
+
+        csv_reads = _csv_requests(result)
+        assert [request for request in csv_reads if request["path"].endswith("/clusterserviceversions")]
+        assert [request for request in csv_reads if request["path"].endswith(f"/{OPERATOR_CSV_NAME}")]
+        assert _mch_deletes(result) == [], "a refused identity re-read must block the guarded DELETE"
+        assert _mch_record_of(result) is None, "a refused read is not an absent identity"
+        assert result["returncode"] != 0
+
+    def test_a_denied_operator_deployment_read_records_an_unavailable_identity(self):
+        """A 403 on the operator Deployment GET yields an identity that excludes no Pod.
+
+        The seeded Pod's owner chain really reaches the operator Deployment, so a run
+        that walked ownership under an unavailable identity would drain; only a
+        verified-empty inventory may.
+        """
+        result = run_mch_role(
+            acm_pods=[_operator_owned_pod()],
+            operator_replicasets=[_operator_replicaset()],
+            object_read_statuses={f"deployments/{OPERATOR_DEPLOYMENT_NAME}": 403},
+            mch_drain_retries=1,
+            mch_drain_delay=0,
+        )
+
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["operator_identity_unavailable"]["reason"] == "deployment_read_failed"
+        assert len(_mch_deletes(result)) == 1, "an unavailable identity still permits the guarded DELETE"
+        assert record["phase"] == "drain_pending"
+        assert "Fail closed when ACM workload still blocks the MultiClusterHub drain" in _failed_task_names(result)
+        assert result["returncode"] != 0
+
+    def test_a_denied_named_multiclusterhub_read_fails_closed(self):
+        """A 403 on the named MultiClusterHub GET is not the 404 disappearance race.
+
+        The 404 sibling ends the substep as ``precondition_noop`` with a zero return
+        code; a denial must stop the run before the identity capture instead.
+        """
+        result = run_mch_role(mch_named_read_status=403)
+
+        assert result["acm_switchover_decommission_result"]["substeps"].get("multiclusterhub") != "precondition_noop"
+        assert _csv_requests(result) == [], "a refused target read must stop the run before the identity capture"
+        assert _mch_deletes(result) == []
+        assert _mch_record_of(result) is None
+        assert result["facts"].get("_acm_mch_changed") is not True
+        assert result["returncode"] != 0

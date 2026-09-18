@@ -4162,6 +4162,44 @@ class TestMultiClusterHubMutationOrdering:
         assert hub.writes == []
         assert MCH_DELETE not in hub.requests
 
+    def test_a_denied_csv_read_is_never_the_kind_not_served_absence(self, state_manager):
+        """A denied ClusterServiceVersion read and an unserved CSV kind are not one outcome.
+
+        ``KubeClient.list/get_custom_resource_strict`` render every non-404 ``ApiException``
+        -- a 403 among them -- as ``ERROR`` and a discovery refusal as ``CRD_ABSENT``
+        (lib/kube_client.py:1036-1039, :330-357). Only the latter may become the
+        ``csv_absent`` unavailable identity that lets the guarded DELETE proceed; a denial
+        is fatal before any durable write.
+        """
+        denied = _AcmHub(csv_list=[_strict("ERROR")], namespaces=[_namespace_present()], pods=[_pods()])
+        unserved = _AcmHub(csv_list=[_strict("CRD_ABSENT")], namespaces=[_namespace_present()], pods=[_pods()])
+
+        denied_execution = _mch_decommission(state_manager, denied).teardown_multiclusterhub()
+        assert denied_execution == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert denied.writes == []
+        assert MCH_DELETE not in denied.requests
+
+        unserved_execution = _mch_decommission(state_manager, unserved).teardown_multiclusterhub()
+        assert unserved_execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
+        assert _completed_write(unserved).operator_identity_unavailable["reason"] == "csv_absent"
+        assert MCH_DELETE in unserved.requests
+
+    def test_a_denied_named_multiclusterhub_get_captures_nothing_and_deletes_nothing(self, state_manager):
+        """A denied named MultiClusterHub GET fails closed before the identity capture.
+
+        ``get_custom_resource_strict`` returns ``OBJECT_ABSENT`` only for a 404 and
+        ``ERROR`` for every other ``ApiException`` (lib/kube_client.py:1036-1039), so a
+        denial can never end the substep as the clean "target gone between LIST and GET"
+        skip.
+        """
+        hub = _AcmHub(mch_gets=[_strict("ERROR")])
+        dec = _mch_decommission(state_manager, hub)
+
+        assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        assert hub.writes == []
+        assert _mch_family_requests(hub, "clusterserviceversions") == []
+        assert MCH_DELETE not in hub.requests
+
     def test_a_failed_delete_started_write_issues_no_delete(self, state_manager):
         hub = _AcmHub()
         dec = _mch_decommission(state_manager, hub)
