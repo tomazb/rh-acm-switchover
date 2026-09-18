@@ -24,9 +24,13 @@ rules:
   - apiGroups: ["cluster.open-cluster-management.io"]
     resources: ["managedclusters"]
     verbs: ["get", "delete"]
+  # `get` on MultiClusterHubs matches the same pattern: standalone teardown issues a strict
+  # named GET before the UID-preconditioned delete and again for absence proof. Broader
+  # MultiClusterHub reads stay on the baseline operator role; this extension must not grow
+  # beyond get+delete.
   - apiGroups: ["operator.open-cluster-management.io"]
     resources: ["multiclusterhubs"]
-    verbs: ["delete"]
+    verbs: ["get", "delete"]
   # `get` is here so this extension is self-consistent with the calls the standalone
   # teardown in modules/decommission.py makes: a strict named GET before the delete and
   # a final absence proof after it. The extension is not self-sufficient on its own --

@@ -274,6 +274,15 @@ spec:
                   - apiGroups: ["operator.open-cluster-management.io"]
                     resources: ["multiclusterhubs"]
                     verbs: ["list"]
+                  - apiGroups: ["operators.coreos.com"]
+                    resources: ["clusterserviceversions"]
+                    verbs: ["get", "list"]
+                  - apiGroups: ["apps"]
+                    resources: ["deployments"]
+                    verbs: ["get"]
+                  - apiGroups: ["apps"]
+                    resources: ["replicasets"]
+                    verbs: ["get"]
             - complianceType: musthave
               objectDefinition:
                 apiVersion: rbac.authorization.k8s.io/v1

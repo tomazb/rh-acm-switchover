@@ -117,6 +117,21 @@ rules:
     resources: ["multiclusterhubs"]
     verbs: ["list"]
 
+  # OLM API - ClusterServiceVersions (read-only: decommission operator-identity capture)
+  - apiGroups: ["operators.coreos.com"]
+    resources: ["clusterserviceversions"]
+    verbs: ["get", "list"]
+
+  # Apps API - Deployments (read-only: decommission operator-identity capture)
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get"]
+
+  # Apps API - ReplicaSets (read-only: decommission drain ownership classification)
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get"]
+
 ---
 # Role for ACM Switchover Operator in multicluster-engine namespace
 apiVersion: rbac.authorization.k8s.io/v1
