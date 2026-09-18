@@ -677,7 +677,16 @@ class RBACValidator:
 
             required_permissions = list(permissions)
             if include_decommission:
-                required_permissions.extend(self.DECOMMISSION_NAMESPACE_PERMISSIONS.get(namespace, []))
+                # The decommission table repeats reads the baseline table already carries
+                # (the ACM and observability Pod reads). The review itself is cached, so
+                # re-adding them only duplicates the error line for a denied grant.
+                already_required = {
+                    (api_group, resource, verb) for api_group, resource, verbs in required_permissions for verb in verbs
+                }
+                for api_group, resource, verbs in self.DECOMMISSION_NAMESPACE_PERMISSIONS.get(namespace, []):
+                    extra_verbs = [verb for verb in verbs if (api_group, resource, verb) not in already_required]
+                    if extra_verbs:
+                        required_permissions.append((api_group, resource, extra_verbs))
 
             for api_group, resource, verbs in required_permissions:
                 for verb in verbs:

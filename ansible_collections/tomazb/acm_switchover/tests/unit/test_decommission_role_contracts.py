@@ -4456,9 +4456,11 @@ class TestDeleteMultiClusterHubDurable:
         """§21.4: an unverifiable CSV read is not an absent identity."""
         result = run_mch_role(csv_read_status=403)
 
+        assert _csv_requests(result), "the run must reach the identity capture for the error to be its own"
         assert _mch_deletes(result) == [], "an identity capture error must block the guarded DELETE"
         assert result["returncode"] != 0
         assert _mch_record_of(result) is None
+        assert result["facts"].get("_acm_mch_changed") is not True
 
     def test_a_failed_checkpoint_write_blocks_the_delete(self):
         """§10: the delete_started write must be durable BEFORE the DELETE is issued.
@@ -5448,6 +5450,9 @@ class TestDeleteMultiClusterHubDeniedReads:
         """
         result = run_mch_role(mch_named_read_status=403)
 
+        # Non-vacuity: the named GET was actually issued. `_strict_mch_reads` would also
+        # pass on the LIST alone, so the bound-target read is matched by path here.
+        assert [request for request in _mch_requests(result) if request["path"].endswith("/multiclusterhub")]
         assert result["acm_switchover_decommission_result"]["substeps"].get("multiclusterhub") != "precondition_noop"
         assert _csv_requests(result) == [], "a refused target read must stop the run before the identity capture"
         assert _mch_deletes(result) == []

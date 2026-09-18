@@ -175,6 +175,11 @@ class TestRBACPermissionCoverage:
             assert verb in matched[0][2], f"Expected '{verb}' verb for {resource}"
 
 
+def _without_comment_lines(text: str) -> str:
+    """Drop YAML comment lines so prose in a rule block cannot satisfy a verb assertion."""
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+
 class TestRBACManifestConsistency:
     """Test that RBAC manifests match code definitions."""
 
@@ -526,7 +531,9 @@ class TestRBACManifestConsistency:
             assert snippet in content
         assert 'resources: ["clusterdeployments"]\n    verbs: ["get", "list"]' not in content
         # Extension isolation: ManagedCluster named-GET is required; list/patch/* must not appear.
-        mc_rule = content.split('resources: ["managedclusters"]', 1)[1].split("- apiGroups:", 1)[0]
+        mc_rule = _without_comment_lines(
+            content.split('resources: ["managedclusters"]', 1)[1].split("- apiGroups:", 1)[0]
+        )
         assert 'verbs: ["get", "delete"]' in mc_rule
         assert "list" not in mc_rule
         assert "patch" not in mc_rule
@@ -555,7 +562,9 @@ class TestRBACManifestConsistency:
         for snippet in required_snippets:
             assert snippet in decommission_block
         assert 'resources: ["clusterdeployments"]\n    verbs: ["get", "list"]' not in decommission_block
-        mc_rule = decommission_block.split('resources: ["managedclusters"]', 1)[1].split("- apiGroups:", 1)[0]
+        mc_rule = _without_comment_lines(
+            decommission_block.split('resources: ["managedclusters"]', 1)[1].split("- apiGroups:", 1)[0]
+        )
         assert 'verbs: ["get", "delete"]' in mc_rule
         assert "list" not in mc_rule
         assert "patch" not in mc_rule
@@ -584,7 +593,9 @@ class TestRBACManifestConsistency:
                 )[0],
             ),
         ):
-            mc_rule = content.split('resources: ["managedclusters"]', 1)[1].split("- apiGroups:", 1)[0]
+            mc_rule = _without_comment_lines(
+                content.split('resources: ["managedclusters"]', 1)[1].split("- apiGroups:", 1)[0]
+            )
             assert 'verbs: ["get", "delete"]' in mc_rule, label
             verbs_line = next(line for line in mc_rule.splitlines() if "verbs:" in line)
             assert verbs_line.strip() == 'verbs: ["get", "delete"]', (label, verbs_line)
@@ -940,18 +951,7 @@ _BUNDLED_RBAC_DIR = (
 _HELM_CHART_DIR = _REPO_ROOT / "deploy" / "helm" / "acm-switchover-rbac"
 _POLICY_PATH = _REPO_ROOT / "deploy" / "acm-policies" / "policy-rbac.yaml"
 
-_BASELINE_MANIFESTS = (
-    "namespace.yaml",
-    "serviceaccount.yaml",
-    "clusterrole.yaml",
-    "clusterrolebinding.yaml",
-    "role.yaml",
-    "rolebinding.yaml",
-)
-_EXTENSION_MANIFESTS = (
-    "extensions/decommission/clusterrole.yaml",
-    "extensions/decommission/clusterrolebinding.yaml",
-)
+_DECOMMISSION_EXTENSION_SUBDIR = Path("extensions") / "decommission"
 
 _ACM_OPERATOR_ROLE = ("Role", "open-cluster-management", "acm-switchover-operator")
 _ACM_VALIDATOR_ROLE = ("Role", "open-cluster-management", "acm-switchover-validator")
@@ -990,13 +990,41 @@ _MCH_DECOMMISSION_VERBS = ["get", "delete"]
 
 _OPERATOR_SUBJECTS = frozenset({("ServiceAccount", "acm-switchover", "acm-switchover-operator")})
 _VALIDATOR_SUBJECTS = frozenset({("ServiceAccount", "acm-switchover", "acm-switchover-validator")})
+_RBAC_API_GROUP = "rbac.authorization.k8s.io"
+# Binding tuple: (kind, namespace, name, roleRef kind, roleRef apiGroup, roleRef name, subjects).
+# The roleRef kind and apiGroup are pinned so retargeting a namespaced RoleBinding at a
+# cluster-wide ClusterRole -- a silent privilege escalation -- fails here.
 _BASELINE_BINDINGS = frozenset(
     {
-        ("ClusterRoleBinding", "", "acm-switchover-operator", "acm-switchover-operator", _OPERATOR_SUBJECTS),
-        ("ClusterRoleBinding", "", "acm-switchover-validator", "acm-switchover-validator", _VALIDATOR_SUBJECTS),
+        (
+            "ClusterRoleBinding",
+            "",
+            "acm-switchover-operator",
+            "ClusterRole",
+            _RBAC_API_GROUP,
+            "acm-switchover-operator",
+            _OPERATOR_SUBJECTS,
+        ),
+        (
+            "ClusterRoleBinding",
+            "",
+            "acm-switchover-validator",
+            "ClusterRole",
+            _RBAC_API_GROUP,
+            "acm-switchover-validator",
+            _VALIDATOR_SUBJECTS,
+        ),
     }
     | {
-        ("RoleBinding", namespace, f"acm-switchover-{role}", f"acm-switchover-{role}", subjects)
+        (
+            "RoleBinding",
+            namespace,
+            f"acm-switchover-{role}",
+            "Role",
+            _RBAC_API_GROUP,
+            f"acm-switchover-{role}",
+            subjects,
+        )
         for namespace in (
             "open-cluster-management",
             "open-cluster-management-backup",
@@ -1010,9 +1038,28 @@ _DECOMMISSION_BINDING = (
     "ClusterRoleBinding",
     "",
     "acm-switchover-decommission",
+    "ClusterRole",
+    _RBAC_API_GROUP,
     "acm-switchover-decommission",
     _OPERATOR_SUBJECTS,
 )
+
+
+def _binding_tuples(objects) -> frozenset:
+    """Expand every RoleBinding/ClusterRoleBinding into its pinned identity tuple."""
+    return frozenset(
+        (
+            kind,
+            namespace,
+            name,
+            obj["roleRef"]["kind"],
+            obj["roleRef"]["apiGroup"],
+            obj["roleRef"]["name"],
+            frozenset((subject["kind"], subject.get("namespace", ""), subject["name"]) for subject in obj["subjects"]),
+        )
+        for (kind, namespace, name), obj in objects.items()
+        if kind in ("RoleBinding", "ClusterRoleBinding")
+    )
 
 
 def _permission_tuples(rules) -> frozenset:
@@ -1020,6 +1067,9 @@ def _permission_tuples(rules) -> frozenset:
 
     Helm groups some resources into a single rule where the raw manifests use one
     rule per resource; only the expanded triples are comparable across forms.
+
+    Limitation: ``resourceNames`` is not part of the triple. No shipped manifest uses it
+    today, so a name-restricted rule would compare equal to the unrestricted one.
     """
     return frozenset(
         (group, resource, verb)
@@ -1031,21 +1081,37 @@ def _permission_tuples(rules) -> frozenset:
 
 
 def _index_objects(docs) -> dict:
-    """Key parsed Kubernetes objects by (kind, namespace, name)."""
-    indexed = {}
+    """Key parsed Kubernetes objects by (kind, namespace, name).
+
+    A repeated key would silently hide one of the two objects behind the other, so the
+    collision is an error rather than an overwrite.
+    """
+    indexed: dict = {}
     for doc in docs:
         if not doc:
             continue
         metadata = doc["metadata"]
-        indexed[(doc["kind"], metadata.get("namespace", ""), metadata["name"])] = doc
+        key = (doc["kind"], metadata.get("namespace", ""), metadata["name"])
+        assert key not in indexed, f"Duplicate object {key} across the parsed manifests"
+        indexed[key] = doc
     return indexed
 
 
 def _load_manifest_dir(directory: Path, include_extension: bool) -> dict:
-    names = _BASELINE_MANIFESTS + (_EXTENSION_MANIFESTS if include_extension else ())
+    """Parse every shipped manifest in a directory -- discovered, not enumerated.
+
+    Globbing means a manifest added to the tree is covered by the surface assertions
+    instead of being silently skipped by a hardcoded file list.
+    """
+    paths = sorted(directory.glob("*.yaml"))
+    assert paths, f"No baseline RBAC manifests found in {directory}"
+    if include_extension:
+        extension_paths = sorted((directory / _DECOMMISSION_EXTENSION_SUBDIR).glob("*.yaml"))
+        assert extension_paths, f"No decommission extension manifests found under {directory}"
+        paths += extension_paths
     docs = []
-    for name in names:
-        docs.extend(yaml.safe_load_all((directory / name).read_text(encoding="utf-8")))
+    for path in paths:
+        docs.extend(yaml.safe_load_all(path.read_text(encoding="utf-8")))
     return _index_objects(docs)
 
 
@@ -1142,20 +1208,7 @@ class TestMeasuredDecommissionReadSurface:
         expected = _BASELINE_BINDINGS
         if request.node.callspec.params["rbac_objects"] != "policy":
             expected = expected | {_DECOMMISSION_BINDING}
-        actual = {
-            (
-                kind,
-                namespace,
-                name,
-                obj["roleRef"]["name"],
-                frozenset(
-                    (subject["kind"], subject.get("namespace", ""), subject["name"]) for subject in obj["subjects"]
-                ),
-            )
-            for (kind, namespace, name), obj in rbac_objects.items()
-            if kind in ("RoleBinding", "ClusterRoleBinding")
-        }
-        assert actual == expected
+        assert _binding_tuples(rbac_objects) == expected
 
 
 class TestDecommissionExtensionMultiClusterHubVerbs:

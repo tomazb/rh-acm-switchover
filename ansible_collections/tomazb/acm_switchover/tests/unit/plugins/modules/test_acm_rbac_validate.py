@@ -1026,6 +1026,25 @@ def test_decommission_only_requires_the_measured_acm_reads(permission):
     assert permission in permissions
 
 
+def test_decommission_only_requires_the_named_multiclusterhub_read():
+    """The named MultiClusterHub GET must survive expansion, not merely sit in the table.
+
+    The standalone teardown reads the hub by name before the UID-preconditioned delete and
+    again for its absence proof; the sweep only checks what the expansion emits.
+    """
+    permissions = expand_rbac_requirements(
+        role="operator",
+        include_decommission=True,
+        include_old_hub_finalization=False,
+        skip_observability=True,
+        argocd_mode="none",
+        argocd_install_type="unknown",
+        decommission_only=True,
+    )
+
+    assert ("operator.open-cluster-management.io", "multiclusterhubs", "get", None) in permissions
+
+
 @pytest.mark.parametrize("permission", MEASURED_ACM_DECOMMISSION_READS)
 def test_integrated_decommission_requires_the_measured_acm_reads(permission):
     """The integrated preflight sweep must ask for them too.

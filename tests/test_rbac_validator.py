@@ -1836,6 +1836,27 @@ class TestIntegratedDecommissionNamespacePermissions:
             f"Missing permission in {ACM_NAMESPACE}: {verb} {group_name}/{resource} - Permission denied"
         ]
 
+    @pytest.mark.parametrize("namespace", [ACM_NAMESPACE, OBSERVABILITY_NAMESPACE])
+    def test_a_denied_overlapping_pod_read_is_reported_once(self, validator, namespace):
+        """The decommission table repeats the baseline Pod reads; the denial is one error.
+
+        Both tables require ``pods`` ``get``/``list`` in the ACM and observability
+        namespaces. Extending the required list blindly reported the same denial twice,
+        which reads as two distinct missing grants in the operator-facing report.
+        """
+
+        def check_permission(checked_group, checked_resource, checked_verb, checked_namespace=None):
+            if checked_namespace == namespace and checked_resource == "pods" and checked_verb == "get":
+                return (False, "Permission denied")
+            return (True, "")
+
+        validator.check_permission = MagicMock(side_effect=check_permission)
+
+        all_valid, all_errors = validator.validate_all_permissions(include_decommission=True)
+
+        assert all_valid is False
+        assert all_errors["namespaces"] == [f"Missing permission in {namespace}: get core/pods - Permission denied"]
+
     def test_validate_all_permissions_with_decommission_checks_exact_permission_set(self, validator):
         """The integrated decommission sweep is the baseline surface plus the decommission tables.
 

@@ -4165,19 +4165,21 @@ class TestMultiClusterHubMutationOrdering:
     def test_a_denied_csv_read_is_never_the_kind_not_served_absence(self, state_manager):
         """A denied ClusterServiceVersion read and an unserved CSV kind are not one outcome.
 
-        ``KubeClient.list/get_custom_resource_strict`` render every non-404 ``ApiException``
-        -- a 403 among them -- as ``ERROR`` and a discovery refusal as ``CRD_ABSENT``
-        (lib/kube_client.py:1036-1039, :330-357). Only the latter may become the
-        ``csv_absent`` unavailable identity that lets the guarded DELETE proceed; a denial
-        is fatal before any durable write.
+        ``get_custom_resource_strict`` renders a 404 as ``OBJECT_ABSENT`` and every other
+        ``ApiException`` -- a 403 among them -- as ``ERROR`` (lib/kube_client.py:1036-1041).
+        On the LIST side a discovery *refusal* is itself an ``ERROR``
+        (``_discovery_serves``, lib/kube_client.py:332-336,
+        ``STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE``); ``CRD_ABSENT`` is returned only
+        after a *successful* discovery whose ``APIResourceList`` omits the resource
+        (:353-358), and ``_drain_strict_list`` maps every ``ApiException`` -- 404 included
+        -- to ``ERROR`` (:962-968). Only ``CRD_ABSENT`` may become the ``csv_absent``
+        unavailable identity that lets the guarded DELETE proceed; a denial is fatal before
+        any durable write.
         """
-        denied = _AcmHub(csv_list=[_strict("ERROR")], namespaces=[_namespace_present()], pods=[_pods()])
+        # The denied half is assertion-identical to the sibling
+        # ``test_a_fatal_capture_read_writes_nothing_and_deletes_nothing[csv_list]``; only the
+        # contrasting unserved path is exercised here.
         unserved = _AcmHub(csv_list=[_strict("CRD_ABSENT")], namespaces=[_namespace_present()], pods=[_pods()])
-
-        denied_execution = _mch_decommission(state_manager, denied).teardown_multiclusterhub()
-        assert denied_execution == SubstepExecution(SubstepOutcome.FAILED, changed=False)
-        assert denied.writes == []
-        assert MCH_DELETE not in denied.requests
 
         unserved_execution = _mch_decommission(state_manager, unserved).teardown_multiclusterhub()
         assert unserved_execution == SubstepExecution(SubstepOutcome.COMPLETED, changed=True)
@@ -4196,6 +4198,9 @@ class TestMultiClusterHubMutationOrdering:
         dec = _mch_decommission(state_manager, hub)
 
         assert dec.teardown_multiclusterhub() == SubstepExecution(SubstepOutcome.FAILED, changed=False)
+        # Non-vacuity: the named GET really was issued, so the negatives below describe a
+        # refused read rather than a run that never reached it.
+        assert ("GET", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE, MCH_NAME) in hub.requests
         assert hub.writes == []
         assert _mch_family_requests(hub, "clusterserviceversions") == []
         assert MCH_DELETE not in hub.requests
