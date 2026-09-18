@@ -120,9 +120,11 @@ Users can choose from multiple deployment methods based on their requirements:
 - Separate service accounts for operator (read/write) and validator (read-only)
 - No wildcard permissions
 - Namespace-scoped permissions where possible
-- Baseline operator RBAC includes `MultiClusterObservability` delete for normal old-hub finalization, while `ManagedCluster` and cluster-scoped `MultiClusterHub` decommission deletes remain in the optional extension
+- Baseline operator RBAC includes `MultiClusterObservability` delete for normal old-hub finalization, while the `ManagedCluster` and `MultiClusterHub` decommission deletes remain in the optional extension. `MultiClusterHub` is a namespace-scoped resource in `open-cluster-management`; the extension is a ClusterRole, so it reaches that resource without naming a namespace
+- The baseline operator Role in `open-cluster-management` carries the decommission reads, not the deletes: `ClusterServiceVersion` get/list and `Deployment` get capture the operator identity before the teardown mutates anything, and `ReplicaSet` get classifies Pod ownership during the drain. They are read-only, operator-only, and appear in no ClusterRole and in no validator role
 - The decommission extension carries `MultiClusterObservability` get alongside its delete so the extension is self-consistent with the calls the standalone teardown makes -- a strict named read before deletion and a final absence proof afterwards -- even though the baseline operator ClusterRole bound to the same service account also grants that read
 - The same extension carries `ManagedCluster` get alongside its delete for the identical named-GET / absence-proof pattern used by UID-preconditioned ManagedCluster teardown. `list` remains on the baseline operator role; the extension must not grow `list`, `patch`, or wildcards on ManagedClusters
+- The same extension carries `MultiClusterHub` get alongside its delete for that identical named-GET / absence-proof pattern: the standalone teardown reads the named `MultiClusterHub` before the UID-preconditioned delete and again to prove it gone. `list` remains on the baseline operator role, and the extension must not grow it
 - Explicit enumeration of all required verbs
 
 ### Risk Mitigation

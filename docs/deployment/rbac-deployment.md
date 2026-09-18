@@ -208,17 +208,27 @@ kubectl apply -f deploy/rbac/extensions/decommission/clusterrole.yaml
 kubectl apply -f deploy/rbac/extensions/decommission/clusterrolebinding.yaml
 ```
 
-The baseline namespace Roles include only the `open-cluster-management`
-namespaced `multiclusterhubs` list rule. The baseline ClusterRole includes
+In the `open-cluster-management` namespace the baseline operator Role carries the
+namespaced `multiclusterhubs` list rule plus the decommission reads: `get` and `list` on
+`clusterserviceversions`, `get` on `deployments` and `get` on `replicasets`. The
+ClusterServiceVersion and Deployment reads capture the ACM operator identity before
+teardown mutates anything and the ReplicaSet read classifies Pod ownership during the
+drain; all three rules are read-only and operator-only, and
+the validator Role in that namespace has none of them. The baseline ClusterRole includes
 `delete` on `multiclusterobservabilities` for normal finalization cleanup, and
 the optional extension also carries the Hive `clusterdeployments` read used by
-the decommission `preserveOnDelete` safety gate as `list` plus the cluster-scoped delete
-permissions needed to complete decommission. The extension grants `get` as well as
+the decommission `preserveOnDelete` safety gate as `list` plus the named reads and
+deletes needed to complete decommission. The extension grants `get` as well as
 `delete` on `multiclusterobservabilities` so that it is self-consistent with the calls the
 standalone teardown makes -- it reads the named MultiClusterObservability before deleting it
 and again for its final absence proof. The same extension grants `get` as well as `delete` on
 `managedclusters` for the UID-preconditioned ManagedCluster teardown named-GET and absence-proof
-path (`list` stays on the baseline operator role). The baseline operator ClusterRole is bound to the same
+path (`list` stays on the baseline operator role). It grants `get` as well as `delete` on
+`multiclusterhubs` for the same reason: the standalone teardown reads the named
+MultiClusterHub before the UID-preconditioned delete and again for its absence proof.
+MultiClusterHub is a namespace-scoped resource in `open-cluster-management`, and this
+ClusterRole reaches it there without naming the namespace; `list` stays on the baseline
+operator role. The baseline operator ClusterRole is bound to the same
 service account and also grants those reads; the extension lists them so a validator or
 certification run that inspects the extension alone still sees them.
 
