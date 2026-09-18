@@ -96,6 +96,12 @@ def _python_hub_permissions(
             if skip_observability and api_group == "observability.open-cluster-management.io":
                 continue
             permissions.extend(_expand([(api_group, resource, verbs)]))
+        # The integrated path validates the decommission namespace reads alongside the
+        # ordinary namespace checks, using the same table the standalone path consumes.
+        for namespace, entries in RBACValidator.DECOMMISSION_NAMESPACE_PERMISSIONS.items():
+            if skip_observability and namespace == "open-cluster-management-observability":
+                continue
+            permissions.extend(_expand(entries, namespace=namespace))
 
     if include_old_hub_finalization and not skip_observability:
         if role != "operator":

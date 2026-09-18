@@ -12,6 +12,10 @@ from jinja2 import Environment
 
 import ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_validate as acm_rbac_validate_module
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    ACM_NAMESPACE,
+    APPS,
+    CSV_API_GROUP,
+    CSV_PLURAL,
     MANAGED_CLUSTER_AGENT_NAMESPACE,
 )
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_validate import (
@@ -968,4 +972,176 @@ def test_denied_mco_named_get_fails_decommission_rbac_closed_with_sanitized_outp
     # Sanitized: the resource and verb are named, the raw SSAR body is not reported.
     rendered = json.dumps(exit_result, default=str)
     assert "multiclusterobservabilities" in rendered
+    assert _RAW_SSAR_BODY_SENTINEL not in rendered
+
+
+MEASURED_ACM_DECOMMISSION_READS = [
+    (CSV_API_GROUP, CSV_PLURAL, "get", ACM_NAMESPACE),
+    (CSV_API_GROUP, CSV_PLURAL, "list", ACM_NAMESPACE),
+    (APPS, "deployments", "get", ACM_NAMESPACE),
+    (APPS, "replicasets", "get", ACM_NAMESPACE),
+]
+
+
+def test_decommission_namespace_table_requires_the_measured_acm_reads():
+    """The ACM-namespace decommission table mirrors the Python table entry for entry.
+
+    Same order as ``lib/rbac_validator.py`` so the parity suites can compare the expanded
+    lists, not just their sets.
+    """
+    assert acm_rbac_validate_module.DECOMMISSION_NAMESPACE_PERMISSIONS[ACM_NAMESPACE] == [
+        ("", "pods", ["get", "list"]),
+        (CSV_API_GROUP, CSV_PLURAL, ["get", "list"]),
+        (APPS, "deployments", ["get"]),
+        (APPS, "replicasets", ["get"]),
+    ]
+
+
+def test_decommission_cluster_table_requires_multiclusterhub_named_get():
+    """The standalone teardown reads the MultiClusterHub by name before and after deleting it."""
+    mch_entry = next(
+        entry for entry in acm_rbac_validate_module.DECOMMISSION_CLUSTER_PERMISSIONS if entry[1] == "multiclusterhubs"
+    )
+
+    assert mch_entry == (
+        "operator.open-cluster-management.io",
+        "multiclusterhubs",
+        ["get", "list", "delete"],
+    )
+
+
+@pytest.mark.parametrize("permission", MEASURED_ACM_DECOMMISSION_READS)
+def test_decommission_only_requires_the_measured_acm_reads(permission):
+    """The standalone decommission sweep must ask for every measured ACM-namespace read."""
+    permissions = expand_rbac_requirements(
+        role="operator",
+        include_decommission=True,
+        include_old_hub_finalization=False,
+        skip_observability=True,
+        argocd_mode="none",
+        argocd_install_type="unknown",
+        decommission_only=True,
+    )
+
+    assert permission in permissions
+
+
+@pytest.mark.parametrize("permission", MEASURED_ACM_DECOMMISSION_READS)
+def test_integrated_decommission_requires_the_measured_acm_reads(permission):
+    """The integrated preflight sweep must ask for them too.
+
+    ``roles/preflight`` expands with ``decommission_only=false`` and runs the
+    SelfSubjectAccessReview sweep over exactly this list, so a permission missing here is a
+    permission the integrated path never checks.
+    """
+    permissions = expand_rbac_requirements(
+        role="operator",
+        include_decommission=True,
+        include_old_hub_finalization=False,
+        skip_observability=True,
+        argocd_mode="none",
+        argocd_install_type="unknown",
+    )
+
+    assert permission in permissions
+
+
+@pytest.mark.parametrize("permission", MEASURED_ACM_DECOMMISSION_READS)
+def test_integrated_expansion_without_decommission_omits_the_measured_acm_reads(permission):
+    """Least privilege: ordinary preflight must not ask for the teardown-only reads."""
+    permissions = expand_rbac_requirements(
+        role="operator",
+        include_decommission=False,
+        include_old_hub_finalization=False,
+        skip_observability=False,
+        argocd_mode="none",
+        argocd_install_type="unknown",
+    )
+
+    assert permission not in permissions
+
+
+def test_measured_acm_reads_are_never_granted_write_or_watch_verbs():
+    """The three new resources are read-only in every decommission table."""
+    measured_resources = {CSV_PLURAL, "deployments", "replicasets"}
+    entries = [
+        *acm_rbac_validate_module.DECOMMISSION_CLUSTER_PERMISSIONS,
+        *acm_rbac_validate_module.DECOMMISSION_PERMISSIONS,
+    ]
+    for namespace_entries in acm_rbac_validate_module.DECOMMISSION_NAMESPACE_PERMISSIONS.values():
+        entries.extend(namespace_entries)
+
+    offending = {
+        (resource, verb)
+        for _api_group, resource, verbs in entries
+        for verb in verbs
+        if resource in measured_resources and verb not in {"get", "list"}
+    }
+
+    assert not offending, f"Non-read verbs on measured decommission reads: {sorted(offending)}"
+
+
+def test_denied_csv_list_fails_integrated_decommission_rbac_closed(monkeypatch):
+    """A denied ClusterServiceVersion ``list`` must fail the integrated preflight RBAC gate.
+
+    The sweep can only deny a permission the expansion asked for: the discriminating
+    assertion is that the integrated expansion this run reports actually contains the
+    namespaced CSV ``list``, so a hub missing that grant is caught in preflight rather than
+    mid-teardown.
+    """
+    denied_permissions = _render_denied_permissions_from_run_ssar(
+        [
+            {
+                "item": [CSV_API_GROUP, CSV_PLURAL, "list", ACM_NAMESPACE],
+                "result": {
+                    "status": {
+                        "allowed": False,
+                        "reason": "Permission denied",
+                        "evaluationError": _RAW_SSAR_BODY_SENTINEL,
+                    },
+                },
+            }
+        ]
+    )
+
+    captured = {}
+
+    class FakeModule:
+        def __init__(self, *args, **kwargs):
+            self.params = {
+                "hub": "primary",
+                "role": "operator",
+                "include_decommission": True,
+                "include_old_hub_finalization": False,
+                "decommission_only": False,
+                "scope": "hub",
+                "skip_observability": True,
+                "argocd_mode": "none",
+                "argocd_install_type": "vanilla",
+                "denied_permissions": denied_permissions,
+                "result_id": None,
+                "failure_message": None,
+                "success_message": None,
+                "recommended_action": None,
+            }
+            self.check_mode = False
+
+        def exit_json(self, **kwargs):
+            captured["exit"] = kwargs
+
+        def fail_json(self, **kwargs):
+            raise AssertionError(f"unexpected fail_json: {kwargs}")
+
+    monkeypatch.setattr(acm_rbac_validate_module, "AnsibleModule", FakeModule)
+
+    main()
+
+    exit_result = captured["exit"]
+
+    assert (CSV_API_GROUP, CSV_PLURAL, "list", ACM_NAMESPACE) in exit_result["permissions"]
+    assert exit_result["passed"] is False
+    assert exit_result["critical_failures"] == 1
+
+    rendered = json.dumps(exit_result, default=str)
+    assert CSV_PLURAL in rendered
     assert _RAW_SSAR_BODY_SENTINEL not in rendered
