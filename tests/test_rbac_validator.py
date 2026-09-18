@@ -1830,7 +1830,9 @@ class TestIntegratedDecommissionNamespacePermissions:
 
         group_name = api_group if api_group else "core"
         assert all_valid is False
-        assert f"Missing permission in {ACM_NAMESPACE}: {verb} {group_name}/{resource}" in all_errors["namespaces"]
+        assert all_errors["namespaces"] == [
+            f"Missing permission in {ACM_NAMESPACE}: {verb} {group_name}/{resource} - Permission denied"
+        ]
 
     def test_validate_all_permissions_with_decommission_checks_exact_permission_set(self, validator):
         """The integrated decommission sweep is the baseline surface plus the decommission tables.
