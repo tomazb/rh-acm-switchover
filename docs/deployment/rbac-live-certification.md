@@ -50,17 +50,32 @@ Live certification is absent from normal release validation unless the profile d
 
 The certification validates that the `acm-switchover-operator` service account has:
 
-- **Cluster-scoped permissions**:
+- **Permissions checked without a namespace** (the SubjectAccessReview is issued cluster-wide):
   - Read: namespaces, nodes, clusteroperators, clusterversions, managedclusters, clusterdeployments, multiclusterhubs, multiclusterobservabilities
   - Write: managedclusters (patch)
   - Delete: multiclusterobservabilities (for old-hub finalization)
   - Delete: managedclusters, multiclusterhubs (for decommission)
 
+  `multiclusterhubs` is a **namespace-scoped** resource that lives in `open-cluster-management`;
+  the MultiClusterHub delete is a namespaced resource operation, not a cluster-scoped one. It is
+  listed here because the grant mechanism, not the resource's API scope, is cluster-wide: the
+  baseline ClusterRole (`get`, `list`) and the optional decommission-extension ClusterRole
+  (`delete`) are attached with ClusterRoleBindings, which authorize those verbs in every namespace,
+  so the certification issues the review without a namespace. `managedclusters`, by contrast, is a
+  genuinely cluster-scoped resource.
+
 - **Namespace-scoped permissions**:
   - `open-cluster-management-backup`: backupschedules, restores, backups, configmaps, secrets, pods
-  - `open-cluster-management`: pods
+  - `open-cluster-management`: pods; with `include_decommission: true` also clusterserviceversions
+    (get, list), deployments (get) and replicasets (get)
   - `open-cluster-management-observability`: statefulsets, deployments, pods, routes
   - `multicluster-engine`: configmaps
+
+  The four extra `open-cluster-management` reads are the operator-identity surface that guarded
+  teardown exercises: it resolves the ClusterServiceVersion owning the ACM operator Deployment,
+  re-reads that Deployment, and walks Pod → ReplicaSet → Deployment ownership while draining the
+  namespace. They are certified only when `include_decommission: true`; a baseline run must not
+  require them.
 
 The shipped deployment binds the baseline operator ClusterRole and the optional decommission
 extension to the SAME service account, so a standalone `--decommission` run normally carries
@@ -74,7 +89,10 @@ standalone guarded teardown issues a strict named GET before each UID-preconditi
 again for the final absence proof. The profile-driven certification expansion above covers the
 baseline operator role, where those reads are already part of the baseline cluster read surface;
 the extension-only identity is the case this paragraph records. Nothing in this section asserts
-that a live certification run has been performed.
+that a live certification run has been performed. Neither this document nor the local unit tests
+in `tests/release/checks/test_rbac_certification.py` are evidence of live certification: they only
+pin the permission matrix the certification would submit. Certification evidence exists solely as
+the SubjectAccessReview artifacts of an actual gated run against a cluster.
 
 ### Secondary Hub (Profile-Driven Scope)
 
@@ -127,7 +145,7 @@ scenarios/rbac-bootstrap-live/
   "include_decommission": true,
   "include_old_hub_finalization": true,
   "include_forbidden_permissions": true,
-  "total_permissions": 63,
+  "total_permissions": 67,
   "denied_count": 0,
   "forbidden_allowed_count": 0,
   "error_count": 0,

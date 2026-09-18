@@ -128,6 +128,8 @@ def _get_required_permissions(
         permissions.extend(_expand_permission_entries(entries, namespace=namespace))
     if include_decommission:
         permissions.extend(_expand_permission_entries(RBACValidator.DECOMMISSION_PERMISSIONS))
+        for namespace, entries in RBACValidator.DECOMMISSION_NAMESPACE_PERMISSIONS.items():
+            permissions.extend(_expand_permission_entries(entries, namespace=namespace))
     if include_old_hub_finalization:
         permissions.extend(_expand_permission_entries(RBACValidator.OLD_HUB_FINALIZATION_PERMISSIONS))
     return list(dict.fromkeys(permissions))
@@ -433,7 +435,8 @@ def certify_rbac_permissions(
         role: Role to certify (operator or validator)
         namespace: Namespace where service account exists
         service_account: Service account name to impersonate
-        include_decommission: Include decommission delete permissions
+        include_decommission: Include the decommission permission surface (required
+            namespaced reads in open-cluster-management and the delete extras)
         include_old_hub_finalization: Include old-hub MCO delete permission
 
     Returns:
