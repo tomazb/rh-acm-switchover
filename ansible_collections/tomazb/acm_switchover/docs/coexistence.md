@@ -130,6 +130,35 @@ and do not depend on this setting.
 process records the phase it started at (`resume_start_phase`), last resume
 wins. Shared key names are pinned by `tests/test_checkpoint_state_parity.py`.
 
+## MultiClusterHub teardown
+
+MultiClusterHub teardown is dual-supported, and the contract both runtimes hold is
+(issue #290):
+
+- the operator identity is captured once, from the MultiClusterHub-owning
+  ClusterServiceVersion down to its install Deployment, and bound to the target
+  before the delete;
+- an identity that cannot be determined is recorded as an **explicit unavailable
+  identity** rather than guessed — it excludes no Pod from the drain;
+- Pods are classified by owner chain (Pod → sole controller ReplicaSet → sole
+  controller Deployment, UID-matched against the recorded Deployment), never by Pod
+  name;
+- the drain and the completion proof fail closed: a drain still blocked at the end of
+  the budget, a pass that cannot be read, and a recorded identity that no longer holds
+  all stop the run;
+- a resumed run reuses the recorded target and the recorded identity verbatim — it
+  never rediscovers, rebinds, or upgrades either;
+- final evidence comes only from the last live pass, and a `completed` record is
+  re-proved live on the next run instead of being trusted;
+- check mode and `dry_run` read only: they capture nothing durable, delete nothing,
+  and report no mutation;
+- `changed` means this run's delete was accepted; a preview publishes `would_change`
+  instead.
+
+As with every other durable state on this seam, the Python and collection formats that
+carry this teardown are **independent and not interoperable** — parity is the behavior
+above, not the stored shape.
+
 ## GitOps Integration Boundary
 
 Generic GitOps marker detection in the collection is **read-only and warning-oriented**.

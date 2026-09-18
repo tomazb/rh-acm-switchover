@@ -377,14 +377,10 @@ def test_collection_artifact_schema_documents_current_checkpoint_contract():
 def test_rbac_docs_match_observability_route_and_scale_permissions():
     """Operator-facing RBAC docs must not drift from the enforced observability matrix."""
     rbac_requirements = _read("docs/deployment/rbac-requirements.md")
-    install_doc = _read("docs/getting-started/install.md")
 
     assert "- **Verbs**: `get`" in rbac_requirements
     assert "- **Verbs**: `get`, `list`\n- **Scope**: Namespace-scoped (various)" not in rbac_requirements
     assert "`statefulsets/scale` (get, patch)" in rbac_requirements
-    assert 'resources: ["routes"]' in install_doc
-    assert 'verbs: ["get"]' in install_doc
-    assert 'resources: ["deployments", "statefulsets", "statefulsets/scale"]' in install_doc
 
 
 def test_rbac_requirements_document_current_cluster_read_permissions():
@@ -2296,3 +2292,109 @@ def test_documented_verification_loops_aggregate_failures():
         "if the loop was replaced, re-point this test at whatever replaced it rather than "
         "leaving it inspecting nothing."
     )
+
+
+PARITY_MATRIX_DOC = "docs/ansible-collection/parity-matrix.md"
+BEHAVIOR_MAP_DOC = "docs/ansible-collection/behavior-map.md"
+CLI_MIGRATION_MAP_DOC = "ansible_collections/tomazb/acm_switchover/docs/cli-migration-map.md"
+VARIABLE_REFERENCE_DOC = "ansible_collections/tomazb/acm_switchover/docs/variable-reference.md"
+INSTALL_DOC = "docs/getting-started/install.md"
+RBAC_REQUIREMENTS_DOC = "docs/deployment/rbac-requirements.md"
+
+
+def _table_row(path: str, prefix: str) -> str:
+    """The one table row of `path` starting with `prefix`."""
+    rows = [line for line in _read(path).splitlines() if line.startswith(prefix)]
+    assert len(rows) == 1, f"{path} must carry exactly one {prefix.strip()} row, found {len(rows)}"
+    return rows[0]
+
+
+@pytest.mark.parametrize(
+    "path, row_prefix",
+    [
+        (PARITY_MATRIX_DOC, "| decommission |"),
+        (CLI_MIGRATION_MAP_DOC, "| Decommission old hub |"),
+        (VARIABLE_REFERENCE_DOC, None),
+    ],
+)
+def test_mch_teardown_docs_do_not_regress_to_warning_only(path, row_prefix):
+    """MultiClusterHub teardown is a fail-closed contract; no doc may sell it as a warning (#290)."""
+    text = _read(path) if row_prefix is None else _table_row(path, row_prefix)
+
+    for forbidden in ("does not fail that substep", "only warns on timeout", "warns and continues"):
+        assert forbidden not in text, f"{path} still describes MultiClusterHub teardown as warning-only: {forbidden!r}"
+
+    assert "MultiClusterHub" in text, f"{path} must still describe MultiClusterHub teardown"
+    assert "fail" in text, f"{path} must state that MultiClusterHub teardown fails closed"
+
+
+def test_current_rbac_docs_do_not_call_multiclusterhub_cluster_scoped():
+    """MultiClusterHub is namespace-scoped in `open-cluster-management`; only the grant is cluster-wide."""
+    guarded_paths = (
+        RBAC_REQUIREMENTS_DOC,
+        "docs/deployment/rbac-deployment.md",
+        "docs/deployment/rbac-live-certification.md",
+        "docs/deployment/rbac-live-certification-summary.md",
+        "docs/development/rbac-implementation.md",
+        INSTALL_DOC,
+        "docs/operations/usage.md",
+    )
+
+    for path in guarded_paths:
+        lines = _read(path).splitlines()
+        for index, line in enumerate(lines):
+            if "multiclusterhub" not in line.lower():
+                continue
+            window = lines[max(0, index - 1) : index + 2]
+            if not any("cluster-scoped" in neighbour for neighbour in window):
+                continue
+            assert "not a cluster-scoped" in line or "namespace-scoped" in line, (
+                f"{path}:{index + 1} places MultiClusterHub next to cluster-scoped wording without saying it is "
+                f"namespace-scoped: {line}"
+            )
+
+
+def test_install_doc_references_shipped_rbac_instead_of_inline_rules():
+    """install.md must route to the shipped manifests, not carry its own drifting ClusterRole copies."""
+    content = _read(INSTALL_DOC)
+
+    assert "kind: ClusterRole" not in content, "install.md must not inline ClusterRole YAML; deploy/rbac/ owns it"
+    assert "deploy/rbac/" in content
+    assert "rbac-requirements.md" in content
+
+    lines = content.splitlines()
+    for index, line in enumerate(lines):
+        if "multiclusterhubs" not in line:
+            continue
+        window = "\n".join(lines[index : index + 3])
+        assert 'verbs: ["delete"]' not in window, f"install.md:{index + 1} still inlines a multiclusterhubs delete rule"
+
+
+def test_behavior_map_maps_mch_identity_modules():
+    """The behavior map must map the MultiClusterHub identity surface to its collection counterparts (#290)."""
+    content = _read(BEHAVIOR_MAP_DOC)
+
+    for path in (
+        "modules/decommission_identity.py",
+        "plugins/modules/acm_pod_owner_classify.py",
+        "plugins/module_utils/pod_owner_classify.py",
+        "roles/decommission/tasks/delete_multiclusterhub.yml",
+    ):
+        assert path in content, f"behavior-map.md must map {path}"
+
+
+def test_rbac_requirements_document_decommission_namespace_reads():
+    """The decommission reads in `open-cluster-management` must stay documented with their verbs."""
+    content = _read(RBAC_REQUIREMENTS_DOC)
+
+    assert "`clusterserviceversions` (get, list - operators.coreos.com)" in content
+    assert "`replicasets` (get - apps)" in content
+    assert "`get`, `list` on `clusterserviceversions`" in content
+
+
+def test_changelog_unreleased_records_mch_identity_teardown():
+    """The active changelog section must carry the MultiClusterHub identity teardown and its RBAC upgrade note."""
+    unreleased = _read("CHANGELOG.md").split("## [Unreleased]", 1)[1].split("\n## [", 1)[0]
+
+    for token in ("MultiClusterHub", "clusterserviceversions", "#290", "Upgrade note"):
+        assert token in unreleased, f"CHANGELOG [Unreleased] must record {token!r} for the R4-03 teardown work"

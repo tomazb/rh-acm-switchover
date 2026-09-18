@@ -224,9 +224,14 @@ Standalone decommission requires non-empty
 `acm_switchover_hubs.primary.context`. The role refuses to rely on Ansible's
 implicit or default kube context before any Kubernetes operation runs.
 
-After deleting `MultiClusterHub` resources, decommission waits for non-operator
-ACM workload pods to terminate. If pods remain after the bounded wait, the role
-warns and continues so the result matches the Python CLI's warning behavior.
+After the UID-guarded `MultiClusterHub` delete, decommission drains the remaining
+ACM Pods in `open-cluster-management`, deciding ownership by owner chain against
+the operator Deployment recorded with the teardown rather than by Pod name. The
+drain is bounded at 1200 seconds, polled every 30 seconds. Pods that still block
+the drain at the end of that budget, a drain pass that cannot be read, and a
+recorded operator identity that no longer holds all fail the role — in execute
+mode an inconsistent identity is first written as `recovery_required` — matching
+the Python CLI's fail-closed behavior.
 
 ### `acm_switchover_rbac_bootstrap`
 

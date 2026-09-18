@@ -21,12 +21,13 @@ Source: `lib/`, `modules/`, `scripts/`
 | `modules/post_activation.py` | `roles/post_activation/` | 3 |
 | `modules/finalization.py` | `roles/finalization/` | 3 |
 | `modules/backup_schedule.py` | `roles/finalization/tasks/enable_backups.yml`, `roles/finalization/tasks/repair_backup_schedule_collision.yml` | 3 |
-| `modules/decommission.py` | `roles/decommission/`, with the standalone phase lifecycle in `playbooks/decommission.yml`. The MultiClusterObservability substep's shared phase machine, UID-preconditioned guarded delete, durable per-resource phase records, and destination-observability gate are each mirrored independently — see the guarded-delete row below and the *MultiClusterObservability teardown boundary* paragraph later in [Current-to-Collection Mapping](#current-to-collection-mapping) | 6 |
+| `modules/decommission.py` | `roles/decommission/`, with the standalone phase lifecycle in `playbooks/decommission.yml`. The shared phase machine, UID-preconditioned guarded delete, durable per-resource phase records, and destination-observability gate are each mirrored independently; the MultiClusterHub substep adds operator-identity capture and owner-chain Pod classification, orchestrated by `roles/decommission/tasks/delete_multiclusterhub.yml` — see the guarded-delete and identity rows below, the *MultiClusterObservability teardown boundary* paragraph, and the *MultiClusterHub identity ownership split* paragraph later in [Current-to-Collection Mapping](#current-to-collection-mapping) | 6 |
 | `lib/rbac_validator.py` | `roles/preflight/` validation behavior | 2 |
 | `lib/validation.py` | centralized collection validation layer | 2 |
 | `lib/kube_client.py` legacy readers | stock `kubernetes.core` usage plus later helper code | 2-3 |
-| `lib/strict_read.py` + `lib/kube_client.py` strict producers (`list_custom_resources_strict`, `get_custom_resource_strict`, `get_namespace_strict`, `list_pods_strict`, `get_deployment_strict`, `get_replicaset_strict`) | `plugins/modules/acm_k8s_read_outcome.py` | 3 |
-| `lib/kube_client.py` `delete_custom_resource_preconditioned` (UID-preconditioned guarded delete used by the MultiClusterObservability phase machine) | `plugins/modules/acm_uid_guarded_delete.py`, `plugins/module_utils/uid_guarded_delete.py` | 6 |
+| `lib/strict_read.py` + `lib/kube_client.py` strict producers (`list_custom_resources_strict`, `get_custom_resource_strict`, `get_namespace_strict`, `list_pods_strict`, `get_deployment_strict`, `get_replicaset_strict`) | `plugins/module_utils/k8s_read.py`, with `plugins/modules/acm_k8s_read_outcome.py` as the thin module wrapper over those helpers | 3 |
+| `lib/kube_client.py` `delete_custom_resource_preconditioned` (UID-preconditioned guarded delete used by the shared teardown phase machine for MultiClusterObservability, ManagedCluster and MultiClusterHub) | `plugins/modules/acm_uid_guarded_delete.py`, `plugins/module_utils/uid_guarded_delete.py` | 6 |
+| `modules/decommission_identity.py` (`capture_operator_identity`, `classify_pods`) | `plugins/modules/acm_pod_owner_classify.py` (`capture_identity` and `classify` operations), `plugins/module_utils/pod_owner_classify.py` | 6 |
 | `lib/utils.py` checkpoint semantics | `plugins/action/checkpoint_phase.py`, `plugins/module_utils/checkpoint.py` | 4 |
 
 In `validate` mode (`acm_switchover_execution.mode: validate`), the checkpoint
@@ -79,6 +80,17 @@ Both classify the same five outcomes (`source_observability_unverifiable`, `sour
 `acknowledgement_not_applicable`) and both accept the override only for a destination proven to have no
 observability: Python `--acknowledge-observability-not-migrated`, collection
 `acm_switchover_decommission.acknowledge_observability_not_migrated`.
+
+**MultiClusterHub identity ownership split.** On both sides the identity/classification helper
+(`modules/decommission_identity.py`, `plugins/module_utils/pod_owner_classify.py` behind
+`acm_pod_owner_classify`) is read-side only: it captures the operator Deployment identity from the
+MultiClusterHub-owning ClusterServiceVersion, or returns an explicit unavailable identity, and it
+decides per Pod whether the owner chain reaches the recorded Deployment. It persists nothing,
+deletes nothing and waits for nothing. The orchestration owns the rest — durable records, the phase
+table, the UID-preconditioned delete, the bounded waits and the completion proof: `modules/decommission.py`
+for Python, `roles/decommission/tasks/delete_multiclusterhub.yml` for the collection. The two
+implementations are independent and never import each other at runtime; parity is behavioral and is
+held by shared identity vectors in `tests/test_mch_identity_parity.py`.
 
 | `lib/argocd.py` | `roles/argocd_manage/`, preflight read-only advisory discovery, and deferred playbook | 5 |
 | `lib/gitops_detector.py` | preflight detection and warnings, including non-blocking Argo CD ACM-touching Application advisory output | 5 |
