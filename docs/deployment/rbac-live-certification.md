@@ -53,14 +53,16 @@ The certification validates that the `acm-switchover-operator` service account h
 - **Permissions checked without a namespace** (the SubjectAccessReview is issued cluster-wide):
   - Read: namespaces, nodes, clusteroperators, clusterversions, managedclusters, clusterdeployments, multiclusterhubs, multiclusterobservabilities
   - Write: managedclusters (patch)
-  - Delete: multiclusterobservabilities (for old-hub finalization)
+  - Delete: multiclusterobservabilities (for old-hub finalization, and also part of the decommission
+    surface, so `include_old_hub_finalization: true` adds nothing once `include_decommission: true` is
+    set — both flag combinations certify the same 67 permissions)
   - Delete: managedclusters, multiclusterhubs (for decommission)
 
   `multiclusterhubs` is a **namespace-scoped** resource that lives in `open-cluster-management`;
   the MultiClusterHub delete is a namespaced resource operation, not a cluster-scoped one. It is
   listed here because the grant mechanism, not the resource's API scope, is cluster-wide: the
   baseline ClusterRole (`get`, `list`) and the optional decommission-extension ClusterRole
-  (`delete`) are attached with ClusterRoleBindings, which authorize those verbs in every namespace,
+  (`get`, `delete`) are attached with ClusterRoleBindings, which authorize those verbs in every namespace,
   so the certification issues the review without a namespace. `managedclusters`, by contrast, is a
   genuinely cluster-scoped resource.
 
