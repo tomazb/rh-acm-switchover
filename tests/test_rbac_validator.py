@@ -1800,8 +1800,10 @@ class TestIntegratedDecommissionNamespacePermissions:
     @pytest.mark.parametrize(
         ("api_group", "resource", "verb"),
         [
+            (CSV_API_GROUP, CSV_PLURAL, "get"),
             (CSV_API_GROUP, CSV_PLURAL, "list"),
             ("apps", "deployments", "get"),
+            ("apps", "replicasets", "get"),
         ],
     )
     def test_validate_all_permissions_with_decommission_fails_when_measured_acm_read_denied(

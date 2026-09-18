@@ -23,7 +23,9 @@ options:
     type: str
     default: operator
   include_decommission:
-    description: Whether to include delete permissions required for hub decommission.
+    description:
+      - Whether to include the permissions required for hub decommission - the cluster-scoped
+        deletes and the namespace-scoped reads the teardown issues.
     type: bool
     default: false
   include_old_hub_finalization:
