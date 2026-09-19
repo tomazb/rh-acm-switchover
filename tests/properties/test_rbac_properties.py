@@ -15,6 +15,7 @@ from hypothesis import example, given
 from hypothesis import strategies as st
 
 from lib.constants import (
+    ACM_NAMESPACE,
     BACKUP_NAMESPACE,
     MANAGED_CLUSTER_AGENT_NAMESPACE,
     MCE_NAMESPACE,
@@ -306,6 +307,10 @@ def _python_permissions_raw(case: RbacSelectorCase | InvalidRbacSelectorCase) ->
             if case.skip_observability and api_group == "observability.open-cluster-management.io":
                 continue
             permissions.extend(_expand([(api_group, resource, verbs)]))
+        for namespace, entries in RBACValidator.DECOMMISSION_NAMESPACE_PERMISSIONS.items():
+            if case.skip_observability and namespace == OBSERVABILITY_NAMESPACE:
+                continue
+            permissions.extend(_expand(entries, namespace))
     if case.include_old_hub_finalization and not case.skip_observability:
         permissions.extend(_expand(RBACValidator.OLD_HUB_FINALIZATION_PERMISSIONS))
     return permissions
@@ -420,24 +425,32 @@ def _assert_validator_read_contract(
 
 
 def _expected_raw_duplicate_overlap(case: RbacSelectorCase) -> dict[Permission, int]:
-    """Return the one reviewed overlap produced before effective-set normalization."""
-    if (
-        case.role == "operator"
-        and case.scope == "hub"
-        and not case.decommission_only
-        and case.include_decommission
-        and case.include_old_hub_finalization
-        and not case.skip_observability
-    ):
-        return {
+    """Return the reviewed overlaps produced before effective-set normalization."""
+    if case.role != "operator" or case.scope != "hub" or case.decommission_only:
+        return {}
+
+    overlap: dict[Permission, int] = {}
+
+    if case.include_decommission:
+        # The decommission namespace table keeps the Pod reads the baseline hub table
+        # already carries, so the integrated expansion asks for them from both tables.
+        overlap[("", "pods", "get", ACM_NAMESPACE)] = 2
+        overlap[("", "pods", "list", ACM_NAMESPACE)] = 2
+        if not case.skip_observability:
+            overlap[("", "pods", "get", OBSERVABILITY_NAMESPACE)] = 2
+            overlap[("", "pods", "list", OBSERVABILITY_NAMESPACE)] = 2
+
+    if case.include_decommission and case.include_old_hub_finalization and not case.skip_observability:
+        overlap[
             (
                 "observability.open-cluster-management.io",
                 "multiclusterobservabilities",
                 "delete",
                 None,
-            ): 2
-        }
-    return {}
+            )
+        ] = 2
+
+    return overlap
 
 
 def _expected_operator_mutations(case: RbacSelectorCase) -> set[Permission]:

@@ -114,6 +114,18 @@ manifests, and Helm templates must stay aligned when permissions change.
 - **Scope**: Namespace-scoped (`open-cluster-management-observability`)
 - **Purpose**: Scale Thanos compactor during primary hub preparation
 
+#### Deployments (ACM namespace)
+- **Resources**: `deployments`
+- **Verbs**: `get`
+- **Scope**: Namespace-scoped (`open-cluster-management`), operator role only
+- **Purpose**: Decommission operator-identity capture — read the ACM operator `Deployment` named by the owning `ClusterServiceVersion`
+
+#### ReplicaSets
+- **Resources**: `replicasets`
+- **Verbs**: `get`
+- **Scope**: Namespace-scoped (`open-cluster-management`), operator role only
+- **Purpose**: Decommission drain ownership classification — walk a Pod's owner chain from its `ReplicaSet` to the operator `Deployment`
+
 #### StatefulSet Scale Subresource
 - **Resources**: `statefulsets/scale`
 - **Verbs**: `get`, `patch`
@@ -185,12 +197,20 @@ manifests, and Helm templates must stay aligned when permissions change.
 
 #### MultiClusterHubs
 - **Resources**: `multiclusterhubs`
-- **Verbs**: `get`, `list` cluster-wide; `list` in `open-cluster-management` for namespaced discovery
-- **Scope**: Cluster-wide and namespace-scoped (`open-cluster-management`)
+- **Verbs**: `get`, `list` in the baseline ClusterRole; `list` again in the `open-cluster-management` operator Role for namespaced discovery
+- **Scope**: `MultiClusterHub` is a namespace-scoped resource living in `open-cluster-management`. The baseline `get`/`list` grant sits in a ClusterRole, which reaches the resource in every namespace without naming one.
 - **Purpose**: 
   - Detect ACM version
   - Verify ACM operator installation
   - Discover namespaced `MultiClusterHub` resources before decommission
+
+### OLM API Group (operators.coreos.com)
+
+#### ClusterServiceVersions
+- **Resources**: `clusterserviceversions`
+- **Verbs**: `get`, `list`
+- **Scope**: Namespace-scoped (`open-cluster-management`), operator role only
+- **Purpose**: Decommission operator-identity capture — find the `ClusterServiceVersion` owning the `MultiClusterHub` CRD and re-read it by name before the identity is made durable
 
 ### Observability API Group (observability.open-cluster-management.io)
 
@@ -249,10 +269,11 @@ These resources require ClusterRole and ClusterRoleBinding:
 - `clusteroperators` (read-only health validation)
 - `clusterversions` (read-only upgrade/status validation)
 - `managedclusters` (ACM-wide operations)
-- `multiclusterhubs` (ACM version detection)
 - `multiclusterobservabilities` (auto-detection and old-hub finalization cleanup)
 - `clusterdeployments` (safety validation)
 - `customresourcedefinitions` (Argo CD install-type detection when GitOps checks are enabled)
+
+`multiclusterhubs` is not in that list: it is a namespace-scoped resource in `open-cluster-management`. Its baseline `get`/`list` grant is still carried by a ClusterRole, which is how one grant reaches the resource in every namespace; a ClusterRole may grant a namespaced resource that way.
 
 ### Optional Decommission Extension
 
@@ -264,10 +285,10 @@ The base deployment binds the baseline operator ClusterRole to the same service 
 - **Additional verbs**:
   - `list` on `clusterdeployments` for the just-in-time `preserveOnDelete` decommission safety check
   - `get`, `delete` on `managedclusters`. `get` is the strict named read the standalone teardown performs before the UID-preconditioned delete and again for absence proof; `list` remains on the baseline operator role
-  - `delete` on cluster-scoped `multiclusterhubs`
+  - `get`, `delete` on `multiclusterhubs`. `get` is the strict named read the standalone teardown performs before the UID-preconditioned delete and again for absence proof; `list` remains on the baseline operator role
   - `get`, `delete` on `multiclusterobservabilities`. `delete` is also present in the baseline operator role for normal finalization. `get` is the strict named read the standalone teardown performs before deletion and again for the final absence proof, listed here so the extension is self-consistent with the calls that teardown makes.
 
-The baseline operator Role includes only `list` on namespaced `multiclusterhubs` in `open-cluster-management`.
+The baseline operator Role in `open-cluster-management` includes `list` on namespaced `multiclusterhubs`, plus the three read-only rules the decommission teardown needs there: `get`, `list` on `clusterserviceversions`, `get` on `deployments` and `get` on `replicasets`. The ClusterServiceVersion and Deployment reads capture the ACM operator identity; the ReplicaSet read classifies Pod ownership during the drain. None of the three is granted by any ClusterRole, and the validator/read-only Role in that namespace carries none of them.
 ManagedCluster and MultiClusterHub delete access remains in the opt-in decommission extension so ordinary switchover operators do not receive hub teardown privileges.
 
 Grant this extension only to service accounts that are allowed to run `--decommission`. The baseline operator role is sufficient for validation, switchover, and post-activation/finalization work.
@@ -305,6 +326,9 @@ These resources use Role and RoleBinding for specific namespaces:
 #### open-cluster-management (if needed)
 - `pods` (get, list)
 - `multiclusterhubs` (list - operator.open-cluster-management.io) for namespaced ACM hub discovery
+- `clusterserviceversions` (get, list - operators.coreos.com) for decommission operator-identity capture (operator role only)
+- `deployments` (get - apps) for decommission operator-identity capture (operator role only)
+- `replicasets` (get - apps) for decommission drain ownership classification (operator role only)
 
 ### Managed-Cluster (Spoke) RBAC
 

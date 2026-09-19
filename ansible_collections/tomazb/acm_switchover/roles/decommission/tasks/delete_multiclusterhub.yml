@@ -1,98 +1,782 @@
 ---
-- name: Announce MultiClusterHub deletion (dry_run)
-  ansible.builtin.debug:
-    msg: "[dry_run] Would delete all MultiClusterHub resources"
-  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+# MultiClusterHub durable teardown phase table (R4-03 PR E / E6).
+#
+# Phase table: delete_started -> cr_absent -> drain_pending -> drained -> completed,
+# with recovery_required as the outstanding-obligation transition. Every record carries
+# exactly one durable identity outcome, captured once through the E5 classifier before
+# the first mutation and never re-derived afterwards.
+#
+# Ownership is decided by tomazb.acm_switchover.acm_pod_owner_classify -- one module
+# call per classification pass -- and never by a Pod name prefix. Discovery is the
+# strict acm_k8s_read_outcome read, so an unverifiable inventory fails closed instead of
+# defaulting to "nothing to delete", and the delete is the UID-guarded module, so a
+# same-name replacement is refused rather than removed.
 
-- name: List MultiClusterHub resources
-  kubernetes.core.k8s_info:
-    kind: MultiClusterHub
-    api_version: operator.open-cluster-management.io/v1
-    namespace: open-cluster-management
-    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
-  register: _multiclusterhub_resources
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+- name: Define the MultiClusterHub teardown identity
+  ansible.builtin.set_fact:
+    _acm_mch_api_version: operator.open-cluster-management.io/v1
+    _acm_mch_key_prefix: operator.open-cluster-management.io/v1/MultiClusterHub/open-cluster-management/
+    # Seeded so every later guard and the role summary have a classification even on a
+    # run that resolves no target and therefore reads nothing after the strict list.
+    _acm_mch_changed: false
+    _acm_mch_would_change: false
+    _acm_mch_clean_skip: false
+    _acm_mch_present: false
+    _acm_mch_bound: false
 
-- name: Delete discovered MultiClusterHub resources
-  kubernetes.core.k8s:
-    kind: MultiClusterHub
-    api_version: operator.open-cluster-management.io/v1
-    name: "{{ item.metadata.name }}"
-    namespace: open-cluster-management
-    state: absent
-    wait: true
-    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
-  loop: "{{ _multiclusterhub_resources.resources | default([]) }}"
-  loop_control:
-    label: "{{ item.metadata.name }}"
-  register: _multiclusterhub_delete_results
-  when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-    - not ansible_check_mode
+# BEFORE the first MultiClusterHub request, exactly as section 6 requires: the durable
+# record permanently binds the target name and the expected UID, so live discovery can
+# only contradict it, never rebind it.
+- name: Load the durable MultiClusterHub teardown records
+  tomazb.acm_switchover.checkpoint_phase:
+    checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+    read_facts: true
+  register: _acm_mch_checkpoint
 
-- name: Wait for ACM workload pods to terminate after MultiClusterHub deletion
-  kubernetes.core.k8s_info:
-    kind: Pod
-    api_version: v1
-    namespace: open-cluster-management
-    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
-  register: _acm_pods_after_mch_delete
-  retries: 120
-  delay: 10
-  until: >-
-    {{
-      (
-        _acm_pods_after_mch_delete.resources
-        | default([])
-        | rejectattr('metadata.name', 'match', '^multiclusterhub-operator')
+# The action plugin validates every stored record on the read itself, so a malformed
+# record has already failed the task above. Nothing here re-validates it in Jinja.
+- name: Select the applicable MultiClusterHub durable records
+  ansible.builtin.set_fact:
+    _acm_mch_records: >-
+      {{
+        _acm_mch_checkpoint.facts.teardown_records
+        | dict2items
+        | selectattr('key', 'match', _acm_mch_key_prefix | regex_escape)
         | list
-        | length
-      ) == 0
-    }}
-  failed_when: false
-  when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-    - not ansible_check_mode
-    - (_multiclusterhub_resources.resources | default([]) | length) > 0
+      }}
 
-- name: Warn when ACM workload pods remain after MultiClusterHub deletion
-  ansible.builtin.debug:
+- name: Fail closed on more than one durable MultiClusterHub record
+  ansible.builtin.fail:
     msg: >-
-      Some ACM pods still running after MultiClusterHub deletion wait.
-      Non-operator pod count={{
-        _acm_pods_after_mch_delete.resources
-        | default([])
-        | rejectattr('metadata.name', 'match', '^multiclusterhub-operator')
-        | list
-        | length
-      }}.
+      More than one durable MultiClusterHub teardown record applies to this hub.
+      Nothing was deleted.
+  when: (_acm_mch_records | length) > 1
+
+- name: Publish the durable MultiClusterHub record
+  ansible.builtin.set_fact:
+    acm_switchover_mch_record: >-
+      {{ _acm_mch_records[0]['value'] if (_acm_mch_records | length) == 1 else '' }}
+
+# Strict, and unconditional: preview and check mode perform the same authoritative
+# discovery an execute run does (section 8). `default([])` on this read would turn an
+# unverifiable inventory into a clean skip, which is exactly what fails closed below.
+- name: Read the source MultiClusterHub inventory
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: list
+    api_version: operator.open-cluster-management.io/v1
+    kind: MultiClusterHub
+    resource_name: multiclusterhubs
+    namespace: open-cluster-management
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: acm_switchover_mch_read
+  no_log: true
+
+- name: Fail closed when the source MultiClusterHub inventory is unverifiable
+  ansible.builtin.fail:
+    msg: >-
+      Cannot verify the source MultiClusterHub inventory. Nothing was deleted
+      (read_status={{ acm_switchover_mch_read.read_status | default('n/a') }}).
+  when: acm_switchover_mch_read.read_status not in ['ok', 'kind_not_served']
+
+- name: Select the live MultiClusterHub inventory
+  ansible.builtin.set_fact:
+    _acm_mch_live: >-
+      {{ acm_switchover_mch_read.resources if acm_switchover_mch_read.read_status == 'ok' else [] }}
+
+- name: Fail closed on an ambiguous MultiClusterHub inventory
+  ansible.builtin.fail:
+    msg: >-
+      The source hub serves more than one MultiClusterHub. The ambiguous inventory was
+      left intact.
+  when: (_acm_mch_live | length) > 1
+
+- name: Fail closed on a malformed MultiClusterHub inventory member
+  ansible.builtin.fail:
+    msg: >-
+      The source MultiClusterHub inventory member carries no usable name or UID.
+      Nothing was deleted.
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-    - _acm_pods_after_mch_delete is defined
+    - (_acm_mch_live | length) == 1
+    - >-
+      _acm_mch_live[0] is not mapping
+      or _acm_mch_live[0].metadata is not defined
+      or _acm_mch_live[0].metadata is not mapping
+      or (_acm_mch_live[0].metadata.name | default('', true) | string | trim | length) == 0
+      or (_acm_mch_live[0].metadata.uid | default('', true) | string | trim | length) == 0
+
+# A durable record is never rediscovered: the recorded key IS the target, and a
+# differently named live MultiClusterHub is a contradiction, not a new binding.
+- name: Bind the MultiClusterHub target from its durable record
+  ansible.builtin.set_fact:
+    _acm_mch_key: "{{ _acm_mch_records[0]['key'] }}"
+    _acm_mch_name: "{{ _acm_mch_records[0]['key'] | split('/') | last }}"
+    _acm_mch_bound: true
+  when: acm_switchover_mch_record is mapping
+
+- name: Refuse a MultiClusterHub inventory that contradicts the durable record
+  ansible.builtin.fail:
+    msg: >-
+      The live MultiClusterHub is not the object recorded for teardown. It was left
+      intact.
+  when:
+    - acm_switchover_mch_record is mapping
+    - (_acm_mch_live | length) == 1
+    - _acm_mch_live[0].metadata.name != _acm_mch_name
+
+- name: Bind the MultiClusterHub target from the strict inventory
+  ansible.builtin.set_fact:
+    _acm_mch_key: "{{ _acm_mch_key_prefix }}{{ _acm_mch_live[0].metadata.name }}"
+    _acm_mch_name: "{{ _acm_mch_live[0].metadata.name }}"
+    _acm_mch_bound: true
+  when:
+    - acm_switchover_mch_record is not mapping
+    - (_acm_mch_live | length) == 1
+
+- name: Read the bound MultiClusterHub before any mutation
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: get
+    api_version: operator.open-cluster-management.io/v1
+    kind: MultiClusterHub
+    resource_name: multiclusterhubs
+    namespace: open-cluster-management
+    name: "{{ _acm_mch_name }}"
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _acm_mch_named_read
+  no_log: true
+  when: _acm_mch_bound | bool
+
+- name: Fail closed when the bound MultiClusterHub state is unverifiable
+  ansible.builtin.fail:
+    msg: >-
+      Cannot verify the state of the recorded MultiClusterHub. Nothing was deleted
+      (read_status={{ _acm_mch_named_read.read_status | default('n/a') }},
+      inventory_count={{ _acm_mch_live | length }}).
+  when:
+    - _acm_mch_bound | bool
+    - _acm_mch_named_read.read_status not in ['ok', 'not_found', 'kind_not_served']
+
+- name: Publish the live MultiClusterHub classification
+  ansible.builtin.set_fact:
+    _acm_mch_present: "{{ _acm_mch_named_read.read_status == 'ok' }}"
+  when: _acm_mch_bound | bool
+
+- name: Fail closed when the live MultiClusterHub identity is unreadable
+  ansible.builtin.fail:
+    msg: >-
+      Cannot establish the UID of the live MultiClusterHub. Nothing was deleted
+      (read_status={{ _acm_mch_named_read.read_status | default('n/a') }}).
+  when:
+    - _acm_mch_present | bool
+    - (_acm_mch_named_read.resources[0].metadata.uid | default('', true) | string | trim | length) == 0
+
+- name: Publish the expected MultiClusterHub UID
+  ansible.builtin.set_fact:
+    _acm_mch_expected_uid: >-
+      {{
+        acm_switchover_mch_record.expected_uid
+        if acm_switchover_mch_record is mapping
+        else _acm_mch_named_read.resources[0].metadata.uid
+      }}
+  when:
+    - _acm_mch_bound | bool
+    - (_acm_mch_present | bool) or (acm_switchover_mch_record is mapping)
+
+- name: Refuse a replacement MultiClusterHub
+  ansible.builtin.fail:
+    msg: >-
+      The live MultiClusterHub is not the object recorded for teardown. The replacement
+      was left intact.
+  when:
+    - _acm_mch_present | bool
+    - acm_switchover_mch_record is mapping
+    - _acm_mch_named_read.resources[0].metadata.uid != _acm_mch_expected_uid
+
+# A live target against a `cr_absent`, `drain_pending` or `drained` record is a
+# reappearance, and section 8's "replacement / ambiguous or unverifiable target → fail
+# preview" plus sections 15 and 16's "target present → fail" apply in every mode. It is
+# therefore NOT the section 8 `would_change` case, which is a `delete_started` record
+# only. This is defence in depth: a same-UID reappearance after a proved 404 is not
+# something an API server can produce, and a different UID has already been refused by
+# the replacement guard above.
+- name: Refuse a post-delete MultiClusterHub record whose target is present again
+  ansible.builtin.fail:
+    msg: >-
+      The recorded MultiClusterHub is present after its recorded delete phase. It was
+      left intact.
+  when:
+    - _acm_mch_present | bool
+    - acm_switchover_mch_record is mapping
+    - acm_switchover_mch_record.phase not in ['delete_started']
+
+# Both the "no record, nothing live" case and the list-to-get disappearance race: with
+# no durable obligation and a positively absent target there is nothing to finish, so
+# the substep skips cleanly without reading the namespace, capturing an identity or
+# issuing a delete. A record, by contrast, always owes its remaining proof.
+- name: Publish the clean MultiClusterHub skip classification
+  ansible.builtin.set_fact:
+    _acm_mch_clean_skip: true
+  when:
+    - acm_switchover_mch_record is not mapping
+    - not (_acm_mch_present | bool)
+
+# Section 9: a new live target's operator identity is captured BEFORE the durable write
+# and the delete, in preview as well as in execute mode, and persisted exactly as the
+# module returned it. An unavailable identity is a determinate, durable fail-closed
+# result, not a reason to reject the capture.
+- name: Capture the MultiClusterHub operator identity
+  tomazb.acm_switchover.acm_pod_owner_classify:
+    operation: capture_identity
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+    namespace: open-cluster-management
+    mch_teardown_key: "{{ _acm_mch_key }}"
+    mch_expected_uid: "{{ _acm_mch_expected_uid }}"
+  register: _acm_mch_identity
+  no_log: true
+  when:
+    - not (_acm_mch_clean_skip | bool)
+    - _acm_mch_present | bool
+    - acm_switchover_mch_record is not mapping
+
+- name: Fail closed when the MultiClusterHub operator identity cannot be captured
+  ansible.builtin.fail:
+    msg: >-
+      The MultiClusterHub operator identity could not be captured. Nothing was written
+      and nothing was deleted.
+  when:
+    - not (_acm_mch_clean_skip | bool)
+    - _acm_mch_present | bool
+    - acm_switchover_mch_record is not mapping
+    - _acm_mch_identity.capture_status == 'error'
+
+- name: Bind the captured MultiClusterHub operator Deployment
+  ansible.builtin.set_fact:
+    _acm_mch_operator_deployment: "{{ _acm_mch_identity.operator_deployment }}"
+  no_log: true
+  when: (_acm_mch_identity.capture_status | default('')) == 'operator_deployment'
+
+- name: Bind the captured MultiClusterHub unavailable identity
+  ansible.builtin.set_fact:
+    _acm_mch_operator_identity_unavailable: "{{ _acm_mch_identity.operator_identity_unavailable }}"
+  no_log: true
+  when: (_acm_mch_identity.capture_status | default('')) == 'operator_identity_unavailable'
+
+# Resume never recaptures: the identity the record was born with is the identity every
+# later phase write and every classification pass uses, even if a CSV or Deployment
+# would resolve differently now.
+- name: Bind the recorded MultiClusterHub operator Deployment
+  ansible.builtin.set_fact:
+    _acm_mch_operator_deployment: "{{ acm_switchover_mch_record.operator_deployment }}"
+  no_log: true
+  when:
+    - acm_switchover_mch_record is mapping
+    - acm_switchover_mch_record.operator_deployment is defined
+
+- name: Bind the recorded MultiClusterHub unavailable identity
+  ansible.builtin.set_fact:
+    _acm_mch_operator_identity_unavailable: "{{ acm_switchover_mch_record.operator_identity_unavailable }}"
+  no_log: true
+  when:
+    - acm_switchover_mch_record is mapping
+    - acm_switchover_mch_record.operator_identity_unavailable is defined
+
+- name: Record MultiClusterHub delete_started
+  tomazb.acm_switchover.checkpoint_phase:
+    checkpoint: "{{ acm_switchover_execution.checkpoint }}"
+    teardown_record:
+      key: "{{ _acm_mch_key }}"
+      expected_uid: "{{ _acm_mch_expected_uid }}"
+      phase: delete_started
+      operator_deployment: "{{ _acm_mch_operator_deployment | default(omit, true) }}"
+      operator_identity_unavailable: "{{ _acm_mch_operator_identity_unavailable | default(omit, true) }}"
+  when:
+    - not ansible_check_mode
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - not (_acm_mch_clean_skip | bool)
+    - _acm_mch_present | bool
+    - acm_switchover_mch_record is not mapping or acm_switchover_mch_record.phase == 'delete_started'
+
+# The guarded delete fails through `fail_json`, carrying the `changed` truth of a DELETE
+# the API server already accepted. Absorbing that with `failed_when: false` would report
+# a mutation that happened as no mutation at all, so the rescue preserves it and then
+# re-raises the module's own message.
+- name: Delete the recorded MultiClusterHub under its UID precondition
+  block:
+    - name: Delete the recorded MultiClusterHub
+      tomazb.acm_switchover.acm_uid_guarded_delete:
+        api_version: operator.open-cluster-management.io/v1
+        kind: MultiClusterHub
+        resource_name: multiclusterhubs
+        namespace: open-cluster-management
+        name: "{{ _acm_mch_name }}"
+        expected_uid: "{{ _acm_mch_expected_uid }}"
+        kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+        context: "{{ acm_switchover_hubs.primary.context }}"
+        request_timeout: 30
+        wait_timeout: 1200
+        wait_sleep: 30
+      register: acm_switchover_mch_delete
+      check_mode: >-
+        {{ ansible_check_mode or (acm_switchover_execution.mode | default('dry_run')) != 'execute' }}
+      no_log: true
+      when:
+        - not (_acm_mch_clean_skip | bool)
+        - _acm_mch_present | bool
+        - acm_switchover_mch_record is not mapping or acm_switchover_mch_record.phase == 'delete_started'
+
+    - name: Publish the MultiClusterHub change inputs
+      ansible.builtin.set_fact:
+        _acm_mch_changed: "{{ acm_switchover_mch_delete.changed | default(false) | bool }}"
+        _acm_mch_would_change: "{{ acm_switchover_mch_delete.would_change | default(false) | bool }}"
+      when:
+        - acm_switchover_mch_delete is defined
+        - acm_switchover_mch_delete is not skipped
+  rescue:
+    - name: Preserve the MultiClusterHub change truth across the failed guarded delete
+      ansible.builtin.set_fact:
+        _acm_mch_changed: "{{ ansible_failed_result.changed | default(false) | bool }}"
+
+    - name: Fail after the guarded MultiClusterHub delete failed
+      ansible.builtin.fail:
+        msg: >-
+          The guarded MultiClusterHub delete failed:
+          {{ ansible_failed_result.msg | default('unknown error') }}
+          {{ '(reason=' ~ ansible_failed_result.reason ~ ')' if ansible_failed_result.reason is defined else '' }}
+          {{ '(stage=' ~ ansible_failed_result.stage ~ ')' if ansible_failed_result.stage is defined else '' }}
+
+- name: Publish whether this run must prove the MultiClusterHub teardown
+  ansible.builtin.set_fact:
+    # Execute mode only: a preview writes nothing, deletes nothing and classifies
+    # nothing, so it owes no proof either (section 8).
+    _acm_mch_prove: >-
+      {{
+        (not (_acm_mch_clean_skip | bool))
+        and (not ansible_check_mode)
+        and (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+        and (
+          acm_switchover_mch_record is not mapping
+          or acm_switchover_mch_record.phase != 'completed'
+        )
+      }}
+    # A completed record is immutable: it is re-proved read-only, and every writer below
+    # excludes it. Execute mode only all the same -- the reproof classifies Pods, and
+    # section 8 forbids a preview from classifying anything.
+    _acm_mch_reproof: >-
+      {{
+        (not (_acm_mch_clean_skip | bool))
+        and (not ansible_check_mode)
+        and (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+        and (acm_switchover_mch_record is mapping)
+        and (acm_switchover_mch_record.phase | default('')) == 'completed'
+      }}
+    # M4/section 17: `drained` and `completed` owe the final proof only. Re-running the
+    # drain loop there would spend a second 20-minute drain budget on evidence the record
+    # already carries. The final pass still writes `recovery_required` on a namespace
+    # error (section 15); that transition is the intended one.
+    _acm_mch_drain_required: >-
+      {{
+        (not (_acm_mch_clean_skip | bool))
+        and (not ansible_check_mode)
+        and (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+        and (
+          acm_switchover_mch_record is not mapping
+          or acm_switchover_mch_record.phase in
+          ['delete_started', 'cr_absent', 'drain_pending', 'recovery_required']
+        )
+      }}
+
+- name: Record MultiClusterHub cr_absent
+  tomazb.acm_switchover.checkpoint_phase:
+    checkpoint: "{{ acm_switchover_execution.checkpoint }}"
+    teardown_record:
+      key: "{{ _acm_mch_key }}"
+      expected_uid: "{{ _acm_mch_expected_uid }}"
+      phase: cr_absent
+      operator_deployment: "{{ _acm_mch_operator_deployment | default(omit, true) }}"
+      operator_identity_unavailable: "{{ _acm_mch_operator_identity_unavailable | default(omit, true) }}"
+  when:
+    - not ansible_check_mode
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - _acm_mch_prove | bool
+    - acm_switchover_mch_record is not mapping or acm_switchover_mch_record.phase == 'delete_started'
+
+- name: Record MultiClusterHub drain_pending
+  tomazb.acm_switchover.checkpoint_phase:
+    checkpoint: "{{ acm_switchover_execution.checkpoint }}"
+    teardown_record:
+      key: "{{ _acm_mch_key }}"
+      expected_uid: "{{ _acm_mch_expected_uid }}"
+      phase: drain_pending
+      operator_deployment: "{{ _acm_mch_operator_deployment | default(omit, true) }}"
+      operator_identity_unavailable: "{{ _acm_mch_operator_identity_unavailable | default(omit, true) }}"
+  when:
+    - not ansible_check_mode
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - _acm_mch_prove | bool
+    - >-
+      acm_switchover_mch_record is not mapping
+      or acm_switchover_mch_record.phase in ['delete_started', 'cr_absent']
+
+# One module call is one complete classification pass; this file owns the bounded
+# repetition. `retries` x `delay` is the 1200-second budget: ansible-core runs
+# `retries + 1` attempts with `retries` delays between them, so 40 x 30 seconds is the
+# wall-clock bound. Only a verified, identity-consistent pass that still counts blocking
+# Pods retries -- every other outcome is terminal and is branched on below.
+#
+# `until` exhaustion marks the task failed, which is the correct outcome for a drain
+# that never finished. Absorbing that into a warning would report unfinished teardown as
+# success, so the exhausted pass is rescued instead and branched on below with the
+# durable phase left exactly where it was.
+- name: Drain the ACM namespace of MultiClusterHub-owned workload
+  block:
+    - name: Classify one MultiClusterHub drain pass
+      tomazb.acm_switchover.acm_pod_owner_classify:
+        operation: classify
+        kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+        context: "{{ acm_switchover_hubs.primary.context }}"
+        namespace: open-cluster-management
+        operator_deployment: "{{ _acm_mch_operator_deployment | default(omit, true) }}"
+        operator_identity_unavailable: "{{ _acm_mch_operator_identity_unavailable | default(omit, true) }}"
+      register: _acm_mch_drain
+      retries: "{{ acm_switchover_mch_drain_retries | default(40) }}"
+      delay: "{{ acm_switchover_mch_drain_delay | default(30) }}"
+      until: >-
+        _acm_mch_drain.read_status != 'ok'
+        or _acm_mch_drain.identity_status == 'operator_identity_inconsistent'
+        or (_acm_mch_drain.blocking_count | int) == 0
+      no_log: true
+      when: _acm_mch_drain_required | bool
+  rescue:
+    - name: Propagate an unexpected MultiClusterHub drain failure
+      ansible.builtin.fail:
+        msg: >-
+          Unexpected MultiClusterHub drain failure:
+          {{ ansible_failed_result.msg | default('unknown error') }}
+      when: >-
+        _acm_mch_drain.read_status is not defined
+        or _acm_mch_drain.attempts is not defined
+
+- name: Record MultiClusterHub recovery_required after an unprovable drain pass
+  tomazb.acm_switchover.checkpoint_phase:
+    checkpoint: "{{ acm_switchover_execution.checkpoint }}"
+    teardown_record:
+      key: "{{ _acm_mch_key }}"
+      expected_uid: "{{ _acm_mch_expected_uid }}"
+      phase: recovery_required
+      operator_deployment: "{{ _acm_mch_operator_deployment | default(omit, true) }}"
+      operator_identity_unavailable: "{{ _acm_mch_operator_identity_unavailable | default(omit, true) }}"
+  # An unreadable namespace and a pass that classified no read at all are both ambiguous
+  # proof, which the outstanding obligation must record. A Pod-stage error is NOT: the
+  # namespace was read, only its inventory was not, so the existing phase stays the
+  # obligation and nothing is written. Identity inconsistency is checked before the
+  # blocking count, because zero Pods never overrides it.
+  when:
+    - not ansible_check_mode
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - _acm_mch_prove | bool
+    - _acm_mch_drain.read_status is defined
     - >-
       (
-        _acm_pods_after_mch_delete.resources
-        | default([])
-        | rejectattr('metadata.name', 'match', '^multiclusterhub-operator')
-        | list
-        | length
-      ) > 0
+        _acm_mch_drain.read_status == 'error'
+        and (_acm_mch_drain.read_error_stage | default('', true)) != 'pods'
+      )
+      or (
+        _acm_mch_drain.read_status == 'ok'
+        and _acm_mch_drain.identity_status == 'operator_identity_inconsistent'
+      )
+
+- name: Fail closed when a MultiClusterHub drain pass is unverifiable
+  ansible.builtin.fail:
+    msg: >-
+      The ACM namespace state could not be verified during the MultiClusterHub drain
+      (read_status={{ _acm_mch_drain.read_status | default('n/a') }},
+      read_error_stage={{ _acm_mch_drain.read_error_stage | default('n/a') }},
+      attempts={{ _acm_mch_drain.attempts | default('n/a') }}).
+  when:
+    - _acm_mch_prove | bool
+    - _acm_mch_drain.read_status is defined
+    - _acm_mch_drain.read_status == 'error'
+
+- name: Fail closed when the recorded MultiClusterHub operator identity is inconsistent
+  ansible.builtin.fail:
+    msg: >-
+      The recorded MultiClusterHub operator identity no longer matches the live
+      Deployment. The drain cannot be certified
+      (identity_status={{ _acm_mch_drain.identity_status | default('n/a') }},
+      deployment_status={{ _acm_mch_drain.deployment_status | default('n/a') }},
+      attempts={{ _acm_mch_drain.attempts | default('n/a') }}).
+  when:
+    - _acm_mch_prove | bool
+    - _acm_mch_drain.read_status is defined
+    - _acm_mch_drain.read_status == 'ok'
+    - _acm_mch_drain.identity_status == 'operator_identity_inconsistent'
+
+- name: Fail closed when ACM workload still blocks the MultiClusterHub drain
+  ansible.builtin.fail:
+    msg: >-
+      ACM workload the MultiClusterHub operator does not own was still running when the
+      drain budget expired
+      (blocking_count={{ _acm_mch_drain.blocking_count | default('n/a') }},
+      identity_status={{ _acm_mch_drain.identity_status | default('n/a') }},
+      attempts={{ _acm_mch_drain.attempts | default('n/a') }}).
+  when:
+    - _acm_mch_prove | bool
+    - _acm_mch_drain.read_status is defined
+    - _acm_mch_drain.read_status == 'ok'
+    - (_acm_mch_drain.blocking_count | int) > 0
+
+- name: Record MultiClusterHub drained
+  tomazb.acm_switchover.checkpoint_phase:
+    checkpoint: "{{ acm_switchover_execution.checkpoint }}"
+    teardown_record:
+      key: "{{ _acm_mch_key }}"
+      expected_uid: "{{ _acm_mch_expected_uid }}"
+      phase: drained
+      operator_deployment: "{{ _acm_mch_operator_deployment | default(omit, true) }}"
+      operator_identity_unavailable: "{{ _acm_mch_operator_identity_unavailable | default(omit, true) }}"
+  when:
+    - not ansible_check_mode
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - _acm_mch_prove | bool
+    - _acm_mch_drain.read_status is defined
+    - >-
+      _acm_mch_drain.read_status == 'namespace_absent'
+      or (_acm_mch_drain.read_status == 'ok' and (_acm_mch_drain.blocking_count | int) == 0)
+    - >-
+      acm_switchover_mch_record is not mapping
+      or acm_switchover_mch_record.phase in
+      ['delete_started', 'cr_absent', 'drain_pending', 'recovery_required']
+
+# Section 15: the final proof is wholly fresh. No read taken before or during the drain
+# may certify completion, and the completed record's revisions come from this pass only.
+- name: Re-read the MultiClusterHub for the final absence proof
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: get
+    api_version: operator.open-cluster-management.io/v1
+    kind: MultiClusterHub
+    resource_name: multiclusterhubs
+    namespace: open-cluster-management
+    name: "{{ _acm_mch_name }}"
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _acm_mch_final_read
+  no_log: true
+  when: (_acm_mch_prove | bool) or (_acm_mch_reproof | bool)
+
+- name: Fail closed when final MultiClusterHub absence is unproven
+  ansible.builtin.fail:
+    msg: >-
+      Final proof did not establish that the recorded MultiClusterHub is absent
+      (read_status={{ _acm_mch_final_read.read_status | default('n/a') }}).
+  when:
+    - (_acm_mch_prove | bool) or (_acm_mch_reproof | bool)
+    - _acm_mch_final_read.read_status not in ['not_found', 'kind_not_served']
+
+- name: Classify the final MultiClusterHub verification pass
+  tomazb.acm_switchover.acm_pod_owner_classify:
+    operation: classify
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+    namespace: open-cluster-management
+    operator_deployment: "{{ _acm_mch_operator_deployment | default(omit, true) }}"
+    operator_identity_unavailable: "{{ _acm_mch_operator_identity_unavailable | default(omit, true) }}"
+  register: _acm_mch_final
+  no_log: true
+  when: (_acm_mch_prove | bool) or (_acm_mch_reproof | bool)
+
+- name: Record MultiClusterHub recovery_required after an unprovable final pass
+  tomazb.acm_switchover.checkpoint_phase:
+    checkpoint: "{{ acm_switchover_execution.checkpoint }}"
+    teardown_record:
+      key: "{{ _acm_mch_key }}"
+      expected_uid: "{{ _acm_mch_expected_uid }}"
+      phase: recovery_required
+      operator_deployment: "{{ _acm_mch_operator_deployment | default(omit, true) }}"
+      operator_identity_unavailable: "{{ _acm_mch_operator_identity_unavailable | default(omit, true) }}"
+  # The same ruling as the drain pass, and never on a completed record: `_acm_mch_prove`
+  # excludes one, so a failing reproof fails the invocation instead of downgrading an
+  # immutable record.
+  when:
+    - not ansible_check_mode
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - _acm_mch_prove | bool
+    - >-
+      (
+        _acm_mch_final.read_status == 'error'
+        and (_acm_mch_final.read_error_stage | default('', true)) != 'pods'
+      )
+      or (
+        _acm_mch_final.read_status == 'ok'
+        and _acm_mch_final.identity_status == 'operator_identity_inconsistent'
+      )
+
+- name: Fail closed when the final MultiClusterHub pass is unverifiable
+  ansible.builtin.fail:
+    msg: >-
+      The ACM namespace state could not be verified in the final MultiClusterHub proof
+      (read_status={{ _acm_mch_final.read_status | default('n/a') }},
+      read_error_stage={{ _acm_mch_final.read_error_stage | default('n/a') }}).
+  when:
+    - (_acm_mch_prove | bool) or (_acm_mch_reproof | bool)
+    - _acm_mch_final.read_status == 'error'
+
+- name: Fail closed when the final MultiClusterHub pass contradicts the recorded identity
+  ansible.builtin.fail:
+    msg: >-
+      The recorded MultiClusterHub operator identity no longer matches the live
+      Deployment. Completion is unproven
+      (identity_status={{ _acm_mch_final.identity_status | default('n/a') }},
+      deployment_status={{ _acm_mch_final.deployment_status | default('n/a') }}).
+  when:
+    - (_acm_mch_prove | bool) or (_acm_mch_reproof | bool)
+    - _acm_mch_final.read_status == 'ok'
+    - _acm_mch_final.identity_status == 'operator_identity_inconsistent'
+
+- name: Fail closed when a MultiClusterHub-unowned Pod survives the final proof
+  ansible.builtin.fail:
+    msg: >-
+      ACM workload the MultiClusterHub operator does not own was present in the final
+      verification pass. Completion is unproven
+      (blocking_count={{ _acm_mch_final.blocking_count | default('n/a') }},
+      identity_status={{ _acm_mch_final.identity_status | default('n/a') }}).
+  when:
+    - (_acm_mch_prove | bool) or (_acm_mch_reproof | bool)
+    - _acm_mch_final.read_status == 'ok'
+    - (_acm_mch_final.blocking_count | int) > 0
+
+- name: Fail closed when the final MultiClusterHub evidence is incomplete
+  ansible.builtin.fail:
+    msg: >-
+      The final MultiClusterHub verification pass did not produce the revisions its
+      completion mode requires
+      (read_status={{ _acm_mch_final.read_status | default('n/a') }},
+      identity_status={{ _acm_mch_final.identity_status | default('n/a') }},
+      deployment_status={{ _acm_mch_final.deployment_status | default('n/a') }}).
+  when:
+    - (_acm_mch_prove | bool) or (_acm_mch_reproof | bool)
+    - _acm_mch_final.read_status == 'ok'
+    - >-
+      (_acm_mch_final.namespace_resource_version | default('', true) | string | trim | length) == 0
+      or (_acm_mch_final.pods_resource_version | default('', true) | string | trim | length) == 0
+      or (
+        (_acm_mch_operator_deployment is defined)
+        and (
+          _acm_mch_final.deployment_status != 'matched'
+          or (_acm_mch_final.deployment_resource_version | default('', true) | string | trim | length) == 0
+        )
+      )
+      or (
+        (_acm_mch_operator_identity_unavailable is defined)
+        and (
+          _acm_mch_final.deployment_status != 'not_applicable'
+          or (_acm_mch_final.identity_status | default('', true)) != 'operator_identity_unavailable'
+        )
+      )
+
+- name: Build the final MultiClusterHub absence proof
+  ansible.builtin.set_fact:
+    _acm_mch_target_absence_proof:
+      proof_type: >-
+        {{ 'crd_absent' if _acm_mch_final_read.read_status == 'kind_not_served' else 'object_absent' }}
+      resource_key: "{{ _acm_mch_key }}"
+  when: _acm_mch_prove | bool
+
+# Completion mode 1: a positively absent ACM namespace entails both an empty Pod
+# inventory and the recorded Deployment's absence, so it carries no revision at all.
+- name: Build namespace-absent MultiClusterHub completion evidence
+  ansible.builtin.set_fact:
+    _acm_mch_resource_versions: {}
+    _acm_mch_absence_proofs:
+      target_cr: "{{ _acm_mch_target_absence_proof }}"
+      drain_namespace:
+        proof_type: namespace_absent
+        resource_key: v1/Namespace//open-cluster-management
+  when:
+    - _acm_mch_prove | bool
+    - _acm_mch_final.read_status == 'namespace_absent'
+
+# Completion mode 2: a captured identity adds the operator Deployment revision.
+- name: Build captured-identity MultiClusterHub completion evidence
+  ansible.builtin.set_fact:
+    _acm_mch_resource_versions:
+      drain_namespace: "{{ _acm_mch_final.namespace_resource_version }}"
+      drain_pods: "{{ _acm_mch_final.pods_resource_version }}"
+      operator_deployment: "{{ _acm_mch_final.deployment_resource_version }}"
+    _acm_mch_absence_proofs:
+      target_cr: "{{ _acm_mch_target_absence_proof }}"
+  when:
+    - _acm_mch_prove | bool
+    - _acm_mch_final.read_status == 'ok'
+    - _acm_mch_operator_deployment is defined
+
+# Completion mode 3: an unavailable identity owns no Deployment revision, and reaches
+# completion only on a strictly verified empty Pod inventory.
+- name: Build unavailable-identity MultiClusterHub completion evidence
+  ansible.builtin.set_fact:
+    _acm_mch_resource_versions:
+      drain_namespace: "{{ _acm_mch_final.namespace_resource_version }}"
+      drain_pods: "{{ _acm_mch_final.pods_resource_version }}"
+    _acm_mch_absence_proofs:
+      target_cr: "{{ _acm_mch_target_absence_proof }}"
+  when:
+    - _acm_mch_prove | bool
+    - _acm_mch_final.read_status == 'ok'
+    - _acm_mch_operator_identity_unavailable is defined
+
+# Every durable record carries exactly one identity outcome, so a live namespace with
+# neither bound is unreachable through the checkpoint validator -- but if it ever
+# happened the completion writers above would all skip and the record would be built
+# from an undefined fact. Failing here names the defect instead.
+- name: Fail closed when the MultiClusterHub completion evidence has no identity
+  ansible.builtin.fail:
+    msg: >-
+      The MultiClusterHub teardown carries no operator identity, so no completion
+      evidence mode applies
+      (read_status={{ _acm_mch_final.read_status | default('n/a') }}).
+  when:
+    - _acm_mch_prove | bool
+    - _acm_mch_final.read_status == 'ok'
+    - _acm_mch_operator_deployment is not defined
+    - _acm_mch_operator_identity_unavailable is not defined
+
+- name: Record MultiClusterHub completed
+  tomazb.acm_switchover.checkpoint_phase:
+    checkpoint: "{{ acm_switchover_execution.checkpoint }}"
+    teardown_record:
+      key: "{{ _acm_mch_key }}"
+      expected_uid: "{{ _acm_mch_expected_uid }}"
+      phase: completed
+      observed_at: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+      resource_versions: "{{ _acm_mch_resource_versions }}"
+      absence_proofs: "{{ _acm_mch_absence_proofs }}"
+      operator_deployment: "{{ _acm_mch_operator_deployment | default(omit, true) }}"
+      operator_identity_unavailable: "{{ _acm_mch_operator_identity_unavailable | default(omit, true) }}"
+  when:
+    - not ansible_check_mode
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - _acm_mch_prove | bool
+    - acm_switchover_mch_record is not mapping or acm_switchover_mch_record.phase != 'completed'
 
 - name: Record the MultiClusterHub substep outcome
   ansible.builtin.set_fact:
     acm_switchover_decommission_outcomes: >-
       {{
         acm_switchover_decommission_outcomes
-        | default({})
         | combine({
             'multiclusterhub': (
-              'completed'
-              if ((_multiclusterhub_resources.resources | default([])) | length) > 0
-              else 'precondition_noop'
+              'precondition_noop'
+              if (_acm_mch_clean_skip | bool)
+              else 'completed'
             )
           })
       }}
-  when: _acm_decommission_records_outcomes | default(false) | bool
+  # `completed` is claimed only by a run that actually proved the teardown, and
+  # `precondition_noop` only by the clean-skip classification. main.yml records outcomes
+  # for every mode that is not `dry_run`, while every writer and the delete here are
+  # gated on `execute`, so an out-of-contract mode string is a preview that would
+  # otherwise report a completion it never performed.
+  when:
+    - _acm_decommission_records_outcomes | bool
+    - (_acm_mch_clean_skip | bool) or (_acm_mch_prove | bool) or (_acm_mch_reproof | bool)

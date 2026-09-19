@@ -41,9 +41,10 @@ class FakeGuardedDeleteAPI:
         self.obj = copy.deepcopy(obj) if obj else None
         self.delete_status = delete_status
         self.on_delete = on_delete
-        # Optional additional cluster-scoped kinds served as positively empty inventories
-        # (group/version/plural/kind). Used by decommission dry-run fixtures that must
-        # exercise ManagedCluster inventory without inventing live targets.
+        # Optional additional kinds served as positively empty inventories
+        # (group/version/plural/kind, plus an optional ``namespaced`` flag). Used by
+        # decommission dry-run fixtures that must exercise ManagedCluster and
+        # MultiClusterHub inventory without inventing live targets.
         self.served_empty_lists = list(served_empty_lists or [])
         self.requests: list[dict] = []
         #: The ``preconditions.uid`` of every DELETE body the server received, in order,
@@ -155,23 +156,35 @@ class FakeGuardedDeleteAPI:
                                     {
                                         "name": plural,
                                         "singularName": kind.lower(),
-                                        "namespaced": False,
+                                        "namespaced": extra.get("namespaced", False),
                                         "kind": kind,
                                         "verbs": ["get", "list", "delete"],
                                     }
                                 ],
                             },
                         )
-                    if path == f"/apis/{group}/{version}/{plural}":
-                        return self._send(
-                            200,
-                            {
-                                "apiVersion": f"{group}/{version}",
-                                "kind": f"{kind}List",
-                                "metadata": {"resourceVersion": "1"},
-                                "items": [],
-                            },
-                        )
+                    # A namespaced kind answers ONLY its configured namespace route.
+                    # The cluster-scoped route 404s instead of serving the same empty
+                    # inventory, so a caller that silently regressed to a cluster-scoped
+                    # list is detectable here rather than assumed away -- which is what
+                    # makes the section 20 MultiClusterHub scope question measurable.
+                    empty_list = {
+                        "apiVersion": f"{group}/{version}",
+                        "kind": f"{kind}List",
+                        "metadata": {"resourceVersion": "1"},
+                        "items": [],
+                    }
+                    if extra.get("namespaced", False):
+                        namespace = extra.get("namespace", "")
+                        if path == f"/apis/{group}/{version}/namespaces/{namespace}/{plural}":
+                            return self._send(200, empty_list)
+                        if path == f"/apis/{group}/{version}/{plural}" or path.endswith(f"/{plural}"):
+                            return self._send(
+                                404,
+                                {"kind": "Status", "code": 404, "reason": "NotFound"},
+                            )
+                    elif path == f"/apis/{group}/{version}/{plural}":
+                        return self._send(200, empty_list)
                 if path == f"/apis/{GROUP}/{VERSION}/{PLURAL}":
                     return self._send(
                         200,

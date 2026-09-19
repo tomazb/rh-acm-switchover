@@ -19,6 +19,8 @@ from lib import KubeClient
 from lib.constants import (
     ACM_NAMESPACE,
     BACKUP_NAMESPACE,
+    CSV_API_GROUP,
+    CSV_PLURAL,
     HIVE_CLUSTERDEPLOYMENT_API_GROUP,
     HIVE_CLUSTERDEPLOYMENT_PLURAL,
     HUB_ROLE_PRIMARY,
@@ -265,7 +267,12 @@ class RBACValidator:
             "managedclusters",
             ["get", "list", "delete"],
         ),
-        ("operator.open-cluster-management.io", "multiclusterhubs", ["list", "delete"]),
+        (
+            "operator.open-cluster-management.io",
+            "multiclusterhubs",
+            # Named read before the delete and again to prove the hub is gone.
+            ["get", "list", "delete"],
+        ),
         (
             "observability.open-cluster-management.io",
             "multiclusterobservabilities",
@@ -276,6 +283,11 @@ class RBACValidator:
     DECOMMISSION_NAMESPACE_PERMISSIONS = {
         ACM_NAMESPACE: [
             ("", "pods", ["get", "list"]),
+            # Operator identity: the CSV that owns the ACM operator Deployment, the
+            # Deployment itself and its ReplicaSets, read while draining the namespace.
+            (CSV_API_GROUP, CSV_PLURAL, ["get", "list"]),
+            ("apps", "deployments", ["get"]),
+            ("apps", "replicasets", ["get"]),
         ],
         OBSERVABILITY_NAMESPACE: [
             ("", "pods", ["get", "list"]),
@@ -601,7 +613,10 @@ class RBACValidator:
         return all_valid, errors
 
     def validate_namespace_permissions(
-        self, skip_observability: bool = False, skip_agent_namespace: bool = True
+        self,
+        skip_observability: bool = False,
+        skip_agent_namespace: bool = True,
+        include_decommission: bool = False,
     ) -> Tuple[bool, List[str]]:
         """
         Validate namespace-scoped permissions on hub clusters.
@@ -610,6 +625,10 @@ class RBACValidator:
             skip_observability: Whether to skip observability namespace checks
             skip_agent_namespace: Whether to skip open-cluster-management-agent namespace
                                   (it exists on managed clusters, not hubs). Default True.
+            include_decommission: Whether to also require the namespace-scoped reads the
+                                  teardown issues (DECOMMISSION_NAMESPACE_PERMISSIONS),
+                                  so the integrated path gives the same verdict as the
+                                  standalone one. Operator role only.
 
         Returns:
             Tuple of (all_valid, list of error messages)
@@ -617,6 +636,13 @@ class RBACValidator:
         Raises:
             ValidationError: If permission checks cannot be completed due to API or client errors
         """
+        if include_decommission and self.role != "operator":
+            # Same explicit rejection as validate_cluster_permissions: never silently skip.
+            raise ValueError(
+                "include_decommission=True is not valid for the validator role. "
+                "Decommission permissions are only applicable to the operator role."
+            )
+
         errors = []
         all_valid = True
 
@@ -649,7 +675,20 @@ class RBACValidator:
 
             logger.info("Checking permissions in namespace: %s", namespace)
 
-            for api_group, resource, verbs in permissions:
+            required_permissions = list(permissions)
+            if include_decommission:
+                # The decommission table repeats reads the baseline table already carries
+                # (the ACM and observability Pod reads). The review itself is cached, so
+                # re-adding them only duplicates the error line for a denied grant.
+                already_required = {
+                    (api_group, resource, verb) for api_group, resource, verbs in required_permissions for verb in verbs
+                }
+                for api_group, resource, verbs in self.DECOMMISSION_NAMESPACE_PERMISSIONS.get(namespace, []):
+                    extra_verbs = [verb for verb in verbs if (api_group, resource, verb) not in already_required]
+                    if extra_verbs:
+                        required_permissions.append((api_group, resource, extra_verbs))
+
+            for api_group, resource, verbs in required_permissions:
                 for verb in verbs:
                     has_perm, error = self.check_permission(api_group, resource, verb, namespace)
                     if not has_perm:
@@ -766,7 +805,10 @@ class RBACValidator:
                 all_errors["cluster"] = cluster_errors
 
             # Validate namespace permissions
-            namespace_valid, namespace_errors = self.validate_namespace_permissions(skip_observability)
+            namespace_valid, namespace_errors = self.validate_namespace_permissions(
+                skip_observability,
+                include_decommission=include_decommission,
+            )
             if namespace_errors:
                 all_errors["namespaces"] = namespace_errors
 

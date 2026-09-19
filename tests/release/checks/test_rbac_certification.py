@@ -61,6 +61,59 @@ def test_get_required_permissions_operator_basic():
     )
 
 
+# The namespaced reads the measured decommission teardown issues in the ACM namespace.
+# Written out literally so a shared omission cannot pass both these tests and the
+# table-derived comparison below.
+MEASURED_DECOMMISSION_ACM_READS = (
+    ("operators.coreos.com", "clusterserviceversions", "list", "open-cluster-management"),
+    ("operators.coreos.com", "clusterserviceversions", "get", "open-cluster-management"),
+    ("apps", "deployments", "get", "open-cluster-management"),
+    ("apps", "replicasets", "get", "open-cluster-management"),
+)
+
+
+def test_decommission_requires_the_measured_acm_namespace_reads():
+    """Certifying decommission must check the namespaced reads the validators require.
+
+    Without these the certification would pass an operator identity that both the
+    Python and collection validators reject.
+    """
+    perms = _get_required_permissions(
+        role="operator",
+        include_decommission=True,
+        include_old_hub_finalization=False,
+    )
+
+    actual = {(p.api_group, p.resource, p.verb, p.namespace) for p in perms}
+    missing = sorted(set(MEASURED_DECOMMISSION_ACM_READS) - actual)
+
+    assert not missing, f"Decommission certification omits measured namespaced reads: {missing}"
+
+
+def test_without_decommission_the_measured_acm_namespace_reads_are_absent():
+    """Least privilege: the teardown-only reads must not be certified for ordinary runs."""
+    perms = _get_required_permissions(
+        role="operator",
+        include_decommission=False,
+        include_old_hub_finalization=False,
+    )
+
+    actual = {(p.api_group, p.resource, p.verb, p.namespace) for p in perms}
+    unexpected = sorted(actual & set(MEASURED_DECOMMISSION_ACM_READS))
+
+    assert not unexpected, f"Baseline certification requires teardown-only reads: {unexpected}"
+
+
+def test_validator_role_cannot_request_decommission():
+    """The validator role has no decommission surface; the scope is rejected, not trimmed."""
+    with pytest.raises(ValueError, match="only valid for the operator role"):
+        _get_required_permissions(
+            role="validator",
+            include_decommission=True,
+            include_old_hub_finalization=False,
+        )
+
+
 def _expand_permissions(entries, namespace=None):
     return {(api_group, resource, verb, namespace) for api_group, resource, verbs in entries for verb in verbs}
 
@@ -87,6 +140,8 @@ def _expected_python_hub_permissions(
         expected.update(_expand_permissions(entries, namespace=namespace))
     if include_decommission:
         expected.update(_expand_permissions(RBACValidator.DECOMMISSION_PERMISSIONS))
+        for namespace, entries in RBACValidator.DECOMMISSION_NAMESPACE_PERMISSIONS.items():
+            expected.update(_expand_permissions(entries, namespace=namespace))
     if include_old_hub_finalization:
         expected.update(_expand_permissions(RBACValidator.OLD_HUB_FINALIZATION_PERMISSIONS))
     return expected
@@ -101,6 +156,7 @@ def _expected_python_hub_permissions(
     [
         ("operator", False, False),
         ("operator", False, True),
+        ("operator", True, False),
         ("operator", True, True),
         ("validator", False, False),
     ],

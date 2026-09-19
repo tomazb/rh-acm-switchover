@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Decommission extension `managedclusters` named `get` (with existing `delete`) so
   standalone teardown RBAC is self-consistent with UID/absence-proof reads; mirrored in
   Python/Collection `DECOMMISSION_CLUSTER_PERMISSIONS`, bundled manifest, and Helm.
+- **MultiClusterHub operator identity and owner-chain Pod classification (#290).** Both form
+  factors now capture the ACM operator Deployment from the MultiClusterHub-owning
+  ClusterServiceVersion — Python `modules/decommission_identity.py`, Collection
+  `acm_pod_owner_classify` over `plugins/module_utils/pod_owner_classify.py` — or record an
+  explicit unavailable identity, and decide Pod ownership by owner chain to that recorded
+  Deployment. Shared identity vectors and parity tests hold the two implementations equal.
+  RBAC follows: the operator Role in `open-cluster-management` gains `clusterserviceversions`
+  get, list (`operators.coreos.com`), `deployments` get and `replicasets` get (`apps`), and the
+  decommission extension ClusterRole moves from `multiclusterhubs` delete to get, delete. Both
+  validators require these on standalone and integrated decommission.
 
 ### Fixed
 
@@ -56,6 +66,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controller Python interpreter on ansible-core 2.16 local connections, so
   live `kube-system` UID reads reach the API instead of failing against a
   system interpreter that lacks the `kubernetes` package (#267 / #270).
+- **Release RBAC live certification covers the decommission reads (#290).** The permission
+  matrix now includes the `open-cluster-management` ClusterServiceVersion, Deployment and
+  ReplicaSet reads when decommission scope is enabled, so the surface the certification checks
+  matches the requests the teardown actually issues.
 
 ### Removed
 
@@ -177,6 +191,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A standalone decommission run never evaluates the destination-observability gate.
 - `--old-hub-action secondary`'s MultiClusterObservability teardown is gated on destination-observability
   proof with no acknowledgement override available on that path.
+- **MultiClusterHub teardown now runs on the shared UID-guarded phase machine on both form
+  factors (#290).** Teardown resolves its target strictly (zero is a clean skip, exactly one is
+  torn down, more than one is refused), writes the durable target UID and the captured operator
+  identity before the UID-preconditioned delete, drains remaining ACM Pods by owner chain within
+  a bounded budget, and fails closed on timeout, on an unverifiable read, or on a recorded
+  identity that no longer holds. Completion evidence is written only from the final live pass,
+  and a completed record is re-proved live on resume instead of being trusted. Pod-name prefix
+  heuristics are no longer authoritative anywhere on this path, and dry run / check mode read
+  only. **Upgrade note (RBAC):** re-apply the shipped RBAC (manifests, Helm chart, ACM policy, or
+  the collection bootstrap role) before running decommission with this version — previous
+  manifests do not grant the new `open-cluster-management` reads, and the RBAC validators now
+  fail closed without them.
 
 ### Fixed
 

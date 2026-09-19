@@ -26,6 +26,16 @@ execution-environment posture, and the local validation commands.
 
 The `argocd_manage` role fails closed instead of patching unsafe child Applications. It blocks auto-sync Applications managed by an ApplicationSet when they touch ACM resources, blocks auto-sync Applications with empty or stale `status.resources`, and re-reads patched Applications to confirm auto-sync is disabled. Resume is fail-closed too (ADR-0001): it fails when a pause run_id is recorded but the Application CRD is not visible, and it never patches `spec.syncPolicy` without a recoverable `original-sync-policy` annotation — Applications paused by the Python tool must be resumed with `acm_switchover.py --argocd-resume-only`. For ApplicationSet-managed cases, pause or update the parent ApplicationSet, generator, or template rather than the generated child Application.
 
+## MultiClusterHub teardown safety
+
+The `decommission` role tears down the MultiClusterHub through checkpoint-backed durable phase state:
+the target UID and the captured ACM operator identity are recorded before anything is deleted, the
+delete itself is UID-guarded, and the final absence and drain proof is fail-closed. Pod ownership is
+decided by the read-only `acm_pod_owner_classify` module, which captures that identity and classifies
+Pods by owner chain without mutating anything. `mode: dry_run` and native check mode stay read-only on
+this path. [`docs/coexistence.md`](docs/coexistence.md) states the contract shared with the Python
+tool; the operator-facing walkthrough is in the repository's `docs/operations/usage.md`.
+
 ## Distinct physical-hub guard
 
 For a normal two-hub switchover, preflight rejects identical context names and

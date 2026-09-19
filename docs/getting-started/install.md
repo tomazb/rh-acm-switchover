@@ -183,99 +183,42 @@ kubectl --context primary-hub get ns open-cluster-management
 
 ### Required Permissions
 
-The script requires these permissions on both hubs:
+The permissions are defined once in the shipped manifests, not restated here:
 
-```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: acm-switchover-role
-rules:
-# Namespace access
-- apiGroups: [""]
-  resources: ["namespaces"]
-  verbs: ["get", "list"]
+- `deploy/rbac/` — the baseline operator and validator permissions both hubs need
+- `deploy/rbac/extensions/decommission/` — the additional old-hub teardown permissions
 
-# Pod access (for health checks)
-- apiGroups: [""]
-  resources: ["pods"]
-  verbs: ["get", "list"]
+[RBAC requirements](../deployment/rbac-requirements.md) documents the full permission matrix and
+[RBAC deployment](../deployment/rbac-deployment.md) covers every supported way to deploy it
+(kubectl, Kustomize, Helm, ACM policy, or the collection `playbooks/rbac_bootstrap.yml`).
 
-# ACM Backup resources
-- apiGroups: ["cluster.open-cluster-management.io"]
-  resources: ["backupschedules", "restores", "backups"]
-  verbs: ["get", "list", "create", "patch", "delete"]
+The minimal direct apply:
 
-# ManagedClusters
-- apiGroups: ["cluster.open-cluster-management.io"]
-  resources: ["managedclusters"]
-  verbs: ["get", "list", "patch"]
+```bash
+# Apply baseline RBAC resources
+kubectl apply -f deploy/rbac/namespace.yaml
+kubectl apply -f deploy/rbac/serviceaccount.yaml
+kubectl apply -f deploy/rbac/clusterrole.yaml
+kubectl apply -f deploy/rbac/clusterrolebinding.yaml
+kubectl apply -f deploy/rbac/role.yaml
+kubectl apply -f deploy/rbac/rolebinding.yaml
 
-# MultiClusterHub
-- apiGroups: ["operator.open-cluster-management.io"]
-  resources: ["multiclusterhubs"]
-  verbs: ["get", "list"]
+# Old-hub teardown only: add the decommission extension
+kubectl apply -f deploy/rbac/extensions/decommission/clusterrole.yaml
+kubectl apply -f deploy/rbac/extensions/decommission/clusterrolebinding.yaml
 
-# Observability
-- apiGroups: ["observability.open-cluster-management.io"]
-  resources: ["multiclusterobservabilities"]
-  verbs: ["get", "list"]
-
-# Deployments and StatefulSets (for scaling)
-- apiGroups: ["apps"]
-  resources: ["deployments", "statefulsets", "statefulsets/scale"]
-  verbs: ["get", "patch"]
-
-# OpenShift routes (observability access)
-- apiGroups: ["route.openshift.io"]
-  resources: ["routes"]
-  verbs: ["get"]
-
-# OADP resources
-- apiGroups: ["oadp.openshift.io"]
-  resources: ["dataprotectionapplications"]
-  verbs: ["get", "list"]
-
-# Hive ClusterDeployments
-- apiGroups: ["hive.openshift.io"]
-  resources: ["clusterdeployments"]
-  verbs: ["get", "list", "patch"]
+# Verify deployment
+kubectl get sa -n acm-switchover
+kubectl get clusterrole acm-switchover-operator
+kubectl get role acm-switchover-operator -n open-cluster-management
+# Only after applying the decommission extension above:
+kubectl get clusterrole acm-switchover-decommission
 ```
 
-For old-hub teardown, grant cluster-scoped delete access separately instead of bundling it into the default operator role:
-
-```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: acm-switchover-decommission
-rules:
-- apiGroups: ["cluster.open-cluster-management.io"]
-  resources: ["managedclusters"]
-  verbs: ["delete"]
-- apiGroups: ["operator.open-cluster-management.io"]
-  resources: ["multiclusterhubs"]
-  verbs: ["delete"]
-- apiGroups: ["observability.open-cluster-management.io"]
-  resources: ["multiclusterobservabilities"]
-  # `get` is required because the standalone teardown reads the named
-  # MultiClusterObservability before deleting it and again for the final
-  # absence proof; see deploy/rbac/extensions/decommission/clusterrole.yaml.
-  verbs: ["get", "delete"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: acm-switchover-decommission-binding
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: acm-switchover-decommission
-subjects:
-- kind: ServiceAccount
-  name: acm-switchover-operator
-  namespace: acm-switchover
-```
+Decommission additionally reads ClusterServiceVersions, Deployments and ReplicaSets in the
+`open-cluster-management` namespace to identify the ACM operator and classify Pod ownership during
+teardown. The shipped manifests above already include those reads; RBAC applied from an earlier
+version does not, so re-apply it before running decommission.
 
 ### Create Service Account (Optional)
 
@@ -283,15 +226,9 @@ For automated execution:
 
 ```bash
 # Create namespace (if not already present)
-kubectl create namespace acm-switchover --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f deploy/rbac/namespace.yaml
 
-# Create service account
-kubectl create serviceaccount acm-switchover-operator -n acm-switchover
-
-# Bind cluster role
-kubectl create clusterrolebinding acm-switchover-binding \
-  --clusterrole=acm-switchover-role \
-  --serviceaccount=acm-switchover:acm-switchover-operator
+# The manifests applied above already created the operator and validator ServiceAccounts and bindings.
 
 # Get token
 kubectl create token acm-switchover-operator -n acm-switchover --duration=24h

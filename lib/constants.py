@@ -420,3 +420,22 @@ OPERATOR_IDENTITY_UNAVAILABLE_REASONS = (
     "deployment_read_failed",
     "deployment_identity_incomplete",
 )
+
+# R4-03 OLM ClusterServiceVersion API coordinates for operator-identity capture
+# (plan §11C.2, task E2). Mirrored in the collection's
+# ansible_collections/tomazb/acm_switchover/plugins/module_utils/constants.py and
+# pinned for parity by CONSTANT_PAIRS in tests/test_constants_parity.py.
+CSV_API_GROUP = "operators.coreos.com"
+CSV_API_VERSION = "v1alpha1"
+CSV_PLURAL = "clusterserviceversions"
+CSV_PHASE_SUCCEEDED = "Succeeded"
+CSV_INSTALL_STRATEGY_DEPLOYMENT = "deployment"
+
+# R4-03 MCH owner-chain classification (plan §11C.1). Reason codes for how a Pod in
+# the MultiClusterHub operator's namespace relates to the recorded operator Deployment.
+# ACM_OPERATOR_POD_PREFIX (above) is a supplementary diagnostic only, never proof of
+# ownership; the owner-chain walk is authoritative.
+POD_CLASSIFICATION_OPERATOR_OWNED = "operator_owned"
+POD_CLASSIFICATION_DRAIN_BLOCKING = "drain_blocking"
+POD_CLASSIFICATION_IDENTITY_UNAVAILABLE = "operator_identity_unavailable"
+POD_CLASSIFICATION_IDENTITY_INCONSISTENT = "operator_identity_inconsistent"

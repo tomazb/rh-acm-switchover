@@ -541,7 +541,30 @@ Delete MultiClusterHub resource? (This will remove all ACM components) [y/N]: y
 **Timeline:**
 - Delete Observability: 3-5 minutes
 - Delete ManagedClusters: 1-2 minutes
-- Delete MultiClusterHub: 15-20 minutes
+- Delete MultiClusterHub: 15-20 minutes typically; the resource-absence wait and the Pod drain that
+  follows it are each bounded at 1200 seconds (polled every 30 seconds), so a slow hub can take longer
+
+**MultiClusterHub teardown contract:**
+The MultiClusterHub target is resolved dynamically, never from a hard-coded name: decommission lists
+MultiClusterHubs in `open-cluster-management` and finds zero (nothing to tear down), exactly one (the
+target), or more than one — in which case it refuses to choose. A dry run reads the current
+MultiClusterHub and the ACM operator identity, but writes nothing durable and deletes nothing. An
+execute run persists the target name and UID together with the captured operator identity *before* the
+UID-guarded delete. If that identity cannot be determined, the run records an explicit "unavailable"
+identity and proceeds — but then no Pod is excluded from the drain, so every ACM Pod must terminate on
+its own. Remaining Pods are judged by owner chain up to the recorded operator Deployment, which replaces
+the older Pod-name prefix heuristic. A drain that times out, a read that cannot be verified, or a
+recorded identity that no longer matches the live Deployment fails the run instead of warning; the
+recorded teardown stays an outstanding obligation that a retry resumes, and an ambiguous namespace
+read or a recorded identity that no longer holds is additionally recorded as `recovery_required`. A resumed run reuses the recorded target and identity — it never
+recaptures or rebinds them — and a teardown already recorded as completed is re-proved against the live
+hub rather than trusted. `changed` in the run result means this run's delete was accepted, which is
+distinct from a dry run's would-change preview.
+
+Decommission therefore also needs the `open-cluster-management` reads that identity capture and Pod
+classification issue — ClusterServiceVersion get/list, Deployment get, ReplicaSet get — plus
+`multiclusterhubs` get on the decommission extension; the shipped manifests include them, and the full
+matrix is in [RBAC requirements](../deployment/rbac-requirements.md).
 
 **ManagedCluster deletion safety gate:**
 Before deleting any non-local `ManagedCluster`, decommission re-reads Hive

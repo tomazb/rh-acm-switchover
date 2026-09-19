@@ -29,14 +29,21 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint i
     KNOWN_PHASES,
     build_operation_identity,
     reset_completed_phases_from,
+    teardown_key,
 )
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    ACM_NAMESPACE,
+    ACM_OPERATOR_POD_PREFIX,
+    CSV_API_GROUP,
+    CSV_API_VERSION,
     DECOMMISSION_SUBSTEP_OUTCOMES,
     GATE_REASON_ACK_NOT_APPLICABLE,
     GATE_REASON_DESTINATION_ABSENT,
     GATE_REASON_DESTINATION_UNVERIFIABLE,
     GATE_REASON_SOURCE_AMBIGUOUS,
     GATE_REASON_SOURCE_UNVERIFIABLE,
+    MCH_OWNED_CRD,
+    OPERATOR_IDENTITY_DISCOVERY_METHOD,
 )
 
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
@@ -62,6 +69,7 @@ DECOMMISSION_TASKS_DIR = ROLES_DIR / "decommission" / "tasks"
 CHECK_MODE_NATIVE_MODULES = frozenset(
     {
         "tomazb.acm_switchover.acm_k8s_read_outcome",
+        "tomazb.acm_switchover.acm_pod_owner_classify",
         "tomazb.acm_switchover.acm_uid_guarded_delete",
     }
 )
@@ -88,6 +96,10 @@ _READ_ONLY_ACTIONS = frozenset(
         "tomazb.acm_switchover.acm_rbac_validate",
         # Read-only by module contract, and it must keep running in check mode.
         "tomazb.acm_switchover.acm_k8s_read_outcome",
+        # Same terms: read-only by module contract, and section 8 requires the
+        # capture pass to keep running under --check so preview can predict. Its
+        # check-mode run is proved in tests/integration/test_pod_owner_classify_runtime.py.
+        "tomazb.acm_switchover.acm_pod_owner_classify",
     }
 )
 
@@ -904,73 +916,349 @@ class TestDeleteManagedClusters:
         assert "_acm_mc_would_change" in facts
 
 
-class TestDeleteMultiClusterHub:
-    """decommission/tasks/delete_multiclusterhub.yml contract tests."""
+class _GuardStub:
+    """A stand-in for any fact a task condition names, fixed to one classify outcome.
+
+    Attribute and item lookups answer the classify pass's own fields -- ``read_status``
+    is always ``error`` and ``read_error_stage`` is the stage under test -- and anything
+    else resolves to another truthy stub, so an unrelated clause never decides the
+    verdict. ``mode`` answers ``execute`` so an execution-mode guard passes.
+    """
+
+    def __init__(self, stage: Optional[str]):
+        self._stage = stage
+
+    def _resolve(self, name: str):
+        if name == "read_status":
+            return "error"
+        if name == "read_error_stage":
+            return self._stage
+        if name == "mode":
+            return "execute"
+        return _GuardStub(self._stage)
+
+    def __getattr__(self, name: str):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return self._resolve(name)
+
+    def __getitem__(self, name):
+        return self._resolve(str(name))
+
+    def get(self, name, default=None):
+        return self._resolve(str(name))
+
+    def __bool__(self) -> bool:
+        return True
+
+    def __eq__(self, other) -> bool:
+        return False
+
+    def __ne__(self, other) -> bool:
+        return True
+
+    def __hash__(self) -> int:
+        return id(self)
+
+
+class TestDeleteMultiClusterHubPhaseTable:
+    """decommission/tasks/delete_multiclusterhub.yml contract tests (R4-03 PR E / E6).
+
+    Replaces the retired ``TestDeleteMultiClusterHub``, whose every assertion pinned the
+    mechanism E6 removes: ``kubernetes.core.k8s_info`` discovery, a generic name-only
+    ``kubernetes.core.k8s`` delete, Pod-name prefix filtering as the drain predicate, and
+    ``failed_when: false`` absorbing the wait. Those are inverted here into absence
+    assertions; the safety properties themselves are proved at runtime by
+    ``TestDeleteMultiClusterHubDurable``.
+    """
 
     def setup_method(self):
-        self.tasks = yaml.safe_load(DELETE_MCH.read_text()) or []
+        self.tasks = _load_tasks(DELETE_MCH)
+        self.text = DELETE_MCH.read_text()
+
+    def _module_tasks(self, module: str) -> list:
+        return [task for task in self.tasks if module in _task_actions(task)]
 
     def test_file_exists(self):
         assert DELETE_MCH.exists(), "decommission/tasks/delete_multiclusterhub.yml must exist"
 
-    def test_list_and_delete_guarded_by_execute_mode(self):
-        """MCH list and delete operations must not run in dry-run mode."""
-        # list task
-        k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        mch_list_tasks = [
-            t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "MultiClusterHub"
+    def test_no_generic_multiclusterhub_discovery_or_delete_remains(self):
+        """§5: a name-only delete can remove a replacement; k8s_info cannot fail closed."""
+        assert not [
+            task for task in self.tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "MultiClusterHub"
         ]
-        assert mch_list_tasks, "delete_multiclusterhub.yml must list MultiClusterHub resources"
-        for task in mch_list_tasks:
-            assert "!= 'dry_run'" in _when_text(task), "MCH list must be guarded by execute-mode check"
+        assert not [task for task in self.tasks if task.get("kubernetes.core.k8s", {}).get("kind") == "MultiClusterHub"]
+        assert not [task for task in self.tasks if task.get("kubernetes.core.k8s", {}).get("state") == "absent"]
 
-        # delete task
-        k8s_tasks = [t for t in self.tasks if "kubernetes.core.k8s" in t and "kubernetes.core.k8s_info" not in t]
-        mch_delete_tasks = [t for t in k8s_tasks if t.get("kubernetes.core.k8s", {}).get("kind") == "MultiClusterHub"]
-        assert mch_delete_tasks, "delete_multiclusterhub.yml must have a MultiClusterHub delete task"
-        for task in mch_delete_tasks:
-            assert "!= 'dry_run'" in _when_text(task), "MCH delete must be guarded by execute-mode check"
+    def _decision_expressions(self, task: dict) -> str:
+        """Everything this task DECIDES with: its loop condition, its guards, its args.
 
-    def test_mch_operations_use_primary_hub(self):
-        """All MCH operations must target the primary hub (old hub being decommissioned)."""
-        for task in self.tasks:
-            for module in ("kubernetes.core.k8s_info", "kubernetes.core.k8s"):
-                if module in task:
-                    params = task[module]
-                    if isinstance(params, dict) and params.get("kind") in (
-                        "MultiClusterHub",
-                        "Pod",
-                    ):
-                        kubeconfig = str(params.get("kubeconfig", ""))
-                        assert (
-                            "primary" in kubeconfig
-                        ), f"Task '{task.get('name')}' must use primary hub kubeconfig for MCH operations"
-
-    def test_pod_wait_uses_failed_when_false(self):
-        """ACM pod wait must use failed_when: false to warn rather than fail when pods linger.
-
-        The pod watch may time out when some ACM components take unexpectedly long to
-        terminate. Failing hard here is unhelpful — the MCH is already deleted; the operator
-        should be warned and can verify manually.
+        Diagnostic text -- a `fail`/`debug` message -- is deliberately excluded: naming
+        the operator Deployment in an error message is not a filter.
         """
-        k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        pod_wait_tasks = [t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Pod"]
-        assert pod_wait_tasks, "delete_multiclusterhub.yml must have a Pod wait task"
-        for task in pod_wait_tasks:
-            assert task.get("failed_when") is False, (
-                "ACM pod wait must use 'failed_when: false' — lingering pods should warn, "
-                "not abort the decommission. The MCH is already deleted at this point."
-            )
+        parts = [str(task.get("until", "")), _when_text(task), str(task.get("failed_when", ""))]
+        for action in _task_actions(task):
+            if action in ("ansible.builtin.fail", "ansible.builtin.debug"):
+                continue
+            parts.append(str(task[action]))
+        return " ".join(parts)
 
-    def test_pod_wait_has_retries_delay_until(self):
-        """MCH pod wait must use polling with retries and delay."""
-        k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        pod_wait_tasks = [t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Pod"]
-        assert pod_wait_tasks
-        for task in pod_wait_tasks:
-            assert "retries" in task, "Pod wait must specify retries"
-            assert "delay" in task, "Pod wait must specify delay"
-            assert "until" in task, "Pod wait must specify until condition"
+    def test_no_pod_name_prefix_filter_decides_anything(self):
+        """§5: ownership is decided by the classifier, never by a name prefix."""
+        for task in self.tasks:
+            expression = self._decision_expressions(task)
+            assert "rejectattr" not in expression, f"task {task.get('name')!r} still filters by name"
+            assert (
+                ACM_OPERATOR_POD_PREFIX not in expression
+            ), f"task {task.get('name')!r} still treats the operator name prefix as a signal"
+
+    def test_no_authoritative_read_is_absorbed_or_defaulted_to_empty(self):
+        """§5: `failed_when: false` and `default([])` both turn a failed read into 'nothing'.
+
+        The `default([])` ban is scoped to what a task DECIDES with -- an authoritative
+        read turned into an empty inventory -- not to the whole file text.
+        """
+        for task in self.tasks:
+            assert task.get("failed_when") is not False, f"task {task.get('name')!r} absorbs its own failure"
+            assert "ignore_errors" not in task, f"task {task.get('name')!r} absorbs its own failure"
+            decisions = self._decision_expressions(task)
+            assert "default([])" not in decisions, f"task {task.get('name')!r} decides on a defaulted-empty read"
+        # A block-level `ignore_errors` never reaches a flattened task, so the parsed
+        # check alone cannot see it.
+        assert "ignore_errors" not in self.text
+
+    def test_target_resolution_binds_the_strict_read_arguments(self):
+        """§7: a namespaced strict LIST, then a strict named GET, of the MCH resource."""
+        reads = [
+            task
+            for task in read_outcome_tasks(self.tasks)
+            if task["tomazb.acm_switchover.acm_k8s_read_outcome"].get("resource_name") == "multiclusterhubs"
+        ]
+        assert reads, "MultiClusterHub discovery must use acm_k8s_read_outcome"
+        modes = {task["tomazb.acm_switchover.acm_k8s_read_outcome"].get("read_mode") for task in reads}
+        assert {"list", "get"} <= modes
+        for task in reads:
+            args = task["tomazb.acm_switchover.acm_k8s_read_outcome"]
+            assert args["api_version"] == "operator.open-cluster-management.io/v1"
+            assert args["kind"] == "MultiClusterHub"
+            assert args["namespace"] == ACM_NAMESPACE
+            assert "primary.kubeconfig" in str(args["kubeconfig"])
+
+    def test_identity_capture_and_classification_go_through_the_e5_module(self):
+        """§9 and §13: one classifier owns every ownership decision, and it is no_log."""
+        classifiers = self._module_tasks("tomazb.acm_switchover.acm_pod_owner_classify")
+        operations = [task["tomazb.acm_switchover.acm_pod_owner_classify"].get("operation") for task in classifiers]
+        # `>= 1`, not `== 1`: section 8's preview capture and section 9's execute capture
+        # are allowed to be two tasks with different guards.
+        assert operations.count("capture_identity") >= 1
+        assert operations.count("classify") >= 2, "the drain loop and the final proof are separate passes"
+        for task in classifiers:
+            args = task["tomazb.acm_switchover.acm_pod_owner_classify"]
+            assert args["namespace"] == ACM_NAMESPACE
+            assert "primary.kubeconfig" in str(args["kubeconfig"])
+            assert task.get("no_log") is True
+
+    def test_the_delete_is_uid_guarded_and_bound_to_the_durable_identity(self):
+        """§11: the expected UID precondition is what makes the delete safe."""
+        guarded = self._module_tasks("tomazb.acm_switchover.acm_uid_guarded_delete")
+        assert len(guarded) == 1
+        args = guarded[0]["tomazb.acm_switchover.acm_uid_guarded_delete"]
+        assert args["api_version"] == "operator.open-cluster-management.io/v1"
+        assert args["kind"] == "MultiClusterHub"
+        assert args["resource_name"] == "multiclusterhubs"
+        assert args["namespace"] == ACM_NAMESPACE
+        assert "expected_uid" in args
+        assert "primary.kubeconfig" in str(args["kubeconfig"])
+        for timeout in ("request_timeout", "wait_timeout", "wait_sleep"):
+            assert str(args.get(timeout, "")).strip()
+
+    def test_every_durable_phase_of_the_table_is_written(self):
+        """§10, §12, §14, §15: the phase vocabulary the resume matrix depends on.
+
+        Lead ruling: the six phases must appear as LITERAL `teardown_record.phase`
+        values across the writer tasks. A templated phase would make the static
+        vocabulary -- and the guard analysis the recovery_required ruling rests on --
+        unreadable, so Task 2 is bound to one writer task per phase.
+        """
+        writers = checkpoint_writer_tasks({"mch": self.tasks})
+        phases = {
+            str(task[_CHECKPOINT_WRITER_MODULE]["teardown_record"]["phase"])
+            for task in writers
+            if "teardown_record" in task.get(_CHECKPOINT_WRITER_MODULE, {})
+        }
+        assert phases, "the MultiClusterHub teardown must write durable records"
+        assert not [phase for phase in phases if "{{" in phase], "each durable phase needs its own literal writer task"
+        literal = {"delete_started", "cr_absent", "drain_pending", "drained", "completed", "recovery_required"}
+        assert literal <= phases
+
+    def test_the_durable_write_precedes_the_delete(self):
+        """§10: the delete_started record must exist before the cluster is mutated."""
+        delete_index = index_of_task_using(self.tasks, "tomazb.acm_switchover.acm_uid_guarded_delete")
+        writes = [
+            index
+            for index, task in enumerate(self.tasks)
+            if _CHECKPOINT_WRITER_MODULE in _task_actions(task)
+            and task[_CHECKPOINT_WRITER_MODULE].get("teardown_record", {}).get("phase") == "delete_started"
+        ]
+        assert writes, "no delete_started write found"
+        assert min(writes) < delete_index
+
+    def test_the_drain_loop_is_bounded_by_the_1200_second_contract(self):
+        """§13: `retries: N` is N+1 attempts with N delays, so N x delay is the budget.
+
+        Verified against ansible-core 2.16.14 (`ansible/executor/task_executor.py:626-638`).
+        The two overridable variables are resolved here the way Ansible resolves them, so
+        the pinned budget is the DEFAULT budget rather than a literal in the task file.
+        """
+        import jinja2
+
+        loops = self._drain_loop_tasks()
+        environment = jinja2.Environment()
+        for task in loops:
+            # Ansible's own implicit default is `retries: 3`, which would silently cap the
+            # drain at 30 seconds. The budget has to be declared, not inherited.
+            assert "retries" in task, "the drain loop must declare its retries, not inherit Ansible's default of 3"
+            assert "delay" in task, "the drain loop must declare its delay"
+            retries = int(environment.from_string(str(task["retries"])).render())
+            delay = int(environment.from_string(str(task["delay"])).render())
+            assert delay == 30
+            assert retries * delay == 1200
+
+    def _drain_loop_tasks(self) -> list:
+        """The classification passes that RETRY -- the drain loop, never the final proof."""
+        loops = [
+            task
+            for task in self._module_tasks("tomazb.acm_switchover.acm_pod_owner_classify")
+            if "until" in task and task["tomazb.acm_switchover.acm_pod_owner_classify"].get("operation") == "classify"
+        ]
+        assert loops, "the drain pass must retry under an `until` condition"
+        return loops
+
+    def test_the_drain_loop_stops_on_every_terminal_condition(self):
+        """§13: only ok + consistent identity + blocking Pods may retry."""
+        for task in self._drain_loop_tasks():
+            until = str(task["until"])
+            assert "read_status" in until
+            assert "identity_status" in until
+            assert "blocking_count" in until
+            assert "failed_when" not in task or "read_status" not in str(task.get("failed_when"))
+
+    def test_a_stage_less_classify_error_reaches_the_recovery_write_and_a_pod_error_does_not(self):
+        """§14 and the lead ruling, pinned by EVALUATING the guard, not by reading it.
+
+        `read_error_stage` is `null` only when the classify module never reached a read:
+        client construction failed (`acm_pod_owner_classify.py:245-246`) or an unexpected
+        exception escaped (`:285-286`). Both go through the SHARED primary kubeconfig and
+        context, so in a role run every earlier strict read fails closed first;
+        `strict_read` itself raises nothing (`k8s_read.py:214-260`), so `classify_pass`
+        always sets `namespace` or `pods` on an error it produced
+        (`pod_owner_classify.py:352,357`). A partial recorded identity cannot reach the
+        raw `recorded["name"]` indexing either: `checkpoint.py:504` requires the exact
+        `operator_deployment` field set and `:506` requires non-empty strings, and
+        `acm_pod_owner_classify.py:211-212` fails the task outright. The case is
+        therefore unreachable from any harness input and is pinned statically.
+
+        `when:` is the only admissible place for this decision: `failed_when` re-labels a
+        task's outcome after it ran, and module arguments cannot stop a write -- only the
+        task condition decides whether the recovery_required record is persisted at all.
+        """
+        writers = self._recovery_required_writers()
+        for task in writers:
+            for stage, expected in (("pods", False), ("namespace", True), (None, True)):
+                rendered = self._render_guard(task, stage)
+                assert rendered is expected, (
+                    f"task {task.get('name')!r}: with read_error_stage={stage!r} the recovery_required write "
+                    f"is {'reached' if rendered else 'skipped'}; the ruling says it must be "
+                    f"{'reached' if expected else 'skipped'}"
+                )
+
+    def test_the_recovery_guard_analysis_rejects_the_inverse_ruling(self):
+        """A self-test of the machinery the ruling above rests on.
+
+        This one passes on arrival on purpose: it proves the guard renderer can tell the
+        ruling from its inverse, which a substring search could not. The kill condition
+        is the renderer answering the same verdicts for all three guards below.
+        """
+
+        def verdicts(*clauses):
+            task = {
+                "name": "synthetic",
+                "when": list(clauses),
+                _CHECKPOINT_WRITER_MODULE: {"teardown_record": {"phase": "recovery_required"}},
+            }
+            return [self._render_guard(task, stage) for stage in ("pods", "namespace", None)]
+
+        # The ruling: a Pod-stage error is skipped, `namespace` and stage-less both write.
+        assert verdicts(
+            "acm_switchover_execution.mode == 'execute'",
+            "not ansible_check_mode",
+            "_acm_mch_pass.read_status == 'error'",
+            "_acm_mch_pass.read_error_stage != 'pods'",
+        ) == [False, True, True]
+        # Its exact inverse, which the retired substring assertions accepted.
+        assert verdicts("_acm_mch_pass.read_error_stage == 'pods'") == [True, False, False]
+        # Namespace-only: the stage-less pass would silently lose its recovery transition.
+        assert verdicts("_acm_mch_pass.read_error_stage == 'namespace'") == [False, True, False]
+        # The Ansible filter spellings a real guard may use still render.
+        assert verdicts(
+            "(_acm_mch_pass.read_error_stage | default('', true)) != 'pods'",
+            "not (ansible_check_mode | bool)",
+        ) == [False, True, True]
+
+    def _recovery_required_writers(self) -> list:
+        writers = [
+            task
+            for task in checkpoint_writer_tasks({"mch": self.tasks})
+            if str(task[_CHECKPOINT_WRITER_MODULE].get("teardown_record", {}).get("phase", "")) == "recovery_required"
+        ]
+        assert writers, "no recovery_required write found"
+        return writers
+
+    def _render_guard(self, task: dict, stage: Optional[str]) -> bool:
+        """Evaluate one task's `when` clauses for a classify error carrying ``stage``.
+
+        Every fact the expression names is stubbed: the classify result reports
+        ``read_status == 'error'`` with the stage under test, execution is a real
+        execute-mode run, and anything else the guard happens to consult is truthy. So
+        the only thing that can vary the verdict is the read stage.
+        """
+        import jinja2
+        from jinja2 import meta
+
+        clauses = task.get("when", [])
+        if not isinstance(clauses, list):
+            clauses = [clauses]
+        assert clauses, f"task {task.get('name')!r} writes recovery_required unconditionally"
+
+        environment = jinja2.Environment()
+        # `bool` and `ternary` are Ansible filters, not Jinja builtins; a guard is allowed
+        # to use them, so the shim supplies them rather than failing to render.
+        environment.filters["bool"] = lambda value: bool(value) and str(value).lower() not in ("false", "no", "0")
+        environment.filters["ternary"] = lambda condition, yes, no=None: yes if condition else no
+        environment.tests["truthy"] = lambda value: bool(value)
+        environment.tests["falsy"] = lambda value: not value
+
+        for clause in clauses:
+            source = "{{ (" + str(clause) + ") }}"
+            names = meta.find_undeclared_variables(environment.parse(source))
+            context: Dict[str, Any] = {name: _GuardStub(stage) for name in names}
+            for name in names:
+                if "check_mode" in name:
+                    context[name] = False
+            if str(environment.from_string(source).render(**context)).strip() != "True":
+                return False
+        return True
+
+    def test_the_family_publishes_its_change_and_prediction_facts(self):
+        """§19: the role summary aggregates facts, not a delete loop's register."""
+        published = {
+            name
+            for task in self.tasks
+            for name in (task.get("ansible.builtin.set_fact") or {})
+            if name in ("_acm_mch_changed", "_acm_mch_would_change")
+        }
+        assert published == {"_acm_mch_changed", "_acm_mch_would_change"}
+        assert "_multiclusterhub_delete_results" not in self.text
 
 
 def test_summary_status_is_not_hardcoded():
@@ -1060,6 +1348,40 @@ _GROUP_API_RESOURCES = {
             }
         ],
     ),
+    # The MultiClusterHub operator-identity surface: the CSV that owns the MCH CRD, the
+    # install-strategy Deployment it names, and the ReplicaSet an owned Pod's controller
+    # chain walks through. `acm_pod_owner_classify` reads all three and nothing else.
+    "apps": (
+        "v1",
+        [
+            {
+                "name": "deployments",
+                "singularName": "deployment",
+                "namespaced": True,
+                "kind": "Deployment",
+                "verbs": ["get", "list"],
+            },
+            {
+                "name": "replicasets",
+                "singularName": "replicaset",
+                "namespaced": True,
+                "kind": "ReplicaSet",
+                "verbs": ["get", "list"],
+            },
+        ],
+    ),
+    "operators.coreos.com": (
+        "v1alpha1",
+        [
+            {
+                "name": "clusterserviceversions",
+                "singularName": "clusterserviceversion",
+                "namespaced": True,
+                "kind": "ClusterServiceVersion",
+                "verbs": ["get", "list"],
+            }
+        ],
+    ),
 }
 
 _KIND_BY_PLURAL: Dict[str, str] = {"pods": "Pod", "namespaces": "Namespace"}
@@ -1125,10 +1447,16 @@ class FakeDecommissionAPI:
         delete_status_by_plural: dict,
         read_status_by_plural: dict,
         pods: Optional[list] = None,
+        deployments: Optional[list] = None,
+        replicasets: Optional[list] = None,
+        clusterserviceversions: Optional[list] = None,
         named_read_status_by_plural: Optional[dict] = None,
+        named_read_status_by_object: Optional[dict] = None,
         retain_after_delete_by_plural: Optional[dict] = None,
         post_delete_read_status_by_plural: Optional[dict] = None,
         read_status_sequences_by_plural: Optional[dict] = None,
+        list_inventory_sequences_by_plural: Optional[dict] = None,
+        list_revision_sequences_by_plural: Optional[dict] = None,
         api_resources_by_group: Optional[dict] = None,
     ):
         #: Overridable so a hub can serve a group/version that positively does NOT
@@ -1143,14 +1471,34 @@ class FakeDecommissionAPI:
             "namespaces": copy.deepcopy(namespaces),
             "clusterdeployments": [],
             "pods": copy.deepcopy(pods or []),
+            "deployments": copy.deepcopy(deployments or []),
+            "replicasets": copy.deepcopy(replicasets or []),
+            "clusterserviceversions": copy.deepcopy(clusterserviceversions or []),
         }
         self.delete_status_by_plural = dict(delete_status_by_plural)
         self.read_status_by_plural = dict(read_status_by_plural)
         self.named_read_status_by_plural = dict(named_read_status_by_plural or {})
+        #: Per-OBJECT named-GET status, keyed ``"<plural>/<name>"``. The per-plural map
+        #: cannot express "this one Namespace read fails": refusing every ``namespaces``
+        #: GET also refuses the standalone kube-system identity read.
+        self.named_read_status_by_object = dict(named_read_status_by_object or {})
         self.retain_after_delete_by_plural = dict(retain_after_delete_by_plural or {})
         self.post_delete_read_status_by_plural = dict(post_delete_read_status_by_plural or {})
         self.read_status_sequences_by_plural = {
             plural: list(statuses) for plural, statuses in (read_status_sequences_by_plural or {}).items()
+        }
+        #: Per-LIST inventories, popped one per unfiltered list read, so a Pod that
+        #: appears only in a later pass can be served. The popped value replaces the
+        #: whole store for that plural; the last one stays in effect.
+        self.list_inventory_sequences_by_plural = {
+            plural: [copy.deepcopy(items) for items in inventories]
+            for plural, inventories in (list_inventory_sequences_by_plural or {}).items()
+        }
+        #: Per-LIST ``metadata.resourceVersion`` values, popped the same way. Without
+        #: these every list read reports the same revision, so "the completed record
+        #: carries the FINAL pass's revision" cannot be told from "any pass's".
+        self.list_revision_sequences_by_plural = {
+            plural: list(revisions) for plural, revisions in (list_revision_sequences_by_plural or {}).items()
         }
         self._requests: List[dict] = []
         self._lock = threading.Lock()
@@ -1181,18 +1529,31 @@ class FakeDecommissionAPI:
             self._requests.append({"method": method, "path": path, **details})
 
     def _select(self, plural: str, namespace, name):
+        """The objects one read selects.
+
+        A named read filters by namespace and name. A LIST filters by namespace, EXCEPT
+        that malformed members -- a non-mapping item, or an item whose ``metadata`` is
+        not a mapping -- are served by every LIST regardless of its namespace, because
+        such an object carries no namespace to filter on and the role's fail-closed
+        contracts exist precisely to observe it. This is wider than the original
+        cluster-scoped-only rule, so a namespaced fixture (the MultiClusterHub LIST) now
+        sees malformed members it previously never received.
+        """
         items = self.store.get(plural, [])
         selected = []
         for item in items:
-            # Preserve malformed inventory objects on unfiltered list reads so role
-            # fail-closed contracts can observe them (PR D Blocker 2).
+            # Preserve malformed inventory objects on ANY list read so role fail-closed
+            # contracts can observe them (PR D Blocker 2). The namespace filter cannot
+            # apply to an object with no readable metadata, and the MultiClusterHub LIST
+            # is namespaced -- requiring `namespace is None` too silently dropped every
+            # malformed MCH member before the role ever saw it.
             if not isinstance(item, dict):
-                if name is None and namespace is None:
+                if name is None:
                     selected.append(item)
                 continue
             metadata = item.get("metadata")
             if not isinstance(metadata, dict):
-                if name is None and namespace is None:
+                if name is None:
                     selected.append(item)
                 continue
             if namespace is not None and metadata.get("namespace") != namespace:
@@ -1276,18 +1637,22 @@ class FakeDecommissionAPI:
                     return
                 if name is None and api.read_status_sequences_by_plural.get(plural):
                     read_status = api.read_status_sequences_by_plural[plural].pop(0)
-                else:
-                    read_status = (
-                        api.named_read_status_by_plural.get(plural, 200)
-                        if name is not None
-                        else api.read_status_by_plural.get(plural, 200)
+                elif name is not None:
+                    read_status = api.named_read_status_by_object.get(
+                        f"{plural}/{name}",
+                        api.named_read_status_by_plural.get(plural, 200),
                     )
+                else:
+                    read_status = api.read_status_by_plural.get(plural, 200)
                 if read_status != 200:
                     self._write_json(
                         _status_body(read_status, f"fixture refused GET of {plural}"),
                         status=read_status,
                     )
                     return
+                if name is None and api.list_inventory_sequences_by_plural.get(plural):
+                    with api._lock:
+                        api.store[plural] = api.list_inventory_sequences_by_plural[plural].pop(0)
                 selected = api._select(plural, namespace, name)
                 if name is not None:
                     if not selected:
@@ -1295,11 +1660,12 @@ class FakeDecommissionAPI:
                         return
                     self._write_json(copy.deepcopy(selected[0]))
                     return
+                revisions = api.list_revision_sequences_by_plural.get(plural)
                 self._write_json(
                     {
                         "apiVersion": _API_VERSION_BY_PLURAL[plural],
                         "kind": f"{_KIND_BY_PLURAL[plural]}List",
-                        "metadata": {"resourceVersion": "1"},
+                        "metadata": {"resourceVersion": revisions.pop(0) if revisions else "1"},
                         "items": copy.deepcopy(selected),
                     }
                 )
@@ -1336,7 +1702,17 @@ class FakeDecommissionAPI:
                     return
                 victim = selected[0]
                 actual_uid = victim.get("metadata", {}).get("uid")
-                if expected_uid != actual_uid:
+                # The real API server enforces a precondition only when the request
+                # carries one. A DELETE with no ``preconditions.uid`` is name-only --
+                # exactly what the guarded-delete module exists to replace -- and the
+                # fake must serve it rather than answering 409, or "a name-only delete
+                # removes a replacement" becomes unprovable here.
+                #
+                # CHANGED for E6: a name-only DELETE is no longer refused. Before the
+                # fixture MultiClusterHub carried a UID, `None == None` made it succeed
+                # by accident; the rule below makes that deliberate. A test that wants a
+                # refusal must send a MISMATCHING uid, not omit one.
+                if expected_uid is not None and expected_uid != actual_uid:
                     self._write_json(
                         _status_body(
                             409,
@@ -1449,16 +1825,292 @@ def _mco_object(name: str, uid: str = "mco-uid-1") -> dict:
     }
 
 
-def _mch_object(name: str) -> dict:
+#: The fixture MultiClusterHub identity. A live MCH always has a UID, and the guarded
+#: delete's whole contract is the precondition it carries, so the fixture object must
+#: carry one too.
+MCH_UID = "mch-uid-1"
+#: The fixture operator-identity UIDs, shared by the Deployment/ReplicaSet/CSV builders
+#: and by the recorded identity a durable record seeds.
+OPERATOR_DEPLOYMENT_NAME = "multiclusterhub-operator"
+OPERATOR_DEPLOYMENT_UID = "operator-deployment-uid-1"
+OPERATOR_REPLICASET_NAME = "multiclusterhub-operator-7d9f"
+OPERATOR_REPLICASET_UID = "operator-replicaset-uid-1"
+OPERATOR_CSV_NAME = "advanced-cluster-management.v2.13.0"
+OPERATOR_CSV_UID = "operator-csv-uid-1"
+
+
+def _mch_object(name: str, uid: str = MCH_UID) -> dict:
     return {
         "apiVersion": "operator.open-cluster-management.io/v1",
         "kind": "MultiClusterHub",
         "metadata": {
             "name": name,
-            "namespace": "open-cluster-management",
+            "namespace": ACM_NAMESPACE,
+            "uid": uid,
             "resourceVersion": "1",
         },
     }
+
+
+#: The canonical MultiClusterHub teardown record key, built through the real helper.
+MCH_KEY = teardown_key("operator.open-cluster-management.io/v1", "MultiClusterHub", ACM_NAMESPACE, "multiclusterhub")
+
+
+def mch_operator_deployment_identity(
+    *,
+    key: str = MCH_KEY,
+    expected_uid: str = MCH_UID,
+    deployment_uid: str = OPERATOR_DEPLOYMENT_UID,
+) -> dict:
+    """A durable ``operator_deployment`` identity in the exact §10.2.2 record shape."""
+    return {
+        "namespace": ACM_NAMESPACE,
+        "name": OPERATOR_DEPLOYMENT_NAME,
+        "uid": deployment_uid,
+        "discovery_method": OPERATOR_IDENTITY_DISCOVERY_METHOD,
+        "captured_at": "2026-09-17T00:00:00+00:00",
+        "csv": {
+            "namespace": ACM_NAMESPACE,
+            "name": OPERATOR_CSV_NAME,
+            "uid": OPERATOR_CSV_UID,
+            "owned_crd": MCH_OWNED_CRD,
+        },
+        "mch_teardown_key": key,
+        "mch_expected_uid": expected_uid,
+    }
+
+
+def mch_identity_unavailable(
+    *,
+    key: str = MCH_KEY,
+    expected_uid: str = MCH_UID,
+    reason: str = "csv_absent",
+) -> dict:
+    """A durable ``operator_identity_unavailable`` outcome in the exact §10.2.3 shape."""
+    return {
+        "reason": reason,
+        "discovery_method": OPERATOR_IDENTITY_DISCOVERY_METHOD,
+        "captured_at": "2026-09-17T00:00:00+00:00",
+        "evidence_summary": "No ClusterServiceVersion owning the MultiClusterHub CRD was found.",
+        "mch_teardown_key": key,
+        "mch_expected_uid": expected_uid,
+    }
+
+
+def mch_teardown_record(
+    phase: str, *, identity: Optional[dict] = None, expected_uid: str = MCH_UID, **evidence
+) -> dict:
+    """One durable MCH teardown record the real validator accepts.
+
+    An MCH record carries exactly one identity outcome at EVERY phase, so a seeded
+    record without one fails validation at the checkpoint enter -- before the role
+    reaches any MCH task.
+    """
+    record: Dict[str, Any] = {"expected_uid": expected_uid, "phase": phase}
+    identity = identity if identity is not None else mch_operator_deployment_identity(expected_uid=expected_uid)
+    if "reason" in identity:
+        record["operator_identity_unavailable"] = identity
+    else:
+        record["operator_deployment"] = identity
+    record.update(evidence)
+    return record
+
+
+def _operator_csv(
+    *,
+    name: str = OPERATOR_CSV_NAME,
+    uid: str = OPERATOR_CSV_UID,
+    deployment_names: Optional[List[str]] = None,
+    owned_crd: str = MCH_OWNED_CRD,
+    phase: str = "Succeeded",
+) -> dict:
+    """The OLM ClusterServiceVersion that identifies the MCH operator Deployment.
+
+    The shape is the one proven on the real client in
+    ``tests/integration/test_pod_owner_classify_runtime.py`` -- owned-CRD list, install
+    strategy ``deployment``, ``status.phase`` -- not a new one.
+    """
+    deployments = [{"name": deployment} for deployment in (deployment_names or [OPERATOR_DEPLOYMENT_NAME])]
+    return {
+        "apiVersion": f"{CSV_API_GROUP}/{CSV_API_VERSION}",
+        "kind": "ClusterServiceVersion",
+        "metadata": {"name": name, "namespace": ACM_NAMESPACE, "uid": uid, "resourceVersion": "csv-3"},
+        "spec": {
+            "customresourcedefinitions": {"owned": [{"name": owned_crd}]},
+            "install": {"strategy": "deployment", "spec": {"deployments": deployments}},
+        },
+        "status": {"phase": phase},
+    }
+
+
+def _operator_deployment(
+    *,
+    name: str = OPERATOR_DEPLOYMENT_NAME,
+    uid: Optional[str] = OPERATOR_DEPLOYMENT_UID,
+    resource_version: str = "deploy-7",
+) -> dict:
+    metadata: Dict[str, Any] = {"name": name, "namespace": ACM_NAMESPACE, "resourceVersion": resource_version}
+    if uid is not None:
+        metadata["uid"] = uid
+    return {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": metadata}
+
+
+def _operator_replicaset(
+    *,
+    name: str = OPERATOR_REPLICASET_NAME,
+    uid: str = OPERATOR_REPLICASET_UID,
+    deployment_name: str = OPERATOR_DEPLOYMENT_NAME,
+    deployment_uid: str = OPERATOR_DEPLOYMENT_UID,
+) -> dict:
+    return {
+        "apiVersion": "apps/v1",
+        "kind": "ReplicaSet",
+        "metadata": {
+            "name": name,
+            "namespace": ACM_NAMESPACE,
+            "uid": uid,
+            "resourceVersion": "rs-5",
+            "ownerReferences": [
+                {
+                    "apiVersion": "apps/v1",
+                    "kind": "Deployment",
+                    "name": deployment_name,
+                    "uid": deployment_uid,
+                    "controller": True,
+                }
+            ],
+        },
+    }
+
+
+def _acm_pod_object(name: str, owner: Optional[dict] = None, *, unprefixed: bool = False) -> dict:
+    """One Pod in the ACM namespace, with an optional single controller owner reference.
+
+    Every ACM-namespace Pod this harness seeds keeps the ``multiclusterhub-operator``
+    name prefix unless the caller passes ``unprefixed=True``, which is admissible only
+    on a run that resolves no live MultiClusterHub (see ``_acm_pod_name``). The
+    LEGACY role waits for Pods with ``retries: 120, delay: 10`` and excludes only names
+    matching that prefix, so one differently named Pod makes the role poll for 1200s and
+    blow the 600s subprocess timeout -- a fixture-level RuntimeError instead of a failing
+    assertion. The prefix is exactly what E6 retires as an ownership signal, so a spoof
+    Pod that carries it is also the sharper fixture.
+    """
+    metadata: Dict[str, Any] = {
+        "name": _acm_pod_name(name, unprefixed=unprefixed),
+        "namespace": ACM_NAMESPACE,
+        "resourceVersion": "1",
+    }
+    if owner is not None:
+        metadata["ownerReferences"] = [owner]
+    return {"apiVersion": "v1", "kind": "Pod", "metadata": metadata}
+
+
+def _acm_pod_name(name: str, *, unprefixed: bool = False) -> str:
+    """Guard the prefix rule, with a deliberate opt-out.
+
+    ``unprefixed=True`` is safe ONLY on a run that resolves no live MultiClusterHub
+    (``mch_present=False``): the legacy Pod wait is guarded on a non-empty MCH
+    inventory, so it never runs there and cannot poll for 1200s.
+    """
+    if unprefixed or name.startswith(ACM_OPERATOR_POD_PREFIX):
+        return name
+    raise ValueError(
+        f"ACM-namespace fixture Pod {name!r} must keep the {ACM_OPERATOR_POD_PREFIX!r} prefix, or pass "
+        "unprefixed=True on a run with no live MultiClusterHub; see _acm_pod_object for why"
+    )
+
+
+def _operator_owned_pod(
+    name: str = "multiclusterhub-operator-7d9f-abcde",
+    *,
+    unprefixed: bool = False,
+    replicaset_name: str = OPERATOR_REPLICASET_NAME,
+    replicaset_uid: str = OPERATOR_REPLICASET_UID,
+) -> dict:
+    """A Pod whose controller chain really reaches the recorded operator Deployment.
+
+    ``replicaset_name``/``replicaset_uid`` name the intermediate ReplicaSet, so a rolling
+    update -- two ReplicaSets of the SAME Deployment, one Pod each -- can be seeded.
+    """
+    return _acm_pod_object(
+        name,
+        owner={
+            "apiVersion": "apps/v1",
+            "kind": "ReplicaSet",
+            "name": replicaset_name,
+            "uid": replicaset_uid,
+            "controller": True,
+        },
+        unprefixed=unprefixed,
+    )
+
+
+def _spoof_pod(name: str = "multiclusterhub-operator-spoof", *, unprefixed: bool = False) -> dict:
+    """The operator NAME with no owner chain at all: blocking, whatever the prefix says."""
+    return _acm_pod_object(name, unprefixed=unprefixed)
+
+
+def _job_owned_pod(name: str = "multiclusterhub-operator-backup-job-x") -> dict:
+    return _acm_pod_object(
+        name,
+        owner={"apiVersion": "batch/v1", "kind": "Job", "name": "mch-backup", "uid": "job-uid-1", "controller": True},
+    )
+
+
+def _statefulset_owned_pod(name: str = "multiclusterhub-operator-sts-0") -> dict:
+    return _acm_pod_object(
+        name,
+        owner={
+            "apiVersion": "apps/v1",
+            "kind": "StatefulSet",
+            "name": "mch-sts",
+            "uid": "sts-uid-1",
+            "controller": True,
+        },
+    )
+
+
+def _unrelated_replicaset_pod(name: str = "multiclusterhub-operator-other-rs-1") -> dict:
+    """Owned by a ReplicaSet that exists but is controlled by another Deployment."""
+    return _acm_pod_object(
+        name,
+        owner={
+            "apiVersion": "apps/v1",
+            "kind": "ReplicaSet",
+            "name": "unrelated-rs",
+            "uid": "unrelated-rs-uid",
+            "controller": True,
+        },
+    )
+
+
+def _unrelated_replicaset() -> dict:
+    return _operator_replicaset(
+        name="unrelated-rs",
+        uid="unrelated-rs-uid",
+        deployment_name="some-other-operator",
+        deployment_uid="some-other-uid",
+    )
+
+
+def _request_shape(request: dict) -> tuple:
+    """``(VERB, API_GROUP, RESOURCE_PLURAL, NAMESPACE_OR_NONE)`` for one logged request.
+
+    Identical to the normaliser ``tests/test_decommission.py`` builds the measured
+    Python MCH request table from, so the two measured sets are directly comparable as
+    sets rather than through a hand-written table. A LIST is a GET with no object name.
+    """
+    path = request["path"]
+    parsed = _split_resource_path(path)
+    if parsed is None:
+        return (request["method"], None, None, None)
+    plural, namespace, name = parsed
+    segments = [segment for segment in path.split("/") if segment]
+    group = "" if segments[0] == "api" else segments[1]
+    verb = request["method"]
+    if verb == "GET" and name is None:
+        verb = "LIST"
+    return (verb, group, plural, namespace)
 
 
 def _managed_cluster_object(name: str, uid: Optional[str] = None) -> dict:
@@ -1550,6 +2202,7 @@ def run_decommission_role(
     *,
     check_mode: bool = False,
     execution_mode: str = "execute",
+    allow_unknown_execution_mode: bool = False,
     observability_outcome: Optional[str] = None,
     managed_clusters_outcome: Optional[str] = None,
     multiclusterhub_outcome: Optional[str] = None,
@@ -1580,6 +2233,23 @@ def run_decommission_role(
     seeded_operation_identity: Optional[dict] = None,
     managed_cluster_teardown_records: Optional[Dict[str, dict]] = None,
     checkpoint_dir_readonly: bool = False,
+    mch_inventory: Optional[List[dict]] = None,
+    mch_record: Optional[dict] = None,
+    mch_teardown_records: Optional[Dict[str, dict]] = None,
+    mch_read_status: int = 200,
+    mch_kind_served: bool = True,
+    mch_named_read_status: int = 200,
+    mch_post_delete_read_status: Optional[int] = None,
+    mch_drain_retries: Optional[int] = None,
+    mch_drain_delay: Optional[int] = None,
+    acm_pods: Optional[List[dict]] = None,
+    acm_pod_passes: Optional[List[List[dict]]] = None,
+    pod_list_revisions: Optional[List[str]] = None,
+    operator_csvs: Optional[List[dict]] = None,
+    operator_deployments: Optional[List[dict]] = None,
+    operator_replicasets: Optional[List[dict]] = None,
+    csv_read_status: int = 200,
+    object_read_statuses: Optional[Dict[str, int]] = None,
 ) -> dict:
     """Run the decommission role against declared fakes and return one canonical result.
 
@@ -1596,7 +2266,7 @@ def run_decommission_role(
         _write_fixture_kubeconfig,
     )
 
-    if execution_mode not in ("execute", "validate", "dry_run"):
+    if not allow_unknown_execution_mode and execution_mode not in ("execute", "validate", "dry_run"):
         raise ValueError(f"execution_mode={execution_mode!r} is not one of ('execute', 'validate', 'dry_run')")
     entry_points = [standalone_playbook, integrated_finalization, integrated_finalization_secondary]
     if sum(1 for flag in entry_points if flag) > 1:
@@ -1716,6 +2386,14 @@ def run_decommission_role(
                 mch_delete_status = 500
     if mch_present is None:
         mch_present = True
+    if mch_inventory is not None and mch_present is not True:
+        raise ValueError("mch_inventory supplies the inventory and requires mch_present=True")
+    if mch_record is not None and mch_teardown_records is not None:
+        raise ValueError("pass one mch_record or the mch_teardown_records mapping, not both")
+    if not mch_kind_served and (mch_present or mch_inventory):
+        raise ValueError("mch_kind_served=False serves no MultiClusterHub kind at all; it takes no inventory")
+    if acm_pods is not None and acm_pod_passes is not None:
+        raise ValueError("pass a fixed acm_pods inventory or the acm_pod_passes sequence, not both")
 
     namespaces = [_namespace_object("open-cluster-management")]
     if observability_namespace == "present":
@@ -1727,6 +2405,12 @@ def run_decommission_role(
     # the empty/malformed-uid refusal can be exercised against a real response.
     namespaces.append(_namespace_object("kube-system", uid=primary_cluster_uid))
 
+    observability_pod_store = [_observability_pod_object(name) for name in (observability_pods or [])]
+    post_delete_read_statuses: Dict[str, int] = {}
+    if mco_post_delete_read_status is not None:
+        post_delete_read_statuses["multiclusterobservabilities"] = mco_post_delete_read_status
+    if mch_post_delete_read_status is not None:
+        post_delete_read_statuses["multiclusterhubs"] = mch_post_delete_read_status
     managedcluster_store = (
         copy.deepcopy(managed_cluster_objects)
         if managed_cluster_objects is not None
@@ -1735,29 +2419,57 @@ def run_decommission_role(
 
     repo_root = ROLES_DIR.parents[3]
     workspace = pathlib.Path(tempfile.mkdtemp(prefix="acm-decommission-harness-"))
+    # Dropping the plural from the served group is the only way to produce a genuine
+    # `kind_not_served`: a 404 on the discovery path is `error`, not positive absence.
+    source_api_resources = copy.deepcopy(_GROUP_API_RESOURCES)
+    if not mch_kind_served:
+        source_api_resources["operator.open-cluster-management.io"] = (
+            _GROUP_API_RESOURCES["operator.open-cluster-management.io"][0],
+            [],
+        )
     api = FakeDecommissionAPI(
+        api_resources_by_group=source_api_resources,
         multiclusterobservabilities=(
             copy.deepcopy(mco_inventory)
             if mco_inventory is not None
             else ([_mco_object("observability")] if mco_present else [])
         ),
-        multiclusterhubs=[_mch_object("multiclusterhub")] if mch_present else [],
+        multiclusterhubs=(
+            copy.deepcopy(mch_inventory)
+            if mch_inventory is not None
+            else ([_mch_object("multiclusterhub")] if mch_present else [])
+        ),
         managedclusters=managedcluster_store,
         namespaces=namespaces,
-        pods=[_observability_pod_object(name) for name in (observability_pods or [])],
+        pods=observability_pod_store + copy.deepcopy(acm_pods or []),
+        deployments=copy.deepcopy(
+            operator_deployments if operator_deployments is not None else [_operator_deployment()]
+        ),
+        replicasets=copy.deepcopy(
+            operator_replicasets if operator_replicasets is not None else [_operator_replicaset()]
+        ),
+        clusterserviceversions=copy.deepcopy(operator_csvs if operator_csvs is not None else [_operator_csv()]),
+        named_read_status_by_object=dict(object_read_statuses or {}),
+        list_inventory_sequences_by_plural=(
+            {"pods": [observability_pod_store + pass_pods for pass_pods in acm_pod_passes]} if acm_pod_passes else {}
+        ),
+        list_revision_sequences_by_plural={"pods": list(pod_list_revisions or [])},
         delete_status_by_plural={
             "multiclusterobservabilities": obs_delete_status,
             "managedclusters": managed_clusters_delete_status,
             "multiclusterhubs": mch_delete_status,
         },
-        read_status_by_plural={"multiclusterobservabilities": observability_read_status},
-        named_read_status_by_plural={"multiclusterobservabilities": mco_named_read_status},
+        read_status_by_plural={
+            "multiclusterobservabilities": observability_read_status,
+            "multiclusterhubs": mch_read_status,
+            "clusterserviceversions": csv_read_status,
+        },
+        named_read_status_by_plural={
+            "multiclusterobservabilities": mco_named_read_status,
+            "multiclusterhubs": mch_named_read_status,
+        },
         retain_after_delete_by_plural={"multiclusterobservabilities": mco_retain_after_delete},
-        post_delete_read_status_by_plural=(
-            {"multiclusterobservabilities": mco_post_delete_read_status}
-            if mco_post_delete_read_status is not None
-            else {}
-        ),
+        post_delete_read_status_by_plural=post_delete_read_statuses,
         read_status_sequences_by_plural={
             "pods": pod_read_statuses or [],
             # Per-list-read statuses on the source hub, so the gate's own fresh read
@@ -1789,6 +2501,13 @@ def run_decommission_role(
         if managed_cluster_teardown_records:
             records = seeded_operational_data.setdefault("decommission_teardown_records", {})
             for key, record in managed_cluster_teardown_records.items():
+                records[key] = copy.deepcopy(record)
+        seeded_mch_records = (
+            {MCH_KEY: mch_record} if mch_record is not None else copy.deepcopy(mch_teardown_records or {})
+        )
+        if seeded_mch_records:
+            records = seeded_operational_data.setdefault("decommission_teardown_records", {})
+            for key, record in seeded_mch_records.items():
                 records[key] = copy.deepcopy(record)
         # A standalone run must establish its own primary-only identity from empty
         # state -- that is the whole acceptance case, and a pre-seeded
@@ -1850,7 +2569,7 @@ def run_decommission_role(
                 "backend": "file",
                 "path": str(checkpoint_path),
             }
-        vars_payload = {
+        vars_payload: Dict[str, Any] = {
             "acm_switchover_hubs": {"primary": {"context": "primary-hub", "kubeconfig": str(kubeconfig)}},
             "acm_switchover_execution": execution,
             "acm_switchover_features": {
@@ -1864,6 +2583,10 @@ def run_decommission_role(
                 "acknowledge_observability_not_migrated": acknowledge_observability_not_migrated,
             },
         }
+        if mch_drain_retries is not None:
+            vars_payload["acm_switchover_mch_drain_retries"] = mch_drain_retries
+        if mch_drain_delay is not None:
+            vars_payload["acm_switchover_mch_drain_delay"] = mch_drain_delay
         if destination_api is not None:
             vars_payload["acm_switchover_hubs"]["secondary"] = {
                 "context": "secondary-hub",
@@ -2935,6 +3658,7 @@ def test_mco_prediction_is_aggregated_separately_from_actual_change():
     result = publish["ansible.builtin.set_fact"]["acm_switchover_decommission_result"]
     assert "_acm_mco_would_change" in str(result["would_change"])
     assert "_acm_mc_would_change" in str(result["would_change"])
+    assert "_acm_mch_would_change" in str(result["would_change"])
 
 
 def test_managed_cluster_actual_change_uses_family_fact_not_k8s_loop_register():
@@ -2943,6 +3667,14 @@ def test_managed_cluster_actual_change_uses_family_fact_not_k8s_loop_register():
     changed = str(publish["ansible.builtin.set_fact"]["acm_switchover_decommission_result"]["changed"])
     assert "_acm_mc_changed" in changed
     assert "_managed_cluster_delete_results" not in changed
+
+
+def test_multiclusterhub_actual_change_uses_family_fact_not_k8s_loop_register():
+    """E6 retires `_multiclusterhub_delete_results`; changed must read `_acm_mch_changed`."""
+    publish = task_named(decommission_task_files["main"], "Publish decommission result")
+    changed = str(publish["ansible.builtin.set_fact"]["acm_switchover_decommission_result"]["changed"])
+    assert "_acm_mch_changed" in changed
+    assert "_multiclusterhub_delete_results" not in changed
 
 
 def test_summary_keeps_its_published_artifact_keys():
@@ -3446,3 +4178,1284 @@ def test_only_the_standalone_playbook_declares_the_standalone_discriminator():
 
     assert yaml_files
     assert offenders == []
+
+
+# ---------------------------------------------------------------------------
+# E6 -- the MultiClusterHub durable phase table, measured at runtime.
+#
+# These drive the REAL role through ``run_decommission_role`` and assert on the
+# durable record, the request log and the published facts. They deliberately do
+# NOT assert on the classify/capture task results: those tasks are ``no_log:
+# true``, so the callback record carries a censored result.
+#
+# Every ACM-namespace Pod fixture keeps the ``multiclusterhub-operator`` prefix;
+# see ``_acm_pod_object`` for why that is load-bearing for the harness.
+# ---------------------------------------------------------------------------
+
+_ACM_PODS_PATH = f"/api/v1/namespaces/{ACM_NAMESPACE}/pods"
+_ACM_NAMESPACE_PATH = f"/api/v1/namespaces/{ACM_NAMESPACE}"
+
+#: The measured Python E4 MultiClusterHub request surface, in the 4-tuple shape
+#: ``tests/test_decommission.py`` builds its own table in, so the two are diffable
+#: as sets rather than through a hand-maintained comparison table.
+MCH_GROUP = "operator.open-cluster-management.io"
+MCH_LIST_SHAPE = ("LIST", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE)
+MCH_GET_SHAPE = ("GET", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE)
+MCH_GUARDED_DELETE_SHAPE = ("DELETE", MCH_GROUP, "multiclusterhubs", ACM_NAMESPACE)
+CSV_LIST_SHAPE = ("LIST", CSV_API_GROUP, "clusterserviceversions", ACM_NAMESPACE)
+CSV_GET_SHAPE = ("GET", CSV_API_GROUP, "clusterserviceversions", ACM_NAMESPACE)
+DEPLOYMENT_GET_SHAPE = ("GET", "apps", "deployments", ACM_NAMESPACE)
+REPLICASET_GET_SHAPE = ("GET", "apps", "replicasets", ACM_NAMESPACE)
+NAMESPACE_GET_SHAPE = ("GET", "", "namespaces", None)
+POD_LIST_SHAPE = ("LIST", "", "pods", ACM_NAMESPACE)
+
+#: §20 scenario 1 -- a fresh captured identity carried to `completed`. The nine shapes
+#: are exactly the Python E4 set measured by
+#: ``tests/test_decommission.py::TestMultiClusterHubRequestShapes::
+#: test_fresh_captured_identity_with_a_rolling_update`` (lines 4856-4881).
+_SCENARIO_ONE_SURFACE = {
+    MCH_LIST_SHAPE,
+    MCH_GET_SHAPE,
+    MCH_GUARDED_DELETE_SHAPE,
+    CSV_LIST_SHAPE,
+    CSV_GET_SHAPE,
+    DEPLOYMENT_GET_SHAPE,
+    REPLICASET_GET_SHAPE,
+    NAMESPACE_GET_SHAPE,
+    POD_LIST_SHAPE,
+}
+
+
+#: The ACM-namespace route of the ``apps/v1`` group, i.e. where the operator identity
+#: chain is read. Deployments and ReplicaSets exist in other namespaces too (the
+#: observability family patches some), so they are matched on this prefix, never on the
+#: plural alone.
+_ACM_APPS_PREFIX = f"/apis/apps/v1/namespaces/{ACM_NAMESPACE}/"
+
+
+def _is_mch_measured(request: dict) -> bool:
+    """Whether one logged request belongs to the MultiClusterHub teardown's own surface.
+
+    Pods and Namespaces are matched on the EXACT ACM paths and the identity chain on the
+    ACM-namespace ``apps/v1`` prefix: a plural-only filter also catches the observability
+    namespace's Pod and Deployment reads and the kube-system identity read, which belong
+    to other families.
+    """
+    path = request["path"]
+    if path in (_ACM_PODS_PATH, _ACM_NAMESPACE_PATH):
+        return True
+    if path.startswith(f"{_ACM_APPS_PREFIX}deployments") or path.startswith(f"{_ACM_APPS_PREFIX}replicasets"):
+        return True
+    return any(f"/{plural}" in path for plural in ("multiclusterhubs", "clusterserviceversions"))
+
+
+def run_mch_role(**kwargs) -> dict:
+    """One decommission run with the other two families quiesced.
+
+    The MultiClusterHub substep is what these tests measure; a live MCO or
+    ManagedCluster inventory only adds requests and failure modes that belong to
+    the other families' own suites.
+    """
+    kwargs.setdefault("observability_outcome", "precondition_noop")
+    kwargs.setdefault("managed_clusters_outcome", "precondition_noop")
+    return run_decommission_role(**kwargs)
+
+
+def _mch_requests(result: dict) -> list:
+    return [request for request in result["requests"] if "/multiclusterhubs" in request["path"]]
+
+
+def _mch_deletes(result: dict) -> list:
+    return [call for call in result["delete_calls"] if "/multiclusterhubs" in call["path"]]
+
+
+def _csv_requests(result: dict) -> list:
+    return [request for request in result["requests"] if "/clusterserviceversions" in request["path"]]
+
+
+def _acm_pod_lists(result: dict) -> list:
+    """Pod LISTs in the ACM namespace only -- an exact path, never a prefix match.
+
+    ``"open-cluster-management" in path`` also matches the observability namespace.
+    """
+    return [request for request in result["requests"] if request["path"] == _ACM_PODS_PATH]
+
+
+def _operator_identity_reads(result: dict) -> list:
+    """Every Deployment/ReplicaSet read -- the ownership chain the classifier walks."""
+    return [
+        request
+        for request in result["requests"]
+        if "/deployments" in request["path"] or "/replicasets" in request["path"]
+    ]
+
+
+def _teardown_records(result: dict, *, before: bool = False) -> dict:
+    data = result["checkpoint"]["before_operational_data" if before else "operational_data"]
+    return data.get("decommission_teardown_records", {})
+
+
+def _mch_record_of(result: dict, key: str = MCH_KEY):
+    records = result["checkpoint"]["operational_data"].get("decommission_teardown_records", {})
+    return records.get(key)
+
+
+def _tasks_using(result: dict, module: str) -> list:
+    """Every task that RAN the module. The callback records skipped tasks too, and a
+    skipped strict read proves nothing about what the run actually did."""
+    return [task for task in result["tasks"] if task["module"] == module and not task["skipped"]]
+
+
+def _teardown_record_writes(result: dict) -> list:
+    """Every ``checkpoint_phase`` task that RAN and carried a durable teardown record.
+
+    The record LOAD is a ``checkpoint_phase`` call too (``read_facts: true``), and the
+    playbook's own phase transitions are others, so "wrote nothing" has to be asserted on
+    the tasks that carry a ``teardown_record`` argument rather than on the module.
+    """
+    return [
+        task
+        for task in _tasks_using(result, _CHECKPOINT_WRITER_MODULE)
+        if "teardown_record" in (task.get("task_args") or {})
+    ]
+
+
+def _failed_task_names(result: dict) -> list:
+    """Every failed task name, in order. Includes rescued failures -- an exhausted drain
+    loop is recorded failed before its rescue decides what the exhaustion meant."""
+    return [task["name"] for task in result["tasks"] if task["failed"]]
+
+
+def _first_failed_task(result: dict) -> str:
+    """The name of the FIRST task that failed. The substep rescue in main.yml re-fails
+    afterwards, so only the first failure identifies the refusal that decided the run."""
+    failed = _failed_task_names(result)
+    assert failed, "the run recorded no failed task"
+    return failed[0]
+
+
+def _strict_mch_reads(result: dict) -> list:
+    return [
+        task
+        for task in _tasks_using(result, "tomazb.acm_switchover.acm_k8s_read_outcome")
+        if (task.get("task_args") or {}).get("resource_name") == "multiclusterhubs"
+    ]
+
+
+def _completed_mch_record(**overrides) -> dict:
+    record = mch_teardown_record(
+        "completed",
+        observed_at="2026-09-17T00:00:00Z",
+        resource_versions={"drain_namespace": "ns-1", "drain_pods": "pods-1", "operator_deployment": "deploy-1"},
+        absence_proofs={"target_cr": {"proof_type": "object_absent", "resource_key": MCH_KEY}},
+    )
+    record.update(overrides)
+    return record
+
+
+class TestDeleteMultiClusterHubDurable:
+    """Runtime contracts for the MultiClusterHub durable teardown phase table (E6)."""
+
+    def test_drain_is_decided_by_ownership_not_the_operator_name_prefix(self):
+        """§21.1: a Pod carrying the operator NAME but no owner chain still blocks."""
+        result = run_mch_role(acm_pods=[_spoof_pod()], mch_drain_retries=1, mch_drain_delay=0)
+
+        assert result["returncode"] != 0, "an unowned Pod wearing the operator name prefix must block the drain"
+        record = _mch_record_of(result)
+        assert record is not None, "the blocked drain must leave a durable MultiClusterHub record"
+        assert record["phase"] == "drain_pending"
+
+    def test_an_owned_pod_without_the_operator_name_prefix_is_still_excluded(self):
+        """§5 converse: the name proves nothing in EITHER direction -- the chain decides.
+
+        Safe without the prefix rule because this run resolves no live MultiClusterHub,
+        so the legacy Pod wait (guarded on a non-empty MCH inventory) never runs.
+        """
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drain_pending"),
+            acm_pods=[_operator_owned_pod("acm-operator-xyz-1", unprefixed=True)],
+        )
+
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["phase"] == "completed", "an owned Pod must be excluded whatever it is called"
+        assert result["returncode"] == 0
+
+    def test_an_unowned_pod_without_the_operator_name_prefix_still_blocks(self):
+        """§5 converse: an unowned Pod blocks whether or not it wears the operator name."""
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drain_pending"),
+            acm_pods=[_spoof_pod("search-redisgraph-0", unprefixed=True)],
+            mch_drain_retries=1,
+            mch_drain_delay=0,
+        )
+
+        assert result["returncode"] != 0, "an unowned ACM Pod blocks the drain whatever it is called"
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["phase"] == "drain_pending"
+
+    def test_no_live_target_and_no_record_is_a_clean_precondition_noop(self):
+        """§21.2 (zero) and §7: strict discovery, no Namespace read, no capture, no DELETE."""
+        result = run_mch_role(mch_present=False)
+
+        assert _strict_mch_reads(result), "MCH discovery must use acm_k8s_read_outcome, not kubernetes.core.k8s_info"
+        assert not [
+            task
+            for task in _tasks_using(result, "kubernetes.core.k8s_info")
+            if (task.get("task_args") or {}).get("kind") == "MultiClusterHub"
+        ]
+        assert result["acm_switchover_decommission_result"]["substeps"]["multiclusterhub"] == "precondition_noop"
+        assert _csv_requests(result) == []
+        assert [request for request in result["requests"] if request["path"] == _ACM_NAMESPACE_PATH] == []
+        assert _mch_deletes(result) == []
+        assert _mch_record_of(result) is None
+
+    def test_strict_target_resolution_takes_the_exact_live_name(self):
+        """§21.2 (one) and §7: the durable key binds the live name, not a fixed one."""
+        key = teardown_key("operator.open-cluster-management.io/v1", "MultiClusterHub", ACM_NAMESPACE, "custom-hub")
+        result = run_mch_role(mch_inventory=[_mch_object("custom-hub", uid="mch-uid-custom")])
+
+        record = _mch_record_of(result, key)
+        assert record is not None, f"the durable record must be keyed on the live target: {key}"
+        assert record["expected_uid"] == "mch-uid-custom"
+        identity = record.get("operator_deployment") or record.get("operator_identity_unavailable")
+        assert identity["mch_teardown_key"] == key, "the captured identity must back-reference the dynamic key"
+        assert identity["mch_expected_uid"] == "mch-uid-custom"
+        deletes = _mch_deletes(result)
+        assert len(deletes) == 1
+        assert deletes[0]["path"].endswith("/custom-hub")
+
+    def test_more_than_one_live_multiclusterhub_fails_closed(self):
+        """§21.2 (many) and §7: ambiguous inventory mutates nothing."""
+        result = run_mch_role(
+            mch_inventory=[_mch_object("multiclusterhub"), _mch_object("other-hub", uid="mch-uid-2")],
+        )
+
+        assert _mch_deletes(result) == [], "an ambiguous MultiClusterHub inventory must not be deleted"
+        assert result["returncode"] != 0
+        assert _mch_record_of(result) is None
+
+    def test_capture_precedes_the_durable_write_which_precedes_the_delete(self):
+        """§21.3 and §9-§11: identity, then delete_started, then the guarded DELETE."""
+        result = run_mch_role()
+
+        csv_reads = _csv_requests(result)
+        assert csv_reads, "the operator identity must be captured through the CSV before the delete"
+        deletes = _mch_deletes(result)
+        assert len(deletes) == 1
+        assert result["requests"].index(csv_reads[0]) < result["requests"].index(deletes[0])
+        assert deletes[0]["expected_uid"] == MCH_UID
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["operator_deployment"]["uid"] == OPERATOR_DEPLOYMENT_UID
+
+    def test_a_capture_error_blocks_both_the_durable_write_and_the_delete(self):
+        """§21.4: an unverifiable CSV read is not an absent identity."""
+        result = run_mch_role(csv_read_status=403)
+
+        assert _csv_requests(result), "the run must reach the identity capture for the error to be its own"
+        assert _mch_deletes(result) == [], "an identity capture error must block the guarded DELETE"
+        assert result["returncode"] != 0
+        assert _mch_record_of(result) is None
+        assert result["facts"].get("_acm_mch_changed") is not True
+
+    def test_a_failed_checkpoint_write_blocks_the_delete(self):
+        """§10: the delete_started write must be durable BEFORE the DELETE is issued.
+
+        The first two assertions prove the run actually REACHED the write: a read-only
+        checkpoint directory still allows the enter (reads succeed), so the strict target
+        resolution and the identity capture must both have happened. Without them a
+        checkpoint enter that failed early would satisfy "no DELETE" vacuously.
+        """
+        result = run_mch_role(checkpoint_dir_readonly=True)
+
+        assert _strict_mch_reads(result), "the run must reach strict target resolution before the durable write"
+        assert _csv_requests(result), "the run must reach the identity capture before the durable write"
+        assert _mch_deletes(result) == [], "no DELETE may be issued when the durable write failed"
+        assert result["returncode"] != 0
+
+    def test_every_phase_write_carries_the_identity_the_record_was_created_with(self):
+        """§21.5 and §12: the recorded identity is preserved, never re-derived."""
+        identity = mch_operator_deployment_identity()
+        result = run_mch_role(mch_present=False, mch_record=mch_teardown_record("drain_pending", identity=identity))
+
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["phase"] == "completed", "an absent target with a drain obligation must finish it"
+        assert record["operator_deployment"] == identity
+        assert _mch_deletes(result) == []
+
+    def test_a_recorded_unavailable_identity_excludes_no_pod(self):
+        """§21.6 and §17: an unavailable identity is never upgraded, and owns no Pod."""
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drain_pending", identity=mch_identity_unavailable()),
+            acm_pods=[_operator_owned_pod()],
+            mch_drain_retries=1,
+            mch_drain_delay=0,
+        )
+
+        assert result["returncode"] != 0, "under an unavailable identity every ACM Pod blocks the drain"
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["phase"] == "drain_pending"
+        assert "operator_identity_unavailable" in record
+
+    def test_zero_pods_with_an_inconsistent_operator_deployment_records_recovery_required(self):
+        """§21.7 and §14: identity inconsistency is checked BEFORE blocking_count."""
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drain_pending"),
+            operator_deployments=[_operator_deployment(uid="rotated-deployment-uid")],
+            acm_pods=[],
+        )
+
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["phase"] == "recovery_required", "zero Pods does not override an inconsistent identity"
+        assert result["returncode"] != 0
+
+    def test_a_namespace_read_error_records_recovery_required_before_failing(self):
+        """§21.8 and §14: the durable transition is written first, then the failure."""
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drain_pending"),
+            object_read_statuses={f"namespaces/{ACM_NAMESPACE}": 500},
+        )
+
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["phase"] == "recovery_required"
+        assert result["returncode"] != 0
+
+    def test_a_pod_list_error_fails_without_the_recovery_transition(self):
+        """§21.9 and §14: a Pod-stage error leaves the outstanding obligation as it was."""
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drain_pending"),
+            pod_read_statuses=[403],
+        )
+
+        assert result["returncode"] != 0, "an unverifiable Pod inventory must fail the substep"
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["phase"] == "drain_pending"
+
+    def test_a_drain_timeout_leaves_the_durable_phase_at_drain_pending(self):
+        """§21.10 and §14: a timeout is not a recovery transition, and no owner is guessed."""
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drain_pending"),
+            acm_pods=[_spoof_pod(), _job_owned_pod(), _statefulset_owned_pod(), _unrelated_replicaset_pod()],
+            operator_replicasets=[_operator_replicaset(), _unrelated_replicaset()],
+            mch_drain_retries=1,
+            mch_drain_delay=0,
+        )
+
+        assert result["returncode"] != 0, "Job-, StatefulSet- and foreign-ReplicaSet-owned Pods all block the drain"
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["phase"] == "drain_pending"
+
+    def test_completion_mode_one_records_namespace_absence_evidence(self):
+        """§21.11 mode 1 and §15: an absent Namespace discharges the drain predicate."""
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drain_pending"),
+            object_read_statuses={f"namespaces/{ACM_NAMESPACE}": 404},
+        )
+
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["phase"] == "completed"
+        assert record["resource_versions"] == {}
+        assert set(record["absence_proofs"]) == {"target_cr", "drain_namespace"}
+
+    def test_completion_mode_two_records_all_three_revisions(self):
+        """§21.11 mode 2: a captured identity adds the operator Deployment revision."""
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drain_pending"),
+            acm_pods=[_operator_owned_pod()],
+        )
+
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["phase"] == "completed"
+        assert set(record["resource_versions"]) == {"drain_namespace", "drain_pods", "operator_deployment"}
+        assert set(record["absence_proofs"]) == {"target_cr"}
+
+    def test_completion_revisions_come_from_the_final_pass_only(self):
+        """§21.12 and §15: a stale drain-loop revision may not certify completion."""
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drain_pending"),
+            acm_pods=[_operator_owned_pod()],
+            pod_list_revisions=["pods-drain-pass"] + ["pods-final-pass"] * 8,
+        )
+
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["phase"] == "completed"
+        assert record["resource_versions"]["drain_pods"] == "pods-final-pass"
+
+    def test_completion_mode_three_omits_the_operator_deployment_revision(self):
+        """§21.11 mode 3: an unavailable identity completes only on an empty Pod inventory."""
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drain_pending", identity=mch_identity_unavailable()),
+            acm_pods=[],
+        )
+
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["phase"] == "completed"
+        assert set(record["resource_versions"]) == {"drain_namespace", "drain_pods"}
+
+    def test_a_new_pod_in_the_final_pass_blocks_completion(self):
+        """§15: the final proof is a wholly fresh pass, not the drain loop's last answer."""
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drain_pending"),
+            acm_pod_passes=[[], [_spoof_pod()], [_spoof_pod()]],
+            mch_drain_retries=1,
+            mch_drain_delay=0,
+        )
+
+        assert result["returncode"] != 0, "a Pod appearing only in the final pass must block completion"
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["phase"] != "completed"
+
+    @pytest.mark.parametrize("phase", ["cr_absent", "drained", "recovery_required"])
+    def test_resume_from_a_post_delete_phase_issues_no_delete(self, phase):
+        """§17: each post-delete phase resumes its outstanding proof without mutating.
+
+        `recovery_required` completes here on purpose. Section 17 says to "retry the
+        outstanding proof per the established state machine", and plan section 20 allows
+        no success transition until a later strict rerun obtains the missing proof --
+        which this rerun does. `recovery_required` is only ever written from the drain or
+        final-proof stages, so the outstanding obligation is exactly drain plus final
+        proof; with the target absent, the namespace live and no blocking Pod, that proof
+        now succeeds and the record may complete. Identity is never rebound.
+        """
+        result = run_mch_role(mch_present=False, mch_record=mch_teardown_record(phase), acm_pods=[])
+
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["phase"] == "completed"
+        assert _mch_deletes(result) == []
+
+    def test_a_completed_record_is_reproved_without_any_write(self):
+        """§21.13 and §16: a completed record is immutable and re-proved read-only."""
+        completed = _completed_mch_record()
+        result = run_mch_role(mch_present=False, mch_record=completed, acm_pods=[])
+
+        assert _acm_pod_lists(result), "a completed reproof with a live namespace must classify a fresh pass"
+        # Asserted before the outcome, so a reproof that reaches a durable writer at all
+        # is caught here rather than incidentally on the return code the writer's own
+        # failure produces. Content equality would also hold if a writer ran and rewrote
+        # the identical record; no writer may RUN.
+        assert _teardown_record_writes(result) == []
+        assert result["returncode"] == 0
+        assert _mch_record_of(result) == completed
+        # Scoped to the durable records rather than the whole operational_data map: the
+        # substep outcome lives in a play fact, not in the checkpoint (main.yml:199).
+        assert _teardown_records(result) == _teardown_records(result, before=True)
+        assert _mch_deletes(result) == []
+
+    def test_a_completed_record_is_never_overwritten_with_recovery_required(self):
+        """§16: a failing reproof fails the invocation; it does not downgrade the record."""
+        completed = _completed_mch_record()
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=completed,
+            object_read_statuses={f"namespaces/{ACM_NAMESPACE}": 500},
+        )
+
+        assert result["returncode"] != 0, "an unverifiable reproof must fail the invocation"
+        assert _mch_record_of(result) == completed
+
+    @pytest.mark.parametrize("execution_mode, check_mode", [("execute", True), ("dry_run", False)])
+    def test_preview_predicts_the_change_without_writing_or_deleting(self, execution_mode, check_mode):
+        """§21.14, §21.15 and §8: strict reads still run; nothing is written or deleted."""
+        result = run_mch_role(execution_mode=execution_mode, check_mode=check_mode)
+
+        assert result["facts"].get("_acm_mch_would_change") is True, "a live target must predict a change"
+        assert result["facts"].get("_acm_mch_changed") is False
+        assert _mch_deletes(result) == []
+        assert result["checkpoint"]["operational_data"] == result["checkpoint"]["before_operational_data"]
+        assert _strict_mch_reads(result)
+
+    def test_preview_of_a_clean_absence_predicts_no_change(self):
+        """§8: no target means no prospective change."""
+        result = run_mch_role(check_mode=True, mch_present=False)
+
+        assert result["facts"].get("_acm_mch_would_change") is False
+        assert _mch_deletes(result) == []
+
+    def test_actual_change_is_published_for_this_invocations_delete(self):
+        """§21.15 and §19: `_acm_mch_changed` is this run's mutation truth."""
+        result = run_mch_role()
+
+        assert result["facts"].get("_acm_mch_changed") is True
+        assert result["acm_switchover_decommission_result"]["changed"] is True
+
+    def test_change_truth_survives_a_failure_after_the_delete_was_accepted(self):
+        """§11: an accepted DELETE followed by a later failure still reports changed."""
+        result = run_mch_role(mch_post_delete_read_status=500)
+
+        assert result["facts"].get("_acm_mch_changed") is True, "an accepted DELETE is a real change, even on failure"
+        assert result["returncode"] != 0
+        assert len(_mch_deletes(result)) == 1
+        assert result["acm_switchover_decommission_result"]["changed"] is True
+
+    def test_the_list_to_get_disappearance_race_is_a_clean_noop(self):
+        """§7: LIST selected one, the named GET proved it absent -- nothing to do."""
+        result = run_mch_role(mch_named_read_status=404)
+
+        assert result["acm_switchover_decommission_result"]["substeps"]["multiclusterhub"] == "precondition_noop"
+        assert result["returncode"] == 0
+        assert _mch_deletes(result) == []
+        assert _mch_record_of(result) is None
+        assert _csv_requests(result) == []
+
+    def test_a_durable_record_never_rebinds_to_a_different_live_name(self):
+        """§7 and §17: contradictory live inventory fails closed; no rediscovery."""
+        result = run_mch_role(
+            mch_record=mch_teardown_record("delete_started"),
+            mch_inventory=[_mch_object("other-hub", uid="mch-uid-2")],
+        )
+
+        assert _mch_deletes(result) == [], "a durable record must never delete a differently named MultiClusterHub"
+        assert result["returncode"] != 0
+
+    def test_a_same_name_replacement_uid_is_refused(self):
+        """§11: the replacement is left intact; a name-only delete would have removed it.
+
+        `acm_uid_guarded_delete` reads and compares the UID before it issues anything
+        (`module_utils/uid_guarded_delete.py: run_guarded_delete` raises
+        `REASON_UID_MISMATCH` at `STAGE_UID_MISMATCH`), so a correct implementation
+        issues NO DELETE at all here -- the empty log is reachable, not merely desirable.
+        """
+        result = run_mch_role(
+            mch_record=mch_teardown_record("delete_started"),
+            mch_inventory=[_mch_object("multiclusterhub", uid="mch-uid-replacement")],
+        )
+
+        assert _mch_deletes(result) == [], "a same-name replacement must not be deleted"
+        assert result["returncode"] != 0
+
+    def test_the_measured_request_surface_matches_the_python_e4_shapes(self):
+        """§20: the role-level measured set, compared against Python's measured table."""
+        result = run_mch_role(acm_pods=[_operator_owned_pod()])
+
+        measured = {_request_shape(request) for request in result["requests"] if _is_mch_measured(request)}
+        assert measured == _SCENARIO_ONE_SURFACE
+
+    def test_an_unknown_execution_mode_is_a_preview_not_an_unrecorded_delete(self):
+        """§10: every durable writer is gated on `execute`, so the delete must be too.
+
+        A `!= 'dry_run'` check-mode gate on the guarded delete treats an unknown mode
+        string as a live run while every `== 'execute'` writer stays skipped -- a DELETE
+        with no `delete_started` record, which is the one ordering section 10 forbids.
+
+        The substep outcome is the same trap seen from the other end: main.yml records
+        outcomes for every mode that is not `dry_run`, so an out-of-contract mode string
+        would report `completed` for a preview that deleted nothing and proved nothing.
+        """
+        result = run_mch_role(execution_mode="bogus", allow_unknown_execution_mode=True)
+
+        assert _strict_mch_reads(result), "an unknown mode must still perform strict discovery"
+        assert _mch_deletes(result) == [], "only execute mode may delete"
+        assert _mch_record_of(result) is None
+        assert result["checkpoint"]["operational_data"] == result["checkpoint"]["before_operational_data"]
+        assert (
+            result["acm_switchover_decommission_result"]["substeps"].get("multiclusterhub") is None
+        ), "a preview that proved nothing must record no MultiClusterHub outcome"
+
+    def test_a_preview_of_a_completed_record_classifies_nothing(self):
+        """§8 and §16: a preview reads the target strictly and stops.
+
+        The completed reproof classifies Pods, and section 8 forbids a preview from
+        classifying anything, so the reproof is execute-mode work like every other pass.
+        """
+        completed = _completed_mch_record()
+        result = run_mch_role(check_mode=True, mch_present=False, mch_record=completed, acm_pods=[])
+
+        assert _strict_mch_reads(result), "the strict target reads still run under --check"
+        assert _acm_pod_lists(result) == [], "a preview must classify no Pod"
+        assert _csv_requests(result) == []
+        assert _operator_identity_reads(result) == []
+        assert result["facts"].get("_acm_mch_would_change") is False
+        assert result["returncode"] == 0
+        assert _mch_record_of(result) == completed
+        assert _teardown_records(result) == _teardown_records(result, before=True)
+
+    def test_a_recovery_required_marker_is_never_demoted_before_new_evidence(self):
+        """§17: resume retries the outstanding proof; it does not overwrite the marker.
+
+        Writing `drain_pending` on the way in demotes the record BEFORE the pass that
+        would justify it, so a Pod-stage error -- which deliberately writes no recovery
+        transition -- leaves a weaker obligation recorded than the one the run started
+        with.
+        """
+        pods = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("recovery_required"),
+            pod_read_statuses=[403],
+        )
+
+        assert pods["returncode"] != 0
+        assert _mch_record_of(pods)["phase"] == "recovery_required"
+
+        namespace = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("recovery_required"),
+            object_read_statuses={f"namespaces/{ACM_NAMESPACE}": 500},
+        )
+
+        assert namespace["returncode"] != 0
+        assert _mch_record_of(namespace)["phase"] == "recovery_required"
+
+    def test_resume_from_drained_runs_the_final_proof_only(self):
+        """§17: a `drained` record owes the final proof, not another drain loop.
+
+        Re-running the bounded loop there spends a second 20-minute drain budget on
+        evidence the record already carries. The final proof still records
+        `recovery_required` on an unverifiable namespace, which is the intended §15
+        transition and is covered by the test below.
+        """
+        result = run_mch_role(mch_present=False, mch_record=mch_teardown_record("drained"), acm_pods=[])
+
+        assert len(_acm_pod_lists(result)) == 1, "the final verification pass is the only pass a drained record owes"
+        assert _mch_record_of(result)["phase"] == "completed"
+        assert result["returncode"] == 0
+
+    def test_a_kind_that_stopped_being_served_completes_a_durable_record_as_crd_absent(self):
+        """§15: the kind not being served at the FINAL GET is positive absence, not an error.
+
+        The CRD goes away with the operator, so a resumed record routinely meets a hub
+        that no longer serves `MultiClusterHub`. That is the strongest absence proof the
+        final pass can obtain, and it is recorded as `crd_absent` rather than as the
+        `object_absent` proof a named 404 produces.
+        """
+        result = run_mch_role(
+            mch_present=False,
+            mch_kind_served=False,
+            mch_record=mch_teardown_record("drained"),
+            acm_pods=[],
+        )
+
+        assert result["returncode"] == 0
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["phase"] == "completed"
+        assert record["absence_proofs"]["target_cr"]["proof_type"] == "crd_absent"
+
+    def test_a_namespace_error_resuming_from_drained_records_recovery_required(self):
+        """§15: an unverifiable namespace in the FINAL proof is the recovery transition."""
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drained"),
+            object_read_statuses={f"namespaces/{ACM_NAMESPACE}": 500},
+        )
+
+        assert result["returncode"] != 0
+        assert _mch_record_of(result)["phase"] == "recovery_required"
+        assert _acm_pod_lists(result) == [], "the namespace read failed before any Pod was listed"
+
+    # --- §22 matrix completion (Task 3) ------------------------------------
+
+    def test_a_multiclusterhub_kind_that_is_not_served_is_a_clean_precondition_noop(self):
+        """§22 (CRD absent) and §7: positive absence of the KIND is a clean skip.
+
+        Distinct from the empty-inventory skip: discovery proves the kind is not served,
+        so there is no inventory to bind and no named read to take.
+        """
+        result = run_mch_role(mch_present=False, mch_kind_served=False)
+
+        assert result["returncode"] == 0
+        assert result["acm_switchover_decommission_result"]["substeps"]["multiclusterhub"] == "precondition_noop"
+        assert len(_strict_mch_reads(result)) == 1, "an unserved kind is resolved by the LIST alone"
+        assert _mch_deletes(result) == []
+        assert _mch_record_of(result) is None
+        assert _csv_requests(result) == []
+        assert result["facts"].get("_acm_mch_would_change") is False
+
+    def test_an_unverifiable_multiclusterhub_inventory_fails_closed(self):
+        """§22 (LIST error) and §7: an error is never an absence.
+
+        The named read must not be attempted either: a run that cannot enumerate the
+        inventory has no target to bind.
+        """
+        result = run_mch_role(mch_read_status=500)
+
+        assert result["returncode"] != 0
+        assert _mch_deletes(result) == []
+        assert _mch_record_of(result) is None
+        assert _csv_requests(result) == []
+        assert len(_strict_mch_reads(result)) == 1, "no bound target may be read after an unverifiable LIST"
+
+    @pytest.mark.parametrize(
+        "member, refusing_task",
+        [
+            ("not-an-object", "Fail closed when the source MultiClusterHub inventory is unverifiable"),
+            (
+                {"apiVersion": "operator.open-cluster-management.io/v1", "kind": "MultiClusterHub", "metadata": "oops"},
+                "Fail closed on a malformed MultiClusterHub inventory member",
+            ),
+            (
+                {
+                    "apiVersion": "operator.open-cluster-management.io/v1",
+                    "kind": "MultiClusterHub",
+                    "metadata": {"namespace": ACM_NAMESPACE, "uid": MCH_UID, "resourceVersion": "1"},
+                },
+                "Fail closed on a malformed MultiClusterHub inventory member",
+            ),
+            (
+                {
+                    "apiVersion": "operator.open-cluster-management.io/v1",
+                    "kind": "MultiClusterHub",
+                    "metadata": {"name": "multiclusterhub", "namespace": ACM_NAMESPACE, "resourceVersion": "1"},
+                },
+                "Fail closed on a malformed MultiClusterHub inventory member",
+            ),
+        ],
+        ids=["non-mapping", "non-mapping-metadata", "no-name", "no-uid"],
+    )
+    def test_a_malformed_live_multiclusterhub_member_fails_closed(self, member, refusing_task):
+        """§22 (malformed live member/name/UID): nothing is bound, captured or deleted.
+
+        Two refusals are in play and both are fail-closed: a member that is not a mapping
+        at all makes the strict LIST itself unverifiable (``_strict_list_page`` refuses
+        the page), while a mapping without a usable name or UID reaches the role's own
+        malformed-member task. WHICH task refused is asserted, because these members are
+        defended in depth: without the named refusal the run would still fail, just later
+        and on an undefined variable rather than on a decision.
+        """
+        result = run_mch_role(mch_inventory=[member])
+
+        assert result["returncode"] != 0
+        assert _first_failed_task(result) == refusing_task
+        assert _mch_deletes(result) == []
+        assert _mch_record_of(result) is None
+        assert _csv_requests(result) == []
+
+    def test_more_than_one_durable_multiclusterhub_record_fails_closed(self):
+        """§22 (>1 durable record) and §6: ambiguity is refused before the first read.
+
+        The record load precedes every MultiClusterHub request, so an ambiguous durable
+        state must cost zero MultiClusterHub API traffic -- not merely zero DELETEs.
+        """
+        other_key = teardown_key(
+            "operator.open-cluster-management.io/v1", "MultiClusterHub", ACM_NAMESPACE, "other-hub"
+        )
+        result = run_mch_role(
+            mch_teardown_records={
+                MCH_KEY: mch_teardown_record("drain_pending"),
+                other_key: mch_teardown_record(
+                    "drain_pending",
+                    identity=mch_operator_deployment_identity(key=other_key, expected_uid="mch-uid-2"),
+                    expected_uid="mch-uid-2",
+                ),
+            },
+        )
+
+        assert result["returncode"] != 0
+        assert _mch_requests(result) == [], "an ambiguous durable record must be refused before any MCH read"
+        assert _mch_deletes(result) == []
+        assert _teardown_records(result) == _teardown_records(result, before=True)
+
+    def test_a_fresh_unavailable_identity_completes_without_a_deployment_revision(self):
+        """§9 and §21.11 mode 3: a capture with no CSV is a determinate durable outcome.
+
+        The capture is not an error, so the delete proceeds; the record it creates carries
+        ``operator_identity_unavailable``, and completion needs a strictly empty Pod
+        inventory because that identity owns nothing.
+        """
+        result = run_mch_role(operator_csvs=[], acm_pods=[])
+
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["phase"] == "completed"
+        assert "operator_identity_unavailable" in record
+        assert set(record["resource_versions"]) == {"drain_namespace", "drain_pods"}
+        assert len(_mch_deletes(result)) == 1
+        assert _operator_identity_reads(result) == [], "an unavailable identity reads no Deployment"
+
+    def test_a_resumed_delete_started_record_deletes_once_without_recapturing(self):
+        """§17 (resume delete_started, same UID) and §9: the recorded identity is reused."""
+        identity = mch_operator_deployment_identity()
+        result = run_mch_role(mch_record=mch_teardown_record("delete_started", identity=identity), acm_pods=[])
+
+        deletes = _mch_deletes(result)
+        assert len(deletes) == 1, "a delete_started record retries exactly its own delete"
+        assert deletes[0]["expected_uid"] == MCH_UID
+        assert _csv_requests(result) == [], "resume never recaptures the operator identity"
+        record = _mch_record_of(result)
+        assert record["phase"] == "completed"
+        assert record["operator_deployment"] == identity
+        assert result["facts"].get("_acm_mch_changed") is True
+
+    def test_a_resumed_delete_started_record_with_an_absent_target_changes_nothing(self):
+        """§19: `changed` is THIS invocation's mutation truth, not the teardown's.
+
+        The delete already happened in an earlier run, so the record finishes its
+        outstanding proof while this run reports no change at all.
+        """
+        result = run_mch_role(mch_present=False, mch_record=mch_teardown_record("delete_started"), acm_pods=[])
+
+        assert result["returncode"] == 0
+        assert _mch_deletes(result) == []
+        assert _mch_record_of(result)["phase"] == "completed"
+        assert result["facts"].get("_acm_mch_changed") is False
+        assert result["acm_switchover_decommission_result"]["changed"] is False
+
+    def test_the_authoritative_reads_precede_the_capture_which_precedes_the_delete(self):
+        """§22 (request ordering): LIST, named GET, capture, then the guarded DELETE.
+
+        The durable `delete_started` write sits between the capture and the DELETE, and
+        it is not an HTTP request to this hub, so its position is asserted on the task
+        log instead of on the request log -- the two logs are never cross-correlated.
+        """
+        result = run_mch_role(acm_pods=[])
+
+        requests = result["requests"]
+        mch = _mch_requests(result)
+        csv = _csv_requests(result)
+        mch_list = [request for request in mch if request["path"].endswith("/multiclusterhubs")]
+        mch_get = [request for request in mch if request["path"].endswith("/multiclusterhub")]
+        delete = _mch_deletes(result)
+        assert mch_list and mch_get and csv and len(delete) == 1
+        assert requests.index(mch_list[0]) < requests.index(mch_get[0])
+        assert requests.index(mch_get[0]) < requests.index(csv[0])
+        assert requests.index(csv[-1]) < requests.index(delete[0])
+
+        names = [task["name"] for task in result["tasks"] if not task["skipped"]]
+        assert names.index("Capture the MultiClusterHub operator identity") < names.index(
+            "Record MultiClusterHub delete_started"
+        )
+        assert names.index("Record MultiClusterHub delete_started") < names.index("Delete the recorded MultiClusterHub")
+
+    def test_a_rolling_update_of_the_operator_deployment_drains_cleanly(self):
+        """§22 (rolling update): two ReplicaSets, one Deployment, every Pod owned."""
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drain_pending"),
+            acm_pods=[
+                _operator_owned_pod(
+                    "multiclusterhub-operator-old-1", replicaset_name="mch-op-old", replicaset_uid="uid-rs-old"
+                ),
+                _operator_owned_pod(
+                    "multiclusterhub-operator-new-1", replicaset_name="mch-op-new", replicaset_uid="uid-rs-new"
+                ),
+            ],
+            operator_replicasets=[
+                _operator_replicaset(name="mch-op-old", uid="uid-rs-old"),
+                _operator_replicaset(name="mch-op-new", uid="uid-rs-new"),
+            ],
+        )
+
+        # Ownership first, so a role that stops establishing it is killed HERE rather
+        # than incidentally on the return code: both owner chains must really be walked.
+        # Without this, a run that resolved one ReplicaSet and assumed the rest of the
+        # inventory belonged to the same Deployment would still reach `completed`.
+        read_paths = [request["path"] for request in _operator_identity_reads(result)]
+        assert [path for path in read_paths if path.endswith("/replicasets/mch-op-old")]
+        assert [path for path in read_paths if path.endswith("/replicasets/mch-op-new")]
+        assert result["returncode"] == 0
+        record = _mch_record_of(result)
+        assert record["phase"] == "completed", "both generations of the same Deployment are owned"
+        assert set(record["resource_versions"]) == {"drain_namespace", "drain_pods", "operator_deployment"}
+
+    @pytest.mark.parametrize(
+        "deployments, object_read_statuses",
+        [
+            ([], None),
+            ([_operator_deployment(uid="rotated-deployment-uid")], None),
+            (None, {f"deployments/{OPERATOR_DEPLOYMENT_NAME}": 500}),
+        ],
+        ids=["absent", "replaced", "read-error"],
+    )
+    def test_a_recorded_operator_deployment_that_cannot_be_confirmed_records_recovery_required(
+        self, deployments, object_read_statuses
+    ):
+        """§22 (recorded Deployment absent/replaced/error) and §14.
+
+        All three are one classifier outcome -- ``operator_identity_inconsistent``
+        (``pod_owner_classify.classify_pods`` verifies the re-read Deployment's UID and
+        treats absence, rotation and an unreadable read alike) -- so all three write the
+        outstanding obligation and fail rather than certifying a drain.
+        """
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drain_pending"),
+            acm_pods=[],
+            operator_deployments=deployments,
+            object_read_statuses=object_read_statuses,
+        )
+
+        assert result["returncode"] != 0
+        assert _mch_record_of(result)["phase"] == "recovery_required"
+
+    def test_an_unreadable_replicaset_leaves_its_pod_blocking(self):
+        """§22 (ReplicaSet error): an unverifiable owner chain never proves ownership."""
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drain_pending"),
+            acm_pods=[_operator_owned_pod()],
+            object_read_statuses={f"replicasets/{OPERATOR_REPLICASET_NAME}": 500},
+            mch_drain_retries=1,
+            mch_drain_delay=0,
+        )
+
+        assert result["returncode"] != 0, "a Pod whose ReplicaSet cannot be read must block the drain"
+        # The phase alone is also what a run that failed for any other reason leaves
+        # behind; the blocking-workload refusal has to be the one that stopped this run.
+        # Membership, not first: the exhausted drain loop is itself recorded failed (and
+        # then rescued) before the branch tasks read its result.
+        assert "Fail closed when ACM workload still blocks the MultiClusterHub drain" in _failed_task_names(result)
+        assert _mch_record_of(result)["phase"] == "drain_pending"
+
+    @pytest.mark.parametrize(
+        "pod",
+        [_job_owned_pod(), _statefulset_owned_pod(), _unrelated_replicaset_pod()],
+        ids=["job", "statefulset", "unrelated-replicaset"],
+    )
+    def test_each_foreign_controller_blocks_the_drain_on_its_own(self, pod):
+        """§22 (Job/StatefulSet/unrelated RS owner): one owner kind at a time.
+
+        The aggregate timeout test cannot tell which owner blocked; these can.
+        """
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drain_pending"),
+            acm_pods=[pod],
+            operator_replicasets=[_operator_replicaset(), _unrelated_replicaset()],
+            mch_drain_retries=1,
+            mch_drain_delay=0,
+        )
+
+        assert result["returncode"] != 0
+        assert "Fail closed when ACM workload still blocks the MultiClusterHub drain" in _failed_task_names(result)
+        assert _mch_record_of(result)["phase"] == "drain_pending"
+
+    def test_a_final_pass_identity_inconsistency_blocks_completion(self):
+        """§22 (final identity failure) and §15: the FINAL pass has its own identity check.
+
+        A `drained` record runs no drain loop, so this inconsistency can only be caught by
+        the final verification pass.
+        """
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drained"),
+            acm_pods=[],
+            operator_deployments=[_operator_deployment(uid="rotated-deployment-uid")],
+        )
+
+        assert result["returncode"] != 0
+        assert _mch_record_of(result)["phase"] == "recovery_required"
+
+    def test_a_completed_reproof_accepts_an_absent_namespace_without_writing(self):
+        """§16: namespace absence re-proves completion, and still writes nothing."""
+        completed = _completed_mch_record()
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=completed,
+            object_read_statuses={f"namespaces/{ACM_NAMESPACE}": 404},
+        )
+
+        assert _teardown_record_writes(result) == [], "a reproof may run no durable writer at all"
+        assert result["returncode"] == 0
+        assert _mch_record_of(result) == completed
+        assert _acm_pod_lists(result) == [], "an absent namespace ends the pass before any Pod LIST"
+        assert _teardown_records(result) == _teardown_records(result, before=True)
+
+    def test_a_completed_reproof_refuses_a_reappeared_target(self):
+        """§16: a target present after its recorded delete phase fails the invocation."""
+        completed = _completed_mch_record()
+        result = run_mch_role(mch_record=completed, acm_pods=[])
+
+        assert result["returncode"] != 0, "a recorded, completed MultiClusterHub that is live again is a contradiction"
+        # Named, because the reproof's own absence proof would refuse this too, one stage
+        # later: the contradiction must be caught before the record is acted on at all.
+        assert _first_failed_task(result) == "Refuse a post-delete MultiClusterHub record whose target is present again"
+        assert _mch_deletes(result) == []
+        assert _mch_record_of(result) == completed
+        assert _teardown_records(result) == _teardown_records(result, before=True)
+        assert _teardown_record_writes(result) == []
+
+    def test_a_completed_reproof_refuses_a_blocking_pod(self):
+        """§16: the reproof classifies, so unowned ACM workload fails it -- read-only."""
+        completed = _completed_mch_record()
+        result = run_mch_role(mch_present=False, mch_record=completed, acm_pods=[_spoof_pod()])
+
+        assert result["returncode"] != 0
+        assert _first_failed_task(result) == "Fail closed when a MultiClusterHub-unowned Pod survives the final proof"
+        assert _mch_record_of(result) == completed
+        assert _teardown_records(result) == _teardown_records(result, before=True)
+        assert _teardown_record_writes(result) == []
+
+    def test_a_dry_run_without_check_mode_reproves_nothing_against_a_completed_record(self):
+        """§8 and §16: the reproof gate's `mode == 'execute'` half, without `--check`.
+
+        `--check` alone would leave a `dry_run` execution mode able to classify Pods and
+        read the operator identity on a record it may not touch.
+        """
+        completed = _completed_mch_record()
+        result = run_mch_role(execution_mode="dry_run", mch_present=False, mch_record=completed, acm_pods=[])
+
+        assert _teardown_record_writes(result) == []
+        assert result["returncode"] == 0
+        assert _acm_pod_lists(result) == [], "a dry run must classify no Pod"
+        assert _csv_requests(result) == []
+        assert _operator_identity_reads(result) == []
+        assert _mch_record_of(result) == completed
+        assert _teardown_records(result) == _teardown_records(result, before=True)
+
+    def test_a_recorded_unavailable_identity_is_never_upgraded_by_a_live_csv(self):
+        """§17: the identity a record was born with survives a hub that now resolves one.
+
+        The CSV, Deployment and ReplicaSet are all served here; the run must read none of
+        them and must complete under the recorded unavailable identity.
+        """
+        identity = mch_identity_unavailable()
+        result = run_mch_role(
+            mch_present=False,
+            mch_record=mch_teardown_record("drain_pending", identity=identity),
+            acm_pods=[],
+        )
+
+        record = _mch_record_of(result)
+        assert record["phase"] == "completed"
+        assert record["operator_identity_unavailable"] == identity
+        assert "operator_deployment" not in record
+        assert _csv_requests(result) == [], "a recorded identity is never recaptured"
+        assert _operator_identity_reads(result) == []
+        assert set(record["resource_versions"]) == {"drain_namespace", "drain_pods"}
+
+    def test_a_later_execute_run_repeats_every_authoritative_read(self):
+        """§22 (later execute rereads everything): a preview leaves nothing behind.
+
+        Two separate invocations against two separate fake hubs, which is what "later
+        run" means here: the preview must write no durable state, and the execute run
+        must perform the whole authoritative read set itself rather than trusting
+        anything the preview observed.
+        """
+        preview = run_mch_role(check_mode=True)
+
+        assert preview["checkpoint"]["operational_data"] == preview["checkpoint"]["before_operational_data"]
+        assert _mch_deletes(preview) == []
+
+        live = run_mch_role(acm_pods=[_operator_owned_pod()])
+
+        measured = {_request_shape(request) for request in live["requests"] if _is_mch_measured(request)}
+        assert measured == _SCENARIO_ONE_SURFACE, "the execute run owes the whole authoritative surface itself"
+        assert _mch_record_of(live)["phase"] == "completed"
+
+    #: The §20 measurement scenarios: ``(id, fixture factory, measured surface, outcome)``.
+    #: Every surface below was MEASURED on the shipped role
+    #: (see `.superpowers/sdd/e6-plan/e6-request-measurement.md`). Scenarios 1-6a have a
+    #: Python E4 counterpart in
+    #: ``tests/test_decommission.py::TestMultiClusterHubRequestShapes`` (lines 4853-4958)
+    #: and the expected set is that measured Python set, so a Collection surface that
+    #: drifts from it fails here. Scenarios 6b and 7 are Collection-only and are labelled
+    #: as such in the measurement file; no Python counterpart is claimed.
+    #:
+    #: The fixtures are FACTORIES: a row's record and Pod objects would otherwise be one
+    #: shared mutable object across every run of the parametrised test.
+    #: ``outcome`` is the substep outcome the run must reach (``None`` for a preview,
+    #: which records none, and ``"failed"`` for a run that must not succeed), so a
+    #: scenario cannot be satisfied by an early failure that happens to issue the right
+    #: requests -- 6b's empty set most of all.
+    _MEASURED_SURFACES = [
+        (
+            "1-fresh-captured-rolling-update",
+            lambda: dict(
+                acm_pods=[
+                    _operator_owned_pod(
+                        "multiclusterhub-operator-old-1", replicaset_name="mch-op-old", replicaset_uid="uid-rs-old"
+                    ),
+                    _operator_owned_pod(
+                        "multiclusterhub-operator-new-1", replicaset_name="mch-op-new", replicaset_uid="uid-rs-new"
+                    ),
+                ],
+                operator_replicasets=[
+                    _operator_replicaset(name="mch-op-old", uid="uid-rs-old"),
+                    _operator_replicaset(name="mch-op-new", uid="uid-rs-new"),
+                ],
+            ),
+            _SCENARIO_ONE_SURFACE,
+            "completed",
+        ),
+        (
+            "2-fresh-unavailable-identity",
+            lambda: dict(operator_csvs=[], acm_pods=[]),
+            {
+                MCH_LIST_SHAPE,
+                MCH_GET_SHAPE,
+                CSV_LIST_SHAPE,
+                NAMESPACE_GET_SHAPE,
+                POD_LIST_SHAPE,
+                MCH_GUARDED_DELETE_SHAPE,
+            },
+            "completed",
+        ),
+        (
+            "3-resume-drain-pending",
+            lambda: dict(
+                mch_present=False,
+                mch_record=mch_teardown_record("drain_pending"),
+                acm_pods=[_operator_owned_pod()],
+            ),
+            {
+                MCH_LIST_SHAPE,
+                MCH_GET_SHAPE,
+                DEPLOYMENT_GET_SHAPE,
+                REPLICASET_GET_SHAPE,
+                NAMESPACE_GET_SHAPE,
+                POD_LIST_SHAPE,
+            },
+            "completed",
+        ),
+        (
+            "4-completed-reproof",
+            lambda: dict(
+                mch_present=False,
+                mch_record=_completed_mch_record(),
+                acm_pods=[_operator_owned_pod()],
+            ),
+            {
+                MCH_LIST_SHAPE,
+                MCH_GET_SHAPE,
+                NAMESPACE_GET_SHAPE,
+                POD_LIST_SHAPE,
+                DEPLOYMENT_GET_SHAPE,
+                REPLICASET_GET_SHAPE,
+            },
+            "completed",
+        ),
+        (
+            "5-dry-run-preview",
+            lambda: dict(execution_mode="dry_run"),
+            {MCH_LIST_SHAPE, MCH_GET_SHAPE, CSV_LIST_SHAPE, CSV_GET_SHAPE, DEPLOYMENT_GET_SHAPE},
+            None,
+        ),
+        ("6a-no-target-empty-list", lambda: dict(mch_present=False), {MCH_LIST_SHAPE}, "precondition_noop"),
+        # Collection-only: discovery positively refuses the kind, so the LIST is never
+        # issued at all. Python's `test_no_target_clean_skip` measures {MCH_LIST_SHAPE}.
+        (
+            "6b-no-target-kind-not-served",
+            lambda: dict(mch_present=False, mch_kind_served=False),
+            set(),
+            "precondition_noop",
+        ),
+        # Collection-only: §20 scenario 7 has no Python precedent, so this set stands on
+        # its own rather than being compared.
+        (
+            "7a-recovery-required",
+            lambda: dict(
+                mch_present=False,
+                mch_record=mch_teardown_record("drain_pending"),
+                object_read_statuses={f"namespaces/{ACM_NAMESPACE}": 500},
+            ),
+            {MCH_LIST_SHAPE, MCH_GET_SHAPE, NAMESPACE_GET_SHAPE},
+            "failed",
+        ),
+        (
+            "7b-recovery-required-resume",
+            lambda: dict(
+                mch_present=False,
+                mch_record=mch_teardown_record("recovery_required"),
+                acm_pods=[],
+            ),
+            {MCH_LIST_SHAPE, MCH_GET_SHAPE, NAMESPACE_GET_SHAPE, POD_LIST_SHAPE, DEPLOYMENT_GET_SHAPE},
+            "completed",
+        ),
+    ]
+
+    @pytest.mark.parametrize(
+        "fixture, expected, outcome",
+        [row[1:] for row in _MEASURED_SURFACES],
+        ids=[row[0] for row in _MEASURED_SURFACES],
+    )
+    def test_the_measured_request_surface_of_every_scenario(self, fixture, expected, outcome):
+        """§20: the measured Collection surface of each scenario, scenario by scenario.
+
+        Every §20 scenario is here, including scenario 1 with the rolling-update fixture
+        Python measures it with. Each expected set is the MEASURED one, and for scenarios
+        2-6a it is also the measured Python E4 set, so a Collection-only or Python-only
+        request shows up here. The outcome is asserted alongside the surface: a set alone
+        can be produced by a run that failed before it did the work.
+        """
+        result = run_mch_role(**fixture())
+
+        assert result["acm_switchover_decommission_result"]["substeps"].get("multiclusterhub") == outcome
+        assert (result["returncode"] == 0) is (outcome != "failed")
+        measured = {_request_shape(request) for request in result["requests"] if _is_mch_measured(request)}
+        assert measured == expected
+
+
+class TestDeleteMultiClusterHubDeniedReads:
+    """Runtime denial contracts: one read refused with 403 after RBAC validation passed."""
+
+    def test_a_denied_named_csv_read_blocks_the_durable_write_and_the_delete(self):
+        """A 403 on the named CSV GET that follows a successful LIST is fatal.
+
+        The LIST and the named GET are asserted present first: without them a run that
+        failed earlier would satisfy "no record, no DELETE" vacuously and prove nothing
+        about the read that was actually refused.
+        """
+        result = run_mch_role(object_read_statuses={f"clusterserviceversions/{OPERATOR_CSV_NAME}": 403})
+
+        csv_reads = _csv_requests(result)
+        assert [request for request in csv_reads if request["path"].endswith("/clusterserviceversions")]
+        assert [request for request in csv_reads if request["path"].endswith(f"/{OPERATOR_CSV_NAME}")]
+        assert _mch_deletes(result) == [], "a refused identity re-read must block the guarded DELETE"
+        assert _mch_record_of(result) is None, "a refused read is not an absent identity"
+        assert result["returncode"] != 0
+
+    def test_a_denied_operator_deployment_read_records_an_unavailable_identity(self):
+        """A 403 on the operator Deployment GET yields an identity that excludes no Pod.
+
+        The seeded Pod's owner chain really reaches the operator Deployment, so a run
+        that walked ownership under an unavailable identity would drain; only a
+        verified-empty inventory may.
+        """
+        result = run_mch_role(
+            acm_pods=[_operator_owned_pod()],
+            operator_replicasets=[_operator_replicaset()],
+            object_read_statuses={f"deployments/{OPERATOR_DEPLOYMENT_NAME}": 403},
+            mch_drain_retries=1,
+            mch_drain_delay=0,
+        )
+
+        record = _mch_record_of(result)
+        assert record is not None
+        assert record["operator_identity_unavailable"]["reason"] == "deployment_read_failed"
+        assert len(_mch_deletes(result)) == 1, "an unavailable identity still permits the guarded DELETE"
+        assert record["phase"] == "drain_pending"
+        assert "Fail closed when ACM workload still blocks the MultiClusterHub drain" in _failed_task_names(result)
+        assert result["returncode"] != 0
+
+    def test_a_denied_named_multiclusterhub_read_fails_closed(self):
+        """A 403 on the named MultiClusterHub GET is not the 404 disappearance race.
+
+        The 404 sibling ends the substep as ``precondition_noop`` with a zero return
+        code; a denial must stop the run before the identity capture instead.
+        """
+        result = run_mch_role(mch_named_read_status=403)
+
+        # Non-vacuity: the named GET was actually issued. `_strict_mch_reads` would also
+        # pass on the LIST alone, so the bound-target read is matched by path here.
+        assert [request for request in _mch_requests(result) if request["path"].endswith("/multiclusterhub")]
+        assert result["acm_switchover_decommission_result"]["substeps"].get("multiclusterhub") != "precondition_noop"
+        assert _csv_requests(result) == [], "a refused target read must stop the run before the identity capture"
+        assert _mch_deletes(result) == []
+        assert _mch_record_of(result) is None
+        assert result["facts"].get("_acm_mch_changed") is not True
+        assert result["returncode"] != 0

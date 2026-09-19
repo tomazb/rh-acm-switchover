@@ -246,6 +246,13 @@ python acm_switchover.py --decommission \
   --primary-context primary-hub
 ```
 
+Decommission tears the old hub down through durable, UID-guarded records: the target UID — and, for
+the MultiClusterHub, the ACM operator identity — is persisted before the delete, Pod draining is decided by
+operator ownership rather than Pod names, and completion is fail-closed and re-proved live on a later
+run. Refreshed RBAC is required — earlier manifests do not grant the reads this path now performs.
+See [decommission usage](docs/operations/usage.md#decommission-old-hub) and
+[RBAC requirements](docs/deployment/rbac-requirements.md).
+
 ### Restore-Only (Single Hub — No Primary Needed)
 
 When the old hub is gone and you need to restore managed clusters from existing S3 backups:

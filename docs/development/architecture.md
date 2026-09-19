@@ -469,11 +469,12 @@ teardown (`Decommission.teardown_managed_clusters`) uses the same machine with *
 namespace/Pod drain I/O. Collection parity lives in `roles/decommission/tasks/delete_managed_clusters.yml`
 plus `teardown_one_managed_cluster.yml` via `acm_k8s_read_outcome` and `acm_uid_guarded_delete`.
 
-Drain-scoped families (MCO) use the full phase table:
+Drain-scoped families (MCO and MultiClusterHub) use the full phase table:
 
 - **Phase table** (durable, per resource, keyed `apiVersion/kind/namespace/name`):
   `delete_started` → `cr_absent` → `drain_pending` → `drained` → `completed`, with `recovery_required` on
-  an ambiguous drain-namespace read. A no-record clean-skip and a `completed`-record reproof are read-only
+  an ambiguous drain-namespace read and, for MultiClusterHub, on a recorded operator identity that no
+  longer holds. A no-record clean-skip and a `completed`-record reproof are read-only
   and never enter the phase table.
 - **UID-preconditioned delete.** The DELETE carries the expected UID read moments earlier (or the resumed
   record's `expected_uid`); the primitive is `KubeClient.delete_custom_resource_preconditioned`. A live UID
@@ -509,6 +510,52 @@ Drain-scoped families (MCO) use the full phase table:
 The Ansible Collection mirrors this machine independently through `acm_uid_guarded_delete` (guarded delete)
 and the `decommission` role's `delete_observability.yml` / `destination_observability_gate.yml` task files —
 see the [behavior map](../ansible-collection/behavior-map.md) and [parity matrix](../ansible-collection/parity-matrix.md).
+
+#### MultiClusterHub teardown
+
+`Decommission.teardown_multiclusterhub` runs on that same `_teardown_resource` machine, which now
+serves MultiClusterObservability, ManagedCluster and MultiClusterHub alike. What is specific to this
+family is identity, not orchestration:
+
+- **Target resolution.** With no durable record, the teardown lists `multiclusterhubs` strictly in
+  `open-cluster-management`: zero is a clean skip, exactly one is read by name and torn down, more than
+  one is refused — no name is ever hard-coded or guessed. With a record, the recorded name and
+  `expected_uid` bind the target for good; another live MultiClusterHub is left intact, not adopted.
+- **Read-side identity boundary.** `modules/decommission_identity.py` owns two read-only decisions.
+  `capture_operator_identity` walks the strict CSV inventory in `open-cluster-management` to the single
+  MultiClusterHub-CRD-owning `Succeeded` ClusterServiceVersion, re-reads it by name, resolves its one
+  install Deployment and reads that Deployment — yielding either an `operator_deployment` identity or a
+  sanitized `operator_identity_unavailable` reason. `classify_pods` decides, per Pod, whether the owner
+  chain (sole controller `apps/v1` ReplicaSet, strict UID-matched GET, sole controller `apps/v1`
+  Deployment) reaches the recorded Deployment; any missing or ambiguous link leaves the Pod
+  drain-blocking, an unavailable identity excludes nothing, and a recorded Deployment that is absent or
+  replaced is reported as an inconsistent identity. `modules/decommission_identity.py` performs no
+  persistence, no DELETE and no waiting: the phase machine owns all three.
+- **Immutable identity on every write.** The identity is captured once — after the live UID is proved
+  and before the first durable write — and then carried verbatim on every phase transition of that
+  record. A resume reuses what is recorded and never recaptures.
+- **Delete after the durable write.** The record carrying target name, UID and identity is written
+  first; only then does `delete_custom_resource_preconditioned` issue the UID-preconditioned DELETE.
+- **Bounded owner-chain drain.** The CR-absence wait and the Pod drain each use
+  `DECOMMISSION_POD_TIMEOUT` (1200s) at `DECOMMISSION_POD_INTERVAL` (30s). Each drain pass re-reads the
+  recorded Deployment; an unreadable namespace or Pod read, an inconsistent identity, or Pods still
+  blocking at the budget fails the substep, with `recovery_required` written for the ambiguous and
+  inconsistent cases.
+- **Final live proof and completed reproof.** Completion evidence — `observed_at`, `resource_versions`,
+  `absence_proofs` — is written only from the final pass, in the proof mode `lib/teardown_record.py`
+  permits for the observed drain namespace and identity outcome. A `completed` record is re-proved live
+  on the next run and never rewritten. `ACM_OPERATOR_POD_PREFIX` survives only as a parity-pinned
+  constant with no remaining production reference; it authorizes nothing.
+
+The Collection mirrors the same identity and ownership decisions in the `acm_pod_owner_classify`
+module (over `plugins/module_utils/pod_owner_classify.py`; both operations always report
+`changed: false` and read only in check mode), which additionally owns its own Namespace read and
+Pod list inside the `classify` operation, unlike the Python helper. It also mirrors the
+orchestration in `roles/decommission/tasks/delete_multiclusterhub.yml`, which drives the same
+phase vocabulary over checkpoint-backed durable state and `acm_uid_guarded_delete`.
+The strict-read helpers behind both module sides now live in `plugins/module_utils/k8s_read.py`, with
+`acm_k8s_read_outcome` reduced to a thin module wrapper over them. Neither form factor imports the
+other; the shared identity vectors in `tests/test_mch_identity_parity.py` hold the behavior equal.
 
 ## Switchover Interaction Model
 

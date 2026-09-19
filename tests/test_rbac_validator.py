@@ -13,6 +13,8 @@ from lib import rbac_validator
 from lib.constants import (
     ACM_NAMESPACE,
     BACKUP_NAMESPACE,
+    CSV_API_GROUP,
+    CSV_PLURAL,
     MANAGED_CLUSTER_AGENT_NAMESPACE,
     MANAGED_CLUSTER_API_GROUP,
     MANAGED_CLUSTER_PLURAL,
@@ -1634,3 +1636,302 @@ class TestValidateDecommissionPermissions:
         )
         assert "Permission denied" in report
         assert _RAW_SSAR_BODY_SENTINEL not in report
+
+    @pytest.mark.parametrize(
+        ("api_group", "resource", "verb"),
+        [
+            (CSV_API_GROUP, CSV_PLURAL, "get"),
+            (CSV_API_GROUP, CSV_PLURAL, "list"),
+            ("apps", "deployments", "get"),
+            ("apps", "replicasets", "get"),
+        ],
+    )
+    def test_validate_decommission_permissions_fails_when_measured_acm_read_denied(
+        self, mock_primary_client, caplog, api_group, resource, verb
+    ):
+        """Every ACM-namespace read the teardown measurably issues must gate decommission.
+
+        The E4/E6 request measurement showed the teardown reading ClusterServiceVersions
+        (list, then a named get), the operator Deployment and its ReplicaSet in
+        ``open-cluster-management``. A denial of any one of them must stop standalone
+        decommission before any delete, naming the permission it lacks.
+        """
+        validator = RBACValidator(mock_primary_client)
+
+        def check_permission(checked_group, checked_resource, checked_verb, namespace=None):
+            if (
+                namespace == ACM_NAMESPACE
+                and checked_group == api_group
+                and checked_resource == resource
+                and checked_verb == verb
+            ):
+                return (False, "Permission denied")
+            return (True, "")
+
+        validator.check_permission = MagicMock(side_effect=check_permission)
+
+        with caplog.at_level(logging.ERROR, logger="lib.rbac_validator"):
+            with patch("lib.rbac_validator.RBACValidator", return_value=validator):
+                with pytest.raises(ValidationError, match="Decommission RBAC permission validation failed"):
+                    validate_decommission_permissions(mock_primary_client, skip_observability=True)
+
+        group_name = api_group if api_group else "core"
+        assert f"Missing decommission permission in {ACM_NAMESPACE}: {verb} {group_name}/{resource}" in caplog.text
+
+    def test_decommission_namespace_table_requires_the_measured_acm_reads(self):
+        """The ACM-namespace decommission table is the single authority for those reads.
+
+        Pinned as a literal so a dropped or renamed entry fails here rather than silently
+        removing an authorization question both validator paths depend on.
+        """
+        assert RBACValidator.DECOMMISSION_NAMESPACE_PERMISSIONS[ACM_NAMESPACE] == [
+            ("", "pods", ["get", "list"]),
+            (CSV_API_GROUP, CSV_PLURAL, ["get", "list"]),
+            ("apps", "deployments", ["get"]),
+            ("apps", "replicasets", ["get"]),
+        ]
+
+    def test_decommission_cluster_table_requires_multiclusterhub_named_get(self):
+        """The standalone teardown reads the MultiClusterHub by name before and after deleting it."""
+        mch_entry = next(
+            entry for entry in RBACValidator.DECOMMISSION_CLUSTER_PERMISSIONS if entry[1] == "multiclusterhubs"
+        )
+
+        assert mch_entry == (
+            "operator.open-cluster-management.io",
+            "multiclusterhubs",
+            ["get", "list", "delete"],
+        )
+
+    def test_legacy_decommission_permissions_table_stays_delete_only(self):
+        """The legacy integrated table must not grow reads that the namespace table now owns."""
+        assert RBACValidator.DECOMMISSION_PERMISSIONS == [
+            ("cluster.open-cluster-management.io", "managedclusters", ["delete"]),
+            ("operator.open-cluster-management.io", "multiclusterhubs", ["delete"]),
+            (
+                "observability.open-cluster-management.io",
+                "multiclusterobservabilities",
+                ["delete"],
+            ),
+        ]
+
+    def test_measured_reads_are_never_granted_write_or_watch_verbs(self):
+        """The three new resources are read-only everywhere, in every decommission table."""
+        measured_resources = {CSV_PLURAL, "deployments", "replicasets"}
+        entries = [
+            *RBACValidator.DECOMMISSION_CLUSTER_PERMISSIONS,
+            *RBACValidator.DECOMMISSION_PERMISSIONS,
+        ]
+        for namespace_entries in RBACValidator.DECOMMISSION_NAMESPACE_PERMISSIONS.values():
+            entries.extend(namespace_entries)
+
+        offending = {
+            (resource, verb)
+            for _api_group, resource, verbs in entries
+            for verb in verbs
+            if resource in measured_resources and verb not in {"get", "list"}
+        }
+
+        assert not offending, f"Non-read verbs on measured decommission reads: {sorted(offending)}"
+
+    def test_validator_role_never_reaches_the_decommission_surface(self):
+        """No validator instance can sweep the decommission tables at all."""
+        client = MagicMock()
+        client.context = "primary-hub"
+        validator = RBACValidator(client, role="validator")
+
+        with pytest.raises(ValueError, match="only applicable to the operator role"):
+            validator.validate_decommission_permissions()
+
+    @patch("kubernetes.client")
+    def test_denied_mch_get_fails_standalone_decommission_permission_validation(
+        self, mock_k8s_client, mock_primary_client, caplog
+    ):
+        """A denied MultiClusterHub ``get`` must stop the standalone teardown.
+
+        The teardown reads the MultiClusterHub by name before deleting it and again to prove
+        its absence. The denial is delivered through the real SelfSubjectAccessReview path, so
+        this fails if ``DECOMMISSION_CLUSTER_PERMISSIONS`` stops asking for that grant.
+        """
+        reviews = []
+
+        mock_k8s_client.V1ResourceAttributes.side_effect = lambda **kwargs: SimpleNamespace(**kwargs)
+        mock_k8s_client.V1SelfSubjectAccessReviewSpec.side_effect = lambda **kwargs: SimpleNamespace(**kwargs)
+        mock_k8s_client.V1SelfSubjectAccessReview.side_effect = lambda **kwargs: SimpleNamespace(**kwargs)
+
+        def create_self_subject_access_review(body):
+            attrs = body.spec.resource_attributes
+            reviews.append((attrs.group, attrs.resource, attrs.verb, attrs.namespace))
+            allowed = not (attrs.resource == "multiclusterhubs" and attrs.verb == "get")
+            return SimpleNamespace(
+                status=SimpleNamespace(
+                    allowed=allowed,
+                    reason=None if allowed else "Permission denied",
+                    evaluation_error=_RAW_SSAR_BODY_SENTINEL,
+                )
+            )
+
+        authorization_api = MagicMock()
+        authorization_api.create_self_subject_access_review.side_effect = create_self_subject_access_review
+        mock_k8s_client.AuthorizationV1Api.return_value = authorization_api
+
+        with caplog.at_level(logging.ERROR, logger="lib.rbac_validator"):
+            with pytest.raises(ValidationError, match="Decommission RBAC permission validation failed"):
+                validate_decommission_permissions(mock_primary_client, skip_observability=True)
+
+        assert ("operator.open-cluster-management.io", "multiclusterhubs", "get", None) in reviews
+
+        report = caplog.text
+        assert "Missing decommission permission: get operator.open-cluster-management.io/multiclusterhubs" in report
+        assert "Permission denied" in report
+        assert _RAW_SSAR_BODY_SENTINEL not in report
+
+
+class TestIntegratedDecommissionNamespacePermissions:
+    """The integrated preflight path must validate the same decommission namespace reads."""
+
+    @pytest.fixture
+    def validator(self):
+        client = MagicMock()
+        client.context = "primary-hub"
+        client.namespace_exists = MagicMock(return_value=True)
+        return RBACValidator(client)
+
+    @pytest.mark.parametrize(
+        ("api_group", "resource", "verb"),
+        [
+            (CSV_API_GROUP, CSV_PLURAL, "get"),
+            (CSV_API_GROUP, CSV_PLURAL, "list"),
+            ("apps", "deployments", "get"),
+            ("apps", "replicasets", "get"),
+        ],
+    )
+    def test_validate_all_permissions_with_decommission_fails_when_measured_acm_read_denied(
+        self, validator, api_group, resource, verb
+    ):
+        """``include_decommission=True`` must fail when a measured ACM-namespace read is denied.
+
+        The integrated preflight promises the same decommission authorization verdict the
+        standalone path gives. Without the namespace table wired into it, this denial passes
+        preflight and only surfaces as a 403 mid-teardown.
+        """
+
+        def check_permission(checked_group, checked_resource, checked_verb, namespace=None):
+            if (
+                namespace == ACM_NAMESPACE
+                and checked_group == api_group
+                and checked_resource == resource
+                and checked_verb == verb
+            ):
+                return (False, "Permission denied")
+            return (True, "")
+
+        validator.check_permission = MagicMock(side_effect=check_permission)
+
+        all_valid, all_errors = validator.validate_all_permissions(include_decommission=True)
+
+        group_name = api_group if api_group else "core"
+        assert all_valid is False
+        assert all_errors["namespaces"] == [
+            f"Missing permission in {ACM_NAMESPACE}: {verb} {group_name}/{resource} - Permission denied"
+        ]
+
+    @pytest.mark.parametrize("namespace", [ACM_NAMESPACE, OBSERVABILITY_NAMESPACE])
+    def test_a_denied_overlapping_pod_read_is_reported_once(self, validator, namespace):
+        """The decommission table repeats the baseline Pod reads; the denial is one error.
+
+        Both tables require ``pods`` ``get``/``list`` in the ACM and observability
+        namespaces. Extending the required list blindly reported the same denial twice,
+        which reads as two distinct missing grants in the operator-facing report.
+        """
+
+        def check_permission(checked_group, checked_resource, checked_verb, checked_namespace=None):
+            if checked_namespace == namespace and checked_resource == "pods" and checked_verb == "get":
+                return (False, "Permission denied")
+            return (True, "")
+
+        validator.check_permission = MagicMock(side_effect=check_permission)
+
+        all_valid, all_errors = validator.validate_all_permissions(include_decommission=True)
+
+        assert all_valid is False
+        assert all_errors["namespaces"] == [f"Missing permission in {namespace}: get core/pods - Permission denied"]
+
+    def test_validate_all_permissions_with_decommission_checks_exact_permission_set(self, validator):
+        """The integrated decommission sweep is the baseline surface plus the decommission tables.
+
+        Built from the live tables, so a table entry that stops being checked - or a namespace
+        the decommission table owns but the baseline table does not - fails here.
+        """
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        all_valid, all_errors = validator.validate_all_permissions(include_decommission=True)
+
+        assert all_valid is True
+        assert all_errors == {}
+
+        expected = {
+            (api_group, resource, verb, None)
+            for table in (
+                RBACValidator.OPERATOR_CLUSTER_PERMISSIONS,
+                RBACValidator.DECOMMISSION_PERMISSIONS,
+            )
+            for api_group, resource, verbs in table
+            for verb in verbs
+        } | {
+            (api_group, resource, verb, namespace)
+            for table in (
+                RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS,
+                RBACValidator.DECOMMISSION_NAMESPACE_PERMISSIONS,
+            )
+            for namespace, entries in table.items()
+            for api_group, resource, verbs in entries
+            for verb in verbs
+        }
+        actual = {
+            (c.args[0], c.args[1], c.args[2], c.args[3] if len(c.args) >= 4 else None)
+            for c in validator.check_permission.call_args_list
+        }
+
+        assert actual == expected, (
+            f"Integrated decommission permission set mismatch.\n"
+            f"  Missing: {sorted(expected - actual)}\n"
+            f"  Unexpected: {sorted(actual - expected)}"
+        )
+
+    def test_validate_all_permissions_without_decommission_omits_the_measured_acm_reads(self, validator):
+        """Least privilege: ordinary preflight must not require the teardown-only reads."""
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        validator.validate_all_permissions(include_decommission=False)
+
+        acm_resources = {
+            c.args[1]
+            for c in validator.check_permission.call_args_list
+            if len(c.args) >= 4 and c.args[3] == ACM_NAMESPACE
+        }
+
+        assert acm_resources == {"pods"}
+
+    def test_validator_role_decommission_is_rejected_before_any_namespace_check(self):
+        """The validator-role rejection fires before a single namespaced review is issued."""
+        client = MagicMock()
+        client.context = "primary-hub"
+        client.namespace_exists = MagicMock(return_value=True)
+        validator = RBACValidator(client, role="validator")
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        with pytest.raises(ValueError, match="not valid for the validator role"):
+            validator.validate_all_permissions(include_decommission=True)
+
+        assert not [c for c in validator.check_permission.call_args_list if len(c.args) >= 4 and c.args[3] is not None]
+
+    def test_validate_namespace_permissions_rejects_decommission_for_validator_role(self):
+        """Direct callers get the same explicit rejection rather than a silent skip."""
+        client = MagicMock()
+        client.context = "primary-hub"
+        client.namespace_exists = MagicMock(return_value=True)
+        validator = RBACValidator(client, role="validator")
+
+        with pytest.raises(ValueError, match="not valid for the validator role"):
+            validator.validate_namespace_permissions(include_decommission=True)

@@ -23,7 +23,9 @@ options:
     type: str
     default: operator
   include_decommission:
-    description: Whether to include delete permissions required for hub decommission.
+    description:
+      - Whether to include the permissions required for hub decommission - the cluster-scoped
+        deletes and the namespace-scoped reads the teardown issues.
     type: bool
     default: false
   include_old_hub_finalization:
@@ -98,6 +100,8 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
     BACKUP_NAMESPACE,
     CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO,
     CONFIG_OPENSHIFT_IO,
+    CSV_API_GROUP,
+    CSV_PLURAL,
     HIVE_CLUSTERDEPLOYMENT_RESOURCE,
     HIVE_OPENSHIFT_IO,
     MANAGED_CLUSTER_AGENT_NAMESPACE,
@@ -252,7 +256,12 @@ DECOMMISSION_CLUSTER_PERMISSIONS = [
     ("", "namespaces", ["get"]),
     (HIVE_OPENSHIFT_IO, HIVE_CLUSTERDEPLOYMENT_RESOURCE, ["list"]),
     (CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO, "managedclusters", ["get", "list", "delete"]),
-    (OPERATOR_OPEN_CLUSTER_MANAGEMENT_IO, "multiclusterhubs", ["list", "delete"]),
+    (
+        OPERATOR_OPEN_CLUSTER_MANAGEMENT_IO,
+        "multiclusterhubs",
+        # Named read before the delete and again to prove the hub is gone.
+        ["get", "list", "delete"],
+    ),
     (
         OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO,
         "multiclusterobservabilities",
@@ -263,6 +272,11 @@ DECOMMISSION_CLUSTER_PERMISSIONS = [
 DECOMMISSION_NAMESPACE_PERMISSIONS: dict[str, list[tuple[str, str, list[str]]]] = {
     ACM_NAMESPACE: [
         ("", "pods", ["get", "list"]),
+        # Operator identity: the CSV that owns the ACM operator Deployment, the Deployment
+        # itself and its ReplicaSets, read while draining the namespace.
+        (CSV_API_GROUP, CSV_PLURAL, ["get", "list"]),
+        (APPS, "deployments", ["get"]),
+        (APPS, "replicasets", ["get"]),
     ],
     OBSERVABILITY_NAMESPACE: [
         ("", "pods", ["get", "list"]),
@@ -405,6 +419,13 @@ def expand_rbac_requirements(
             if not (skip_observability and g == OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO)
         ]
         permissions.extend(_expand_permission_list(filtered_decommission))
+
+        # Same namespace-scoped teardown reads the standalone expansion requires, so the
+        # integrated sweep gives the same decommission verdict.
+        for namespace, ns_perms in DECOMMISSION_NAMESPACE_PERMISSIONS.items():
+            if skip_observability and namespace == OBSERVABILITY_NAMESPACE:
+                continue
+            permissions.extend(_expand_permission_list(ns_perms, namespace=namespace))
 
     if include_old_hub_finalization and not skip_observability:
         permissions.extend(_expand_permission_list(OLD_HUB_FINALIZATION_PERMISSIONS))
