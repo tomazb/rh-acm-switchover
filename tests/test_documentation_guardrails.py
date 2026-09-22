@@ -361,13 +361,13 @@ def test_ssa_01_documentation_contract_is_complete():
 def test_decommission_outcome_and_target_identity_contracts_are_published():
     """R4-03 operator docs must keep the five substep outcomes and the identity limit.
 
-    Pins contract identifiers — outcome values, ``would_change``, non-zero exit,
-    and the SSA-02 / intended-old-hub boundary — plus the negative relation that
-    resource and resume checks do not make standalone decommission safe against
-    initial wrong-hub selection. It does not snapshot a paragraph.
+    Pins outcome identifiers and relations, then parses the operator-facing
+    identity table to bind each property's status and ownership to that property.
+    Prose spelling and nested negation are not the identity-status authority.
     """
-    usage = re.sub(r"\s+", " ", _read("docs/operations/usage.md"))
-    decommission = usage.split("## Decommission Old Hub", 1)[1].split("## Troubleshooting", 1)[0]
+    usage = _read("docs/operations/usage.md")
+    section = usage.split("## Decommission Old Hub", 1)[1].split("## Troubleshooting", 1)[0]
+    decommission = re.sub(r"\s+", " ", section)
     for outcome in ("not_requested", "precondition_noop", "completed", "refused", "failed"):
         assert f"`{outcome}`" in decommission, f"usage decommission section must name {outcome}"
     assert "would_change" in decommission
@@ -379,14 +379,29 @@ def test_decommission_outcome_and_target_identity_contracts_are_published():
     assert "does not bind the switchover" in decommission
     assert re.search(r"precondition_noop.{0,700}not `completed`", decommission)
     assert re.search(r"namespace is still present is not this outcome", decommission)
-    assert re.search(r"not implemented.{0,40}SSA-02", decommission)
-    # Polarity, not a sentence snapshot: "Do not treat ... making standalone ...
-    # non-interactive ... safe against ... wrong hub". The space before "safe"
-    # rejects "unsafe against", which would invert the warning.
-    assert re.search(
-        r"Do not treat .{0,120}making standalone.{0,80}non-interactive.{0,60} safe against.{0,60}wrong hub",
-        decommission,
-    ), "initial-target checks must not be described as making decommission safe against the wrong hub"
+
+    identity_section = section.split("**What that identity does not prove.**", 1)[1].split("**Modes.**", 1)[0]
+    rows = [
+        [" ".join(cell.translate(str.maketrans("", "", "*_`")).split()) for cell in line.strip().strip("|").split("|")]
+        for line in identity_section.splitlines()
+        if line.strip().startswith("|")
+    ]
+    assert rows[0] == ["Identity property", "R4-03 status", "Owner"]
+    assert len(rows[1]) == 3 and all(re.fullmatch(r":?-+:?", cell) for cell in rows[1])
+    identity_status = {}
+    identity_owner = {}
+    for row in rows[2:]:
+        assert len(row) == 3, "identity contract rows must contain property, status, and owner"
+        property_name, status, owner = row
+        assert property_name not in identity_status, "identity properties must have one unambiguous status"
+        identity_status[property_name] = status
+        identity_owner[property_name] = owner
+    assert identity_status == {
+        "Recorded resource / UID identity": "provided by R4-03",
+        "Collection standalone resume continuity to the recorded physical cluster": "provided by R4-03",
+        "Initial wrong-hub / expected-target selection": "not provided by R4-03",
+    }
+    assert identity_owner["Initial wrong-hub / expected-target selection"] == "SSA-02"
 
     parity = re.sub(r"\s+", " ", _read("docs/ansible-collection/parity-matrix.md"))
     for outcome in ("not_requested", "precondition_noop", "completed", "refused", "failed"):

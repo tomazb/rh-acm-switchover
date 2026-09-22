@@ -641,9 +641,13 @@ Consequences worth planning for:
   needs no special flags;
 - standalone decommission does **not** require a secondary hub, and reads none.
 
-**What that identity does not prove.** Resource identity and resume continuity
-are real protections, and neither one proves the operator initially selected
-the intended old hub.
+**What that identity does not prove.** These are separate identity properties:
+
+| Identity property | R4-03 status | Owner |
+| --- | --- | --- |
+| Recorded resource / UID identity | **provided by R4-03** | R4-03 |
+| Collection standalone resume continuity to the recorded physical cluster | **provided by R4-03** | R4-03 |
+| Initial wrong-hub / expected-target selection | **not provided by R4-03** | SSA-02 |
 
 - **Resource identity.** Both form factors record the UID of a resource they are
   tearing down and delete only that UID. A replacement object created later
@@ -655,11 +659,8 @@ the intended old hub.
   hub-identity map; on that path the resource UID above is the identity check.
 
 A collection standalone run records whichever cluster the configured context
-points at. Matching that recorded cluster on resume, or matching a resource UID
-on either form factor, does not show that the starting context was the intended
-old hub. Wrong-target / expected-target hub identity is a separate property and
-is not implemented here (SSA-02). Do not treat these checks as making standalone
-or non-interactive decommission safe against choosing the wrong hub at the start.
+points at on first execution. Selecting the intended old hub remains the
+operator's responsibility, including standalone and non-interactive runs.
 
 **Modes.** `validate` is **refused** for decommission — it is not a preview: the
 role's delete guards fire in any mode other than `dry_run`, so a validate run would
