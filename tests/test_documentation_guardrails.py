@@ -367,21 +367,28 @@ def test_decommission_outcome_and_target_identity_contracts_are_published():
     usage = re.sub(r"\s+", " ", _read("docs/operations/usage.md"))
     decommission = usage.split("## Decommission Old Hub", 1)[1].split("## Troubleshooting", 1)[0]
     for outcome in ("not_requested", "precondition_noop", "completed", "refused", "failed"):
-        assert outcome in decommission, f"usage decommission section must name {outcome}"
+        assert f"`{outcome}`" in decommission, f"usage decommission section must name {outcome}"
     assert "would_change" in decommission
     assert "non-zero" in decommission
-    assert "SSA-02" in decommission
     assert "intended old hub" in decommission
-    assert re.search(r"precondition_noop.{0,600}not `completed`", decommission)
+    assert "outstanding observability teardown record" in decommission
+    assert "does not require `changed`" in decommission
+    assert "does not emit `refused`" in decommission
+    assert "does not bind the switchover" in decommission
+    assert re.search(r"precondition_noop.{0,700}not `completed`", decommission)
+    assert re.search(r"namespace is still present is not this outcome", decommission)
+    assert re.search(r"not implemented.{0,40}SSA-02", decommission)
 
     parity = re.sub(r"\s+", " ", _read("docs/ansible-collection/parity-matrix.md"))
     for outcome in ("not_requested", "precondition_noop", "completed", "refused", "failed"):
-        assert outcome in parity
-    assert "SSA-02" in parity
+        assert f"`{outcome}`" in parity
+    assert "The collection role does not emit `refused`" in parity
+    assert re.search(r"precondition_noop.{0,80}not `completed`", parity)
+    assert re.search(r"not initial wrong-target protection.{0,30}SSA-02", parity)
     assert "usage.md#decommission-old-hub" in parity
 
     readme = re.sub(r"\s+", " ", _read("ansible_collections/tomazb/acm_switchover/README.md"))
-    assert "intended old hub" in readme
+    assert re.search(r"different property.{0,120}intended old hub", readme)
     assert "docs/operations/usage.md" in readme
 
 
