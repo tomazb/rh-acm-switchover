@@ -3236,13 +3236,12 @@ def test_check_mode_does_not_require_checkpointing_and_writes_nothing():
     """A preview is never refused by the gate.
 
     ONE conjunct discriminates here: ``returncode == 0``, which fails if the gate
-    loses its ``not ansible_check_mode`` guard. The ``phases`` and ``operational_data``
-    conjuncts do NOT discriminate in this configuration -- with
-    ``checkpoint_available=False`` the transitions are skipped by their ``enabled``
-    conjunct whatever the mode, so they would stay empty even with the check-mode
-    guards removed. ``test_b_stage_check_mode_writes_no_checkpoint_or_outcome`` is the
-    test that actually pins "check mode writes no checkpoint state", because it runs
-    WITH checkpointing available; it was the one that fired under that mutation.
+    loses its ``not ansible_check_mode`` guard. ``operational_data`` equality does
+    NOT discriminate in this configuration -- with ``checkpoint_available=False``
+    the transitions are skipped by their ``enabled`` conjunct whatever the mode.
+    Issue #287's vacuous ``phases == []`` conjunct is not repeated here. A check-mode
+    run that actually has checkpointing enabled, and that reaches the guarded-delete
+    tasks, is ``test_decommission_check_mode.py``.
 
     Kill condition: dropping ``not ansible_check_mode`` from the gate.
     """
@@ -3251,9 +3250,8 @@ def test_check_mode_does_not_require_checkpointing_and_writes_nothing():
     assert result["returncode"] == 0
     assert result["delete_calls"] == []
     assert result["acm_switchover_decommission_result"]["changed"] is False
-    # Kept as consistency checks, not as coverage; see the docstring.
+    # Consistency only: checkpointing is disabled, so this cannot prove a writer no-op.
     assert checkpoint["operational_data"] == checkpoint["before_operational_data"]
-    assert checkpoint["phases"] == []
 
 
 def test_dry_run_execution_mode_does_not_require_checkpointing():
