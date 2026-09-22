@@ -43,8 +43,11 @@ requires distinct non-empty live `kube-system` Namespace UIDs before it can
 enter a mutation-capable phase. Different contexts or kubeconfigs can still
 resolve to the same physical Kubernetes cluster. Execute mode, including
 native `ansible-playbook --check`, reads both UIDs freshly. Restore-only reads
-only the secondary hub, and
-standalone decommission is outside this two-hub rule.
+only the secondary hub. Standalone decommission is outside this two-hub
+distinctness rule. Resource-UID binding and resume continuity of a recorded
+cluster are a different property from proving the initial target was the
+intended old hub; the operator contract is in the repository
+`docs/operations/usage.md` Decommission Old Hub section.
 
 ## Explicit Non-Scope
 

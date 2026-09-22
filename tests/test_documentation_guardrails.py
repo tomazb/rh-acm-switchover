@@ -358,6 +358,64 @@ def test_ssa_01_documentation_contract_is_complete():
         assert term in collection_architecture
 
 
+def test_decommission_outcome_and_target_identity_contracts_are_published():
+    """R4-03 operator docs must keep the five substep outcomes and the identity limit.
+
+    Pins outcome identifiers and relations, then parses the operator-facing
+    identity table to bind each property's status and ownership to that property.
+    Prose spelling and nested negation are not the identity-status authority.
+    """
+    usage = _read("docs/operations/usage.md")
+    section = usage.split("## Decommission Old Hub", 1)[1].split("## Troubleshooting", 1)[0]
+    decommission = re.sub(r"\s+", " ", section)
+    for outcome in ("not_requested", "precondition_noop", "completed", "refused", "failed"):
+        assert f"`{outcome}`" in decommission, f"usage decommission section must name {outcome}"
+    assert "would_change" in decommission
+    assert "non-zero" in decommission
+    assert "intended old hub" in decommission
+    assert "outstanding observability teardown record" in decommission
+    assert "does not require `changed`" in decommission
+    assert "does not emit `refused`" in decommission
+    assert "does not bind the switchover" in decommission
+    assert re.search(r"precondition_noop.{0,700}not `completed`", decommission)
+    assert re.search(r"namespace is still present is not this outcome", decommission)
+
+    identity_section = section.split("**What that identity does not prove.**", 1)[1].split("**Modes.**", 1)[0]
+    rows = [
+        [" ".join(cell.translate(str.maketrans("", "", "*_`")).split()) for cell in line.strip().strip("|").split("|")]
+        for line in identity_section.splitlines()
+        if line.strip().startswith("|")
+    ]
+    assert rows[0] == ["Identity property", "R4-03 status", "Owner"]
+    assert len(rows[1]) == 3 and all(re.fullmatch(r":?-+:?", cell) for cell in rows[1])
+    identity_status = {}
+    identity_owner = {}
+    for row in rows[2:]:
+        assert len(row) == 3, "identity contract rows must contain property, status, and owner"
+        property_name, status, owner = row
+        assert property_name not in identity_status, "identity properties must have one unambiguous status"
+        identity_status[property_name] = status
+        identity_owner[property_name] = owner
+    assert identity_status == {
+        "Recorded resource / UID identity": "provided by R4-03",
+        "Collection standalone resume continuity to the recorded physical cluster": "provided by R4-03",
+        "Initial wrong-hub / expected-target selection": "not provided by R4-03",
+    }
+    assert identity_owner["Initial wrong-hub / expected-target selection"] == "SSA-02"
+
+    parity = re.sub(r"\s+", " ", _read("docs/ansible-collection/parity-matrix.md"))
+    for outcome in ("not_requested", "precondition_noop", "completed", "refused", "failed"):
+        assert f"`{outcome}`" in parity
+    assert "The collection role does not emit `refused`" in parity
+    assert re.search(r"precondition_noop.{0,80}not `completed`", parity)
+    assert re.search(r"not initial wrong-target protection.{0,30}SSA-02", parity)
+    assert "usage.md#decommission-old-hub" in parity
+
+    readme = re.sub(r"\s+", " ", _read("ansible_collections/tomazb/acm_switchover/README.md"))
+    assert re.search(r"different property.{0,120}intended old hub", readme)
+    assert "docs/operations/usage.md" in readme
+
+
 def test_collection_artifact_schema_documents_current_checkpoint_contract():
     """Checkpoint docs must describe schema 2.0 and non-mutating validate/dry-run behavior."""
     content = _read("ansible_collections/tomazb/acm_switchover/docs/artifact-schema.md")
