@@ -358,6 +358,33 @@ def test_ssa_01_documentation_contract_is_complete():
         assert term in collection_architecture
 
 
+def test_decommission_outcome_and_target_identity_contracts_are_published():
+    """R4-03 operator docs must keep the five substep outcomes and the identity limit.
+
+    Pins contract identifiers — outcome values, ``would_change``, non-zero exit,
+    and the SSA-02 / intended-old-hub boundary — not a paragraph snapshot.
+    """
+    usage = re.sub(r"\s+", " ", _read("docs/operations/usage.md"))
+    decommission = usage.split("## Decommission Old Hub", 1)[1].split("## Troubleshooting", 1)[0]
+    for outcome in ("not_requested", "precondition_noop", "completed", "refused", "failed"):
+        assert outcome in decommission, f"usage decommission section must name {outcome}"
+    assert "would_change" in decommission
+    assert "non-zero" in decommission
+    assert "SSA-02" in decommission
+    assert "intended old hub" in decommission
+    assert re.search(r"precondition_noop.{0,600}not `completed`", decommission)
+
+    parity = re.sub(r"\s+", " ", _read("docs/ansible-collection/parity-matrix.md"))
+    for outcome in ("not_requested", "precondition_noop", "completed", "refused", "failed"):
+        assert outcome in parity
+    assert "SSA-02" in parity
+    assert "usage.md#decommission-old-hub" in parity
+
+    readme = re.sub(r"\s+", " ", _read("ansible_collections/tomazb/acm_switchover/README.md"))
+    assert "intended old hub" in readme
+    assert "docs/operations/usage.md" in readme
+
+
 def test_collection_artifact_schema_documents_current_checkpoint_contract():
     """Checkpoint docs must describe schema 2.0 and non-mutating validate/dry-run behavior."""
     content = _read("ansible_collections/tomazb/acm_switchover/docs/artifact-schema.md")

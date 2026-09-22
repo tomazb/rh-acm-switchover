@@ -544,6 +544,26 @@ Delete MultiClusterHub resource? (This will remove all ACM components) [y/N]: y
 - Delete MultiClusterHub: 15-20 minutes typically; the resource-absence wait and the Pod drain that
   follows it are each bounded at 1200 seconds (polled every 30 seconds), so a slow hub can take longer
 
+**Decommission substep outcomes.** Python and the collection use the same five
+outcomes for one teardown substep. A preview (`--dry-run`, collection
+`mode: dry_run`, or native check mode) does not record them.
+
+- `not_requested` — the substep was not requested or not enabled. That is not a failure.
+- `precondition_noop` — teardown was requested, the target was positively absent, and no teardown record was outstanding, so nothing had to be done. This is a successful no-op. It is not `completed`, and it is not proof that a teardown ran.
+- `completed` — the requested teardown reached its required completion proof, including a fresh live proof when a resumed record is re-checked. `completed` does not require `changed` on this invocation: a resumed obligation can finish with no new mutation.
+- `refused` — the operator declined a required destructive confirmation. The decommission is unsuccessful, and later requested substeps are not attempted. The collection role does not prompt, so it does not emit `refused`.
+- `failed` — the substep hit an expected operational failure. The decommission is unsuccessful.
+
+`refused` and `failed` make the decommission result unsuccessful. The Python CLI
+exits non-zero for either. A collection substep that fails records `failed` and
+fails the play; the role does not emit `refused`. Declining the opening
+decommission confirmation cancels the run before any substep and is also
+unsuccessful; that cancellation is not one of the five outcomes.
+
+`changed` is an actual mutation accepted during this invocation. `would_change`
+is only a read-only preview. A preview can report `would_change` while `changed`
+stays false and no substep outcome is recorded.
+
 **MultiClusterHub teardown contract:**
 The MultiClusterHub target is resolved dynamically, never from a hard-coded name: decommission lists
 MultiClusterHubs in `open-cluster-management` and finds zero (nothing to tear down), exactly one (the
@@ -617,6 +637,26 @@ Consequences worth planning for:
 - an ordinary **retry resumes** the retained checkpoint and re-proves identity; it
   needs no special flags;
 - standalone decommission does **not** require a secondary hub, and reads none.
+
+**What that identity does not prove.** Resource identity and resume continuity
+are real protections, and neither one proves the operator initially selected
+the intended old hub.
+
+- **Resource identity.** Both form factors record the UID of a resource they are
+  tearing down and delete only that UID. A replacement object created later
+  under the same name is not deleted as if it were the recorded one.
+- **Resume continuity.** The stored primary `kube-system` Namespace UID, on
+  collection standalone decommission, stops a later transition when the
+  configured context now points at a different physical cluster than the one
+  this run recorded. Python `--decommission` does not bind the switchover
+  hub-identity map; on that path the resource UID above is the identity check.
+
+A collection standalone run records whichever cluster the configured context
+points at. Matching that recorded cluster on resume, or matching a resource UID
+on either form factor, does not show that the starting context was the intended
+old hub. Wrong-target / expected-target hub identity is a separate property and
+is not implemented here (SSA-02). Do not treat these checks as making standalone
+or non-interactive decommission safe against choosing the wrong hub at the start.
 
 **Modes.** `validate` is **refused** for decommission — it is not a preview: the
 role's delete guards fire in any mode other than `dry_run`, so a validate run would

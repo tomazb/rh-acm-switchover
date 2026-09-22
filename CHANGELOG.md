@@ -120,6 +120,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Documentation now publishes the complete decommission substep outcome
+  vocabulary (`not_requested`, `precondition_noop`, `completed`, `refused`,
+  `failed`), distinguishes `precondition_noop` from `completed`, and clarifies
+  that R4-03 resource and resume-continuity identity is not wrong-target hub
+  identity. This records behavior already implemented; it adds no runtime
+  behavior (#309).
 - `AGENTS.md` now binds verification claims to the condition actually established on the
   exercised test surface, distinguishing unapplied, surviving, detected, and
   unrelated-failure mutation outcomes; requires a static guard to protect its semantic
