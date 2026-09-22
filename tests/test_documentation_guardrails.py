@@ -362,7 +362,9 @@ def test_decommission_outcome_and_target_identity_contracts_are_published():
     """R4-03 operator docs must keep the five substep outcomes and the identity limit.
 
     Pins contract identifiers — outcome values, ``would_change``, non-zero exit,
-    and the SSA-02 / intended-old-hub boundary — not a paragraph snapshot.
+    and the SSA-02 / intended-old-hub boundary — plus the negative relation that
+    resource and resume checks do not make standalone decommission safe against
+    initial wrong-hub selection. It does not snapshot a paragraph.
     """
     usage = re.sub(r"\s+", " ", _read("docs/operations/usage.md"))
     decommission = usage.split("## Decommission Old Hub", 1)[1].split("## Troubleshooting", 1)[0]
@@ -378,6 +380,13 @@ def test_decommission_outcome_and_target_identity_contracts_are_published():
     assert re.search(r"precondition_noop.{0,700}not `completed`", decommission)
     assert re.search(r"namespace is still present is not this outcome", decommission)
     assert re.search(r"not implemented.{0,40}SSA-02", decommission)
+    # Polarity, not a sentence snapshot: "Do not treat ... making standalone ...
+    # non-interactive ... safe against ... wrong hub". The space before "safe"
+    # rejects "unsafe against", which would invert the warning.
+    assert re.search(
+        r"Do not treat .{0,120}making standalone.{0,80}non-interactive.{0,60} safe against.{0,60}wrong hub",
+        decommission,
+    ), "initial-target checks must not be described as making decommission safe against the wrong hub"
 
     parity = re.sub(r"\s+", " ", _read("docs/ansible-collection/parity-matrix.md"))
     for outcome in ("not_requested", "precondition_noop", "completed", "refused", "failed"):
