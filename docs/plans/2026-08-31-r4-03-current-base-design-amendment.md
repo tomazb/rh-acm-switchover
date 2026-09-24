@@ -1,5 +1,12 @@
 # R4-03 Decommission Completion — Current-Base Design Amendment
 
+> **Superseded (2026-09-24).** R4-03 was delivered into `ansible` by PRs #281, #286,
+> #293, #304, #307, #308, and #310. The merged tests and code are now authoritative for
+> R4-03 behavior. This amendment, which was the authoritative reopened R4-03 design where
+> it conflicted with the July design, is retained as a historical rationale record only,
+> under the design-document lifecycle rule in `thermos-resolution-plan.md`. The status
+> lines below describe its state before delivery.
+
 **Date:** 2026-08-31
 **Branch:** `docs/r4-03-current-base-amendment-2026-08-31` (base `origin/ansible` @ `74268192`)
 **Status:** design **reopened** following exact-head validation of the implementation plan
