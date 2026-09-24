@@ -120,6 +120,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The root test lane (`run_tests.sh` and CI) and the collection unit and integration lanes
+  (`ansible-collection-foundation.yml`) now run under `pytest-xdist` with
+  `-n auto --dist worksteal` (#312). `pytest-xdist>=3.2.1,<4` is added to `requirements-dev.txt`
+  and to the collection workflow's dependency install. Release-framework, live certification,
+  E2E, and collection scenario lanes stay serial, and `setup.cfg` does not enable parallelism by
+  default. The `ordered_bounded_map` worker-timeout tests no longer depend on a 40 ms wall-clock
+  bound: workers block on an event, and the batch-deadline test now detects a per-future wait,
+  which the previous bound did not. The ManagedCluster rescue-contract tests in
+  `test_decommission_role_contracts.py` now inject their deliberate fault into a private copy of
+  the collection instead of rewriting the shipped `teardown_one_managed_cluster.yml` in place,
+  which under parallel workers leaked the fault into concurrent tests and could leave the
+  tracked role file corrupted.
 - Documentation now publishes the complete decommission substep outcome
   vocabulary (`not_requested`, `precondition_noop`, `completed`, `refused`,
   `failed`), distinguishes `precondition_noop` from `completed`, and clarifies

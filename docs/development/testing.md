@@ -65,7 +65,7 @@ but the documented form is CI's.
 # --cov-report=term --junitxml=pytest-results-<python-version>.xml. The selection of tests is
 # identical; only the reporting artifacts differ. Use the coverage form below when you need
 # the report.
-python -m pytest tests/ --ignore=tests/release -v -m "not e2e"
+python -m pytest tests/ --ignore=tests/release -v -m "not e2e" -n auto --dist worksteal
 
 # 2. Release-framework helper tests
 # Non-live only when no profile is resolved. Inspect ACM_RELEASE_PROFILE and PYTEST_ADDOPTS first.
@@ -74,13 +74,13 @@ python -m pytest tests/release -q
 # 3. Collection unit tests
 # CI precedes this with a separate compatibility-contract step under an exported
 # ANSIBLE_COLLECTIONS_PATH — see "Folded into surface 3" below.
-PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q
+PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q -n auto --dist worksteal
 
 # 4. Collection integration tests
 # CI exports ANSIBLE_COLLECTIONS_PATH before this step; `$(pwd)` is the local equivalent of
 # ${GITHUB_WORKSPACE}. Surface 3 above deliberately has no export, matching CI.
 export ANSIBLE_COLLECTIONS_PATH="$(pwd):${HOME}/.ansible/collections"
-PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/ -q
+PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/ -q -n auto --dist worksteal
 
 # 5. Collection scenario tests
 export ANSIBLE_COLLECTIONS_PATH="$(pwd):${HOME}/.ansible/collections"
@@ -134,6 +134,31 @@ PYTHONPATH=. python -m pytest \
 
 If you reproduce surface 3 without first running this step, a lane-specific dependency
 resolution failure is exactly what you will miss.
+
+#### Parallel execution with pytest-xdist
+
+Surfaces 1, 3, and 4 run under `pytest-xdist` with `-n auto --dist worksteal`, in CI and in the
+commands above. `pytest-xdist` is declared in `requirements-dev.txt`, and
+`ansible-collection-foundation.yml` installs it explicitly because that workflow does not install
+`requirements-dev.txt`. `worksteal` is used because test durations are very uneven: many
+collection tests each drive a full `ansible-playbook` run, and pinning whole files to one worker
+(`--dist loadfile`) leaves those files as the long pole. The coverage and JUnit reports in
+surface 1 are combined across workers by `pytest-cov` and pytest, so the reporting form is
+unchanged.
+
+Every other pytest lane stays serial, and must not be given `-n` or `--dist`:
+
+- **Surface 2, release-framework helpers, and surface 9, live certification.** A profile-driven
+  release session builds its run ID at one-second resolution and creates its artifact directory
+  exclusively, so per-worker sessions would collide.
+- **Surface 5, collection scenario tests,** and the resolved-dependency compatibility check.
+- **Surface 8, E2E.** Its phases are chained through class-level state, so tests split across
+  workers would silently skip later phases, and it mutates live clusters.
+
+Parallelism is not global: `setup.cfg` adds no `-n` to `addopts`, so targeted developer
+invocations run serially unless you pass the flags. Running a lane in parallel changes only its
+wall time. It does not change what the lane proves, and it never turns a local, fake-backed, or
+fixture-backed result into live certification evidence.
 
 Surfaces 8 and 9 are covered under [E2E Tests](#e2e-tests-on-demand) and
 [Release Validation Framework](#release-validation-framework) below.
@@ -193,6 +218,8 @@ default convenience run into live certification. `./run_tests.sh` is not a live-
 entrypoint; invoke certification directly with an explicit release profile instead.
 
 `./run_tests.sh` covers surfaces 1 and 2, and adds surface 8 only when you export `RUN_E2E=1`.
+It runs surface 1 in parallel with `-n auto --dist worksteal`; the release-helper and E2E
+subprocesses stay serial.
 No invocation of it runs the collection unit, integration, scenario, syntax, or build gates —
 surfaces 3 through 7 have no code path in the runner at all. In particular, `./run_tests.sh`
 is not a complete verification surface for any change that touches `ansible_collections/`.
@@ -233,7 +260,7 @@ pip install -r requirements-dev.txt
 #### Run Root Tests (matches the default local runner)
 
 ```bash
-python -m pytest tests/ --ignore=tests/release -v -m "not e2e"
+python -m pytest tests/ --ignore=tests/release -v -m "not e2e" -n auto --dist worksteal
 ```
 
 #### Run Specific Test File
@@ -761,4 +788,4 @@ See [CONTRIBUTING.md](../../CONTRIBUTING.md) for details.
 
 ---
 
-**Last Updated**: 2026-08-13
+**Last Updated**: 2026-09-24

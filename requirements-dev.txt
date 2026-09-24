@@ -5,6 +5,8 @@ hypothesis>=6.100.0
 mutmut>=3.6.0,<4
 pytest-cov>=4.1.0
 pytest-mock>=3.11.0
+# Parallel root and collection unit/integration lanes use --dist worksteal (added in 3.2.0; hang fixed in 3.2.1).
+pytest-xdist>=3.2.1,<4
 
 # Code quality
 flake8>=6.1.0

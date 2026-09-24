@@ -43,7 +43,7 @@ jobs:
         
     - name: Run root tests with coverage
       run: |
-        python -m pytest tests/ --ignore=tests/release -v -m "not e2e" --cov=. --cov-report=xml --cov-report=html --cov-report=term --junitxml=pytest-results-${{ matrix.python-version }}.xml
+        python -m pytest tests/ --ignore=tests/release -v -m "not e2e" -n auto --dist worksteal --cov=. --cov-report=xml --cov-report=html --cov-report=term --junitxml=pytest-results-${{ matrix.python-version }}.xml
 
     - name: Archive pytest results
       if: always()

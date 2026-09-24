@@ -93,8 +93,9 @@ echo "Running Unit Tests"
 echo "======================================"
 
 # E2E tests are on-demand. Release-framework helper tests run as their own
-# explicit lane so local verification matches CI structure.
-pytest_args=(tests/ --ignore=tests/release -v --cov=. --cov-report=term-missing --cov-report=html --cov-report=xml -m "not e2e")
+# explicit lane so local verification matches CI structure. Only this lane runs
+# under pytest-xdist; the release and E2E lanes below stay serial.
+pytest_args=(tests/ --ignore=tests/release -v -n auto --dist worksteal --cov=. --cov-report=term-missing --cov-report=html --cov-report=xml -m "not e2e")
 python -m pytest "${pytest_args[@]}"
 
 echo ""
