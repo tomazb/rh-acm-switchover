@@ -131,7 +131,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Workers block on an event.
     - The deadline passed to `wait` is recorded, which proves one shared batch deadline. The
       previous bound let a per-future wait pass.
-    - Only the single-worker test keeps a wall-clock check, a 2 s ceiling on returning promptly.
+    - The remaining wall-clock checks are generous ceilings.
+      - The single-worker call has 2 s.
+      - The batch has N × deadline, the hard lower bound of any per-future waiting, which leaves
+        (N − 1) × deadline of scheduling slack.
   - The ManagedCluster rescue-contract tests in `test_decommission_role_contracts.py` inject
     their deliberate fault into a private copy of the collection. They no longer rewrite the
     shipped `teardown_one_managed_cluster.yml` in place, which under parallel workers leaked the
@@ -140,8 +143,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     folded into a parametrized test.
   - The connection-failure runtime test keeps its unused port bound for the whole run, so a
     concurrently started fake API server cannot be handed the same port.
-  - The decommission check-mode fixtures run their `ansible-playbook` harness once per session
-    rather than once per worker.
+  - The decommission check-mode fixtures run their `ansible-playbook` harness once per pytest
+    run rather than once per worker.
+    - The shared result lives in pytest's temporary root, keyed by the xdist run ID.
+    - It is written atomically.
+    - A failed run is not repeated by the other workers.
 - Documentation now publishes the complete decommission substep outcome
   vocabulary (`not_requested`, `precondition_noop`, `completed`, `refused`,
   `failed`), distinguishes `precondition_noop` from `completed`, and clarifies

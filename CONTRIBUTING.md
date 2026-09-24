@@ -296,8 +296,9 @@ Before submitting a PR:
    prefix to match CI's invocation exactly (see `.github/workflows/ansible-collection-foundation.yml`).
    Running from the repository root also works without it, because `setup.cfg` sets
    `pythonpath = .` for pytest, but the documented form is CI's. CI also runs this lane in
-   parallel with `pytest-xdist` (installed by `requirements-dev.txt`); dropping `-n auto --dist
-   worksteal` runs the same tests serially:
+   parallel with `pytest-xdist`. Locally it comes from `requirements-dev.txt`; the collection
+   workflow does not install that file and installs `pytest-xdist` explicitly. Dropping
+   `-n auto --dist worksteal` runs the same tests serially:
    ```bash
    PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q -n auto --dist worksteal
    ```

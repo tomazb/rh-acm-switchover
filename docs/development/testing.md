@@ -154,9 +154,11 @@ and `setup.cfg`):
   entrypoint, and supplying a profile turns the helper lane into certification. A profile-driven
   session builds its run ID at one-second resolution and creates its artifact directory
   exclusively, so per-worker sessions would collide.
-- **Surface 5, collection scenario tests,** and the resolved-dependency compatibility check. Issue
-  #312 keeps them serial as a scoping choice, not because of a known collision: the compatibility
-  check is a single file, and the scenario lane was not part of the parallel-safety audit.
+- **Surface 5, collection scenario tests,** and the dedicated resolved-dependency compatibility
+  step. Issue #312 keeps them serial as a scoping choice, not because of a known collision: the
+  scenario lane was not part of the parallel-safety audit. The compatibility step names a single
+  file. That file is also collected by surface 3's directory run, so it does execute under
+  xdist there and must stay safe to run in parallel.
 - **Surface 8, E2E.** Its phases are chained through class-level state, so tests split across
   workers would silently skip later phases, and it mutates live clusters.
 

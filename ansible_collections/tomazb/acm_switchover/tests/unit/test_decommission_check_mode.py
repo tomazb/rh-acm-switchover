@@ -7,7 +7,6 @@ one B4.1 harness. ``run_role_check_mode`` only forces ``check_mode=True``.
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 
@@ -148,21 +147,40 @@ def _once_per_session(tmp_path_factory, name, produce):
 
     ``--dist worksteal`` hands single tests to any worker, so a module-scoped fixture would
     otherwise repeat its full ansible-playbook run on every worker that receives a test from
-    this module. Under xdist the first worker stores the JSON result under an exclusive lock
-    and the other workers read it. The files live in pytest's temporary root for this run,
-    not in the repository, and are keyed by xdist's per-run UID, so a result from another run
-    is never reused. Without xdist this is a plain call.
+    this module. Under xdist the first worker publishes an explicit outcome envelope under an
+    exclusive lock. The other workers read it: a success returns the recorded result, and a
+    failure fails them at once instead of repeating the run. The envelope is published by
+    write-then-rename, so a producer killed mid-write never leaves a file a consumer accepts.
+    It lives in pytest's temporary root, not in the repository, and is keyed by xdist's per-run
+    UID, so another pytest invocation never reuses it. Every caller receives the JSON form, so
+    the fixture's types do not depend on whether xdist is used.
     """
     run_uid = os.environ.get("PYTEST_XDIST_TESTRUNUID")
     if not os.environ.get("PYTEST_XDIST_WORKER") or not run_uid:
-        return produce()
+        return json.loads(json.dumps(produce()))
+
+    import fcntl  # POSIX only, and needed only on the xdist path
+
     shared = tmp_path_factory.getbasetemp().parent
-    cache = shared / f"{name}-{run_uid}.json"
+    outcome_path = shared / f"{name}-{run_uid}.outcome.json"
     with open(shared / f"{name}-{run_uid}.lock", "w", encoding="utf-8") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if not cache.exists():
-            cache.write_text(json.dumps(produce()), encoding="utf-8")
-        return json.loads(cache.read_text(encoding="utf-8"))
+        if not outcome_path.exists():
+            failure = None
+            try:
+                payload = json.dumps({"status": "succeeded", "result": produce()})
+            except Exception as exc:  # recorded for the other workers, then re-raised here
+                failure = exc
+                payload = json.dumps({"status": "failed", "error": repr(exc)})
+            partial = outcome_path.with_name(f"{outcome_path.name}.partial")
+            partial.write_text(payload, encoding="utf-8")
+            os.replace(partial, outcome_path)
+            if failure is not None:
+                raise failure
+        outcome = json.loads(outcome_path.read_text(encoding="utf-8"))
+    if outcome.get("status") == "succeeded":
+        return outcome["result"]
+    pytest.fail(f"{name} failed once for this run and is not retried: {outcome.get('error', outcome)}")
 
 
 @pytest.fixture(scope="module")

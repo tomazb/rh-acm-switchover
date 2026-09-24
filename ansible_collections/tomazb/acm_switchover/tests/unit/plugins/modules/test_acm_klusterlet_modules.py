@@ -841,9 +841,9 @@ def _record_wait_timeouts(monkeypatch) -> list:
     timeouts: list = []
     real_wait = klusterlet_utils.wait
 
-    def recording_wait(futures, timeout=None, **kwargs):
-        timeouts.append(timeout)
-        return real_wait(futures, timeout=timeout, **kwargs)
+    def recording_wait(futures, *args, **kwargs):
+        timeouts.append(args[0] if args else kwargs.get("timeout"))
+        return real_wait(futures, *args, **kwargs)
 
     monkeypatch.setattr(klusterlet_utils, "wait", recording_wait)
     return timeouts
@@ -891,12 +891,13 @@ def test_worker_future_timeout_uses_one_batch_deadline(monkeypatch):
     wait_timeouts = _record_wait_timeouts(monkeypatch)
     release = threading.Event()
     clusters = ["cluster-a", "cluster-b", "cluster-c"]
-    future_timeout = 0.3
+    future_timeout = 0.75
 
     def blocked_worker(cluster_name: str) -> dict:
         release.wait(_BLOCKED_WORKER_MAX_SECONDS)
         return {"cluster": cluster_name, "status": "verified"}
 
+    started_at = time.monotonic()
     try:
         results = ordered_bounded_map(
             clusters,
@@ -905,13 +906,20 @@ def test_worker_future_timeout_uses_one_batch_deadline(monkeypatch):
             future_timeout=future_timeout,
             timeout_result=_worker_timeout_result,
         )
+        elapsed = time.monotonic() - started_at
     finally:
         release.set()
 
     # Exactly one wait over the whole batch with the full deadline. Waiting on each future in
     # turn (per-future ``result(timeout=...)`` or one ``wait`` per future) records zero or
-    # len(clusters) calls, so this proves the shared deadline without timing the call.
+    # len(clusters) calls.
     assert wait_timeouts == [future_timeout]
+    # Nor does anything wait per future afterwards. Every worker stays blocked, so waiting on each
+    # of the N futures in turn costs at least N * future_timeout on its own (2.25 s here). A batch
+    # wait followed by per-future waits costs (N + 1) * future_timeout (3.0 s). The correct call
+    # returns after one future_timeout (about 0.75 s), which leaves (N - 1) * future_timeout
+    # (1.5 s) of scheduling slack under the N * future_timeout bound.
+    assert elapsed < len(clusters) * future_timeout
     assert results == [
         {"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"},
         {"cluster": "cluster-b", "status": "failed", "reason": "worker_timeout"},
