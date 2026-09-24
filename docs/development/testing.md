@@ -161,10 +161,12 @@ and `setup.cfg`):
   xdist there and must stay safe to run in parallel.
 - **Surface 8, E2E.** Its phases are chained through class-level state, so tests split across
   workers would silently skip later phases, and it mutates live clusters. Because an inherited
-  `-n` is accepted once pytest-xdist is installed, `tests/e2e/conftest.py` refuses xdist
-  distribution with a usage error from `pytest_configure`, on the controller. That happens
-  before collection, so no fixture ever builds a cluster client. This is the runtime
-  protection; the static guardrail above is defense in depth.
+  `-n` is accepted once pytest-xdist is installed, `tests/e2e/conftest.py` fails every
+  selected `e2e`-marked test that runs inside an xdist worker, before pytest's own setup. No
+  fixture, cluster client, or test body runs, however the tests were selected (`tests/e2e`,
+  `-m e2e`, `PYTEST_ADDOPTS`). Serial runs, `-n 0`, `--collect-only`, and the unmarked helper
+  tests in the parallel root lane are unaffected. This is the runtime protection; the static
+  guardrail above is defense in depth.
 
 Parallelism is not global: `setup.cfg` adds no `-n` to `addopts`, so targeted developer
 invocations run serially unless you pass the flags. Running a lane in parallel changes only its

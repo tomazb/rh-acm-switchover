@@ -142,57 +142,65 @@ def _assert_rbac_validation_is_explicitly_skipped(result):
     assert not [request for request in result["requests"] if "selfsubjectaccessreviews" in request["path"]]
 
 
-def _once_per_session(tmp_path_factory, name, produce):
+def _once_per_session(config, tmp_path_factory, name, produce):
     """Return ``produce()``, run once per test session even across pytest-xdist workers.
 
     ``--dist worksteal`` hands single tests to any worker, so a module-scoped fixture would
     otherwise repeat its full ansible-playbook run on every worker that receives a test from
-    this module. Under xdist the first worker publishes an explicit outcome envelope under an
-    exclusive lock. The other workers read it: a success returns the recorded result, and a
-    failure fails them at once instead of repeating the run. The envelope is published by
-    write-then-rename, so a producer killed mid-write never leaves a file a consumer accepts.
-    It lives in pytest's temporary root, not in the repository, and is keyed by xdist's per-run
-    UID, so another pytest invocation never reuses it. Every caller receives the JSON form, so
-    the fixture's types do not depend on whether xdist is used.
+    this module. In an xdist worker (``config.workerinput``, which a nested pytest process does
+    not inherit) the first worker publishes an explicit outcome envelope under an exclusive lock.
+    The other workers read it and get the same outcome: the recorded result, the same skip, or
+    an immediate failure instead of repeating the run. Session-ending interrupts are not
+    recorded. The envelope is published by write-then-rename, so a producer killed mid-write
+    never leaves a file a consumer accepts. It lives in pytest's temporary root, not in the
+    repository, and is keyed by xdist's per-run UID, so another pytest invocation never reuses
+    it. Every caller receives the JSON form, so the fixture's types do not depend on xdist.
     """
-    run_uid = os.environ.get("PYTEST_XDIST_TESTRUNUID")
-    if not os.environ.get("PYTEST_XDIST_WORKER") or not run_uid:
+    workerinput = getattr(config, "workerinput", None)
+    if workerinput is None:
         return json.loads(json.dumps(produce()))
 
     import fcntl  # POSIX only, and needed only on the xdist path
 
+    run_uid = workerinput["testrunuid"]
     shared = tmp_path_factory.getbasetemp().parent
     outcome_path = shared / f"{name}-{run_uid}.outcome.json"
     with open(shared / f"{name}-{run_uid}.lock", "w", encoding="utf-8") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not outcome_path.exists():
-            failure = None
+            raised: BaseException | None = None
             try:
                 payload = json.dumps({"status": "succeeded", "result": produce()})
-            except BaseException as exc:  # includes pytest skip/fail; recorded, then re-raised here
-                failure = exc
+            except pytest.skip.Exception as exc:
+                raised = exc
+                payload = json.dumps({"status": "skipped", "reason": str(exc)})
+            except (Exception, pytest.fail.Exception) as exc:
+                raised = exc
                 payload = json.dumps({"status": "failed", "error": repr(exc)})
             partial = outcome_path.with_name(f"{outcome_path.name}.partial")
             partial.write_text(payload, encoding="utf-8")
             os.replace(partial, outcome_path)
-            if failure is not None:
-                raise failure
+            if raised is not None:
+                raise raised
         outcome = json.loads(outcome_path.read_text(encoding="utf-8"))
     if outcome.get("status") == "succeeded":
         return outcome["result"]
+    if outcome.get("status") == "skipped":
+        pytest.skip(outcome.get("reason", name))
     pytest.fail(f"{name} failed once for this run and is not retried: {outcome.get('error', outcome)}")
 
 
 @pytest.fixture(scope="module")
-def native_check(tmp_path_factory):
+def native_check(pytestconfig, tmp_path_factory):
     """One role-level ``--check`` run with every family present."""
-    return _once_per_session(tmp_path_factory, "decommission-native-check", run_role_check_mode)
+    return _once_per_session(pytestconfig, tmp_path_factory, "decommission-native-check", run_role_check_mode)
 
 
 @pytest.fixture(scope="module")
-def operator_dry_run(tmp_path_factory):
+def operator_dry_run(pytestconfig, tmp_path_factory):
     """Operator dry-run, not native check mode, with every family present."""
     return _once_per_session(
+        pytestconfig,
         tmp_path_factory,
         "decommission-operator-dry-run",
         lambda: run_decommission_role(execution_mode="dry_run"),

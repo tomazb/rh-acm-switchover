@@ -57,13 +57,15 @@ def _strip_shell_comments(script: str) -> str:
 
 
 def _foundation_run_scripts() -> list:
-    """Return the collection workflow's executable shell, with comments removed.
+    """Return the gating foundation job's executable shell, with comments removed.
 
     Reading the workflow as raw text would accept a command that has been
     commented out or moved into an `echo`, so coverage is judged only from what
-    the runner would actually execute.
+    the runner would actually execute. Only the foundation job counts: a check
+    moved to another (optional or disabled) job no longer gates the lanes.
     """
-    return _workflow_run_scripts(COLLECTION_WORKFLOW)
+    workflow = yaml.safe_load(COLLECTION_WORKFLOW.read_text())
+    return [_executable_shell(step["run"]) for step in workflow["jobs"]["foundation"]["steps"] if step.get("run")]
 
 
 # A command must be the thing being run, not a word inside an `echo`, a comment,
@@ -298,8 +300,11 @@ _OTHER_PYTEST_CONFIGS = ("pytest.ini", ".pytest.ini", "pytest.toml", ".pytest.to
 
 
 def _executable_shell(script: str) -> str:
-    """Shell text as it runs: comments removed and backslash continuations joined."""
-    return _strip_shell_comments(script.replace("\\\n", " "))
+    """Shell text as it runs: comments removed, then backslash continuations joined.
+
+    Comments go first because a backslash at the end of a comment does not continue the line.
+    """
+    return _strip_shell_comments(script).replace("\\\n", " ")
 
 
 def _workflow_run_scripts(path: Path) -> list:
@@ -345,6 +350,8 @@ def test_xdist_option_detection():
     # A continuation line and a trailing comment are judged as the shell runs them.
     assert _XDIST_OPTION.search(_executable_shell("pytest tests/release -q \\\n  -n auto"))
     assert not _XDIST_OPTION.search(_executable_shell("pytest tests/e2e/ -q  # never add -n auto"))
+    # A backslash ending a comment does not continue it: the next line still runs.
+    assert _XDIST_OPTION.search(_executable_shell("# keep this lane serial \\\npytest tests/release -q -n auto"))
 
 
 def test_xdist_runs_only_on_the_documented_parallel_lanes():
@@ -419,66 +426,67 @@ def test_xdist_runs_only_on_the_documented_parallel_lanes():
         assert not other.exists() or not _XDIST_OPTION.search(other.read_text()), f"{name} enables xdist"
 
 
-def _collect_e2e(*args: str, addopts: str = "") -> subprocess.CompletedProcess:
-    """Collect the e2e suite in a fresh pytest process; no cluster context is needed to collect."""
-    env = {key: value for key, value in os.environ.items() if not key.startswith(("PYTEST_", "ACM_RELEASE"))}
+def _run_pytest(*args: str, addopts: str = "") -> subprocess.CompletedProcess:
+    """Run pytest in a fresh process with no inherited pytest, E2E or release configuration."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith(("PYTEST_", "E2E_", "ACM_RELEASE"))}
     if addopts:
         env["PYTEST_ADDOPTS"] = addopts
     return subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "tests/e2e",
-            "-m",
-            "e2e",
-            "--collect-only",
-            "-q",
-            "-p",
-            "no:cacheprovider",
-            *args,
-        ],
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *args],
         cwd=REPO_ROOT,
         env=env,
         capture_output=True,
         text=True,
         check=False,
-        timeout=120,
+        timeout=300,
     )
 
 
 @pytest.mark.parametrize(
-    "args",
-    [pytest.param((), id="serial"), pytest.param(("-n", "0"), id="n0")],
+    "args, needs_xdist",
+    [
+        pytest.param(("tests/e2e", "-m", "e2e", "--collect-only"), False, id="serial-e2e"),
+        pytest.param(("tests/e2e", "-m", "e2e", "--collect-only", "-n", "0"), True, id="n0-e2e"),
+        pytest.param(
+            ("tests/", "--ignore=tests/release", "-m", "not e2e", "--collect-only", "-n", "2"),
+            True,
+            id="root-lane-collect-only",
+        ),
+        pytest.param(("tests/e2e", "-m", "not e2e", "-n", "2"), True, id="unmarked-e2e-helpers-parallel"),
+    ],
 )
-def test_e2e_suite_accepts_serial_runs(args):
-    pytest.importorskip("xdist")
-    result = _collect_e2e(*args)
+def test_e2e_guard_leaves_serial_and_non_e2e_runs_alone(args, needs_xdist):
+    if needs_xdist:
+        pytest.importorskip("xdist")
+    result = _run_pytest(*args)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "tests collected" in result.stdout
 
 
 @pytest.mark.parametrize(
     "args, addopts",
     [
-        pytest.param(("-n", "auto"), "", id="n-auto"),
-        pytest.param(("-n", "2"), "", id="n2"),
-        pytest.param(("--numprocesses=2",), "", id="numprocesses"),
-        pytest.param(("--dist", "load", "--tx", "2*popen"), "", id="dist-tx"),
-        pytest.param((), "-n 2", id="pytest-addopts"),
+        pytest.param(("tests/e2e", "-m", "e2e", "-n", "2"), "", id="e2e-dir-n2"),
+        pytest.param(("-m", "e2e", "-n", "2", "--ignore=tests/release"), "", id="testpaths-n2"),
+        pytest.param(("tests/", "--ignore=tests/release", "-m", "e2e", "-n", "2"), "", id="tests-dir-n2"),
+        pytest.param(("tests/e2e", "-m", "e2e", "--numprocesses=2"), "", id="numprocesses"),
+        pytest.param(("tests/e2e", "-m", "e2e", "--dist", "load", "--tx", "2*popen"), "", id="dist-tx"),
+        pytest.param(("-m", "e2e", "--ignore=tests/release"), "-n 2", id="pytest-addopts"),
     ],
 )
-def test_e2e_suite_refuses_xdist_distribution_before_collection(args, addopts):
-    """The runtime half of the serial E2E contract, for invocations no static scan sees.
+def test_e2e_guard_refuses_every_e2e_test_under_xdist(args, addopts):
+    """The runtime half of the serial E2E contract, however the e2e tests were selected.
 
-    The refusal is a usage error raised from tests/e2e/conftest.py's pytest_configure, so no
-    test is collected and no fixture (and therefore no cluster client) is ever created.
+    tests/e2e/conftest.py fails each e2e-marked item in an xdist worker before pytest's own
+    setup, so no fixture, cluster client, or test body runs. Without it, these runs execute the
+    suite: fixture-driven skips and passes, and on a host with E2E contexts set, live phases split
+    across workers.
     """
     pytest.importorskip("xdist")
     from tests.e2e.conftest import E2E_SERIAL_ONLY_MESSAGE
 
-    result = _collect_e2e(*args, addopts=addopts)
+    result = _run_pytest(*args, addopts=addopts)
     output = result.stdout + result.stderr
-    assert result.returncode == pytest.ExitCode.USAGE_ERROR, output
+    summary = [line for line in output.splitlines() if line.strip()][-1]
+    assert result.returncode == pytest.ExitCode.TESTS_FAILED, output
     assert E2E_SERIAL_ONLY_MESSAGE in " ".join(output.split())
-    assert "collected" not in output
+    assert "error" in summary and "passed" not in summary and "skipped" not in summary, summary

@@ -20,14 +20,19 @@ E2E_SERIAL_ONLY_MESSAGE = (
 )
 
 
-def _xdist_distribution_active(config) -> bool:
-    """pytest-xdist's own predicate: a distribution mode and execution environments are set.
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    """Refuse to run a selected E2E test inside a pytest-xdist worker.
 
-    xdist resolves ``-n``/``--numprocesses`` into ``dist`` and ``tx`` in ``pytest_cmdline_main``,
-    before any ``pytest_configure``; ``-n 0`` leaves ``dist`` at ``"no"``. Worker processes reset
-    ``dist`` to ``"no"``, so this is true only on a distributing controller.
+    Once pytest-xdist is installed, an inherited ``-n`` is accepted rather than rejected. The check
+    is per selected item, so it holds however the test was selected (``pytest tests/e2e -n 2``,
+    ``pytest -m e2e -n auto``, ``PYTEST_ADDOPTS``), including when the xdist controller never loads
+    this conftest. It runs before pytest's own setup, so no fixture, cluster client, or test body
+    runs. Unmarked helper tests in this directory, and the parallel root lane's ``-m "not e2e"``
+    run, are unaffected. Serial runs, ``-n 0`` and ``--collect-only`` never create workers.
     """
-    return config.getoption("dist", "no") != "no" and bool(config.getoption("tx", None))
+    if hasattr(item.config, "workerinput") and item.get_closest_marker("e2e"):
+        pytest.fail(E2E_SERIAL_ONLY_MESSAGE, pytrace=False)
 
 
 @pytest.fixture(scope="class", autouse=True)
@@ -179,14 +184,7 @@ def pytest_addoption(parser):
 
 
 def pytest_configure(config):
-    """Refuse xdist distribution for this directory, then register E2E and resilience markers.
-
-    Once pytest-xdist is installed an inherited ``-n`` is accepted rather than rejected, so the
-    refusal happens here, on the controller, before collection and before any fixture can build
-    a cluster client or any worker starts.
-    """
-    if _xdist_distribution_active(config):
-        raise pytest.UsageError(E2E_SERIAL_ONLY_MESSAGE)
+    """Register E2E and resilience markers."""
     config.addinivalue_line("markers", "e2e: End-to-end tests requiring real clusters")
     config.addinivalue_line("markers", "resilience: Resilience tests with failure injection")
     config.addinivalue_line(
