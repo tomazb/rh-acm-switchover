@@ -1,5 +1,14 @@
 # Decommission Completion Proof + Destination Readiness — Design
 
+> **Superseded (2026-09-24).** R4-03 was delivered into `ansible` by PRs #281, #286,
+> #293, #304, #307, #308, and #310. The merged tests and code are now authoritative for
+> R4-03 behavior. This design document is retained as a historical rationale record only,
+> under the design-document lifecycle rule in `thermos-resolution-plan.md`. Where it
+> conflicts with the reopened design in
+> [`2026-08-31-r4-03-current-base-design-amendment.md`](2026-08-31-r4-03-current-base-design-amendment.md),
+> that amendment governed the delivered sequence. The status lines below describe this
+> document's state before delivery.
+
 **Date:** 2026-07-29
 **Branch:** `ansible` (spec branch `docs/thermos-safety-specs`)
 **Status:** approved design, awaiting implementation plan
