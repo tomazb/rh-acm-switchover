@@ -1,5 +1,6 @@
 """Static guardrails for CI and local test runner behavior."""
 
+import configparser
 import re
 import shutil
 import subprocess
@@ -285,3 +286,79 @@ def test_flake8_excludes_the_documented_worktree_directory(tmp_path):
     # Control: flake8 really scanned this tree, so an absent worktree finding means excluded.
     assert "undefined_name_at_repo_root" in result.stdout, result.stdout + result.stderr
     assert "undefined_name_inside_worktree" not in result.stdout, result.stdout + result.stderr
+
+
+# `-n auto`, `-nauto`, `--numprocesses=4`, `--dist worksteal`, `--dist=load`. The lookbehind keeps
+# `--no-header` and the like from matching on their inner `-n`.
+_XDIST_OPTION = re.compile(r"(?<!\S)(?:-n|--numprocesses|--dist)(?=[\s=]|[0-9a-z])")
+_PARALLEL_FLAGS = ("-n auto", "--dist worksteal")
+
+
+def _workflow_run_scripts(path: Path) -> list:
+    workflow = yaml.safe_load(path.read_text())
+    return [
+        _strip_shell_comments(step["run"])
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if step.get("run")
+    ]
+
+
+def _executed_pytest_lines(scripts: list) -> list:
+    command = re.compile(_PYTEST_COMMAND)
+    return [line.strip() for script in scripts for line in script.splitlines() if command.match(line)]
+
+
+def test_xdist_option_detection():
+    for parallel in ("pytest x -n auto", "pytest x -nauto", "pytest x --numprocesses=4", "pytest x --dist=load"):
+        assert _XDIST_OPTION.search(parallel), parallel
+    for serial in ('pytest tests/ -m "not e2e" -q', "pytest x --no-header", "pytest x -q"):
+        assert not _XDIST_OPTION.search(serial), serial
+
+
+def test_xdist_runs_only_on_the_documented_parallel_lanes():
+    """Surfaces 1, 3 and 4 run under xdist; every other pytest lane stays serial.
+
+    Release certification collides on its second-resolution run ID and exclusive artifact
+    directory, and E2E phases chain through class-level state, so a stray `-n` there fails
+    only in a profile-driven or live run. This keeps that boundary executable.
+    """
+    root_lane = "tests/ --ignore=tests/release"
+    ci_lines = _executed_pytest_lines(_workflow_run_scripts(CI_WORKFLOW))
+    foundation_lines = _executed_pytest_lines(_foundation_run_scripts())
+
+    # The whole unit or integration directory; the single compatibility-contract file stays serial.
+    collection_lane = re.compile(r"acm_switchover/tests/(?:unit|integration)/(?:\s|$)")
+
+    def is_parallel_lane(line: str) -> bool:
+        return root_lane in line or bool(collection_lane.search(line))
+
+    parallel = [line for line in ci_lines + foundation_lines if is_parallel_lane(line)]
+    serial = [line for line in ci_lines + foundation_lines if not is_parallel_lane(line)]
+    assert len(parallel) == 3, parallel
+    for line in parallel:
+        for flag in _PARALLEL_FLAGS:
+            assert flag in line, f"{flag!r} missing from parallel lane: {line}"
+    assert any("tests/release" in line for line in serial), serial
+    assert any("tests/scenario/" in line for line in serial), serial
+    assert any("test_compatibility_contract.py" in line for line in serial), serial
+    for line in serial:
+        assert not _XDIST_OPTION.search(line), f"serial lane must not use xdist: {line}"
+
+    runner = [line.strip() for line in RUN_TESTS.read_text().splitlines() if not line.lstrip().startswith("#")]
+    root_args = [line for line in runner if line.startswith("pytest_args=(")]
+    assert len(root_args) == 1, root_args
+    for flag in _PARALLEL_FLAGS:
+        assert flag in root_args[0]
+    runner_pytest = _executed_pytest_lines(["\n".join(runner)])
+    assert any("tests/release" in line for line in runner_pytest), runner_pytest
+    assert any("tests/e2e/" in line for line in runner_pytest), runner_pytest
+    for line in runner_pytest:
+        assert not _XDIST_OPTION.search(line), f"run_tests.sh serial lane must not use xdist: {line}"
+
+    install = [line for line in _foundation_run_scripts() if "pip install" in line and "ansible-core" in line]
+    assert install and "pytest-xdist" in install[0], "the collection workflow must install pytest-xdist"
+
+    config = configparser.ConfigParser()
+    config.read(SETUP_CFG)
+    assert not _XDIST_OPTION.search(config.get("tool:pytest", "addopts")), "xdist must not be enabled globally"

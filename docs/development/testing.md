@@ -146,7 +146,9 @@ collection tests each drive a full `ansible-playbook` run, and pinning whole fil
 surface 1 are combined across workers by `pytest-cov` and pytest, so the reporting form is
 unchanged.
 
-Every other pytest lane stays serial, and must not be given `-n` or `--dist`:
+Every other pytest lane stays serial, and must not be given `-n` or `--dist`
+(`tests/test_ci_guardrails.py` enforces both directions against the workflows, `run_tests.sh`,
+and `setup.cfg`):
 
 - **Surface 2, release-framework helpers, and surface 9, live certification.** They share one
   entrypoint, and supplying a profile turns the helper lane into certification. A profile-driven

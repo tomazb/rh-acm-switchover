@@ -836,7 +836,27 @@ def test_worker_future_timeout_surfaces_as_failed_result():
     assert results == [{"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"}]
 
 
-def test_single_worker_future_timeout_surfaces_as_failed_result():
+def _record_wait_timeouts(monkeypatch) -> list:
+    """Wrap the real ``concurrent.futures.wait`` and record the deadline of every call."""
+    timeouts: list = []
+    real_wait = klusterlet_utils.wait
+
+    def recording_wait(futures, timeout=None, **kwargs):
+        timeouts.append(timeout)
+        return real_wait(futures, timeout=timeout, **kwargs)
+
+    monkeypatch.setattr(klusterlet_utils, "wait", recording_wait)
+    return timeouts
+
+
+# Generous on purpose: the call should return about 1 ms after it starts, and a regression that
+# runs the worker inline or joins it takes _BLOCKED_WORKER_MAX_SECONDS. This only has to catch
+# a deadline overshoot of seconds, so it tolerates heavy scheduler contention.
+_PROMPT_RETURN_MAX_SECONDS = 2
+
+
+def test_single_worker_future_timeout_surfaces_as_failed_result(monkeypatch):
+    wait_timeouts = _record_wait_timeouts(monkeypatch)
     release = threading.Event()
     finished = threading.Event()
 
@@ -845,6 +865,7 @@ def test_single_worker_future_timeout_surfaces_as_failed_result():
         finished.set()
         return {"cluster": cluster_name, "status": "verified"}
 
+    started_at = time.monotonic()
     try:
         results = ordered_bounded_map(
             ["cluster-a"],
@@ -853,6 +874,7 @@ def test_single_worker_future_timeout_surfaces_as_failed_result():
             future_timeout=0.001,
             timeout_result=_worker_timeout_result,
         )
+        elapsed = time.monotonic() - started_at
         # The worker is still blocked, so the call returned at the deadline: it neither ran
         # the worker inline nor waited for it to finish.
         worker_finished_before_return = finished.is_set()
@@ -860,10 +882,13 @@ def test_single_worker_future_timeout_surfaces_as_failed_result():
         release.set()
 
     assert not worker_finished_before_return
+    assert wait_timeouts == [0.001], "the single-worker path must wait exactly the requested deadline"
+    assert elapsed < _PROMPT_RETURN_MAX_SECONDS
     assert results == [{"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"}]
 
 
-def test_worker_future_timeout_uses_one_batch_deadline():
+def test_worker_future_timeout_uses_one_batch_deadline(monkeypatch):
+    wait_timeouts = _record_wait_timeouts(monkeypatch)
     release = threading.Event()
     clusters = ["cluster-a", "cluster-b", "cluster-c"]
     future_timeout = 0.3
@@ -872,7 +897,6 @@ def test_worker_future_timeout_uses_one_batch_deadline():
         release.wait(_BLOCKED_WORKER_MAX_SECONDS)
         return {"cluster": cluster_name, "status": "verified"}
 
-    started_at = time.monotonic()
     try:
         results = ordered_bounded_map(
             clusters,
@@ -881,14 +905,13 @@ def test_worker_future_timeout_uses_one_batch_deadline():
             future_timeout=future_timeout,
             timeout_result=_worker_timeout_result,
         )
-        elapsed = time.monotonic() - started_at
     finally:
         release.set()
 
-    # One shared deadline returns after about one future_timeout. Waiting on each future in
-    # turn cannot return before len(clusters) * future_timeout, because every worker stays
-    # blocked. The bound sits between the two, leaving most of a second of scheduling slack.
-    assert elapsed < (len(clusters) - 0.5) * future_timeout
+    # Exactly one wait over the whole batch with the full deadline. Waiting on each future in
+    # turn (per-future ``result(timeout=...)`` or one ``wait`` per future) records zero or
+    # len(clusters) calls, so this proves the shared deadline without timing the call.
+    assert wait_timeouts == [future_timeout]
     assert results == [
         {"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"},
         {"cluster": "cluster-b", "status": "failed", "reason": "worker_timeout"},

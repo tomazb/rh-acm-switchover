@@ -2287,6 +2287,11 @@ def run_decommission_role(
     with_destination = (
         destination_mco is not None or destination_namespace is not None or integrated_finalization_secondary
     )
+    if collection_root is not None and standalone_playbook:
+        raise ValueError(
+            "collection_root does not relocate the standalone playbook, which runs from the "
+            "repository; do not combine them"
+        )
     if acknowledge_observability_not_migrated and not with_destination:
         raise ValueError("acknowledge_observability_not_migrated only means something with a destination hub")
     if with_destination:
@@ -3990,12 +3995,18 @@ def _assert_injected_fault_failed(result: dict) -> None:
     assert any(task["failed"] and "rescue-contract test" in task["name"] for task in result["tasks"])
 
 
-def test_managed_cluster_undefined_variable_failure_aborts_family(tmp_path):
+@pytest.mark.parametrize("fault", ["undefined", "unexpected_command"])
+def test_managed_cluster_unclassified_failure_aborts_family(tmp_path, fault):
+    """An unclassified failure on spoke-a aborts the family before any DELETE.
+
+    Asserting no ManagedCluster DELETE at all also kills a blanket rescue that continues
+    the loop: it would go on to delete spoke-b.
+    """
     result = run_decommission_role(
         managed_clusters=["spoke-a", "spoke-b"],
         observability_outcome="precondition_noop",
         multiclusterhub_outcome="precondition_noop",
-        collection_root=_collection_with_mc_teardown_fault(tmp_path, "undefined"),
+        collection_root=_collection_with_mc_teardown_fault(tmp_path, fault),
     )
     _assert_injected_fault_failed(result)
     assert result["returncode"] != 0
@@ -4007,35 +4018,10 @@ def test_managed_cluster_undefined_variable_failure_aborts_family(tmp_path):
     assert "survivor" not in combined or "unexpected" in combined
 
 
-def test_managed_cluster_unexpected_action_failure_aborts_family(tmp_path):
-    result = run_decommission_role(
-        managed_clusters=["spoke-a", "spoke-b"],
-        observability_outcome="precondition_noop",
-        multiclusterhub_outcome="precondition_noop",
-        collection_root=_collection_with_mc_teardown_fault(tmp_path, "unexpected_command"),
-    )
-    _assert_injected_fault_failed(result)
-    assert result["returncode"] != 0
-    deleted = [call for call in result["delete_calls"] if "managedclusters/" in call["path"]]
-    assert deleted == []
-    combined = " ".join(
-        str(task.get("result", {}).get("msg", "")) for task in result["tasks"] if task.get("failed")
-    ).lower()
-    assert "survivor" not in combined or "unexpected" in combined
-
-
-def test_managed_cluster_blanket_rescue_must_not_continue_after_unclassified_failure(tmp_path):
-    """Kill-style regression: unclassified failure must not delete a later sibling."""
-    result = run_decommission_role(
-        managed_clusters=["spoke-a", "spoke-b"],
-        observability_outcome="precondition_noop",
-        multiclusterhub_outcome="precondition_noop",
-        collection_root=_collection_with_mc_teardown_fault(tmp_path, "unexpected_command"),
-    )
-    _assert_injected_fault_failed(result)
-    assert "spoke-b" not in {
-        call["path"].rsplit("/", 1)[-1] for call in result["delete_calls"] if "managedclusters/" in call["path"]
-    }
+def test_harness_refuses_collection_root_with_standalone_playbook(tmp_path):
+    """The standalone playbook is not relocated, so combining them would mix two trees."""
+    with pytest.raises(ValueError, match="collection_root"):
+        run_decommission_role(standalone_playbook=True, collection_root=tmp_path)
 
 
 def _assert_mc_inventory_fail_closed(result: dict) -> None:

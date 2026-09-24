@@ -295,9 +295,11 @@ Before submitting a PR:
 5. **Run collection tests when touching the collection.** The command keeps the `PYTHONPATH=.`
    prefix to match CI's invocation exactly (see `.github/workflows/ansible-collection-foundation.yml`).
    Running from the repository root also works without it, because `setup.cfg` sets
-   `pythonpath = .` for pytest, but the documented form is CI's:
+   `pythonpath = .` for pytest, but the documented form is CI's. CI also runs this lane in
+   parallel with `pytest-xdist` (installed by `requirements-dev.txt`); dropping `-n auto --dist
+   worksteal` runs the same tests serially:
    ```bash
-   PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q
+   PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q -n auto --dist worksteal
    ```
 
    Collection unit tests are one surface of several. See

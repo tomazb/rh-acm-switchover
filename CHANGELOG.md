@@ -125,13 +125,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `-n auto --dist worksteal` (#312). `pytest-xdist>=3.2.1,<4` is added to `requirements-dev.txt`
   and to the collection workflow's dependency install. Release-framework, live certification,
   E2E, and collection scenario lanes stay serial, and `setup.cfg` does not enable parallelism by
-  default. The `ordered_bounded_map` worker-timeout tests no longer depend on a 40 ms wall-clock
-  bound: workers block on an event, and the batch-deadline test now detects a per-future wait,
-  which the previous bound did not. The ManagedCluster rescue-contract tests in
-  `test_decommission_role_contracts.py` now inject their deliberate fault into a private copy of
-  the collection instead of rewriting the shipped `teardown_one_managed_cluster.yml` in place,
-  which under parallel workers leaked the fault into concurrent tests and could leave the
-  tracked role file corrupted.
+  default. `tests/test_ci_guardrails.py` now fails if a serial lane gains `-n`/`--dist`, a
+  parallel lane loses them, or `setup.cfg` enables xdist globally.
+  - The `ordered_bounded_map` worker-timeout tests replace their 40 ms wall-clock bounds.
+    - Workers block on an event.
+    - The deadline passed to `wait` is recorded, which proves one shared batch deadline. The
+      previous bound let a per-future wait pass.
+    - Only the single-worker test keeps a wall-clock check, a 2 s ceiling on returning promptly.
+  - The ManagedCluster rescue-contract tests in `test_decommission_role_contracts.py` inject
+    their deliberate fault into a private copy of the collection. They no longer rewrite the
+    shipped `teardown_one_managed_cluster.yml` in place, which under parallel workers leaked the
+    fault into concurrent tests and could leave the tracked role file corrupted. They now also
+    assert that the injected task is what failed. The redundant blanket-rescue variant is
+    folded into a parametrized test.
+  - The connection-failure runtime test keeps its unused port bound for the whole run, so a
+    concurrently started fake API server cannot be handed the same port.
+  - The decommission check-mode fixtures run their `ansible-playbook` harness once per session
+    rather than once per worker.
 - Documentation now publishes the complete decommission substep outcome
   vocabulary (`not_requested`, `precondition_noop`, `completed`, `refused`,
   `failed`), distinguishes `precondition_noop` from `completed`, and clarifies

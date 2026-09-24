@@ -7,7 +7,9 @@ one B4.1 harness. ``run_role_check_mode`` only forces ``check_mode=True``.
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 
 import pytest
 from test_decommission_role_contracts import (
@@ -141,16 +143,42 @@ def _assert_rbac_validation_is_explicitly_skipped(result):
     assert not [request for request in result["requests"] if "selfsubjectaccessreviews" in request["path"]]
 
 
+def _once_per_session(tmp_path_factory, name, produce):
+    """Return ``produce()``, run once per test session even across pytest-xdist workers.
+
+    ``--dist worksteal`` hands single tests to any worker, so a module-scoped fixture would
+    otherwise repeat its full ansible-playbook run on every worker that receives a test from
+    this module. Under xdist the first worker stores the JSON result under an exclusive lock
+    and the other workers read it. The files live in pytest's temporary root for this run,
+    not in the repository, and are keyed by xdist's per-run UID, so a result from another run
+    is never reused. Without xdist this is a plain call.
+    """
+    run_uid = os.environ.get("PYTEST_XDIST_TESTRUNUID")
+    if not os.environ.get("PYTEST_XDIST_WORKER") or not run_uid:
+        return produce()
+    shared = tmp_path_factory.getbasetemp().parent
+    cache = shared / f"{name}-{run_uid}.json"
+    with open(shared / f"{name}-{run_uid}.lock", "w", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not cache.exists():
+            cache.write_text(json.dumps(produce()), encoding="utf-8")
+        return json.loads(cache.read_text(encoding="utf-8"))
+
+
 @pytest.fixture(scope="module")
-def native_check():
+def native_check(tmp_path_factory):
     """One role-level ``--check`` run with every family present."""
-    return run_role_check_mode()
+    return _once_per_session(tmp_path_factory, "decommission-native-check", run_role_check_mode)
 
 
 @pytest.fixture(scope="module")
-def operator_dry_run():
+def operator_dry_run(tmp_path_factory):
     """Operator dry-run, not native check mode, with every family present."""
-    return run_decommission_role(execution_mode="dry_run")
+    return _once_per_session(
+        tmp_path_factory,
+        "decommission-operator-dry-run",
+        lambda: run_decommission_role(execution_mode="dry_run"),
+    )
 
 
 def test_check_mode_writes_no_checkpoint_transition(native_check):
