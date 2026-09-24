@@ -3985,6 +3985,11 @@ def _collection_with_mc_teardown_fault(tmp_path: pathlib.Path, fault: str) -> pa
     return root
 
 
+def _assert_injected_fault_failed(result: dict) -> None:
+    """The run failed at the injected task, not for an unrelated reason in the private copy."""
+    assert any(task["failed"] and "rescue-contract test" in task["name"] for task in result["tasks"])
+
+
 def test_managed_cluster_undefined_variable_failure_aborts_family(tmp_path):
     result = run_decommission_role(
         managed_clusters=["spoke-a", "spoke-b"],
@@ -3992,6 +3997,7 @@ def test_managed_cluster_undefined_variable_failure_aborts_family(tmp_path):
         multiclusterhub_outcome="precondition_noop",
         collection_root=_collection_with_mc_teardown_fault(tmp_path, "undefined"),
     )
+    _assert_injected_fault_failed(result)
     assert result["returncode"] != 0
     deleted = [call for call in result["delete_calls"] if "managedclusters/" in call["path"]]
     assert deleted == []
@@ -4008,6 +4014,7 @@ def test_managed_cluster_unexpected_action_failure_aborts_family(tmp_path):
         multiclusterhub_outcome="precondition_noop",
         collection_root=_collection_with_mc_teardown_fault(tmp_path, "unexpected_command"),
     )
+    _assert_injected_fault_failed(result)
     assert result["returncode"] != 0
     deleted = [call for call in result["delete_calls"] if "managedclusters/" in call["path"]]
     assert deleted == []
@@ -4025,6 +4032,7 @@ def test_managed_cluster_blanket_rescue_must_not_continue_after_unclassified_fai
         multiclusterhub_outcome="precondition_noop",
         collection_root=_collection_with_mc_teardown_fault(tmp_path, "unexpected_command"),
     )
+    _assert_injected_fault_failed(result)
     assert "spoke-b" not in {
         call["path"].rsplit("/", 1)[-1] for call in result["delete_calls"] if "managedclusters/" in call["path"]
     }
