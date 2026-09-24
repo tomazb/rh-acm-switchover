@@ -841,9 +841,10 @@ def _record_wait_timeouts(monkeypatch) -> list:
     timeouts: list = []
     real_wait = klusterlet_utils.wait
 
-    def recording_wait(futures, *args, **kwargs):
-        timeouts.append(args[0] if args else kwargs.get("timeout"))
-        return real_wait(futures, *args, **kwargs)
+    def recording_wait(*args, **kwargs):
+        # Same call shapes as concurrent.futures.wait(fs, timeout=None, return_when=...).
+        timeouts.append(args[1] if len(args) > 1 else kwargs.get("timeout"))
+        return real_wait(*args, **kwargs)
 
     monkeypatch.setattr(klusterlet_utils, "wait", recording_wait)
     return timeouts

@@ -13,6 +13,22 @@ import pytest
 
 from tests.e2e.orchestrator import E2EOrchestrator, RunConfig
 
+E2E_SERIAL_ONLY_MESSAGE = (
+    "tests/e2e is intentionally serial: its phases are ordered and share class-level state, "
+    "and it can operate on live clusters. Run it without pytest-xdist distribution "
+    "(remove -n/--numprocesses/--dist/--tx, including from PYTEST_ADDOPTS)."
+)
+
+
+def _xdist_distribution_active(config) -> bool:
+    """pytest-xdist's own predicate: a distribution mode and execution environments are set.
+
+    xdist resolves ``-n``/``--numprocesses`` into ``dist`` and ``tx`` in ``pytest_cmdline_main``,
+    before any ``pytest_configure``; ``-n 0`` leaves ``dist`` at ``"no"``. Worker processes reset
+    ``dist`` to ``"no"``, so this is true only on a distributing controller.
+    """
+    return config.getoption("dist", "no") != "no" and bool(config.getoption("tx", None))
+
 
 @pytest.fixture(scope="class", autouse=True)
 def _reset_phase_tracker():
@@ -163,7 +179,14 @@ def pytest_addoption(parser):
 
 
 def pytest_configure(config):
-    """Register E2E and resilience markers."""
+    """Refuse xdist distribution for this directory, then register E2E and resilience markers.
+
+    Once pytest-xdist is installed an inherited ``-n`` is accepted rather than rejected, so the
+    refusal happens here, on the controller, before collection and before any fixture can build
+    a cluster client or any worker starts.
+    """
+    if _xdist_distribution_active(config):
+        raise pytest.UsageError(E2E_SERIAL_ONLY_MESSAGE)
     config.addinivalue_line("markers", "e2e: End-to-end tests requiring real clusters")
     config.addinivalue_line("markers", "resilience: Resilience tests with failure injection")
     config.addinivalue_line(

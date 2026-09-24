@@ -1,6 +1,7 @@
 """Static guardrails for CI and local test runner behavior."""
 
 import configparser
+import os
 import re
 import shutil
 import subprocess
@@ -16,6 +17,7 @@ COLLECTION_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ansible-collection-
 RUN_TESTS = REPO_ROOT / "run_tests.sh"
 AGENT_INSTRUCTIONS = REPO_ROOT / "AGENTS.md"
 SETUP_CFG = REPO_ROOT / "setup.cfg"
+REQUIREMENTS_DEV = REPO_ROOT / "requirements-dev.txt"
 
 # Matches the AGENTS.md line that documents where agent worktrees are created, e.g.
 # "Use one isolated `.claude/worktrees/thermos-*` worktree and one branch per PR."
@@ -55,14 +57,13 @@ def _strip_shell_comments(script: str) -> str:
 
 
 def _foundation_run_scripts() -> list:
-    """Return the foundation job's executable shell, with comments removed.
+    """Return the collection workflow's executable shell, with comments removed.
 
     Reading the workflow as raw text would accept a command that has been
     commented out or moved into an `echo`, so coverage is judged only from what
     the runner would actually execute.
     """
-    workflow = yaml.safe_load(COLLECTION_WORKFLOW.read_text())
-    return [_strip_shell_comments(step["run"]) for step in workflow["jobs"]["foundation"]["steps"] if step.get("run")]
+    return _workflow_run_scripts(COLLECTION_WORKFLOW)
 
 
 # A command must be the thing being run, not a word inside an `echo`, a comment,
@@ -291,9 +292,9 @@ def test_flake8_excludes_the_documented_worktree_directory(tmp_path):
 # `-n auto`, `-nauto`, `--numprocesses=4`, `--dist worksteal`, `--dist=load`, `--tx 4*popen`, also
 # at the start of a quoted or assigned value (`PYTEST_ADDOPTS="-n auto"`). The lookbehind keeps
 # `--no-header` and the like from matching on their inner `-n`.
-_XDIST_OPTION = re.compile(r"(?<![^\s\"'=])(?:-n|--numprocesses|--dist|--tx)(?=[\s=]|[0-9a-z])")
+_XDIST_OPTION = re.compile(r"(?<![^\s\"'=])(?:-n|--numprocesses|--dist|--tx)(?=[\s=\"']|[0-9a-z])")
 _PARALLEL_FLAGS = ("-n auto", "--dist worksteal")
-_OTHER_PYTEST_CONFIGS = ("pytest.ini", "pyproject.toml", "tox.ini")
+_OTHER_PYTEST_CONFIGS = ("pytest.ini", ".pytest.ini", "pytest.toml", ".pytest.toml", "pyproject.toml", "tox.ini")
 
 
 def _executable_shell(script: str) -> str:
@@ -335,6 +336,7 @@ def test_xdist_option_detection():
         "pytest x --tx 4*popen",
         'export PYTEST_ADDOPTS="-n auto"',
         "PYTEST_ADDOPTS=-n2 pytest x",
+        'addopts = ["-n", "auto"]',
     )
     for line in parallel:
         assert _XDIST_OPTION.search(line), line
@@ -381,7 +383,9 @@ def test_xdist_runs_only_on_the_documented_parallel_lanes():
     for line in serial:
         assert not _XDIST_OPTION.search(line), f"serial lane must not use xdist: {line}"
     for path in (CI_WORKFLOW, COLLECTION_WORKFLOW):
-        for value in _workflow_pytest_addopts(path):
+        script_lines = [line for script in _workflow_run_scripts(path) for line in script.splitlines()]
+        addopts = _workflow_pytest_addopts(path) + [line for line in script_lines if "PYTEST_ADDOPTS" in line]
+        for value in addopts:
             assert not _XDIST_OPTION.search(value), f"{path.name} sets xdist through PYTEST_ADDOPTS: {value}"
 
     runner = _executable_shell(RUN_TESTS.read_text()).splitlines()
@@ -395,10 +399,16 @@ def test_xdist_runs_only_on_the_documented_parallel_lanes():
     for line in runner_pytest + [line for line in runner if "PYTEST_ADDOPTS" in line]:
         assert not _XDIST_OPTION.search(line), f"run_tests.sh serial lane must not use xdist: {line}"
 
+    declared = [line.strip() for line in REQUIREMENTS_DEV.read_text().splitlines() if line.startswith("pytest-xdist")]
+    assert len(declared) == 1, declared
     install = [
-        line for line in _workflow_run_scripts(COLLECTION_WORKFLOW) if "pip install" in line and "ansible-core" in line
+        line
+        for script in _workflow_run_scripts(COLLECTION_WORKFLOW)
+        for line in script.splitlines()
+        if re.match(r"\s*pip install\b", line) and "ansible-core" in line
     ]
-    assert install and "pytest-xdist" in install[0], "the collection workflow must install pytest-xdist"
+    assert len(install) == 1, install
+    assert f'"{declared[0]}"' in install[0], f"the collection workflow must install {declared[0]}: {install[0]}"
 
     config = configparser.ConfigParser()
     config.read(SETUP_CFG)
@@ -407,3 +417,68 @@ def test_xdist_runs_only_on_the_documented_parallel_lanes():
     for name in _OTHER_PYTEST_CONFIGS:
         other = REPO_ROOT / name
         assert not other.exists() or not _XDIST_OPTION.search(other.read_text()), f"{name} enables xdist"
+
+
+def _collect_e2e(*args: str, addopts: str = "") -> subprocess.CompletedProcess:
+    """Collect the e2e suite in a fresh pytest process; no cluster context is needed to collect."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith(("PYTEST_", "ACM_RELEASE"))}
+    if addopts:
+        env["PYTEST_ADDOPTS"] = addopts
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/e2e",
+            "-m",
+            "e2e",
+            "--collect-only",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            *args,
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+
+
+@pytest.mark.parametrize(
+    "args",
+    [pytest.param((), id="serial"), pytest.param(("-n", "0"), id="n0")],
+)
+def test_e2e_suite_accepts_serial_runs(args):
+    pytest.importorskip("xdist")
+    result = _collect_e2e(*args)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "tests collected" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "args, addopts",
+    [
+        pytest.param(("-n", "auto"), "", id="n-auto"),
+        pytest.param(("-n", "2"), "", id="n2"),
+        pytest.param(("--numprocesses=2",), "", id="numprocesses"),
+        pytest.param(("--dist", "load", "--tx", "2*popen"), "", id="dist-tx"),
+        pytest.param((), "-n 2", id="pytest-addopts"),
+    ],
+)
+def test_e2e_suite_refuses_xdist_distribution_before_collection(args, addopts):
+    """The runtime half of the serial E2E contract, for invocations no static scan sees.
+
+    The refusal is a usage error raised from tests/e2e/conftest.py's pytest_configure, so no
+    test is collected and no fixture (and therefore no cluster client) is ever created.
+    """
+    pytest.importorskip("xdist")
+    from tests.e2e.conftest import E2E_SERIAL_ONLY_MESSAGE
+
+    result = _collect_e2e(*args, addopts=addopts)
+    output = result.stdout + result.stderr
+    assert result.returncode == pytest.ExitCode.USAGE_ERROR, output
+    assert E2E_SERIAL_ONLY_MESSAGE in " ".join(output.split())
+    assert "collected" not in output

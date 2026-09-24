@@ -141,6 +141,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     fault into concurrent tests and could leave the tracked role file corrupted. They now also
     assert that the injected task is what failed. The redundant blanket-rescue variant is
     folded into a parametrized test.
+  - `tests/e2e/conftest.py` refuses pytest-xdist distribution with a usage error before
+    collection, because an inherited `-n`, for example from `PYTEST_ADDOPTS`, is now accepted
+    rather than rejected. Serial runs and `-n 0` are unaffected.
   - The connection-failure runtime test keeps its unused port bound for the whole run, so a
     concurrently started fake API server cannot be handed the same port.
   - The decommission check-mode fixtures run their `ansible-playbook` harness once per pytest

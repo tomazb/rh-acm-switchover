@@ -169,7 +169,7 @@ def _once_per_session(tmp_path_factory, name, produce):
             failure = None
             try:
                 payload = json.dumps({"status": "succeeded", "result": produce()})
-            except Exception as exc:  # recorded for the other workers, then re-raised here
+            except BaseException as exc:  # includes pytest skip/fail; recorded, then re-raised here
                 failure = exc
                 payload = json.dumps({"status": "failed", "error": repr(exc)})
             partial = outcome_path.with_name(f"{outcome_path.name}.partial")

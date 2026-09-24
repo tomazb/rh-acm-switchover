@@ -160,7 +160,11 @@ and `setup.cfg`):
   file. That file is also collected by surface 3's directory run, so it does execute under
   xdist there and must stay safe to run in parallel.
 - **Surface 8, E2E.** Its phases are chained through class-level state, so tests split across
-  workers would silently skip later phases, and it mutates live clusters.
+  workers would silently skip later phases, and it mutates live clusters. Because an inherited
+  `-n` is accepted once pytest-xdist is installed, `tests/e2e/conftest.py` refuses xdist
+  distribution with a usage error from `pytest_configure`, on the controller. That happens
+  before collection, so no fixture ever builds a cluster client. This is the runtime
+  protection; the static guardrail above is defense in depth.
 
 Parallelism is not global: `setup.cfg` adds no `-n` to `addopts`, so targeted developer
 invocations run serially unless you pass the flags. Running a lane in parallel changes only its
@@ -285,7 +289,8 @@ python -m pytest tests/test_utils.py::TestStateManager::test_initial_state -v
 #### Run with Coverage
 
 ```bash
-python -m pytest tests/ -v -m "not e2e" --cov=. --cov-report=html --cov-report=term
+python -m pytest tests/ --ignore=tests/release -v -m "not e2e" -n auto --dist worksteal \
+  --cov=. --cov-report=html --cov-report=term
 ```
 
 View HTML coverage report:
