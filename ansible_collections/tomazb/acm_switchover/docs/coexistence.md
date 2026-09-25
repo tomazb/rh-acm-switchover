@@ -119,6 +119,30 @@ contrast, warns and continues when its state file records no pending
 `_ensure_auto_import_default`), since an unreadable ConfigMap without a
 recorded obligation cannot represent an undischarged reset.
 
+**Intentional divergence on a named-read 404 with unreadable discovery (#317):**
+both form factors publish named-object absence only for a 404 on a route live
+discovery serves, but their proof obligations differ. The collection resolves
+every kind, built-in or custom, through kubernetes.core's shared on-disk
+discovery cache, and the dynamic client routes the GET by the cached plural and
+scope. After any named 404 the collection's `strict_read` therefore re-reads
+the group/version's discovery live and publishes `not_found` only when the
+live entry matches the resource name and scope the GET was routed by. A live
+miss is `kind_not_served`, and an unreadable or non-matching entry is `error`.
+The Python CLI has no cached route: custom-resource reads prove the kind served
+before the GET (the same outcomes), and typed built-in reads
+(`get_namespace_strict`, `get_deployment_strict`, `get_replicaset_strict`, and
+the `import-controller-config` ConfigMap read) use fixed routes and take a 404
+as absence without discovery. The one difference is a built-in named 404 whose
+live discovery read then fails, which the collection reports as `error` and
+Python as absence. It is fail-closed: the collection's auto-import step fails
+instead of applying immediate-import annotations, the destination-observability
+gate blocks instead of accepting an absent namespace, observability teardown
+fails instead of recording namespace-absent evidence, and Pod classification
+reports an unreadable namespace or `deployment_read_failed` instead of
+`namespace_absent` or `install_deployment_absent`. Operator-approved; the
+capabilities stay `dual-supported`. The parity tests hold the custom-resource
+outcomes equal and intentionally carry no equality vector for this case.
+
 **Default posture (audit C4):** `checkpoint.enabled` remains `false` by
 default. Without checkpointing the collection has no resume and no
 hub-identity binding for resumed runs; enabling it is the operator's opt-in

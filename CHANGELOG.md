@@ -46,7 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   closed to `error` if its discovery read fails. The Python CLI needs no change: it uses typed
   clients with fixed routes and no discovery cache, and its custom-resource strict GET already
   proves the kind served before the request. Its typed built-in reads still take a 404 as
-  absence without discovery, so the one difference is fail-closed on the collection side.
+  absence without discovery, so the one difference is fail-closed on the collection side: an
+  operator-approved divergence recorded in
+  [coexistence.md](ansible_collections/tomazb/acm_switchover/docs/coexistence.md) and the
+  [parity matrix](docs/ansible-collection/parity-matrix.md); both capabilities stay
+  `dual-supported`.
 
 - Each call to the collection test helper `tests/conftest.py::_ansible_env` now sets `TMPDIR`
   to a fresh, short directory (#314). kubernetes.core and kubernetes.dynamic cache API

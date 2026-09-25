@@ -27,7 +27,8 @@ from lib.strict_read import StrictReadStatus
 # reads (Namespace, Deployment, ReplicaSet) use fixed routes and take a 404 as absence without
 # discovery. The one observable difference is fail-closed and deliberately has no equality
 # vector here: a built-in named 404 whose discovery read then fails is `error` in the collection
-# and absence in Python.
+# and absence in Python. It is an operator-approved divergence recorded in the collection's
+# docs/coexistence.md.
 #
 # The last column is the exact revision both form factors must publish, and `None` means both
 # must publish no revision at all (Python `resource_version is None`, collection `null`). It is
@@ -42,7 +43,7 @@ VECTORS = [
     # The collection may resolve the kind from kubernetes.core's shared on-disk discovery cache
     # and receive a 404 on its object route; Python proves the kind served before the GET.
     ("named_get_kind_not_served", "positive kind-not-served", StrictReadStatus.CRD_ABSENT, "kind_not_served", None),
-    ("named_get_discovery_unverifiable", "api failure", StrictReadStatus.ERROR, "error", None),
+    ("named_custom_resource_get_discovery_unverifiable", "api failure", StrictReadStatus.ERROR, "error", None),
     ("named_get_success", "success, complete inventory", StrictReadStatus.ITEMS, "ok", "77"),
     ("authorization_failure", "api failure", StrictReadStatus.ERROR, "error", None),
     ("transport_failure", "api failure", StrictReadStatus.ERROR, "error", None),
@@ -179,7 +180,7 @@ def _python_named_get_kind_not_served():
     return outcome
 
 
-def _python_named_get_discovery_unverifiable():
+def _python_named_custom_resource_get_discovery_unverifiable():
     call_api = Mock(side_effect=ApiException(status=503))
     client = _python_client(call_api=call_api)
     outcome = client.get_custom_resource_strict(_GROUP, _VERSION, _PLURAL, "mch")
@@ -388,7 +389,7 @@ _PYTHON_VECTORS = {
     "kind_not_served": _python_kind_not_served,
     "namespace_absent": _python_namespace_absent,
     "named_get_kind_not_served": _python_named_get_kind_not_served,
-    "named_get_discovery_unverifiable": _python_named_get_discovery_unverifiable,
+    "named_custom_resource_get_discovery_unverifiable": _python_named_custom_resource_get_discovery_unverifiable,
     "named_get_success": _python_named_get_success,
     "authorization_failure": _python_authorization_failure,
     "transport_failure": _python_transport_failure,
@@ -740,7 +741,7 @@ def _collection_named_get_kind_not_served():
     return _run_collection(_NAMED_WIDGET_PARAMS, client=client)
 
 
-def _collection_named_get_discovery_unverifiable():
+def _collection_named_custom_resource_get_discovery_unverifiable():
     dynamic = _FakeDynamicClient(discovery_error=_collection_api_error(503))
     client = _FakeK8sClient(resource=_WIDGET_ROUTE, get_error=_collection_api_error(404), dynamic=dynamic)
     return _run_collection(_NAMED_WIDGET_PARAMS, client=client)
@@ -1005,7 +1006,7 @@ _COLLECTION_VECTORS = {
     "kind_not_served": _collection_kind_not_served,
     "namespace_absent": _collection_namespace_absent,
     "named_get_kind_not_served": _collection_named_get_kind_not_served,
-    "named_get_discovery_unverifiable": _collection_named_get_discovery_unverifiable,
+    "named_custom_resource_get_discovery_unverifiable": _collection_named_custom_resource_get_discovery_unverifiable,
     "named_get_success": _collection_named_get_success,
     "authorization_failure": _collection_authorization_failure,
     "transport_failure": _collection_transport_failure,
