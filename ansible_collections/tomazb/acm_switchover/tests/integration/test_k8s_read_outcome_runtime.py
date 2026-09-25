@@ -32,6 +32,7 @@ def _run_module(
     resource_name: str,
     name: str = "",
     check_mode: bool = False,
+    env: dict | None = None,
 ) -> subprocess.CompletedProcess[str]:
     repo_root = _repo_root()
     kubeconfig = tmp_path / "r3-02.kubeconfig"
@@ -72,7 +73,7 @@ def _run_module(
         capture_output=True,
         text=True,
         check=False,
-        env=_ansible_env(repo_root, tmp_path),
+        env=env if env is not None else _ansible_env(repo_root, tmp_path),
         timeout=60,
     )
 
@@ -334,4 +335,50 @@ def test_runtime_runs_sharing_an_api_endpoint_each_perform_their_own_discovery(t
     discovery = {"method": "GET", "path": "/apis"}
     assert discovery in first_requests, first_requests
     assert discovery in second_requests, second_requests
+    assert "READ_STATUS=kind_not_served COUNT=0 CHANGED=False" in _output(second)
+
+
+def test_runtime_stale_shared_discovery_never_turns_an_unserved_kind_into_not_found(tmp_path):
+    """A named 404 is an absence proof only when live discovery serves the kind (#317).
+
+    Production controllers share one ``tempfile.gettempdir()``, so kubernetes.core loads the
+    discovery cache an earlier run wrote for the same API host and user. Here both runs share
+    one TMPDIR. Between them the API stops serving ConfigMaps and, as a real API server does
+    for an unserved kind, answers the object route with 404. The second run resolves the kind
+    from the first run's cache; it must still report ``kind_not_served``, never ``not_found``.
+    """
+    api = FakeR302API()
+    shared_env = _ansible_env(_repo_root(), tmp_path)
+
+    def read_configmap() -> subprocess.CompletedProcess[str]:
+        return _run_module(
+            tmp_path,
+            server=api.url,
+            read_mode="get",
+            kind="ConfigMap",
+            resource_name="configmaps",
+            name="test-config",
+            env=shared_env,
+        )
+
+    try:
+        first = read_configmap()
+        first_requests = api.requests
+        api.core_resources = [
+            {"name": "pods", "singularName": "pod", "namespaced": True, "kind": "Pod", "verbs": ["get", "list"]}
+        ]
+        api.configmap_status = 404
+        api.configmap_body = status_payload(404)
+        second = read_configmap()
+        second_requests = api.requests[len(first_requests) :]
+    finally:
+        api.close()
+
+    assert first.returncode == 0, _output(first)
+    assert "READ_STATUS=ok COUNT=1 CHANGED=False" in _output(first)
+    # The precondition this regression exists for: the second run's kind resolution came from
+    # the first run's shared cache, so no discoverer group listing was requested again.
+    assert {"method": "GET", "path": "/apis"} not in second_requests, second_requests
+    assert second.returncode == 0, _output(second)
+    assert "READ_STATUS=not_found" not in _output(second)
     assert "READ_STATUS=kind_not_served COUNT=0 CHANGED=False" in _output(second)

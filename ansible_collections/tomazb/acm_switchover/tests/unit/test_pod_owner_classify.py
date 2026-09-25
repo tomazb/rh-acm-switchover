@@ -8,6 +8,7 @@ are the shipped ones. Objects use the camelCase shapes the dynamic client return
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 from types import ModuleType
 from typing import Any
@@ -98,12 +99,33 @@ class _Resource:
         self.kind = kind
 
 
-class _PositiveDiscovery:
-    """A discovery document that validates and serves none of the kinds under test."""
+_PLURALS = {
+    "ClusterServiceVersion": "clusterserviceversions",
+    "Deployment": "deployments",
+    "Namespace": "namespaces",
+    "Pod": "pods",
+    "ReplicaSet": "replicasets",
+}
+
+
+class _LiveDiscovery:
+    """A validating discovery document that serves every kind the fake client still resolves.
+
+    A kind the client has stopped resolving (`unserved_from`) is positively absent from it, so
+    its reads are `kind_not_served`; a named 404 of a still-served kind is `not_found` (#317).
+    """
+
+    def __init__(self, k8s_client: "_FakeK8sClient"):
+        self._k8s_client = k8s_client
 
     def request(self, method, path, **params):
+        served = [
+            {"name": plural, "kind": kind} for kind, plural in _PLURALS.items() if not self._k8s_client.unserved(kind)
+        ]
+        body = json.dumps({"kind": "APIResourceList", "resources": served}).encode("utf-8")
+
         class _Raw:
-            data = b'{"kind": "APIResourceList", "resources": [{"name": "unrelated", "kind": "Unrelated"}]}'
+            data = body
 
         return _Raw()
 
@@ -127,12 +149,16 @@ class _FakeK8sClient:
         # longer resolves, and discovery positively lists nothing for it (kind_not_served).
         self._unserved_from = dict(unserved_from or {})
         self._resolutions: dict[str, int] = {}
-        self.client = _PositiveDiscovery()
+        self.client = _LiveDiscovery(self)
+
+    def unserved(self, kind) -> bool:
+        """Whether `kind`'s latest resolution found it no longer served."""
+        return kind in self._unserved_from and self._resolutions.get(kind, 0) > self._unserved_from[kind]
 
     def resource(self, kind, api_version):
         index = self._resolutions.get(kind, 0)
         self._resolutions[kind] = index + 1
-        if kind in self._unserved_from and index >= self._unserved_from[kind]:
+        if self.unserved(kind):
             raise LookupError(f"{kind} is not served")
         return _Resource(api_version, kind)
 

@@ -28,6 +28,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Collection `strict_read` (`acm_k8s_read_outcome`, `acm_pod_owner_classify`) no longer reports
+  a named-GET 404 as `not_found` unless a live, bounded discovery read of the group/version
+  still serves the kind (#317). kubernetes.core resolves kinds from a discovery cache it shares
+  on disk with every earlier run against the same API host and user; a kind that has since
+  stopped being served still resolved, and the 404 on its object route was published as an
+  absence proof. That 404 is now `kind_not_served` when discovery positively omits the kind,
+  and `error` when discovery cannot be read. Happy-path reads are unchanged and the shared
+  cache is not rewritten. Every current CRD-backed named-GET caller already treated
+  `not_found` and `kind_not_served` alike; for built-in kinds a named 404 now also fails closed
+  to `error` if its discovery read fails. The Python CLI is
+  unaffected: it uses typed clients with no discovery cache, and its custom-resource strict
+  GET already proves the kind served live before the request.
+
 - Each call to the collection test helper `tests/conftest.py::_ansible_env` now sets `TMPDIR`
   to a fresh, short directory (#314). kubernetes.core and kubernetes.dynamic cache API
   discovery in the system temp directory, keyed by the API server host:port (and, for

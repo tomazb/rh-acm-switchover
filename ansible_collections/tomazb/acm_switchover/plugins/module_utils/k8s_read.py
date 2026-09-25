@@ -4,7 +4,8 @@
 Moved unchanged out of ``plugins/modules/acm_k8s_read_outcome.py`` so every collection
 module that needs a strict read consumes this single owner instead of a copy: complete
 pagination under fixed page and restart bounds, a bounded request timeout on every
-request, a discovery-served proof before any kind is reported as not served, rejection
+request, a live discovery-served proof before any kind is reported as not served and before
+any named 404 is reported as an absent object, rejection
 of malformed responses, and an error that is never reported as an empty inventory.
 
 ``strict_read`` returns the same ``(read_status, resources, resource_version)`` triple
@@ -227,9 +228,10 @@ def strict_read(
     """One strict GET or complete LIST through an already-constructed client.
 
     Returns ``(read_status, resources, resource_version)`` with ``read_status`` one of
-    ``ok``, ``not_found`` (named GET 404 only), ``kind_not_served`` (discovery positively
-    shows the kind is not served) or ``error``. ``resources`` is empty and
-    ``resource_version`` is ``None`` on every outcome other than ``ok``.
+    ``ok``, ``not_found`` (named GET 404 while live discovery serves the kind),
+    ``kind_not_served`` (discovery positively shows the kind is not served) or ``error``.
+    ``resources`` is empty and ``resource_version`` is ``None`` on every outcome other
+    than ``ok``.
     """
     try:
         resource = api_client.resource(kind, api_version)
@@ -261,7 +263,13 @@ def strict_read(
         raw = api_client.get(resource, **params)
     except Exception as exc:
         if read_mode == "get" and _is_named_not_found(exc):
-            return "not_found", [], None
+            # kubernetes.core may resolve the kind from its shared on-disk discovery cache, and
+            # the object route of a kind that is no longer served also answers 404. Absence is
+            # proved only when live discovery still serves the kind (#317).
+            served = _discovery_serves(api_client, api_version, resource_name)
+            if served is True:
+                return "not_found", [], None
+            return ("kind_not_served" if served is False else "error"), [], None
         return "error", [], None
 
     normalized = _normalize_resources(read_mode, raw)
