@@ -275,15 +275,25 @@ def test_runtime_runs_sharing_an_api_endpoint_each_perform_their_own_discovery(t
     ConfigMaps, and the second run must discover that itself rather than load the first
     run's cache, which still lists them.
     """
-    configmap_read = {"read_mode": "get", "kind": "ConfigMap", "resource_name": "configmaps", "name": "test-config"}
     api = FakeR302API()
+
+    def read_configmap() -> subprocess.CompletedProcess[str]:
+        return _run_module(
+            tmp_path,
+            server=api.url,
+            read_mode="get",
+            kind="ConfigMap",
+            resource_name="configmaps",
+            name="test-config",
+        )
+
     try:
-        first = _run_module(tmp_path, server=api.url, **configmap_read)
+        first = read_configmap()
         first_requests = api.requests
         api.core_resources = [
             {"name": "pods", "singularName": "pod", "namespaced": True, "kind": "Pod", "verbs": ["get", "list"]}
         ]
-        second = _run_module(tmp_path, server=api.url, **configmap_read)
+        second = read_configmap()
         second_requests = api.requests[len(first_requests) :]
     finally:
         api.close()
