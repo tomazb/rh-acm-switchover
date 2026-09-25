@@ -46,6 +46,8 @@ options:
     description:
       - The exact canonical Kubernetes APIResource name (plural) for C(kind); never
         synthesized from C(kind).
+      - A named get's 404 is C(not_found) only when the resolved kind routes through this
+        name, so a wrong name makes that 404 C(error) or C(kind_not_served).
     type: str
     required: true
 extends_documentation_fragment:
@@ -91,10 +93,11 @@ changed:
 read_status:
   description:
     - C(ok) when the read completed successfully.
-    - C(not_found) only for a named get that received an explicit 404/NotFound and whose
-      API group/version, read live, still serves this kind. A 404 for a kind that live
-      discovery positively omits is C(kind_not_served); one whose discovery cannot be read
-      is C(error).
+    - C(not_found) only for a named get that received an explicit 404/NotFound on a route
+      that live discovery of the API group/version still serves, with the same resource name
+      and scope the request was routed by. A 404 for a kind that live discovery positively
+      omits is C(kind_not_served); one whose discovery cannot be read, or whose route live
+      discovery does not confirm, is C(error).
     - C(kind_not_served) when the API group/version was read successfully and
       positively does not serve this kind.
     - C(error) for every other unverifiable outcome.

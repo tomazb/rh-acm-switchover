@@ -30,16 +30,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Collection `strict_read` (`acm_k8s_read_outcome`, `acm_pod_owner_classify`) no longer reports
   a named-GET 404 as `not_found` unless a live, bounded discovery read of the group/version
-  still serves the kind (#317). kubernetes.core resolves kinds from a discovery cache it shares
-  on disk with every earlier run against the same API host and user; a kind that has since
-  stopped being served still resolved, and the 404 on its object route was published as an
-  absence proof. That 404 is now `kind_not_served` when discovery positively omits the kind,
-  and `error` when discovery cannot be read. Happy-path reads are unchanged and the shared
-  cache is not rewritten. Every current CRD-backed named-GET caller already treated
-  `not_found` and `kind_not_served` alike; for built-in kinds a named 404 now also fails closed
-  to `error` if its discovery read fails. The Python CLI is
-  unaffected: it uses typed clients with no discovery cache, and its custom-resource strict
-  GET already proves the kind served live before the request.
+  serves the exact route the GET used (#317). kubernetes.core resolves kinds from a discovery
+  cache it shares on disk with every earlier run against the same API host and user, and the
+  dynamic client builds the object route from the cached plural and scope. A kind that had
+  stopped being served still resolved and its 404 was published as an absence proof; a stale
+  cached scope sent the GET to a route that 404s while the object exists. Both were reproduced
+  read-only against a live API server. A named 404 is now `kind_not_served` when live discovery
+  omits the resource name, and `error` when discovery cannot be read, or when the live entry's
+  name or scope does not match the route read. Successful reads are unchanged and the shared
+  cache is not rewritten. Gating decisions do not change for the CRD-backed named reads
+  (MultiClusterHub, ManagedCluster, ClusterServiceVersion), which already accepted `not_found`
+  and `kind_not_served` alike, but the recorded evidence for a removed CRD becomes `crd_absent`
+  instead of `object_absent` (`teardown_one_managed_cluster.yml`, `delete_multiclusterhub.yml`).
+  For built-in kinds (ConfigMap, Namespace, Deployment, ReplicaSet) a named 404 now fails
+  closed to `error` if its discovery read fails. The Python CLI needs no change: it uses typed
+  clients with fixed routes and no discovery cache, and its custom-resource strict GET already
+  proves the kind served before the request. Its typed built-in reads still take a 404 as
+  absence without discovery, so the one difference is fail-closed on the collection side.
 
 - Each call to the collection test helper `tests/conftest.py::_ansible_env` now sets `TMPDIR`
   to a fresh, short directory (#314). kubernetes.core and kubernetes.dynamic cache API

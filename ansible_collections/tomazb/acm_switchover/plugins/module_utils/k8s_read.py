@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: MIT
 """The collection's one bounded strict Kubernetes read (R4-03).
 
-Moved unchanged out of ``plugins/modules/acm_k8s_read_outcome.py`` so every collection
-module that needs a strict read consumes this single owner instead of a copy: complete
-pagination under fixed page and restart bounds, a bounded request timeout on every
-request, a live discovery-served proof before any kind is reported as not served and before
-any named 404 is reported as an absent object, rejection
-of malformed responses, and an error that is never reported as an empty inventory.
+Moved out of ``plugins/modules/acm_k8s_read_outcome.py`` so every collection module that
+needs a strict read consumes this single owner instead of a copy: complete pagination under
+fixed page and restart bounds, a bounded request timeout on every request, a live discovery
+proof before any kind is reported as not served and before any named 404 is reported as an
+absent object, rejection of malformed responses, and an error that is never reported as an
+empty inventory.
 
 ``strict_read`` returns the same ``(read_status, resources, resource_version)`` triple
 ``acm_k8s_read_outcome`` publishes. It raises nothing for an API outcome; argument
@@ -112,12 +112,12 @@ def _strict_list_page(raw) -> tuple[list[dict] | None, str | None, str | None]:
     return members, token, revision
 
 
-def _discovery_serves(api_client, api_version: str, resource_name: str) -> bool | None:
-    """True if served, False if positively absent, None if unverifiable.
+def _live_discovery_resources(api_client, api_version: str) -> list[dict] | None:
+    """The group/version's live APIResourceList entries, or None if unverifiable.
 
-    The dynamic client's discovery cache substitutes an empty resource list
-    for some discovery-fetch failures, and the substituted set differs across
-    the supported client range, so a lookup miss alone never proves absence.
+    Every request goes to the API server: the dynamic client's discovery cache substitutes an
+    empty resource list for some discovery-fetch failures, and the substituted set differs
+    across the supported client range, so a cached lookup miss alone never proves absence.
     """
     path = f"/apis/{api_version}" if "/" in api_version else f"/api/{api_version}"
     try:
@@ -142,9 +142,38 @@ def _discovery_serves(api_client, api_version: str, resource_name: str) -> bool 
             or not entry["kind"]
         ):
             return None
-    if any(entry["name"] == resource_name for entry in resources):
-        return True
-    return False
+    return resources
+
+
+def _discovery_serves(api_client, api_version: str, resource_name: str) -> bool | None:
+    """True if served, False if positively absent, None if unverifiable."""
+    resources = _live_discovery_resources(api_client, api_version)
+    if resources is None:
+        return None
+    return any(entry["name"] == resource_name for entry in resources)
+
+
+def _named_404_status(api_client, resource, api_version: str, resource_name: str) -> str:
+    """Classify a named-GET 404 by what live discovery says about the route that was read (#317).
+
+    kubernetes.core may resolve the kind from its shared on-disk discovery cache, and the
+    dynamic client builds the object route from the resolved plural and scope. Both can be
+    stale: an unserved kind's route, and a route built with the wrong scope, answer 404 while
+    the kind (or even the object) exists. Absence is proved only when live discovery serves
+    the exact route that returned the 404.
+    """
+    if getattr(resource, "name", None) != resource_name:
+        return "error"
+    resources = _live_discovery_resources(api_client, api_version)
+    if resources is None:
+        return "error"
+    entry = next((entry for entry in resources if entry["name"] == resource_name), None)
+    if entry is None:
+        return "kind_not_served"
+    live_namespaced = entry.get("namespaced")
+    if not isinstance(live_namespaced, bool) or live_namespaced is not getattr(resource, "namespaced", None):
+        return "error"
+    return "not_found"
 
 
 def _drain_list(api_client, resource, params) -> tuple[list[dict] | None, str, str | None]:
@@ -263,13 +292,7 @@ def strict_read(
         raw = api_client.get(resource, **params)
     except Exception as exc:
         if read_mode == "get" and _is_named_not_found(exc):
-            # kubernetes.core may resolve the kind from its shared on-disk discovery cache, and
-            # the object route of a kind that is no longer served also answers 404. Absence is
-            # proved only when live discovery still serves the kind (#317).
-            served = _discovery_serves(api_client, api_version, resource_name)
-            if served is True:
-                return "not_found", [], None
-            return ("kind_not_served" if served is False else "error"), [], None
+            return _named_404_status(api_client, resource, api_version, resource_name), [], None
         return "error", [], None
 
     normalized = _normalize_resources(read_mode, raw)

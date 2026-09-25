@@ -283,13 +283,27 @@ def test_named_get_present_is_ok(monkeypatch):
     assert result["changed"] is False
 
 
+class _ResolvedResource:
+    """The two resolved-resource fields the dynamic client builds a named object route from."""
+
+    def __init__(self, name, *, namespaced):
+        self.name = name
+        self.namespaced = namespaced
+
+
+_CONFIGMAPS_ROUTE = _ResolvedResource("configmaps", namespaced=True)
+_CONFIGMAPS_SERVED = {
+    "kind": "APIResourceList",
+    "resources": [{"name": "configmaps", "kind": "ConfigMap", "namespaced": True}],
+}
+_CONFIGMAPS_NOT_SERVED = {"kind": "APIResourceList", "resources": [{"name": "pods", "kind": "Pod", "namespaced": True}]}
+
+
 def test_named_get_explicit_404_is_not_found(monkeypatch):
     client = _FakeClient(
-        resource=object(),
+        resource=_CONFIGMAPS_ROUTE,
         get_error=_api_error(NotFoundError, 404),
-        dynamic=_FakeDynamicClient(
-            discovery={"kind": "APIResourceList", "resources": [{"name": "configmaps", "kind": "ConfigMap"}]}
-        ),
+        dynamic=_FakeDynamicClient(discovery=_CONFIGMAPS_SERVED),
     )
     result = _run_module(
         monkeypatch,
@@ -308,9 +322,6 @@ def test_named_get_explicit_404_is_not_found(monkeypatch):
     assert result["changed"] is False
     assert SENTINEL not in repr(result)
 
-
-_CONFIGMAPS_SERVED = {"kind": "APIResourceList", "resources": [{"name": "configmaps", "kind": "ConfigMap"}]}
-_CONFIGMAPS_NOT_SERVED = {"kind": "APIResourceList", "resources": [{"name": "pods", "kind": "Pod"}]}
 
 NAMED_CONFIGMAP_PARAMS = {
     "read_mode": "get",
@@ -343,7 +354,7 @@ def test_a_named_404_is_an_absence_proof_only_when_live_discovery_serves_the_kin
     discovery read that serves the kind; a positive miss is `kind_not_served`, and discovery
     that cannot be read is `error`, never absence.
     """
-    client = _FakeClient(resource=object(), get_error=_api_error(NotFoundError, 404), dynamic=dynamic)
+    client = _FakeClient(resource=_CONFIGMAPS_ROUTE, get_error=_api_error(NotFoundError, 404), dynamic=dynamic)
     result = _run_module(monkeypatch, params=NAMED_CONFIGMAP_PARAMS, client=client)
     assert result["read_status"] == expected_status
     assert result["resources"] == []
@@ -362,10 +373,53 @@ def test_a_named_404_is_an_absence_proof_only_when_live_discovery_serves_the_kin
 def test_a_non_404_named_get_failure_stays_error_even_when_discovery_serves_the_kind(monkeypatch, get_error):
     """Only a 404 is ever reclassified; a served kind never turns any other failure into absence."""
     dynamic = _FakeDynamicClient(discovery=_CONFIGMAPS_SERVED)
-    client = _FakeClient(resource=object(), get_error=get_error, dynamic=dynamic)
+    client = _FakeClient(resource=_CONFIGMAPS_ROUTE, get_error=get_error, dynamic=dynamic)
     result = _run_module(monkeypatch, params=NAMED_CONFIGMAP_PARAMS, client=client)
     assert result["read_status"] == "error"
     assert dynamic.request_calls == []
+
+
+def _configmaps_entry(**overrides):
+    entry = {"name": "configmaps", "kind": "ConfigMap", "namespaced": True, **overrides}
+    return {"kind": "APIResourceList", "resources": [{k: v for k, v in entry.items() if v is not None}]}
+
+
+@pytest.mark.parametrize(
+    "resource, discovery",
+    [
+        (_ResolvedResource("configmaps", namespaced=False), _CONFIGMAPS_SERVED),
+        (_CONFIGMAPS_ROUTE, _configmaps_entry(namespaced=False)),
+        (_CONFIGMAPS_ROUTE, _configmaps_entry(namespaced=None)),
+        (_CONFIGMAPS_ROUTE, _configmaps_entry(namespaced="true")),
+        (_ResolvedResource("configmap", namespaced=True), _CONFIGMAPS_SERVED),
+        (object(), _CONFIGMAPS_SERVED),
+    ],
+    ids=[
+        "cached_scope_is_stale",
+        "live_scope_differs",
+        "live_scope_missing",
+        "live_scope_not_a_bool",
+        "routed_plural_is_not_the_canonical_name",
+        "route_unknown",
+    ],
+)
+def test_a_named_404_on_a_route_live_discovery_does_not_confirm_is_error(monkeypatch, resource, discovery):
+    """#317: the 404 came from the route the resolved resource built, possibly from a stale cache.
+
+    The dynamic client builds a named object's path from the resolved plural and scope. A stale
+    cached scope sends the GET to a route that 404s even while the object exists, and live
+    discovery still lists the plural; this was reproduced read-only against a live API server.
+    Absence is proved only when live discovery confirms the exact route that was read.
+    """
+    client = _FakeClient(
+        resource=resource,
+        get_error=_api_error(NotFoundError, 404),
+        dynamic=_FakeDynamicClient(discovery=discovery),
+    )
+    result = _run_module(monkeypatch, params=NAMED_CONFIGMAP_PARAMS, client=client)
+    assert result["read_status"] == "error"
+    assert result["resources"] == []
+    assert result["resource_version"] is None
 
 
 def test_list_path_404_is_error_not_not_found(monkeypatch):
@@ -831,10 +885,13 @@ def test_malformed_list_pages_are_error_never_empty_success(monkeypatch, page):
                 "resource_name": "namespaces",
             },
             {
-                "resource": object(),
+                "resource": _ResolvedResource("namespaces", namespaced=False),
                 "get_error": _api_error(NotFoundError, 404),
                 "dynamic": _FakeDynamicClient(
-                    discovery={"kind": "APIResourceList", "resources": [{"name": "namespaces", "kind": "Namespace"}]}
+                    discovery={
+                        "kind": "APIResourceList",
+                        "resources": [{"name": "namespaces", "kind": "Namespace", "namespaced": False}],
+                    }
                 ),
             },
             "not_found",

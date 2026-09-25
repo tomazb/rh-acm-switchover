@@ -15,7 +15,13 @@ from typing import Any
 
 import pytest
 from kubernetes.client.exceptions import ApiException
-from kubernetes.dynamic.exceptions import ForbiddenError, InternalServerError, NotFoundError, api_exception
+from kubernetes.dynamic.exceptions import (
+    ForbiddenError,
+    InternalServerError,
+    NotFoundError,
+    ServiceUnavailableError,
+    api_exception,
+)
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils import constants
 
@@ -93,12 +99,6 @@ def _api_error(exc_type: type[Exception], status: int, body: str = SENTINEL) -> 
     return wrapped
 
 
-class _Resource:
-    def __init__(self, api_version: str, kind: str):
-        self.api_version = api_version
-        self.kind = kind
-
-
 _PLURALS = {
     "ClusterServiceVersion": "clusterserviceversions",
     "Deployment": "deployments",
@@ -106,6 +106,17 @@ _PLURALS = {
     "Pod": "pods",
     "ReplicaSet": "replicasets",
 }
+_CLUSTER_SCOPED = {"Namespace"}
+
+
+class _Resource:
+    """A resolved resource with the plural and scope the dynamic client routes a named GET by."""
+
+    def __init__(self, api_version: str, kind: str):
+        self.api_version = api_version
+        self.kind = kind
+        self.name = _PLURALS[kind]
+        self.namespaced = kind not in _CLUSTER_SCOPED
 
 
 class _LiveDiscovery:
@@ -113,14 +124,20 @@ class _LiveDiscovery:
 
     A kind the client has stopped resolving (`unserved_from`) is positively absent from it, so
     its reads are `kind_not_served`; a named 404 of a still-served kind is `not_found` (#317).
+    `discovery_omits` models a kind that still resolves from a stale cache but is no longer
+    served, and `discovery_fails` a discovery read that cannot be completed.
     """
 
     def __init__(self, k8s_client: "_FakeK8sClient"):
         self._k8s_client = k8s_client
 
     def request(self, method, path, **params):
+        if self._k8s_client.discovery_fails:
+            raise _api_error(ServiceUnavailableError, 503)
         served = [
-            {"name": plural, "kind": kind} for kind, plural in _PLURALS.items() if not self._k8s_client.unserved(kind)
+            {"name": plural, "kind": kind, "namespaced": kind not in _CLUSTER_SCOPED}
+            for kind, plural in _PLURALS.items()
+            if not self._k8s_client.unserved(kind) and kind not in self._k8s_client.discovery_omits
         ]
         body = json.dumps({"kind": "APIResourceList", "resources": served}).encode("utf-8")
 
@@ -149,6 +166,8 @@ class _FakeK8sClient:
         # longer resolves, and discovery positively lists nothing for it (kind_not_served).
         self._unserved_from = dict(unserved_from or {})
         self._resolutions: dict[str, int] = {}
+        self.discovery_fails = False
+        self.discovery_omits: set[str] = set()
         self.client = _LiveDiscovery(self)
 
     def unserved(self, kind) -> bool:
@@ -486,6 +505,17 @@ def test_deployment_read_outcomes_map_to_the_shared_unavailable_reasons(monkeypa
     unavailable = result["operator_identity_unavailable"]
     assert unavailable["reason"] == reason
     assert unavailable["mch_teardown_key"] == MCH_KEY and unavailable["mch_expected_uid"] == MCH_UID
+
+
+def test_a_deployment_404_whose_live_discovery_cannot_be_read_is_never_install_deployment_absent(monkeypatch):
+    """#317: without a live served-kind proof the 404 is a failed read, not an absent Deployment."""
+    client = _capture_client(overrides={("GET", "Deployment", DEPLOYMENT_NAME): [_api_error(NotFoundError, 404)]})
+    client.discovery_fails = True
+
+    result = _capture(monkeypatch, client)
+
+    assert result["capture_status"] == "operator_identity_unavailable"
+    assert result["operator_identity_unavailable"]["reason"] == "deployment_read_failed"
     assert result["operator_deployment"] is None
 
 
@@ -693,6 +723,27 @@ def test_a_positively_absent_namespace_is_namespace_absent_with_no_further_reads
     assert result.get("read_error_stage", "<absent>") is None
     assert result["blocking_count"] is None and result["decisions"] == []
     assert result["deployment_status"] == "not_applicable"
+    assert [r["kind"] for r in client.requests] == ["Namespace"]
+
+
+@pytest.mark.parametrize("discovery", ["fails", "omits_namespaces"])
+def test_a_namespace_404_without_live_discovery_serving_namespaces_is_error_never_absence(monkeypatch, discovery):
+    """#317: `namespace_absent` skips every Pod read, so it must rest on a proved absence.
+
+    A Namespace 404 whose live discovery cannot be read, or does not serve `namespaces`, proves
+    nothing about the namespace and is an unreadable namespace stage.
+    """
+    client = _classify_client([], overrides={("GET", "Namespace", ACM_NS): [_api_error(NotFoundError, 404)]})
+    if discovery == "fails":
+        client.discovery_fails = True
+    else:
+        client.discovery_omits = {"Namespace"}
+
+    result = _classify(monkeypatch, client)
+
+    assert result["read_status"] == "error"
+    assert result["read_error_stage"] == "namespace"
+    assert result["read_status"] != "namespace_absent"
     assert [r["kind"] for r in client.requests] == ["Namespace"]
 
 

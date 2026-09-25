@@ -379,6 +379,7 @@ def test_runtime_stale_shared_discovery_never_turns_an_unserved_kind_into_not_fo
     # The precondition this regression exists for: the second run's kind resolution came from
     # the first run's shared cache, so no discoverer group listing was requested again.
     assert {"method": "GET", "path": "/apis"} not in second_requests, second_requests
+    assert {"method": "GET", "path": "/api"} not in second_requests, second_requests
     assert second.returncode == 0, _output(second)
     assert "READ_STATUS=not_found" not in _output(second)
     assert "READ_STATUS=kind_not_served COUNT=0 CHANGED=False" in _output(second)
