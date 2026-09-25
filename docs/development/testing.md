@@ -151,9 +151,18 @@ Every other pytest lane stays serial, and must not be given `-n` or `--dist`
 and `setup.cfg`):
 
 - **Surface 2, release-framework helpers, and surface 9, live certification.** They share one
-  entrypoint, and supplying a profile turns the helper lane into certification. A profile-driven
-  session builds its run ID at one-second resolution and creates its artifact directory
-  exclusively, so per-worker sessions would collide.
+  entrypoint, and supplying a profile turns the helper lane into certification. Helpers and
+  certification, especially live scenarios, are not designed or validated for concurrent or
+  distributed execution, and a distributed run can start live work the operator did not intend.
+  An artifact collision is not the safeguard: under ordinary scheduling only the worker that
+  receives the certification item creates an artifact directory, while `--dist each` duplicates
+  that item on every worker, so the copies either collide on the one-second run ID or get
+  distinct run IDs and run live scenarios twice. `tests/release/conftest.py` therefore fails
+  every selected `tests/release` item, helper or certification, that runs inside an xdist
+  worker, before pytest's own setup and before the profile skip. No fixture, profile load,
+  artifact directory, or scenario runs, however the tests were selected (`tests/release`, the
+  `tests/` parent, testpaths, `-k`/`-m`, `PYTEST_ADDOPTS`). Serial runs, `-n 0`,
+  `--collect-only`, and the root lane, which ignores `tests/release`, are unaffected.
 - **Surface 5, collection scenario tests,** and the dedicated resolved-dependency compatibility
   step. Issue #312 keeps them serial as a scoping choice, not because of a known collision: the
   scenario lane was not part of the parallel-safety audit. The compatibility step names a single
