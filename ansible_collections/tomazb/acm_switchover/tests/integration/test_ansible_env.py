@@ -1,3 +1,5 @@
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -20,11 +22,14 @@ def test_integration_ansible_env_includes_python314_compat_path(tmp_path):
     assert Path(env["ANSIBLE_REMOTE_TMP"]).is_relative_to(tmp_path)
 
 
-def test_integration_ansible_env_gives_each_call_its_own_existing_tmpdir(monkeypatch, tmp_path):
-    """A shared or missing TMPDIR shares the discovery cache between runs (#314).
+def test_integration_ansible_env_gives_each_call_its_own_short_existing_tmpdir(monkeypatch, tmp_path):
+    """Each call gets its own existing TMPDIR, and it is not placed under tmp_path (#314).
 
-    tempfile.gettempdir() silently falls back to /tmp when TMPDIR does not exist, and an
-    inherited TMPDIR (common on CI runners) must not replace the per-call directory.
+    A shared TMPDIR shares the kubernetes.core and kubernetes.dynamic discovery caches
+    between runs, and tempfile.gettempdir() silently falls back to /tmp when TMPDIR does not
+    exist. An inherited TMPDIR (common on CI runners) must not become the per-call directory.
+    The directory must not sit under tmp_path either: ansible-core 2.21 binds a Unix socket
+    beneath TMPDIR, and pytest-xdist tmp_paths are too deep for one.
     """
     shared = tmp_path / "inherited"
     shared.mkdir()
@@ -33,9 +38,36 @@ def test_integration_ansible_env_gives_each_call_its_own_existing_tmpdir(monkeyp
     first = Path(_ansible_env(_find_repo_root(), tmp_path)["TMPDIR"])
     second = Path(_ansible_env(_find_repo_root(), tmp_path)["TMPDIR"])
 
-    assert first.is_dir() and first.is_relative_to(tmp_path)
-    assert second.is_dir() and second.is_relative_to(tmp_path)
+    assert first.is_dir() and second.is_dir()
     assert len({first, second, shared}) == 3
+    assert not first.is_relative_to(tmp_path) and not second.is_relative_to(tmp_path)
+
+
+def test_integration_ansible_env_tmpdirs_are_removed_when_the_process_exits(tmp_path):
+    """TMPDIRs live outside tmp_path, so pytest's tmp_path retention cannot remove them (#314)."""
+    repo_root = _find_repo_root()
+    script = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from ansible_collections.tomazb.acm_switchover.tests.conftest import _ansible_env\n"
+        "print(_ansible_env(Path(sys.argv[1]), Path(sys.argv[2]))['TMPDIR'])\n"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(repo_root), str(tmp_path)],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "PYTHONPATH": str(repo_root)},
+        timeout=60,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    tmpdir = Path(completed.stdout.strip())
+    assert tmpdir.is_absolute(), completed.stdout
+    assert not tmpdir.exists()
+    assert not tmpdir.parent.exists()
 
 
 def test_integration_ansible_env_disables_callback_color(monkeypatch, tmp_path):

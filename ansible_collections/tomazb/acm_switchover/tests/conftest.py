@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -18,6 +20,33 @@ import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _ANSIBLE_PY314_COMPAT_PATH = _REPO_ROOT / "ansible_collections/tomazb/acm_switchover/tests/support/python314_ast_compat"
+# Parent of every _ansible_env() TMPDIR, read once at import so a test that later changes
+# TMPDIR (see test_ansible_env.py) cannot move it. The root is created on first use, one per
+# process (each pytest-xdist worker has its own), and removed when that process exits.
+_ANSIBLE_TMPDIR_BASE = Path(tempfile.gettempdir())
+_ansible_tmpdir_root: Path | None = None
+
+
+def _new_ansible_tmpdir() -> str:
+    """Return a new, existing, short directory for one ansible-playbook run's TMPDIR (#314).
+
+    kubernetes.core (k8srcp-<sha256(host-user)>.json) and kubernetes.dynamic
+    (osrcp-<md5(host)>.json) cache API discovery in tempfile.gettempdir(), keyed by the API
+    server host:port, plus the login user for kubernetes.core. Fake APIs bind ephemeral
+    ports that the OS recycles, so a shared temp dir lets a run load an earlier run's stale
+    discovery. A fresh directory per call isolates runs within one test too. mkdtemp also
+    guarantees the directory exists: gettempdir() silently falls back to /tmp otherwise.
+
+    The directory must stay short. ansible-core 2.21 binds a multiprocessing Unix socket at
+    <TMPDIR>/pymp-XXXXXXXX/listener-XXXXXXXX, 32 bytes more, and Linux socket paths hold at
+    most 107 bytes. pytest-xdist tmp_paths are too deep for that, so these directories live
+    under the system temp directory instead: about 36 bytes with Linux's default /tmp.
+    """
+    global _ansible_tmpdir_root
+    if _ansible_tmpdir_root is None:
+        _ansible_tmpdir_root = Path(tempfile.mkdtemp(prefix="acm-tests-", dir=_ANSIBLE_TMPDIR_BASE))
+        atexit.register(shutil.rmtree, _ansible_tmpdir_root, ignore_errors=True)
+    return tempfile.mkdtemp(prefix="run-", dir=_ansible_tmpdir_root)
 
 
 def _materialize_report_dir(report_dir: str, tmp_path: Path) -> Path:
@@ -265,12 +294,6 @@ def _ansible_env(repo_root: Path, tmp_path: Path, *, extra_pythonpaths: tuple[Pa
     remote_tmp = tmp_path / "ansible-remote"
     local_tmp.mkdir(parents=True, exist_ok=True)
     remote_tmp.mkdir(parents=True, exist_ok=True)
-    # kubernetes.core (k8srcp-<sha256(host-user)>.json) and kubernetes.dynamic
-    # (osrcp-<md5(host)>.json) cache API discovery in tempfile.gettempdir(), keyed by the API
-    # server host:port (plus the login user for kubernetes.core). Fake APIs bind ephemeral ports the OS recycles, so a shared temp dir lets
-    # a run load an earlier run's stale discovery (#314). A fresh directory per call isolates
-    # runs within one test too; mkdtemp also guarantees it exists, which gettempdir() requires.
-    module_tmp = tempfile.mkdtemp(prefix="tmpdir-", dir=tmp_path)
     env = {
         **os.environ,
         "ANSIBLE_COLLECTIONS_PATH": ":".join(
@@ -286,7 +309,7 @@ def _ansible_env(repo_root: Path, tmp_path: Path, *, extra_pythonpaths: tuple[Pa
         "ANSIBLE_PYTHON_INTERPRETER": sys.executable,
         "ANSIBLE_LOCAL_TEMP": str(local_tmp),
         "ANSIBLE_REMOTE_TMP": str(remote_tmp),
-        "TMPDIR": module_tmp,
+        "TMPDIR": _new_ansible_tmpdir(),
     }
     pythonpaths = [str(_ANSIBLE_PY314_COMPAT_PATH)]
     pythonpaths.extend(str(path) for path in extra_pythonpaths)

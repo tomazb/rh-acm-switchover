@@ -265,6 +265,35 @@ def test_runtime_check_mode_still_reads_without_writes(tmp_path):
     assert "changed=0" in output
 
 
+def test_runtime_runs_when_tmp_path_is_too_deep_for_a_unix_socket(tmp_path):
+    """A deep pytest tmp_path must not break ansible-playbook on ansible-core 2.21 (#314).
+
+    ansible-core 2.21 starts a multiprocessing manager at the start of every playbook, and
+    its Unix socket is created beneath TMPDIR. Linux socket paths hold at most 107 bytes
+    (``sun_path`` is 108 bytes including the terminating NUL), and pytest-xdist tmp_paths on
+    CI are deep enough that a TMPDIR under them failed every run with "Local RPC server did
+    not start". This tmp_path alone is at least 108 bytes, so no socket fits beneath it.
+    Earlier ansible-core versions start no such server, so only 2.21 can fail here.
+    """
+    deep = tmp_path / ("d" * max(1, 108 - len(str(tmp_path))))
+    deep.mkdir()
+    api = FakeR302API()
+    try:
+        completed = _run_module(
+            deep,
+            server=api.url,
+            read_mode="get",
+            kind="ConfigMap",
+            resource_name="configmaps",
+            name="test-config",
+        )
+    finally:
+        api.close()
+
+    assert completed.returncode == 0, _output(completed)
+    assert "READ_STATUS=ok COUNT=1 CHANGED=False" in _output(completed)
+
+
 def test_runtime_runs_sharing_an_api_endpoint_each_perform_their_own_discovery(tmp_path):
     """Module runs whose fake APIs share a host:port must not share discovery (#314).
 
