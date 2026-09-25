@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -262,13 +263,14 @@ def _seed_phase_local_facts(vars_payload: dict) -> None:
 def _ansible_env(repo_root: Path, tmp_path: Path, *, extra_pythonpaths: tuple[Path, ...] = ()) -> dict:
     local_tmp = tmp_path / "ansible-local"
     remote_tmp = tmp_path / "ansible-remote"
-    # kubernetes.core caches API discovery at tempfile.gettempdir()/k8srcp-<sha256(host-user)>.json.
-    # Fake APIs bind ephemeral ports the OS recycles, so a shared temp dir lets one test load
-    # another's stale discovery (#314). gettempdir() silently skips a missing TMPDIR, so create it.
-    module_tmp = tmp_path / "tmpdir"
     local_tmp.mkdir(parents=True, exist_ok=True)
     remote_tmp.mkdir(parents=True, exist_ok=True)
-    module_tmp.mkdir(parents=True, exist_ok=True)
+    # kubernetes.core (k8srcp-<sha256(host-user)>.json) and kubernetes.dynamic
+    # (osrcp-<md5(host)>.json) cache API discovery in tempfile.gettempdir(), keyed by the API
+    # server host:port. Fake APIs bind ephemeral ports the OS recycles, so a shared temp dir lets
+    # a run load an earlier run's stale discovery (#314). A fresh directory per call isolates
+    # runs within one test too; mkdtemp also guarantees it exists, which gettempdir() requires.
+    module_tmp = tempfile.mkdtemp(prefix="tmpdir-", dir=tmp_path)
     env = {
         **os.environ,
         "ANSIBLE_COLLECTIONS_PATH": ":".join(
@@ -284,7 +286,7 @@ def _ansible_env(repo_root: Path, tmp_path: Path, *, extra_pythonpaths: tuple[Pa
         "ANSIBLE_PYTHON_INTERPRETER": sys.executable,
         "ANSIBLE_LOCAL_TEMP": str(local_tmp),
         "ANSIBLE_REMOTE_TMP": str(remote_tmp),
-        "TMPDIR": str(module_tmp),
+        "TMPDIR": module_tmp,
     }
     pythonpaths = [str(_ANSIBLE_PY314_COMPAT_PATH)]
     pythonpaths.extend(str(path) for path in extra_pythonpaths)

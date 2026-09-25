@@ -20,6 +20,16 @@ def test_integration_ansible_env_includes_python314_compat_path(tmp_path):
     assert Path(env["ANSIBLE_REMOTE_TMP"]).is_relative_to(tmp_path)
 
 
+def test_integration_ansible_env_gives_each_call_its_own_existing_tmpdir(tmp_path):
+    """tempfile.gettempdir() silently falls back to /tmp when TMPDIR does not exist (#314)."""
+    first = Path(_ansible_env(_find_repo_root(), tmp_path)["TMPDIR"])
+    second = Path(_ansible_env(_find_repo_root(), tmp_path)["TMPDIR"])
+
+    assert first.is_dir() and first.is_relative_to(tmp_path)
+    assert second.is_dir() and second.is_relative_to(tmp_path)
+    assert first != second
+
+
 def test_integration_ansible_env_disables_callback_color(monkeypatch, tmp_path):
     """Sensitive-output tests must not mistake Ansible's own color controls for leaked data."""
     monkeypatch.setenv("ANSIBLE_FORCE_COLOR", "1")

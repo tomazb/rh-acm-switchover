@@ -266,35 +266,32 @@ def test_runtime_check_mode_still_reads_without_writes(tmp_path):
 
 
 def test_runtime_runs_sharing_an_api_endpoint_each_perform_their_own_discovery(tmp_path):
-    """Two tests whose fake APIs share a host:port must not share discovery (#314).
+    """Module runs whose fake APIs share a host:port must not share discovery (#314).
 
     kubernetes.core caches API discovery in ``tempfile.gettempdir()``, keyed by the API
-    server host:port and user. Fake APIs bind ephemeral ports the OS recycles, so a later
-    test can reach the same host:port as an earlier one. One fake API with two distinct
-    per-test directories reproduces that deterministically: the second run serves a
-    different resource set and must discover it itself rather than load the first run's
-    cache.
+    server host:port. Fake APIs bind ephemeral ports the OS recycles, so a later run, in
+    the same test or another one, can reach the host:port of an earlier fake API. One
+    fake API reproduces that deterministically: between the runs it stops serving
+    ConfigMaps, and the second run must discover that itself rather than load the first
+    run's cache, which still lists them.
     """
-    first_test_dir = tmp_path / "first-test"
-    second_test_dir = tmp_path / "second-test"
-    first_test_dir.mkdir()
-    second_test_dir.mkdir()
+    configmap_read = {"read_mode": "get", "kind": "ConfigMap", "resource_name": "configmaps", "name": "test-config"}
     api = FakeR302API()
     try:
-        first = _run_module(first_test_dir, server=api.url, read_mode="list", kind="Pod", resource_name="pods")
+        first = _run_module(tmp_path, server=api.url, **configmap_read)
         first_requests = api.requests
         api.core_resources = [
             {"name": "pods", "singularName": "pod", "namespaced": True, "kind": "Pod", "verbs": ["get", "list"]}
         ]
-        second = _run_module(second_test_dir, server=api.url, read_mode="list", kind="Pod", resource_name="pods")
+        second = _run_module(tmp_path, server=api.url, **configmap_read)
         second_requests = api.requests[len(first_requests) :]
     finally:
         api.close()
 
-    for completed in (first, second):
-        output = _output(completed)
-        assert completed.returncode == 0, output
-        assert "READ_STATUS=ok COUNT=0 CHANGED=False" in output
+    assert first.returncode == 0, _output(first)
+    assert "READ_STATUS=ok COUNT=1 CHANGED=False" in _output(first)
+    assert second.returncode == 0, _output(second)
     discovery = {"method": "GET", "path": "/api/v1"}
     assert discovery in first_requests, first_requests
     assert discovery in second_requests, second_requests
+    assert "READ_STATUS=kind_not_served COUNT=0 CHANGED=False" in _output(second)
