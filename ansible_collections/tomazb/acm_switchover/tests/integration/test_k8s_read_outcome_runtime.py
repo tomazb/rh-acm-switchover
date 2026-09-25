@@ -263,3 +263,75 @@ def test_runtime_check_mode_still_reads_without_writes(tmp_path):
     assert {"method": "GET", "path": "/api/v1/namespaces/test-ns/pods"} in requests
     assert writes == []
     assert "changed=0" in output
+
+
+def test_runtime_runs_when_tmp_path_is_too_deep_for_a_unix_socket(tmp_path):
+    """A deep pytest tmp_path must not break ansible-playbook on ansible-core 2.21 (#314).
+
+    ansible-core 2.21 starts a multiprocessing manager at the start of every playbook, and
+    its Unix socket is created beneath TMPDIR. Linux socket paths hold at most 107 bytes
+    (``sun_path`` is 108 bytes including the terminating NUL), and pytest-xdist tmp_paths on
+    CI are deep enough that a TMPDIR under them failed every run with "Local RPC server did
+    not start". This tmp_path alone is at least 108 bytes, so no socket fits beneath it.
+    Earlier ansible-core versions start no such server, so only 2.21 can fail here.
+    """
+    deep = tmp_path / ("d" * max(1, 108 - len(str(tmp_path))))
+    deep.mkdir()
+    api = FakeR302API()
+    try:
+        completed = _run_module(
+            deep,
+            server=api.url,
+            read_mode="get",
+            kind="ConfigMap",
+            resource_name="configmaps",
+            name="test-config",
+        )
+    finally:
+        api.close()
+
+    assert completed.returncode == 0, _output(completed)
+    assert "READ_STATUS=ok COUNT=1 CHANGED=False" in _output(completed)
+
+
+def test_runtime_runs_sharing_an_api_endpoint_each_perform_their_own_discovery(tmp_path):
+    """Module runs whose fake APIs share a host:port must not share discovery (#314).
+
+    kubernetes.core caches API discovery in ``tempfile.gettempdir()``, keyed by the API
+    server host:port and the login user. Fake APIs bind ephemeral ports the OS recycles, so a later run, in
+    the same test or another one, can reach the host:port of an earlier fake API. One
+    fake API reproduces that deterministically: between the runs it stops serving
+    ConfigMaps, and the second run must discover that itself rather than load the first
+    run's cache, which still lists them.
+    """
+    api = FakeR302API()
+
+    def read_configmap() -> subprocess.CompletedProcess[str]:
+        return _run_module(
+            tmp_path,
+            server=api.url,
+            read_mode="get",
+            kind="ConfigMap",
+            resource_name="configmaps",
+            name="test-config",
+        )
+
+    try:
+        first = read_configmap()
+        first_requests = api.requests
+        api.core_resources = [
+            {"name": "pods", "singularName": "pod", "namespaced": True, "kind": "Pod", "verbs": ["get", "list"]}
+        ]
+        second = read_configmap()
+        second_requests = api.requests[len(first_requests) :]
+    finally:
+        api.close()
+
+    assert first.returncode == 0, _output(first)
+    assert "READ_STATUS=ok COUNT=1 CHANGED=False" in _output(first)
+    assert second.returncode == 0, _output(second)
+    # Only the discoverer requests /apis; strict_read's own served-kind probe requests /api/v1.
+    discovery = {"method": "GET", "path": "/apis"}
+    assert discovery in first_requests, first_requests
+    assert discovery in second_requests, second_requests
+    assert "READ_STATUS=kind_not_served COUNT=0 CHANGED=False" in _output(second)

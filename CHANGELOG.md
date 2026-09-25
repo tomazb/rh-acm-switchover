@@ -28,6 +28,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Each call to the collection test helper `tests/conftest.py::_ansible_env` now sets `TMPDIR`
+  to a fresh, short directory (#314). kubernetes.core and kubernetes.dynamic cache API
+  discovery in the system temp directory, keyed by the API server host:port (and, for
+  kubernetes.core, the login user). A run whose fake API reused an earlier run's ephemeral
+  port, in the same test or another, could therefore load that run's stale discovery and skip
+  its own. The directories sit under one per-process root in the system temp directory, which
+  is removed when the test process exits, and not under the test's `tmp_path`: ansible-core
+  2.21 binds a Unix socket beneath `TMPDIR`, and pytest-xdist `tmp_path`s are too deep for
+  Linux's socket path limit. A runtime regression in `test_k8s_read_outcome_runtime.py` runs
+  the read module twice against one host:port whose served resources change in between, and
+  requires the second run to rediscover them. Another runs the module from a `tmp_path`
+  deeper than that limit. Test-harness only; no collection or CLI behaviour changes. The same
+  shared cache can still reach `strict_read`-based modules at runtime; that exposure is
+  tracked in #317.
 - `tests/release/conftest.py` now fails every `tests/release` test, helpers and the
   `release`-marked certification alike, that runs inside a pytest-xdist worker, before any
   fixture, profile load, artifact directory, or scenario runs (#315). Since #312 installs
