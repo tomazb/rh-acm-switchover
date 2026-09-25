@@ -205,18 +205,20 @@ These commands cover the same surfaces as the CI lanes, in the same order.
 # 1. Resolve dependencies exactly as a lane does
 ansible-galaxy collection install -r ansible_collections/tomazb/acm_switchover/requirements.yml
 
-# 2. Compatibility guardrail (metadata, EE, CI matrix, resolved dependency)
+# 2. Compatibility guardrail (metadata, EE, CI matrix, resolved dependency). This dedicated step
+#    runs serially; the same file is collected again by the parallel unit run in step 3.
 export ANSIBLE_COLLECTIONS_PATH="$PWD:$HOME/.ansible/collections"
 PYTHONPATH=. python -m pytest \
   ansible_collections/tomazb/acm_switchover/tests/unit/test_compatibility_contract.py -q
 
-# 3. Unit tests
-PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q
+# 3. Unit tests (parallel under pytest-xdist, as in CI)
+PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q \
+  -n auto --dist worksteal
 
-# 4. Integration and scenario tests
-PYTHONPATH=. python -m pytest \
-  ansible_collections/tomazb/acm_switchover/tests/integration/ \
-  ansible_collections/tomazb/acm_switchover/tests/scenario/ -q
+# 4. Integration tests (parallel, as in CI), then scenario tests (serial, as in CI)
+PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/ -q \
+  -n auto --dist worksteal
+PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/scenario/ -q
 
 # 5. Playbook syntax checks, for every shipped playbook
 for playbook in ansible_collections/tomazb/acm_switchover/playbooks/*.yml; do
@@ -234,7 +236,7 @@ done
 ```bash
 python3.11 -m venv .venv-lane-min
 source .venv-lane-min/bin/activate
-pip install "ansible-core==2.16.*" pytest PyYAML "kubernetes>=28.0.0"
+pip install "ansible-core==2.16.*" pytest "pytest-xdist>=3.2.1,<4" PyYAML "kubernetes>=28.0.0"
 
 # The collection dependencies must be resolved again inside this environment:
 # a lane is defined by its ansible-core *and* what that core resolves.

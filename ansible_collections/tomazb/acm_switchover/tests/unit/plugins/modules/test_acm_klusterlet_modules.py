@@ -805,67 +805,122 @@ def test_probe_passes_bounded_request_timeout_to_secret_reads():
     assert managed.request_timeouts == [7]
 
 
+# Workers below block on an event instead of sleeping, so they cannot finish before the
+# deadline however the scheduler behaves. The event is always set after the call returns;
+# this timeout only bounds a worker if ordered_bounded_map regresses to waiting for it.
+_BLOCKED_WORKER_MAX_SECONDS = 5
+
+
+def _worker_timeout_result(cluster: str) -> dict:
+    return {"cluster": cluster, "status": "failed", "reason": "worker_timeout"}
+
+
 def test_worker_future_timeout_surfaces_as_failed_result():
-    def slow_worker(cluster_name: str) -> dict:
-        time.sleep(0.05)
+    release = threading.Event()
+
+    def blocked_worker(cluster_name: str) -> dict:
+        release.wait(_BLOCKED_WORKER_MAX_SECONDS)
         return {"cluster": cluster_name, "status": "verified"}
 
-    results = ordered_bounded_map(
-        ["cluster-a"],
-        workers=2,
-        fn=slow_worker,
-        future_timeout=0.001,
-        timeout_result=lambda cluster: {
-            "cluster": cluster,
-            "status": "failed",
-            "reason": "worker_timeout",
-        },
-    )
+    try:
+        results = ordered_bounded_map(
+            ["cluster-a"],
+            workers=2,
+            fn=blocked_worker,
+            future_timeout=0.001,
+            timeout_result=_worker_timeout_result,
+        )
+    finally:
+        release.set()
 
     assert results == [{"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"}]
 
 
-def test_single_worker_future_timeout_surfaces_as_failed_result():
-    def slow_worker(cluster_name: str) -> dict:
-        time.sleep(0.05)
+def _record_wait_timeouts(monkeypatch) -> list:
+    """Wrap the real ``concurrent.futures.wait`` and record the deadline of every call."""
+    timeouts: list = []
+    real_wait = klusterlet_utils.wait
+
+    def recording_wait(*args, **kwargs):
+        # Same call shapes as concurrent.futures.wait(fs, timeout=None, return_when=...).
+        timeouts.append(args[1] if len(args) > 1 else kwargs.get("timeout"))
+        return real_wait(*args, **kwargs)
+
+    monkeypatch.setattr(klusterlet_utils, "wait", recording_wait)
+    return timeouts
+
+
+# Generous on purpose: the call should return about 1 ms after it starts, and a regression that
+# runs the worker inline or joins it takes _BLOCKED_WORKER_MAX_SECONDS. This only has to catch
+# a deadline overshoot of seconds, so it tolerates heavy scheduler contention.
+_PROMPT_RETURN_MAX_SECONDS = 2
+
+
+def test_single_worker_future_timeout_surfaces_as_failed_result(monkeypatch):
+    wait_timeouts = _record_wait_timeouts(monkeypatch)
+    release = threading.Event()
+    finished = threading.Event()
+
+    def blocked_worker(cluster_name: str) -> dict:
+        release.wait(_BLOCKED_WORKER_MAX_SECONDS)
+        finished.set()
         return {"cluster": cluster_name, "status": "verified"}
 
     started_at = time.monotonic()
-    results = ordered_bounded_map(
-        ["cluster-a"],
-        workers=1,
-        fn=slow_worker,
-        future_timeout=0.001,
-        timeout_result=lambda cluster: {
-            "cluster": cluster,
-            "status": "failed",
-            "reason": "worker_timeout",
-        },
-    )
+    try:
+        results = ordered_bounded_map(
+            ["cluster-a"],
+            workers=1,
+            fn=blocked_worker,
+            future_timeout=0.001,
+            timeout_result=_worker_timeout_result,
+        )
+        elapsed = time.monotonic() - started_at
+        # The worker is still blocked, so the call returned at the deadline: it neither ran
+        # the worker inline nor waited for it to finish.
+        worker_finished_before_return = finished.is_set()
+    finally:
+        release.set()
 
-    assert time.monotonic() - started_at < 0.04
+    assert not worker_finished_before_return
+    assert wait_timeouts == [0.001], "the single-worker path must wait exactly the requested deadline"
+    assert elapsed < _PROMPT_RETURN_MAX_SECONDS
     assert results == [{"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"}]
 
 
-def test_worker_future_timeout_uses_one_batch_deadline():
-    def slow_worker(cluster_name: str) -> dict:
-        time.sleep(0.05)
+def test_worker_future_timeout_uses_one_batch_deadline(monkeypatch):
+    wait_timeouts = _record_wait_timeouts(monkeypatch)
+    release = threading.Event()
+    clusters = ["cluster-a", "cluster-b", "cluster-c"]
+    future_timeout = 0.75
+
+    def blocked_worker(cluster_name: str) -> dict:
+        release.wait(_BLOCKED_WORKER_MAX_SECONDS)
         return {"cluster": cluster_name, "status": "verified"}
 
     started_at = time.monotonic()
-    results = ordered_bounded_map(
-        ["cluster-a", "cluster-b", "cluster-c"],
-        workers=3,
-        fn=slow_worker,
-        future_timeout=0.01,
-        timeout_result=lambda cluster: {
-            "cluster": cluster,
-            "status": "failed",
-            "reason": "worker_timeout",
-        },
-    )
+    try:
+        results = ordered_bounded_map(
+            clusters,
+            workers=len(clusters),
+            fn=blocked_worker,
+            future_timeout=future_timeout,
+            timeout_result=_worker_timeout_result,
+        )
+        elapsed = time.monotonic() - started_at
+    finally:
+        release.set()
 
-    assert time.monotonic() - started_at < 0.04
+    # Exactly one wait over the whole batch with the full deadline. Waiting on each future in
+    # turn (per-future ``result(timeout=...)`` or one ``wait`` per future) records zero or
+    # len(clusters) calls.
+    assert wait_timeouts == [future_timeout]
+    # Nor does anything wait per future afterwards. Every worker stays blocked, so waiting on each
+    # of the N futures in turn costs at least N * future_timeout on its own (2.25 s here). A batch
+    # wait followed by per-future waits costs (N + 1) * future_timeout (3.0 s). The correct call
+    # returns after one future_timeout (about 0.75 s), which leaves (N - 1) * future_timeout
+    # (1.5 s) of scheduling slack under the N * future_timeout bound.
+    assert elapsed < len(clusters) * future_timeout
     assert results == [
         {"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"},
         {"cluster": "cluster-b", "status": "failed", "reason": "worker_timeout"},

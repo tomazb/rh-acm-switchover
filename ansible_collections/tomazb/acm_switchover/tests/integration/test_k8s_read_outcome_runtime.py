@@ -205,17 +205,18 @@ def test_runtime_forbidden_is_sanitized_error(tmp_path):
 
 
 def test_runtime_connection_failure_is_error(tmp_path):
+    # Keep the port bound but never listening for the whole run: connections are refused, and no
+    # concurrently started fake API server (pytest-xdist workers) can be handed the same port.
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         unavailable_url = f"http://127.0.0.1:{sock.getsockname()[1]}"
-
-    completed = _run_module(
-        tmp_path,
-        server=unavailable_url,
-        read_mode="list",
-        kind="Pod",
-        resource_name="pods",
-    )
+        completed = _run_module(
+            tmp_path,
+            server=unavailable_url,
+            read_mode="list",
+            kind="Pod",
+            resource_name="pods",
+        )
 
     output = _output(completed)
     assert completed.returncode == 0, output

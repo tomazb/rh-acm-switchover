@@ -13,6 +13,27 @@ import pytest
 
 from tests.e2e.orchestrator import E2EOrchestrator, RunConfig
 
+E2E_SERIAL_ONLY_MESSAGE = (
+    "tests/e2e is intentionally serial: its phases are ordered and share class-level state, "
+    "and it can operate on live clusters. Run it without pytest-xdist distribution "
+    "(remove -n/--numprocesses/--dist/--tx, including from PYTEST_ADDOPTS)."
+)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    """Refuse to run a selected E2E test inside a pytest-xdist worker.
+
+    Once pytest-xdist is installed, an inherited ``-n`` is accepted rather than rejected. The check
+    is per selected item, so it holds however the test was selected (``pytest tests/e2e -n 2``,
+    ``pytest -m e2e -n auto``, ``PYTEST_ADDOPTS``), including when the xdist controller never loads
+    this conftest. It runs before pytest's own setup, so no fixture, cluster client, or test body
+    runs. Unmarked helper tests in this directory, and the parallel root lane's ``-m "not e2e"``
+    run, are unaffected. Serial runs, ``-n 0`` and ``--collect-only`` never create workers.
+    """
+    if hasattr(item.config, "workerinput") and item.get_closest_marker("e2e"):
+        pytest.fail(E2E_SERIAL_ONLY_MESSAGE, pytrace=False)
+
 
 @pytest.fixture(scope="class", autouse=True)
 def _reset_phase_tracker():

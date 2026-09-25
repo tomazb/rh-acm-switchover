@@ -15,6 +15,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
@@ -2250,6 +2251,7 @@ def run_decommission_role(
     operator_replicasets: Optional[List[dict]] = None,
     csv_read_status: int = 200,
     object_read_statuses: Optional[Dict[str, int]] = None,
+    collection_root: Optional[pathlib.Path] = None,
 ) -> dict:
     """Run the decommission role against declared fakes and return one canonical result.
 
@@ -2257,7 +2259,6 @@ def run_decommission_role(
     raises ``TypeError`` so PRs C, D and E must extend this helper deliberately
     rather than silently receiving a no-op fake.
     """
-    import shutil
     import subprocess
     import tempfile
 
@@ -2286,6 +2287,11 @@ def run_decommission_role(
     with_destination = (
         destination_mco is not None or destination_namespace is not None or integrated_finalization_secondary
     )
+    if collection_root is not None and standalone_playbook:
+        raise ValueError(
+            "collection_root does not relocate the standalone playbook, which runs from the "
+            "repository; do not combine them"
+        )
     if acknowledge_observability_not_migrated and not with_destination:
         raise ValueError("acknowledge_observability_not_migrated only means something with a destination hub")
     if with_destination:
@@ -2417,7 +2423,9 @@ def run_decommission_role(
         else [_managed_cluster_object("local-cluster")] + [_managed_cluster_object(name) for name in managed_clusters]
     )
 
-    repo_root = ROLES_DIR.parents[3]
+    # ``collection_root`` runs the role from a private copy (see
+    # ``_collection_with_mc_teardown_fault``); by default it is the repository itself.
+    repo_root = collection_root or ROLES_DIR.parents[3]
     workspace = pathlib.Path(tempfile.mkdtemp(prefix="acm-decommission-harness-"))
     # Dropping the plural from the served group is the only way to produce a genuine
     # `kind_not_served`: a 404 on the discovery path is `error`, not positive absence.
@@ -3945,13 +3953,20 @@ def test_managed_cluster_checkpoint_write_failure_aborts_rather_than_surviving()
     assert "survivor" not in combined or "unexpected" in combined
 
 
-def _inject_mc_teardown_fault(fault: str):
-    """Temporarily insert an unexpected failure into the per-target include (restored by caller).
+def _collection_with_mc_teardown_fault(tmp_path: pathlib.Path, fault: str) -> pathlib.Path:
+    """Return a root holding a private collection copy with an unexpected failure injected.
 
-    The fault is scoped to ``spoke-a`` so a blanket rescue that continues the loop would
-    still reach ``spoke-b`` and issue DELETE — the discrimination the contract needs.
+    The fault goes into the copy's per-target include, never the shipped role, so tests
+    running concurrently (pytest-xdist workers) cannot execute it and the fault tests
+    cannot restore over each other. It is scoped to ``spoke-a`` so a blanket rescue that
+    continues the loop would still reach ``spoke-b`` and issue DELETE — the discrimination
+    the contract needs.
     """
-    path = TEARDOWN_ONE_MANAGED_CLUSTER
+    collection = ROLES_DIR.parent
+    root = tmp_path / "collection-root"
+    collection_copy = root / "ansible_collections" / "tomazb" / "acm_switchover"
+    shutil.copytree(collection, collection_copy, ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    path = collection_copy / TEARDOWN_ONE_MANAGED_CLUSTER.relative_to(collection)
     original = path.read_text(encoding="utf-8")
     marker = "    - name: Define this ManagedCluster teardown identity\n"
     if fault == "undefined":
@@ -3972,61 +3987,41 @@ def _inject_mc_teardown_fault(fault: str):
     assert marker in original
     path.write_text(original.replace(marker, injected, 1), encoding="utf-8")
     assert "rescue-contract test" in path.read_text(encoding="utf-8")
-    return path, original
+    return root
 
 
-def test_managed_cluster_undefined_variable_failure_aborts_family():
-    path, original = _inject_mc_teardown_fault("undefined")
-    try:
-        result = run_decommission_role(
-            managed_clusters=["spoke-a", "spoke-b"],
-            observability_outcome="precondition_noop",
-            multiclusterhub_outcome="precondition_noop",
-        )
-        assert result["returncode"] != 0
-        deleted = [call for call in result["delete_calls"] if "managedclusters/" in call["path"]]
-        assert deleted == []
-        combined = " ".join(
-            str(task.get("result", {}).get("msg", "")) for task in result["tasks"] if task.get("failed")
-        ).lower()
-        assert "survivor" not in combined or "unexpected" in combined
-    finally:
-        path.write_text(original, encoding="utf-8")
+def _assert_injected_fault_failed(result: dict) -> None:
+    """The run failed at the injected task, not for an unrelated reason in the private copy."""
+    assert any(task["failed"] and "rescue-contract test" in task["name"] for task in result["tasks"])
 
 
-def test_managed_cluster_unexpected_action_failure_aborts_family():
-    path, original = _inject_mc_teardown_fault("unexpected_command")
-    try:
-        result = run_decommission_role(
-            managed_clusters=["spoke-a", "spoke-b"],
-            observability_outcome="precondition_noop",
-            multiclusterhub_outcome="precondition_noop",
-        )
-        assert result["returncode"] != 0
-        deleted = [call for call in result["delete_calls"] if "managedclusters/" in call["path"]]
-        assert deleted == []
-        combined = " ".join(
-            str(task.get("result", {}).get("msg", "")) for task in result["tasks"] if task.get("failed")
-        ).lower()
-        assert "survivor" not in combined or "unexpected" in combined
-    finally:
-        path.write_text(original, encoding="utf-8")
+@pytest.mark.parametrize("fault", ["undefined", "unexpected_command"])
+def test_managed_cluster_unclassified_failure_aborts_family(tmp_path, fault):
+    """An unclassified failure on spoke-a aborts the family before any DELETE.
+
+    Asserting no ManagedCluster DELETE at all also kills a blanket rescue that continues
+    the loop: it would go on to delete spoke-b.
+    """
+    result = run_decommission_role(
+        managed_clusters=["spoke-a", "spoke-b"],
+        observability_outcome="precondition_noop",
+        multiclusterhub_outcome="precondition_noop",
+        collection_root=_collection_with_mc_teardown_fault(tmp_path, fault),
+    )
+    _assert_injected_fault_failed(result)
+    assert result["returncode"] != 0
+    deleted = [call for call in result["delete_calls"] if "managedclusters/" in call["path"]]
+    assert deleted == []
+    combined = " ".join(
+        str(task.get("result", {}).get("msg", "")) for task in result["tasks"] if task.get("failed")
+    ).lower()
+    assert "survivor" not in combined or "unexpected" in combined
 
 
-def test_managed_cluster_blanket_rescue_must_not_continue_after_unclassified_failure():
-    """Kill-style regression: unclassified failure must not delete a later sibling."""
-    path, original = _inject_mc_teardown_fault("unexpected_command")
-    try:
-        result = run_decommission_role(
-            managed_clusters=["spoke-a", "spoke-b"],
-            observability_outcome="precondition_noop",
-            multiclusterhub_outcome="precondition_noop",
-        )
-        assert "spoke-b" not in {
-            call["path"].rsplit("/", 1)[-1] for call in result["delete_calls"] if "managedclusters/" in call["path"]
-        }
-    finally:
-        path.write_text(original, encoding="utf-8")
+def test_harness_refuses_collection_root_with_standalone_playbook(tmp_path):
+    """The standalone playbook is not relocated, so combining them would mix two trees."""
+    with pytest.raises(ValueError, match="collection_root"):
+        run_decommission_role(standalone_playbook=True, collection_root=tmp_path)
 
 
 def _assert_mc_inventory_fail_closed(result: dict) -> None:

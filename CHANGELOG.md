@@ -120,6 +120,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The root test lane (`run_tests.sh` and CI) and the collection unit and integration lanes
+  (`ansible-collection-foundation.yml`) now run under `pytest-xdist` with
+  `-n auto --dist worksteal` (#312). `pytest-xdist>=3.2.1,<4` is added to `requirements-dev.txt`
+  and to the collection workflow's dependency install. Release-framework, live certification,
+  E2E, and collection scenario lanes stay serial, and `setup.cfg` does not enable parallelism by
+  default. `tests/test_ci_guardrails.py` now fails if a serial lane gains `-n`/`--dist`, a
+  parallel lane loses them, or `setup.cfg` enables xdist globally.
+  - The `ordered_bounded_map` worker-timeout tests replace their 40 ms wall-clock bounds.
+    - Workers block on an event.
+    - The deadline passed to `wait` is recorded, which proves one shared batch deadline. The
+      previous bound let a per-future wait pass.
+    - The remaining wall-clock checks are generous ceilings.
+      - The single-worker call has 2 s.
+      - The batch has N × deadline, the hard lower bound of any per-future waiting, which leaves
+        (N − 1) × deadline of scheduling slack.
+  - The ManagedCluster rescue-contract tests in `test_decommission_role_contracts.py` inject
+    their deliberate fault into a private copy of the collection. They no longer rewrite the
+    shipped `teardown_one_managed_cluster.yml` in place, which under parallel workers leaked the
+    fault into concurrent tests and could leave the tracked role file corrupted. They now also
+    assert that the injected task is what failed. The redundant blanket-rescue variant is
+    folded into a parametrized test.
+  - `tests/e2e/conftest.py` fails every selected `e2e`-marked test inside a pytest-xdist
+    worker before any fixture runs. An inherited `-n`, for example from `PYTEST_ADDOPTS`, is
+    now accepted rather than rejected. Serial runs, `-n 0` and `--collect-only` are unaffected.
+  - The connection-failure runtime test keeps its unused port bound for the whole run, so a
+    concurrently started fake API server cannot be handed the same port.
+  - The decommission check-mode fixtures run their `ansible-playbook` harness once per pytest
+    run rather than once per worker.
+    - The shared result lives in pytest's temporary root, keyed by the xdist run ID.
+    - It is written atomically.
+    - A failed run is not repeated by the other workers.
 - Documentation now publishes the complete decommission substep outcome
   vocabulary (`not_requested`, `precondition_noop`, `completed`, `refused`,
   `failed`), distinguishes `precondition_noop` from `completed`, and clarifies
