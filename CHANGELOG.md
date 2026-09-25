@@ -37,13 +37,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cached scope sent the GET to a route that 404s while the object exists. Both were reproduced
   read-only against a live API server. A named 404 is now `kind_not_served` when live discovery
   omits the resource name, and `error` when discovery cannot be read, or when the live entry's
-  name or scope does not match the route read. Successful reads are unchanged and the shared
-  cache is not rewritten. Gating decisions do not change for the CRD-backed named reads
-  (MultiClusterHub, ManagedCluster, ClusterServiceVersion), which already accepted `not_found`
-  and `kind_not_served` alike, but the recorded evidence for a removed CRD becomes `crd_absent`
-  instead of `object_absent` (`teardown_one_managed_cluster.yml`, `delete_multiclusterhub.yml`).
-  For built-in kinds (ConfigMap, Namespace, Deployment, ReplicaSet) a named 404 now fails
-  closed to `error` if its discovery read fails. The Python CLI needs no change: it uses typed
+  name or scope does not match the route read, or a namespaced kind was read without a
+  namespace. Successful reads are unchanged and the shared cache is not rewritten. For a removed
+  CRD, the CRD-backed named reads (MultiClusterHub, ManagedCluster, ClusterServiceVersion) gate
+  as before, since they already accepted `not_found` and `kind_not_served` alike, but the
+  recorded evidence becomes `crd_absent` instead of `object_absent`
+  (`teardown_one_managed_cluster.yml`, `delete_multiclusterhub.yml`). For every kind, CRD-backed
+  or built-in (ConfigMap, Namespace, Deployment, ReplicaSet), a named 404 whose discovery read
+  fails or whose route live discovery does not confirm now fails closed to `error`; for CRD
+  kinds that matches Python. The Python CLI needs no change: it uses typed
   clients with fixed routes and no discovery cache, and its custom-resource strict GET already
   proves the kind served before the request. Its typed built-in reads still take a 404 as
   absence without discovery, so the one difference is fail-closed on the collection side: an

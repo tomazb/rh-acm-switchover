@@ -505,12 +505,19 @@ def test_deployment_read_outcomes_map_to_the_shared_unavailable_reasons(monkeypa
     unavailable = result["operator_identity_unavailable"]
     assert unavailable["reason"] == reason
     assert unavailable["mch_teardown_key"] == MCH_KEY and unavailable["mch_expected_uid"] == MCH_UID
+    assert result["operator_deployment"] is None
 
 
-def test_a_deployment_404_whose_live_discovery_cannot_be_read_is_never_install_deployment_absent(monkeypatch):
+@pytest.mark.parametrize("discovery", ["fails", "omits_deployments"])
+def test_a_deployment_404_without_live_discovery_serving_deployments_is_never_install_deployment_absent(
+    monkeypatch, discovery
+):
     """#317: without a live served-kind proof the 404 is a failed read, not an absent Deployment."""
     client = _capture_client(overrides={("GET", "Deployment", DEPLOYMENT_NAME): [_api_error(NotFoundError, 404)]})
-    client.discovery_fails = True
+    if discovery == "fails":
+        client.discovery_fails = True
+    else:
+        client.discovery_omits = {"Deployment"}
 
     result = _capture(monkeypatch, client)
 

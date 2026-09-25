@@ -422,6 +422,19 @@ def test_a_named_404_on_a_route_live_discovery_does_not_confirm_is_error(monkeyp
     assert result["resource_version"] is None
 
 
+def test_a_named_404_of_a_namespaced_kind_read_without_a_namespace_is_error(monkeypatch):
+    """The dynamic client routes a namespaced kind read with no namespace to its cluster-wide
+    collection path, so that 404 is not an absence proof for any namespaced object (#317)."""
+    params = {key: value for key, value in NAMED_CONFIGMAP_PARAMS.items() if key != "namespace"}
+    client = _FakeClient(
+        resource=_CONFIGMAPS_ROUTE,
+        get_error=_api_error(NotFoundError, 404),
+        dynamic=_FakeDynamicClient(discovery=_CONFIGMAPS_SERVED),
+    )
+    result = _run_module(monkeypatch, params=params, client=client)
+    assert result["read_status"] == "error"
+
+
 def test_list_path_404_is_error_not_not_found(monkeypatch):
     client = _FakeClient(
         resource=object(),

@@ -126,8 +126,9 @@ every kind, built-in or custom, through kubernetes.core's shared on-disk
 discovery cache, and the dynamic client routes the GET by the cached plural and
 scope. After any named 404 the collection's `strict_read` therefore re-reads
 the group/version's discovery live and publishes `not_found` only when the
-live entry matches the resource name and scope the GET was routed by. A live
-miss is `kind_not_served`, and an unreadable or non-matching entry is `error`.
+live entry matches the resource name and scope the GET was routed by, and a
+namespaced kind was read in a namespace. A live miss is `kind_not_served`, and
+an unreadable or non-matching entry is `error`.
 The Python CLI has no cached route: custom-resource reads prove the kind served
 before the GET (the same outcomes), and typed built-in reads
 (`get_namespace_strict`, `get_deployment_strict`, `get_replicaset_strict`, and

@@ -153,14 +153,15 @@ def _discovery_serves(api_client, api_version: str, resource_name: str) -> bool 
     return any(entry["name"] == resource_name for entry in resources)
 
 
-def _named_404_status(api_client, resource, api_version: str, resource_name: str) -> str:
+def _named_404_status(api_client, resource, api_version: str, resource_name: str, namespace: str | None) -> str:
     """Classify a named-GET 404 by what live discovery says about the route that was read (#317).
 
     kubernetes.core may resolve the kind from its shared on-disk discovery cache, and the
     dynamic client builds the object route from the resolved plural and scope. Both can be
     stale: an unserved kind's route, and a route built with the wrong scope, answer 404 while
-    the kind (or even the object) exists. Absence is proved only when live discovery serves
-    the exact route that returned the 404.
+    the kind (or even the object) exists. A namespaced kind read with no namespace is routed to
+    its cluster-wide path, which names no namespaced object. Absence is proved only when live
+    discovery serves the exact route that returned the 404.
     """
     if getattr(resource, "name", None) != resource_name:
         return "error"
@@ -172,6 +173,8 @@ def _named_404_status(api_client, resource, api_version: str, resource_name: str
         return "kind_not_served"
     live_namespaced = entry.get("namespaced")
     if not isinstance(live_namespaced, bool) or live_namespaced is not getattr(resource, "namespaced", None):
+        return "error"
+    if live_namespaced and not namespace:
         return "error"
     return "not_found"
 
@@ -292,7 +295,7 @@ def strict_read(
         raw = api_client.get(resource, **params)
     except Exception as exc:
         if read_mode == "get" and _is_named_not_found(exc):
-            return _named_404_status(api_client, resource, api_version, resource_name), [], None
+            return _named_404_status(api_client, resource, api_version, resource_name, namespace), [], None
         return "error", [], None
 
     normalized = _normalize_resources(read_mode, raw)
