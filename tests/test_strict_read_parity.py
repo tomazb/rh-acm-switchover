@@ -24,7 +24,7 @@ from lib.strict_read import StrictReadStatus
 # through kubernetes.core's possibly stale on-disk discovery cache, so after any named 404 it
 # re-reads discovery live and requires the served entry to match the route it read. Python has
 # no cached route: custom resources prove the kind served before the GET, and typed built-in
-# reads (Namespace, Deployment, ReplicaSet) use fixed routes and take a 404 as absence without
+# reads (Namespace, Deployment, ReplicaSet, ConfigMap) use fixed routes and take a 404 as absence without
 # discovery. The observable difference is fail-closed and deliberately has no equality vector
 # here: a built-in named 404 that live discovery does not confirm (unreadable, omitted, or not
 # matching the route read) is `error` or `kind_not_served` in the collection and absence in
