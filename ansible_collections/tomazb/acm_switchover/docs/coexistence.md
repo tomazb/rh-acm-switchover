@@ -119,6 +119,38 @@ contrast, warns and continues when its state file records no pending
 `_ensure_auto_import_default`), since an unreadable ConfigMap without a
 recorded obligation cannot represent an undischarged reset.
 
+**Intentional divergence on a built-in named-read 404 that live discovery does not confirm (#317):**
+both form factors publish named-object absence only for a 404 on a route live
+discovery serves, but their proof obligations differ. The collection resolves
+every kind, built-in or custom, through kubernetes.core's shared on-disk
+discovery cache, and the dynamic client routes the GET by the cached plural and
+scope. After any named 404 the collection's `strict_read` therefore
+publishes `not_found` only when the resolved plural is the canonical resource
+name, a live read of the group/version's discovery lists it with the scope the
+GET was routed by, and a namespaced kind was read in a namespace. A live miss
+is `kind_not_served`; a name or scope mismatch, a namespaced read without a
+namespace, or unreadable discovery is `error`.
+The Python CLI has no cached route: custom-resource reads prove the kind served
+before the GET (the same outcomes), and typed built-in reads
+(`get_namespace_strict`, `get_deployment_strict`, `get_replicaset_strict`, and
+the `import-controller-config` ConfigMap read) use fixed routes and take a 404
+as absence without discovery. The difference is a built-in named 404 that
+these checks do not confirm: `error` for a name or scope mismatch, a
+namespaced read without a namespace, or unreadable discovery, and
+`kind_not_served` for an omitted kind. Python reports each as absence. For
+the canonical resource names and namespaces the collection's callers pass,
+only the unreadable case is reachable on a conformant API server: built-in
+kinds are always served there, and their plural and scope are fixed, so a
+stale cache cannot mismatch them. It is fail-closed: the collection's
+auto-import step fails instead of applying immediate-import annotations, the
+destination-observability gate blocks instead of accepting an absent
+namespace, observability teardown fails instead of recording namespace-absent
+evidence, and Pod classification reports an unreadable namespace or
+`deployment_read_failed` instead of `namespace_absent` or
+`install_deployment_absent`. Operator-approved; the capabilities stay
+`dual-supported`. The parity tests hold the custom-resource outcomes equal and
+intentionally carry no equality vector for this case.
+
 **Default posture (audit C4):** `checkpoint.enabled` remains `false` by
 default. Without checkpointing the collection has no resume and no
 hub-identity binding for resumed runs; enabling it is the operator's opt-in
