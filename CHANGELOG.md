@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `tests/release/conftest.py` now fails every `tests/release` test, helpers and the
+  `release`-marked certification alike, that runs inside a pytest-xdist worker, before any
+  fixture, profile load, artifact directory, or scenario runs (#315). Since #312 installs
+  pytest-xdist, an explicit or inherited `-n`, `--dist` or `--tx` was accepted and could split
+  helpers across workers or, with `--dist each`, duplicate live certification. Serial runs, `-n 0`,
+  `--collect-only`, and the root lane are unaffected. `tests/test_ci_guardrails.py` covers the
+  refusal for direct, `tests/` parent, testpaths, `-k`/`-m` and `PYTEST_ADDOPTS` selection
+  without a release profile. Its serial and `-n 0` acceptance cases for both the E2E and release
+  guards are now real runs rather than `--collect-only`. The documented reason the release lane
+  is serial no longer claims that ordinary distribution collides on the run ID.
 - The Collection `decommission` role no longer reads the source
   `MultiClusterObservability` inventory when no teardown is requested. With
   `acm_switchover_decommission.has_observability` explicitly false and no durable

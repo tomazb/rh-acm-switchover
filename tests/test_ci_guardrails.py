@@ -357,9 +357,11 @@ def test_xdist_option_detection():
 def test_xdist_runs_only_on_the_documented_parallel_lanes():
     """Surfaces 1, 3 and 4 run under xdist; every other pytest lane stays serial.
 
-    Release certification collides on its second-resolution run ID and exclusive artifact
-    directory, and E2E phases chain through class-level state, so a stray `-n` there fails
-    only in a profile-driven or live run. This keeps that boundary executable.
+    Release helpers and certification are not designed or validated for distributed execution:
+    ordinary scheduling runs live certification beside parallel helpers, and `--dist each` can
+    duplicate live scenarios under distinct run IDs rather than failing on an artifact collision.
+    E2E phases chain through class-level state. The conftest guards refuse both at runtime; this
+    keeps the maintained entrypoints' side of that boundary executable.
     """
     root_lane = "tests/ --ignore=tests/release"
     ci_lines = _executed_pytest_lines(_workflow_run_scripts(CI_WORKFLOW))
@@ -432,7 +434,7 @@ def _run_pytest(*args: str, addopts: str = "") -> subprocess.CompletedProcess:
     if addopts:
         env["PYTEST_ADDOPTS"] = addopts
     return subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *args],
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--color=no", *args],
         cwd=REPO_ROOT,
         env=env,
         capture_output=True,
@@ -442,24 +444,52 @@ def _run_pytest(*args: str, addopts: str = "") -> subprocess.CompletedProcess:
     )
 
 
+# Cheap real runs, no clusters and no release profile. They execute pytest_runtest_setup, which
+# --collect-only never calls, so a guard that also refused serial runs would fail them.
+_E2E_REAL_RUN = ("tests/e2e/test_e2e_monitoring.py", "-m", "e2e")
+_RELEASE_REAL_RUN = ("tests/release/test_options.py", "tests/release/test_release_certification.py")
+
+
+def _summary(result: subprocess.CompletedProcess) -> str:
+    return [line for line in (result.stdout + result.stderr).splitlines() if line.strip()][-1]
+
+
+def _assert_every_selected_test_refused(result: subprocess.CompletedProcess, message: str) -> None:
+    """Every selected test errored in setup with the serial-only message; none passed or skipped.
+
+    The exit code rules out a usage or collection error, and the summary rules out a guard that
+    fired for only some items or after a skip marker had already been applied.
+    """
+    output = result.stdout + result.stderr
+    summary = _summary(result)
+    assert result.returncode == pytest.ExitCode.TESTS_FAILED, output
+    assert message in " ".join(output.split())
+    assert "error" in summary and "passed" not in summary and "skipped" not in summary, summary
+
+
 @pytest.mark.parametrize(
     "args, needs_xdist",
     [
-        pytest.param(("tests/e2e", "-m", "e2e", "--collect-only"), False, id="serial-e2e"),
-        pytest.param(("tests/e2e", "-m", "e2e", "--collect-only", "-n", "0"), True, id="n0-e2e"),
+        pytest.param(_E2E_REAL_RUN, False, id="serial-e2e"),
+        pytest.param((*_E2E_REAL_RUN, "-n", "0"), True, id="n0-e2e"),
+        pytest.param(_RELEASE_REAL_RUN, False, id="serial-release"),
+        pytest.param((*_RELEASE_REAL_RUN, "-n", "0"), True, id="n0-release"),
         pytest.param(
             ("tests/", "--ignore=tests/release", "-m", "not e2e", "--collect-only", "-n", "2"),
             True,
             id="root-lane-collect-only",
         ),
+        pytest.param(("tests/release", "--collect-only", "-n", "2"), True, id="release-collect-only"),
         pytest.param(("tests/e2e", "-m", "not e2e", "-n", "2"), True, id="unmarked-e2e-helpers-parallel"),
     ],
 )
-def test_e2e_guard_leaves_serial_and_non_e2e_runs_alone(args, needs_xdist):
+def test_serial_lane_guards_leave_serial_and_unguarded_runs_alone(args, needs_xdist):
     if needs_xdist:
         pytest.importorskip("xdist")
     result = _run_pytest(*args)
     assert result.returncode == 0, result.stdout + result.stderr
+    if "--collect-only" not in args:
+        assert "passed" in _summary(result), _summary(result)
 
 
 @pytest.mark.parametrize(
@@ -484,9 +514,47 @@ def test_e2e_guard_refuses_every_e2e_test_under_xdist(args, addopts):
     pytest.importorskip("xdist")
     from tests.e2e.conftest import E2E_SERIAL_ONLY_MESSAGE
 
-    result = _run_pytest(*args, addopts=addopts)
-    output = result.stdout + result.stderr
-    summary = [line for line in output.splitlines() if line.strip()][-1]
-    assert result.returncode == pytest.ExitCode.TESTS_FAILED, output
-    assert E2E_SERIAL_ONLY_MESSAGE in " ".join(output.split())
-    assert "error" in summary and "passed" not in summary and "skipped" not in summary, summary
+    _assert_every_selected_test_refused(_run_pytest(*args, addopts=addopts), E2E_SERIAL_ONLY_MESSAGE)
+
+
+@pytest.mark.parametrize(
+    "args, addopts",
+    [
+        pytest.param((*_RELEASE_REAL_RUN, "-n", "2"), "", id="release-files-n2"),
+        pytest.param((*_RELEASE_REAL_RUN, "--numprocesses=2"), "", id="numprocesses"),
+        pytest.param((*_RELEASE_REAL_RUN, "--dist", "load", "--tx", "2*popen"), "", id="dist-tx"),
+        pytest.param((*_RELEASE_REAL_RUN, "--dist", "each", "--tx", "2*popen"), "", id="dist-each"),
+        pytest.param(_RELEASE_REAL_RUN, "-n 2", id="pytest-addopts"),
+        pytest.param(("tests/release", "-n", "2"), "", id="release-dir-n2"),
+        pytest.param(("tests/", "-k", "test_resolve_release_mode_defaults", "-n", "2"), "", id="tests-dir-helpers"),
+        pytest.param(("-k", "test_resolve_release_mode_defaults", "-n", "2"), "", id="testpaths-helpers"),
+        pytest.param(("-m", "release", "-n", "2"), "", id="testpaths-certification"),
+    ],
+)
+def test_release_guard_refuses_every_release_test_under_xdist(args, addopts):
+    """The runtime half of the serial release contract, for helpers and certification alike.
+
+    tests/release/conftest.py fails each tests/release item in an xdist worker before pytest's own
+    setup, so no fixture, profile load, artifact directory, or scenario runs. No profile is given:
+    the certification item must be refused rather than skipped, which proves the guard runs before
+    the profile skip marker is evaluated. Without the guard, these runs pass and skip.
+    """
+    pytest.importorskip("xdist")
+    from tests.release.conftest import RELEASE_SERIAL_ONLY_MESSAGE
+
+    _assert_every_selected_test_refused(_run_pytest(*args, addopts=addopts), RELEASE_SERIAL_ONLY_MESSAGE)
+
+
+def test_release_guard_is_scoped_to_release_items():
+    """In one distributed session, only tests/release items are refused; other tests still run."""
+    pytest.importorskip("xdist")
+    from tests.release.conftest import RELEASE_SERIAL_ONLY_MESSAGE
+
+    result = _run_pytest(
+        "tests/test_ci_guardrails.py::test_xdist_option_detection", "tests/release/test_options.py", "-n", "2"
+    )
+    summary = _summary(result)
+    assert result.returncode == pytest.ExitCode.TESTS_FAILED, result.stdout + result.stderr
+    assert RELEASE_SERIAL_ONLY_MESSAGE in " ".join((result.stdout + result.stderr).split())
+    # test_options.py holds six helper tests; the guardrail test is the one that must still pass.
+    assert "1 passed, 6 errors" in summary and "failed" not in summary, summary

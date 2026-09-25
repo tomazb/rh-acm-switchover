@@ -77,6 +77,8 @@ Run debug mode while developing the framework or investigating local behavior:
 python -m pytest tests/release/test_release_certification.py --release-profile tests/release/profiles/dev-minimal.example.yaml --release-mode debug --allow-dirty
 ```
 
+Run every `tests/release` invocation serially. Release helpers and certification are not designed for distributed execution, so `tests/release/conftest.py` fails each of their tests with a serial-only error when it runs inside a pytest-xdist worker, before any fixture, profile load, or scenario. Remove `-n`/`--numprocesses`/`--dist`/`--tx`, including from `PYTEST_ADDOPTS`. `-n 0` is accepted.
+
 You can also filter by stream with `--release-stream python`, `--release-stream ansible`, or `--release-stream bash`. When no mode is supplied, the framework defaults to `certification` for unfiltered runs and `focused-rerun` when scenario or stream filters are present.
 
 Profile scenario declarations define the default matrix for a run. CLI scenario and stream filters narrow that profile-declared set, while mutating scenario filters automatically add prerequisites and final checks. Focused reruns are currently filter-based only; the harness does not support resuming or rerunning from a previous artifact directory.

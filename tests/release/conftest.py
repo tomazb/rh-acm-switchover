@@ -13,6 +13,11 @@ from tests.release.reporting.artifacts import ReleaseArtifacts
 from tests.release.scenarios.catalog import select_release_matrix
 
 RELEASE_PROFILE_SKIP_REASON = "release tests require an explicit release profile"
+RELEASE_SERIAL_ONLY_MESSAGE = (
+    "tests/release is intentionally serial: release helpers and certification are not designed or "
+    "validated for distributed execution, and certification can start live lab work. Run it without "
+    "pytest-xdist distribution (remove -n/--numprocesses/--dist/--tx, including from PYTEST_ADDOPTS)."
+)
 
 
 @dataclass(frozen=True)
@@ -47,6 +52,21 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "release: real-cluster release certification tests")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Refuse to run any tests/release item inside a pytest-xdist worker.
+
+    Once pytest-xdist is installed, an inherited ``-n`` is accepted rather than rejected. The check
+    is per selected item and applies to every item under this directory, helpers and the
+    ``release``-marked certification alike, however it was selected (``tests/release``, the
+    ``tests/`` parent, testpaths, ``-k``/``-m``, ``PYTEST_ADDOPTS``). It runs before pytest's own
+    setup, including the profile skip marker, so no fixture, profile load, artifact directory, or
+    scenario runs. Serial runs, ``-n 0`` and ``--collect-only`` never create workers.
+    """
+    if hasattr(item.config, "workerinput"):
+        pytest.fail(RELEASE_SERIAL_ONLY_MESSAGE, pytrace=False)
 
 
 def _profile_path(config: pytest.Config) -> Path | None:
