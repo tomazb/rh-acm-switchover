@@ -35,7 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or another, could load that run's stale discovery and skip its own. A runtime regression in
   `test_k8s_read_outcome_runtime.py` runs the read module twice against one host:port whose
   served resources change in between, and requires the second run to rediscover them.
-  Test-harness only; no collection or CLI behaviour changes.
+  Test-harness only; no collection or CLI behaviour changes. The same shared cache can still
+  reach `strict_read`-based modules at runtime; that exposure is tracked in #317.
 - `tests/release/conftest.py` now fails every `tests/release` test, helpers and the
   `release`-marked certification alike, that runs inside a pytest-xdist worker, before any
   fixture, profile load, artifact directory, or scenario runs (#315). Since #312 installs

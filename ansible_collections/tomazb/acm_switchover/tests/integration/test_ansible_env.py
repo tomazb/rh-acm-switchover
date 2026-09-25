@@ -20,14 +20,22 @@ def test_integration_ansible_env_includes_python314_compat_path(tmp_path):
     assert Path(env["ANSIBLE_REMOTE_TMP"]).is_relative_to(tmp_path)
 
 
-def test_integration_ansible_env_gives_each_call_its_own_existing_tmpdir(tmp_path):
-    """tempfile.gettempdir() silently falls back to /tmp when TMPDIR does not exist (#314)."""
+def test_integration_ansible_env_gives_each_call_its_own_existing_tmpdir(monkeypatch, tmp_path):
+    """A shared or missing TMPDIR shares the discovery cache between runs (#314).
+
+    tempfile.gettempdir() silently falls back to /tmp when TMPDIR does not exist, and an
+    inherited TMPDIR (common on CI runners) must not replace the per-call directory.
+    """
+    shared = tmp_path / "inherited"
+    shared.mkdir()
+    monkeypatch.setenv("TMPDIR", str(shared))
+
     first = Path(_ansible_env(_find_repo_root(), tmp_path)["TMPDIR"])
     second = Path(_ansible_env(_find_repo_root(), tmp_path)["TMPDIR"])
 
     assert first.is_dir() and first.is_relative_to(tmp_path)
     assert second.is_dir() and second.is_relative_to(tmp_path)
-    assert first != second
+    assert len({first, second, shared}) == 3
 
 
 def test_integration_ansible_env_disables_callback_color(monkeypatch, tmp_path):

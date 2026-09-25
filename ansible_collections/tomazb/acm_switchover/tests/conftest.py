@@ -267,7 +267,7 @@ def _ansible_env(repo_root: Path, tmp_path: Path, *, extra_pythonpaths: tuple[Pa
     remote_tmp.mkdir(parents=True, exist_ok=True)
     # kubernetes.core (k8srcp-<sha256(host-user)>.json) and kubernetes.dynamic
     # (osrcp-<md5(host)>.json) cache API discovery in tempfile.gettempdir(), keyed by the API
-    # server host:port. Fake APIs bind ephemeral ports the OS recycles, so a shared temp dir lets
+    # server host:port (plus the login user for kubernetes.core). Fake APIs bind ephemeral ports the OS recycles, so a shared temp dir lets
     # a run load an earlier run's stale discovery (#314). A fresh directory per call isolates
     # runs within one test too; mkdtemp also guarantees it exists, which gettempdir() requires.
     module_tmp = tempfile.mkdtemp(prefix="tmpdir-", dir=tmp_path)

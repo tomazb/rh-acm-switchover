@@ -269,7 +269,7 @@ def test_runtime_runs_sharing_an_api_endpoint_each_perform_their_own_discovery(t
     """Module runs whose fake APIs share a host:port must not share discovery (#314).
 
     kubernetes.core caches API discovery in ``tempfile.gettempdir()``, keyed by the API
-    server host:port. Fake APIs bind ephemeral ports the OS recycles, so a later run, in
+    server host:port and the login user. Fake APIs bind ephemeral ports the OS recycles, so a later run, in
     the same test or another one, can reach the host:port of an earlier fake API. One
     fake API reproduces that deterministically: between the runs it stops serving
     ConfigMaps, and the second run must discover that itself rather than load the first
@@ -291,7 +291,8 @@ def test_runtime_runs_sharing_an_api_endpoint_each_perform_their_own_discovery(t
     assert first.returncode == 0, _output(first)
     assert "READ_STATUS=ok COUNT=1 CHANGED=False" in _output(first)
     assert second.returncode == 0, _output(second)
-    discovery = {"method": "GET", "path": "/api/v1"}
+    # Only the discoverer requests /apis; strict_read's own served-kind probe requests /api/v1.
+    discovery = {"method": "GET", "path": "/apis"}
     assert discovery in first_requests, first_requests
     assert discovery in second_requests, second_requests
     assert "READ_STATUS=kind_not_served COUNT=0 CHANGED=False" in _output(second)
