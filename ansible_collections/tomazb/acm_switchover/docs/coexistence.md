@@ -133,9 +133,12 @@ The Python CLI has no cached route: custom-resource reads prove the kind served
 before the GET (the same outcomes), and typed built-in reads
 (`get_namespace_strict`, `get_deployment_strict`, `get_replicaset_strict`, and
 the `import-controller-config` ConfigMap read) use fixed routes and take a 404
-as absence without discovery. The one difference is a built-in named 404 whose
-live discovery read then fails, which the collection reports as `error` and
-Python as absence. It is fail-closed: the collection's auto-import step fails
+as absence without discovery. The difference is a built-in named 404 that live
+discovery does not confirm: discovery that cannot be read or whose entry does
+not match the route read (`error`), or discovery that omits the kind
+(`kind_not_served`). Python reports each as absence. On a conformant API server
+the unreadable case is the reachable one, since core kinds are always served
+and cannot be recreated with another scope. It is fail-closed: the collection's auto-import step fails
 instead of applying immediate-import annotations, the destination-observability
 gate blocks instead of accepting an absent namespace, observability teardown
 fails instead of recording namespace-absent evidence, and Pod classification

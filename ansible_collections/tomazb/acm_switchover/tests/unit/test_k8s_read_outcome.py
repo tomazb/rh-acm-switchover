@@ -433,6 +433,8 @@ def test_a_named_404_of_a_namespaced_kind_read_without_a_namespace_is_error(monk
     )
     result = _run_module(monkeypatch, params=params, client=client)
     assert result["read_status"] == "error"
+    assert result["resources"] == []
+    assert result["resource_version"] is None
 
 
 def test_list_path_404_is_error_not_not_found(monkeypatch):

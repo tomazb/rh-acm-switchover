@@ -25,9 +25,10 @@ from lib.strict_read import StrictReadStatus
 # re-reads discovery live and requires the served entry to match the route it read. Python has
 # no cached route: custom resources prove the kind served before the GET, and typed built-in
 # reads (Namespace, Deployment, ReplicaSet) use fixed routes and take a 404 as absence without
-# discovery. The one observable difference is fail-closed and deliberately has no equality
-# vector here: a built-in named 404 whose discovery read then fails is `error` in the collection
-# and absence in Python. It is an operator-approved divergence recorded in the collection's
+# discovery. The observable difference is fail-closed and deliberately has no equality vector
+# here: a built-in named 404 that live discovery does not confirm (unreadable, omitted, or not
+# matching the route read) is `error` or `kind_not_served` in the collection and absence in
+# Python. It is an operator-approved divergence recorded in the collection's
 # docs/coexistence.md.
 #
 # The last column is the exact revision both form factors must publish, and `None` means both
