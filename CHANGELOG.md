@@ -38,10 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read-only against a live API server. A named 404 is now `kind_not_served` when live discovery
   omits the resource name, and `error` when discovery cannot be read, when the resolved plural
   is not the canonical resource name, when the live entry's scope does not match the route
-  read, or when a namespaced kind was read without a namespace. Successful reads are unchanged and the shared cache is not rewritten. For a removed
-  CRD, the CRD-backed named reads (MultiClusterHub, ManagedCluster, ClusterServiceVersion) gate
-  as before, since they already accepted `not_found` and `kind_not_served` alike, but the
-  recorded evidence becomes `crd_absent` instead of `object_absent`
+  read, or when a namespaced kind was read without a namespace. Successful reads are unchanged
+  and the shared cache is not rewritten. For a removed CRD, the CRD-backed named reads
+  (MultiClusterHub, ManagedCluster, ClusterServiceVersion) gate as before, since they already
+  accepted `not_found` and `kind_not_served` alike, but the recorded evidence becomes
+  `crd_absent` instead of `object_absent`
   (`teardown_one_managed_cluster.yml`, `delete_multiclusterhub.yml`). For every kind, CRD-backed
   or built-in (ConfigMap, Namespace, Deployment, ReplicaSet), a named 404 whose discovery read
   fails or whose served entry does not match the route read now fails closed to `error`; for
