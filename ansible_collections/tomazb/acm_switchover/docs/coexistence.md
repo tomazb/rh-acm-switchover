@@ -147,9 +147,9 @@ destination-observability gate blocks instead of accepting an absent
 namespace, observability teardown fails instead of recording namespace-absent
 evidence, and Pod classification reports an unreadable namespace or
 `deployment_read_failed` instead of `namespace_absent` or
-`install_deployment_absent`. Operator-approved; the
-capabilities stay `dual-supported`. The parity tests hold the custom-resource
-outcomes equal and intentionally carry no equality vector for this case.
+`install_deployment_absent`. Operator-approved; the capabilities stay
+`dual-supported`. The parity tests hold the custom-resource outcomes equal and
+intentionally carry no equality vector for this case.
 
 **Default posture (audit C4):** `checkpoint.enabled` remains `false` by
 default. Without checkpointing the collection has no resume and no

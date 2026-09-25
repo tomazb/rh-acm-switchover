@@ -36,9 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stopped being served still resolved and its 404 was published as an absence proof; a stale
   cached scope sent the GET to a route that 404s while the object exists. Both were reproduced
   read-only against a live API server. A named 404 is now `kind_not_served` when live discovery
-  omits the resource name, and `error` when discovery cannot be read, or when the live entry's
-  name or scope does not match the route read, or a namespaced kind was read without a
-  namespace. Successful reads are unchanged and the shared cache is not rewritten. For a removed
+  omits the resource name, and `error` when discovery cannot be read, when the resolved plural
+  is not the canonical resource name, when the live entry's scope does not match the route
+  read, or when a namespaced kind was read without a namespace. Successful reads are unchanged and the shared cache is not rewritten. For a removed
   CRD, the CRD-backed named reads (MultiClusterHub, ManagedCluster, ClusterServiceVersion) gate
   as before, since they already accepted `not_found` and `kind_not_served` alike, but the
   recorded evidence becomes `crd_absent` instead of `object_absent`
