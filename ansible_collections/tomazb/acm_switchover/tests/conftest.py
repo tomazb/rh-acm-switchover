@@ -262,8 +262,13 @@ def _seed_phase_local_facts(vars_payload: dict) -> None:
 def _ansible_env(repo_root: Path, tmp_path: Path, *, extra_pythonpaths: tuple[Path, ...] = ()) -> dict:
     local_tmp = tmp_path / "ansible-local"
     remote_tmp = tmp_path / "ansible-remote"
+    # kubernetes.core caches API discovery at tempfile.gettempdir()/k8srcp-<sha256(host-user)>.json.
+    # Fake APIs bind ephemeral ports the OS recycles, so a shared temp dir lets one test load
+    # another's stale discovery (#314). gettempdir() silently skips a missing TMPDIR, so create it.
+    module_tmp = tmp_path / "tmpdir"
     local_tmp.mkdir(parents=True, exist_ok=True)
     remote_tmp.mkdir(parents=True, exist_ok=True)
+    module_tmp.mkdir(parents=True, exist_ok=True)
     env = {
         **os.environ,
         "ANSIBLE_COLLECTIONS_PATH": ":".join(
@@ -279,6 +284,7 @@ def _ansible_env(repo_root: Path, tmp_path: Path, *, extra_pythonpaths: tuple[Pa
         "ANSIBLE_PYTHON_INTERPRETER": sys.executable,
         "ANSIBLE_LOCAL_TEMP": str(local_tmp),
         "ANSIBLE_REMOTE_TMP": str(remote_tmp),
+        "TMPDIR": str(module_tmp),
     }
     pythonpaths = [str(_ANSIBLE_PY314_COMPAT_PATH)]
     pythonpaths.extend(str(path) for path in extra_pythonpaths)

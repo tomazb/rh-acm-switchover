@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Collection test harnesses built on `tests/conftest.py::_ansible_env` now give each
+  `ansible-playbook` run its own `TMPDIR` inside the test's `tmp_path` (#314). kubernetes.core
+  caches API discovery in the system temp directory keyed by the API server host:port, so a
+  test whose fake API reused an earlier test's ephemeral port could load that test's stale
+  discovery and skip its own. A runtime regression in `test_k8s_read_outcome_runtime.py` runs
+  two module invocations against one host:port and requires each to perform discovery.
+  Test-harness only; no collection or CLI behaviour changes.
 - `tests/release/conftest.py` now fails every `tests/release` test, helpers and the
   `release`-marked certification alike, that runs inside a pytest-xdist worker, before any
   fixture, profile load, artifact directory, or scenario runs (#315). Since #312 installs

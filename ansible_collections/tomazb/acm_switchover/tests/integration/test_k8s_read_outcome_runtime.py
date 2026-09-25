@@ -263,3 +263,38 @@ def test_runtime_check_mode_still_reads_without_writes(tmp_path):
     assert {"method": "GET", "path": "/api/v1/namespaces/test-ns/pods"} in requests
     assert writes == []
     assert "changed=0" in output
+
+
+def test_runtime_runs_sharing_an_api_endpoint_each_perform_their_own_discovery(tmp_path):
+    """Two tests whose fake APIs share a host:port must not share discovery (#314).
+
+    kubernetes.core caches API discovery in ``tempfile.gettempdir()``, keyed by the API
+    server host:port and user. Fake APIs bind ephemeral ports the OS recycles, so a later
+    test can reach the same host:port as an earlier one. One fake API with two distinct
+    per-test directories reproduces that deterministically: the second run serves a
+    different resource set and must discover it itself rather than load the first run's
+    cache.
+    """
+    first_test_dir = tmp_path / "first-test"
+    second_test_dir = tmp_path / "second-test"
+    first_test_dir.mkdir()
+    second_test_dir.mkdir()
+    api = FakeR302API()
+    try:
+        first = _run_module(first_test_dir, server=api.url, read_mode="list", kind="Pod", resource_name="pods")
+        first_requests = api.requests
+        api.core_resources = [
+            {"name": "pods", "singularName": "pod", "namespaced": True, "kind": "Pod", "verbs": ["get", "list"]}
+        ]
+        second = _run_module(second_test_dir, server=api.url, read_mode="list", kind="Pod", resource_name="pods")
+        second_requests = api.requests[len(first_requests) :]
+    finally:
+        api.close()
+
+    for completed in (first, second):
+        output = _output(completed)
+        assert completed.returncode == 0, output
+        assert "READ_STATUS=ok COUNT=0 CHANGED=False" in output
+    discovery = {"method": "GET", "path": "/api/v1"}
+    assert discovery in first_requests, first_requests
+    assert discovery in second_requests, second_requests
