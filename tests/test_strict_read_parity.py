@@ -28,6 +28,10 @@ VECTORS = [
     ("object_absent", "named-object absence", StrictReadStatus.OBJECT_ABSENT, "not_found", None),
     ("kind_not_served", "positive kind-not-served", StrictReadStatus.CRD_ABSENT, "kind_not_served", None),
     ("namespace_absent", "positive namespace absence", StrictReadStatus.NAMESPACE_ABSENT, "not_found", None),
+    # #317: a named GET of a kind live discovery no longer serves is never an object absence.
+    # The collection may resolve the kind from kubernetes.core's shared on-disk discovery cache
+    # and receive a 404 on its object route; Python proves the kind served before the GET.
+    ("named_get_kind_not_served", "positive kind-not-served", StrictReadStatus.CRD_ABSENT, "kind_not_served", None),
     ("named_get_success", "success, complete inventory", StrictReadStatus.ITEMS, "ok", "77"),
     ("authorization_failure", "api failure", StrictReadStatus.ERROR, "error", None),
     ("transport_failure", "api failure", StrictReadStatus.ERROR, "error", None),
@@ -153,6 +157,14 @@ def _python_complete_pagination():
 def _python_object_absent():
     client = _python_client(get_effects=[ApiException(status=404)])
     outcome = client.get_custom_resource_strict(_GROUP, _VERSION, _PLURAL, "mch")
+    return outcome
+
+
+def _python_named_get_kind_not_served():
+    call_api = Mock(return_value=_unserved_discovery(_PLURAL))
+    client = _python_client(call_api=call_api, get_effects=[ApiException(status=404)])
+    outcome = client.get_custom_resource_strict(_GROUP, _VERSION, _PLURAL, "mch")
+    client.custom_api.get_cluster_custom_object.assert_not_called()
     return outcome
 
 
@@ -356,6 +368,7 @@ _PYTHON_VECTORS = {
     "object_absent": _python_object_absent,
     "kind_not_served": _python_kind_not_served,
     "namespace_absent": _python_namespace_absent,
+    "named_get_kind_not_served": _python_named_get_kind_not_served,
     "named_get_success": _python_named_get_success,
     "authorization_failure": _python_authorization_failure,
     "transport_failure": _python_transport_failure,
@@ -659,7 +672,10 @@ def _collection_complete_pagination():
 
 
 def _collection_object_absent():
-    client = _FakeK8sClient(resource=object(), get_error=_collection_api_error(404))
+    dynamic = _FakeDynamicClient(
+        discovery={"kind": "APIResourceList", "resources": [{"name": "widgets", "kind": "Widget"}]}
+    )
+    client = _FakeK8sClient(resource=object(), get_error=_collection_api_error(404), dynamic=dynamic)
     return _run_collection(
         {"read_mode": "get", "api_version": "g/v1", "kind": "Widget", "name": "mch", "resource_name": "widgets"},
         client=client,
@@ -680,8 +696,21 @@ def _collection_kind_not_served():
     )
 
 
+def _collection_named_get_kind_not_served():
+    # The kind still resolves (a stale cached discovery entry) but live discovery omits it.
+    dynamic = _FakeDynamicClient(discovery={"kind": "APIResourceList", "resources": [{"name": "pods", "kind": "Pod"}]})
+    client = _FakeK8sClient(resource=object(), get_error=_collection_api_error(404), dynamic=dynamic)
+    return _run_collection(
+        {"read_mode": "get", "api_version": "g/v1", "kind": "Widget", "name": "mch", "resource_name": "widgets"},
+        client=client,
+    )
+
+
 def _collection_namespace_absent():
-    client = _FakeK8sClient(resource=object(), get_error=_collection_api_error(404))
+    dynamic = _FakeDynamicClient(
+        discovery={"kind": "APIResourceList", "resources": [{"name": "namespaces", "kind": "Namespace"}]}
+    )
+    client = _FakeK8sClient(resource=object(), get_error=_collection_api_error(404), dynamic=dynamic)
     return _run_collection(
         {
             "read_mode": "get",
@@ -930,6 +959,7 @@ _COLLECTION_VECTORS = {
     "object_absent": _collection_object_absent,
     "kind_not_served": _collection_kind_not_served,
     "namespace_absent": _collection_namespace_absent,
+    "named_get_kind_not_served": _collection_named_get_kind_not_served,
     "named_get_success": _collection_named_get_success,
     "authorization_failure": _collection_authorization_failure,
     "transport_failure": _collection_transport_failure,
