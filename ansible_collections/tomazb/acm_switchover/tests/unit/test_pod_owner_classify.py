@@ -139,7 +139,12 @@ class _LiveDiscovery:
             for kind, plural in _PLURALS.items()
             if not self._k8s_client.unserved(kind) and kind not in self._k8s_client.discovery_omits
         ]
-        body = json.dumps({"kind": "APIResourceList", "resources": served}).encode("utf-8")
+        # A live APIResourceList names the group/version it was served for: the requested path's.
+        # Deliberately conformant; groupVersion negatives live in test_k8s_read_outcome.py.
+        group_version = path.removeprefix("/apis/") if path.startswith("/apis/") else path.removeprefix("/api/")
+        body = json.dumps({"kind": "APIResourceList", "groupVersion": group_version, "resources": served}).encode(
+            "utf-8"
+        )
 
         class _Raw:
             data = body

@@ -118,6 +118,7 @@ def _live_discovery_resources(api_client, api_version: str) -> list[dict] | None
     Every request goes to the API server: the dynamic client's discovery cache substitutes an
     empty resource list for some discovery-fetch failures, and the substituted set differs
     across the supported client range, so a cached lookup miss alone never proves absence.
+    A document that does not declare the requested group/version says nothing about it.
     """
     path = f"/apis/{api_version}" if "/" in api_version else f"/api/{api_version}"
     try:
@@ -126,6 +127,9 @@ def _live_discovery_resources(api_client, api_version: str) -> list[dict] | None
     except Exception:
         return None
     if not isinstance(body, dict) or body.get("kind") != "APIResourceList":
+        return None
+    group_version = body.get("groupVersion")
+    if not isinstance(group_version, str) or not group_version or group_version != api_version:
         return None
     resources = body.get("resources")
     if not isinstance(resources, list):
@@ -163,7 +167,8 @@ def _named_404_status(
     stale: an unserved kind's route, and a route built with the wrong scope, answer 404 while
     the kind (or even the object) exists. A namespaced kind read with no namespace is routed to
     its cluster-wide path, which names no namespaced object. Absence is proved only when live
-    discovery serves the requested kind on the exact route that returned the 404.
+    discovery for the requested group/version serves the requested kind on the exact route that
+    returned the 404.
     """
     if getattr(resource, "name", None) != resource_name:
         return "error"

@@ -380,6 +380,12 @@ def test_runtime_stale_shared_discovery_never_turns_an_unserved_kind_into_not_fo
     # the first run's shared cache, so no discoverer group listing was requested again.
     assert {"method": "GET", "path": "/apis"} not in second_requests, second_requests
     assert {"method": "GET", "path": "/api"} not in second_requests, second_requests
+    # The cached route was actually read: the named object GET was sent (and the fake 404s it),
+    # and a live /api/v1 discovery read followed it.
+    named_get = {"method": "GET", "path": "/api/v1/namespaces/test-ns/configmaps/test-config"}
+    assert named_get in second_requests, second_requests
+    after_named_get = second_requests[second_requests.index(named_get) + 1 :]
+    assert {"method": "GET", "path": "/api/v1"} in after_named_get, second_requests
     assert second.returncode == 0, _output(second)
     assert "READ_STATUS=not_found" not in _output(second)
     assert "READ_STATUS=kind_not_served COUNT=0 CHANGED=False" in _output(second)

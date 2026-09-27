@@ -96,8 +96,8 @@ read_status:
     - C(not_found) only for a named get that received an explicit 404/NotFound on a route
       that live discovery of the API group/version still serves, with the same resource name
       and scope the request was routed by. A 404 for a kind that live discovery positively
-      omits is C(kind_not_served); one whose discovery cannot be read, or whose route live
-      discovery does not confirm, is C(error).
+      omits is C(kind_not_served); one whose discovery cannot be read or does not declare the
+      requested group/version, or whose route live discovery does not confirm, is C(error).
     - C(kind_not_served) when the API group/version was read successfully and
       positively does not serve this kind.
     - C(error) for every other unverifiable outcome.

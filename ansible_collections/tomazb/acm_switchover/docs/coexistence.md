@@ -125,11 +125,16 @@ collection resolves every kind, built-in or custom, through kubernetes.core's
 shared on-disk discovery cache, and the dynamic client routes the GET by the
 cached plural and scope. After any named 404 the collection's `strict_read`
 therefore publishes `not_found` only when the resolved plural is the canonical
-resource name, a live read of the group/version's discovery lists it with the
-requested kind and the scope the GET was routed by, and a namespaced kind was
-read in a namespace. A live miss is `kind_not_served`; a name, kind, or scope
-mismatch, a namespaced read without a namespace, or unreadable discovery is
-`error`.
+resource name, a live read of the group/version's discovery declares that
+requested group/version and lists the name with the requested kind and the
+scope the GET was routed by, and a namespaced kind was read in a namespace. A
+live miss is `kind_not_served`; a name, kind, or scope mismatch, a namespaced
+read without a namespace, or unreadable discovery is `error`. Every collection
+discovery read, including the kind-not-served proof for an unresolvable kind,
+treats a document whose `groupVersion` is missing or is not the requested
+group/version as unreadable. Python's discovery prover does not check that
+field; a conformant API server always declares the requested group/version, so
+only a non-conformant response differs, and the collection fails closed on it.
 The Python CLI has no cached route: custom-resource reads prove the resource
 name served before the GET and align for supported caller inputs, while typed
 built-in reads (`get_namespace_strict`, `get_deployment_strict`,

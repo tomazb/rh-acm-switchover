@@ -294,9 +294,14 @@ class _ResolvedResource:
 _CONFIGMAPS_ROUTE = _ResolvedResource("configmaps", namespaced=True)
 _CONFIGMAPS_SERVED = {
     "kind": "APIResourceList",
+    "groupVersion": "v1",
     "resources": [{"name": "configmaps", "kind": "ConfigMap", "namespaced": True}],
 }
-_CONFIGMAPS_NOT_SERVED = {"kind": "APIResourceList", "resources": [{"name": "pods", "kind": "Pod", "namespaced": True}]}
+_CONFIGMAPS_NOT_SERVED = {
+    "kind": "APIResourceList",
+    "groupVersion": "v1",
+    "resources": [{"name": "pods", "kind": "Pod", "namespaced": True}],
+}
 
 
 def test_named_get_explicit_404_is_not_found(monkeypatch):
@@ -381,7 +386,11 @@ def test_a_non_404_named_get_failure_stays_error_even_when_discovery_serves_the_
 
 def _configmaps_entry(**overrides):
     entry = {"name": "configmaps", "kind": "ConfigMap", "namespaced": True, **overrides}
-    return {"kind": "APIResourceList", "resources": [{k: v for k, v in entry.items() if v is not None}]}
+    return {
+        "kind": "APIResourceList",
+        "groupVersion": "v1",
+        "resources": [{k: v for k, v in entry.items() if v is not None}],
+    }
 
 
 @pytest.mark.parametrize(
@@ -437,6 +446,73 @@ def test_a_named_404_of_a_namespaced_kind_read_without_a_namespace_is_error(monk
     assert result["read_status"] == "error"
     assert result["resources"] == []
     assert result["resource_version"] is None
+
+
+_MISSING = object()
+
+
+def _configmaps_document(group_version):
+    """A live discovery document whose only varied field is `groupVersion`."""
+    document = {
+        "kind": "APIResourceList",
+        "resources": [{"name": "configmaps", "kind": "ConfigMap", "namespaced": True}],
+    }
+    if group_version is not _MISSING:
+        document["groupVersion"] = group_version
+    return document
+
+
+@pytest.mark.parametrize(
+    "group_version, expected_status",
+    [
+        ("v1", "not_found"),
+        (_MISSING, "error"),
+        ("", "error"),
+        (7, "error"),
+        ("apps/v1", "error"),
+    ],
+    ids=["matches_requested", "missing", "empty", "not_a_string", "differs_from_requested"],
+)
+def test_a_named_404_is_an_absence_proof_only_when_live_discovery_is_for_the_requested_group_version(
+    monkeypatch, group_version, expected_status
+):
+    """#317: live discovery must establish the requested API group/version, not just a plural.
+
+    The canonical plural, requested kind, and routed scope all match in every case; only the
+    document's `groupVersion` varies. A document that does not declare the requested group/version
+    proves nothing about the route that returned the 404, so it is unverifiable, never absence.
+    """
+    dynamic = _FakeDynamicClient(discovery=_configmaps_document(group_version))
+    client = _FakeClient(resource=_CONFIGMAPS_ROUTE, get_error=_api_error(NotFoundError, 404), dynamic=dynamic)
+    result = _run_module(monkeypatch, params=NAMED_CONFIGMAP_PARAMS, client=client)
+    assert result["read_status"] == expected_status
+    assert result["resources"] == []
+    assert result["resource_version"] is None
+    assert [call["path"] for call in dynamic.request_calls] == ["/api/v1"]
+
+
+@pytest.mark.parametrize(
+    "group_version",
+    [_MISSING, "", 7, "operator.open-cluster-management.io/v2"],
+    ids=["missing", "empty", "not_a_string", "differs_from_requested"],
+)
+def test_discovery_for_another_group_version_never_proves_a_kind_not_served(monkeypatch, group_version):
+    """An unresolvable kind is `kind_not_served` only when discovery for its own group/version omits it."""
+    discovery = {"kind": "APIResourceList", "resources": [{"name": "pods", "kind": "Pod"}]}
+    if group_version is not _MISSING:
+        discovery["groupVersion"] = group_version
+    client = _FakeClient(resource_error=ResourceNotFoundError("no matches"), dynamic=_FakeDynamicClient(discovery))
+    result = _run_module(
+        monkeypatch,
+        params={
+            "read_mode": "list",
+            "api_version": "operator.open-cluster-management.io/v1",
+            "kind": "MultiClusterHub",
+            "resource_name": "multiclusterhubs",
+        },
+        client=client,
+    )
+    assert result["read_status"] == "error"
 
 
 def test_list_path_404_is_error_not_not_found(monkeypatch):
@@ -907,6 +983,7 @@ def test_malformed_list_pages_are_error_never_empty_success(monkeypatch, page):
                 "dynamic": _FakeDynamicClient(
                     discovery={
                         "kind": "APIResourceList",
+                        "groupVersion": "v1",
                         "resources": [{"name": "namespaces", "kind": "Namespace", "namespaced": False}],
                     }
                 ),
@@ -923,7 +1000,11 @@ def test_malformed_list_pages_are_error_never_empty_success(monkeypatch, page):
             {
                 "resource_error": ResourceNotFoundError("no matches"),
                 "dynamic": _FakeDynamicClient(
-                    discovery={"kind": "APIResourceList", "resources": [{"name": "pods", "kind": "Pod"}]}
+                    discovery={
+                        "kind": "APIResourceList",
+                        "groupVersion": "g/v1",
+                        "resources": [{"name": "pods", "kind": "Pod"}],
+                    }
                 ),
             },
             "kind_not_served",
@@ -948,7 +1029,11 @@ def test_positive_discovery_miss_is_kind_not_served(monkeypatch):
     client = _FakeClient(
         resource_error=ResourceNotFoundError("no matches"),
         dynamic=_FakeDynamicClient(
-            discovery={"kind": "APIResourceList", "resources": [{"name": "pods", "kind": "Pod"}]}
+            discovery={
+                "kind": "APIResourceList",
+                "groupVersion": "operator.open-cluster-management.io/v1",
+                "resources": [{"name": "pods", "kind": "Pod"}],
+            }
         ),
     )
     result = _run_module(
@@ -965,7 +1050,13 @@ def test_positive_discovery_miss_is_kind_not_served(monkeypatch):
 
 
 def test_discovery_request_is_bounded_and_targets_the_exact_group_version(monkeypatch):
-    dynamic = _FakeDynamicClient(discovery={"kind": "APIResourceList", "resources": [{"name": "pods", "kind": "Pod"}]})
+    dynamic = _FakeDynamicClient(
+        discovery={
+            "kind": "APIResourceList",
+            "groupVersion": "operator.open-cluster-management.io/v1",
+            "resources": [{"name": "pods", "kind": "Pod"}],
+        }
+    )
     client = _FakeClient(resource_error=ResourceNotFoundError("no matches"), dynamic=dynamic)
     _run_module(
         monkeypatch,
@@ -984,7 +1075,9 @@ def test_discovery_request_is_bounded_and_targets_the_exact_group_version(monkey
 
 
 def test_core_group_discovery_uses_the_core_path(monkeypatch):
-    dynamic = _FakeDynamicClient(discovery={"kind": "APIResourceList", "resources": [{"name": "pods", "kind": "Pod"}]})
+    dynamic = _FakeDynamicClient(
+        discovery={"kind": "APIResourceList", "groupVersion": "v1", "resources": [{"name": "pods", "kind": "Pod"}]}
+    )
     client = _FakeClient(resource_error=ResourceNotFoundError("no matches"), dynamic=dynamic)
     _run_module(monkeypatch, params=LIST_PARAMS, client=client)
     assert dynamic.request_calls[0]["path"] == "/api/v1"
@@ -999,9 +1092,9 @@ def test_core_group_discovery_uses_the_core_path(monkeypatch):
         _FakeDynamicClient(discovery_error=TimeoutError("deadline exceeded")),
         _FakeDynamicClient(discovery="<html>gateway</html>"),
         _FakeDynamicClient(discovery={"kind": "Status"}),
-        _FakeDynamicClient(discovery={"kind": "APIResourceList"}),
-        _FakeDynamicClient(discovery={"kind": "APIResourceList", "resources": "nope"}),
-        _FakeDynamicClient(discovery={"kind": "APIResourceList", "resources": [{"name": 7}]}),
+        _FakeDynamicClient(discovery={"kind": "APIResourceList", "groupVersion": "g/v1"}),
+        _FakeDynamicClient(discovery={"kind": "APIResourceList", "groupVersion": "g/v1", "resources": "nope"}),
+        _FakeDynamicClient(discovery={"kind": "APIResourceList", "groupVersion": "g/v1", "resources": [{"name": 7}]}),
     ],
 )
 def test_unverifiable_discovery_is_error_not_kind_not_served(monkeypatch, dynamic):
@@ -1029,7 +1122,7 @@ def test_a_malformed_entry_anywhere_is_unverifiable_whatever_the_entry_order(res
     maps both `True` and `None` to `error`, which hides the order-dependence from the module's
     output while leaving it wrong in the helper the parity contract holds equal.
     """
-    dynamic = _FakeDynamicClient(discovery={"kind": "APIResourceList", "resources": resources})
+    dynamic = _FakeDynamicClient(discovery={"kind": "APIResourceList", "groupVersion": "g/v1", "resources": resources})
     client = _FakeClient(resource_error=ResourceNotFoundError("no matches"), dynamic=dynamic)
     assert acm_k8s_read_outcome._discovery_serves(client, "g/v1", "widgets") is None
 
@@ -1068,6 +1161,7 @@ def test_irregular_plural_matches_the_exact_name_and_never_becomes_absence(monke
         dynamic=_FakeDynamicClient(
             discovery={
                 "kind": "APIResourceList",
+                "groupVersion": "observability.open-cluster-management.io/v1beta2",
                 "resources": [{"name": "multiclusterobservabilities", "kind": "MultiClusterObservability"}],
             }
         ),
