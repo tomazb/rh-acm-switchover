@@ -131,13 +131,11 @@ scope the GET was routed by, and a namespaced kind was read in a namespace. A
 live miss is `kind_not_served`; a name, kind, or scope mismatch, a namespaced
 read without a namespace, or unreadable discovery is `error`. Every collection
 discovery read, including the kind-not-served proof for an unresolvable kind,
-treats a document whose `groupVersion` is missing or is not the requested
-group/version as unreadable. Python's discovery prover does not check that
-field; a conformant API server always declares the requested group/version, so
-only a non-conformant response differs, and the collection fails closed on it.
-The Python CLI has no cached route: custom-resource reads prove the resource
-name served before the GET and align for supported caller inputs, while typed
-built-in reads (`get_namespace_strict`, `get_deployment_strict`,
+treats a document whose `groupVersion` is missing, empty, not a string, or not
+the requested group/version as unreadable; for custom resources that is a
+separate divergence, recorded in the next paragraph. The Python CLI has no
+cached route: custom-resource reads prove the resource name served before the
+GET, while typed built-in reads (`get_namespace_strict`, `get_deployment_strict`,
 `get_replicaset_strict`, and the `import-controller-config` ConfigMap read)
 use fixed routes and take a 404 as absence without discovery. The difference is
 a built-in named 404 that these collection checks do not confirm: `error` for a
@@ -154,7 +152,39 @@ namespace, observability teardown fails instead of recording namespace-absent
 evidence, and Pod classification reports an unreadable namespace or
 `deployment_read_failed` instead of `namespace_absent` or
 `install_deployment_absent`. Operator-approved; the capabilities stay
-`dual-supported`. The parity tests hold the custom-resource outcomes equal and
+`dual-supported`. The parity tests intentionally carry no equality vector for
+this case.
+
+**Intentional divergence on custom-resource discovery with a malformed or non-matching `groupVersion` (#317, approved after implementation; Python realignment tracked in #321):**
+this is distinct from the built-in divergence above. The collection's
+`groupVersion` check is part of its shared discovery prover, so it governs both
+the named-404 classifier and the kind-not-served proof after a resource
+resolution failure, in either read mode. Python's custom-resource prover
+(`lib/kube_client.py` `_discovery_serves`, used by `get_custom_resource_strict`
+and `list_custom_resources_strict`) does not read `groupVersion`. For valid
+caller inputs and a structurally readable discovery response whose
+`groupVersion` is missing, empty, not a string, or a different group/version,
+the collection returns `error`, while Python can report `OBJECT_ABSENT`
+(canonical resource listed, named GET 404) or `CRD_ABSENT` (canonical resource
+omitted). Such a document proves nothing about the requested group/version, so
+`error` is the fail-closed outcome, and the collection check is not weakened to
+regain equality; the decommission callers that read custom resources reject
+`error` instead of recording absence evidence. Only a malformed or
+non-conformant discovery response reaches this case, because a conformant API
+server always declares the requested group/version. For conformant discovery
+and a cached route that still matches it, the custom-resource outcomes are
+equal on both form factors and are held equal by the parity vectors. A stale
+cached route is the collection-only defect #317 fixes: Python has no cache to
+be stale, so the collection fails closed to `error` where Python reads its
+fixed route. That fail-closed outcome is the #317 fix itself, not a recorded
+parity divergence. Chronology: the collection check was added in #317's repair
+of an independent-validator finding; the next independent validation found
+that Python does not enforce the field; the operator then approved retaining
+this narrow, fail-closed collection divergence. It is recorded as an
+operator-granted exception to the approval-before-implementation rule above.
+The approval covers only a malformed or non-matching discovery
+`groupVersion`. Python runtime is not changed by #317; realigning it is
+tracked in #321. The capabilities stay `dual-supported`, and the parity tests
 intentionally carry no equality vector for this case.
 
 **Default posture (audit C4):** `checkpoint.enabled` remains `false` by

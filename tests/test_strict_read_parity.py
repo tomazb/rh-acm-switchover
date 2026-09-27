@@ -28,12 +28,19 @@ from lib.strict_read import StrictReadStatus
 # (Namespace, Deployment, ReplicaSet, ConfigMap) use fixed routes and take a 404 as absence
 # without discovery. The observable difference is fail-closed and deliberately has no equality
 # vector here: a built-in named 404 that live discovery does not confirm (unreadable, omitted,
-# requested-kind mismatch, or route mismatch) is `error` or `kind_not_served` in the collection
-# and absence in Python. It is an operator-approved divergence recorded in the collection's
-# docs/coexistence.md. Every collection discovery read also rejects a document whose
-# `groupVersion` is not the requested group/version; Python's prover does not read that field,
-# so the Python fixtures below omit it and no vector compares it (only a non-conformant server
-# can differ there).
+# requested-kind mismatch, route mismatch, or a namespaced read without a namespace) is `error`
+# or `kind_not_served` in the collection and absence in Python. It is an operator-approved
+# divergence recorded in the collection's docs/coexistence.md.
+#
+# Custom-resource outcomes are held equal only where a discovery document, when read, declares
+# the requested group/version: the collection fixtures below carry that
+# `groupVersion`, and Python's prover never reads it, so its fixtures omit it. A readable
+# discovery document whose `groupVersion` is missing, empty, non-string, or a different
+# group/version is a second, separate approved divergence (#317, approved after
+# implementation): the collection returns `error`, while Python can publish `OBJECT_ABSENT` or
+# `CRD_ABSENT`. It deliberately has no vector here, because an equality vector would have to
+# require Python's absence to equal the collection's `error`. The collection side is pinned on
+# its shared discovery prover by its own unit tests; aligning Python is tracked in #321.
 #
 # The last column is the exact revision both form factors must publish, and `None` means both
 # must publish no revision at all (Python `resource_version is None`, collection `null`). It is

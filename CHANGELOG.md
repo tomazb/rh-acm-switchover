@@ -47,16 +47,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `crd_absent` instead of `object_absent` (`teardown_one_managed_cluster.yml`,
   `delete_multiclusterhub.yml`). For every kind, CRD-backed or built-in (ConfigMap, Namespace,
   Deployment, ReplicaSet), a named 404 whose discovery read fails or whose served entry does not
-  match the requested kind or route read now fails closed to `error`; for CRD kinds that matches
-  Python, except that Python's discovery prover does not check `groupVersion`, a difference only
-  a non-conformant discovery response can reach. The Python CLI needs no change: it uses typed
-  clients with fixed routes and no discovery cache, and its custom-resource strict GET already
-  proves the kind served before the request. Its typed built-in reads still take a 404 as
-  absence without discovery, so a built-in 404 that live discovery does not confirm is the other
-  difference, and it is fail-closed on the collection side: an operator-approved divergence
-  recorded in [coexistence.md](ansible_collections/tomazb/acm_switchover/docs/coexistence.md)
-  and the [parity matrix](docs/ansible-collection/parity-matrix.md); both capabilities stay
-  `dual-supported`.
+  match the requested kind or route read now fails closed to `error`; for CRD kinds whose live
+  discovery cannot be read, that matches Python. The Python CLI is not changed by this fix: it uses
+  typed clients with fixed routes and no discovery cache, so it is not exposed to the stale
+  cache, and its custom-resource strict reads already prove the kind served before the request.
+  Two operator-approved, fail-closed parity divergences remain, each recorded in
+  [coexistence.md](ansible_collections/tomazb/acm_switchover/docs/coexistence.md) and the
+  [parity matrix](docs/ansible-collection/parity-matrix.md); both capabilities stay
+  `dual-supported`. First, Python's typed built-in reads still take a 404 as absence without
+  discovery, so a built-in 404 that live discovery does not confirm is absence in Python.
+  Second, Python's custom-resource discovery prover does not validate `groupVersion`, so for a
+  custom resource whose live discovery document is readable but has a missing, empty,
+  non-string, or different `groupVersion`, the collection returns `error` while Python can
+  report the object or CRD absent. Only a non-conformant discovery response reaches the second
+  case. It was approved after the collection check was implemented, and realigning Python is
+  tracked in #321.
 
 - Each call to the collection test helper `tests/conftest.py::_ansible_env` now sets `TMPDIR`
   to a fresh, short directory (#314). kubernetes.core and kubernetes.dynamic cache API
