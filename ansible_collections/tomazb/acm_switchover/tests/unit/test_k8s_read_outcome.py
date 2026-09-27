@@ -391,6 +391,7 @@ def _configmaps_entry(**overrides):
         (_CONFIGMAPS_ROUTE, _configmaps_entry(namespaced=False)),
         (_CONFIGMAPS_ROUTE, _configmaps_entry(namespaced=None)),
         (_CONFIGMAPS_ROUTE, _configmaps_entry(namespaced="true")),
+        (_CONFIGMAPS_ROUTE, _configmaps_entry(kind="OtherConfigMap")),
         (_ResolvedResource("configmap", namespaced=True), _CONFIGMAPS_SERVED),
         (object(), _CONFIGMAPS_SERVED),
     ],
@@ -399,6 +400,7 @@ def _configmaps_entry(**overrides):
         "live_scope_differs",
         "live_scope_missing",
         "live_scope_not_a_bool",
+        "live_kind_differs",
         "routed_plural_is_not_the_canonical_name",
         "route_unknown",
     ],
@@ -409,7 +411,7 @@ def test_a_named_404_on_a_route_live_discovery_does_not_confirm_is_error(monkeyp
     The dynamic client builds a named object's path from the resolved plural and scope. A stale
     cached scope sends the GET to a route that 404s even while the object exists, and live
     discovery still lists the plural; this was reproduced read-only against a live API server.
-    Absence is proved only when live discovery confirms the exact route that was read.
+    Absence is proved only when live discovery confirms the requested kind on the exact route that was read.
     """
     client = _FakeClient(
         resource=resource,

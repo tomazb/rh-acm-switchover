@@ -19,16 +19,16 @@ from lib.strict_read import StrictReadStatus
 
 # (vector id, normative outcome, python status, collection read_status, expected revision)
 #
-# Named-object absence (#317) has one contract on both sides, a 404 on a route live discovery
-# serves, but different proof obligations. The collection resolves every kind, built-in or not,
-# through kubernetes.core's possibly stale on-disk discovery cache, so after any named 404 it
-# re-reads discovery live and requires the served entry to match the route it read. Python has
-# no cached route: custom resources prove the kind served before the GET, and typed built-in
-# reads (Namespace, Deployment, ReplicaSet, ConfigMap) use fixed routes and take a 404 as
-# absence without discovery. The observable difference is fail-closed and deliberately has no
-# equality vector here: a built-in named 404 that live discovery does not confirm (unreadable,
-# omitted, or not matching the route read) is `error` or `kind_not_served` in the collection and
-# absence in Python. It is an operator-approved divergence recorded in the collection's
+# Named-object absence (#317) has different proof obligations across the two form factors. The
+# collection resolves every kind, built-in or not, through kubernetes.core's possibly stale
+# on-disk discovery cache, so after any named 404 it re-reads discovery live and requires the
+# served entry to match the requested kind and the route it read. Python has no cached route:
+# custom resources prove the resource name served before the GET, and typed built-in reads
+# (Namespace, Deployment, ReplicaSet, ConfigMap) use fixed routes and take a 404 as absence
+# without discovery. The observable difference is fail-closed and deliberately has no equality
+# vector here: a built-in named 404 that live discovery does not confirm (unreadable, omitted,
+# requested-kind mismatch, or route mismatch) is `error` or `kind_not_served` in the collection
+# and absence in Python. It is an operator-approved divergence recorded in the collection's
 # docs/coexistence.md.
 #
 # The last column is the exact revision both form factors must publish, and `None` means both
