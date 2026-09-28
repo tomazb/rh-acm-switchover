@@ -284,11 +284,12 @@ def test_named_get_present_is_ok(monkeypatch):
 
 
 class _ResolvedResource:
-    """The two resolved-resource fields the dynamic client builds a named object route from."""
+    """The resolved-resource fields the dynamic client builds a named object route from."""
 
-    def __init__(self, name, *, namespaced):
+    def __init__(self, name, *, namespaced, group_version="v1"):
         self.name = name
         self.namespaced = namespaced
+        self.group_version = group_version
 
 
 _CONFIGMAPS_ROUTE = _ResolvedResource("configmaps", namespaced=True)
@@ -402,6 +403,7 @@ def _configmaps_entry(**overrides):
         (_CONFIGMAPS_ROUTE, _configmaps_entry(namespaced="true")),
         (_CONFIGMAPS_ROUTE, _configmaps_entry(kind="OtherConfigMap")),
         (_ResolvedResource("configmap", namespaced=True), _CONFIGMAPS_SERVED),
+        (_ResolvedResource("configmaps", namespaced=True, group_version="foo.io/v1"), _CONFIGMAPS_SERVED),
         (object(), _CONFIGMAPS_SERVED),
     ],
     ids=[
@@ -411,16 +413,20 @@ def _configmaps_entry(**overrides):
         "live_scope_not_a_bool",
         "live_kind_differs",
         "routed_plural_is_not_the_canonical_name",
+        "routed_group_version_is_not_the_requested_one",
         "route_unknown",
     ],
 )
 def test_a_named_404_on_a_route_live_discovery_does_not_confirm_is_error(monkeypatch, resource, discovery):
     """#317: the 404 came from the route the resolved resource built, possibly from a stale cache.
 
-    The dynamic client builds a named object's path from the resolved plural and scope. A stale
-    cached scope sends the GET to a route that 404s even while the object exists, and live
-    discovery still lists the plural; this was reproduced read-only against a live API server.
-    Absence is proved only when live discovery confirms the requested kind on the exact route that was read.
+    The dynamic client builds a named object's path from the resolved group/version, plural and
+    scope. A stale cached scope sends the GET to a route that 404s even while the
+    object exists, and live discovery still lists the plural; this was reproduced read-only
+    against a live API server. When a core `v1` lookup misses, kubernetes.core resolves the kind
+    in any group at `v1`, so the 404 can come from another group's route while live `/api/v1`
+    discovery confirms the core kind. Absence is proved only when live discovery confirms the
+    requested kind on the exact route that was read.
     """
     client = _FakeClient(
         resource=resource,

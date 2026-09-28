@@ -38,14 +38,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that 404s while the object exists. Both were reproduced read-only against a live API server. A
   named 404 is now `kind_not_served` when live discovery omits the resource name, and `error`
   when discovery cannot be read or does not declare the requested group/version (`groupVersion`
-  missing, empty, non-string, or different), when the resolved plural is not the canonical
-  resource name, when the live entry's kind is not the requested kind, when its scope does not
-  match the route read, or when a namespaced kind was read without a namespace. Successful reads
-  are unchanged and the shared cache is not rewritten. For a removed CRD, the CRD-backed named
-  reads (MultiClusterHub, ManagedCluster, ClusterServiceVersion) gate as before, since they
-  already accepted `not_found` and `kind_not_served` alike, but the recorded evidence becomes
-  `crd_absent` instead of `object_absent` (`teardown_one_managed_cluster.yml`,
-  `delete_multiclusterhub.yml`). For every kind, CRD-backed or built-in (ConfigMap, Namespace,
+  missing, empty, non-string, or different), when the resolved group/version is not the
+  requested one (kubernetes.core resolves a core `v1` kind whose core lookup misses in any group
+  at `v1`), when the resolved plural is not the canonical resource name, when the live entry's
+  kind is not the requested kind, when its scope does not match the route read, or when a
+  namespaced kind was read without a namespace. Successful reads are unchanged and the shared
+  cache is not rewritten. For a removed CRD whose group/version is still served, the CRD-backed
+  named reads (MultiClusterHub, ManagedCluster, ClusterServiceVersion) gate as before, since
+  they already accepted `not_found` and `kind_not_served` alike, but the recorded evidence
+  becomes `crd_absent` instead of `object_absent` (`teardown_one_managed_cluster.yml`,
+  `delete_multiclusterhub.yml`). If the removed CRD was the last resource in its group/version,
+  the discovery read itself returns 404 and the named read is `error`, as in Python and as it
+  already was without a stale cache. For every kind, CRD-backed or built-in (ConfigMap, Namespace,
   Deployment, ReplicaSet), a named 404 whose discovery read fails or whose served entry does not
   match the requested kind or route read now fails closed to `error`; for CRD kinds whose live
   discovery cannot be read, that matches Python. The Python CLI is not changed by this fix: it uses

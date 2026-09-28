@@ -713,14 +713,15 @@ def _collection_complete_pagination():
 
 
 class _ResolvedRoute:
-    """The resolved plural and scope the dynamic client builds a named object route from."""
+    """The resolved route fields the dynamic client builds a named object route from."""
 
-    def __init__(self, name, *, namespaced):
+    def __init__(self, name, *, namespaced, group_version):
         self.name = name
         self.namespaced = namespaced
+        self.group_version = group_version
 
 
-_WIDGET_ROUTE = _ResolvedRoute("widgets", namespaced=False)
+_WIDGET_ROUTE = _ResolvedRoute("widgets", namespaced=False, group_version="g/v1")
 _WIDGETS_SERVED = {
     "kind": "APIResourceList",
     "groupVersion": "g/v1",
@@ -788,7 +789,9 @@ def _collection_namespace_absent():
         }
     )
     client = _FakeK8sClient(
-        resource=_ResolvedRoute("namespaces", namespaced=False), get_error=_collection_api_error(404), dynamic=dynamic
+        resource=_ResolvedRoute("namespaces", namespaced=False, group_version="v1"),
+        get_error=_collection_api_error(404),
+        dynamic=dynamic,
     )
     return _run_collection(
         {

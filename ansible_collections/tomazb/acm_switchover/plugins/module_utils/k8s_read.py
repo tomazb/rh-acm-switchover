@@ -163,14 +163,15 @@ def _named_404_status(
     """Classify a named-GET 404 by what live discovery says about the route that was read (#317).
 
     kubernetes.core may resolve the kind from its shared on-disk discovery cache, and the
-    dynamic client builds the object route from the resolved plural and scope. Both can be
-    stale: an unserved kind's route, and a route built with the wrong scope, answer 404 while
-    the kind (or even the object) exists. A namespaced kind read with no namespace is routed to
-    its cluster-wide path, which names no namespaced object. Absence is proved only when live
-    discovery for the requested group/version serves the requested kind on the exact route that
-    returned the 404.
+    dynamic client builds the object route from the resolved group/version, plural and scope.
+    They can be stale or foreign: an unserved kind's route, and a route built with the wrong
+    scope, answer 404 while the kind (or even the object) exists, and when a core `v1` lookup
+    misses, kubernetes.core resolves the kind in any group at `v1`. A namespaced kind read with
+    no namespace is routed to its cluster-wide path, which names no namespaced object. Absence
+    is proved only when live discovery for the requested group/version serves the requested
+    kind on the exact route that returned the 404.
     """
-    if getattr(resource, "name", None) != resource_name:
+    if getattr(resource, "group_version", None) != api_version or getattr(resource, "name", None) != resource_name:
         return "error"
     resources = _live_discovery_resources(api_client, api_version)
     if resources is None:

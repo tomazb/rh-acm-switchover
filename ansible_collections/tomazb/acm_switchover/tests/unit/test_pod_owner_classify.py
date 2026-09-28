@@ -110,10 +110,11 @@ _CLUSTER_SCOPED = {"Namespace"}
 
 
 class _Resource:
-    """A resolved resource with the plural and scope the dynamic client routes a named GET by."""
+    """A resolved resource with the route fields the dynamic client routes a named GET by."""
 
     def __init__(self, api_version: str, kind: str):
         self.api_version = api_version
+        self.group_version = api_version
         self.kind = kind
         self.name = _PLURALS[kind]
         self.namespaced = kind not in _CLUSTER_SCOPED

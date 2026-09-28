@@ -124,12 +124,13 @@ the two form factors have different proof obligations for a named 404. The
 collection resolves every kind, built-in or custom, through kubernetes.core's
 shared on-disk discovery cache, and the dynamic client routes the GET by the
 cached plural and scope. After any named 404 the collection's `strict_read`
-therefore publishes `not_found` only when the resolved plural is the canonical
-resource name, a live read of the group/version's discovery declares that
-requested group/version and lists the name with the requested kind and the
-scope the GET was routed by, and a namespaced kind was read in a namespace. A
-live miss is `kind_not_served`; a name, kind, or scope mismatch, a namespaced
-read without a namespace, or unreadable discovery is `error`. Every collection
+therefore publishes `not_found` only when the resolved group/version is the
+requested one, the resolved plural is the canonical resource name, a live read
+of the group/version's discovery declares that requested group/version and
+lists the name with the requested kind and the scope the GET was routed by, and
+a namespaced kind was read in a namespace. A live miss is `kind_not_served`; a
+group/version, name, kind, or scope mismatch, a namespaced read without a
+namespace, or unreadable discovery is `error`. Every collection
 discovery read, including the kind-not-served proof for an unresolvable kind,
 treats a document whose `groupVersion` is missing, empty, not a string, or not
 the requested group/version as unreadable; for custom resources that is a
@@ -139,12 +140,16 @@ GET, while typed built-in reads (`get_namespace_strict`, `get_deployment_strict`
 `get_replicaset_strict`, and the `import-controller-config` ConfigMap read)
 use fixed routes and take a 404 as absence without discovery. The difference is
 a built-in named 404 that these collection checks do not confirm: `error` for a
-name, kind, or scope mismatch, a namespaced read without a namespace, or
-unreadable discovery, and `kind_not_served` for an omitted kind. Python
-reports each as absence. For the canonical resource names, kinds, and
+group/version, name, kind, or scope mismatch, a namespaced read without a
+namespace, or unreadable discovery, and `kind_not_served` for an omitted kind.
+Python reports each as absence. For the canonical resource names, kinds, and
 namespaces the collection's callers pass, only the unreadable case is reachable
 on a conformant API server: built-in kinds are always served there, and their
-plural, kind, and scope are fixed, so a stale cache cannot mismatch them. It is
+plural, kind, and scope are fixed, so a stale cache cannot mismatch them. A
+group/version mismatch needs kubernetes.core's fallback for a core `v1` kind
+whose core lookup missed, which resolves the kind in any group at `v1`; that
+happens only when core discovery could not be read while the kind was
+resolved. It is
 fail-closed: the collection's
 auto-import step fails instead of applying immediate-import annotations, the
 destination-observability gate blocks instead of accepting an absent
