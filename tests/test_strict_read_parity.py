@@ -42,6 +42,14 @@ from lib.strict_read import StrictReadStatus
 # require Python's absence to equal the collection's `error`. The collection side is pinned on
 # its shared discovery prover by its own unit tests; aligning Python is tracked in #321.
 #
+# The custom-resource vectors below also give the collection a resolved route that matches live
+# discovery. A custom-resource named 404 on a stale cached route (resolved plural not canonical,
+# live kind different, or live scope different from the routed scope) is a third, separate
+# approved divergence (#317, approved after implementation): the collection returns `error`,
+# while Python, which reads the caller's fixed route, can read the object or publish
+# `OBJECT_ABSENT` (or `CRD_ABSENT` when live discovery also omits the canonical name). It also
+# deliberately has no vector here; the collection's route checks are pinned by its own unit tests.
+#
 # The last column is the exact revision both form factors must publish, and `None` means both
 # must publish no revision at all (Python `resource_version is None`, collection `null`). It is
 # what makes §10.2.1b's provenance rule parity-checkable rather than described.

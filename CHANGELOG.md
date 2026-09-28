@@ -51,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   discovery cannot be read, that matches Python. The Python CLI is not changed by this fix: it uses
   typed clients with fixed routes and no discovery cache, so it is not exposed to the stale
   cache, and its custom-resource strict reads already prove the kind served before the request.
-  Two operator-approved, fail-closed parity divergences remain, each recorded in
+  Three operator-approved, fail-closed parity divergences remain, each recorded in
   [coexistence.md](ansible_collections/tomazb/acm_switchover/docs/coexistence.md) and the
   [parity matrix](docs/ansible-collection/parity-matrix.md); both capabilities stay
   `dual-supported`. First, Python's typed built-in reads still take a 404 as absence without
@@ -61,7 +61,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-string, or different `groupVersion`, the collection returns `error` while Python can
   report the object or CRD absent. Only a non-conformant discovery response reaches the second
   case. It was approved after the collection check was implemented, and realigning Python is
-  tracked in #321.
+  tracked in #321. Third, for a custom-resource named GET that returns 404 on a route resolved
+  from a stale discovery cache, where the resolved plural is not canonical or live discovery shows
+  a different kind or scope, the collection returns `error` while Python, which reads the caller's
+  fixed route, can read the object or report it or its CRD absent. Only cached discovery that no
+  longer matches the live API server, such as after a custom resource definition's plural, kind,
+  or scope changed, reaches the third case. It was also approved after the collection checks were
+  implemented; it does not cover LIST routing (#320).
 
 - Each call to the collection test helper `tests/conftest.py::_ansible_env` now sets `TMPDIR`
   to a fresh, short directory (#314). kubernetes.core and kubernetes.dynamic cache API

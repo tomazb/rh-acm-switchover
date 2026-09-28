@@ -173,11 +173,9 @@ regain equality; the decommission callers that read custom resources reject
 non-conformant discovery response reaches this case, because a conformant API
 server always declares the requested group/version. For conformant discovery
 and a cached route that still matches it, the custom-resource outcomes are
-equal on both form factors and are held equal by the parity vectors. A stale
-cached route is the collection-only defect #317 fixes: Python has no cache to
-be stale, so the collection fails closed to `error` where Python reads its
-fixed route. That fail-closed outcome is the #317 fix itself, not a recorded
-parity divergence. Chronology: the collection check was added in #317's repair
+equal on both form factors and are held equal by the parity vectors; a stale
+cached route is the third, separate divergence recorded in the next paragraph.
+Chronology: the collection check was added in #317's repair
 of an independent-validator finding; the next independent validation found
 that Python does not enforce the field; the operator then approved retaining
 this narrow, fail-closed collection divergence. It is recorded as an
@@ -186,6 +184,45 @@ The approval covers only a malformed or non-matching discovery
 `groupVersion`. Python runtime is not changed by #317; realigning it is
 tracked in #321. The capabilities stay `dual-supported`, and the parity tests
 intentionally carry no equality vector for this case.
+
+**Intentional divergence on a custom-resource named-read 404 from a stale cached route (#317, approved after implementation):**
+this is distinct from both divergences above. For a custom-resource named GET,
+the collection builds the object route from the plural and scope that
+kubernetes.core resolved for the requested kind, possibly from its shared
+on-disk discovery cache. When that GET returns 404 and the resolved route does
+not match the requested resource identity, the collection returns `error`: when
+the resolved plural is not the canonical resource name (decided before any
+discovery read), or when fresh live discovery for the requested group/version
+(conformant and readable, declaring that group/version) lists that name with a
+different Kubernetes kind or with a namespaced scope that differs from the
+scope the GET was routed by. Python's custom-resource reads never use a
+dynamic-client route: after a name-only discovery proof they GET the caller's
+fixed group, version, plural, and namespace, so for the same cluster state
+Python reads the object (`ITEMS`) or reports `OBJECT_ABSENT`; for a stale
+plural whose canonical name live discovery also omits, Python reports
+`CRD_ABSENT` without a GET. A stale route cannot prove anything about the
+requested object, so `error` is the fail-closed outcome. The collection's
+plural, kind, and scope checks are not weakened, and the route is not retried
+or rerouted, to regain equality. The decommission callers that read custom
+resources reject `error` instead of recording absence evidence. With a fresh
+cache and conformant discovery the resolved route matches, so this case is
+reachable only when the cached discovery no longer matches the live API
+server, for example after a custom resource definition's plural, scope, or kind
+changed within one group/version after the cache was written. The omitted-kind
+case stays aligned when the resolved plural is canonical (`kind_not_served` in
+the collection, `CRD_ABSENT` in Python). Chronology: the plural and scope
+checks were implemented in `7d105b30` and the kind check in `3105809b`, before
+any approval for custom resources; the earlier built-in approval (recorded in
+`53179299`) and the `groupVersion` approval above do not cover this case. An
+independent validation then found the difference (IV-319-F4), and the operator
+explicitly approved it afterwards as a third narrow divergence. It is recorded
+as an operator-granted exception to the approval-before-implementation rule
+above. The approval covers only this stale cached-route mismatch on
+custom-resource named reads. It does not cover LIST routing, which #320 owns,
+and it does not authorize fallbacks. Python runtime is not changed by #317, and
+any restoration of parity for this case needs its own governed follow-up. The
+capabilities stay `dual-supported`, and the parity tests intentionally carry no
+equality vector for this case.
 
 **Default posture (audit C4):** `checkpoint.enabled` remains `false` by
 default. Without checkpointing the collection has no resume and no
