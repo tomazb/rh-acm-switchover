@@ -45,6 +45,7 @@ class FakeR302API:
         configmap_transport_error: bool = False,
         core_resources: list[dict[str, Any]] | None = None,
         managed_clusters: list[dict[str, Any]] | None = None,
+        managed_cluster_discovery_status: int = 200,
     ):
         self.pod_list_status = pod_list_status
         self.pod_list_body = copy.deepcopy(pod_list_body)
@@ -56,6 +57,8 @@ class FakeR302API:
         self.configmap_transport_error = configmap_transport_error
         self._configmap_transport_errors_remaining = 1 if configmap_transport_error else 0
         self.core_resources: list[dict[str, Any]] | None = copy.deepcopy(core_resources)
+        # A status other than 200 makes the ManagedCluster group/version discovery read fail.
+        self.managed_cluster_discovery_status = managed_cluster_discovery_status
         default_managed_clusters: list[dict[str, Any]] = [
             {
                 "apiVersion": "cluster.open-cluster-management.io/v1",
@@ -187,6 +190,10 @@ class FakeR302API:
                     )
                     return
                 if path == "/apis/cluster.open-cluster-management.io/v1":
+                    if api.managed_cluster_discovery_status != 200:
+                        status = api.managed_cluster_discovery_status
+                        self._write_json(status_payload(status), status=status)
+                        return
                     self._write_json(
                         {
                             "kind": "APIResourceList",

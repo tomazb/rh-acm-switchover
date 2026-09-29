@@ -7,10 +7,10 @@
     - name: Read the requested Kubernetes resource
       tomazb.acm_switchover.acm_k8s_read_outcome:
         read_mode: "{{ r3_02_read_mode }}"
-        api_version: v1
+        api_version: "{{ r3_02_api_version | default('v1') }}"
         kind: "{{ r3_02_kind }}"
         resource_name: "{{ r3_02_resource_name }}"
-        namespace: test-ns
+        namespace: "{{ r3_02_namespace | default('test-ns') or omit }}"
         name: "{{ r3_02_name if r3_02_read_mode == 'get' else omit }}"
         label_selectors: "{{ ['app=r3-02'] if r3_02_read_mode == 'list' else omit }}"
         kubeconfig: "{{ r3_02_kubeconfig }}"
