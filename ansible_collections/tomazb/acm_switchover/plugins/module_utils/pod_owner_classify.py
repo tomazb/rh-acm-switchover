@@ -335,9 +335,10 @@ def classify_error_result() -> dict:
 def classify_pass(read: Reader, identity: dict, *, namespace: str) -> dict:
     """One complete classification pass: Namespace GET, strict all-Pod LIST, classification.
 
-    ``read_status`` is ``namespace_absent`` only on a named Namespace GET 404, with no Pod or
-    Deployment read after it. A Pod LIST that is not a complete inventory -- a 404 included --
-    is ``error``, never an empty one. ``blocking_count`` is None unless the pass is ``ok``.
+    ``read_status`` is ``namespace_absent`` only on a named Namespace GET ``not_found`` (a 404
+    on a route live discovery serves), with no Pod or Deployment read after it. A Pod LIST
+    that is not a complete inventory -- a 404 included -- is ``error``, never an empty one.
+    ``blocking_count`` is None unless the pass is ``ok``.
     ``read_error_stage`` names the unverifiable read of an ``error`` pass (``namespace`` or
     ``pods``) and is None otherwise; it carries no reason or server text.
     """

@@ -19,6 +19,37 @@ from lib.strict_read import StrictReadStatus
 
 # (vector id, normative outcome, python status, collection read_status, expected revision)
 #
+# Named-object absence (#317) has different proof obligations across the two form factors. The
+# collection resolves every kind, built-in or not, through kubernetes.core's possibly stale
+# on-disk discovery cache, so after any named 404 it re-reads discovery live and requires the
+# document to declare the requested group/version and the served entry to match the requested
+# kind and the route it read. Python has no cached route:
+# custom resources prove the resource name served before the GET, and typed built-in reads
+# (Namespace, Deployment, ReplicaSet, ConfigMap) use fixed routes and take a 404 as absence
+# without discovery. The observable difference is fail-closed and deliberately has no equality
+# vector here: a built-in named 404 that live discovery does not confirm (unreadable, omitted,
+# requested-kind mismatch, route mismatch, or a namespaced read without a namespace) is `error`
+# or `kind_not_served` in the collection and absence in Python. It is an operator-approved
+# divergence recorded in the collection's docs/coexistence.md.
+#
+# Custom-resource outcomes are held equal only where a discovery document, when read, declares
+# the requested group/version: the collection fixtures below carry that
+# `groupVersion`, and Python's prover never reads it, so its fixtures omit it. A readable
+# discovery document whose `groupVersion` is missing, empty, non-string, or a different
+# group/version is a second, separate approved divergence (#317, approved after
+# implementation): the collection returns `error`, while Python can publish `OBJECT_ABSENT` or
+# `CRD_ABSENT`. It deliberately has no vector here, because an equality vector would have to
+# require Python's absence to equal the collection's `error`. The collection side is pinned on
+# its shared discovery prover by its own unit tests; aligning Python is tracked in #321.
+#
+# The custom-resource vectors below also give the collection a resolved route that matches live
+# discovery. A custom-resource named 404 on a stale cached route (resolved plural not canonical,
+# live kind different, or live scope different from the routed scope) is a third, separate
+# approved divergence (#317, approved after implementation): the collection returns `error`,
+# while Python, which reads the caller's fixed route, can read the object or publish
+# `OBJECT_ABSENT` (or `CRD_ABSENT` when live discovery also omits the canonical name). It also
+# deliberately has no vector here; the collection's route checks are pinned by its own unit tests.
+#
 # The last column is the exact revision both form factors must publish, and `None` means both
 # must publish no revision at all (Python `resource_version is None`, collection `null`). It is
 # what makes §10.2.1b's provenance rule parity-checkable rather than described.
@@ -28,6 +59,11 @@ VECTORS = [
     ("object_absent", "named-object absence", StrictReadStatus.OBJECT_ABSENT, "not_found", None),
     ("kind_not_served", "positive kind-not-served", StrictReadStatus.CRD_ABSENT, "kind_not_served", None),
     ("namespace_absent", "positive namespace absence", StrictReadStatus.NAMESPACE_ABSENT, "not_found", None),
+    # #317: a named GET of a kind live discovery no longer serves is never an object absence.
+    # The collection may resolve the kind from kubernetes.core's shared on-disk discovery cache
+    # and receive a 404 on its object route; Python proves the kind served before the GET.
+    ("named_get_kind_not_served", "positive kind-not-served", StrictReadStatus.CRD_ABSENT, "kind_not_served", None),
+    ("named_custom_resource_get_discovery_unverifiable", "api failure", StrictReadStatus.ERROR, "error", None),
     ("named_get_success", "success, complete inventory", StrictReadStatus.ITEMS, "ok", "77"),
     ("authorization_failure", "api failure", StrictReadStatus.ERROR, "error", None),
     ("transport_failure", "api failure", StrictReadStatus.ERROR, "error", None),
@@ -153,6 +189,22 @@ def _python_complete_pagination():
 def _python_object_absent():
     client = _python_client(get_effects=[ApiException(status=404)])
     outcome = client.get_custom_resource_strict(_GROUP, _VERSION, _PLURAL, "mch")
+    return outcome
+
+
+def _python_named_get_kind_not_served():
+    call_api = Mock(return_value=_unserved_discovery(_PLURAL))
+    client = _python_client(call_api=call_api)
+    outcome = client.get_custom_resource_strict(_GROUP, _VERSION, _PLURAL, "mch")
+    client.custom_api.get_cluster_custom_object.assert_not_called()
+    return outcome
+
+
+def _python_named_custom_resource_get_discovery_unverifiable():
+    call_api = Mock(side_effect=ApiException(status=503))
+    client = _python_client(call_api=call_api)
+    outcome = client.get_custom_resource_strict(_GROUP, _VERSION, _PLURAL, "mch")
+    client.custom_api.get_cluster_custom_object.assert_not_called()
     return outcome
 
 
@@ -356,6 +408,8 @@ _PYTHON_VECTORS = {
     "object_absent": _python_object_absent,
     "kind_not_served": _python_kind_not_served,
     "namespace_absent": _python_namespace_absent,
+    "named_get_kind_not_served": _python_named_get_kind_not_served,
+    "named_custom_resource_get_discovery_unverifiable": _python_named_custom_resource_get_discovery_unverifiable,
     "named_get_success": _python_named_get_success,
     "authorization_failure": _python_authorization_failure,
     "transport_failure": _python_transport_failure,
@@ -658,8 +712,33 @@ def _collection_complete_pagination():
     return result
 
 
+class _ResolvedRoute:
+    """The resolved route fields the dynamic client builds a named object route from."""
+
+    def __init__(self, name, *, namespaced, group_version):
+        self.name = name
+        self.namespaced = namespaced
+        self.group_version = group_version
+
+
+_WIDGET_ROUTE = _ResolvedRoute("widgets", namespaced=False, group_version="g/v1")
+_WIDGETS_SERVED = {
+    "kind": "APIResourceList",
+    "groupVersion": "g/v1",
+    "resources": [{"name": "widgets", "kind": "Widget", "namespaced": False}],
+}
+_NAMED_WIDGET_PARAMS = {
+    "read_mode": "get",
+    "api_version": "g/v1",
+    "kind": "Widget",
+    "name": "mch",
+    "resource_name": "widgets",
+}
+
+
 def _collection_object_absent():
-    client = _FakeK8sClient(resource=object(), get_error=_collection_api_error(404))
+    dynamic = _FakeDynamicClient(discovery=_WIDGETS_SERVED)
+    client = _FakeK8sClient(resource=_WIDGET_ROUTE, get_error=_collection_api_error(404), dynamic=dynamic)
     return _run_collection(
         {"read_mode": "get", "api_version": "g/v1", "kind": "Widget", "name": "mch", "resource_name": "widgets"},
         client=client,
@@ -667,7 +746,13 @@ def _collection_object_absent():
 
 
 def _collection_kind_not_served():
-    dynamic = _FakeDynamicClient(discovery={"kind": "APIResourceList", "resources": [{"name": "pods", "kind": "Pod"}]})
+    dynamic = _FakeDynamicClient(
+        discovery={
+            "kind": "APIResourceList",
+            "groupVersion": f"{_OBS_GROUP}/{_OBS_VERSION}",
+            "resources": [{"name": "pods", "kind": "Pod"}],
+        }
+    )
     client = _FakeK8sClient(resource_error=ResourceNotFoundError("no matches"), dynamic=dynamic)
     return _run_collection(
         {
@@ -680,8 +765,34 @@ def _collection_kind_not_served():
     )
 
 
+def _collection_named_get_kind_not_served():
+    # The kind still resolves (a stale cached discovery entry) but live discovery omits it.
+    dynamic = _FakeDynamicClient(
+        discovery={"kind": "APIResourceList", "groupVersion": "g/v1", "resources": [{"name": "pods", "kind": "Pod"}]}
+    )
+    client = _FakeK8sClient(resource=_WIDGET_ROUTE, get_error=_collection_api_error(404), dynamic=dynamic)
+    return _run_collection(_NAMED_WIDGET_PARAMS, client=client)
+
+
+def _collection_named_custom_resource_get_discovery_unverifiable():
+    dynamic = _FakeDynamicClient(discovery_error=_collection_api_error(503))
+    client = _FakeK8sClient(resource=_WIDGET_ROUTE, get_error=_collection_api_error(404), dynamic=dynamic)
+    return _run_collection(_NAMED_WIDGET_PARAMS, client=client)
+
+
 def _collection_namespace_absent():
-    client = _FakeK8sClient(resource=object(), get_error=_collection_api_error(404))
+    dynamic = _FakeDynamicClient(
+        discovery={
+            "kind": "APIResourceList",
+            "groupVersion": "v1",
+            "resources": [{"name": "namespaces", "kind": "Namespace", "namespaced": False}],
+        }
+    )
+    client = _FakeK8sClient(
+        resource=_ResolvedRoute("namespaces", namespaced=False, group_version="v1"),
+        get_error=_collection_api_error(404),
+        dynamic=dynamic,
+    )
     return _run_collection(
         {
             "read_mode": "get",
@@ -732,7 +843,9 @@ def _collection_discovery_http_404():
 
 
 def _collection_malformed_discovery():
-    dynamic = _FakeDynamicClient(discovery={"kind": "APIResourceList", "resources": [{"name": 7}]})
+    dynamic = _FakeDynamicClient(
+        discovery={"kind": "APIResourceList", "groupVersion": "g/v1", "resources": [{"name": 7}]}
+    )
     client = _FakeK8sClient(resource_error=ResourceNotFoundError("no matches"), dynamic=dynamic)
     return _run_collection(_WIDGET_PARAMS, client=client)
 
@@ -745,7 +858,11 @@ def _collection_malformed_discovery_after_match():
     prover directly in the collection unit lane; this vector holds the outcome contract equal.
     """
     dynamic = _FakeDynamicClient(
-        discovery={"kind": "APIResourceList", "resources": [{"name": "widgets", "kind": "Widget"}, {"name": 7}]}
+        discovery={
+            "kind": "APIResourceList",
+            "groupVersion": "g/v1",
+            "resources": [{"name": "widgets", "kind": "Widget"}, {"name": 7}],
+        }
     )
     client = _FakeK8sClient(resource_error=ResourceNotFoundError("no matches"), dynamic=dynamic)
     return _run_collection(_WIDGET_PARAMS, client=client)
@@ -753,7 +870,11 @@ def _collection_malformed_discovery_after_match():
 
 def _collection_malformed_discovery_before_match():
     dynamic = _FakeDynamicClient(
-        discovery={"kind": "APIResourceList", "resources": [{"name": 7}, {"name": "widgets", "kind": "Widget"}]}
+        discovery={
+            "kind": "APIResourceList",
+            "groupVersion": "g/v1",
+            "resources": [{"name": 7}, {"name": "widgets", "kind": "Widget"}],
+        }
     )
     client = _FakeK8sClient(resource_error=ResourceNotFoundError("no matches"), dynamic=dynamic)
     return _run_collection(_WIDGET_PARAMS, client=client)
@@ -930,6 +1051,8 @@ _COLLECTION_VECTORS = {
     "object_absent": _collection_object_absent,
     "kind_not_served": _collection_kind_not_served,
     "namespace_absent": _collection_namespace_absent,
+    "named_get_kind_not_served": _collection_named_get_kind_not_served,
+    "named_custom_resource_get_discovery_unverifiable": _collection_named_custom_resource_get_discovery_unverifiable,
     "named_get_success": _collection_named_get_success,
     "authorization_failure": _collection_authorization_failure,
     "transport_failure": _collection_transport_failure,

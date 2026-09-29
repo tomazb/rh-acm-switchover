@@ -28,6 +28,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Collection `strict_read` (`acm_k8s_read_outcome`, `acm_pod_owner_classify`) no longer reports
+  a named-GET 404 as `not_found` unless a live, bounded discovery read of the requested
+  group/version confirms that group/version, the requested kind, and the exact route the GET
+  used (#317). kubernetes.core resolves kinds from a discovery cache it shares on disk with
+  every earlier run against the same API host and user, and the dynamic client builds the object
+  route from the cached plural and scope. A kind that had stopped being served still resolved
+  and its 404 was published as an absence proof; a stale cached scope sent the GET to a route
+  that 404s while the object exists. Both were reproduced read-only against a live API server. A
+  named 404 is now `kind_not_served` when live discovery omits the resource name, and `error`
+  when discovery cannot be read or does not declare the requested group/version (`groupVersion`
+  missing, empty, non-string, or different), when the resolved group/version is not the
+  requested one (kubernetes.core resolves a core `v1` kind whose core lookup misses in any group
+  at `v1`), when the resolved plural is not the canonical resource name, when the live entry's
+  kind is not the requested kind, when its scope does not match the route read, or when a
+  namespaced kind was read without a namespace. Successful reads are unchanged and the shared
+  cache is not rewritten. For a removed CRD whose group/version is still served, the CRD-backed
+  named reads (MultiClusterHub, ManagedCluster, ClusterServiceVersion) gate as before, since
+  they already accepted `not_found` and `kind_not_served` alike, but the recorded evidence
+  becomes `crd_absent` instead of `object_absent` (`teardown_one_managed_cluster.yml`,
+  `delete_multiclusterhub.yml`). If the removed CRD was the last resource in its group/version,
+  the discovery read itself returns 404 and the named read is `error`, as in Python and as it
+  already was without a stale cache. For every kind, CRD-backed or built-in (ConfigMap, Namespace,
+  Deployment, ReplicaSet), a named 404 whose discovery read fails or whose served entry does not
+  match the requested kind or route read now fails closed to `error`; for CRD kinds whose live
+  discovery cannot be read, that matches Python. The Python CLI is not changed by this fix: it uses
+  typed clients with fixed routes and no discovery cache, so it is not exposed to the stale
+  cache, and its custom-resource strict reads already prove the kind served before the request.
+  Three operator-approved, fail-closed parity divergences remain, each recorded in
+  [coexistence.md](ansible_collections/tomazb/acm_switchover/docs/coexistence.md) and the
+  [parity matrix](docs/ansible-collection/parity-matrix.md); both capabilities stay
+  `dual-supported`. First, Python's typed built-in reads still take a 404 as absence without
+  discovery, so a built-in 404 that live discovery does not confirm is absence in Python.
+  Second, Python's custom-resource discovery prover does not validate `groupVersion`, so for a
+  custom resource whose live discovery document is readable but has a missing, empty,
+  non-string, or different `groupVersion`, the collection returns `error` while Python can
+  report the object or CRD absent. Only a non-conformant discovery response reaches the second
+  case. It was approved after the collection check was implemented, and realigning Python is
+  tracked in #321. Third, for a custom-resource named GET that returns 404 on a route resolved
+  from a stale discovery cache, where the resolved plural is not canonical or live discovery shows
+  a different kind or scope, the collection returns `error` while Python, which reads the caller's
+  fixed route, can read the object or report it or its CRD absent. Only cached discovery that no
+  longer matches the live API server, such as after a custom resource definition's plural, kind,
+  or scope changed, reaches the third case. It was also approved after the collection checks were
+  implemented; it does not cover LIST routing (#320).
+
 - Each call to the collection test helper `tests/conftest.py::_ansible_env` now sets `TMPDIR`
   to a fresh, short directory (#314). kubernetes.core and kubernetes.dynamic cache API
   discovery in the system temp directory, keyed by the API server host:port (and, for
