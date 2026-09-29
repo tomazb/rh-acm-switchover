@@ -82,10 +82,12 @@ named-404 rule for it is unchanged).
 ### 4.2 Discovery before the request for custom resources
 
 The built-in boundary mirrors Python's typed clients exactly. A new collection constant
-`STRICT_READ_BUILTIN_API_VERSIONS = ("v1", "apps/v1")` names the group/versions Python reads
-through fixed typed routes without discovery. It is collection-only (Python expresses the
-same boundary by which method it calls), documented beside the constant, and pinned by the
-parity test module.
+`STRICT_READ_BUILTIN_API_VERSIONS = ("v1", "apps/v1")` in the collection's
+`module_utils/constants.py` names the group/versions Python reads through fixed typed routes
+without discovery. It is collection-only, like `STRICT_READ_REQUEST_TIMEOUT`: Python expresses
+the same boundary by which method it calls, so the constant is not added to the shared-constant
+mapping in `tests/test_constants_parity.py`. Its comment names the Python typed readers it
+mirrors, and a parity-module test pins its value.
 
 For any other `api_version` (a custom resource), after §4.1 and before the object request:
 
@@ -115,9 +117,9 @@ collection at `70d422bb`.
 | # | Case | Base | New collection | Python |
 | --- | --- | --- | --- | --- |
 | 1 | Built-in, R matches request, request 200 | `ok` | `ok` | `ITEMS` |
-| 2 | Built-in LIST in namespace, R cached `namespaced=False` (#320) | `ok` + cluster-wide superset | `error`, no request | `ITEMS` (fixed route) |
+| 2 | Any kind, namespaced request, R cached `namespaced=False` (#320) | `ok` + cluster-wide superset | `error`, no request | `ITEMS` (fixed route) |
 | 3 | Built-in, R group/version ≠ request (#323 fallback) | `ok` from foreign group | `error`, no request | `ITEMS` |
-| 4 | Built-in, R plural ≠ `resource_name` | `ok` from R's route | `error`, no request | n/a (fixed route) |
+| 4 | Any kind, R plural ≠ `resource_name` | `ok` from R's route | `error`, no request | n/a (fixed route) |
 | 5 | Custom, L unreadable/malformed, GET would 200 (#322) | `ok` | `error`, no object request | `ERROR` |
 | 6 | Custom, L unreadable/malformed, LIST | `ok` | `error`, no object request | `ERROR` |
 | 7 | Custom, L omits `resource_name`, R resolved from cache | GET: `ok` or `kind_not_served`; LIST: `ok` or `error` | `kind_not_served`, no object request | `CRD_ABSENT` |
@@ -179,6 +181,11 @@ null revision. No message, exception text or response body is added to module ou
   incidental effect of this invariant; #323 is not a governing scope here, it is commented on
   with evidence, and it is not closed by this slice.
 - **#282.** No kind cross-check is added to any discovery proof.
+- **Guard ordering.** §4.1 runs before §4.2, so a custom resource resolved to a non-canonical
+  plural is `error` even when live discovery would show the kind unserved (Python:
+  `CRD_ABSENT`). That is the case the approved third #317 paragraph already records ("the
+  omitted-kind case stays aligned when the resolved plural is canonical"); row 7 is the
+  aligned, canonical-plural case.
 
 ## 6. Parity consequences
 
@@ -194,6 +201,15 @@ sentence claiming a stale cache cannot mismatch built-in scope is corrected: a f
 corrupted cache file can, and the collection now fails closed on it. No capability changes
 status; both stay `dual-supported`.
 
+Documentation surfaces updated with the code: the `acm_k8s_read_outcome` `RETURN` block
+(`ok` for a custom resource now requires a live discovery confirmation, and `kind_not_served`
+can be reported before any object request); the `k8s_read.py` module docstring; the
+coexistence #321 `groupVersion` paragraph (the prover now also governs the pre-request proof,
+still removed by #321); a new coexistence paragraph for #320; the parity matrix and behavior
+map rows that describe strict reads; `CHANGELOG.md` `[Unreleased]`. `thermos-resolution-plan.md`
+carries no row for #317/#319 and none is added for this non-Thermos follow-up; the R4-04
+Task 0 assessment records the prerequisite state.
+
 ## 7. Tests
 
 Unit (`tests/unit/test_k8s_read_outcome.py`, collection lane), each with a request log:
@@ -203,6 +219,9 @@ Unit (`tests/unit/test_k8s_read_outcome.py`, collection lane), each with a reque
 - stale `namespaced=False` on a namespaced named GET → `error`, no GET sent;
 - resolved group/version ≠ request, resolved plural ≠ `resource_name`, non-bool `namespaced`
   → `error`, no request (GET and LIST);
+- #323's exact condition: requested `api_version="v1"`, resolved `Resource` with
+  `prefix="apis"` and `group_version="foo.io/v1"`, request would return 200 → `error`, zero
+  requests (GET and LIST). No runtime test is added for it (that would widen into #323);
 - custom named GET, discovery 503 / undecodable / malformed entries / missing `groupVersion`,
   object would return 200 → `error`, no GET sent;
 - custom LIST, same discovery failures → `error`, no LIST sent;
@@ -215,9 +234,14 @@ Unit (`tests/unit/test_k8s_read_outcome.py`, collection lane), each with a reque
 Runtime (`tests/integration/test_k8s_read_outcome_runtime.py`, real `ansible-playbook` and
 kubernetes.core through the shared TMPDIR cache, as in #317's regression):
 
-- #320: run 1 writes a cache with Pods `namespaced=False`; the fake then serves Pods
-  namespaced; run 2 (namespaced LIST) must be `error` and must not request `/api/v1/pods`.
-  The same run at base publishes `ok` with the foreign Pod (kill condition).
+- #320: both runs share one `_ansible_env(...)` (one TMPDIR, so one cache file). Run 1 is a
+  ConfigMap named GET (`ok`, positive control) against an `/api/v1` document whose `pods`
+  entry says `namespaced: false`; kubernetes.core caches the whole group/version document.
+  The fake then serves Pods as namespaced. Run 2 is the namespaced Pod LIST. On run 2's
+  request log: no `/api` and no `/apis` (cache precondition), neither `/api/v1/pods` nor
+  `/api/v1/namespaces/test-ns/pods` (the guard fired before any request), and
+  `READ_STATUS=error`. Kill condition: at base run 2 requests `/api/v1/pods` and publishes
+  `ok` with the foreign-namespace Pod placed in `pod_list_body`.
 - #322: run 1 caches ManagedCluster discovery; the fake then answers
   `/apis/cluster.open-cluster-management.io/v1` with 503; run 2 (named GET of an existing
   ManagedCluster) must be `error` and must not request the object. Base publishes `ok`.
@@ -234,6 +258,11 @@ and decommission suites.
 
 Every RED test is shown failing at base for the intended assertion before production code
 changes; tests green on arrival carry a recorded kill condition.
+
+Read-only live diagnostics on `prod2` (no ACM installed; diagnostic tier, not certification):
+`/api/v1` and `/apis/apps/v1` declare their `groupVersion`, and a cluster-scoped kind read at a
+namespaced path (`/apis/rbac.authorization.k8s.io/v1/namespaces/default/clusterroles`) returns
+404 — the server itself refuses a scope-mismatched route, which §3-D relies on.
 
 ## 8. Supported-behavior preservation
 
