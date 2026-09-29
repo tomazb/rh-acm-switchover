@@ -28,6 +28,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Collection `strict_read` (`acm_k8s_read_outcome`, `acm_pod_owner_classify`) now confirms the
+  route before any request (#320, #322). A route kubernetes.core resolved to a group/version
+  other than the requested one, to a plural other than the canonical resource name, or as
+  cluster-scoped for a request that names a namespace is `error`, and nothing is read: a stale or
+  foreign cached `namespaced: false` previously sent a namespaced LIST to the cluster-wide URL and
+  published every namespace's objects, or an empty cluster-wide answer, as the requested
+  namespace's inventory (#320). A custom resource (any group/version other than `v1` and
+  `apps/v1`) is now read only after a live discovery read of its group/version is readable and
+  lists the resource name; unreadable discovery is `error` and an omitted name is `kind_not_served`, with no object request, for GET and LIST. That is Python's
+  existing order, so a successful custom-resource GET or LIST is no longer published as `ok`
+  while Python reports `ERROR` (#322). A custom-resource read costs one more bounded request;
+  built-in reads are unchanged, and a custom-resource named 404 reuses the same discovery read.
+  The route refusal is collection-internal and fail-closed, recorded in
+  [coexistence.md](ansible_collections/tomazb/acm_switchover/docs/coexistence.md); the Python CLI
+  is unchanged. Until #321, a malformed discovery `groupVersion` also fails a custom-resource read
+  that Python completes: an operator-approved, temporary extension of the #317 `groupVersion`
+  divergence to these success paths (PR #324), removed when #321 aligns Python.
+
 - Collection `strict_read` (`acm_k8s_read_outcome`, `acm_pod_owner_classify`) no longer reports
   a named-GET 404 as `not_found` unless a live, bounded discovery read of the requested
   group/version confirms that group/version, the requested kind, and the exact route the GET

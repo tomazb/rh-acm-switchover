@@ -145,7 +145,10 @@ namespace, or unreadable discovery, and `kind_not_served` for an omitted kind.
 Python reports each as absence. For the canonical resource names, kinds, and
 namespaces the collection's callers pass, only the unreadable case is reachable
 on a conformant API server: built-in kinds are always served there, and their
-plural, kind, and scope are fixed, so a stale cache cannot mismatch them. A
+plural, kind, and scope are fixed, so a stale cache that was written by that
+same server cannot mismatch them; a cache file left by another server behind the
+same API URL, or a corrupted one, can, and the collection then refuses the route
+before any request (see the #320 paragraph below). A
 group/version mismatch needs kubernetes.core's fallback for a core `v1` kind
 whose core lookup missed, which resolves the kind in any group at `v1`; that
 happens only when core discovery could not be read while the kind was
@@ -162,9 +165,17 @@ this case.
 
 **Intentional divergence on custom-resource discovery with a malformed or non-matching `groupVersion` (#317, approved after implementation; Python realignment tracked in #321):**
 this is distinct from the built-in divergence above. The collection's
-`groupVersion` check is part of its shared discovery prover, so it governs both
-the named-404 classifier and the kind-not-served proof after a resource
-resolution failure, in either read mode. Python's custom-resource prover
+`groupVersion` check is part of its shared discovery prover, so it governs the
+named-404 classifier, the kind-not-served proof after a resource resolution
+failure, and, since #322, the live discovery proof every custom-resource read
+takes before its object request, in either read mode. Until #321 lands, a
+custom-resource read whose discovery document is readable but has a malformed
+or non-matching `groupVersion` is therefore `error` in the collection even when
+Python goes on to read the object or inventory. The operator explicitly approved
+that extension to the success paths on 2026-09-29, before merge, as temporary
+until #321 (PR #324 governance comment, after the independent validator's
+finding B1); it is the same malformed-document condition as the approval
+below. Python's custom-resource prover
 (`lib/kube_client.py` `_discovery_serves`, used by `get_custom_resource_strict`
 and `list_custom_resources_strict`) does not read `groupVersion`. For valid
 caller inputs and a structurally readable discovery response whose
@@ -228,6 +239,46 @@ and it does not authorize fallbacks. Python runtime is not changed by #317, and
 any restoration of parity for this case needs its own governed follow-up. The
 capabilities stay `dual-supported`, and the parity tests intentionally carry no
 equality vector for this case.
+
+**Custom-resource reads prove live discovery before the request (#322):** the
+collection's `strict_read` now reads a custom resource (any group/version other
+than `v1` and `apps/v1`, the group/versions Python reads through fixed typed
+routes) only after a live discovery read of the requested group/version is
+readable and lists the canonical resource name. Unreadable discovery is `error` and an omitted name is
+`kind_not_served`, with no object request, for a named GET and a LIST alike.
+This is Python's existing order (`get_custom_resource_strict` and
+`list_custom_resources_strict` prove the name served before any request), so
+the previous difference — the collection publishing a successful custom-resource
+GET or LIST as `ok` without reading discovery — is removed and held equal by
+parity vectors. Built-in reads are unchanged and read no discovery on success,
+as in Python.
+
+**Fail-closed outcome on a stale or foreign resolved route (#320):** before any
+request, the collection's `strict_read` refuses, as `error`, a route that
+kubernetes.core resolved to a group/version other than the requested one, to a
+plural other than the canonical resource name, with a scope that is not a
+boolean, or as cluster-scoped for a request that names a namespace. The dynamic
+client uses the namespaced URL only for a route resolved as namespaced, so a
+stale or foreign cached `namespaced: false` would otherwise read a namespaced
+LIST cluster-wide and publish another namespace's objects (or an empty
+cluster-wide answer) as the requested namespace's inventory. Scope needs no
+discovery field: with a namespaced route, the server answers a namespaced
+request at the namespaced URL, which returns 404 for a cluster-scoped kind.
+Python has no resolved route: it reads the caller's fixed route and returns the
+object or inventory. The collection difference is reachable only when its
+resolved route does not match the live API server — a discovery cache written by
+another server behind the same API URL, a corrupted cache, a custom resource
+definition recreated with another scope, or kubernetes.core's core-`v1`
+fallback into another group after core discovery failed during resolution
+(#323) — and in each of those cases the collection previously published the
+wrong route's result as `ok`. For a resolved route that matches the live server
+every outcome is unchanged and equal on both form factors. No cache is
+invalidated or rewritten and no route is retried or rebuilt. A post-read check
+of each item's namespace is deliberately not added: it could fire only on a
+non-conformant server. Every decommission, observability, primary-prep, and
+activation caller already treats `error` as fail-closed. The capabilities stay
+`dual-supported`; the parity tests carry no equality vector for this
+collection-internal case, and the collection's unit and runtime tests pin it.
 
 **Default posture (audit C4):** `checkpoint.enabled` remains `false` by
 default. Without checkpointing the collection has no resume and no

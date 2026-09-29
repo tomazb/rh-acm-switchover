@@ -92,7 +92,13 @@ changed:
   returned: always
 read_status:
   description:
-    - C(ok) when the read completed successfully.
+    - C(ok) when the read completed successfully on the requested route. A resolved route that
+      is not the requested group/version, resource name and scope (for example a stale cached
+      scope that would read a namespaced request cluster-wide) is C(error) and is never read.
+      A custom resource (any group/version other than C(v1) and C(apps/v1)) is read only after
+      a live discovery read of its group/version is readable and lists the resource name;
+      otherwise the outcome is C(error), or C(kind_not_served) when discovery omits the name,
+      and no object request is sent.
     - C(not_found) only for a named get that received an explicit 404/NotFound on a route
       that live discovery of the API group/version still serves, with the same resource name
       and scope the request was routed by. A 404 for a kind that live discovery positively
