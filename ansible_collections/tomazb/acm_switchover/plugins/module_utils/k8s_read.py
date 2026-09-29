@@ -176,6 +176,31 @@ def _route_is_requested(resource, api_version: str, resource_name: str, namespac
     )
 
 
+def _confirm_route(
+    api_client, resource, api_version: str, resource_name: str, namespace: str | None
+) -> tuple[str | None, list[dict] | None]:
+    """Refuse a route before any request, or return what a custom resource was proved by.
+
+    Returns ``(refused_status, discovered)``: a ``read_status`` for a route that must not be
+    read, or ``None`` and the live discovery entries a custom resource was proved served by
+    (``None`` for a built-in, which Python also reads without discovery). A custom resource is
+    read only after live discovery proves it served, as Python proves it before any object
+    request (#322). Scope needs no discovery field: `_route_is_requested` refuses a namespaced
+    request on a cluster-scoped route, and the server answers any other scope mismatch at the
+    route itself.
+    """
+    if not _route_is_requested(resource, api_version, resource_name, namespace):
+        return "error", None
+    if api_version in STRICT_READ_BUILTIN_API_VERSIONS:
+        return None, None
+    discovered = _live_discovery_resources(api_client, api_version)
+    if discovered is None:
+        return "error", None
+    if not any(entry["name"] == resource_name for entry in discovered):
+        return "kind_not_served", None
+    return None, discovered
+
+
 def _named_404_status(
     api_client,
     resource,
@@ -308,22 +333,9 @@ def strict_read(
         served = _discovery_serves(api_client, api_version, resource_name)
         return ("kind_not_served" if served is False else "error"), [], None
 
-    if not _route_is_requested(resource, api_version, resource_name, namespace):
-        return "error", [], None
-
-    discovered = None
-    if api_version not in STRICT_READ_BUILTIN_API_VERSIONS:
-        # A custom resource is read only after live discovery proves its route, as Python proves
-        # the resource served before any object request (#322). Its scope must be the scope the
-        # request is routed by; a route live discovery does not confirm is never read.
-        discovered = _live_discovery_resources(api_client, api_version)
-        if discovered is None:
-            return "error", [], None
-        entry = next((entry for entry in discovered if entry["name"] == resource_name), None)
-        if entry is None:
-            return "kind_not_served", [], None
-        if entry.get("namespaced") is not resource.namespaced:
-            return "error", [], None
+    refused, discovered = _confirm_route(api_client, resource, api_version, resource_name, namespace)
+    if refused is not None:
+        return refused, [], None
 
     params: dict[str, Any] = {}
     if namespace:

@@ -414,6 +414,8 @@ def _configmaps_entry(**overrides):
         (_ResolvedResource("configmaps", namespaced=True, group_version="foo.io/v1"), _CONFIGMAPS_SERVED),
         (object(), _CONFIGMAPS_SERVED),
     ],
+    # The stale-scope, plural, group/version and unknown-route cases are refused before the GET
+    # by the pre-request route guard (#320); the others reach the named-404 classifier.
     ids=[
         "cached_scope_is_stale",
         "live_scope_differs",
@@ -443,6 +445,8 @@ def test_a_named_404_on_a_route_live_discovery_does_not_confirm_is_error(monkeyp
     )
     result = _run_module(monkeypatch, params=NAMED_CONFIGMAP_PARAMS, client=client)
     assert result["read_status"] == "error"
+    refused_before_the_get = resource is not _CONFIGMAPS_ROUTE
+    assert client.get_calls == (0 if refused_before_the_get else 1)
     assert result["resources"] == []
     assert result["resource_version"] is None
 
@@ -709,10 +713,11 @@ def test_every_path_reports_changed_false(monkeypatch):
                 "resource_name": "pods",
             },
             _FakeClient(
-                resource=_CONFIGMAPS_ROUTE,
+                resource=_PODS_ROUTE,
                 get_result=_DictResult({"kind": "PodList", "items": [], "metadata": {"resourceVersion": "1"}}),
             ),
             None,
+            "ok",
         ),
         (
             {
@@ -724,10 +729,12 @@ def test_every_path_reports_changed_false(monkeypatch):
                 "resource_name": "configmaps",
             },
             _FakeClient(
-                resource=_PODS_ROUTE,
+                resource=_CONFIGMAPS_ROUTE,
                 get_error=_api_error(NotFoundError, 404),
+                dynamic=_FakeDynamicClient(discovery=_CONFIGMAPS_SERVED),
             ),
             None,
+            "not_found",
         ),
         (
             {
@@ -742,6 +749,7 @@ def test_every_path_reports_changed_false(monkeypatch):
                 get_error=_api_error(BadRequestError, 400),
             ),
             None,
+            "error",
         ),
         (
             {
@@ -753,9 +761,10 @@ def test_every_path_reports_changed_false(monkeypatch):
             },
             None,
             Exception("boom"),
+            "error",
         ),
     ]
-    for params, client, client_error in cases:
+    for params, client, client_error, expected_status in cases:
         result = _run_module(
             monkeypatch,
             params=params,
@@ -764,7 +773,7 @@ def test_every_path_reports_changed_false(monkeypatch):
             check_mode=True,
         )
         assert result["changed"] is False
-        assert result["read_status"] in {"ok", "not_found", "error"}
+        assert result["read_status"] == expected_status
 
 
 LIST_PARAMS = {
@@ -826,7 +835,7 @@ def test_a_continuation_page_at_a_different_revision_is_error(monkeypatch):
 def test_a_restarted_read_with_an_inconsistent_continuation_is_error(monkeypatch):
     """The restarted read establishes a new snapshot, and its pages must agree with it."""
     client = _FakeClient(
-        resource=_CONFIGMAPS_ROUTE,
+        resource=_PODS_ROUTE,
         pages=[
             _page([{"metadata": {"name": "a"}}], "tok", resource_version="100"),
             _api_error(GoneError, 410),
@@ -838,6 +847,8 @@ def test_a_restarted_read_with_an_inconsistent_continuation_is_error(monkeypatch
     assert result["read_status"] == "error"
     assert result["resources"] == []
     assert result["resource_version"] is None
+    # Every scripted page was read: the error is the restarted read's revision mismatch.
+    assert client.get_calls == 4
 
 
 def test_a_named_get_publishes_the_objects_revision(monkeypatch):
@@ -1387,16 +1398,21 @@ def test_an_all_namespaces_list_of_a_namespaced_kind_is_still_ok(monkeypatch):
 
 
 @pytest.mark.parametrize("read_mode", ["get", "list"])
-def test_a_built_in_read_never_reads_discovery_on_success(monkeypatch, read_mode):
+@pytest.mark.parametrize(
+    "api_version, kind, resource_name",
+    [("v1", "ConfigMap", "configmaps"), ("apps/v1", "Deployment", "deployments")],
+    ids=["core", "apps"],
+)
+def test_a_built_in_read_never_reads_discovery_on_success(monkeypatch, read_mode, api_version, kind, resource_name):
     """Python's typed built-in readers prove nothing by discovery, so neither does the collection."""
     dynamic = _FakeDynamicClient(discovery_error=AssertionError("a built-in success must not read discovery"))
-    client = _routed_client(
-        read_mode, _ResolvedResource("configmaps", namespaced=True), _CM, list_kind="ConfigMapList", dynamic=dynamic
-    )
+    route = _ResolvedResource(resource_name, namespaced=True, group_version=api_version)
+    obj = {"kind": kind, "metadata": {"name": "cfg", "namespace": "ns", "resourceVersion": "1"}}
+    client = _routed_client(read_mode, route, obj, list_kind=f"{kind}List", dynamic=dynamic)
     result = _run_module(
         monkeypatch,
         params=_read_params(
-            read_mode, api_version="v1", kind="ConfigMap", resource_name="configmaps", namespace="ns", name="cfg"
+            read_mode, api_version=api_version, kind=kind, resource_name=resource_name, namespace="ns", name="cfg"
         ),
         client=client,
     )
@@ -1415,7 +1431,9 @@ _MC_SERVED = {
 
 
 def _mc_params(read_mode):
-    return _read_params(read_mode, api_version=_MC_API, kind="ManagedCluster", resource_name="managedclusters", name="c1")
+    return _read_params(
+        read_mode, api_version=_MC_API, kind="ManagedCluster", resource_name="managedclusters", name="c1"
+    )
 
 
 def _mc_client(read_mode, dynamic):
@@ -1456,12 +1474,22 @@ def test_a_custom_resource_live_discovery_omits_is_kind_not_served_before_any_re
 
 @pytest.mark.parametrize("read_mode", ["get", "list"])
 @pytest.mark.parametrize("live_namespaced", [True, None, 0], ids=["namespaced", "missing", "non-bool"])
-def test_a_custom_resource_whose_live_scope_is_not_its_route_scope_is_error(monkeypatch, read_mode, live_namespaced):
+def test_a_custom_resource_read_needs_only_the_served_name_before_the_request(monkeypatch, read_mode, live_namespaced):
+    """Before the request, live discovery must list the name; its scope field gates nothing.
+
+    Python's prover reads only the name. The route guard has already refused a namespaced request
+    on a cluster-scoped route, and the server answers any other scope mismatch at the route itself
+    (a namespaced URL for a cluster-scoped kind, or a cluster URL for a named namespaced object, is
+    404, which the named-404 classifier then refuses to call absence). Gating on the live scope field
+    would only fail reads Python completes when a non-conformant document omits or mistypes it.
+    """
     entry = {"name": "managedclusters", "kind": "ManagedCluster", "namespaced": live_namespaced}
-    client = _mc_client(read_mode, _FakeDynamicClient(discovery=dict(_MC_SERVED, resources=[entry])))
+    dynamic = _FakeDynamicClient(discovery=dict(_MC_SERVED, resources=[entry]))
+    client = _mc_client(read_mode, dynamic)
     result = _run_module(monkeypatch, params=_mc_params(read_mode), client=client)
-    assert result["read_status"] == "error"
-    assert client.get_calls == 0
+    assert result["read_status"] == "ok"
+    assert len(dynamic.request_calls) == 1
+    assert client.get_calls == 1
 
 
 @pytest.mark.parametrize("read_mode", ["get", "list"])

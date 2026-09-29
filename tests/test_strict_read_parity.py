@@ -1259,8 +1259,22 @@ def test_the_collection_builtin_group_versions_are_pythons_typed_readers():
     prove the resource served first.
     """
     import ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants as ans_constants
-    from lib.kube_client import KubeClient
 
     assert ans_constants.STRICT_READ_BUILTIN_API_VERSIONS == ("v1", "apps/v1")
-    for typed_reader in ("get_namespace_strict", "list_pods_strict", "get_deployment_strict", "get_replicaset_strict"):
-        assert callable(getattr(KubeClient, typed_reader)), typed_reader
+
+    # Each typed reader takes its 404 without a discovery read; `call_api` is the prover's only
+    # transport, so an untouched mock proves no discovery request was made.
+    client = _python_client(call_api=Mock(side_effect=AssertionError("typed readers never read discovery")))
+    client.apps_v1 = Mock()
+    missing = ApiException(status=404)
+    client.core_v1.read_namespace = Mock(side_effect=missing)
+    client.core_v1.list_namespaced_pod = Mock(side_effect=missing)
+    client.core_v1.read_namespaced_config_map = Mock(side_effect=missing)
+    client.apps_v1.read_namespaced_deployment = Mock(side_effect=missing)
+    client.apps_v1.read_namespaced_replica_set = Mock(side_effect=missing)
+    assert client.get_namespace_strict("acm").status is StrictReadStatus.NAMESPACE_ABSENT
+    assert client.list_pods_strict("acm").status is StrictReadStatus.NAMESPACE_ABSENT
+    assert client.get_deployment_strict("op", "acm").status is StrictReadStatus.OBJECT_ABSENT
+    assert client.get_replicaset_strict("op-1", "acm").status is StrictReadStatus.OBJECT_ABSENT
+    assert client.get_configmap_advisory("multicluster-engine", "import-controller-config") is None
+    client._api_client.call_api.assert_not_called()
