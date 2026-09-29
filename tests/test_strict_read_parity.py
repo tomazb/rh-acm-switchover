@@ -683,7 +683,8 @@ _WIDGET_PARAMS = {"read_mode": "list", "api_version": "g/v1", "kind": "Widget", 
 
 def _collection_true_empty():
     client = _FakeK8sClient(
-        resource=object(),
+        resource=_WIDGET_ROUTE,
+        dynamic=_FakeDynamicClient(discovery=_WIDGETS_SERVED),
         get_result=_DictResult({"kind": "WidgetList", "items": [], "metadata": {"resourceVersion": "100"}}),
     )
     result = _run_collection(_WIDGET_PARAMS, client=client)
@@ -693,7 +694,8 @@ def _collection_true_empty():
 
 def _collection_complete_pagination():
     client = _FakeK8sClient(
-        resource=object(),
+        resource=_WIDGET_ROUTE,
+        dynamic=_FakeDynamicClient(discovery=_WIDGETS_SERVED),
         pages=[
             _DictResult(
                 {
@@ -807,7 +809,8 @@ def _collection_namespace_absent():
 
 def _collection_named_get_success():
     client = _FakeK8sClient(
-        resource=object(),
+        resource=_WIDGET_ROUTE,
+        dynamic=_FakeDynamicClient(discovery=_WIDGETS_SERVED),
         get_result=_DictResult({"kind": "Widget", "metadata": {"name": "mch", "resourceVersion": "77"}}),
     )
     return _run_collection(
@@ -817,14 +820,22 @@ def _collection_named_get_success():
 
 
 def _collection_authorization_failure():
-    client = _FakeK8sClient(resource=object(), get_error=_collection_api_error(403))
+    client = _FakeK8sClient(
+        resource=_WIDGET_ROUTE,
+        dynamic=_FakeDynamicClient(discovery=_WIDGETS_SERVED),
+        get_error=_collection_api_error(403),
+    )
     result = _run_collection(_WIDGET_PARAMS, client=client)
     _assert_collection_list_calls_bounded(client, 1)
     return result
 
 
 def _collection_transport_failure():
-    client = _FakeK8sClient(resource=object(), get_error=OSError("connection reset"))
+    client = _FakeK8sClient(
+        resource=_WIDGET_ROUTE,
+        dynamic=_FakeDynamicClient(discovery=_WIDGETS_SERVED),
+        get_error=OSError("connection reset"),
+    )
     result = _run_collection(_WIDGET_PARAMS, client=client)
     _assert_collection_list_calls_bounded(client, 1)
     return result
@@ -882,7 +893,8 @@ def _collection_malformed_discovery_before_match():
 
 def _collection_malformed_items():
     client = _FakeK8sClient(
-        resource=object(),
+        resource=_WIDGET_ROUTE,
+        dynamic=_FakeDynamicClient(discovery=_WIDGETS_SERVED),
         get_result=_DictResult({"kind": "WidgetList", "items": "nope", "metadata": {"resourceVersion": "100"}}),
     )
     result = _run_collection(_WIDGET_PARAMS, client=client)
@@ -892,7 +904,8 @@ def _collection_malformed_items():
 
 def _collection_missing_items_key():
     client = _FakeK8sClient(
-        resource=object(),
+        resource=_WIDGET_ROUTE,
+        dynamic=_FakeDynamicClient(discovery=_WIDGETS_SERVED),
         get_result=_DictResult({"kind": "WidgetList", "metadata": {"resourceVersion": "100"}}),
     )
     result = _run_collection(_WIDGET_PARAMS, client=client)
@@ -902,7 +915,8 @@ def _collection_missing_items_key():
 
 def _collection_missing_list_revision():
     client = _FakeK8sClient(
-        resource=object(),
+        resource=_WIDGET_ROUTE,
+        dynamic=_FakeDynamicClient(discovery=_WIDGETS_SERVED),
         get_result=_DictResult({"kind": "WidgetList", "items": [], "metadata": {}}),
     )
     result = _run_collection(_WIDGET_PARAMS, client=client)
@@ -912,7 +926,8 @@ def _collection_missing_list_revision():
 
 def _collection_inconsistent_continuation_revision():
     client = _FakeK8sClient(
-        resource=object(),
+        resource=_WIDGET_ROUTE,
+        dynamic=_FakeDynamicClient(discovery=_WIDGETS_SERVED),
         pages=[
             _DictResult(
                 {
@@ -935,7 +950,8 @@ def _collection_inconsistent_continuation_revision():
 
 def _collection_named_get_missing_revision():
     client = _FakeK8sClient(
-        resource=object(),
+        resource=_WIDGET_ROUTE,
+        dynamic=_FakeDynamicClient(discovery=_WIDGETS_SERVED),
         get_result=_DictResult({"kind": "Widget", "metadata": {"name": "mch"}}),
     )
     result = _run_collection(
@@ -949,7 +965,8 @@ def _collection_named_get_missing_revision():
 
 def _collection_later_page_failure():
     client = _FakeK8sClient(
-        resource=object(),
+        resource=_WIDGET_ROUTE,
+        dynamic=_FakeDynamicClient(discovery=_WIDGETS_SERVED),
         pages=[
             _DictResult(
                 {
@@ -969,7 +986,11 @@ def _collection_later_page_failure():
 def _collection_outstanding_continuation():
     consts = _collection_constants()
     page = _DictResult({"kind": "WidgetList", "items": [], "metadata": {"continue": "tok", "resourceVersion": "100"}})
-    client = _FakeK8sClient(resource=object(), pages=[page] * (consts.STRICT_READ_MAX_PAGES + 5))
+    client = _FakeK8sClient(
+        resource=_WIDGET_ROUTE,
+        dynamic=_FakeDynamicClient(discovery=_WIDGETS_SERVED),
+        pages=[page] * (consts.STRICT_READ_MAX_PAGES + 5),
+    )
     result = _run_collection(_WIDGET_PARAMS, client=client)
     _assert_collection_list_calls_bounded(client, consts.STRICT_READ_MAX_PAGES)
     return result
@@ -977,7 +998,8 @@ def _collection_outstanding_continuation():
 
 def _collection_expired_continuation_restart():
     client = _FakeK8sClient(
-        resource=object(),
+        resource=_WIDGET_ROUTE,
+        dynamic=_FakeDynamicClient(discovery=_WIDGETS_SERVED),
         pages=[
             _DictResult(
                 {
@@ -1011,7 +1033,8 @@ def _collection_expired_continuation_restart():
 
 def _collection_second_expired_continuation():
     client = _FakeK8sClient(
-        resource=object(),
+        resource=_WIDGET_ROUTE,
+        dynamic=_FakeDynamicClient(discovery=_WIDGETS_SERVED),
         pages=[
             _DictResult(
                 {
@@ -1039,7 +1062,11 @@ def _collection_second_expired_continuation():
 
 
 def _collection_timeout_exhausted():
-    client = _FakeK8sClient(resource=object(), get_error=TimeoutError("deadline exceeded"))
+    client = _FakeK8sClient(
+        resource=_WIDGET_ROUTE,
+        dynamic=_FakeDynamicClient(discovery=_WIDGETS_SERVED),
+        get_error=TimeoutError("deadline exceeded"),
+    )
     result = _run_collection(_WIDGET_PARAMS, client=client)
     _assert_collection_list_calls_bounded(client, 1)
     return result

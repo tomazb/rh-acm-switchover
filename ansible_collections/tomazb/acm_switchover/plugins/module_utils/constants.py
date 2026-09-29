@@ -141,6 +141,13 @@ STRICT_READ_MAX_RESTARTS = 1
 # Collection-only: the collection module has no client instance carrying a timeout.
 # Value mirrors KubeClient's per-instance request_timeout default (lib/kube_client.py:210).
 STRICT_READ_REQUEST_TIMEOUT = 30
+# Collection-only: the group/versions the Python CLI reads through fixed typed routes with no
+# discovery proof (`get_namespace_strict`, `list_pods_strict`, `get_deployment_strict`,
+# `get_replicaset_strict`, the `import-controller-config` ConfigMap read). Every other
+# group/version is a custom resource, which Python proves served by live discovery before any
+# object request, and the collection's strict read does the same (#322). Python expresses this
+# boundary by which method it calls, so there is no Python twin to hold equal.
+STRICT_READ_BUILTIN_API_VERSIONS = ("v1", "apps/v1")
 
 # R4-03 decommission teardown records (plan §10.2). These mirror lib/teardown_record.py
 # and lib/constants.py; the collection shares no runtime code with the Python CLI, so

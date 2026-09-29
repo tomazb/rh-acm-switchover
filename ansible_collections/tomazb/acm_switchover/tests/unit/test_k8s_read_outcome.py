@@ -220,7 +220,7 @@ class _DictResult(dict):
 
 def test_successful_empty_list_is_ok(monkeypatch):
     client = _FakeClient(
-        resource=object(),
+        resource=_PODS_ROUTE,
         get_result=_DictResult({"kind": "PodList", "items": [], "metadata": {"resourceVersion": "1"}}),
     )
     result = _run_module(
@@ -244,7 +244,7 @@ def test_successful_empty_list_is_ok(monkeypatch):
 def test_successful_nonempty_list_preserves_dicts(monkeypatch):
     pod = {"kind": "Pod", "metadata": {"name": "p1"}}
     client = _FakeClient(
-        resource=object(),
+        resource=_PODS_ROUTE,
         get_result=_DictResult({"kind": "PodList", "items": [pod], "metadata": {"resourceVersion": "1"}}),
     )
     result = _run_module(
@@ -265,7 +265,7 @@ def test_successful_nonempty_list_preserves_dicts(monkeypatch):
 
 def test_named_get_present_is_ok(monkeypatch):
     cm = {"kind": "ConfigMap", "metadata": {"name": "cfg", "namespace": "ns", "resourceVersion": "1"}}
-    client = _FakeClient(resource=object(), get_result=_DictResult(cm))
+    client = _FakeClient(resource=_CONFIGMAPS_ROUTE, get_result=_DictResult(cm))
     result = _run_module(
         monkeypatch,
         params={
@@ -293,6 +293,14 @@ class _ResolvedResource:
 
 
 _CONFIGMAPS_ROUTE = _ResolvedResource("configmaps", namespaced=True)
+_PODS_ROUTE = _ResolvedResource("pods", namespaced=True)
+_MCO_API = "observability.open-cluster-management.io/v1beta2"
+_MCO_ROUTE = _ResolvedResource("multiclusterobservabilities", namespaced=False, group_version=_MCO_API)
+_MCO_SERVED = {
+    "kind": "APIResourceList",
+    "groupVersion": _MCO_API,
+    "resources": [{"name": "multiclusterobservabilities", "kind": "MultiClusterObservability", "namespaced": False}],
+}
 _CONFIGMAPS_SERVED = {
     "kind": "APIResourceList",
     "groupVersion": "v1",
@@ -523,7 +531,7 @@ def test_discovery_for_another_group_version_never_proves_a_kind_not_served(monk
 
 def test_list_path_404_is_error_not_not_found(monkeypatch):
     client = _FakeClient(
-        resource=object(),
+        resource=_PODS_ROUTE,
         get_error=_api_error(NotFoundError, 404),
     )
     result = _run_module(
@@ -544,7 +552,7 @@ def test_list_path_404_is_error_not_not_found(monkeypatch):
 
 def test_bad_request_400_is_error(monkeypatch):
     client = _FakeClient(
-        resource=object(),
+        resource=_PODS_ROUTE,
         get_error=_api_error(BadRequestError, 400),
     )
     result = _run_module(
@@ -564,7 +572,7 @@ def test_bad_request_400_is_error(monkeypatch):
 
 def test_forbidden_403_is_error(monkeypatch):
     client = _FakeClient(
-        resource=object(),
+        resource=_CONFIGMAPS_ROUTE,
         get_error=_api_error(ForbiddenError, 403),
     )
     result = _run_module(
@@ -601,7 +609,7 @@ def test_resource_discovery_failure_is_error(monkeypatch):
 
 
 def test_timeout_transport_failure_is_error(monkeypatch):
-    client = _FakeClient(resource=object(), get_error=TimeoutError("timed out connecting"))
+    client = _FakeClient(resource=_PODS_ROUTE, get_error=TimeoutError("timed out connecting"))
     result = _run_module(
         monkeypatch,
         params={
@@ -636,7 +644,7 @@ def test_client_auth_construction_failure_is_error(monkeypatch):
 
 
 def test_malformed_list_response_is_error(monkeypatch):
-    client = _FakeClient(resource=object(), get_result=object())
+    client = _FakeClient(resource=_PODS_ROUTE, get_result=object())
     result = _run_module(
         monkeypatch,
         params={
@@ -652,7 +660,7 @@ def test_malformed_list_response_is_error(monkeypatch):
 
 
 def test_malformed_named_get_response_is_error(monkeypatch):
-    client = _FakeClient(resource=object(), get_result={"items": "not-a-list"})
+    client = _FakeClient(resource=_CONFIGMAPS_ROUTE, get_result={"items": "not-a-list"})
     result = _run_module(
         monkeypatch,
         params={
@@ -670,7 +678,7 @@ def test_malformed_named_get_response_is_error(monkeypatch):
 
 def test_sensitive_exception_content_never_returned(monkeypatch):
     client = _FakeClient(
-        resource=object(),
+        resource=_PODS_ROUTE,
         get_error=_api_error(ForbiddenError, 403, body=f"token={SENTINEL}"),
     )
     result = _run_module(
@@ -701,7 +709,7 @@ def test_every_path_reports_changed_false(monkeypatch):
                 "resource_name": "pods",
             },
             _FakeClient(
-                resource=object(),
+                resource=_CONFIGMAPS_ROUTE,
                 get_result=_DictResult({"kind": "PodList", "items": [], "metadata": {"resourceVersion": "1"}}),
             ),
             None,
@@ -716,7 +724,7 @@ def test_every_path_reports_changed_false(monkeypatch):
                 "resource_name": "configmaps",
             },
             _FakeClient(
-                resource=object(),
+                resource=_PODS_ROUTE,
                 get_error=_api_error(NotFoundError, 404),
             ),
             None,
@@ -730,7 +738,7 @@ def test_every_path_reports_changed_false(monkeypatch):
                 "resource_name": "pods",
             },
             _FakeClient(
-                resource=object(),
+                resource=_PODS_ROUTE,
                 get_error=_api_error(BadRequestError, 400),
             ),
             None,
@@ -777,7 +785,7 @@ def _page(items, continue_token=None, resource_version="1"):
 
 def test_list_mode_follows_continue_tokens_to_exhaustion(monkeypatch):
     client = _FakeClient(
-        resource=object(),
+        resource=_PODS_ROUTE,
         pages=[_page([{"metadata": {"name": "a"}}], "tok"), _page([{"metadata": {"name": "b"}}])],
     )
     result = _run_module(monkeypatch, params=LIST_PARAMS, client=client)
@@ -789,7 +797,7 @@ def test_list_mode_follows_continue_tokens_to_exhaustion(monkeypatch):
 def test_a_complete_list_publishes_the_page_one_snapshot_revision(monkeypatch):
     """A3.0 rule 8: one revision describes the whole read, and every page agrees with it."""
     client = _FakeClient(
-        resource=object(),
+        resource=_PODS_ROUTE,
         pages=[
             _page([{"metadata": {"name": "a"}}], "tok", resource_version="100"),
             _page([{"metadata": {"name": "b"}}], resource_version="100"),
@@ -803,7 +811,7 @@ def test_a_complete_list_publishes_the_page_one_snapshot_revision(monkeypatch):
 def test_a_continuation_page_at_a_different_revision_is_error(monkeypatch):
     """A3.0 rule 8, negative: mismatched pages are not one snapshot, so the read fails."""
     client = _FakeClient(
-        resource=object(),
+        resource=_PODS_ROUTE,
         pages=[
             _page([{"metadata": {"name": "a"}}], "tok", resource_version="100"),
             _page([{"metadata": {"name": "b"}}], resource_version="999"),
@@ -818,7 +826,7 @@ def test_a_continuation_page_at_a_different_revision_is_error(monkeypatch):
 def test_a_restarted_read_with_an_inconsistent_continuation_is_error(monkeypatch):
     """The restarted read establishes a new snapshot, and its pages must agree with it."""
     client = _FakeClient(
-        resource=object(),
+        resource=_CONFIGMAPS_ROUTE,
         pages=[
             _page([{"metadata": {"name": "a"}}], "tok", resource_version="100"),
             _api_error(GoneError, 410),
@@ -834,7 +842,7 @@ def test_a_restarted_read_with_an_inconsistent_continuation_is_error(monkeypatch
 
 def test_a_named_get_publishes_the_objects_revision(monkeypatch):
     client = _FakeClient(
-        resource=object(),
+        resource=_CONFIGMAPS_ROUTE,
         get_result=_DictResult({"kind": "ConfigMap", "metadata": {"name": "cm", "resourceVersion": "77"}}),
     )
     result = _run_module(
@@ -865,7 +873,7 @@ def test_a_named_get_publishes_the_objects_revision(monkeypatch):
 def test_a_named_get_without_a_usable_revision_is_error(monkeypatch, metadata):
     """A3.0 rule 9: `read_status: ok` is unreachable without the object's own revision."""
     client = _FakeClient(
-        resource=object(),
+        resource=_CONFIGMAPS_ROUTE,
         get_result=_DictResult({"kind": "ConfigMap", "metadata": metadata}),
     )
     result = _run_module(
@@ -886,7 +894,7 @@ def test_a_named_get_without_a_usable_revision_is_error(monkeypatch, metadata):
 
 
 def test_every_list_page_carries_the_fixed_limit_and_a_bounded_timeout(monkeypatch):
-    client = _FakeClient(resource=object(), pages=[_page([], "tok"), _page([])])
+    client = _FakeClient(resource=_PODS_ROUTE, pages=[_page([], "tok"), _page([])])
     _run_module(monkeypatch, params=LIST_PARAMS, client=client)
     assert [p["limit"] for p in client.get_params] == [
         constants.STRICT_READ_PAGE_LIMIT,
@@ -897,7 +905,7 @@ def test_every_list_page_carries_the_fixed_limit_and_a_bounded_timeout(monkeypat
 
 def test_list_mode_page_failure_is_error_and_returns_no_partial_inventory(monkeypatch):
     client = _FakeClient(
-        resource=object(),
+        resource=_PODS_ROUTE,
         pages=[_page([{"metadata": {"name": "a"}}], "tok"), _api_error(InternalServerError, 500)],
     )
     result = _run_module(monkeypatch, params=LIST_PARAMS, client=client)
@@ -908,7 +916,7 @@ def test_list_mode_page_failure_is_error_and_returns_no_partial_inventory(monkey
 
 def test_list_mode_outstanding_continuation_at_exit_is_error(monkeypatch):
     client = _FakeClient(
-        resource=object(),
+        resource=_PODS_ROUTE,
         pages=[_page([], "tok")] * (constants.STRICT_READ_MAX_PAGES + 5),
     )
     result = _run_module(monkeypatch, params=LIST_PARAMS, client=client)
@@ -918,7 +926,7 @@ def test_list_mode_outstanding_continuation_at_exit_is_error(monkeypatch):
 
 def test_expired_continuation_restarts_the_whole_read_once(monkeypatch):
     client = _FakeClient(
-        resource=object(),
+        resource=_PODS_ROUTE,
         pages=[
             _page([{"metadata": {"name": "a"}}], "tok", resource_version="100"),
             _api_error(GoneError, 410),
@@ -937,7 +945,7 @@ def test_expired_continuation_restarts_the_whole_read_once(monkeypatch):
 
 def test_second_expired_continuation_is_error_with_no_partial_output(monkeypatch):
     client = _FakeClient(
-        resource=object(),
+        resource=_PODS_ROUTE,
         pages=[
             _page([{"metadata": {"name": "a"}}], "tok"),
             _api_error(GoneError, 410),
@@ -965,7 +973,7 @@ def test_second_expired_continuation_is_error_with_no_partial_output(monkeypatch
     ],
 )
 def test_malformed_list_pages_are_error_never_empty_success(monkeypatch, page):
-    client = _FakeClient(resource=object(), pages=[page])
+    client = _FakeClient(resource=_PODS_ROUTE, pages=[page])
     result = _run_module(monkeypatch, params=LIST_PARAMS, client=client)
     assert result["read_status"] == "error"
     assert result["resources"] == []
@@ -1027,7 +1035,7 @@ def test_absence_outcomes_never_publish_a_revision(monkeypatch, params, client_k
 
 def test_every_outcome_publishes_the_resource_version_key(monkeypatch):
     """The key is always present, so callers never branch on its absence."""
-    client = _FakeClient(resource=object(), pages=[_page([])])
+    client = _FakeClient(resource=_PODS_ROUTE, pages=[_page([])])
     assert "resource_version" in _run_module(monkeypatch, params=LIST_PARAMS, client=client)
 
 
@@ -1136,7 +1144,8 @@ def test_a_malformed_entry_anywhere_is_unverifiable_whatever_the_entry_order(res
 def test_irregular_plural_resource_lookup_success_reads_ok(monkeypatch):
     """The canonical plural is supplied by the caller and the read completes normally."""
     client = _FakeClient(
-        resource=object(),
+        resource=_MCO_ROUTE,
+        dynamic=_FakeDynamicClient(discovery=_MCO_SERVED),
         pages=[
             _DictResult({"kind": "MultiClusterObservabilityList", "items": [], "metadata": {"resourceVersion": "1"}})
         ],
@@ -1187,7 +1196,7 @@ def test_irregular_plural_matches_the_exact_name_and_never_becomes_absence(monke
 
 @pytest.mark.parametrize("resource_name", [None, "", "   "])
 def test_missing_resource_name_is_rejected_before_any_client_work(monkeypatch, resource_name):
-    client = _FakeClient(resource=object(), pages=[_page([])])
+    client = _FakeClient(resource=_PODS_ROUTE, pages=[_page([])])
     result = _run_module(
         monkeypatch,
         params={**LIST_PARAMS, "resource_name": resource_name},
@@ -1262,7 +1271,7 @@ def test_a_named_get_is_bounded(monkeypatch):
     indefinitely and would break that parity.
     """
     client = _FakeClient(
-        resource=object(),
+        resource=_CONFIGMAPS_ROUTE,
         get_result=_DictResult({"kind": "ConfigMap", "metadata": {"name": "cm", "resourceVersion": "77"}}),
     )
     result = _run_module(

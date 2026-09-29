@@ -3,10 +3,11 @@
 
 Moved out of ``plugins/modules/acm_k8s_read_outcome.py`` so every collection module that
 needs a strict read consumes this single owner instead of a copy: complete pagination under
-fixed page and restart bounds, a bounded request timeout on every request, a live discovery
-proof before any kind is reported as not served and before any named 404 is reported as an
-absent object, rejection of malformed responses, and an error that is never reported as an
-empty inventory.
+fixed page and restart bounds, a bounded request timeout on every request, no request on a
+resolved route that is not the requested group/version, resource name and scope, a live
+discovery proof before any custom-resource request, before any kind is reported as not served
+and before any named 404 is reported as an absent object, rejection of malformed responses,
+and an error that is never reported as an empty inventory.
 
 ``strict_read`` returns the same ``(read_status, resources, resource_version)`` triple
 ``acm_k8s_read_outcome`` publishes. It raises nothing for an API outcome; argument
@@ -19,6 +20,7 @@ import json
 from typing import Any
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    STRICT_READ_BUILTIN_API_VERSIONS,
     STRICT_READ_MAX_PAGES,
     STRICT_READ_MAX_RESTARTS,
     STRICT_READ_PAGE_LIMIT,
@@ -157,8 +159,31 @@ def _discovery_serves(api_client, api_version: str, resource_name: str) -> bool 
     return any(entry["name"] == resource_name for entry in resources)
 
 
+def _route_is_requested(resource, api_version: str, resource_name: str, namespace: str | None) -> bool:
+    """Whether the resolved route is exactly the requested one (#320).
+
+    kubernetes.core may resolve the kind from its shared on-disk discovery cache or, after a
+    core `v1` lookup miss, in another group at `v1`, and the dynamic client routes the request
+    by what it resolved. A namespaced request on a route resolved as cluster-scoped would drop
+    the namespace and read cluster-wide. A route that is not the requested one is never read.
+    """
+    namespaced = getattr(resource, "namespaced", None)
+    return (
+        getattr(resource, "group_version", None) == api_version
+        and getattr(resource, "name", None) == resource_name
+        and isinstance(namespaced, bool)
+        and (namespaced or not namespace)
+    )
+
+
 def _named_404_status(
-    api_client, resource, api_version: str, kind: str, resource_name: str, namespace: str | None
+    api_client,
+    resource,
+    api_version: str,
+    kind: str,
+    resource_name: str,
+    namespace: str | None,
+    resources: list[dict] | None = None,
 ) -> str:
     """Classify a named-GET 404 by what live discovery says about the route that was read (#317).
 
@@ -169,11 +194,13 @@ def _named_404_status(
     misses, kubernetes.core resolves the kind in any group at `v1`. A namespaced kind read with
     no namespace is routed to its cluster-wide path, which names no namespaced object. Absence
     is proved only when live discovery for the requested group/version serves the requested
-    kind on the exact route that returned the 404.
+    kind on the exact route that returned the 404. A custom resource's discovery was already
+    read live before its GET and is passed in as `resources`; a built-in's is read here.
     """
     if getattr(resource, "group_version", None) != api_version or getattr(resource, "name", None) != resource_name:
         return "error"
-    resources = _live_discovery_resources(api_client, api_version)
+    if resources is None:
+        resources = _live_discovery_resources(api_client, api_version)
     if resources is None:
         return "error"
     entry = next((entry for entry in resources if entry["name"] == resource_name), None)
@@ -281,6 +308,23 @@ def strict_read(
         served = _discovery_serves(api_client, api_version, resource_name)
         return ("kind_not_served" if served is False else "error"), [], None
 
+    if not _route_is_requested(resource, api_version, resource_name, namespace):
+        return "error", [], None
+
+    discovered = None
+    if api_version not in STRICT_READ_BUILTIN_API_VERSIONS:
+        # A custom resource is read only after live discovery proves its route, as Python proves
+        # the resource served before any object request (#322). Its scope must be the scope the
+        # request is routed by; a route live discovery does not confirm is never read.
+        discovered = _live_discovery_resources(api_client, api_version)
+        if discovered is None:
+            return "error", [], None
+        entry = next((entry for entry in discovered if entry["name"] == resource_name), None)
+        if entry is None:
+            return "kind_not_served", [], None
+        if entry.get("namespaced") is not resource.namespaced:
+            return "error", [], None
+
     params: dict[str, Any] = {}
     if namespace:
         params["namespace"] = namespace
@@ -305,7 +349,10 @@ def strict_read(
         raw = api_client.get(resource, **params)
     except Exception as exc:
         if read_mode == "get" and _is_named_not_found(exc):
-            return _named_404_status(api_client, resource, api_version, kind, resource_name, namespace), [], None
+            status = _named_404_status(
+                api_client, resource, api_version, kind, resource_name, namespace, resources=discovered
+            )
+            return status, [], None
         return "error", [], None
 
     normalized = _normalize_resources(read_mode, raw)

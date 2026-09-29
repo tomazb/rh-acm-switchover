@@ -126,14 +126,16 @@ class _LiveDiscovery:
     A kind the client has stopped resolving (`unserved_from`) is positively absent from it, so
     its reads are `kind_not_served`; a named 404 of a still-served kind is `not_found` (#317).
     `discovery_omits` models a kind that still resolves from a stale cache but is no longer
-    served, and `discovery_fails` a discovery read that cannot be completed.
+    served, and `discovery_fails` a discovery read that cannot be completed: every read when
+    `True`, or only the reads of the discovery paths in a set.
     """
 
     def __init__(self, k8s_client: "_FakeK8sClient"):
         self._k8s_client = k8s_client
 
     def request(self, method, path, **params):
-        if self._k8s_client.discovery_fails:
+        fails = self._k8s_client.discovery_fails
+        if fails is True or (isinstance(fails, set) and path in fails):
             raise _api_error(ServiceUnavailableError, 503)
         served = [
             {"name": plural, "kind": kind, "namespaced": kind not in _CLUSTER_SCOPED}
@@ -172,7 +174,7 @@ class _FakeK8sClient:
         # longer resolves, and discovery positively lists nothing for it (kind_not_served).
         self._unserved_from = dict(unserved_from or {})
         self._resolutions: dict[str, int] = {}
-        self.discovery_fails = False
+        self.discovery_fails: bool | set[str] = False
         self.discovery_omits: set[str] = set()
         self.client = _LiveDiscovery(self)
 
@@ -521,7 +523,9 @@ def test_a_deployment_404_without_live_discovery_serving_deployments_is_never_in
     """#317: without a live served-kind proof the 404 is a failed read, not an absent Deployment."""
     client = _capture_client(overrides={("GET", "Deployment", DEPLOYMENT_NAME): [_api_error(NotFoundError, 404)]})
     if discovery == "fails":
-        client.discovery_fails = True
+        # Only the Deployment's group/version: the ClusterServiceVersion read before it is a custom
+        # resource whose own live discovery proof must still succeed (#322).
+        client.discovery_fails = {"/apis/apps/v1"}
     else:
         client.discovery_omits = {"Deployment"}
 
