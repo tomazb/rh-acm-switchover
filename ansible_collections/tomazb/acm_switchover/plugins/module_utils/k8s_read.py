@@ -194,11 +194,11 @@ def _named_404_status(
     misses, kubernetes.core resolves the kind in any group at `v1`. A namespaced kind read with
     no namespace is routed to its cluster-wide path, which names no namespaced object. Absence
     is proved only when live discovery for the requested group/version serves the requested
-    kind on the exact route that returned the 404. A custom resource's discovery was already
-    read live before its GET and is passed in as `resources`; a built-in's is read here.
+    kind on the exact route that returned the 404. `strict_read` has already refused a route
+    whose group/version or plural is not the requested one (`_route_is_requested`). A custom
+    resource's discovery was read live before its GET and is passed in as `resources`; a
+    built-in's is read here.
     """
-    if getattr(resource, "group_version", None) != api_version or getattr(resource, "name", None) != resource_name:
-        return "error"
     if resources is None:
         resources = _live_discovery_resources(api_client, api_version)
     if resources is None:
