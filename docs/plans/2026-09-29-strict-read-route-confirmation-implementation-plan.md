@@ -439,6 +439,10 @@ In `strict_read`, after the resolution `try/except`:
             return "error", [], None
 ```
 
+> **Amended after pre-PR review (design §10):** the `entry.get("namespaced")` comparison above
+> was removed; a custom resource is gated only on the served name, and the two pre-request
+> checks live in one helper, `_confirm_route`.
+
 `_named_404_status` gains `resources: list[dict] | None = None` and reads live discovery only
 when it is `None`; the named-GET 404 branch passes `resources=discovered`. Update the module
 docstring's discovery sentence to: "a live route proof before any custom-resource request,

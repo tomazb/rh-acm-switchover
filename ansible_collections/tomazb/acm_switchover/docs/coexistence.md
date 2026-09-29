@@ -240,8 +240,7 @@ equality vector for this case.
 collection's `strict_read` now reads a custom resource (any group/version other
 than `v1` and `apps/v1`, the group/versions Python reads through fixed typed
 routes) only after a live discovery read of the requested group/version is
-readable, lists the canonical resource name, and confirms the scope the request
-is routed by. Unreadable discovery is `error` and an omitted name is
+readable and lists the canonical resource name. Unreadable discovery is `error` and an omitted name is
 `kind_not_served`, with no object request, for a named GET and a LIST alike.
 This is Python's existing order (`get_custom_resource_strict` and
 `list_custom_resources_strict` prove the name served before any request), so
@@ -258,8 +257,9 @@ boolean, or as cluster-scoped for a request that names a namespace. The dynamic
 client uses the namespaced URL only for a route resolved as namespaced, so a
 stale or foreign cached `namespaced: false` would otherwise read a namespaced
 LIST cluster-wide and publish another namespace's objects (or an empty
-cluster-wide answer) as the requested namespace's inventory. For a custom
-resource, the live discovery proof above must also show the resolved scope.
+cluster-wide answer) as the requested namespace's inventory. Scope needs no
+discovery field: with a namespaced route, the server answers a namespaced
+request at the namespaced URL, which returns 404 for a cluster-scoped kind.
 Python has no resolved route: it reads the caller's fixed route and returns the
 object or inventory. The collection difference is reachable only when its
 resolved route does not match the live API server — a discovery cache written by

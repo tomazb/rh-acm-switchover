@@ -94,9 +94,16 @@ For any other `api_version` (a custom resource), after §4.1 and before the obje
 1. Read `_live_discovery_resources(api_client, api_version)` — the existing prover, with its
    whole-document validation and `groupVersion` check. `None` → `error`.
 2. No entry named `resource_name` → `kind_not_served` (Python: `CRD_ABSENT`, no GET).
-3. The entry's `namespaced` must be a `bool` equal to `resource.namespaced`; otherwise
-   `error`. (With §4.1 this also confirms a namespaced request against live discovery.)
-4. Only then send the GET or the first LIST page.
+3. Only then send the GET or the first LIST page.
+
+The live entry's `namespaced` field gates nothing before the request (amended after pre-PR
+review, see §10). §4.1 already refuses a namespaced request on a cluster-scoped route, and the
+server answers every other scope mismatch at the route itself: a namespaced URL for a
+cluster-scoped kind and a cluster URL for a named namespaced object are 404 (verified read-only
+on `prod2`), and a LIST with no namespace is the same all-namespaces read Python makes. A
+namespaced 200 is therefore the server's own evidence of the requested scope. Gating on the
+field would only fail, on a non-conformant document that omits or mistypes it, a read Python
+completes — a new divergence.
 
 No `entry["kind"] == kind` check is added before the request (Python has none; #282). The
 existing named-404 kind check is unchanged.
@@ -123,14 +130,15 @@ collection at `70d422bb`.
 | 5 | Custom, L unreadable/malformed, GET would 200 (#322) | `ok` | `error`, no object request | `ERROR` |
 | 6 | Custom, L unreadable/malformed, LIST | `ok` | `error`, no object request | `ERROR` |
 | 7 | Custom, L omits `resource_name`, R resolved from cache | GET: `ok` or `kind_not_served`; LIST: `ok` or `error` | `kind_not_served`, no object request | `CRD_ABSENT` |
-| 8 | Custom, L lists it, scope R = L, request 200 | `ok` | `ok` (+1 discovery GET) | `ITEMS` |
-| 9 | Custom, L lists it, L scope ≠ R scope | GET 404 `error`; success `ok` | `error`, no object request | `ITEMS` / `OBJECT_ABSENT` |
+| 8 | Custom, L lists it, request 200 | `ok` | `ok` (+1 discovery GET) | `ITEMS` |
+| 9 | Custom, L lists it, L scope ≠ R scope, request allowed by §4.1 | GET 404 `error`; success `ok` | unchanged: the server answers at R's route; a 404 is classified by §4.3 | `ITEMS` / `OBJECT_ABSENT` |
 | 10 | Custom, named 404, R = L, namespaced in namespace | `not_found` | `not_found` (no second discovery read) | `OBJECT_ABSENT` |
 | 11 | Resolution failure | discovery proof | unchanged | n/a |
 | 12 | Any auth/transport/decode/page failure | `error` | `error` | `ERROR` |
 
-Rows 1, 5, 6, 7, 8, 10, 12 are equal on both form factors and gain equality parity vectors
-where none exists (5, 6, 7). Rows 2, 3, 4 and 9 are reachable only when the resolved route
+Rows 1, 5, 6, 7, 8, 10, 12 are equal on both form factors (row 9 keeps its base outcomes: equal
+on success, the approved #317 named-404 divergence on a 404) and gain equality parity vectors
+where none exists (5, 6, 7). Rows 2, 3 and 4 are reachable only when the resolved route
 does not match the live API server (a stale or foreign cache entry, or kubernetes.core's
 core-`v1` fallback after a core discovery read failed during resolution): the collection
 fails closed where it previously published an inventory or object that was not the
@@ -226,7 +234,8 @@ Unit (`tests/unit/test_k8s_read_outcome.py`, collection lane), each with a reque
   object would return 200 → `error`, no GET sent;
 - custom LIST, same discovery failures → `error`, no LIST sent;
 - custom GET and LIST, discovery omits the name → `kind_not_served`, no object request;
-- custom, live scope ≠ resolved scope → `error`, no object request;
+- custom, live `namespaced` true / missing / non-bool while the route is cluster-scoped and no
+  namespace is requested → `ok` after exactly one discovery read (the field gates nothing);
 - custom named 404 → `not_found` with exactly one discovery read (reuse);
 - positive controls: built-in GET/LIST with no discovery read; custom GET/LIST with exactly
   one discovery read; complete pagination, 410 restart and snapshot revision unchanged.
@@ -276,3 +285,11 @@ and after named 404s.
 
 Python runtime (unchanged here; #321 follows), post-read membership checks, kind
 cross-checks (#282), cache invalidation, rerouting, RBAC, protected files, live mutation.
+
+## 10. Amendment after pre-PR review
+
+The first candidate (`b7b80dc5`) also required, before a custom-resource request, the live
+entry's `namespaced` to be a boolean equal to the resolved scope. Independent review showed it
+adds no safety (§4.2) and fails closed where Python, which never reads the field, completes the
+read when a non-conformant discovery document omits or mistypes it. It was removed before the PR
+was opened; rows 8 and 9 of §4.4 and the §7 test list reflect the amended rule.

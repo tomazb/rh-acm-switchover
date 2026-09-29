@@ -36,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   published every namespace's objects, or an empty cluster-wide answer, as the requested
   namespace's inventory (#320). A custom resource (any group/version other than `v1` and
   `apps/v1`) is now read only after a live discovery read of its group/version is readable, lists
-  the resource name, and confirms the routed scope; unreadable discovery is `error` and an
+  the resource name; unreadable discovery is `error` and an
   omitted name is `kind_not_served`, with no object request, for GET and LIST. That is Python's
   existing order, so a successful custom-resource GET or LIST is no longer published as `ok`
   while Python reports `ERROR` (#322). A custom-resource read costs one more bounded request;
