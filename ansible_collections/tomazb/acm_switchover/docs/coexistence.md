@@ -171,7 +171,11 @@ failure, and, since #322, the live discovery proof every custom-resource read
 takes before its object request, in either read mode. Until #321 lands, a
 custom-resource read whose discovery document is readable but has a malformed
 or non-matching `groupVersion` is therefore `error` in the collection even when
-Python goes on to read the object or inventory. Python's custom-resource prover
+Python goes on to read the object or inventory. The operator explicitly approved
+that extension to the success paths on 2026-09-29, before merge, as temporary
+until #321 (PR #324 governance comment, after the independent validator's
+finding B1); it is the same malformed-document condition as the approval
+below. Python's custom-resource prover
 (`lib/kube_client.py` `_discovery_serves`, used by `get_custom_resource_strict`
 and `list_custom_resources_strict`) does not read `groupVersion`. For valid
 caller inputs and a structurally readable discovery response whose
