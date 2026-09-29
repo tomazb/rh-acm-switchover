@@ -50,6 +50,14 @@ from lib.strict_read import StrictReadStatus
 # `OBJECT_ABSENT` (or `CRD_ABSENT` when live discovery also omits the canonical name). It also
 # deliberately has no vector here; the collection's route checks are pinned by its own unit tests.
 #
+# A fourth, collection-internal case has no vector for the same reason (#320): before any
+# request, the collection refuses a resolved route that is not the requested group/version,
+# canonical resource name and scope (a stale or foreign cached route, or kubernetes.core's
+# core-`v1` fallback into another group), so a namespaced read is never routed cluster-wide.
+# Python has no resolved route and reads its fixed one. For a resolved route that matches the
+# live server the outcomes stay equal; the collection's refusal is pinned by its own unit and
+# runtime tests and recorded in the collection's docs/coexistence.md.
+#
 # The last column is the exact revision both form factors must publish, and `None` means both
 # must publish no revision at all (Python `resource_version is None`, collection `null`). It is
 # what makes §10.2.1b's provenance rule parity-checkable rather than described.
@@ -64,6 +72,18 @@ VECTORS = [
     # and receive a 404 on its object route; Python proves the kind served before the GET.
     ("named_get_kind_not_served", "positive kind-not-served", StrictReadStatus.CRD_ABSENT, "kind_not_served", None),
     ("named_custom_resource_get_discovery_unverifiable", "api failure", StrictReadStatus.ERROR, "error", None),
+    # #322: a custom resource is read only after live discovery proves it served, in both form
+    # factors, even when the collection resolved its route (possibly from its discovery cache)
+    # and the object request would succeed.
+    ("custom_get_success_discovery_unverifiable", "api failure", StrictReadStatus.ERROR, "error", None),
+    ("custom_list_discovery_unverifiable_resolved_route", "api failure", StrictReadStatus.ERROR, "error", None),
+    (
+        "custom_list_kind_not_served_resolved_route",
+        "positive kind-not-served",
+        StrictReadStatus.CRD_ABSENT,
+        "kind_not_served",
+        None,
+    ),
     ("named_get_success", "success, complete inventory", StrictReadStatus.ITEMS, "ok", "77"),
     ("authorization_failure", "api failure", StrictReadStatus.ERROR, "error", None),
     ("transport_failure", "api failure", StrictReadStatus.ERROR, "error", None),
@@ -205,6 +225,30 @@ def _python_named_custom_resource_get_discovery_unverifiable():
     client = _python_client(call_api=call_api)
     outcome = client.get_custom_resource_strict(_GROUP, _VERSION, _PLURAL, "mch")
     client.custom_api.get_cluster_custom_object.assert_not_called()
+    return outcome
+
+
+def _python_custom_get_success_discovery_unverifiable():
+    call_api = Mock(side_effect=ApiException(status=503))
+    client = _python_client(call_api=call_api, get_effects=[{"metadata": {"name": "mch", "resourceVersion": "77"}}])
+    outcome = client.get_custom_resource_strict(_GROUP, _VERSION, _PLURAL, "mch")
+    client.custom_api.get_cluster_custom_object.assert_not_called()
+    return outcome
+
+
+def _python_custom_list_discovery_unverifiable_resolved_route():
+    call_api = Mock(side_effect=ApiException(status=503))
+    client = _python_client(call_api=call_api, list_effects=[{"items": [], "metadata": {"resourceVersion": "100"}}])
+    outcome = client.list_custom_resources_strict(_GROUP, _VERSION, _PLURAL)
+    client.custom_api.list_cluster_custom_object.assert_not_called()
+    return outcome
+
+
+def _python_custom_list_kind_not_served_resolved_route():
+    call_api = Mock(return_value=_unserved_discovery(_PLURAL))
+    client = _python_client(call_api=call_api, list_effects=[{"items": [], "metadata": {"resourceVersion": "100"}}])
+    outcome = client.list_custom_resources_strict(_GROUP, _VERSION, _PLURAL)
+    client.custom_api.list_cluster_custom_object.assert_not_called()
     return outcome
 
 
@@ -410,6 +454,9 @@ _PYTHON_VECTORS = {
     "namespace_absent": _python_namespace_absent,
     "named_get_kind_not_served": _python_named_get_kind_not_served,
     "named_custom_resource_get_discovery_unverifiable": _python_named_custom_resource_get_discovery_unverifiable,
+    "custom_get_success_discovery_unverifiable": _python_custom_get_success_discovery_unverifiable,
+    "custom_list_discovery_unverifiable_resolved_route": _python_custom_list_discovery_unverifiable_resolved_route,
+    "custom_list_kind_not_served_resolved_route": _python_custom_list_kind_not_served_resolved_route,
     "named_get_success": _python_named_get_success,
     "authorization_failure": _python_authorization_failure,
     "transport_failure": _python_transport_failure,
@@ -782,6 +829,35 @@ def _collection_named_custom_resource_get_discovery_unverifiable():
     return _run_collection(_NAMED_WIDGET_PARAMS, client=client)
 
 
+def _collection_custom_get_success_discovery_unverifiable():
+    dynamic = _FakeDynamicClient(discovery_error=_collection_api_error(503))
+    widget = _DictResult({"kind": "Widget", "metadata": {"name": "mch", "resourceVersion": "77"}})
+    client = _FakeK8sClient(resource=_WIDGET_ROUTE, get_result=widget, dynamic=dynamic)
+    result = _run_collection(_NAMED_WIDGET_PARAMS, client=client)
+    assert client.get_calls == 0
+    return result
+
+
+def _collection_custom_list_discovery_unverifiable_resolved_route():
+    dynamic = _FakeDynamicClient(discovery_error=_collection_api_error(503))
+    page = _DictResult({"kind": "WidgetList", "items": [], "metadata": {"resourceVersion": "100"}})
+    client = _FakeK8sClient(resource=_WIDGET_ROUTE, pages=[page], dynamic=dynamic)
+    result = _run_collection(_WIDGET_PARAMS, client=client)
+    assert client.get_calls == 0
+    return result
+
+
+def _collection_custom_list_kind_not_served_resolved_route():
+    dynamic = _FakeDynamicClient(
+        discovery={"kind": "APIResourceList", "groupVersion": "g/v1", "resources": [{"name": "pods", "kind": "Pod"}]}
+    )
+    page = _DictResult({"kind": "WidgetList", "items": [], "metadata": {"resourceVersion": "100"}})
+    client = _FakeK8sClient(resource=_WIDGET_ROUTE, pages=[page], dynamic=dynamic)
+    result = _run_collection(_WIDGET_PARAMS, client=client)
+    assert client.get_calls == 0
+    return result
+
+
 def _collection_namespace_absent():
     dynamic = _FakeDynamicClient(
         discovery={
@@ -1083,6 +1159,9 @@ _COLLECTION_VECTORS = {
     "named_get_success": _collection_named_get_success,
     "authorization_failure": _collection_authorization_failure,
     "transport_failure": _collection_transport_failure,
+    "custom_get_success_discovery_unverifiable": _collection_custom_get_success_discovery_unverifiable,
+    "custom_list_discovery_unverifiable_resolved_route": _collection_custom_list_discovery_unverifiable_resolved_route,
+    "custom_list_kind_not_served_resolved_route": _collection_custom_list_kind_not_served_resolved_route,
     "discovery_unverifiable": _collection_discovery_unverifiable,
     "discovery_http_404": _collection_discovery_http_404,
     "malformed_discovery": _collection_malformed_discovery,
@@ -1169,3 +1248,19 @@ def test_strict_read_bounds_are_mirrored():
     # module has no instance, so its constant must equal that default.
     default_timeout = inspect.signature(KubeClient.__init__).parameters["request_timeout"].default
     assert ans_constants.STRICT_READ_REQUEST_TIMEOUT == default_timeout
+
+
+def test_the_collection_builtin_group_versions_are_pythons_typed_readers():
+    """The collection reads without a discovery proof exactly where Python does (#322).
+
+    `STRICT_READ_BUILTIN_API_VERSIONS` is collection-only: Python draws the same line by which
+    method it calls. Its typed strict readers use the core `v1` and `apps/v1` clients and never
+    read discovery; every other group/version is read through the custom-resource readers, which
+    prove the resource served first.
+    """
+    import ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants as ans_constants
+    from lib.kube_client import KubeClient
+
+    assert ans_constants.STRICT_READ_BUILTIN_API_VERSIONS == ("v1", "apps/v1")
+    for typed_reader in ("get_namespace_strict", "list_pods_strict", "get_deployment_strict", "get_replicaset_strict"):
+        assert callable(getattr(KubeClient, typed_reader)), typed_reader
