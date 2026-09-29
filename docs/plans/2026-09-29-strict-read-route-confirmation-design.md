@@ -271,7 +271,9 @@ changes; tests green on arrival carry a recorded kill condition.
 Read-only live diagnostics on `prod2` (no ACM installed; diagnostic tier, not certification):
 `/api/v1` and `/apis/apps/v1` declare their `groupVersion`, and a cluster-scoped kind read at a
 namespaced path (`/apis/rbac.authorization.k8s.io/v1/namespaces/default/clusterroles`) returns
-404 — the server itself refuses a scope-mismatched route, which §3-D relies on.
+404, and a named namespaced object read at its cluster URL (`/api/v1/configmaps/kube-root-ca.crt`)
+returns 404 while the same object at `/api/v1/namespaces/default/configmaps/kube-root-ca.crt`
+returns 200 — the server itself refuses a scope-mismatched route, which §3-D and §4.2 rely on.
 
 ## 8. Supported-behavior preservation
 
