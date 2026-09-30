@@ -13,6 +13,7 @@
 - `docs/plans/2026-07-29-migration-evidence-design.md`
 - `docs/plans/2026-08-27-r4-04-current-base-design-amendment.md` at accepted exact head `f5f7505d55d7ef97b4642c87844e0c254b635018`
 - `docs/plans/2026-09-30-r4-04-controller-child-evidence-amendment.md` at merged exact head `97fb161735e43f9ea01ad47c3bf081e467fa96b1` (operator-directed amendment of 2026-09-30; wins over the two documents above where they conflict: exact-first generic selection, direct-`latest` determinism, one-shot `passive_restore` keeps the `latest` trigger with frozen predictions, one-shot child roles and owner membership, and recorded journal-shape resolutions). Task 2's vectors and Tasks 7–8 include its acceptance criteria 31–38.
+- `docs/plans/2026-09-30-r4-04-pr-c-decisions-amendment.md` (operator-directed amendment of 2026-09-30 after PR B; wins over the three documents above where they conflict: legacy `passive_patch` hive/cluster branch-aware exclusion, and explicit Argo CD recovery for an activation-failure rescue under a journal). Tasks 7, 8 and 12 include its acceptance criteria 39–42.
 
 **Plan status:** reviewed and approved for publication. This document does **not** authorize runtime implementation by itself.
 
@@ -488,6 +489,7 @@ PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/un
 - Modify: `modules/restore_discovery.py`
 - Modify: `modules/activation.py`
 - Modify: `acm_switchover.py` only for wiring already validated inputs/effective expectations
+- Modify: `lib/argocd_resume.py` and `lib/workflow.py` (PR C decisions amendment §2.2 failure rescue)
 - Create: `tests/test_restore_discovery.py`
 - Modify: `tests/test_activation.py`
 - Modify: `tests/test_main.py`
@@ -515,6 +517,8 @@ Cover all mutation kinds and resume:
 16. ACM phase `Enabled` is accepted only with the full passive-patch conjunctive proof; `EnabledWithErrors` blocks on 2.17; one-shot/full require `Finished`;
 17. `restore.completed_at` is written only after every required identity/provenance/completion/name predicate is complete, and written last.
 18. cleanup-policy tests prove a pre-PATCH mismatch issues zero PATCH, one-shot and full create bodies send the normalized journal value, post-create/post-patch mismatch blocks, and resume drift blocks.
+19. legacy `passive_patch` hive/cluster requests follow the PR C decisions amendment §1.2: before PATCH, the `orLabelSelectors` shortcut reusing the frozen `activation_credentials` Backup is permitted, while a selected distinct hive/cluster Backup or a blocking prediction issues zero PATCH; at completion any exact-owner child bound to a dedicated hive/cluster credential Backup blocks (including historical), and the shared unsuffixed credentials child is bound to `activation_credentials` when present;
+20. phase-failure rescue under a journal (activation, post-activation, finalization) follows the PR C decisions amendment §2.2 in `lib/argocd_resume.py`: no rewind to `PRIMARY_PREP`/`PREFLIGHT`, a durable Argo CD re-pause marker outside the journal persisted before any resume mutation, re-pause on retry before any further activation step, marker cleared only on success, and every failure visible; journal-free behavior unchanged.
 
 Run before implementation:
 
@@ -561,6 +565,7 @@ python -m pytest tests/test_restore_discovery.py tests/test_activation.py tests/
 - Modify: `ansible_collections/tomazb/acm_switchover/roles/activation/tasks/activate_restore.yml`
 - Modify: `ansible_collections/tomazb/acm_switchover/roles/activation/tasks/wait_for_restore.yml`
 - Modify: `ansible_collections/tomazb/acm_switchover/roles/activation/tasks/main.yml`
+- Modify: `ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml` and the affected phase roles (PR C decisions amendment §2.2 failure rescue)
 - Modify/add unit, integration, and scenario tests for activation.
 
 `acm_migration_evidence.py` is a thin adapter over `plugins/module_utils/migration_evidence.py`; it validates/builds evidence but performs no cluster mutation. Role YAML must consume validated module/checkpoint facts and must not walk raw `operational_data`.
@@ -571,6 +576,7 @@ Mirror every Python decision listed in Task 7, plus:
 
 - explicitly freeze `activation_credentials`, `activation_resources`, and `activation_resources_generic` before a passive PATCH through the same pinned-lane upstream-first selection contract; if a required auxiliary input is indeterminate, persist no accepted mutation transition and issue no PATCH; resume reuses/revalidates those frozen categories rather than re-resolving `latest`;
 - bind every consumed legacy/2.17 credential/resource/generic Velero child `spec.backupName` to the matching frozen `activation_*` category before completion evidence is accepted;
+- mirror the PR C decisions amendment: §1.2 legacy hive/cluster branch-aware exclusion, and §2.2 explicit Argo CD recovery in `playbooks/switchover.yml` and the activation role (no `status: reset` of `primary_prep` over a journal, no `ignore_errors` on that path);
 - strict pre-mutation Backup GET/revalidation compares the seven-field evidence after the same omitted-counter normalization used at freeze time;
 - mirror the complete Task 7 `cleanupBeforeRestore` contract: pre-PATCH strict equality with
   zero mutation on mismatch, one-shot/full create bodies carrying the journaled normalized
@@ -763,6 +769,7 @@ Document:
 - exact new waiver/repair interfaces;
 - `latest` permitted for `passive_patch` and one-shot `passive_restore`; full restoration uses concrete owned fields, and all accepted Backup and child provenance remains concrete;
 - strict resume/no-refreeze behavior;
+- the legacy `passive_patch` hive/cluster rule, including the historical-child compatibility restriction, and explicit Argo CD recovery after an activation failure under a journal (PR C decisions amendment);
 - cleanup recovery/repair states and operator action;
 - count/name additivity;
 - check/dry-run behavior;
