@@ -133,8 +133,8 @@ group/version, name, kind, or scope mismatch, a namespaced read without a
 namespace, or unreadable discovery is `error`. Every collection
 discovery read, including the kind-not-served proof for an unresolvable kind,
 treats a document whose `groupVersion` is missing, empty, not a string, or not
-the requested group/version as unreadable; for custom resources that is a
-separate divergence, recorded in the next paragraph. The Python CLI has no
+the requested group/version as unreadable, as Python's custom-resource prover
+also does since #321 (next paragraph). The Python CLI has no
 cached route: custom-resource reads prove the resource name served before the
 GET, while typed built-in reads (`get_namespace_strict`, `get_deployment_strict`,
 `get_replicaset_strict`, and the `import-controller-config` ConfigMap read)
@@ -163,46 +163,27 @@ evidence, and Pod classification reports an unreadable namespace or
 `dual-supported`. The parity tests intentionally carry no equality vector for
 this case.
 
-**Intentional divergence on custom-resource discovery with a malformed or non-matching `groupVersion` (#317, approved after implementation; Python realignment tracked in #321):**
-this is distinct from the built-in divergence above. The collection's
-`groupVersion` check is part of its shared discovery prover, so it governs the
-named-404 classifier, the kind-not-served proof after a resource resolution
-failure, and, since #322, the live discovery proof every custom-resource read
-takes before its object request, in either read mode. Until #321 lands, a
-custom-resource read whose discovery document is readable but has a malformed
-or non-matching `groupVersion` is therefore `error` in the collection even when
-Python goes on to read the object or inventory. The operator explicitly approved
-that extension to the success paths on 2026-09-29, before merge, as temporary
-until #321 (PR #324 governance comment, after the independent validator's
-finding B1); it is the same malformed-document condition as the approval
-below. Python's custom-resource prover
-(`lib/kube_client.py` `_discovery_serves`, used by `get_custom_resource_strict`
-and `list_custom_resources_strict`) does not read `groupVersion`. For valid
-caller inputs and a structurally readable discovery response whose
-`groupVersion` is missing, empty, not a string, or a different group/version,
-the collection returns `error`, while Python can report `OBJECT_ABSENT`
-(canonical resource listed, named GET 404) or `CRD_ABSENT` (canonical resource
-omitted). Such a document proves nothing about the requested group/version, so
-`error` is the fail-closed outcome, and the collection check is not weakened to
-regain equality; the decommission callers that read custom resources reject
-`error` instead of recording absence evidence. Only a malformed or
-non-conformant discovery response reaches this case, because a conformant API
-server always declares the requested group/version. For conformant discovery
-and a cached route that still matches it, the custom-resource outcomes are
-equal on both form factors and are held equal by the parity vectors; a stale
-cached route is the third, separate divergence recorded in the next paragraph.
-Chronology: the collection check was added in #317's repair
-of an independent-validator finding; the next independent validation found
-that Python does not enforce the field; the operator then approved retaining
-this narrow, fail-closed collection divergence. It is recorded as an
-operator-granted exception to the approval-before-implementation rule above.
-The approval covers only a malformed or non-matching discovery
-`groupVersion`. Python runtime is not changed by #317; realigning it is
-tracked in #321. The capabilities stay `dual-supported`, and the parity tests
-intentionally carry no equality vector for this case.
+**Custom-resource discovery with a malformed or non-matching `groupVersion` — aligned (#321):**
+both form factors' discovery provers — the collection's shared prover in
+`plugins/module_utils/k8s_read.py` and Python's `_discovery_serves` in
+`lib/kube_client.py` (used by `get_custom_resource_strict` and
+`list_custom_resources_strict`) — treat a readable `APIResourceList` whose
+`groupVersion` is missing, empty, not a string, or not the requested
+group/version as unverifiable, before any verdict. Such a document proves
+nothing about the requested group/version, so it is `error` / `ERROR` in both,
+on every path: the named-404 classifier, the kind-not-served proof, and the
+live discovery proof every custom-resource read takes before its object request
+(#322). It can establish neither a served kind nor object or kind absence. The
+parity tests hold this equal with the `malformed_group_version_*` vectors. Only
+a malformed or non-conformant discovery response reaches it, because a
+conformant API server always declares the requested group/version. History:
+the collection check was added in #317; Python did not read the field, and the
+operator approved retaining the fail-closed collection-only behaviour (#317),
+then its extension to custom-resource success paths (PR #324), each as
+temporary until #321, which aligned Python and retired both approvals.
 
 **Intentional divergence on a custom-resource named-read 404 from a stale cached route (#317, approved after implementation):**
-this is distinct from both divergences above. For a custom-resource named GET,
+this is distinct from the built-in divergence above. For a custom-resource named GET,
 the collection builds the object route from the plural and scope that
 kubernetes.core resolved for the requested kind, possibly from its shared
 on-disk discovery cache. When that GET returns 404 and the resolved route does
@@ -229,9 +210,10 @@ case stays aligned when the resolved plural is canonical (`kind_not_served` in
 the collection, `CRD_ABSENT` in Python). Chronology: the plural and scope
 checks were implemented in `7d105b30` and the kind check in `3105809b`, before
 any approval for custom resources; the earlier built-in approval (recorded in
-`53179299`) and the `groupVersion` approval above do not cover this case. An
+`53179299`) and the since-retired `groupVersion` approval (#321) do not cover this case. An
 independent validation then found the difference (IV-319-F4), and the operator
-explicitly approved it afterwards as a third narrow divergence. It is recorded
+explicitly approved it afterwards as a third narrow divergence (the second still
+open since #321 retired the `groupVersion` one). It is recorded
 as an operator-granted exception to the approval-before-implementation rule
 above. The approval covers only this stale cached-route mismatch on
 custom-resource named reads. It does not cover LIST routing, which #320 owns,

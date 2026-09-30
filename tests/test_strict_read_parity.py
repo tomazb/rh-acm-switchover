@@ -32,25 +32,21 @@ from lib.strict_read import StrictReadStatus
 # or `kind_not_served` in the collection and absence in Python. It is an operator-approved
 # divergence recorded in the collection's docs/coexistence.md.
 #
-# Custom-resource outcomes are held equal only where a discovery document, when read, declares
-# the requested group/version: the collection fixtures below carry that
-# `groupVersion`, and Python's prover never reads it, so its fixtures omit it. A readable
-# discovery document whose `groupVersion` is missing, empty, non-string, or a different
-# group/version is a second, separate approved divergence (#317, approved after
-# implementation): the collection returns `error`, while Python can publish `OBJECT_ABSENT` or
-# `CRD_ABSENT`. It deliberately has no vector here, because an equality vector would have to
-# require Python's absence to equal the collection's `error`. The collection side is pinned on
-# its shared discovery prover by its own unit tests; aligning Python is tracked in #321.
+# Both discovery provers require the document to declare the requested group/version (#317 in
+# the collection, #321 in Python), so every discovery fixture below carries its `groupVersion`,
+# and a readable document whose `groupVersion` is missing, empty, non-string, or another
+# group/version is unverifiable in both form factors: `ERROR`/`error`, never an absence or a
+# served proof. The `malformed_group_version_*` vectors hold that equal.
 #
 # The custom-resource vectors below also give the collection a resolved route that matches live
 # discovery. A custom-resource named 404 on a stale cached route (resolved plural not canonical,
-# live kind different, or live scope different from the routed scope) is a third, separate
+# live kind different, or live scope different from the routed scope) is a second, separate
 # approved divergence (#317, approved after implementation): the collection returns `error`,
 # while Python, which reads the caller's fixed route, can read the object or publish
 # `OBJECT_ABSENT` (or `CRD_ABSENT` when live discovery also omits the canonical name). It also
 # deliberately has no vector here; the collection's route checks are pinned by its own unit tests.
 #
-# A fourth, collection-internal case has no vector for the same reason (#320): before any
+# A third, collection-internal case has no vector for the same reason (#320): before any
 # request, the collection refuses a resolved route that is not the requested group/version,
 # canonical resource name and scope (a stale or foreign cached route, or kubernetes.core's
 # core-`v1` fallback into another group), so a namespaced read is never routed cluster-wide.
@@ -76,6 +72,26 @@ VECTORS = [
     # factors, even when the collection resolved its route (possibly from its discovery cache)
     # and the object request would succeed.
     ("custom_get_success_discovery_unverifiable", "api failure", StrictReadStatus.ERROR, "error", None),
+    # #321: a discovery document that does not declare the requested group/version proves
+    # nothing — not a served kind, not an absent object after a 404, not an unserved kind.
+    ("malformed_group_version_missing_listed_get_404", "malformed response", StrictReadStatus.ERROR, "error", None),
+    ("malformed_group_version_other_listed_get_success", "malformed response", StrictReadStatus.ERROR, "error", None),
+    ("malformed_group_version_empty_omitted_list", "malformed response", StrictReadStatus.ERROR, "error", None),
+    (
+        "malformed_group_version_other_version_omitted_list",
+        "malformed response",
+        StrictReadStatus.ERROR,
+        "error",
+        None,
+    ),
+    ("malformed_group_version_non_string_omitted_get", "malformed response", StrictReadStatus.ERROR, "error", None),
+    (
+        "malformed_group_version_missing_omitted_list_unresolved",
+        "malformed response",
+        StrictReadStatus.ERROR,
+        "error",
+        None,
+    ),
     ("custom_list_discovery_unverifiable_resolved_route", "api failure", StrictReadStatus.ERROR, "error", None),
     (
         "custom_list_kind_not_served_resolved_route",
@@ -141,15 +157,17 @@ def _raw_body(payload):
     return Mock(data=json.dumps(payload).encode("utf-8"))
 
 
-def _served_discovery(name=_PLURAL, kind="Widget"):
-    return _raw_body({"kind": "APIResourceList", "resources": [{"name": name, "kind": kind}]})
+def _served_discovery(name=_PLURAL, kind="Widget", group_version=f"{_GROUP}/{_VERSION}"):
+    return _raw_body(
+        {"kind": "APIResourceList", "groupVersion": group_version, "resources": [{"name": name, "kind": kind}]}
+    )
 
 
-def _unserved_discovery(excluding):
+def _unserved_discovery(excluding, group_version=f"{_GROUP}/{_VERSION}"):
     # A structurally valid APIResourceList that simply does not list `excluding`.
     resources = [{"name": "pods", "kind": "Pod"}]
     assert all(entry["name"] != excluding for entry in resources), "fixture must not actually serve `excluding`"
-    return _raw_body({"kind": "APIResourceList", "resources": resources})
+    return _raw_body({"kind": "APIResourceList", "groupVersion": group_version, "resources": resources})
 
 
 # ==============================================================================================
@@ -252,8 +270,33 @@ def _python_custom_list_kind_not_served_resolved_route():
     return outcome
 
 
+def _malformed_group_version_body(group_version, *, listed):
+    """A readable APIResourceList whose `groupVersion` is not the requested `g/v1` (#321)."""
+    resources = [{"name": _PLURAL, "kind": "Widget"}] if listed else [{"name": "pods", "kind": "Pod"}]
+    body = {"kind": "APIResourceList", "resources": resources}
+    if group_version is not None:
+        body["groupVersion"] = group_version
+    return body
+
+
+def _python_malformed_group_version_get(group_version, *, listed, get_effects):
+    call_api = Mock(return_value=_raw_body(_malformed_group_version_body(group_version, listed=listed)))
+    client = _python_client(call_api=call_api, get_effects=get_effects)
+    outcome = client.get_custom_resource_strict(_GROUP, _VERSION, _PLURAL, "mch")
+    client.custom_api.get_cluster_custom_object.assert_not_called()
+    return outcome
+
+
+def _python_malformed_group_version_list(group_version, *, listed):
+    call_api = Mock(return_value=_raw_body(_malformed_group_version_body(group_version, listed=listed)))
+    client = _python_client(call_api=call_api, list_effects=[{"items": [], "metadata": {"resourceVersion": "100"}}])
+    outcome = client.list_custom_resources_strict(_GROUP, _VERSION, _PLURAL)
+    client.custom_api.list_cluster_custom_object.assert_not_called()
+    return outcome
+
+
 def _python_kind_not_served():
-    call_api = Mock(return_value=_unserved_discovery(_OBS_PLURAL))
+    call_api = Mock(return_value=_unserved_discovery(_OBS_PLURAL, group_version=f"{_OBS_GROUP}/{_OBS_VERSION}"))
     client = _python_client(call_api=call_api, list_effects=[])
     outcome = client.list_custom_resources_strict(_OBS_GROUP, _OBS_VERSION, _OBS_PLURAL)
     client.custom_api.list_cluster_custom_object.assert_not_called()
@@ -306,7 +349,9 @@ def _python_discovery_http_404():
 
 
 def _python_malformed_discovery():
-    call_api = Mock(return_value=_raw_body({"kind": "APIResourceList", "resources": [{"name": 7}]}))
+    call_api = Mock(
+        return_value=_raw_body({"kind": "APIResourceList", "groupVersion": "g/v1", "resources": [{"name": 7}]})
+    )
     client = _python_client(call_api=call_api, list_effects=[])
     outcome = client.list_custom_resources_strict(_GROUP, _VERSION, _PLURAL)
     client.custom_api.list_cluster_custom_object.assert_not_called()
@@ -321,7 +366,11 @@ def _python_malformed_discovery_after_match():
     """
     call_api = Mock(
         return_value=_raw_body(
-            {"kind": "APIResourceList", "resources": [{"name": _PLURAL, "kind": "Widget"}, {"name": 7}]}
+            {
+                "kind": "APIResourceList",
+                "groupVersion": "g/v1",
+                "resources": [{"name": _PLURAL, "kind": "Widget"}, {"name": 7}],
+            }
         )
     )
     client = _python_client(call_api=call_api, list_effects=[{"items": [], "metadata": {"resourceVersion": "100"}}])
@@ -334,7 +383,11 @@ def _python_malformed_discovery_before_match():
     """The mirror: the malformed entry precedes the requested one. Already fails closed."""
     call_api = Mock(
         return_value=_raw_body(
-            {"kind": "APIResourceList", "resources": [{"name": 7}, {"name": _PLURAL, "kind": "Widget"}]}
+            {
+                "kind": "APIResourceList",
+                "groupVersion": "g/v1",
+                "resources": [{"name": 7}, {"name": _PLURAL, "kind": "Widget"}],
+            }
         )
     )
     client = _python_client(call_api=call_api, list_effects=[{"items": [], "metadata": {"resourceVersion": "100"}}])
@@ -455,6 +508,22 @@ _PYTHON_VECTORS = {
     "named_get_kind_not_served": _python_named_get_kind_not_served,
     "named_custom_resource_get_discovery_unverifiable": _python_named_custom_resource_get_discovery_unverifiable,
     "custom_get_success_discovery_unverifiable": _python_custom_get_success_discovery_unverifiable,
+    "malformed_group_version_missing_listed_get_404": lambda: _python_malformed_group_version_get(
+        None, listed=True, get_effects=[ApiException(status=404)]
+    ),
+    "malformed_group_version_other_listed_get_success": lambda: _python_malformed_group_version_get(
+        "other.io/v1", listed=True, get_effects=[{"metadata": {"name": "mch", "resourceVersion": "77"}}]
+    ),
+    "malformed_group_version_empty_omitted_list": lambda: _python_malformed_group_version_list("", listed=False),
+    "malformed_group_version_other_version_omitted_list": lambda: _python_malformed_group_version_list(
+        "g/v2", listed=False
+    ),
+    "malformed_group_version_non_string_omitted_get": lambda: _python_malformed_group_version_get(
+        7, listed=False, get_effects=[ApiException(status=404)]
+    ),
+    "malformed_group_version_missing_omitted_list_unresolved": lambda: _python_malformed_group_version_list(
+        None, listed=False
+    ),
     "custom_list_discovery_unverifiable_resolved_route": _python_custom_list_discovery_unverifiable_resolved_route,
     "custom_list_kind_not_served_resolved_route": _python_custom_list_kind_not_served_resolved_route,
     "named_get_success": _python_named_get_success,
@@ -858,6 +927,21 @@ def _collection_custom_list_kind_not_served_resolved_route():
     return result
 
 
+def _collection_malformed_group_version(group_version, *, listed, read_mode, resolved=True, get_error=None):
+    dynamic = _FakeDynamicClient(discovery=_malformed_group_version_body(group_version, listed=listed))
+    widget = _DictResult({"kind": "Widget", "metadata": {"name": "mch", "resourceVersion": "77"}})
+    page = _DictResult({"kind": "WidgetList", "items": [], "metadata": {"resourceVersion": "100"}})
+    route = {"resource": _WIDGET_ROUTE} if resolved else {"resource_error": ResourceNotFoundError("no matches")}
+    if read_mode == "get":
+        client = _FakeK8sClient(**route, get_result=widget, get_error=get_error, dynamic=dynamic)
+        result = _run_collection(_NAMED_WIDGET_PARAMS, client=client)
+    else:
+        client = _FakeK8sClient(**route, pages=[page], dynamic=dynamic)
+        result = _run_collection(_WIDGET_PARAMS, client=client)
+    assert client.get_calls == 0
+    return result
+
+
 def _collection_namespace_absent():
     dynamic = _FakeDynamicClient(
         discovery={
@@ -1160,6 +1244,24 @@ _COLLECTION_VECTORS = {
     "authorization_failure": _collection_authorization_failure,
     "transport_failure": _collection_transport_failure,
     "custom_get_success_discovery_unverifiable": _collection_custom_get_success_discovery_unverifiable,
+    "malformed_group_version_missing_listed_get_404": lambda: _collection_malformed_group_version(
+        None, listed=True, read_mode="get", get_error=_collection_api_error(404)
+    ),
+    "malformed_group_version_other_listed_get_success": lambda: _collection_malformed_group_version(
+        "other.io/v1", listed=True, read_mode="get"
+    ),
+    "malformed_group_version_empty_omitted_list": lambda: _collection_malformed_group_version(
+        "", listed=False, read_mode="list"
+    ),
+    "malformed_group_version_other_version_omitted_list": lambda: _collection_malformed_group_version(
+        "g/v2", listed=False, read_mode="list"
+    ),
+    "malformed_group_version_non_string_omitted_get": lambda: _collection_malformed_group_version(
+        7, listed=False, read_mode="get", get_error=_collection_api_error(404)
+    ),
+    "malformed_group_version_missing_omitted_list_unresolved": lambda: _collection_malformed_group_version(
+        None, listed=False, read_mode="list", resolved=False
+    ),
     "custom_list_discovery_unverifiable_resolved_route": _collection_custom_list_discovery_unverifiable_resolved_route,
     "custom_list_kind_not_served_resolved_route": _collection_custom_list_kind_not_served_resolved_route,
     "discovery_unverifiable": _collection_discovery_unverifiable,

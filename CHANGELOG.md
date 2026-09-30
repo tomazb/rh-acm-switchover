@@ -28,6 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Python's custom-resource discovery proof (`KubeClient._discovery_serves`, used by
+  `get_custom_resource_strict` and `list_custom_resources_strict`) now requires the discovery
+  document to declare the requested group/version (#321). A readable `APIResourceList` whose
+  `groupVersion` is missing, empty, not a string, or another group/version is `ERROR`
+  (`discovery_unverifiable`) before any verdict, so it can no longer establish `CRD_ABSENT`,
+  `OBJECT_ABSENT` after a named 404, or a served kind that lets a read return `ITEMS`. The
+  collection has enforced the same rule since #317, so the operator-approved #317 `groupVersion`
+  divergence and its PR #324 extension to custom-resource success paths are retired, and parity
+  vectors now hold the malformed shapes equal. Only non-conformant discovery reaches the change;
+  every Python caller already fails closed on `ERROR`. Collection behaviour is unchanged.
+
 - Collection `strict_read` (`acm_k8s_read_outcome`, `acm_pod_owner_classify`) now confirms the
   route before any request (#320, #322). A route kubernetes.core resolved to a group/version
   other than the requested one, to a plural other than the canonical resource name, or as
@@ -42,9 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   built-in reads are unchanged, and a custom-resource named 404 reuses the same discovery read.
   The route refusal is collection-internal and fail-closed, recorded in
   [coexistence.md](ansible_collections/tomazb/acm_switchover/docs/coexistence.md); the Python CLI
-  is unchanged. Until #321, a malformed discovery `groupVersion` also fails a custom-resource read
-  that Python completes: an operator-approved, temporary extension of the #317 `groupVersion`
-  divergence to these success paths (PR #324), removed when #321 aligns Python.
+  is unchanged. A malformed discovery `groupVersion` also fails such a read; that was a temporary,
+  operator-approved difference from Python until #321, above, aligned it.
 
 - Collection `strict_read` (`acm_k8s_read_outcome`, `acm_pod_owner_classify`) no longer reports
   a named-GET 404 as `not_found` unless a live, bounded discovery read of the requested
@@ -73,17 +83,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   discovery cannot be read, that matches Python. The Python CLI is not changed by this fix: it uses
   typed clients with fixed routes and no discovery cache, so it is not exposed to the stale
   cache, and its custom-resource strict reads already prove the kind served before the request.
-  Three operator-approved, fail-closed parity divergences remain, each recorded in
+  Three operator-approved, fail-closed parity divergences remained (the second was later aligned
+  by #321), each recorded in
   [coexistence.md](ansible_collections/tomazb/acm_switchover/docs/coexistence.md) and the
   [parity matrix](docs/ansible-collection/parity-matrix.md); both capabilities stay
   `dual-supported`. First, Python's typed built-in reads still take a 404 as absence without
   discovery, so a built-in 404 that live discovery does not confirm is absence in Python.
-  Second, Python's custom-resource discovery prover does not validate `groupVersion`, so for a
-  custom resource whose live discovery document is readable but has a missing, empty,
-  non-string, or different `groupVersion`, the collection returns `error` while Python can
-  report the object or CRD absent. Only a non-conformant discovery response reaches the second
-  case. It was approved after the collection check was implemented, and realigning Python is
-  tracked in #321. Third, for a custom-resource named GET that returns 404 on a route resolved
+  Second, before #321, Python's custom-resource discovery prover did not validate
+  `groupVersion`, so for a custom resource whose live discovery document was readable but had a
+  missing, empty, non-string, or different `groupVersion`, the collection returned `error` while
+  Python could report the object or CRD absent. Only a non-conformant discovery response reached
+  that case. It was approved after the collection check was implemented, and it was retired when
+  #321 aligned Python with the collection. Third, for a custom-resource named GET that returns 404 on a route resolved
   from a stale discovery cache, where the resolved plural is not canonical or live discovery shows
   a different kind or scope, the collection returns `error` while Python, which reads the caller's
   fixed route, can read the object or report it or its CRD absent. Only cached discovery that no
