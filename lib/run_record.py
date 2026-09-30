@@ -54,6 +54,28 @@ _UNSET = object()
 # Presence sentinel for strict reads: a stored null must not look like "never written".
 _ABSENT = object()
 
+# Amendment section 10: --reset-state is the only fresh-run boundary once a journal exists.
+MIGRATION_JOURNAL_IMPLICIT_RESET_REFUSAL = (
+    "Refusing to reset the state file: it records a migration journal (the frozen Backup evidence of "
+    "an in-progress migration). Resume with the same contexts, or start a new migration explicitly "
+    "with --reset-state."
+)
+
+
+class StateStructureError(ValueError):
+    """The state's config bag is not a mapping, so no journal read can be trusted. Fail closed."""
+
+
+def migration_journal_present(state_snapshot: Any) -> bool:
+    """True when a state snapshot's config carries a migration journal slot, valid or not.
+
+    For StateManager and workflow code that must not drop a journal by resetting the
+    state: they ask this facade instead of naming the key. A config that is not a
+    mapping cannot hold the slot.
+    """
+    config = state_snapshot.get("config") if isinstance(state_snapshot, dict) else None
+    return isinstance(config, dict) and _KEY_MIGRATION_BACKUPS in config
+
 
 @dataclass(frozen=True)
 class HubFacts:
@@ -378,6 +400,10 @@ class RunRecord:
         invalid, partial or unknown-version journal raises MigrationEvidenceError
         (amendment section 2). The returned journal is a detached copy.
         """
+        config = self._state.state.get("config")
+        if not isinstance(config, dict):
+            # A malformed bag would read every key as absent, the journal included.
+            raise StateStructureError(f"state config must be a mapping, got {type(config).__name__}")
         stored = self._get(_KEY_MIGRATION_BACKUPS, _ABSENT)
         if stored is _ABSENT:
             return None

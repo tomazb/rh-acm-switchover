@@ -19,6 +19,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint i
     check_migration_rewind,
     checkpoint_structure_error,
     classify_migration_backups,
+    has_migration_backups,
     migration_backups,
     record_migration_backups,
 )
@@ -212,41 +213,85 @@ def test_the_writer_refuses_an_unreadable_store(first_write):
 
 # --- reset / rewind (amendment section 10) --------------------------------------
 
+LATER_PHASES = ["activation", "post_activation", "finalization"]
 
-@pytest.mark.parametrize("reset_from", ["activation", "post_activation", "finalization"])
+
+@pytest.mark.parametrize("reset_from", LATER_PHASES)
 @pytest.mark.parametrize("prunes", [True, False])
-def test_a_rewind_at_or_after_activation_retains_a_valid_journal(first_write, reset_from, prunes):
+@pytest.mark.parametrize("requested_phase", ["preflight", "primary_prep", *LATER_PHASES])
+def test_a_rewind_at_or_after_activation_retains_a_valid_journal(first_write, reset_from, prunes, requested_phase):
     checkpoint = _checkpoint({KEY_MIGRATION_BACKUPS: first_write})
-    assert check_migration_rewind(checkpoint, reset_from, prunes=prunes) == MIGRATION_JOURNAL_VALID
+    outcome = check_migration_rewind(checkpoint, reset_from, prunes=prunes, requested_phase=requested_phase)
+    assert outcome == MIGRATION_JOURNAL_VALID
     assert checkpoint["operational_data"][KEY_MIGRATION_BACKUPS] == first_write
 
 
 @pytest.mark.parametrize("reset_from", ["preflight", "primary_prep"])
-def test_a_pre_freeze_rewind_with_a_valid_journal_is_refused(first_write, reset_from):
+@pytest.mark.parametrize("requested_phase", ["preflight", "primary_prep", *LATER_PHASES])
+def test_a_pre_freeze_reset_from_that_prunes_is_refused(first_write, reset_from, requested_phase):
     with pytest.raises(MigrationRewindRefused, match="full checkpoint reset"):
-        check_migration_rewind(_checkpoint({KEY_MIGRATION_BACKUPS: first_write}), reset_from, prunes=True)
+        check_migration_rewind(
+            _checkpoint({KEY_MIGRATION_BACKUPS: first_write}), reset_from, prunes=True, requested_phase=requested_phase
+        )
 
 
 @pytest.mark.parametrize("reset_from", ["preflight", "primary_prep"])
-def test_a_stale_pre_freeze_reset_from_that_prunes_nothing_keeps_a_valid_journal(first_write, reset_from):
-    """reset_from stays in the checkpoint config for every later task of the run; once
-    it no longer names a completed phase, no rewind happens and the journal stands."""
+@pytest.mark.parametrize("requested_phase", ["preflight", "primary_prep"])
+def test_a_pre_freeze_reset_from_entering_a_pre_freeze_phase_is_refused_without_pruning(
+    first_write, reset_from, requested_phase
+):
+    """Codex's case: completed ["preflight"], phase activation, enter primary_prep.
+    Nothing is pruned, but the checkpoint would still move back before the freeze."""
+    with pytest.raises(MigrationRewindRefused, match="full checkpoint reset"):
+        check_migration_rewind(
+            _checkpoint({KEY_MIGRATION_BACKUPS: first_write}), reset_from, prunes=False, requested_phase=requested_phase
+        )
+
+
+@pytest.mark.parametrize("reset_from", ["preflight", "primary_prep"])
+@pytest.mark.parametrize("requested_phase", LATER_PHASES)
+def test_a_stale_pre_freeze_reset_from_with_no_backward_effect_keeps_a_valid_journal(
+    first_write, reset_from, requested_phase
+):
+    """reset_from rides along in every task's checkpoint config. When it prunes nothing
+    and the requested phase is past the freeze, it has no effect and is allowed."""
     checkpoint = _checkpoint({KEY_MIGRATION_BACKUPS: first_write})
-    assert check_migration_rewind(checkpoint, reset_from, prunes=False) == MIGRATION_JOURNAL_VALID
+    outcome = check_migration_rewind(checkpoint, reset_from, prunes=False, requested_phase=requested_phase)
+    assert outcome == MIGRATION_JOURNAL_VALID
 
 
-@pytest.mark.parametrize("reset_from", ["preflight", "primary_prep", "activation", "post_activation", "finalization"])
+@pytest.mark.parametrize("reset_from", ["preflight", "primary_prep", *LATER_PHASES])
 @pytest.mark.parametrize("prunes", [True, False])
-def test_an_invalid_journal_blocks_every_rewind(reset_from, prunes):
+@pytest.mark.parametrize("requested_phase", ["preflight", "finalization"])
+def test_an_invalid_journal_blocks_every_reset_from(reset_from, prunes, requested_phase):
     with pytest.raises(MigrationRewindRefused, match="invalid"):
-        check_migration_rewind(_checkpoint({KEY_MIGRATION_BACKUPS: {}}), reset_from, prunes=prunes)
+        check_migration_rewind(
+            _checkpoint({KEY_MIGRATION_BACKUPS: {}}), reset_from, prunes=prunes, requested_phase=requested_phase
+        )
 
 
 @pytest.mark.parametrize("reset_from", ["preflight", "primary_prep", "activation"])
-def test_a_rewind_without_a_journal_is_unaffected(reset_from):
-    assert check_migration_rewind(_checkpoint({}), reset_from, prunes=True) == MIGRATION_JOURNAL_ABSENT
+@pytest.mark.parametrize("requested_phase", ["preflight", "primary_prep", "activation"])
+def test_a_rewind_without_a_journal_is_unaffected(reset_from, requested_phase):
+    outcome = check_migration_rewind(_checkpoint({}), reset_from, prunes=True, requested_phase=requested_phase)
+    assert outcome == MIGRATION_JOURNAL_ABSENT
 
 
 def test_a_rewind_refuses_an_unreadable_store():
     with pytest.raises(CheckpointStructureError):
-        check_migration_rewind({"operational_data": "x"}, "activation", prunes=True)
+        check_migration_rewind({"operational_data": "x"}, "activation", prunes=True, requested_phase="activation")
+
+
+# --- presence, for paths that rebuild a checkpoint -------------------------------
+
+
+@pytest.mark.parametrize("stored", [None, {}, {"schema_version": 2}, "x"])
+def test_presence_counts_an_invalid_journal(stored):
+    assert has_migration_backups(_checkpoint({KEY_MIGRATION_BACKUPS: stored})) is True
+
+
+@pytest.mark.parametrize(
+    "checkpoint", [_checkpoint(), _checkpoint({}), {"operational_data": "x"}, {"operational_data": None}, []]
+)
+def test_presence_is_false_where_no_slot_can_exist(checkpoint):
+    assert has_migration_backups(checkpoint) is False

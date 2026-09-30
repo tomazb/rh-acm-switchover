@@ -27,6 +27,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint i
     check_migration_rewind,
     checkpoint_facts,
     checkpoint_structure_error,
+    has_migration_backups,
     is_unsafe_legacy_checkpoint,
     normalize_operation_identity,
     record_migration_backups,
@@ -393,10 +394,16 @@ class ActionModule(ActionBase):
                 "msg": (f"standalone_decommission_identity requires phase={self.STANDALONE_PHASE}, got '{phase}'."),
             }
 
+        if status == "update":
+            return {
+                "failed": True,
+                "msg": "status: update is not supported for a standalone decommission: it writes no migration journal.",
+            }
+
         if status not in CHECKPOINT_VALID_STATUSES:
             return {
                 "failed": True,
-                "msg": (f"Invalid checkpoint status '{status}'. Expected one of: enter, pass, fail, reset, update."),
+                "msg": (f"Invalid checkpoint status '{status}'. Expected one of: enter, pass, fail, reset."),
             }
 
         checkpoint_config = args.get("checkpoint")
@@ -776,11 +783,16 @@ class ActionModule(ActionBase):
             # A full reset rebuilds the checkpoint without reading it, so only a
             # checkpoint that would actually be kept can refuse the rewind.
             rewind_failure = (
-                None if should_reset else self._migration_rewind_failure(checkpoint_data, reset_from, status)
+                None if should_reset else self._migration_rewind_failure(checkpoint_data, reset_from, status, phase)
             )
             if rewind_failure is not None:
                 return rewind_failure
             if status == "update":
+                # The execution path refuses an identity it would have to backfill or
+                # normalize; the preview refuses the same checkpoints.
+                identity = checkpoint_data.get("operation_identity")
+                if identity is None or normalize_operation_identity(identity) != identity:
+                    return self._update_identity_failure()
                 update_failure = self._apply_migration_update(deepcopy(checkpoint_data), phase, operational_data)
                 if update_failure is not None:
                     return update_failure
@@ -995,7 +1007,7 @@ class ActionModule(ActionBase):
         execution_mode,
     ) -> dict:
         if operation_identity_changed:
-            return {"failed": True, "msg": "status: update requires an established operation identity."}
+            return self._update_identity_failure()
         candidate = deepcopy(checkpoint_data)
         failure = self._apply_migration_update(candidate, phase, operational_data)
         if failure is not None:
@@ -1016,13 +1028,17 @@ class ActionModule(ActionBase):
         return {"changed": changed, "checkpoint": candidate}
 
     @staticmethod
-    def _migration_rewind_failure(checkpoint_data: dict, reset_from, status: str) -> dict | None:
+    def _update_identity_failure() -> dict:
+        return {"failed": True, "msg": "status: update requires an established operation identity."}
+
+    @staticmethod
+    def _migration_rewind_failure(checkpoint_data: dict, reset_from, status: str, phase: str) -> dict | None:
         """Amendment §10: the journal decides a reset_from rewind before any pruning."""
         if not reset_from or status not in {"enter", "reset"}:
             return None
         prunes = reset_from in checkpoint_data.get("completed_phases", [])
         try:
-            check_migration_rewind(checkpoint_data, reset_from, prunes=prunes)
+            check_migration_rewind(checkpoint_data, reset_from, prunes=prunes, requested_phase=phase)
         except ValueError as exc:
             return {"failed": True, "msg": str(exc)}
         return None
@@ -1127,7 +1143,7 @@ class ActionModule(ActionBase):
         has_explicit_reset: bool,
         expected_operation_identity: dict,
     ) -> tuple[dict, bool]:
-        rewind_failure = self._migration_rewind_failure(checkpoint_data, reset_from, status)
+        rewind_failure = self._migration_rewind_failure(checkpoint_data, reset_from, status, phase)
         if rewind_failure is not None:
             return rewind_failure, False
         if reset_from and status in {"enter", "reset"}:
@@ -1154,6 +1170,19 @@ class ActionModule(ActionBase):
                     False,
                 )
             if status == "enter":
+                if has_migration_backups(checkpoint_data):
+                    # This rebuild starts from empty operational_data; only the full
+                    # checkpoint reset may drop a migration journal (amendment §10).
+                    return (
+                        {
+                            "failed": True,
+                            "msg": (
+                                "Refusing to rebuild a schema 1.0 checkpoint that carries a migration journal. "
+                                "Start a new migration with the full checkpoint reset (checkpoint.reset)."
+                            ),
+                        },
+                        False,
+                    )
                 return (
                     build_checkpoint_record(
                         phase,

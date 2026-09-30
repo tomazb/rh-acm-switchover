@@ -15,10 +15,12 @@ import pytest
 
 from acm_switchover import _prepare_runtime
 from lib import run_record as run_record_module
+from lib.exceptions import SwitchoverError
 from lib.migration_evidence import MigrationEvidenceError
 from lib.migration_journal import validate_journal_transition
 from lib.run_record import ErrorRecord, HubFacts, ManagedClusterExpectation, RunRecord, RunSummary, StepRecord
-from lib.utils import StateLoadError, StateManager
+from lib.utils import Phase, StateIdentityMismatch, StateLoadError, StateManager
+from lib.workflow import CompletedStateConfig, FailedStateConfig, handle_completed_state, handle_failed_state
 
 VECTORS = Path(__file__).resolve().parent / "fixtures" / "r4_04_migration_evidence_vectors.json"
 
@@ -449,3 +451,140 @@ class TestResetStateMakesTheJournalAbsent:
         with patch("acm_switchover._initialize_clients", return_value=(None, None)):
             runtime = _prepare_runtime(_cli_args(reset_state=False), logging.getLogger("test"), str(path))
         assert RunRecord(runtime.state).migration_backups() == first_write
+
+
+# --- Task 3 review: malformed containers and implicit resets ------------------------
+
+
+def _write_raw_state(tmp_path, **fields):
+    """A fresh state file with top-level `fields` overwritten verbatim."""
+    path = tmp_path / "switchover-raw.json"
+    StateManager(str(path))
+    raw = json.loads(path.read_text())
+    raw.update(fields)
+    path.write_text(json.dumps(raw))
+    return path
+
+
+class TestMalformedConfigContainer:
+    """A config bag that is not a mapping is never read as "no journal"."""
+
+    @pytest.mark.parametrize("container", [[], "", None])
+    def test_the_read_blocks(self, tmp_path, container):
+        record = RunRecord(StateManager(str(_write_raw_state(tmp_path, config=container))))
+        with pytest.raises(run_record_module.StateStructureError):
+            record.migration_backups()
+
+    @pytest.mark.parametrize("container", [[], "", None])
+    def test_the_write_blocks(self, tmp_path, container, first_write):
+        path = _write_raw_state(tmp_path, config=container)
+        record = RunRecord(StateManager(str(path)))
+        with pytest.raises(run_record_module.StateStructureError):
+            record.record_migration_backups(first_write)
+        assert json.loads(path.read_text())["config"] == container
+
+    @pytest.mark.parametrize(
+        "snapshot, present",
+        [({"config": {}}, False), ({"config": {"x": 1}}, False), ({"config": []}, False), ({}, False), ([], False)],
+    )
+    def test_presence_is_false_without_the_key(self, snapshot, present):
+        assert run_record_module.migration_journal_present(snapshot) is present
+
+    @pytest.mark.parametrize("stored", [None, {}, {"schema_version": 2}])
+    def test_presence_counts_an_invalid_journal(self, stored):
+        snapshot = {"config": {run_record_module._KEY_MIGRATION_BACKUPS: stored}}
+        assert run_record_module.migration_journal_present(snapshot) is True
+
+
+def _journal_state(tmp_path, first_write, **fields):
+    """A state file bound to hub-a/hub-b that carries a migration journal."""
+    path = tmp_path / "switchover-journal.json"
+    state = StateManager(str(path))
+    state.ensure_contexts("hub-a", "hub-b")
+    RunRecord(state).record_migration_backups(first_write)
+    if fields:
+        raw = json.loads(path.read_text())
+        raw.update(fields)
+        path.write_text(json.dumps(raw))
+    return path
+
+
+class TestImplicitResetsKeepTheJournal:
+    """Amendment section 10: only --reset-state may drop a recorded journal."""
+
+    def test_a_context_mismatch_refuses_instead_of_resetting(self, tmp_path, first_write):
+        path = _journal_state(tmp_path, first_write)
+        state = StateManager(str(path))
+        with pytest.raises(StateIdentityMismatch, match="--reset-state"):
+            state.ensure_contexts("hub-a", "hub-c")
+        assert RunRecord(StateManager(str(path))).migration_backups() == first_write
+
+    def test_missing_contexts_on_progress_refuse_instead_of_resetting(self, tmp_path, first_write):
+        path = _journal_state(
+            tmp_path, first_write, contexts={"primary": None, "secondary": None}, current_phase="activation"
+        )
+        state = StateManager(str(path))
+        with pytest.raises(StateIdentityMismatch, match="--reset-state"):
+            state.ensure_contexts("hub-a", "hub-b")
+        assert RunRecord(StateManager(str(path))).migration_backups() == first_write
+
+    def test_an_invalid_journal_also_refuses_the_context_reset(self, tmp_path):
+        path = _write_raw_state(
+            tmp_path,
+            contexts={"primary": "hub-a", "secondary": "hub-b"},
+            config={run_record_module._KEY_MIGRATION_BACKUPS: None},
+        )
+        with pytest.raises(StateIdentityMismatch, match="--reset-state"):
+            StateManager(str(path)).ensure_contexts("hub-a", "hub-c")
+
+    def test_a_journal_free_context_mismatch_still_resets(self, tmp_path):
+        path = tmp_path / "switchover-plain.json"
+        state = StateManager(str(path))
+        state.ensure_contexts("hub-a", "hub-b")
+        state.mark_step_completed("preflight_validation")
+        state = StateManager(str(path))
+        state.ensure_contexts("hub-a", "hub-c")
+        assert state.state["completed_steps"] == []
+        assert state.state["contexts"] == {"primary": "hub-a", "secondary": "hub-c"}
+
+    def test_the_cli_reports_the_refusal_and_keeps_the_journal(self, tmp_path, first_write):
+        path = _journal_state(tmp_path, first_write)
+        with patch("acm_switchover._initialize_clients", return_value=(None, None)):
+            with pytest.raises(SystemExit):
+                _prepare_runtime(
+                    _cli_args(reset_state=False, secondary_context="hub-c"), logging.getLogger("test"), str(path)
+                )
+        assert RunRecord(StateManager(str(path))).migration_backups() == first_write
+
+    def test_force_on_an_unresumable_failed_state_refuses(self, tmp_path, first_write):
+        path = _journal_state(tmp_path, first_write, current_phase="failed", errors=[])
+        state = StateManager(str(path))
+        config = FailedStateConfig(resumable_phases=(Phase.ACTIVATION,), operation_noun="switchover")
+        with pytest.raises(SwitchoverError, match="--reset-state"):
+            handle_failed_state(argparse.Namespace(force=True), state, logging.getLogger("test"), config)
+        assert RunRecord(StateManager(str(path))).migration_backups() == first_write
+
+    def test_force_on_a_stale_completed_state_refuses(self, tmp_path, first_write):
+        path = _journal_state(
+            tmp_path, first_write, current_phase="completed", last_updated="2020-01-01T00:00:00+00:00"
+        )
+        state = StateManager(str(path))
+        config = CompletedStateConfig(operation_label="Switchover", operation_noun="switchover")
+        with pytest.raises(SwitchoverError, match="--reset-state"):
+            handle_completed_state(argparse.Namespace(force=True), state, logging.getLogger("test"), config)
+        assert RunRecord(StateManager(str(path))).migration_backups() == first_write
+
+    def test_journal_free_force_resets_are_unchanged(self, tmp_path):
+        failed = _write_raw_state(tmp_path, current_phase="failed", errors=[])
+        state = StateManager(str(failed))
+        config = FailedStateConfig(resumable_phases=(Phase.ACTIVATION,), operation_noun="switchover")
+        handle_failed_state(argparse.Namespace(force=True), state, logging.getLogger("test"), config)
+        assert state.get_current_phase() == Phase.INIT
+
+        completed_dir = tmp_path / "completed"
+        completed_dir.mkdir()
+        completed = _write_raw_state(completed_dir, current_phase="completed", last_updated="2020-01-01T00:00:00+00:00")
+        state = StateManager(str(completed))
+        config = CompletedStateConfig(operation_label="Switchover", operation_noun="switchover")
+        assert handle_completed_state(argparse.Namespace(force=True), state, logging.getLogger("test"), config) is False
+        assert state.get_current_phase() == Phase.INIT

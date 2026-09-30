@@ -770,6 +770,18 @@ def migration_backups(checkpoint):
     return value
 
 
+def has_migration_backups(checkpoint) -> bool:
+    """True when the checkpoint carries a journal slot, valid or not.
+
+    For the paths that rebuild a checkpoint from scratch: they must not drop the slot.
+    A checkpoint or operational_data that is not a mapping cannot hold one.
+    """
+    if not isinstance(checkpoint, dict):
+        return False
+    data = checkpoint.get("operational_data")
+    return isinstance(data, dict) and KEY_MIGRATION_BACKUPS in data
+
+
 def record_migration_backups(checkpoint, candidate) -> None:
     """Validate `candidate` and store it as the one complete journal value.
 
@@ -784,15 +796,18 @@ def record_migration_backups(checkpoint, candidate) -> None:
     checkpoint["operational_data"][KEY_MIGRATION_BACKUPS] = copy.deepcopy(candidate)
 
 
-def check_migration_rewind(checkpoint, reset_from: str, *, prunes: bool) -> str:
+def check_migration_rewind(checkpoint, reset_from: str, *, prunes: bool, requested_phase: str) -> str:
     """Decide whether `reset_from` may run against this checkpoint's journal.
 
-    `prunes` says whether reset_from still names a completed phase, i.e. whether a
-    rewind actually happens. An invalid journal refuses every reset_from, pruning or
-    not: dropping a phase marker never turns bad evidence into absence. A valid journal
-    refuses a rewind to a pre-freeze phase and is retained by any other rewind. Returns
-    the journal outcome. The full checkpoint reset rebuilds the record without reading
-    it and so never reaches this rule; it is the only path that may drop a journal.
+    The rule is about effect, because reset_from rides along in the checkpoint config of
+    every task in a run. An invalid journal refuses every reset_from: dropping a phase
+    marker never turns bad evidence into absence. With a valid journal, a pre-freeze
+    reset_from is refused when it would move the checkpoint back before the freeze --
+    `prunes` (it still names a completed phase, so pruning happens) or a
+    `requested_phase` that is itself pre-freeze -- and is otherwise a no-op that keeps
+    the journal. Any later reset_from keeps the journal. Returns the journal outcome.
+    The full checkpoint reset rebuilds the record without reading it and so never
+    reaches this rule; it is the only path that may drop a journal.
     """
     outcome, value = classify_migration_backups(checkpoint)
     if outcome == MIGRATION_JOURNAL_INVALID:
@@ -800,10 +815,11 @@ def check_migration_rewind(checkpoint, reset_from: str, *, prunes: bool) -> str:
             f"Refusing checkpoint.reset_from '{reset_from}': the stored migration journal is invalid ({value}). "
             "Repair the checkpoint, or start a new migration with the full checkpoint reset."
         )
-    if outcome == MIGRATION_JOURNAL_VALID and prunes and reset_from in PRE_FREEZE_PHASES:
+    moves_back = prunes or requested_phase in PRE_FREEZE_PHASES
+    if outcome == MIGRATION_JOURNAL_VALID and reset_from in PRE_FREEZE_PHASES and moves_back:
         raise MigrationRewindRefused(
-            f"Refusing checkpoint.reset_from '{reset_from}': the checkpoint records a migration transaction "
-            "frozen after that phase. Rewind to activation or later to reuse it, or start a new migration "
-            "with the full checkpoint reset (checkpoint.reset)."
+            f"Refusing checkpoint.reset_from '{reset_from}' for phase '{requested_phase}': the checkpoint records "
+            "a migration transaction frozen after that phase. Remove reset_from or rewind to activation or later "
+            "to reuse it, or start a new migration with the full checkpoint reset (checkpoint.reset)."
         )
     return outcome

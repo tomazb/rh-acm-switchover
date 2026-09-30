@@ -715,12 +715,14 @@ class StateManager:
 
         if stored_primary is None and stored_secondary is None:
             if has_progress:
+                self._refuse_reset_of_migration_journal()
                 logging.warning(
                     "Stored state contexts are missing for an in-progress state. Resetting state.",
                 )
                 self.state = self._new_state()
                 state_changed = True
         elif stored_primary != primary_context or stored_secondary != secondary_context:
+            self._refuse_reset_of_migration_journal()
             logging.warning(
                 "Stored state contexts (%s/%s) differ from current invocation (%s/%s). "
                 "Resetting state to avoid mixing runs.",
@@ -738,6 +740,13 @@ class StateManager:
 
         if state_changed:
             self.flush_state()  # Context changes are critical checkpoints
+
+    def _refuse_reset_of_migration_journal(self) -> None:
+        """An implicit reset never drops a migration journal (R4-04 amendment section 10)."""
+        from lib.run_record import MIGRATION_JOURNAL_IMPLICIT_RESET_REFUSAL, migration_journal_present
+
+        if migration_journal_present(self.state):
+            raise StateIdentityMismatch(MIGRATION_JOURNAL_IMPLICIT_RESET_REFUSAL)
 
     def _has_progress(self) -> bool:
         """Return True when this state has progressed beyond a fresh run."""

@@ -1190,7 +1190,12 @@ def _prepare_runtime(
 
     dry_run_state_guard = None
     if should_bind_state:
-        dry_run_state_guard = _bind_contexts_with_dry_run_guard(state, args)
+        try:
+            dry_run_state_guard = _bind_contexts_with_dry_run_guard(state, args)
+        except StateIdentityMismatch as exc:
+            # ensure_contexts refused a reset that would drop a migration journal.
+            logger.error("%s", exc)
+            sys.exit(EXIT_FAILURE)
 
     sanitize_identity_errors = (
         not getattr(args, "decommission", False)

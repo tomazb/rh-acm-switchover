@@ -192,10 +192,17 @@ which no role writes yet. Only `checkpoint_phase` `status: update` writes it: th
 status needs checkpointing enabled and an existing checkpoint whose current phase is
 the requested one, accepts `operational_data` only (no `error` or `report_ref`),
 validates the complete journal and its transition from the stored one, and changes
-only `operational_data` and `updated_at`. Other statuses refuse the key. While a
-journal is present, a `reset_from` that would rewind to `preflight` or `primary_prep`
-is refused, a rewind to `activation` or later keeps it, and an invalid journal refuses
-every `reset_from`; only `checkpoint.reset: true` starts a checkpoint without it.
+only `operational_data` and `updated_at`. Other statuses refuse the key, and the
+standalone decommission path refuses `status: update` outright. While a journal is
+present, `reset_from: preflight` or `reset_from: primary_prep` is refused on an
+`enter`/`reset` that would move the checkpoint back before the freeze: when the
+named phase is still complete (so it would be pruned), or when the requested phase is
+itself `preflight` or `primary_prep`. Otherwise that option is a no-op and allowed, so
+a `reset_from` left in the config for the rest of a run does not block later phases,
+but a rerun that starts at `preflight` with it still set is refused. A `reset_from` of
+`activation` or later keeps the journal, and an invalid journal refuses every
+`reset_from`. A schema `1.0` checkpoint that carries a journal is not rebuilt. Only
+`checkpoint.reset: true` starts a checkpoint without the journal.
 
 During execute-mode resume, the action plugin records
 `operational_data.resume_summary.resume_start_phase` the first time it enters a

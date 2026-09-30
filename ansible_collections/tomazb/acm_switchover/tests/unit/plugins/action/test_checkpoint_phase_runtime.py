@@ -4218,3 +4218,170 @@ def test_a_rewind_without_a_journal_prunes_as_before(tmp_path):
     )
     assert result.get("failed") is not True
     assert _stored(path)["completed_phases"] == ["preflight"]
+
+
+# --- Task 3 review findings -------------------------------------------------------------
+
+
+def test_a_legacy_rebuild_refuses_a_journal_bearing_checkpoint(tmp_path):
+    """Finding 1: the unsafe-legacy rebuild would otherwise start from empty operational_data."""
+    path = tmp_path / "checkpoint.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "phase": "preflight",
+                "completed_phases": ["preflight"],
+                "operational_data": {"migration_backups": _first_journal()},
+            }
+        )
+    )
+    before = _dir_snapshot(tmp_path)
+    result = _enter_action(path, phase="activation", reset_from="activation").run(
+        task_vars=_task_vars_with_operation_identity()
+    )
+    assert result["failed"] is True
+    assert "migration journal" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("stored", [None, {"schema_version": 9}])
+def test_a_legacy_rebuild_refuses_an_invalid_journal_too(tmp_path, stored):
+    path = tmp_path / "checkpoint.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "completed_phases": ["preflight"],
+                "operational_data": {"migration_backups": stored},
+            }
+        )
+    )
+    before = _dir_snapshot(tmp_path)
+    result = _enter_action(path, phase="activation", reset=True).run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_a_journal_free_legacy_rebuild_is_unchanged(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    path.write_text(
+        json.dumps({"schema_version": "1.0", "completed_phases": ["preflight"], "operational_data": {"x": "y"}})
+    )
+    result = _enter_action(path, phase="activation", reset_from="activation").run(
+        task_vars=_task_vars_with_operation_identity()
+    )
+    assert result.get("failed") is not True
+    assert _stored(path)["schema_version"] == "2.0"
+    assert _stored(path)["completed_phases"] == []
+    assert "x" not in _stored(path)["operational_data"]
+
+
+def test_the_full_reset_still_replaces_a_journal_bearing_legacy_checkpoint(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    path.write_text(
+        json.dumps(
+            {"schema_version": "1.0", "completed_phases": ["preflight"], "operational_data": {"migration_backups": {}}}
+        )
+    )
+    result = _enter_action(path, phase="preflight", reset=True).run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    assert _stored(path)["operational_data"] == {}
+
+
+def test_entering_a_pre_freeze_phase_under_a_pre_freeze_reset_from_is_refused_without_pruning(tmp_path):
+    """Finding 2, Codex's input: nothing to prune, but the phase would move back before the freeze."""
+    path = _write_phase_checkpoint(
+        tmp_path, phase="activation", completed=("preflight",), data={"migration_backups": _first_journal()}
+    )
+    before = _dir_snapshot(tmp_path)
+    result = _enter_action(path, phase="primary_prep", reset_from="primary_prep").run(
+        task_vars=_task_vars_with_operation_identity()
+    )
+    assert result["failed"] is True
+    assert "full checkpoint reset" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_a_realistic_run_with_a_stale_reset_from_primary_prep(tmp_path):
+    """Finding 2 walk-through: reset_from rides along on every task of the run.
+
+    The journal is written in activation (PR C), after the activation enter. Every
+    later enter carrying the stale option is allowed: nothing is pruned and no phase
+    moves back. A later rerun with the same option is refused at its first enter.
+    """
+    path = _write_phase_checkpoint(
+        tmp_path,
+        phase="finalization",
+        completed=("preflight", "primary_prep", "activation", "post_activation"),
+        data={},
+    )
+    task_vars = _task_vars_with_operation_identity()
+
+    def step(phase, status="enter", **extra):
+        action = _make_checkpoint_action(
+            {
+                "phase": phase,
+                "checkpoint": {"enabled": True, "backend": "file", "path": str(path), "reset_from": "primary_prep"},
+                "status": status,
+                **extra,
+            }
+        )
+        return action.run(task_vars=task_vars)
+
+    # No journal yet: the operator's rewind prunes primary_prep and everything after it.
+    assert step("preflight").get("failed") is not True
+    assert _stored(path)["completed_phases"] == ["preflight"]
+    assert step("primary_prep").get("failed") is not True
+    assert step("primary_prep", "pass").get("failed") is not True
+    assert _stored(path)["completed_phases"] == ["preflight", "primary_prep"]
+    # Existing behaviour, reported rather than changed here: the stale option re-prunes
+    # the primary_prep marker this same run just completed, on the activation enter.
+    assert step("activation").get("failed") is not True
+    assert _stored(path)["completed_phases"] == ["preflight"]
+    # Activation freezes the journal mid-phase, then completes.
+    assert step("activation", "update", operational_data={"migration_backups": _first_journal()})["changed"] is True
+    assert step("activation", "pass").get("failed") is not True
+    assert _stored(path)["completed_phases"] == ["preflight", "activation"]
+    # Later enters carry the stale option but prune nothing and move nothing back.
+    for phase in ("post_activation", "finalization"):
+        assert step(phase).get("failed") is not True, phase
+        assert step(phase, "pass").get("failed") is not True, phase
+    assert _stored(path)["completed_phases"] == ["preflight", "activation", "post_activation", "finalization"]
+    assert _stored(path)["operational_data"]["migration_backups"] == _first_journal()
+    # A rerun with the same option starts at preflight: that is a pre-freeze phase.
+    before = _dir_snapshot(tmp_path)
+    assert step("preflight")["failed"] is True
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("mode", ["execute", "dry_run", "validate"])
+def test_standalone_decommission_refuses_status_update(standalone_args, mode):
+    """Finding 5: no standalone journal exists, and the preview path validates nothing."""
+    result, execute_module = _run_standalone(
+        standalone_args(status="update", operational_data={"migration_backups": {"x": 1}}),
+        _standalone_task_vars(mode=mode),
+    )
+    assert result["failed"] is True
+    assert "status: update" in result["msg"]
+    execute_module.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [None, dict(_canonical_normal_operation_identity(), primary_kubeconfig="/legacy/primary")],
+)
+@pytest.mark.parametrize("mode, check_mode", [("execute", True), ("dry_run", False)])
+def test_a_non_mutating_update_requires_the_established_identity(tmp_path, identity, mode, check_mode):
+    """Finding 5: check mode applies the same established-identity rule as execution."""
+    path = _write_phase_checkpoint(tmp_path, completed=())
+    stored = _stored(path)
+    stored["operation_identity"] = identity
+    path.write_text(json.dumps(stored))
+    before = _dir_snapshot(tmp_path)
+    action = _update_action(path)
+    action._play_context.check_mode = check_mode
+    result = action.run(task_vars=_task_vars_with_operation_identity(mode=mode))
+    assert result["failed"] is True
+    assert "established operation identity" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before

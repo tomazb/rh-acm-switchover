@@ -151,3 +151,33 @@ def test_migration_journal_key_detector_catches_quoted_uses():
     for line in ("data[KEY_MIGRATION_BACKUPS]", "the ``migration_backups`` record"):
         assert not QUOTED_MIGRATION_JOURNAL_KEY.search(line), line
     assert QUOTED_MIGRATION_JOURNAL_KEY.search(MIGRATION_JOURNAL_KEY_OWNER.read_text(encoding="utf-8"))
+
+
+# Finding 6: the imported constant is the key too. Production plugin code may use it only
+# in the owner and in checkpoint_phase, the one action that persists the journal.
+MIGRATION_JOURNAL_CONSTANT_USERS = frozenset(
+    {MIGRATION_JOURNAL_KEY_OWNER, PLUGINS_DIR / "action" / "checkpoint_phase.py"}
+)
+MIGRATION_JOURNAL_CONSTANT = re.compile(r"\bKEY_MIGRATION_BACKUPS\b")
+
+
+def test_migration_journal_constant_is_used_only_by_its_owner_and_checkpoint_phase():
+    offenders = []
+    for path in sorted(PLUGINS_DIR.rglob("*.py")):
+        if path in MIGRATION_JOURNAL_CONSTANT_USERS:
+            continue
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if MIGRATION_JOURNAL_CONSTANT.search(line):
+                offenders.append(f"{path.relative_to(COLLECTION_ROOT)}:{lineno}: {line.strip()}")
+    assert not offenders, "migration journal constant outside its owners:\n" + "\n".join(offenders)
+
+
+def test_migration_journal_constant_detector_catches_a_plugin_shaped_use():
+    snippet = (
+        "from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (\n"
+        "    KEY_MIGRATION_BACKUPS,\n"
+        ")\n"
+        "journal = checkpoint['operational_data'][KEY_MIGRATION_BACKUPS]\n"
+    )
+    assert len([line for line in snippet.splitlines() if MIGRATION_JOURNAL_CONSTANT.search(line)]) == 2
+    assert not MIGRATION_JOURNAL_CONSTANT.search("_KEY_MIGRATION_BACKUPS_FOR_TESTS = 1")
