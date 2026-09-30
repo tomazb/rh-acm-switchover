@@ -12,6 +12,7 @@
 
 - `docs/plans/2026-07-29-migration-evidence-design.md`
 - `docs/plans/2026-08-27-r4-04-current-base-design-amendment.md` at accepted exact head `f5f7505d55d7ef97b4642c87844e0c254b635018`
+- `docs/plans/2026-09-30-r4-04-controller-child-evidence-amendment.md` (operator-directed amendment of 2026-09-30; wins over the two documents above where they conflict: exact-first generic selection, direct-`latest` determinism, one-shot `passive_restore` keeps the `latest` trigger with frozen predictions, one-shot child roles and owner membership, and recorded journal-shape resolutions). Task 2's vectors and Tasks 7–8 include its acceptance criteria 31–38.
 
 **Plan status:** reviewed and approved for publication. This document does **not** authorize runtime implementation by itself.
 
