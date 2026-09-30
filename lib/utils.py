@@ -743,10 +743,14 @@ class StateManager:
 
     def _refuse_reset_of_migration_journal(self) -> None:
         """An implicit reset never drops a migration journal (R4-04 amendment section 10)."""
-        from lib.run_record import MIGRATION_JOURNAL_IMPLICIT_RESET_REFUSAL, migration_journal_present
+        from lib.run_record import (
+            MIGRATION_JOURNAL_IMPLICIT_RESET_REFUSAL,
+            MigrationJournalResetRefused,
+            migration_journal_present,
+        )
 
         if migration_journal_present(self.state):
-            raise StateIdentityMismatch(MIGRATION_JOURNAL_IMPLICIT_RESET_REFUSAL)
+            raise MigrationJournalResetRefused(MIGRATION_JOURNAL_IMPLICIT_RESET_REFUSAL)
 
     def _has_progress(self) -> bool:
         """Return True when this state has progressed beyond a fresh run."""

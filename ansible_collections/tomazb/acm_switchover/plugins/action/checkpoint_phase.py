@@ -796,6 +796,9 @@ class ActionModule(ActionBase):
                 identity = checkpoint_data.get("operation_identity")
                 if identity is None or normalize_operation_identity(identity) != identity:
                     return self._update_identity_failure()
+                identity_failure = self._update_operation_identity_failure(checkpoint_data, expected_operation_identity)
+                if identity_failure is not None:
+                    return identity_failure
                 update_failure = self._apply_migration_update(deepcopy(checkpoint_data), phase, operational_data)
                 if update_failure is not None:
                     return update_failure
@@ -839,6 +842,7 @@ class ActionModule(ActionBase):
                 phase=phase,
                 operational_data=operational_data,
                 operation_identity_changed=operation_identity_changed,
+                expected_operation_identity=expected_operation_identity,
                 is_non_mutating=is_non_mutating,
                 is_check_mode=is_check_mode,
                 execution_mode=execution_mode,
@@ -963,6 +967,11 @@ class ActionModule(ActionBase):
                 "failed": True,
                 "msg": "status: update requires a non-empty migration_backups mapping in operational_data.",
             }
+        if set(operational_data) != {KEY_MIGRATION_BACKUPS}:
+            return {
+                "failed": True,
+                "msg": "status: update accepts only migration_backups in operational_data.",
+            }
         if not os.path.exists(path):
             return {
                 "failed": True,
@@ -972,7 +981,7 @@ class ActionModule(ActionBase):
 
     @staticmethod
     def _apply_migration_update(checkpoint_data: dict, phase: str, operational_data) -> dict | None:
-        """Write the journal and any other operational data into `checkpoint_data`, or refuse.
+        """Write the journal into `checkpoint_data`, or refuse.
 
         Only operational_data changes: the phase, completion list, phase status,
         errors and report refs are never touched here.
@@ -991,10 +1000,6 @@ class ActionModule(ActionBase):
             record_migration_backups(checkpoint_data, operational_data[KEY_MIGRATION_BACKUPS])
         except ValueError as exc:
             return {"failed": True, "msg": f"Refusing the migration journal update: {exc}"}
-        current_operational_data = checkpoint_data["operational_data"]
-        for key, value in operational_data.items():
-            if key != KEY_MIGRATION_BACKUPS and value not in (None, ""):
-                current_operational_data[key] = value
         return None
 
     def _run_migration_update(
@@ -1005,12 +1010,16 @@ class ActionModule(ActionBase):
         phase: str,
         operational_data,
         operation_identity_changed: bool,
+        expected_operation_identity: dict,
         is_non_mutating: bool,
         is_check_mode: bool,
         execution_mode,
     ) -> dict:
         if operation_identity_changed:
             return self._update_identity_failure()
+        identity_failure = self._update_operation_identity_failure(checkpoint_data, expected_operation_identity)
+        if identity_failure is not None:
+            return identity_failure
         candidate = deepcopy(checkpoint_data)
         failure = self._apply_migration_update(candidate, phase, operational_data)
         if failure is not None:
@@ -1029,6 +1038,15 @@ class ActionModule(ActionBase):
             if save_result is not None and save_result.get("failed"):
                 return save_result
         return {"changed": changed, "checkpoint": candidate}
+
+    @staticmethod
+    def _update_operation_identity_failure(checkpoint_data: dict, expected_operation_identity: dict) -> dict | None:
+        """status: update never resets, so the reset options' identity carve-out does not apply."""
+        try:
+            validate_operation_identity(checkpoint_data, expected_operation_identity)
+        except CheckpointIdentityMismatch as exc:
+            return {"failed": True, "msg": f"Refusing status: update: {exc}"}
+        return None
 
     @staticmethod
     def _update_identity_failure() -> dict:

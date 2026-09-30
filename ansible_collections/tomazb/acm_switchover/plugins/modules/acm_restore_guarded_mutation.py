@@ -345,7 +345,7 @@ def _validated_request(params: dict):
             "expected_managed_clusters_backup_name and replacement_managed_clusters_backup_name "
             "are accepted only with action=patch."
         )
-    for option in ("namespace", "expected_uid", "expected_resource_version"):
+    for option in ("namespace", "name", "expected_uid", "expected_resource_version"):
         if not params[option]:
             raise ValueError(f"{option} may not be empty.")
     _require_unpadded_identity(params["expected_uid"], params["expected_resource_version"])

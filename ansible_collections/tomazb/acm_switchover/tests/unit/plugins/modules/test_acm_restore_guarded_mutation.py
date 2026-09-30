@@ -452,6 +452,8 @@ def test_check_mode_makes_no_api_call_and_reports_the_prediction_separately(monk
         _patch_args(expected_resource_version=""),
         _patch_args(namespace=""),
         _patch_args(namespace=None),
+        _patch_args(name=""),
+        _delete_args(name=""),
         _patch_args(kubeconfig=None),
         _patch_args(context=None),
         _patch_args(expected_resource_version=None),

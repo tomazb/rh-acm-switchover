@@ -36,11 +36,12 @@ the cleanup record: malformed_cleanup, malformed_recovery, malformed_repair,
 invalid_cleanup_state; (9) the restore lifecycle: patch_identity_missing,
 fingerprint_mismatch, incomplete_bundle, completion_child_count,
 activation_names_unverified, teardown_revalidation_premature; (10)
-post_activation_names_unverified; (11) repair_identity_mismatch; (12)
+post_activation_premature, then post_activation_names_unverified; (11) repair_identity_mismatch; (12)
 cleanup_copy_mismatch; (13) cleanup_prerequisite_missing. The other
 validators check the previous record, then the candidate, then:
-validate_journal_transition invalid_freeze_write, frozen_field_changed,
-child_entry_rewritten, then the cleanup edge; validate_cleanup_transition
+validate_journal_transition invalid_freeze_write, frozen_field_changed
+(frozen evidence, set-once fields, the waiver once recorded, the child lists
+once the restore completed), child_entry_rewritten, then the cleanup edge; validate_cleanup_transition
 invalid_cleanup_transition, frozen_field_changed, then
 repair_identity_mismatch; validate_waiver
 malformed_waiver, waiver_scope_mismatch, malformed_expected_names,
@@ -65,8 +66,10 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_ch
 )
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_evidence import (
     ACM_MINOR_CONTRACTS,
+    BACKUP_ALIASES,
     MigrationEvidenceError,
-    _rfc3339_ns,
+    go_normalize,
+    rfc3339_ns,
 )
 
 _LEGACY = "legacy_2_12_2_16"
@@ -83,10 +86,6 @@ _WAIVER_SCOPES = ("activation", "post_activation", "both")
 _PROJECTION_KEYS = ("activation_method", "mutation_kind", "backup_fields", "cleanup_before_restore")
 # August section 4: the upstream-normalized passive sync options a fresh passive_patch requires.
 _PATCH_NORMALIZED = {_MC_FIELD: "skip", _CREDS_FIELD: "latest", _RES_FIELD: "latest"}
-_BACKUP_ALIASES = ("latest", "skip")
-# Go unicode.IsSpace, which strings.TrimSpace uses; Python's str.strip() also strips U+001C-U+001F.
-_GO_SPACE = "\t\n\v\f\r \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
-_GO_SPACE += "\u2028\u2029\u202f\u205f\u3000"
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 
 # Child-evidence amendment section 4.1 and August section 5: the minimum child count
@@ -142,7 +141,7 @@ def _is_int(value: Any) -> bool:
 
 
 def _is_timestamp(value: Any) -> bool:
-    return _rfc3339_ns(value) is not None
+    return rfc3339_ns(value) is not None
 
 
 def _is_uuid(value: Any) -> bool:
@@ -207,7 +206,7 @@ _RESTORE_FIELDS: _Spec = {
 }
 _BACKUP_FIELDS: _Spec = {
     "namespace": _S,
-    "name": (lambda value: _non_empty_str(value) and _go_normalize(value) not in _BACKUP_ALIASES, False),
+    "name": (lambda value: _non_empty_str(value) and go_normalize(value) not in BACKUP_ALIASES, False),
     "uid": _S,
     "phase": (_one_of("Completed"), False),
     "completed_at": _T,
@@ -301,6 +300,8 @@ _SET_ONCE = (
     ("post_activation", "names_verified_at"),
     ("post_activation", "completed_at"),
 )
+# August section 10: the restore evidence the freeze write may not carry yet.
+_FREEZE_WRITE_NULL = ("backup_names_verified_at", "names_verified_at", "completed_at")
 _ABSENT = object()
 
 
@@ -346,6 +347,10 @@ def validate_migration_journal(candidate: Any) -> Dict[str, Any]:
     _require_cleanup(cleanup)
     _require_restore_lifecycle(candidate, kind, contract)
     post = candidate["post_activation"]
+    if candidate["restore"]["completed_at"] is None and any(value is not None for value in post.values()):
+        raise MigrationEvidenceError(
+            "post_activation_premature", "post-activation evidence precedes restore completion"
+        )
     if post["completed_at"] is not None and post["names_verified_at"] is None:
         if not _waived(candidate["waiver"], "post_activation"):
             raise MigrationEvidenceError(
@@ -402,8 +407,12 @@ def validate_journal_transition(previous: Any, candidate: Any) -> Dict[str, Any]
         validate_migration_journal(previous)
     result = validate_migration_journal(candidate)
     if previous is None:
-        if candidate["restore"]["completed_at"] is not None:
-            raise MigrationEvidenceError("invalid_freeze_write", "the first journal write must precede completion")
+        # A cleanup past not_started or teardown revalidation needs completion, and so does
+        # post-activation evidence: validate_migration_journal has already refused those.
+        if any(candidate["restore"][field] is not None for field in _FREEZE_WRITE_NULL):
+            raise MigrationEvidenceError(
+                "invalid_freeze_write", "the first journal write must precede verification and completion"
+            )
         return result
     for key in ("schema_version", "run_id", "resolved_at", "backups"):
         if previous[key] != candidate[key]:
@@ -414,6 +423,13 @@ def validate_journal_transition(previous: Any, candidate: Any) -> Dict[str, Any]
     for block, key in _SET_ONCE:
         if previous[block][key] is not None and previous[block][key] != candidate[block][key]:
             raise MigrationEvidenceError("frozen_field_changed", f"{block}.{key} changed once set")
+    if previous["waiver"] is not None and previous["waiver"] != candidate["waiver"]:
+        raise MigrationEvidenceError("frozen_field_changed", "waiver changed once recorded")
+    if (
+        previous["restore"]["completed_at"] is not None
+        and previous["restore"]["velero_restores"] != candidate["restore"]["velero_restores"]
+    ):
+        raise MigrationEvidenceError("frozen_field_changed", "restore.velero_restores changed after completion")
     for key in VELERO_RESTORE_LISTS:
         accepted = {entry["name"]: entry for entry in candidate["restore"]["velero_restores"][key]}
         for entry in previous["restore"]["velero_restores"][key]:
@@ -521,11 +537,6 @@ def _require_backup_fields(restore: Dict[str, Any], backups: Dict[str, Any], kin
         raise MigrationEvidenceError("invalid_backup_fields", f"restore.backup_fields is not the {kind} projection")
 
 
-def _go_normalize(value: str) -> str:
-    # strings.ToLower maps rune by rune; Python lowers U+0130 to two characters.
-    return "".join("i" if char == "\u0130" else char.lower() for char in value.strip(_GO_SPACE))
-
-
 def _require_precondition(precondition: Any) -> None:
     keys = {"generation", "resource_version", "backup_fields_raw", "backup_fields_normalized", "status_restore_names"}
     if not isinstance(precondition, dict) or set(precondition) != keys:
@@ -539,7 +550,7 @@ def _require_precondition(precondition: Any) -> None:
         or not isinstance(raw, dict)
         or set(raw) != set(_PATCH_NORMALIZED)
         or not all(_non_empty_str(value) for value in raw.values())
-        or precondition["backup_fields_normalized"] != {key: _go_normalize(value) for key, value in raw.items()}
+        or precondition["backup_fields_normalized"] != {key: go_normalize(value) for key, value in raw.items()}
         or precondition["backup_fields_normalized"] != _PATCH_NORMALIZED
         or not isinstance(names, dict)
         or set(names) != set(STATUS_NAME_FIELDS)
@@ -584,6 +595,14 @@ def _require_cleanup(cleanup: Any) -> None:
         or (cleanup["final_get_resource_version"] is None) != (cleanup["delete_accepted_at"] is None)
     ):
         raise MigrationEvidenceError("invalid_cleanup_state", f"the {cleanup['state']} cleanup record is inconsistent")
+    if (
+        recovery is not None
+        and recovery["reason_code"] == "replacement_during_poll"
+        and cleanup["delete_accepted_at"] is None
+    ):
+        raise MigrationEvidenceError(
+            "invalid_cleanup_state", "a replacement seen while polling needs the accepted delete it followed"
+        )
 
 
 def _require_restore_lifecycle(journal: Dict[str, Any], kind: str, contract: str) -> None:

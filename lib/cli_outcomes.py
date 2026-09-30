@@ -18,7 +18,7 @@ from lib.constants import (
 from lib.exceptions import SwitchoverError
 from lib.report_artifacts import SOURCE as PYTHON_REPORT_SOURCE
 from lib.report_artifacts import build_operation_report, write_json_report_artifact
-from lib.run_record import RunSummary
+from lib.run_record import MigrationJournalResetRefused, RunSummary
 from lib.utils import CANONICAL_PHASE_NAMES, Phase, StateIdentityMismatch, StateManager
 
 # Fallback for state entries recorded before completion-time phases existed.
@@ -233,6 +233,11 @@ def run_operation_mode(
         logger.warning("\n\nOperation interrupted by user")
         _report_interrupted_state(args, state, logger)
         exit_code = exit_interrupt
+    except MigrationJournalResetRefused as exc:
+        # A --force reset would discard the migration journal. Nothing was changed, and
+        # this is a refusal, not a run error: never record it into the state file.
+        logger.error("\n✗ %s", exc)
+        exit_code = exit_failure
     except StateIdentityMismatch as exc:
         # The binding guard refused this state file; never write into it.
         # The finally block still emits a report from a read-only snapshot,

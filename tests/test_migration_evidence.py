@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -27,11 +28,14 @@ from lib.migration_evidence import (
     SCHEDULE_TOKENS,
     MigrationEvidenceError,
     controller_contract_for_acm_minor,
+    go_normalize,
     normalize_backup_evidence,
     predict_correlated_backup,
     predict_latest_backup,
+    rfc3339_ns,
     select_correlated_evidence,
     select_latest_evidence,
+    validate_backup_projection,
 )
 from lib.migration_journal import (
     canonical_restore_projection,
@@ -71,6 +75,9 @@ FUNCTIONS = {
     "validate_journal_transition": validate_journal_transition,
     "validate_waiver": validate_waiver,
     "validate_repair": validate_repair,
+    "rfc3339_ns": rfc3339_ns,
+    "go_normalize": go_normalize,
+    "validate_backup_projection": validate_backup_projection,
 }
 NS = "open-cluster-management-backup"
 
@@ -196,3 +203,42 @@ def test_repair_never_synthesizes_absence_or_completion():
     assert repaired["absence_verified_at"] is None and repaired["completed_at"] is None
     assert repaired["delete_accepted_at"] == inputs["journal"]["cleanup"]["delete_accepted_at"]
     assert repaired["recovery"] == inputs["journal"]["cleanup"]["recovery"]
+
+
+# --- scoped generic reclassification (plan Task 2, AC-27) ------------------------------------
+
+_REPO = Path(__file__).resolve().parent.parent
+_EVIDENCE_MODULES = {"migration_evidence.py", "migration_child_evidence.py", "migration_journal.py"}
+_GENERIC_CATEGORY = re.compile(r"[\"'](?:activation_)?resources_generic[\"']")
+
+
+def test_the_coarse_backup_classifiers_are_not_widened():
+    from lib.constants import ACM_BACKUP_NAME_RE, ACM_BACKUP_SCHEDULE_TYPES
+
+    assert ACM_BACKUP_SCHEDULE_TYPES == frozenset({"managedClusters", "credentials", "resources"})
+    assert ACM_BACKUP_NAME_RE.pattern == r"^acm-(managed-clusters|credentials|resources)-"
+    # A generic Backup stays coarsely a `resources` Backup outside the evidence model.
+    match = ACM_BACKUP_NAME_RE.match("acm-resources-generic-schedule-20240101120000")
+    assert match is not None and match.group(1) == "resources"
+
+
+def test_generic_categories_are_named_only_by_the_evidence_model():
+    roots = [_REPO / name for name in ("lib", "modules", "scripts")]
+    roots += [_REPO / name for name in ("acm_switchover.py", "show_state.py", "check_rbac.py")]
+    roots += [_REPO / "ansible_collections/tomazb/acm_switchover" / name for name in ("plugins", "roles", "playbooks")]
+    offenders = []
+    for root in roots:
+        files = [root] if root.is_file() else [p for p in root.rglob("*") if p.suffix in {".py", ".yml", ".yaml"}]
+        for path in files:
+            if path.name in _EVIDENCE_MODULES and path.parent.name in {"lib", "module_utils"}:
+                continue
+            if _GENERIC_CATEGORY.search(path.read_text(encoding="utf-8")):
+                offenders.append(str(path.relative_to(_REPO)))
+    assert not offenders, f"generic Backup categories named outside the evidence model: {offenders}"
+
+
+def test_the_evidence_model_reclassifies_only_the_generic_backup():
+    by_id = {case["id"]: case for case in CASES}
+    frozen = by_id["freeze-full-legacy"]["expect"]["result"]
+    assert frozen["resources"]["name"] == "acm-resources-schedule-20240101120000"
+    assert frozen["resources_generic"]["name"] == "acm-resources-generic-schedule-20240101120000"

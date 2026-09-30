@@ -57,7 +57,7 @@ from lib.constants import (
 from lib.exceptions import StateLoadError, StateLockError, SwitchoverError
 from lib.gitops_detector import GitOpsCollector
 from lib.report_artifacts import validate_report_artifact_directory
-from lib.run_record import HubFacts, RunRecord
+from lib.run_record import HubFacts, MigrationJournalResetRefused, RunRecord
 from lib.utils import StateIdentityMismatch
 from lib.validation import InputValidator, ValidationError, validate_distinct_hub_identities
 from modules import (
@@ -1139,6 +1139,9 @@ def _bind_contexts_with_dry_run_guard(state: StateManager, args: argparse.Namesp
         dry_run_state_guard = state.capture_state_snapshot()
     try:
         state.ensure_contexts(getattr(args, "primary_context", None), getattr(args, "secondary_context", None))
+    except MigrationJournalResetRefused:
+        # Refused before any change: there is nothing to restore, and restoring would write.
+        raise
     except BaseException:
         # H10 guard: ensure_contexts flushes its context-mismatch reset as a
         # critical checkpoint, so an interrupt or I/O error raised during the
@@ -1192,7 +1195,7 @@ def _prepare_runtime(
     if should_bind_state:
         try:
             dry_run_state_guard = _bind_contexts_with_dry_run_guard(state, args)
-        except StateIdentityMismatch as exc:
+        except MigrationJournalResetRefused as exc:
             # ensure_contexts refused a reset that would drop a migration journal.
             logger.error("%s", exc)
             sys.exit(EXIT_FAILURE)

@@ -23,12 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   UID- and resourceVersion-preconditioned delete; a conflict, timeout, unreadable or
   identity-mismatched response is never reported as an accepted change, and dry-run/check mode
   sends nothing. No new RBAC: existing Restore `patch`/`delete`.
-
 - R4-04 PR B migration journal persistence facades, dormant: Python `RunRecord.migration_backups()`
   / `record_migration_backups()` and the collection `checkpoint_phase` `status: update` read and
   write the `migration_backups` journal only through each side's journal validators, as one complete,
   durably written value; an invalid, partial or unknown-version journal blocks rather than
-  reading as absent, and so is a Python state whose `config` is not a mapping. While a journal
+  reading as absent, and the Python `RunRecord` journal read also blocks on a state whose `config`
+  is not a mapping. `status: update` accepts only `migration_backups` in `operational_data` and
+  always proves the operation identity, reset options or not. While a journal
   exists, a collection `reset_from: preflight`/`primary_prep` is refused when it would move the
   checkpoint back before the freeze (it would prune a completed phase, or the requested phase is
   pre-freeze) and is otherwise a no-op; an explicit `status: reset` of `preflight` or
@@ -37,11 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused while the journal key is present (valid or not), while a fail of `activation` or later
   is always recorded; for a journal-bearing schema 1.0 checkpoint the collection refuses the
   schema 1.0 rebuild that would discard operational data, while journal-preserving `reset_from`
-  rebuilds remain allowed, in check mode as in execution; and Python refuses the implicit resets
-  (context mismatch, missing contexts on an in-progress state, `--force` on a stale completed or
-  unresumable failed state) with a pointer to `--reset-state`. No phase writes a journal yet, so
-  runs without one are unaffected.
-
+  rebuilds remain allowed, in check mode as in execution; and, only while a journal is present,
+  Python refuses the implicit resets (context mismatch, missing contexts on an in-progress state,
+  `--force` on a stale completed or unresumable failed state) with a pointer to `--reset-state`,
+  writing nothing to the state file. Every collection reset guard checks for the journal slot
+  first, so a checkpoint without one, a non-mapping `operational_data` included, resets exactly as
+  before. No phase writes a journal yet, so runs without one are unaffected.
 - R4-03 PR D ManagedCluster teardown (Python + Collection): strict inventory, Hive
   `preserveOnDelete` guard, durable UID before UID-preconditioned DELETE, no-drain
   phase sequence, survivor aggregation, and dry-run/check-mode parity.

@@ -62,6 +62,13 @@ MIGRATION_JOURNAL_IMPLICIT_RESET_REFUSAL = (
 )
 
 
+class MigrationJournalResetRefused(RuntimeError):
+    """An implicit reset would discard a recorded migration journal; --reset-state is required.
+
+    A refusal, not a run error: nothing was changed, so no caller records it in the state.
+    """
+
+
 class StateStructureError(ValueError):
     """The state's config bag is not a mapping, so no journal read can be trusted. Fail closed."""
 

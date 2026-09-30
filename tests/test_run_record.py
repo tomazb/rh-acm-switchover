@@ -9,17 +9,18 @@ import copy
 import json
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
 from acm_switchover import _prepare_runtime
 from lib import run_record as run_record_module
-from lib.exceptions import SwitchoverError
+from lib.cli_outcomes import CliOperationHooks, run_operation_mode
 from lib.migration_evidence import MigrationEvidenceError
 from lib.migration_journal import validate_journal_transition
 from lib.run_record import ErrorRecord, HubFacts, ManagedClusterExpectation, RunRecord, RunSummary, StepRecord
-from lib.utils import Phase, StateIdentityMismatch, StateLoadError, StateManager
+from lib.utils import Phase, StateLoadError, StateManager
 from lib.workflow import CompletedStateConfig, FailedStateConfig, handle_completed_state, handle_failed_state
 
 VECTORS = Path(__file__).resolve().parent / "fixtures" / "r4_04_migration_evidence_vectors.json"
@@ -529,7 +530,7 @@ class TestImplicitResetsKeepTheJournal:
         path = _journal_state(tmp_path, first_write)
         state = StateManager(str(path))
         untouched = _Untouched(path, state)
-        with pytest.raises(StateIdentityMismatch, match="--reset-state"):
+        with pytest.raises(run_record_module.MigrationJournalResetRefused, match="--reset-state"):
             state.ensure_contexts("hub-a", "hub-c")
         untouched.assert_unchanged()
         assert RunRecord(StateManager(str(path))).migration_backups() == first_write
@@ -540,7 +541,7 @@ class TestImplicitResetsKeepTheJournal:
         )
         state = StateManager(str(path))
         untouched = _Untouched(path, state)
-        with pytest.raises(StateIdentityMismatch, match="--reset-state"):
+        with pytest.raises(run_record_module.MigrationJournalResetRefused, match="--reset-state"):
             state.ensure_contexts("hub-a", "hub-b")
         untouched.assert_unchanged()
         assert RunRecord(StateManager(str(path))).migration_backups() == first_write
@@ -553,7 +554,7 @@ class TestImplicitResetsKeepTheJournal:
         )
         state = StateManager(str(path))
         untouched = _Untouched(path, state)
-        with pytest.raises(StateIdentityMismatch, match="--reset-state"):
+        with pytest.raises(run_record_module.MigrationJournalResetRefused, match="--reset-state"):
             state.ensure_contexts("hub-a", "hub-c")
         untouched.assert_unchanged()
 
@@ -583,7 +584,7 @@ class TestImplicitResetsKeepTheJournal:
         state = StateManager(str(path))
         config = FailedStateConfig(resumable_phases=(Phase.ACTIVATION,), operation_noun="switchover")
         untouched = _Untouched(path, state)
-        with pytest.raises(SwitchoverError, match="--reset-state"):
+        with pytest.raises(run_record_module.MigrationJournalResetRefused, match="--reset-state"):
             handle_failed_state(argparse.Namespace(force=True), state, logging.getLogger("test"), config)
         untouched.assert_unchanged()
         assert RunRecord(StateManager(str(path))).migration_backups() == first_write
@@ -595,7 +596,7 @@ class TestImplicitResetsKeepTheJournal:
         state = StateManager(str(path))
         config = CompletedStateConfig(operation_label="Switchover", operation_noun="switchover")
         untouched = _Untouched(path, state)
-        with pytest.raises(SwitchoverError, match="--reset-state"):
+        with pytest.raises(run_record_module.MigrationJournalResetRefused, match="--reset-state"):
             handle_completed_state(argparse.Namespace(force=True), state, logging.getLogger("test"), config)
         untouched.assert_unchanged()
         assert RunRecord(StateManager(str(path))).migration_backups() == first_write
@@ -614,3 +615,54 @@ class TestImplicitResetsKeepTheJournal:
         config = CompletedStateConfig(operation_label="Switchover", operation_noun="switchover")
         assert handle_completed_state(argparse.Namespace(force=True), state, logging.getLogger("test"), config) is False
         assert state.get_current_phase() == Phase.INIT
+
+
+class TestResetRefusalWritesNothing:
+    """The refusal is not a run error: no path records it into the state file."""
+
+    def test_the_operation_path_does_not_record_the_refusal(self, tmp_path, first_write):
+        path = _journal_state(tmp_path, first_write)
+        state = StateManager(str(path))
+        untouched = _Untouched(path, state)
+
+        def refuse(*_args, **_kwargs):
+            raise run_record_module.MigrationJournalResetRefused(
+                run_record_module.MIGRATION_JOURNAL_IMPLICIT_RESET_REFUSAL
+            )
+
+        hooks = CliOperationHooks(
+            bind_runtime_hub_identities=lambda *a, **k: None,
+            run_argocd_resume_only=refuse,
+            execute_operation=refuse,
+            write_python_report=lambda *a, **k: None,
+            gitops_reporter_factory=lambda: SimpleNamespace(print_report=lambda: None),
+        )
+        exit_code = run_operation_mode(
+            argparse.Namespace(argocd_resume_only=False),
+            state,
+            None,
+            None,
+            logging.getLogger("test"),
+            should_bind_state=True,
+            should_record_state_errors=True,
+            hooks=hooks,
+            exit_success=0,
+            exit_failure=1,
+            exit_interrupt=130,
+        )
+        assert exit_code == 1
+        untouched.assert_unchanged()
+
+    def test_a_dry_run_cli_refusal_leaves_the_file_untouched(self, tmp_path, first_write):
+        path = _journal_state(tmp_path, first_write)
+        before = path.read_bytes()
+        with patch("acm_switchover._initialize_clients", return_value=(None, None)):
+            with patch.object(StateManager, "restore_state_snapshot", side_effect=AssertionError("nothing to restore")):
+                with pytest.raises(SystemExit) as exc_info:
+                    _prepare_runtime(
+                        _cli_args(reset_state=False, dry_run=True, secondary_context="hub-c"),
+                        logging.getLogger("test"),
+                        str(path),
+                    )
+        assert exc_info.value.code == 1
+        assert path.read_bytes() == before

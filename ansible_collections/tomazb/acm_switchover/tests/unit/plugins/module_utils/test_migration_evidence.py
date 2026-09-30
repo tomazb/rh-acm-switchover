@@ -28,11 +28,14 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_ev
     SCHEDULE_TOKENS,
     MigrationEvidenceError,
     controller_contract_for_acm_minor,
+    go_normalize,
     normalize_backup_evidence,
     predict_correlated_backup,
     predict_latest_backup,
+    rfc3339_ns,
     select_correlated_evidence,
     select_latest_evidence,
+    validate_backup_projection,
 )
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_journal import (
     canonical_restore_projection,
@@ -74,6 +77,9 @@ FUNCTIONS: Dict[str, Callable[..., Any]] = {
     "validate_journal_transition": validate_journal_transition,
     "validate_waiver": validate_waiver,
     "validate_repair": validate_repair,
+    "rfc3339_ns": rfc3339_ns,
+    "go_normalize": go_normalize,
+    "validate_backup_projection": validate_backup_projection,
 }
 NS = "open-cluster-management-backup"
 

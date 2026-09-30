@@ -6,6 +6,7 @@ The JSON is committed; tests/test_migration_evidence_parity.py requires it to
 equal build() byte for byte, so the fixture is never hand-edited.
 """
 
+import calendar
 import copy
 import hashlib
 import json
@@ -160,9 +161,10 @@ for label, minor in [
     ("float", 2.12),
     ("null", None),
 ]:
+    # No pinned lane serves this minor; every pinned lane refuses it the same way.
     case(
         f"contract-unknown-{label}",
-        [],
+        ALL,
         [],
         "controller_contract_for_acm_minor",
         {"minor": minor},
@@ -736,7 +738,7 @@ case(
     True,
 )
 
-# --- Task 2a review fixes -----------------------------------------------------------------
+# --- Timestamp and phase decoding details -------------------------------------------------
 # Go time.Parse accepts a fractional-second tail ('.' or ',' then digits, only the first nine
 # significant) after the seconds even though the layout 20060102150405 omits it.
 fn = "predict_correlated_backup"
@@ -3528,8 +3530,8 @@ rcase("repair-run-id-mismatch-blocks", dict(REPAIR, run_id=OTHER_UUID), RR, "rep
 rcase("repair-operation-id-mismatch-blocks", dict(REPAIR, operation_id=OTHER_UUID), RR, "repair_identity_mismatch")
 rcase("repair-invalid-journal-blocks", REPAIR, mut(RR, cleanup__recovery=None), "invalid_cleanup_state")
 
-# --- Task 2b review fixes -------------------------------------------------------------------
-# W3: a non-string resource type is an unsupported type, never an uncoded TypeError.
+# --- Selection, ownership and completion refinements --------------------------------------
+# a non-string resource type is an unsupported type, never an uncoded TypeError.
 for label, rtype in [("list", []), ("object", {}), ("null", None)]:
     for fn_name, inp in [
         ("predict_latest_backup", {"inventory": [], "resource_type": rtype}),
@@ -3539,7 +3541,7 @@ for label, rtype in [("list", []), ("object", {}), ("null", None)]:
     ]:
         case(f"{fn_name}-resource-type-{label}-rejected", ALL, [], fn_name, inp, err("unsupported_resource_type"), True)
 
-# B3: the 2.17 -active equality predictions run through select_correlated_evidence, so a selected
+# the 2.17 -active equality predictions run through select_correlated_evidence, so a selected
 # Backup that fails the seven-field projection blocks even when its name matches.
 fn = "freeze_one_shot_backups"
 for label, inventory in [
@@ -3556,7 +3558,7 @@ for label, inventory in [
         True,
     )
 
-# B4: passive_patch generated names are predicted before the PATCH (amendment-2 section 4.2). The
+# passive_patch generated names are predicted before the PATCH (amendment-2 section 4.2). The
 # activation-only requests plus the ordinary sync-branch requests from the frozen activation
 # Backups are the roles; historical owner children are not.
 fn = "predict_passive_patch_child_names"
@@ -3634,7 +3636,7 @@ case(
     True,
 )
 
-# W1: membership is the exact controller owner (group, kind, name and UID); a status-named child
+# membership is the exact controller owner (group, kind, name and UID); a status-named child
 # is validated straight from the namespace list, so an impostor at a required locator still blocks.
 fn = "one_shot_completion"
 imp_mc = child(gname(MC_B), MC_B, refs=[owner_ref(uid="uid-previous")])
@@ -3669,7 +3671,7 @@ for lanes, contract, post, children in ((LEGACY, LEG, LEG_POST, LEG_CHILDREN), (
         True,
     )
 
-# W2: an unused one-shot status locator is not itself a completion condition; only the legacy
+# an unused one-shot status locator is not itself a completion condition; only the legacy
 # immutable absence of activation_resources_generic requires an empty generic locator.
 fn = "one_shot_completion"
 case(
@@ -3691,7 +3693,7 @@ case(
     ok(lists(managed_clusters=[c_mc], activation_credentials=[c_cred])),
 )
 
-# B2: every non-empty current status locator resolves to an exact-owner Completed child, even
+# every non-empty current status locator resolves to an exact-owner Completed child, even
 # when unchanged; unchanged historical ordinary children are not rebound to activation Backups.
 fn = "passive_patch_completion"
 case(
@@ -3734,7 +3736,7 @@ case(
     err("velero_restore_owner_mismatch"),
     True,
 )
-# B1: a current-cohort -active member of the credentials or generic locator is bound to its
+# a current-cohort -active member of the credentials or generic locator is bound to its
 # activation category; a matching frozen-bound -active child elsewhere does not mask it.
 for label, extra in [
     ("credentials", child(gname(CRED_B, True), CRED_B)),
@@ -3776,8 +3778,165 @@ case(
 )
 
 
+# --- Journal freeze, waiver, recovery and concrete-Backup rules -----------------------------
+# The first write carries no verification or completion evidence (August §10).
+fn = "validate_journal_transition"
+for name, changes in (
+    ("names-verified", {"restore__names_verified_at": T_NAMES}),
+    ("backup-names-verified", {"restore__backup_names_verified_at": T_VERIFIED}),
+):
+    jtrans(
+        f"transition-freeze-write-{name}-blocks",
+        ALL,
+        ("A:152-163", "A:779-788"),
+        None,
+        mut(PRE_L, **changes),
+        "invalid_freeze_write",
+    )
+# Post-activation evidence follows restore completion (July §1).
+for name, changes in (
+    ("names-verified", {"post_activation__names_verified_at": T_POST_NAMES}),
+    ("completed", {"post_activation__completed_at": T_POST_DONE, "waiver": waiver("both")}),
+):
+    jcase(f"journal-post-activation-{name}-before-restore-blocks", ALL, ("J:136-137",), mut(PRE_L, **changes), "post_activation_premature")
+jtrans(
+    "transition-freeze-write-post-activation-blocks",
+    ALL,
+    ("A:152-163", "J:136-137"),
+    None,
+    mut(PRE_L, post_activation__names_verified_at=T_POST_NAMES),
+    "post_activation_premature",
+)
+# An existing field is reconciled, never rewritten: the waiver included (July §1a).
+WAIVED_PRE = mut(PRE_L, waiver=waiver("activation"))
+for name, candidate in (
+    ("widened", mut(WAIVED_PRE, waiver=waiver("both"))),
+    ("actor-changed", mut(WAIVED_PRE, waiver=waiver("activation", actor="another@example.com"))),
+    ("cleared", mut(WAIVED_PRE, waiver=None)),
+):
+    jtrans(f"transition-waiver-{name}-blocks", ALL, JT + ("J:454-470",), WAIVED_PRE, candidate, "frozen_field_changed")
+jtrans("transition-waiver-kept", ALL, JT, WAIVED_PRE, WAIVED_PRE, None)
+# Completed child evidence is final: no child is added after restore completion (August §5).
+jtrans(
+    "transition-child-added-after-completion-blocks",
+    ALL,
+    JT + ("A:511-543",),
+    FULL_L,
+    mut(FULL_L, **{f"{VR}__managed_clusters": [entry(child("a-" + gname(MC_B), MC_B)), MC_ENTRY]}),
+    "frozen_field_changed",
+)
+# A replacement seen while polling follows an accepted DELETE (July §4a).
+jcase(
+    "journal-recovery-replacement-during-poll-after-accepted-delete",
+    ALL,
+    ("J:196-201", "J:665", "J:715-716"),
+    mut(RR_ACC, cleanup__recovery__reason_code="replacement_during_poll"),
+    None,
+)
+jcase(
+    "journal-recovery-replacement-during-poll-without-accepted-delete-blocks",
+    ALL,
+    ("J:196-201", "J:665", "J:715-716"),
+    mut(RR, cleanup__recovery__reason_code="replacement_during_poll"),
+    "invalid_cleanup_state",
+)
+# full_restore takes its concrete Backups as complete seven-field projections (amendment-2 §3).
+fn = "freeze_one_shot_backups"
+for name, change in (
+    ("alias-name", {"name": "latest"}),
+    ("padded-alias-name", {"name": " Skip "}),
+    ("other-namespace", {"namespace": "elsewhere"}),
+    ("missing-uid", {"uid": DELETE}),
+    ("extra-field", {"start": "2024-01-01T12:00:00Z"}),
+    ("not-completed", {"phase": "PartiallyFailed"}),
+    ("bad-completion", {"completed_at": "2024-01-01 12:05:00"}),
+    ("errors", {"errors": 1}),
+    ("bool-warnings", {"warnings": True}),
+):
+    concrete = copy.deepcopy(FULL_CONCRETE)
+    concrete["credentials"].update(change)
+    concrete["credentials"] = {key: value for key, value in concrete["credentials"].items() if value is not DELETE}
+    case(
+        f"freeze-full-legacy-concrete-{name}-blocks",
+        LEGACY,
+        drefs(LEGACY, "C:103-183", "A:171-212"),
+        fn,
+        freeze("full_restore", "legacy_2_12_2_16", [mc_b, cred_b, res_b, gen_b], concrete),
+        err("concrete_backups_invalid"),
+        True,
+    )
+
+# The public helpers the journal validator shares with the evidence model (August §§3-4).
+NS_20240101T120500Z = calendar.timegm((2024, 1, 1, 12, 5, 0)) * 10**9
+fn = "rfc3339_ns"
+for name, value, result in (
+    ("zulu", "2024-01-01T12:05:00Z", NS_20240101T120500Z),
+    ("offset", "2024-01-01T14:05:00+02:00", NS_20240101T120500Z),
+    ("fraction", "2024-01-01T12:05:00.123456789Z", NS_20240101T120500Z + 123456789),
+    ("lowercase-zone", "2024-01-01T12:05:00z", None),
+    ("space-separator", "2024-01-01 12:05:00Z", None),
+    ("not-a-string", 1704110700, None),
+):
+    case(f"rfc3339-{name}", ALL, drefs(ALL, "A:171-212"), fn, {"value": value}, ok(result))
+fn = "go_normalize"
+for name, value, result in (
+    ("trims-and-lowers", " \tLatest\u2003", "latest"),
+    ("dotted-capital-i", "SK\u0130P", "skip"),
+    ("keeps-non-go-space", "\x1cskip", "\x1cskip"),
+):
+    case(f"go-normalize-{name}", ALL, drefs(ALL, "A:359-428"), fn, {"value": value}, ok(result))
+fn = "validate_backup_projection"
+case(
+    "backup-projection-accepted",
+    ALL,
+    drefs(ALL, "A:171-212"),
+    fn,
+    {"value": projection(cred_b), "namespace": NS},
+    ok(projection(cred_b)),
+)
+for name, value, namespace in (
+    ("alias-name", dict(projection(cred_b), name="latest"), NS),
+    ("other-namespace", projection(cred_b), "elsewhere"),
+    ("extra-field", dict(projection(cred_b), start="2024-01-01T12:00:00Z"), NS),
+    ("negative-warnings", dict(projection(cred_b), warnings=-1), NS),
+    ("not-an-object", [], NS),
+):
+    case(
+        f"backup-projection-{name}-rejected",
+        ALL,
+        drefs(ALL, "A:171-212"),
+        fn,
+        {"value": value, "namespace": namespace},
+        err("malformed_backup_projection"),
+        True,
+    )
+
+
+# Design-document sections for the cases that pin R4-04 rules rather than a controller source line.
+DEFAULT_SPOTS = {
+    "controller_contract_for_acm_minor": ("A:456-483",),
+    "normalize_backup_evidence": ("A:171-212",),
+    "predict_latest_backup": ("C:47-71", "A:244-265"),
+    "select_latest_evidence": ("C:47-71", "A:244-265"),
+    "predict_correlated_backup": ("C:72-102", "A:266-303"),
+    "select_correlated_evidence": ("C:72-102", "A:266-303"),
+    "one_shot_required_predictions": ("C:103-183",),
+    "freeze_one_shot_backups": ("C:103-183",),
+    "generated_child_name": ("C:184-264",),
+    "predict_one_shot_child_names": ("C:184-264",),
+    "one_shot_completion": ("C:184-264",),
+    "passive_patch_cohort": ("A:544-616",),
+    "passive_patch_completion": ("A:544-616",),
+    "predict_passive_patch_child_names": ("A:544-616", "C:236-264"),
+    "acm_phase_accepts": ("A:617-642",),
+}
+
+
 def build():
     """Return the fixture text: a readable header, then one compact case per line."""
+    for c in cases:
+        if not c["source_refs"]:
+            c["source_refs"] = drefs(c["lanes"], *DEFAULT_SPOTS[c["function"]])
     ids = [c["id"] for c in cases]
     if len(ids) != len(set(ids)):
         raise ValueError("duplicate case id")

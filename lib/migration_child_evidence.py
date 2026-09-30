@@ -23,6 +23,7 @@ from lib.migration_evidence import (
     predict_correlated_backup,
     select_correlated_evidence,
     select_latest_evidence,
+    validate_backup_projection,
 )
 
 # The four ACM Restore status fields that publish Velero Restore names.
@@ -46,6 +47,9 @@ VELERO_RESTORE_LISTS = (
 
 _LEGACY = "legacy_2_12_2_16"
 _ACTIVE = "active_2_17"
+if {_LEGACY, _ACTIVE} != set(ACM_MINOR_CONTRACTS.values()):
+    # Every table below is keyed by these two names; a drift would surface as an uncoded KeyError.
+    raise RuntimeError("the child-evidence contracts do not match ACM_MINOR_CONTRACTS")
 _ONE_SHOT_KINDS = ("passive_restore", "full_restore")
 _MUTATION_KINDS = _ONE_SHOT_KINDS + ("passive_patch",)
 _OWNER_GROUP = "cluster.open-cluster-management.io"
@@ -246,7 +250,7 @@ def freeze_one_shot_backups(
     """
     predictions = one_shot_required_predictions(mutation_kind, controller_contract)
     concrete_categories = [p["freeze_as"] for p in predictions if p["selection"] == "concrete"]
-    frozen = _concrete_backups(concrete_backups, concrete_categories)
+    frozen = _concrete_backups(concrete_backups, concrete_categories, namespace)
     for prediction in predictions:
         if prediction["selection"] == "concrete":
             continue
@@ -454,16 +458,18 @@ def _require_categories(frozen_backups: Any, required: Tuple[str, ...], optional
             raise MigrationEvidenceError("frozen_backups_invalid", "a frozen Backup has no name")
 
 
-def _concrete_backups(concrete_backups: Any, categories: List[str]) -> Dict[str, Dict[str, Any]]:
+def _concrete_backups(concrete_backups: Any, categories: List[str], namespace: str) -> Dict[str, Dict[str, Any]]:
     if not categories:
         if concrete_backups is not None:
             raise MigrationEvidenceError("concrete_backups_invalid", "this mutation takes no concrete Backups")
         return {}
     try:
         _require_categories(concrete_backups, tuple(categories), ())
+        return {
+            category: validate_backup_projection(backup, namespace) for category, backup in concrete_backups.items()
+        }
     except MigrationEvidenceError as exc:
         raise MigrationEvidenceError("concrete_backups_invalid", str(exc)) from exc
-    return dict(concrete_backups)
 
 
 def _one_shot_roles(

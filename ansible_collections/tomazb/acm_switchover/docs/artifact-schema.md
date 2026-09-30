@@ -190,7 +190,9 @@ run still fails and the original is untouched. An unreadable file fails without 
 `operational_data.migration_backups` is reserved for the R4-04 migration journal,
 which no role writes yet. Only `checkpoint_phase` `status: update` writes it: that
 status needs checkpointing enabled and an existing checkpoint whose current phase is
-the requested one, accepts `operational_data` only (no `error` or `report_ref`),
+the requested one, accepts only `migration_backups` in `operational_data` (no other
+key, no `error` or `report_ref`), always proves the operation identity even when
+`checkpoint.reset` or `reset_from` is set,
 validates the complete journal and its transition from the stored one, and changes
 only `operational_data` and `updated_at`. Other statuses refuse the key, and the
 standalone decommission path refuses `status: update` outright. While a journal is

@@ -4598,3 +4598,44 @@ def test_a_journal_free_pre_freeze_fail_is_unchanged(tmp_path, phase):
     assert after["completed_phases"] == [p for p in ("preflight", "primary_prep") if p != phase]
     assert after["errors"][-1] == {"phase": phase, "error": "boom"}
     assert after["operational_data"] == {"argocd_run_id": "run-1"}
+
+
+# --- status: update never resets, so it always proves the operation identity -----------------
+
+
+@pytest.mark.parametrize("config", [{"reset_from": "primary_prep"}, {"reset_from": "activation"}, {"reset": True}])
+@pytest.mark.parametrize("mode, check_mode", [("execute", False), ("dry_run", False), ("execute", True)])
+def test_update_refuses_another_operations_checkpoint_even_with_reset_options(tmp_path, config, mode, check_mode):
+    path = _write_phase_checkpoint(tmp_path)
+    stored = _stored(path)
+    stored["operation_identity"]["secondary_cluster_uid"] = "uid-elsewhere"
+    path.write_text(json.dumps(stored))
+    before = _dir_snapshot(tmp_path)
+    action = _update_action(path)
+    action._task.args["checkpoint"].update(config)
+    action._play_context.check_mode = check_mode
+    result = action.run(task_vars=_task_vars_with_operation_identity(mode=mode, collection_version="9.8.7"))
+    assert result["failed"] is True
+    assert "identity" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_update_with_reset_options_still_writes_for_the_same_operation(tmp_path):
+    path = _write_phase_checkpoint(tmp_path)
+    action = _update_action(path)
+    action._task.args["checkpoint"]["reset_from"] = "activation"
+    result = action.run(task_vars=_task_vars_with_operation_identity(collection_version="9.8.7"))
+    assert result.get("failed") is not True
+    assert _stored(path)["operational_data"]["migration_backups"] == _first_journal()
+
+
+@pytest.mark.parametrize("mode, check_mode", [("execute", False), ("dry_run", False), ("execute", True)])
+def test_update_refuses_operational_data_beyond_the_journal(tmp_path, mode, check_mode):
+    path = _write_phase_checkpoint(tmp_path)
+    before = _dir_snapshot(tmp_path)
+    action = _update_action(path, operational_data={"migration_backups": _first_journal(), "argocd_run_id": "run-2"})
+    action._play_context.check_mode = check_mode
+    result = action.run(task_vars=_task_vars_with_operation_identity(mode=mode))
+    assert result["failed"] is True
+    assert "only migration_backups" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before

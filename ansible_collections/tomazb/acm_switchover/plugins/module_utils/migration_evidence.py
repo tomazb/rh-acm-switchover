@@ -16,6 +16,7 @@ tests/test_migration_evidence_parity.py holds them equal.
 
 from __future__ import annotations
 
+import copy
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -81,6 +82,13 @@ _RFC3339 = re.compile(
 )
 # The Velero TimestampedName suffix, Go layout 20060102150405. Go's time.Parse also
 # accepts a fractional second ('.' or ',' then digits) the layout does not declare.
+# August section 3: the seven fields of journaled Backup evidence, and the aliases a
+# concrete Backup name may never be after Go normalization.
+BACKUP_PROJECTION_FIELDS = ("namespace", "name", "uid", "phase", "completed_at", "errors", "warnings")
+BACKUP_ALIASES = ("latest", "skip")
+# Go unicode.IsSpace, which strings.TrimSpace uses; Python's str.strip() also strips U+001C-U+001F.
+_GO_SPACE = "\t\n\v\f\r \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+_GO_SPACE += "\u2028\u2029\u202f\u205f\u3000"
 _NAME_TIMESTAMP = re.compile(r"([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})(?:[.,]([0-9]+))?")
 
 
@@ -112,7 +120,7 @@ def normalize_backup_evidence(raw: Any, namespace: str) -> Dict[str, Any]:
     if status.get("phase") != "Completed":
         raise MigrationEvidenceError("backup_not_completed", f"Backup {name} phase is not Completed")
     completed_at = status.get("completionTimestamp")
-    if _rfc3339_ns(completed_at) is None:
+    if rfc3339_ns(completed_at) is None:
         raise MigrationEvidenceError("malformed_completion_timestamp", f"Backup {name} completionTimestamp is invalid")
     if errors != 0:
         raise MigrationEvidenceError("backup_has_errors", f"Backup {name} reports {errors} errors")
@@ -125,6 +133,40 @@ def normalize_backup_evidence(raw: Any, namespace: str) -> Dict[str, Any]:
         "errors": errors,
         "warnings": warnings,
     }
+
+
+def validate_backup_projection(value: Any, namespace: str) -> Dict[str, Any]:
+    """Return a detached copy of a seven-field Backup projection in `namespace`, or raise.
+
+    For evidence handed in rather than derived by normalize_backup_evidence (the
+    concrete Backups of a full_restore): exactly the seven fields, the given
+    namespace, a concrete name that is no latest/skip alias, a non-empty UID, a
+    Completed phase, an RFC 3339 completion, zero errors and non-negative warnings.
+    """
+    if (
+        not isinstance(value, dict)
+        or set(value) != set(BACKUP_PROJECTION_FIELDS)
+        or not _non_empty_str(namespace)
+        or value["namespace"] != namespace
+        or not _non_empty_str(value["name"])
+        or go_normalize(value["name"]) in BACKUP_ALIASES
+        or not _non_empty_str(value["uid"])
+        or value["phase"] != "Completed"
+        or rfc3339_ns(value["completed_at"]) is None
+        or not _is_count(value["errors"])
+        or value["errors"] != 0
+        or not _is_count(value["warnings"])
+    ):
+        raise MigrationEvidenceError(
+            "malformed_backup_projection", f"the Backup evidence is not a seven-field projection in {namespace!r}"
+        )
+    return copy.deepcopy(value)
+
+
+def go_normalize(value: str) -> str:
+    """Go strings.ToLower(strings.TrimSpace(value)), as the controller compares sync options."""
+    # strings.ToLower maps rune by rune; Python lowers U+0130 to two characters.
+    return "".join("i" if char == "\u0130" else char.lower() for char in value.strip(_GO_SPACE))
 
 
 def select_latest_evidence(inventory: Any, resource_type: str, namespace: str) -> Tuple[str, Optional[Dict[str, Any]]]:
@@ -163,7 +205,7 @@ def predict_latest_backup(inventory: Any, resource_type: str) -> Tuple[str, Opti
     ]
     if not candidates:
         return ("none", None)
-    starts = [_rfc3339_ns(_status(item).get("startTimestamp")) for item in candidates]
+    starts = [rfc3339_ns(_status(item).get("startTimestamp")) for item in candidates]
     if any(start is None for start in starts):
         raise MigrationEvidenceError(
             "latest_start_timestamp_invalid", f"a {token} candidate has a missing or malformed startTimestamp"
@@ -209,6 +251,10 @@ def predict_correlated_backup(
 
 def _non_empty_str(value: Any) -> bool:
     return isinstance(value, str) and bool(value)
+
+
+def _is_count(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def _backup_parts(raw: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -273,14 +319,17 @@ def _within_window(item: Dict[str, Any], target: int) -> bool:
     raw_start = _status(item).get("startTimestamp")
     if raw_start is None:
         return False
-    start = _rfc3339_ns(raw_start)
+    start = rfc3339_ns(raw_start)
     if start is None:
         raise MigrationEvidenceError("malformed_inventory", "a correlated candidate has a malformed startTimestamp")
     return abs(start - target) <= _CORRELATION_WINDOW_NS
 
 
-def _rfc3339_ns(value: Any) -> Optional[int]:
-    """Return an RFC 3339 timestamp as integer nanoseconds since the epoch, or None."""
+def rfc3339_ns(value: Any) -> Optional[int]:
+    """Return an RFC 3339 timestamp as integer nanoseconds since the epoch, or None.
+
+    Public: the journal validator applies the same timestamp rule.
+    """
     match = _RFC3339.fullmatch(value) if isinstance(value, str) else None
     if match is None:
         return None
