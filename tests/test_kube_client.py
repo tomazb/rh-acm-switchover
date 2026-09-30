@@ -14,6 +14,7 @@ import pytest
 from kubernetes.client.rest import ApiException
 from kubernetes.config.config_exception import ConfigException
 from tenacity import wait_none
+from urllib3.exceptions import ProtocolError, ReadTimeoutError
 from urllib3.exceptions import TimeoutError as Urllib3TimeoutError
 
 from lib.constants import (
@@ -2829,10 +2830,9 @@ class TestDiscoveryGroupVersionProof:
         assert self._client(document)._discovery_serves("", "v1", "pods").status is StrictReadStatus.ITEMS
 
 
-# Mirrored parity vectors (R4-04 Task 4). The collection's
-# tests/unit/plugins/modules/test_acm_restore_guarded_mutation.py asserts these same literals
-# against acm_restore_guarded_mutation; the two form factors share no code, so these two
-# copies are what hold the wire document and the conflict classification equal.
+# Unit expectations for the guarded Restore mutations (R4-04 Task 4). Equality with the
+# collection's acm_restore_guarded_mutation is enforced by
+# tests/test_restore_guarded_mutation_parity.py, which drives both form factors.
 GUARDED_RESTORE_PATCH_VECTOR = {
     "uid": "3f0c2a4e-uid",
     "resource_version": "48213",
@@ -2855,14 +2855,6 @@ GUARDED_RESTORE_PATCH_STATUS_VECTOR = {
     404: (False, "not_found"),
     403: (False, "unverifiable"),
     500: (False, "unverifiable"),
-}
-# HTTP status -> classification for the preconditioned DELETE: a conflict, a disappeared
-# target, or anything else.
-GUARDED_RESTORE_DELETE_STATUS_VECTOR = {
-    409: "conflict",
-    412: "conflict",
-    404: "not_found",
-    500: "other",
 }
 
 
@@ -2945,6 +2937,7 @@ class TestGuardedRestoreJsonPatch:
         self._accepted(kube_client, {"uid": "3f0c2a4e-uid", "resourceVersion": "48300", "generation": 7})
         assert self._patch(kube_client) == {
             "accepted": True,
+            "http_accepted": True,
             "changed": True,
             "would_change": False,
             "conflict": False,
@@ -2967,33 +2960,72 @@ class TestGuardedRestoreJsonPatch:
         assert result["generation"] is None
         assert result["generation_reported"] is False
 
+    _MALFORMED_IDENTITY = {
+        "accepted": False,
+        "http_accepted": True,
+        "changed": False,
+        "would_change": False,
+        "conflict": False,
+        "dry_run": False,
+        "reason": "malformed_response",
+        "uid": None,
+        "resource_version": None,
+        "generation": None,
+        "generation_reported": False,
+    }
+
     @pytest.mark.parametrize(
         "metadata",
         [
             {"resourceVersion": "48300", "generation": 7},
+            {"uid": "", "resourceVersion": "48300", "generation": 7},
             {"uid": "3f0c2a4e-uid", "generation": 7},
+            {"uid": "3f0c2a4e-uid", "resourceVersion": "", "generation": 7},
+            {"uid": "3f0c2a4e-uid", "resourceVersion": 48300, "generation": 7},
             {"uid": "a-different-uid", "resourceVersion": "48300", "generation": 7},
             "not-a-mapping",
         ],
     )
-    def test_an_accepted_but_malformed_response_is_flagged_not_trusted(self, kube_client, metadata):
+    def test_a_malformed_response_identity_is_fail_closed_with_no_generation_evidence(self, kube_client, metadata):
+        """July §1 step 3 recovers only a missing generation under a valid identity; a
+        missing or different UID, or a missing resourceVersion, is never verified acceptance
+        and never publishes the generation it came with."""
         self._accepted(kube_client, metadata)
-        result = self._patch(kube_client)
-        # The server accepted the atomic PATCH, so the mutation happened; the identity it
-        # returned cannot be trusted as evidence.
-        assert result["accepted"] is True
-        assert result["changed"] is True
-        assert result["reason"] == "malformed_response"
+        assert self._patch(kube_client) == self._MALFORMED_IDENTITY
 
-    def test_an_undecodable_accepted_body_is_malformed_not_a_failure(self, kube_client):
-        kube_client._api_client.call_api = Mock(return_value=Mock(data=b"<html>"))
+    @pytest.mark.parametrize("data", [b"<html>", b"[]", b"null", b"\xff\xfe"])
+    def test_an_undecodable_accepted_body_is_fail_closed(self, kube_client, data):
+        kube_client._api_client.call_api = Mock(return_value=Mock(data=data))
+        assert self._patch(kube_client) == self._MALFORMED_IDENTITY
+
+    @pytest.mark.parametrize(
+        "exc", [ReadTimeoutError(None, "/restores", "read timed out"), ProtocolError("reset"), OSError("reset")]
+    )
+    def test_a_deferred_body_read_failure_is_not_acceptance(self, kube_client, exc):
+        """With _preload_content=False the body is read after call_api returns; a timeout
+        there says nothing about whether the PATCH was applied."""
+
+        class _DeferredBody:
+            @property
+            def data(self):
+                raise exc
+
+        kube_client._api_client.call_api = Mock(return_value=_DeferredBody())
         result = self._patch(kube_client)
-        assert (result["accepted"], result["reason"], result["uid"], result["generation"]) == (
-            True,
-            "malformed_response",
-            None,
-            None,
-        )
+        assert result == {
+            "accepted": False,
+            "http_accepted": False,
+            "changed": False,
+            "would_change": False,
+            "conflict": False,
+            "dry_run": False,
+            "reason": "unverifiable",
+            "uid": None,
+            "resource_version": None,
+            "generation": None,
+            "generation_reported": False,
+        }
+        assert kube_client._api_client.call_api.call_count == 1
 
     def test_replacing_an_already_latest_value_is_accepted_but_unchanged(self, kube_client):
         self._accepted(kube_client, {"uid": "3f0c2a4e-uid", "resourceVersion": "48213", "generation": 6})
@@ -3042,6 +3074,7 @@ class TestGuardedRestoreJsonPatch:
         dry_run_client.custom_api.patch_namespaced_custom_object.assert_not_called()
         assert result == {
             "accepted": False,
+            "http_accepted": False,
             "changed": False,
             "would_change": expected != "latest",
             "conflict": False,
@@ -3105,30 +3138,111 @@ class TestGuardedRestoreJsonPatch:
         kube_client._api_client.call_api.assert_not_called()
 
 
-class TestGuardedRestoreDeleteVector:
-    """The Restore delete reuses delete_custom_resource_preconditioned; this pins the
-    classification the collection module mirrors, with both preconditions supplied."""
+class TestGuardedRestoreDelete:
+    """The narrow Restore delete wrapper: it delegates to delete_custom_resource_preconditioned
+    with both preconditions and maps its outcome to the guarded-mutation result shape. In
+    dry-run it predicts without reaching the primitive."""
 
-    @pytest.mark.parametrize("status", sorted(GUARDED_RESTORE_DELETE_STATUS_VECTOR))
-    def test_delete_classification_matches_the_shared_vector(self, kube_client, status):
-        from lib.exceptions import PreconditionConflict, TargetDisappeared
+    _ARGS = {
+        "namespace": "open-cluster-management-backup",
+        "uid": "3f0c2a4e-uid",
+        "resource_version": "48213",
+    }
 
-        kube_client.custom_api.delete_namespaced_custom_object = Mock(side_effect=ApiException(status=status))
-        expected = {"conflict": PreconditionConflict, "not_found": TargetDisappeared, "other": ApiException}[
-            GUARDED_RESTORE_DELETE_STATUS_VECTOR[status]
-        ]
-        with pytest.raises(expected) as raised:
-            kube_client.delete_custom_resource_preconditioned(
-                "cluster.open-cluster-management.io",
-                "v1beta1",
-                "restores",
-                "restore-acm-passive-sync",
-                uid="3f0c2a4e-uid",
-                resource_version="48213",
-                namespace="open-cluster-management-backup",
-            )
-        if expected is ApiException:
-            assert not isinstance(raised.value, (PreconditionConflict, TargetDisappeared))
+    def _delete(self, client, **overrides):
+        return client.delete_restore_guarded("restore-acm-passive-sync", **{**self._ARGS, **overrides})
+
+    @staticmethod
+    def _shape(**updates):
+        result = {
+            "accepted": False,
+            "http_accepted": False,
+            "changed": False,
+            "would_change": False,
+            "conflict": False,
+            "dry_run": False,
+            "reason": "unverifiable",
+            "uid": None,
+            "resource_version": None,
+        }
+        result.update(updates)
+        return result
+
+    def test_an_accepted_delete_sends_both_preconditions_once(self, kube_client):
+        kube_client.custom_api.delete_namespaced_custom_object = Mock(return_value={})
+        result = self._delete(kube_client, timeout_seconds=9)
+        assert result == self._shape(
+            accepted=True,
+            http_accepted=True,
+            changed=True,
+            reason="ok",
+            uid="3f0c2a4e-uid",
+            resource_version="48213",
+        )
+        call = kube_client.custom_api.delete_namespaced_custom_object.call_args
         assert kube_client.custom_api.delete_namespaced_custom_object.call_count == 1
-        body = kube_client.custom_api.delete_namespaced_custom_object.call_args.kwargs["body"]
+        assert (call.kwargs["group"], call.kwargs["version"], call.kwargs["plural"]) == (
+            "cluster.open-cluster-management.io",
+            "v1beta1",
+            "restores",
+        )
+        assert call.kwargs["namespace"] == "open-cluster-management-backup"
+        assert call.kwargs["_request_timeout"] == 9
+        body = call.kwargs["body"]
         assert (body.preconditions.uid, body.preconditions.resource_version) == ("3f0c2a4e-uid", "48213")
+
+    @pytest.mark.parametrize(
+        ("exc", "conflict", "reason"),
+        [
+            (ApiException(status=409), True, "precondition_failed"),
+            (ApiException(status=412), True, "precondition_failed"),
+            (ApiException(status=404), False, "not_found"),
+            (ApiException(status=403), False, "unverifiable"),
+            (ApiException(status=500), False, "unverifiable"),
+            (ReadTimeoutError(None, "/restores", "read timed out"), False, "unverifiable"),
+        ],
+    )
+    def test_failures_are_classified_once_and_never_retried(self, kube_client, exc, conflict, reason):
+        kube_client.custom_api.delete_namespaced_custom_object = Mock(side_effect=exc)
+        assert self._delete(kube_client) == self._shape(conflict=conflict, reason=reason)
+        assert kube_client.custom_api.delete_namespaced_custom_object.call_count == 1
+
+    def test_dry_run_predicts_without_any_api_call(self, dry_run_client):
+        dry_run_client.custom_api.delete_namespaced_custom_object = Mock()
+        dry_run_client._api_client.call_api = Mock()
+        assert self._delete(dry_run_client) == self._shape(dry_run=True, would_change=True, reason="predicted")
+        dry_run_client.custom_api.delete_namespaced_custom_object.assert_not_called()
+        dry_run_client._api_client.call_api.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"uid": ""},
+            {"uid": None},
+            {"resource_version": ""},
+            {"resource_version": None},
+            {"resource_version": 48213},
+            {"namespace": ""},
+            {"namespace": None},
+            {"namespace": "Bad_Namespace"},
+        ],
+    )
+    def test_invalid_inputs_are_rejected_before_any_request_even_in_dry_run(self, kube_client, overrides):
+        from lib.validation import ValidationError
+
+        kube_client.custom_api.delete_namespaced_custom_object = Mock()
+        for dry_run in (False, True):
+            kube_client.dry_run = dry_run
+            with pytest.raises(ValidationError):
+                self._delete(kube_client, **overrides)
+        kube_client.custom_api.delete_namespaced_custom_object.assert_not_called()
+
+    def test_failures_never_expose_exception_text(self, kube_client, caplog):
+        secret = "R4-04-DELETE-SECRET token=abc123"
+        exc = ApiException(status=500, reason=secret)
+        exc.body = secret
+        kube_client.custom_api.delete_namespaced_custom_object = Mock(side_effect=exc)
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            result = self._delete(kube_client)
+        assert "abc123" not in json.dumps(result)
+        assert "abc123" not in caplog.text

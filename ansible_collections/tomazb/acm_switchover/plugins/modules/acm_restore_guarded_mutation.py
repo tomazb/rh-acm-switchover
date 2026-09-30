@@ -22,8 +22,11 @@ description:
   - A failed JSON Patch test or a precondition conflict (HTTP 409, 412 or, for a patch,
     422) fails with C(conflict=true); the request mutated nothing and is never retried or
     replaced by an unguarded request. A retry must start again from a fresh read.
-  - A timeout or transport failure is not acceptance. Only an accepted PATCH response
-    supplies C(generation); when it omits one, C(generation_reported) is false.
+  - A timeout or transport failure is not acceptance, including one while reading the
+    response. A PATCH is accepted only when its response carries the proved
+    C(metadata.uid) and a non-empty C(metadata.resourceVersion); only then is its
+    C(generation) published, and when it omits one C(generation_reported) is false. A
+    response with any other identity fails with C(reason=malformed_response).
   - Owns no read, polling or phase policy. Check mode makes no API call and reports the
     prediction in C(would_change).
 options:
@@ -125,7 +128,16 @@ would_change:
   returned: always
   type: bool
 accepted:
-  description: Whether the API server accepted the guarded request.
+  description:
+    - Whether the guarded request was accepted and, for a patch, its response identified
+      the proved Restore.
+  returned: always
+  type: bool
+http_accepted:
+  description:
+    - Diagnostic only. Whether the API server answered the request with success, even
+      when the response could not be verified (C(reason=malformed_response)). Never
+      evidence of an applied change.
   returned: always
   type: bool
 conflict:
@@ -138,8 +150,8 @@ reason:
   description:
     - Closed classification of the outcome.
     - C(ok), C(predicted) (check mode), C(precondition_failed), C(not_found),
-      C(unverifiable), C(invalid_input) or C(malformed_response) (an accepted PATCH whose
-      response lacks the proved UID or a resourceVersion).
+      C(unverifiable), C(invalid_input) or C(malformed_response) (a successful PATCH whose
+      response lacks the proved UID or a resourceVersion; the module fails).
   returned: always
   type: str
   sample: ok
@@ -167,6 +179,8 @@ generation_reported:
   type: bool
 """
 
+
+import json  # noqa: E402
 
 from ansible.module_utils.basic import AnsibleModule  # noqa: E402
 
@@ -267,6 +281,7 @@ def classify_failure(exc: BaseException, conflict_statuses: frozenset) -> tuple[
 def _base_result(action: str) -> dict:
     result = {
         "accepted": False,
+        "http_accepted": False,
         "changed": False,
         "would_change": False,
         "conflict": False,
@@ -279,28 +294,33 @@ def _base_result(action: str) -> dict:
     return result
 
 
-def _response_mapping(response):
-    if callable(getattr(response, "to_dict", None)):
-        response = response.to_dict()
+def _decode_response(body):
+    """The decoded response mapping, or None when the body is not a JSON object."""
+    try:
+        response = json.loads(body.decode("utf-8"))
+    except Exception:  # noqa: BLE001 -- an undecodable body is a malformed response
+        return None
     return response if isinstance(response, dict) else None
 
 
-def _record_patch_response(result: dict, response, expected_uid: str) -> None:
-    """Copy only the accepted response's own identity; never infer a missing value."""
-    result["reason"] = REASON_MALFORMED_RESPONSE
-    body = _response_mapping(response)
+def _record_patch_response(result: dict, body, expected_uid: str, would_change: bool) -> None:
+    """Verify the accepted response's identity, and only then publish it and its generation.
+
+    A missing or different UID, or a missing resourceVersion, is not verified acceptance:
+    the result stays `malformed_response` with no identity or generation evidence. A
+    missing generation under a valid identity is reported, never inferred.
+    """
+    result.update(http_accepted=True, reason=REASON_MALFORMED_RESPONSE)
     metadata = body.get("metadata") if body is not None else None
     if not isinstance(metadata, dict):
         return
-    uid = metadata.get("uid")
     revision = metadata.get("resourceVersion")
+    if metadata.get("uid") != expected_uid or not isinstance(revision, str) or not revision:
+        return
+    result.update(accepted=True, changed=would_change, reason=REASON_OK, uid=expected_uid, resource_version=revision)
     generation = metadata.get("generation")
-    result["uid"] = uid if isinstance(uid, str) and uid else None
-    result["resource_version"] = revision if isinstance(revision, str) and revision else None
     if isinstance(generation, int) and not isinstance(generation, bool):
         result.update(generation=generation, generation_reported=True)
-    if result["uid"] == expected_uid and result["resource_version"] is not None:
-        result["reason"] = REASON_OK
 
 
 def _resolve_restore_resource(kubeconfig: str, context: str, request_timeout):
@@ -334,14 +354,21 @@ def _validated_request(params: dict):
 
 
 def _submit(resource, params: dict, patch_ops):
-    """The one guarded request. Returns the PATCH response; a DELETE returns None."""
+    """The one guarded request. Returns the raw PATCH response body; a DELETE returns None.
+
+    The PATCH is not deserialized by the client, and its body is read here, inside the
+    caller's failure boundary: a failure reading it leaves the outcome unknown and is never
+    taken for acceptance. Decoding is left to the caller, as in the Python helper.
+    """
     if params["action"] == "patch":
-        return resource.patch(
+        raw = resource.patch(
             name=params["name"],
             namespace=params["namespace"],
             body=patch_ops,
             content_type=GUARDED_PATCH_CONTENT_TYPE,
+            serialize=False,
         )
+        return raw.data
     resource.delete(
         name=params["name"],
         namespace=params["namespace"],
@@ -412,11 +439,19 @@ def run_module(module: AnsibleModule) -> None:
         fail(_failure_message(action, params["name"], conflict, reason), conflict=conflict, reason=reason)
         return
 
-    result.update(accepted=True, changed=would_change)
     if action == "patch":
-        _record_patch_response(result, response, params["expected_uid"])
+        _record_patch_response(result, _decode_response(response), params["expected_uid"], would_change)
+        if not result["accepted"]:
+            fail(
+                f"The response to the guarded patch of {params['name']} does not identify the proved "
+                "Restore, so the patch is not verified and no generation evidence is published.",
+            )
+            return
     else:
         result.update(
+            accepted=True,
+            http_accepted=True,
+            changed=would_change,
             reason=REASON_OK,
             uid=params["expected_uid"],
             resource_version=params["expected_resource_version"],

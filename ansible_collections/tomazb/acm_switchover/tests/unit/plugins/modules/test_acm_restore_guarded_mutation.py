@@ -18,14 +18,14 @@ from ansible.module_utils import basic
 from ansible.module_utils.basic import AnsibleModule as RealAnsibleModule
 from kubernetes.client import ApiClient, Configuration
 from kubernetes.client.exceptions import ApiException
+from urllib3.exceptions import ProtocolError, ReadTimeoutError
 from urllib3.response import HTTPResponse
 
 from ansible_collections.tomazb.acm_switchover.plugins.modules import acm_restore_guarded_mutation as module
 
-# Mirrored parity vectors (R4-04 Task 4). tests/test_kube_client.py asserts these same
-# literals against KubeClient.json_patch_custom_resource_guarded and
-# delete_custom_resource_preconditioned; the two form factors share no code, so these two
-# copies are what hold the wire document and the conflict classification equal.
+# Unit expectations for this module (R4-04 Task 4). Equality with the Python
+# KubeClient helpers is enforced by tests/test_restore_guarded_mutation_parity.py at the
+# repository root, which drives both form factors.
 GUARDED_RESTORE_PATCH_VECTOR = {
     "uid": "3f0c2a4e-uid",
     "resource_version": "48213",
@@ -49,18 +49,12 @@ GUARDED_RESTORE_PATCH_STATUS_VECTOR = {
     403: (False, "unverifiable"),
     500: (False, "unverifiable"),
 }
-# HTTP status -> classification for the preconditioned DELETE: a conflict, a disappeared
-# target, or anything else.
+# HTTP status -> (conflict, reason) for the preconditioned DELETE.
 GUARDED_RESTORE_DELETE_STATUS_VECTOR = {
-    409: "conflict",
-    412: "conflict",
-    404: "not_found",
-    500: "other",
-}
-_DELETE_CLASS_TO_RESULT = {
-    "conflict": (True, "precondition_failed"),
-    "not_found": (False, "not_found"),
-    "other": (False, "unverifiable"),
+    409: (True, "precondition_failed"),
+    412: (True, "precondition_failed"),
+    404: (False, "not_found"),
+    500: (False, "unverifiable"),
 }
 
 _SECRET = "R4-04-GUARDED-MUTATION-SECRET-BODY token=abc123 /home/op/.kube/config"
@@ -81,6 +75,11 @@ class ModuleFail(SystemExit):
         self.results = results
 
 
+class _RawResponse:
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+
+
 class FakeResource:
     """A dynamic-client Restore resource that records every request it receives."""
 
@@ -96,8 +95,16 @@ class FakeResource:
         return result
 
     def patch(self, **kwargs):
+        """Answers like the dynamic client with ``serialize=False``: the raw HTTP response,
+        whose ``data`` is the body. Bytes pass through; anything else is JSON-encoded."""
         self.calls.append(("patch", kwargs))
-        return self._answer(self.patch_result)
+        result = self._answer(self.patch_result)
+        if isinstance(result, bytes):
+            return _RawResponse(result)
+        if result is None or isinstance(result, (dict, list, str)):
+            return _RawResponse(json.dumps(result).encode("utf-8"))
+        # A response object is returned untouched, so a lazy `data` is read by the module.
+        return result
 
     def delete(self, **kwargs):
         self.calls.append(("delete", kwargs))
@@ -211,7 +218,7 @@ def test_delete_failures_follow_the_shared_classification_and_are_never_retried(
     resource = FakeResource(delete_result=ApiException(status=status, reason="Rejected"))
     result = _run(monkeypatch, _delete_args(), resource=resource)
 
-    conflict, reason = _DELETE_CLASS_TO_RESULT[GUARDED_RESTORE_DELETE_STATUS_VECTOR[status]]
+    conflict, reason = GUARDED_RESTORE_DELETE_STATUS_VECTOR[status]
     assert result["failed"] is True
     assert (result["conflict"], result["reason"]) == (conflict, reason)
     assert (result["changed"], result["accepted"]) == (False, False)
@@ -246,6 +253,7 @@ def test_an_accepted_patch_exposes_the_response_identity_and_generation(monkeypa
     result.pop("_resolved")
     assert result == {
         "accepted": True,
+        "http_accepted": True,
         "changed": True,
         "would_change": False,
         "conflict": False,
@@ -257,12 +265,11 @@ def test_an_accepted_patch_exposes_the_response_identity_and_generation(monkeypa
     }
 
 
-def test_an_accepted_resource_instance_response_is_read_through_to_dict(monkeypatch):
-    class _Instance:
-        def to_dict(self):
-            return _accepted_restore({"uid": "3f0c2a4e-uid", "resourceVersion": "48300", "generation": 3})
-
-    result = _run(monkeypatch, _patch_args(), resource=FakeResource(patch_result=_Instance()))
+def test_the_patch_response_is_read_raw_and_decoded_by_the_module(monkeypatch):
+    body = json.dumps(_accepted_restore({"uid": "3f0c2a4e-uid", "resourceVersion": "48300", "generation": 3}))
+    resource = FakeResource(patch_result=_RawResponse(body.encode("utf-8")))
+    result = _run(monkeypatch, _patch_args(), resource=resource)
+    assert resource.calls[0][1]["serialize"] is False
     assert (result["reason"], result["generation"]) == ("ok", 3)
 
 
@@ -281,19 +288,62 @@ def test_a_missing_or_non_integer_generation_is_reported_never_invented(monkeypa
     "response",
     [
         _accepted_restore({"resourceVersion": "48300", "generation": 7}),
+        _accepted_restore({"uid": "", "resourceVersion": "48300", "generation": 7}),
         _accepted_restore({"uid": "3f0c2a4e-uid", "generation": 7}),
+        _accepted_restore({"uid": "3f0c2a4e-uid", "resourceVersion": "", "generation": 7}),
+        _accepted_restore({"uid": "3f0c2a4e-uid", "resourceVersion": 48300, "generation": 7}),
         _accepted_restore({"uid": "a-different-uid", "resourceVersion": "48300", "generation": 7}),
         _accepted_restore("not-a-mapping"),
         "not-a-mapping",
         None,
+        [],
+        b"<html>",
+        b"\xff\xfe",
     ],
 )
-def test_an_accepted_but_malformed_response_is_flagged_not_trusted(monkeypatch, response):
+def test_a_malformed_response_identity_fails_closed_with_no_generation_evidence(monkeypatch, response):
+    """July §1 step 3 recovers only a missing generation under a valid identity; a missing or
+    different UID, or a missing resourceVersion, is never verified acceptance."""
     result = _run(monkeypatch, _patch_args(), resource=FakeResource(patch_result=response))
-    # The server accepted the atomic PATCH, so the mutation happened and the module does
-    # not fail; the identity it returned cannot be trusted as evidence.
-    assert result.get("failed") is not True
-    assert (result["accepted"], result["changed"], result["reason"]) == (True, True, "malformed_response")
+    result.pop("_resolved")
+    msg = result.pop("msg")
+    assert "abc123" not in msg
+    assert result == {
+        "failed": True,
+        "accepted": False,
+        "http_accepted": True,
+        "changed": False,
+        "would_change": False,
+        "conflict": False,
+        "reason": "malformed_response",
+        "uid": None,
+        "resource_version": None,
+        "generation": None,
+        "generation_reported": False,
+    }
+
+
+@pytest.mark.parametrize("exc", [ReadTimeoutError(None, "/restores", "read timed out"), ProtocolError("reset")])
+def test_a_failure_reading_the_accepted_response_is_not_acceptance(monkeypatch, exc):
+    """The raw body is read after the request returns; a failure there says nothing about
+    whether the PATCH was applied."""
+
+    class _DeferredBody:
+        @property
+        def data(self):
+            raise exc
+
+    result = _run(monkeypatch, _patch_args(), resource=FakeResource(patch_result=_DeferredBody()))
+    assert result["failed"] is True
+    # Classified at the request boundary, not rescued by main()'s generic catch-all.
+    assert "did not complete verifiably" in result["msg"]
+    assert (result["accepted"], result["http_accepted"], result["changed"], result["reason"]) == (
+        False,
+        False,
+        False,
+        "unverifiable",
+    )
+    assert (result["generation"], result["generation_reported"]) == (None, False)
 
 
 def test_replacing_an_already_latest_value_is_accepted_but_unchanged(monkeypatch):
@@ -342,6 +392,7 @@ def test_delete_sends_both_uid_and_resource_version_preconditions(monkeypatch):
     result.pop("_resolved")
     assert result == {
         "accepted": True,
+        "http_accepted": True,
         "changed": True,
         "would_change": False,
         "conflict": False,
@@ -369,6 +420,7 @@ def test_check_mode_makes_no_api_call_and_reports_the_prediction_separately(monk
     result.pop("_resolved")
     expected = {
         "accepted": False,
+        "http_accepted": False,
         "changed": False,
         "would_change": would_change,
         "conflict": False,
@@ -594,6 +646,7 @@ def test_documentation_matches_the_argument_spec():
         assert doc.get("choices") == definition.get("choices"), option
     yaml.safe_load(module.EXAMPLES)
     assert set(yaml.safe_load(module.RETURN)) >= {
+        "http_accepted",
         "changed",
         "would_change",
         "conflict",
@@ -604,3 +657,16 @@ def test_documentation_matches_the_argument_spec():
         "generation",
         "generation_reported",
     }
+
+
+def test_a_wire_response_without_kind_is_decoded_by_the_module_not_the_client(monkeypatch, tmp_path):
+    """The client's own deserializer raises on an object without `kind`, which would read as
+    an unverifiable failure; the module decodes the raw body itself, as the Python helper does."""
+    _wire_client(monkeypatch, tmp_path, (200, {"metadata": {"uid": "another-uid", "resourceVersion": "9"}}))
+    result = _run_wire(monkeypatch, _patch_args())
+    assert (result["failed"], result["accepted"], result["http_accepted"], result["reason"]) == (
+        True,
+        False,
+        True,
+        "malformed_response",
+    )
