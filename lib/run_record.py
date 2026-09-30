@@ -49,6 +49,7 @@ _KEY_NEW_BACKUP_NAME = "post_switchover_backup_name"
 _KEY_ARCHIVED_RESTORES = "archived_restores"
 _KEY_TEARDOWN_RECORDS = "decommission_teardown_records"
 _KEY_MIGRATION_BACKUPS = "migration_backups"
+_KEY_ARGOCD_REPAUSE_REQUIRED = "argocd_repause_required"
 
 _UNSET = object()
 # Presence sentinel for strict reads: a stored null must not look like "never written".
@@ -429,6 +430,51 @@ class RunRecord:
         validate_journal_transition(self.migration_backups(), candidate)
         self._set(_KEY_MIGRATION_BACKUPS, candidate)
         self._state.flush_state()
+
+    # -- Argo CD re-pause obligation: phase-failure rescue writes, retry discharges --
+
+    def record_argocd_repause_required(self, failed_phase: str, at_iso: str) -> None:
+        """A rescue under a migration journal is about to resume Argo CD auto-sync.
+
+        Written by lib/argocd_resume before any resume mutation, forced durable on
+        return; a failed write propagates and the caller must not resume. The
+        failed operational phase positions the retry (PR C decisions amendment
+        section 2.2). Kept outside the migration journal.
+        """
+        self._set(_KEY_ARGOCD_REPAUSE_REQUIRED, {"failed_phase": failed_phase, "recorded_at": at_iso})
+        self._state.flush_state()
+
+    def argocd_repause_required(self) -> Optional[str]:
+        """The failed phase a retry must re-pause Argo CD before resuming, or None.
+
+        A present value of any other shape raises: the obligation is never read
+        as discharged.
+        """
+        stored = self._get(_KEY_ARGOCD_REPAUSE_REQUIRED)
+        if stored is None:
+            return None
+        failed_phase = stored.get("failed_phase") if isinstance(stored, dict) else None
+        if not isinstance(failed_phase, str) or not failed_phase:
+            raise StateStructureError(f"{_KEY_ARGOCD_REPAUSE_REQUIRED} is malformed")
+        return failed_phase
+
+    def clear_argocd_repause_required(self) -> None:
+        """The retry re-paused Argo CD; discharge the obligation, forced durable.
+
+        A failed write restores the obligation in memory before propagating, so
+        no later state write can drop it.
+        """
+        previous = self._get(_KEY_ARGOCD_REPAUSE_REQUIRED)
+        try:
+            self._set(_KEY_ARGOCD_REPAUSE_REQUIRED, None)
+            self._state.flush_state()
+        except BaseException:
+            self._set_in_memory(_KEY_ARGOCD_REPAUSE_REQUIRED, previous)
+            raise
+
+    def _set_in_memory(self, key: str, value: Any) -> None:
+        # Direct bag access: a write through the accessor would flush again.
+        self._state.state["config"][key] = value
 
     # -- lifecycle view: read side for report writers and show_state --
 

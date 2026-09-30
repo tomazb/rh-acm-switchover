@@ -493,6 +493,7 @@ def _build_switchover_runner_hooks() -> operation_runners.SwitchoverRunnerHooks:
         fail_phase=_fail_phase,
         fail_unexpected_phase_state=_fail_unexpected_phase_state,
         on_phase_failure=_attempt_argocd_resume_on_failure,
+        rescue_repause=_repause_argocd_after_rescue,
     )
 
 
@@ -506,6 +507,7 @@ def _build_restore_only_runner_hooks() -> operation_runners.RestoreOnlyRunnerHoo
         fail_phase=_fail_phase,
         fail_unexpected_phase_state=_fail_unexpected_phase_state,
         on_phase_failure=_attempt_argocd_resume_on_failure,
+        rescue_repause=_repause_argocd_after_rescue,
     )
 
 
@@ -672,6 +674,17 @@ def _attempt_argocd_resume_on_failure(
         logger,
         kube_client_factory=KubeClient,
     )
+
+
+def _repause_argocd_after_rescue(
+    args: argparse.Namespace,
+    state: StateManager,
+    primary: Optional[KubeClient],
+    secondary: Optional[KubeClient],
+    logger: logging.Logger,
+) -> bool:
+    """Re-pause Argo CD before a retry's first phase when a journal rescue resumed it."""
+    return argocd_resume.repause_argocd_after_rescue(args, state, primary, secondary, logger)
 
 
 def _fail_phase(state: StateManager, message: str, logger: logging.Logger) -> bool:
@@ -1371,6 +1384,9 @@ def _bind_runtime_hub_identities(
     except (runtime_bootstrap.HubIdentityVerificationError, ValidationError) as exc:
         raise _PhysicalHubIdentityRefusal(str(exc)) from None
 
+    # #332: a --force reset this run would refuse over a migration journal refuses before
+    # identity is persisted, so the refused state file stays unchanged.
+    operation_runners.refuse_implicit_journal_reset(args, state, logging.getLogger("acm_switchover"))
     state.ensure_hub_identities(
         hub_identities,
         allow_legacy_backfill=getattr(args, "force", False),

@@ -812,6 +812,7 @@ class TestRestoreOnlyFlow:
 
         args = make_restore_only_args()
         state = Mock(spec=StateManager)
+        state._get_config.side_effect = lambda key, default=None: default
         # Return INIT first, then follow each phase transition via set_phase
         current = [Phase.INIT]
 
@@ -893,6 +894,7 @@ class TestRestoreOnlyFlow:
 
         args = make_restore_only_args(validate_only=True)
         state = Mock(spec=StateManager)
+        state._get_config.side_effect = lambda key, default=None: default
         state.get_current_phase.return_value = Phase.INIT
         state.get_state_age.return_value = None
         secondary = Mock()
@@ -912,6 +914,7 @@ class TestRestoreOnlyFlow:
 
         args = make_restore_only_args()
         state = Mock(spec=StateManager)
+        state._get_config.side_effect = lambda key, default=None: default
         state.get_current_phase.return_value = Phase.INIT
         state.get_state_age.return_value = None
         secondary = Mock()
@@ -958,6 +961,7 @@ class TestRestoreOnlyFlow:
         # Explicitly verify old_hub_action is set to "none" by run_restore_only
         args.method = "full"
         state = Mock()
+        state._get_config.side_effect = lambda key, default=None: default
         state.get_current_phase.return_value = Phase.INIT
         state.get_state_age.return_value = None
         secondary = Mock()

@@ -133,9 +133,7 @@ def handle_completed_state(
     if state.get_current_phase() != Phase.COMPLETED:
         return False
 
-    state_age = state.get_state_age()
-    if state_age is None:
-        state_age = timedelta(seconds=STALE_STATE_THRESHOLD + 1)
+    state_age = _completed_state_age(state)
 
     if getattr(args, "validate_only", False):
         return False
@@ -178,7 +176,7 @@ def handle_failed_state(
     if state.get_current_phase() != Phase.FAILED or getattr(args, "validate_only", False):
         return
 
-    last_error_phase = state.get_last_error_phase()
+    last_error_phase = _failed_state_retry_phase(state)
     errors = state.get_errors()
     last_error_msg = errors[-1].get("error", "Unknown error") if errors else "Unknown error"
 
@@ -208,6 +206,44 @@ def handle_failed_state(
     state.reset()
 
 
+def _completed_state_age(state: StateManager) -> timedelta:
+    """A completed state's age; an unknown age counts as stale."""
+    state_age = state.get_state_age()
+    return state_age if state_age is not None else timedelta(seconds=STALE_STATE_THRESHOLD + 1)
+
+
+def _failed_state_retry_phase(state: StateManager) -> Optional[Phase]:
+    """The phase a FAILED state retries: an Argo CD re-pause marker's phase, else the last error's.
+
+    The marker records the failed operational phase durably (PR C decisions amendment
+    section 2.2), so an error recorded later against another phase cannot move the retry.
+    """
+    marker_phase = RunRecord(state).argocd_repause_required()
+    return Phase(marker_phase) if marker_phase is not None else state.get_last_error_phase()
+
+
+def refuse_predictable_journal_reset(
+    args: argparse.Namespace, state: StateManager, logger: logging.Logger, resumable_phases: Tuple[Phase, ...]
+) -> None:
+    """Raise the migration-journal reset refusal before any write when this run's --force would reset.
+
+    Mirrors the two implicit resets of handle_completed_state and handle_failed_state, so
+    a caller that writes before them (live hub identity binding, #332) refuses first and
+    the refused state stays unchanged.
+    """
+    if getattr(args, "validate_only", False) or not getattr(args, "force", False):
+        return
+    phase = state.get_current_phase()
+    if phase == Phase.COMPLETED:
+        would_reset = _completed_state_age(state).total_seconds() > STALE_STATE_THRESHOLD
+    elif phase == Phase.FAILED:
+        would_reset = _failed_state_retry_phase(state) not in resumable_phases
+    else:
+        return
+    if would_reset:
+        _refuse_reset_of_migration_journal(state, logger)
+
+
 def run_validate_only_preflight(
     args: argparse.Namespace,
     state: StateManager,
@@ -234,6 +270,7 @@ def run_phase_flow(
     fail_phase: FailPhaseHandler,
     fail_unexpected_phase_state: UnexpectedPhaseHandler,
     on_phase_failure: FailureHook,
+    before_phases: Optional[PhaseHandler] = None,
 ) -> bool:
     current_phase = state.get_current_phase()
     runnable_phases = {phase for _, phases, _ in phase_flow for phase in phases}
@@ -247,6 +284,10 @@ def run_phase_flow(
     resume_start_phase = CANONICAL_PHASE_NAMES.get(current_phase)
     if current_phase != Phase.INIT and resume_start_phase is not None:
         RunRecord(state).record_resume_start_phase(resume_start_phase)
+
+    # Obligations a failed run left for its retry run before any phase work.
+    if before_phases is not None and not before_phases(args, state, primary, secondary, logger):
+        return False
 
     ran_phase = False
     for handler, allowed_states, expected_phase in phase_flow:
