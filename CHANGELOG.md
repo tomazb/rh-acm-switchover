@@ -89,12 +89,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [parity matrix](docs/ansible-collection/parity-matrix.md); both capabilities stay
   `dual-supported`. First, Python's typed built-in reads still take a 404 as absence without
   discovery, so a built-in 404 that live discovery does not confirm is absence in Python.
-  Second, Python's custom-resource discovery prover does not validate `groupVersion`, so for a
-  custom resource whose live discovery document is readable but has a missing, empty,
-  non-string, or different `groupVersion`, the collection returns `error` while Python can
-  report the object or CRD absent. Only a non-conformant discovery response reaches the second
-  case. It was approved after the collection check was implemented, and realigning Python is
-  tracked in #321. Third, for a custom-resource named GET that returns 404 on a route resolved
+  Second, before #321, Python's custom-resource discovery prover did not validate
+  `groupVersion`, so for a custom resource whose live discovery document was readable but had a
+  missing, empty, non-string, or different `groupVersion`, the collection returned `error` while
+  Python could report the object or CRD absent. Only a non-conformant discovery response reached
+  that case. It was approved after the collection check was implemented, and it was retired when
+  #321 aligned Python with the collection. Third, for a custom-resource named GET that returns 404 on a route resolved
   from a stale discovery cache, where the resolved plural is not canonical or live discovery shows
   a different kind or scope, the collection returns `error` while Python, which reads the caller's
   fixed route, can read the object or report it or its CRD absent. Only cached discovery that no
