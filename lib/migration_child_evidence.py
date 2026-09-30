@@ -15,7 +15,7 @@ this module in plugins/module_utils/migration_child_evidence.py; the two share
 no code and tests/test_migration_evidence_parity.py holds them equal.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from lib.migration_evidence import (
     ACM_MINOR_CONTRACTS,
@@ -115,12 +115,35 @@ PASSIVE_PATCH_CATEGORIES = (
     "activation_resources",
     "activation_resources_generic",
 )
-# passive_patch ordinary status associations and the category each binds to.
-_PATCH_ASSOCIATIONS = (
-    (_CREDS, "activation_credentials"),
-    (_RES, "activation_resources"),
-    (_GEN, "activation_resources_generic"),
-)
+# passive_patch requests whose child names are predicted before the PATCH, as
+# (role, frozen category, -active suffix): the lane's activation-only requests
+# (amendment-2 section 3; U2.12-2.16 restore.go restoreOnlyManagedClusters,
+# U2.17 restore.go:710-719) plus the ordinary requests the sync branch may make
+# from the same frozen Backups (U2.12-2.16 restore_controller.go sync branch,
+# U2.17 restore_controller.go:656-692).
+_PATCH_NAME_ROLES = {
+    _LEGACY: (
+        ("ManagedClusters", "managed_clusters", False),
+        ("Credentials", "activation_credentials", False),
+        ("ResourcesGeneric", "activation_resources_generic", False),
+        ("Resources", "activation_resources", False),
+    ),
+    _ACTIVE: (
+        ("ManagedClusters", "managed_clusters", False),
+        ("CredentialsActive", "activation_credentials", True),
+        ("ResourcesGenericActive", "activation_resources_generic", True),
+        ("Credentials", "activation_credentials", False),
+        ("Resources", "activation_resources", False),
+        ("ResourcesGeneric", "activation_resources_generic", False),
+    ),
+}
+# passive_patch status associations and the category each binds to.
+_PATCH_CATEGORIES = {
+    _MC: "managed_clusters",
+    _CREDS: "activation_credentials",
+    _RES: "activation_resources",
+    _GEN: "activation_resources_generic",
+}
 
 
 def generated_child_name(acm_restore_name: Any, backup_name: Any, *, active_suffix: bool = False) -> str:
@@ -136,23 +159,15 @@ def generated_child_name(acm_restore_name: Any, backup_name: Any, *, active_suff
 
 
 def is_owned_by(raw: Any, owner_name: str, owner_uid: str) -> bool:
-    """Return whether a listed Velero Restore belongs in the owner-filtered list.
+    """Return whether a Velero Restore is controller-owned by exactly this ACM Restore.
 
-    The filter is deliberately wider than the exact owner identity: any
-    controller reference carrying the ACM Restore UID, or naming a Restore of
-    that name in the ACM group (the controller's own index key), selects the
-    child, so validate_velero_child then blocks an impostor instead of the
-    filter silently dropping it.
+    August section 5 "Strict owner validation": a controller reference in the
+    ACM group (any served version) with kind Restore and the exact name and
+    UID. This is the client-side membership filter; a child named by a status
+    locator is validated directly, so an impostor there still blocks.
     """
     _, _, _, refs = _child_parts(raw)
-    for ref in refs:
-        if ref.get("controller") is not True:
-            continue
-        if ref.get("uid") == owner_uid:
-            return True
-        if ref.get("name") == owner_name and ref.get("kind") == "Restore" and _ref_group(ref) == _OWNER_GROUP:
-            return True
-    return False
+    return any(ref.get("controller") is True and _is_acm_restore(ref, owner_name, owner_uid) for ref in refs)
 
 
 def validate_velero_child(
@@ -238,18 +253,17 @@ def freeze_one_shot_backups(
         source = frozen[prediction["source_category"]]["name"] if prediction["source_category"] else None
         if prediction["selection"] == "latest":
             decision, evidence = select_latest_evidence(inventory, resource_type, namespace)
-        elif prediction["decision"] in ("required", "optional"):
-            decision, evidence = select_correlated_evidence(inventory, source, resource_type, namespace)
-        else:
-            # Gate-only predictions journal nothing, so the raw prediction suffices.
-            decision, raw = predict_correlated_backup(inventory, source, resource_type)
-            if prediction["decision"] == "none_required" and decision != "none":
+        elif prediction["decision"] == "none_required":
+            # Every selected candidate blocks, so the raw prediction suffices.
+            if predict_correlated_backup(inventory, source, resource_type)[0] != "none":
                 raise MigrationEvidenceError(
                     "legacy_credential_variant_selected", f"a {resource_type} Backup correlates with {source}"
                 )
-            if prediction["decision"] == "equals" and (
-                raw is None or raw["metadata"]["name"] != frozen[prediction["freeze_as"]]["name"]
-            ):
+            continue
+        else:
+            decision, evidence = select_correlated_evidence(inventory, source, resource_type, namespace)
+        if prediction["decision"] == "equals":
+            if evidence is None or evidence["name"] != frozen[prediction["freeze_as"]]["name"]:
                 raise MigrationEvidenceError(
                     "active_prediction_mismatch",
                     f"the {resource_type} prediction differs from backups.{prediction['freeze_as']}",
@@ -273,13 +287,20 @@ def predict_one_shot_child_names(
     (amendment-2 section 4.2).
     """
     roles = _one_shot_roles(mutation_kind, controller_contract, frozen_backups)
-    names = {
-        role: generated_child_name(acm_restore_name, frozen_backups[category]["name"], active_suffix=field is None)
-        for role, category, field in roles
-    }
-    if len(set(names.values())) != len(names):
-        raise MigrationEvidenceError("generated_name_collision", "two required roles share a generated child name")
-    return names
+    return _predict_names(acm_restore_name, frozen_backups, [(role, cat, field is None) for role, cat, field in roles])
+
+
+def predict_passive_patch_child_names(
+    controller_contract: Any, acm_restore_name: Any, frozen_backups: Any
+) -> Dict[str, str]:
+    """Return the generated child names a passive_patch may produce; raise on a collision.
+
+    Run before the PATCH (amendment-2 section 4.2 "before creating or
+    patching"), so a collision blocks with zero ACM Restore mutation.
+    """
+    _require_contract(controller_contract)
+    _require_categories(frozen_backups, PASSIVE_PATCH_CATEGORIES, ())
+    return _predict_names(acm_restore_name, frozen_backups, _PATCH_NAME_ROLES[controller_contract])
 
 
 def one_shot_completion(
@@ -291,10 +312,14 @@ def one_shot_completion(
     namespace: str,
     frozen_backups: Any,
     status_names: Any,
-    owner_children: Any,
+    namespace_restores: Any,
     acm_phase: Any,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Return the child lists of a completed one-shot Restore, or raise.
+
+    namespace_restores is the strictly complete Velero Restore LIST of the
+    namespace: status locators resolve against it directly, and the owner
+    members are the objects is_owned_by selects from it.
 
     Amendment-2 section 4.1 roles are satisfied first, then, independently,
     the section 4.2 owner membership: every owner child Completed and bound to
@@ -302,27 +327,28 @@ def one_shot_completion(
     """
     roles = _one_shot_roles(mutation_kind, controller_contract, frozen_backups)
     names = _status_names(status_names)
-    children = dict(_owner_children(owner_children))
+    by_name, members = _namespace_restores(namespace_restores, acm_restore_name, acm_restore_uid)
     if not acm_phase_accepts(mutation_kind, controller_contract, acm_phase):
         raise MigrationEvidenceError("acm_phase_not_accepted", f"ACM Restore phase {acm_phase!r} is not Finished")
-    published = {field for _, _, field in roles if field}
-    for field in STATUS_NAME_FIELDS:
-        if field not in published and names[field] != "":
-            raise MigrationEvidenceError("unexpected_status_name", f"status.{field} names no required role")
+    # Amendment-2 section 4.2 immutable absence: an unfrozen legacy generic
+    # category keeps its status locator empty.
+    generic_absent = controller_contract == _LEGACY and "activation_resources_generic" not in frozen_backups
+    if mutation_kind == "passive_restore" and generic_absent and names[_GEN] != "":
+        raise MigrationEvidenceError("unexpected_status_name", f"status.{_GEN} names an unfrozen generic child")
     owner = (namespace, acm_restore_name, acm_restore_uid)
     entries = {}
     for role, category, field in roles:
         backup_name = frozen_backups[category]["name"]
         if field:
-            raw = _published_child(children, names, field)
+            raw = _published_child(by_name, names, field)
         else:
             published_child = entries[_ACTIVE_PUBLISHED_ROLE[role]][1]["name"]
-            raw = _unpublished_child(children, backup_name, published_child, role)
+            raw = _unpublished_child(members, backup_name, published_child, role)
         entries[role] = (category, _child_entry(raw, *owner, backup_name))
     if len({entry["name"] for _, entry in entries.values()}) != len(entries):
         raise MigrationEvidenceError("role_child_collision", "two required roles resolve to one child")
     frozen_names = {backup["name"] for backup in frozen_backups.values()}
-    for name, raw in children.items():
+    for name, raw in members:
         backup_name = _child_backup_name(raw)
         if not _non_empty_str(backup_name):
             raise MigrationEvidenceError("malformed_velero_restore", f"owner child {name} has no spec.backupName")
@@ -343,10 +369,13 @@ def passive_patch_completion(
     frozen_backups: Any,
     precondition_status_names: Any,
     status_names: Any,
-    owner_children: Any,
+    namespace_restores: Any,
     acm_phase: Any,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Return the consumed child lists of a completed passive_patch, or raise.
+
+    namespace_restores is the strictly complete namespace LIST, used as in
+    one_shot_completion.
 
     August section 5 legacy and 2.17 passive_patch contracts. Every cohort
     member must be Completed, but only children consumed by this transaction
@@ -359,33 +388,24 @@ def passive_patch_completion(
     after = _status_names(status_names)
     if before[_MC] != "":
         raise MigrationEvidenceError("precondition_status_invalid", f"precondition status.{_MC} must be empty")
-    children = _owner_children(owner_children)
-    by_name = dict(children)
+    by_name, members = _namespace_restores(namespace_restores, acm_restore_name, acm_restore_uid)
     if not acm_phase_accepts("passive_patch", controller_contract, acm_phase):
         raise MigrationEvidenceError("acm_phase_not_accepted", f"ACM Restore phase {acm_phase!r} is not accepted")
     owner = (namespace, acm_restore_name, acm_restore_uid)
-    consumed = []
-
-    def bind(raw: Any, category: str) -> None:
-        consumed.append((category, _child_entry(raw, *owner, frozen_backups[category]["name"])))
-
-    bind(_published_child(by_name, after, _MC), "managed_clusters")
-    # Legacy restoreOnlyManagedClusters always publishes credentials and generic.
-    required = (_CREDS, _GEN) if controller_contract == _LEGACY else ()
-    for field, category in _PATCH_ASSOCIATIONS:
-        if field in required:
-            bind(_published_child(by_name, after, field), category)
-    for field, category in _PATCH_ASSOCIATIONS:
-        if field not in required and after[field] != before[field]:
-            if after[field] == "":
-                raise MigrationEvidenceError("status_name_cleared", f"status.{field} was cleared by the patch")
-            bind(_published_child(by_name, after, field), category)
+    bound = _patch_bound_fields(controller_contract, before, after)
+    consumed: List[Tuple[str, Dict[str, Any]]] = []
+    # Every current locator resolves to an owned, Completed child; only the
+    # bound associations are journaled, so unchanged historical children are
+    # checked but never rebound.
+    for field in STATUS_NAME_FIELDS:
+        if after[field]:
+            raw = _published_child(by_name, after, field)
+            _check_child(consumed, raw, owner, frozen_backups, _PATCH_CATEGORIES[field] if field in bound else None)
+    cohort = passive_patch_cohort(controller_contract, [raw for _, raw in members], after)
     if controller_contract == _ACTIVE:
-        for category in ("activation_credentials", "activation_resources_generic"):
-            bind(_active_variant(children, frozen_backups[category]["name"], category), category)
-        for _, raw in children:
-            _require_owner(raw, acm_restore_name, acm_restore_uid)
-    for raw in passive_patch_cohort(controller_contract, [raw for _, raw in children], after):
+        for raw, category in _patch_active_children(cohort, members, after, frozen_backups):
+            _check_child(consumed, raw, owner, frozen_backups, category)
+    for raw in cohort:
         _child_entry(raw, *owner, None)
     return _child_lists(consumed)
 
@@ -455,6 +475,16 @@ def _one_shot_roles(
     return tuple(role for role in _ONE_SHOT_ROLES[(mutation_kind, controller_contract)] if role[1] in frozen_backups)
 
 
+def _predict_names(acm_restore_name: Any, frozen_backups: Dict[str, Any], roles: Any) -> Dict[str, str]:
+    names = {
+        role: generated_child_name(acm_restore_name, frozen_backups[category]["name"], active_suffix=active)
+        for role, category, active in roles
+    }
+    if len(set(names.values())) != len(names):
+        raise MigrationEvidenceError("generated_name_collision", "two required roles share a generated child name")
+    return names
+
+
 def _status_names(status_names: Any) -> Dict[str, str]:
     if (
         not isinstance(status_names, dict)
@@ -479,20 +509,82 @@ def _owner_children(owner_children: Any) -> List[Tuple[str, Dict[str, Any]]]:
     return pairs
 
 
+def _patch_bound_fields(controller_contract: str, before: Dict[str, str], after: Dict[str, str]) -> Set[str]:
+    """Return the status fields whose child binds to a frozen category (August section 5).
+
+    The new ManagedClusters association always binds; legacy
+    restoreOnlyManagedClusters also always publishes credentials and generic;
+    any other association binds only when the patch changed it.
+    """
+    required = [_MC, _CREDS, _GEN] if controller_contract == _LEGACY else [_MC]
+    for field in required:
+        if after[field] == "":
+            raise MigrationEvidenceError("required_status_name_missing", f"status.{field} is empty")
+    changed = {field for field in STATUS_NAME_FIELDS if after[field] != before[field]}
+    for field in STATUS_NAME_FIELDS:
+        if field in changed and after[field] == "":
+            raise MigrationEvidenceError("status_name_cleared", f"status.{field} was cleared by the patch")
+    return set(required) | changed
+
+
+def _patch_active_children(
+    cohort: List[Any], members: List[Tuple[str, Any]], after: Dict[str, str], frozen_backups: Dict[str, Any]
+) -> List[Tuple[Any, str]]:
+    """Return the 2.17 -active credentials/generic children with the category each binds to.
+
+    Every current-cohort -active variant of the credentials or generic locator
+    binds to its activation category; without one, exactly one -active member
+    bound to that category is still required (August section 5, 2.17 steps 3
+    and 5).
+    """
+    children = []
+    for field, category in ((_CREDS, "activation_credentials"), (_GEN, "activation_resources_generic")):
+        current = [raw for raw in cohort if _is_active_variant_of(raw, after[field])]
+        if not current:
+            current = [_active_variant(members, frozen_backups[category]["name"], category)]
+        children.extend((raw, category) for raw in current)
+    return children
+
+
+def _check_child(
+    consumed: List[Tuple[str, Dict[str, Any]]],
+    raw: Any,
+    owner: Tuple[str, str, str],
+    frozen_backups: Dict[str, Any],
+    category: Optional[str],
+) -> None:
+    entry = _child_entry(raw, *owner, frozen_backups[category]["name"] if category else None)
+    if category:
+        consumed.append((category, entry))
+
+
+def _namespace_restores(
+    namespace_restores: Any, owner_name: str, owner_uid: str
+) -> Tuple[Dict[str, Any], List[Tuple[str, Any]]]:
+    """Return the namespace LIST by name and its exact-owner members as (name, raw) pairs."""
+    try:
+        restores = _owner_children(namespace_restores)
+    except MigrationEvidenceError as exc:
+        if exc.code != "malformed_owner_children":
+            raise
+        raise MigrationEvidenceError("malformed_restore_list", str(exc)) from exc
+    return dict(restores), [(name, raw) for name, raw in restores if is_owned_by(raw, owner_name, owner_uid)]
+
+
 def _published_child(children: Dict[str, Any], names: Dict[str, str], field: str) -> Any:
     name = names[field]
     if not name:
         raise MigrationEvidenceError("required_status_name_missing", f"status.{field} is empty")
     if name not in children:
-        raise MigrationEvidenceError("required_child_missing", f"status.{field} names {name}, not an owner child")
+        raise MigrationEvidenceError(
+            "required_child_missing", f"status.{field} names {name}, which is not in the namespace"
+        )
     return children[name]
 
 
-def _unpublished_child(children: Dict[str, Any], backup_name: str, published_name: str, role: str) -> Any:
+def _unpublished_child(members: List[Tuple[str, Any]], backup_name: str, published_name: str, role: str) -> Any:
     """Locate a 2.17 -active role: the one owner child bound to its Backup other than the published child."""
-    matches = [
-        raw for name, raw in children.items() if name != published_name and _child_backup_name(raw) == backup_name
-    ]
+    matches = [raw for name, raw in members if name != published_name and _child_backup_name(raw) == backup_name]
     return _exactly_one(matches, role)
 
 
@@ -502,6 +594,11 @@ def _active_variant(children: List[Tuple[str, Any]], backup_name: str, category:
         raw for name, raw in children if name.endswith(_ACTIVE_SUFFIX) and _child_backup_name(raw) == backup_name
     ]
     return _exactly_one(matches, category)
+
+
+def _is_active_variant_of(raw: Any, locator: str) -> bool:
+    name = _child_parts(raw)[0].get("name")
+    return bool(locator) and name.endswith(_ACTIVE_SUFFIX) and _trim_active(name) == _trim_active(locator)
 
 
 def _exactly_one(matches: List[Any], label: str) -> Any:
@@ -541,6 +638,15 @@ def _ref_group(ref: Dict[str, Any]) -> Optional[str]:
     return group if version else None
 
 
+def _is_acm_restore(ref: Dict[str, Any], owner_name: str, owner_uid: str) -> bool:
+    return (
+        _ref_group(ref) == _OWNER_GROUP
+        and ref.get("kind") == "Restore"
+        and ref.get("name") == owner_name
+        and ref.get("uid") == owner_uid
+    )
+
+
 def _require_owner(raw: Any, owner_name: str, owner_uid: str) -> None:
     _, _, _, refs = _child_parts(raw)
     controllers = [ref for ref in refs if ref.get("controller") is True]
@@ -548,13 +654,7 @@ def _require_owner(raw: Any, owner_name: str, owner_uid: str) -> None:
         raise MigrationEvidenceError("velero_restore_owner_missing", "the Velero Restore has no controller owner")
     if len(controllers) > 1:
         raise MigrationEvidenceError("velero_restore_owner_ambiguous", "the Velero Restore has several controllers")
-    ref = controllers[0]
-    if (
-        _ref_group(ref) != _OWNER_GROUP
-        or ref.get("kind") != "Restore"
-        or ref.get("name") != owner_name
-        or ref.get("uid") != owner_uid
-    ):
+    if not _is_acm_restore(controllers[0], owner_name, owner_uid):
         raise MigrationEvidenceError(
             "velero_restore_owner_mismatch", "the Velero Restore controller is not the ACM Restore"
         )

@@ -231,7 +231,7 @@ def _counter(status: Dict[str, Any], key: str) -> int:
 
 
 def _token(resource_type: Any, allowed: frozenset) -> str:
-    if resource_type not in allowed:
+    if not isinstance(resource_type, str) or resource_type not in allowed:
         raise MigrationEvidenceError("unsupported_resource_type", f"resource type {resource_type!r} is not supported")
     return SCHEDULE_TOKENS[resource_type]
 

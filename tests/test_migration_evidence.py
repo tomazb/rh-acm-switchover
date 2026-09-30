@@ -18,6 +18,7 @@ from lib.migration_child_evidence import (
     passive_patch_cohort,
     passive_patch_completion,
     predict_one_shot_child_names,
+    predict_passive_patch_child_names,
     validate_velero_child,
 )
 from lib.migration_evidence import (
@@ -60,6 +61,7 @@ FUNCTIONS = {
     "passive_patch_cohort": passive_patch_cohort,
     "passive_patch_completion": passive_patch_completion,
     "predict_one_shot_child_names": predict_one_shot_child_names,
+    "predict_passive_patch_child_names": predict_passive_patch_child_names,
     "validate_velero_child": validate_velero_child,
     "normalize_child_list": normalize_child_list,
     "canonical_restore_projection": canonical_restore_projection,

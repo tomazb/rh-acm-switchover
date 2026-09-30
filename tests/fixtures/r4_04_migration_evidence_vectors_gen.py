@@ -1193,8 +1193,11 @@ case(
 fn = "is_owned_by"
 for label, owner_refs, expected in [
     ("exact", [owner_ref()], True),
-    ("same-uid-other-kind", [owner_ref(kind="BackupSchedule")], True),
-    ("same-name-other-uid", [owner_ref(uid="uid-previous")], True),
+    ("same-uid-other-kind", [owner_ref(kind="BackupSchedule")], False),
+    ("same-uid-other-group", [owner_ref(api="velero.io/v1")], False),
+    ("same-name-other-uid", [owner_ref(uid="uid-previous")], False),
+    ("other-served-version", [owner_ref(api="cluster.open-cluster-management.io/v1")], True),
+    ("second-controller-ours", [owner_ref(name="other-restore", uid="uid-other"), owner_ref()], True),
     ("same-name-other-group", [owner_ref(api="velero.io/v1", uid="uid-other")], False),
     ("unrelated", [owner_ref(name="other-restore", uid="uid-other")], False),
     ("non-controller", [owner_ref(controller=False)], False),
@@ -1207,7 +1210,7 @@ for label, owner_refs, expected in [
         fn,
         {"raw": child(gname(MC_B), MC_B, refs=owner_refs), "owner_name": R, "owner_uid": RUID},
         ok(expected),
-        label in ("same-uid-other-kind", "same-name-other-uid"),
+        False,
     )
 case(
     "owned-by-malformed-refs",
@@ -1749,7 +1752,7 @@ def one_shot(kind, contract, frozen, status, children, phase="Finished"):
         "namespace": NS,
         "frozen_backups": frozen,
         "status_names": status,
-        "owner_children": children,
+        "namespace_restores": children,
         "acm_phase": phase,
     }
 
@@ -1881,7 +1884,7 @@ case(
     ok(lists(managed_clusters=[c_mc])),
 )
 case(
-    "one-shot-passive-2.17-credentials-status-blocks",
+    "one-shot-passive-2.17-credentials-child-unfrozen-blocks",
     V17,
     OS_17,
     fn,
@@ -1892,7 +1895,7 @@ case(
         status4(mc=gname(MC_B), cred=gname(CRED_B)),
         [c_mc, c_cred],
     ),
-    err("unexpected_status_name"),
+    err("owner_child_unfrozen_backup"),
     True,
 )
 case(
@@ -1995,7 +1998,7 @@ case(
     OS_17,
     fn,
     one_shot(*F17, FULL_FROZEN, FULL_STATUS, [c_mc, c_cred, c_cred_act_foreign, c_res, c_gen, c_gen_act]),
-    err("velero_restore_owner_mismatch"),
+    err("active_child_missing"),
     True,
 )
 case(
@@ -2062,7 +2065,7 @@ def patch(contract, status, children, phase="Enabled", pre=PRE, frozen=PATCH_FRO
         "frozen_backups": frozen,
         "precondition_status_names": pre,
         "status_names": status,
-        "owner_children": children,
+        "namespace_restores": children,
         "acm_phase": phase,
     }
 
@@ -2228,7 +2231,7 @@ case(
     PP_17,
     fn,
     patch(A17, P17_POST, [c for c in P17_CHILDREN if c is not p_cred_act] + [child(gname(CRED_B, True), CRED_B)]),
-    err("active_child_missing"),
+    err("velero_restore_backup_mismatch"),
     True,
 )
 case(
@@ -2289,13 +2292,13 @@ case(
     True,
 )
 case(
-    "patch-2.17-foreign-owner-in-list-blocks",
+    "patch-2.17-old-uid-child-outside-locators-ignored",
     V17,
     PP_17,
     fn,
-    patch(A17, P17_POST, P17_CHILDREN + [child("stray", ACT_CRED_B, refs=[owner_ref(uid="uid-previous")])]),
-    err("velero_restore_owner_mismatch"),
-    True,
+    patch(A17, P17_POST, P17_CHILDREN + [child("stray", ACT_CRED_B, "Failed", refs=[owner_ref(uid="uid-previous")])]),
+    ok(lists(managed_clusters=[p_mc], activation_credentials=[p_cred_act], activation_resources_generic=[p_gen_act])),
+    False,
 )
 
 
@@ -3503,6 +3506,253 @@ rcase("repair-no-inspected-evidence-blocks", dict(REPAIR, inspected_evidence=[])
 rcase("repair-run-id-mismatch-blocks", dict(REPAIR, run_id=OTHER_UUID), RR, "repair_identity_mismatch")
 rcase("repair-operation-id-mismatch-blocks", dict(REPAIR, operation_id=OTHER_UUID), RR, "repair_identity_mismatch")
 rcase("repair-invalid-journal-blocks", REPAIR, mut(RR, cleanup__recovery=None), "invalid_cleanup_state")
+
+# --- Task 2b review fixes -------------------------------------------------------------------
+# W3: a non-string resource type is an unsupported type, never an uncoded TypeError.
+for label, rtype in [("list", []), ("object", {}), ("null", None)]:
+    for fn_name, inp in [
+        ("predict_latest_backup", {"inventory": [], "resource_type": rtype}),
+        ("select_latest_evidence", {"inventory": [], "resource_type": rtype, "namespace": NS}),
+        ("predict_correlated_backup", {"inventory": [], "source_name": SRC, "resource_type": rtype}),
+        ("select_correlated_evidence", {"inventory": [], "source_name": SRC, "resource_type": rtype, "namespace": NS}),
+    ]:
+        case(f"{fn_name}-resource-type-{label}-rejected", ALL, [], fn_name, inp, err("unsupported_resource_type"), True)
+
+# B3: the 2.17 -active equality predictions run through select_correlated_evidence, so a selected
+# Backup that fails the seven-field projection blocks even when its name matches.
+fn = "freeze_one_shot_backups"
+for label, inventory in [
+    ("credentials-failed", [mc_b, backup(CRED_B, phase="Failed"), res_b, gen_b]),
+    ("credentials-errors", [mc_b, backup(CRED_B, errors=1), res_b, gen_b]),
+]:
+    case(
+        f"freeze-full-2.17-active-equals-{label}-blocks",
+        V17,
+        refs2(V17, "active") + refs(V17, "correlated"),
+        fn,
+        freeze("full_restore", "active_2_17", inventory, FULL_CONCRETE),
+        err("backup_not_completed" if label == "credentials-failed" else "backup_has_errors"),
+        True,
+    )
+
+# B4: passive_patch generated names are predicted before the PATCH (amendment-2 section 4.2). The
+# activation-only requests plus the ordinary sync-branch requests from the frozen activation
+# Backups are the roles; historical owner children are not.
+fn = "predict_passive_patch_child_names"
+REF_TABLES["sync_branch"] = {
+    "2.12": "restore_controller.go:399-424",
+    "2.13": "restore_controller.go:399-424",
+    "2.14": "restore_controller.go:502-527",
+    "2.15": "restore_controller.go:502-527",
+    "2.16": "restore_controller.go:502-527",
+    "2.17": "restore_controller.go:656-692",
+}
+case(
+    "patch-names-legacy",
+    LEGACY,
+    refs2(LEGACY, "name", "only_mc", "sync_branch"),
+    fn,
+    {"controller_contract": LEG, "acm_restore_name": R, "frozen_backups": PATCH_FROZEN},
+    ok(
+        {
+            "ManagedClusters": gname(MC_B),
+            "Credentials": gname(ACT_CRED_B),
+            "ResourcesGeneric": gname(ACT_GEN_B),
+            "Resources": gname(ACT_RES_B),
+        }
+    ),
+)
+case(
+    "patch-names-2.17",
+    V17,
+    refs2(V17, "name", "only_mc", "active", "sync_branch"),
+    fn,
+    {"controller_contract": A17, "acm_restore_name": R, "frozen_backups": PATCH_FROZEN},
+    ok(
+        {
+            "ManagedClusters": gname(MC_B),
+            "CredentialsActive": gname(ACT_CRED_B, True),
+            "ResourcesGenericActive": gname(ACT_GEN_B, True),
+            "Credentials": gname(ACT_CRED_B),
+            "Resources": gname(ACT_RES_B),
+            "ResourcesGeneric": gname(ACT_GEN_B),
+        }
+    ),
+)
+for lanes, contract in ((LEGACY, LEG), (V17, A17)):
+    tag = "legacy" if contract == LEG else "2.17"
+    case(
+        f"patch-names-{tag}-truncation-collision-blocks",
+        lanes,
+        refs2(lanes, "name"),
+        fn,
+        {"controller_contract": contract, "acm_restore_name": colliding_restore, "frozen_backups": PATCH_FROZEN},
+        err("generated_name_collision"),
+        True,
+    )
+case(
+    "patch-names-missing-category-rejected",
+    LEGACY,
+    [],
+    fn,
+    {
+        "controller_contract": LEG,
+        "acm_restore_name": R,
+        "frozen_backups": {k: v for k, v in PATCH_FROZEN.items() if k != "activation_resources"},
+    },
+    err("frozen_backups_invalid"),
+    True,
+)
+case(
+    "patch-names-unknown-contract-rejected",
+    ALL,
+    [],
+    fn,
+    {"controller_contract": "legacy", "acm_restore_name": R, "frozen_backups": PATCH_FROZEN},
+    err("unknown_controller_contract"),
+    True,
+)
+
+# W1: membership is the exact controller owner (group, kind, name and UID); a status-named child
+# is validated straight from the namespace list, so an impostor at a required locator still blocks.
+fn = "one_shot_completion"
+imp_mc = child(gname(MC_B), MC_B, refs=[owner_ref(uid="uid-previous")])
+case(
+    "one-shot-impostor-at-required-locator-blocks",
+    ALL,
+    OS_L + OS_17,
+    fn,
+    one_shot("passive_restore", A17, {"managed_clusters": proj(MC_B)}, status4(mc=gname(MC_B)), [imp_mc]),
+    err("velero_restore_owner_mismatch"),
+    True,
+)
+old_uid_child = child("stale", "acm-managed-clusters-schedule-20231231120000", "Failed", refs=[owner_ref(uid="uid-x")])
+case(
+    "one-shot-old-uid-child-outside-locators-ignored",
+    V17,
+    OS_17,
+    fn,
+    one_shot("passive_restore", A17, {"managed_clusters": proj(MC_B)}, status4(mc=gname(MC_B)), [c_mc, old_uid_child]),
+    ok(lists(managed_clusters=[c_mc])),
+)
+fn = "passive_patch_completion"
+for lanes, contract, post, children in ((LEGACY, LEG, LEG_POST, LEG_CHILDREN), (V17, A17, P17_POST, P17_CHILDREN)):
+    tag = "legacy" if contract == LEG else "2.17"
+    case(
+        f"patch-{tag}-impostor-at-required-locator-blocks",
+        lanes,
+        PP_L if contract == LEG else PP_17,
+        fn,
+        patch(contract, post, [c for c in children if c is not p_mc] + [imp_mc]),
+        err("velero_restore_owner_mismatch"),
+        True,
+    )
+
+# W2: an unused one-shot status locator is not itself a completion condition; only the legacy
+# immutable absence of activation_resources_generic requires an empty generic locator.
+fn = "one_shot_completion"
+case(
+    "one-shot-passive-2.17-unused-locator-on-role-child-accepted",
+    V17,
+    OS_17,
+    fn,
+    one_shot(
+        "passive_restore", A17, {"managed_clusters": proj(MC_B)}, status4(mc=gname(MC_B), cred=gname(MC_B)), [c_mc]
+    ),
+    ok(lists(managed_clusters=[c_mc])),
+)
+case(
+    "one-shot-passive-legacy-unused-resources-locator-accepted",
+    LEGACY,
+    OS_L,
+    fn,
+    one_shot(*PL, PASSIVE_LEGACY_NO_GEN, status4(mc=gname(MC_B), cred=gname(CRED_B), res=gname(MC_B)), [c_mc, c_cred]),
+    ok(lists(managed_clusters=[c_mc], activation_credentials=[c_cred])),
+)
+
+# B2: every non-empty current status locator resolves to an exact-owner Completed child, even
+# when unchanged; unchanged historical ordinary children are not rebound to activation Backups.
+fn = "passive_patch_completion"
+case(
+    "patch-2.17-unchanged-locator-child-missing-blocks",
+    V17,
+    PP_17,
+    fn,
+    patch(A17, P17_POST, [c for c in P17_CHILDREN if c is not old_cred]),
+    err("required_child_missing"),
+    True,
+)
+case(
+    "patch-legacy-unchanged-locator-child-missing-blocks",
+    LEGACY,
+    PP_L,
+    fn,
+    patch(LEG, LEG_POST, [c for c in LEG_CHILDREN if c is not old_res]),
+    err("required_child_missing"),
+    True,
+)
+case(
+    "patch-2.17-unchanged-locator-child-running-blocks",
+    V17,
+    PP_17,
+    fn,
+    patch(A17, P17_POST, [c for c in P17_CHILDREN if c is not old_res] + [child(gname(RES_B), RES_B, "InProgress")]),
+    err("velero_restore_not_completed"),
+    True,
+)
+case(
+    "patch-2.17-unchanged-locator-impostor-blocks",
+    V17,
+    PP_17,
+    fn,
+    patch(
+        A17,
+        P17_POST,
+        [c for c in P17_CHILDREN if c is not old_gen] + [child(gname(GEN_B), GEN_B, refs=[owner_ref(uid="uid-x")])],
+    ),
+    err("velero_restore_owner_mismatch"),
+    True,
+)
+# B1: a current-cohort -active member of the credentials or generic locator is bound to its
+# activation category; a matching frozen-bound -active child elsewhere does not mask it.
+for label, extra in [
+    ("credentials", child(gname(CRED_B, True), CRED_B)),
+    ("generic", child(gname(GEN_B, True), GEN_B)),
+]:
+    case(
+        f"patch-2.17-current-{label}-active-member-wrong-backup-blocks",
+        V17,
+        PP_17,
+        fn,
+        patch(A17, P17_POST, P17_CHILDREN + [extra]),
+        err("velero_restore_backup_mismatch"),
+        True,
+    )
+cur_cred_act_bound = child(gname(CRED_B, True), ACT_CRED_B)
+case(
+    "patch-2.17-current-credentials-active-member-bound-accepted",
+    V17,
+    PP_17,
+    fn,
+    patch(A17, P17_POST, [c for c in P17_CHILDREN if c is not p_cred_act] + [cur_cred_act_bound]),
+    ok(
+        lists(
+            managed_clusters=[p_mc],
+            activation_credentials=[cur_cred_act_bound],
+            activation_resources_generic=[p_gen_act],
+        )
+    ),
+)
+
+case(
+    "one-shot-namespace-list-duplicate-name-rejected",
+    V17,
+    [],
+    "one_shot_completion",
+    one_shot("passive_restore", A17, {"managed_clusters": proj(MC_B)}, status4(mc=gname(MC_B)), [c_mc, c_mc]),
+    err("malformed_restore_list"),
+    True,
+)
 
 
 def build():
