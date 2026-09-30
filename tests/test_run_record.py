@@ -4,12 +4,23 @@ All tests go through the public interface only: no raw key literals, no
 reaching into StateManager internals beyond constructing it.
 """
 
+import argparse
+import copy
 import json
+import logging
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+from acm_switchover import _prepare_runtime
+from lib import run_record as run_record_module
+from lib.migration_evidence import MigrationEvidenceError
+from lib.migration_journal import validate_journal_transition
 from lib.run_record import ErrorRecord, HubFacts, ManagedClusterExpectation, RunRecord, RunSummary, StepRecord
-from lib.utils import StateManager
+from lib.utils import StateLoadError, StateManager
+
+VECTORS = Path(__file__).resolve().parent / "fixtures" / "r4_04_migration_evidence_vectors.json"
 
 
 @pytest.fixture
@@ -243,3 +254,198 @@ class TestInterfaceOnlyPersistence:
         assert record.auto_import_override_pending() is True
         assert record.saved_backup_schedule() == {"metadata": {"name": "schedule-acm"}}
         assert record.new_backup() == "acm-backup-9"
+
+
+def _transition_input(case_id: str) -> dict:
+    cases = json.loads(VECTORS.read_text(encoding="utf-8"))["cases"]
+    return copy.deepcopy(next(case["input"] for case in cases if case["id"] == case_id))
+
+
+@pytest.fixture
+def first_write():
+    """A pre-mutation journal: the legal freeze write."""
+    journal = _transition_input("transition-pre-to-completed")["previous"]
+    validate_journal_transition(None, journal)
+    return journal
+
+
+@pytest.fixture
+def next_write():
+    """A legal successor of first_write."""
+    return _transition_input("transition-pre-to-completed")["candidate"]
+
+
+@pytest.fixture
+def rewrite():
+    """Valid on its own, but rewrites first_write's frozen run_id."""
+    return _transition_input("transition-run-id-changed-blocks")["candidate"]
+
+
+def _state_file_with_journal(tmp_path, stored):
+    """A state file whose migration journal slot holds `stored` verbatim."""
+    path = tmp_path / "switchover-journal.json"
+    StateManager(str(path))  # a well-formed fresh state to edit
+    raw = json.loads(path.read_text())
+    raw["config"][run_record_module._KEY_MIGRATION_BACKUPS] = stored
+    path.write_text(json.dumps(raw))
+    return path
+
+
+class TestMigrationBackups:
+    """R4-04 plan Task 3: the strict journal facade (amendment sections 2 and 10)."""
+
+    def test_absent_before_the_first_write(self, record):
+        assert record.migration_backups() is None
+
+    def test_first_write_round_trips_and_survives_reload(self, state, record, first_write):
+        record.record_migration_backups(first_write)
+        assert record.migration_backups() == first_write
+        assert RunRecord(StateManager(state.state_file)).migration_backups() == first_write
+
+    def test_the_write_is_durable_on_return(self, state, record, first_write):
+        record.record_migration_backups(first_write)
+        on_disk = json.loads(open(state.state_file, encoding="utf-8").read())
+        assert on_disk["config"][run_record_module._KEY_MIGRATION_BACKUPS] == first_write
+
+    def test_every_write_forces_a_critical_flush(self, state, record, first_write):
+        record.record_migration_backups(first_write)
+        with patch.object(state, "flush_state", wraps=state.flush_state) as flush:
+            record.record_migration_backups(copy.deepcopy(first_write))
+        flush.assert_called_once_with()
+
+    def test_reads_and_writes_are_detached(self, record, first_write):
+        record.record_migration_backups(first_write)
+        first_write["run_id"] = "edited"
+        read = record.migration_backups()
+        assert read["run_id"] != "edited"
+        read["run_id"] = "edited"
+        assert record.migration_backups()["run_id"] != "edited"
+
+    @pytest.mark.parametrize("stored", [None, {}, [], "", 0, False, {"schema_version": 2}])
+    def test_a_present_invalid_key_raises_and_is_never_absent(self, tmp_path, stored):
+        record = RunRecord(StateManager(str(_state_file_with_journal(tmp_path, stored))))
+        with pytest.raises(MigrationEvidenceError):
+            record.migration_backups()
+
+    def test_an_unknown_schema_version_blocks(self, tmp_path, first_write):
+        first_write["schema_version"] = 3
+        record = RunRecord(StateManager(str(_state_file_with_journal(tmp_path, first_write))))
+        with pytest.raises(MigrationEvidenceError) as exc_info:
+            record.migration_backups()
+        assert exc_info.value.code == "unsupported_schema_version"
+
+    def test_the_first_write_must_be_a_freeze_write(self, record, next_write):
+        with pytest.raises(MigrationEvidenceError) as exc_info:
+            record.record_migration_backups(next_write)
+        assert exc_info.value.code == "invalid_freeze_write"
+        assert record.migration_backups() is None
+
+    def test_a_legal_transition_replaces_the_whole_value(self, record, first_write, next_write):
+        record.record_migration_backups(first_write)
+        record.record_migration_backups(next_write)
+        assert record.migration_backups() == next_write
+
+    def test_retry_never_rewrites_a_frozen_field(self, state, record, first_write, rewrite):
+        record.record_migration_backups(first_write)
+        with pytest.raises(MigrationEvidenceError) as exc_info:
+            record.record_migration_backups(rewrite)
+        assert exc_info.value.code == "frozen_field_changed"
+        assert RunRecord(StateManager(state.state_file)).migration_backups() == first_write
+
+    def test_an_identical_write_is_idempotent(self, record, first_write):
+        record.record_migration_backups(first_write)
+        record.record_migration_backups(copy.deepcopy(first_write))
+        assert record.migration_backups() == first_write
+
+    def test_an_invalid_candidate_is_refused_before_the_stored_one_is_read(self, tmp_path, first_write):
+        record = RunRecord(StateManager(str(_state_file_with_journal(tmp_path, {"broken": True}))))
+        first_write["schema_version"] = 1
+        with pytest.raises(MigrationEvidenceError) as exc_info:
+            record.record_migration_backups(first_write)
+        assert exc_info.value.code == "unsupported_schema_version"
+
+    def test_an_invalid_stored_journal_blocks_every_write(self, tmp_path, first_write):
+        path = _state_file_with_journal(tmp_path, None)
+        record = RunRecord(StateManager(str(path)))
+        with pytest.raises(MigrationEvidenceError):
+            record.record_migration_backups(first_write)
+        assert json.loads(path.read_text())["config"][run_record_module._KEY_MIGRATION_BACKUPS] is None
+
+    def test_a_critical_write_failure_propagates(self, record, first_write):
+        with patch("lib.utils._fsync_directory", side_effect=OSError("EIO")):
+            with pytest.raises(OSError, match="EIO"):
+                record.record_migration_backups(first_write)
+
+    def test_a_failed_write_before_replace_propagates_and_keeps_the_old_file(self, state, record, first_write):
+        with patch("lib.utils.os.replace", side_effect=OSError("read-only file system")):
+            with pytest.raises(OSError, match="read-only"):
+                record.record_migration_backups(first_write)
+        assert RunRecord(StateManager(state.state_file)).migration_backups() is None
+
+
+class TestMigrationStoreOutcomes:
+    """Amendment section 2: corrupt and unreadable block and are never an absent journal."""
+
+    @pytest.mark.parametrize("text", ["{not json", "[]", '"text"'])
+    def test_a_corrupt_state_file_blocks_across_invocations_and_is_preserved(self, tmp_path, text):
+        path = tmp_path / "switchover-corrupt.json"
+        path.write_text(text)
+        for _ in range(2):
+            with pytest.raises(StateLoadError):
+                StateManager(str(path))
+        assert path.read_text() == text
+        copies = list(tmp_path.glob("switchover-corrupt.json.corrupt.*"))
+        assert copies and all(copy_path.read_text() == text for copy_path in copies)
+
+    def test_a_failed_forensic_copy_still_blocks_and_keeps_the_original(self, tmp_path):
+        path = tmp_path / "switchover-corrupt.json"
+        path.write_text("{not json")
+        with patch("lib.utils.shutil.copy2", side_effect=OSError("disk full")):
+            with pytest.raises(StateLoadError):
+                StateManager(str(path))
+        assert path.read_text() == "{not json"
+        assert not list(tmp_path.glob("switchover-corrupt.json.corrupt.*"))
+
+
+def _cli_args(**overrides):
+    defaults = {
+        "min_managed_clusters": None,
+        "dry_run": False,
+        "argocd_resume_only": False,
+        "decommission": False,
+        "primary_context": "hub-a",
+        "secondary_context": "hub-b",
+        "reset_state": True,
+    }
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
+
+
+class TestResetStateMakesTheJournalAbsent:
+    """Amendment section 10: --reset-state is the explicit fresh-run boundary."""
+
+    def test_reset_state_recovers_a_corrupt_state_file(self, tmp_path):
+        path = tmp_path / "switchover-corrupt.json"
+        path.write_text("{not json")
+        with patch("acm_switchover._initialize_clients", return_value=(None, None)):
+            runtime = _prepare_runtime(_cli_args(), logging.getLogger("test"), str(path))
+        assert RunRecord(runtime.state).migration_backups() is None
+        assert json.loads(path.read_text())["config"] == {}
+
+    def test_reset_state_discards_a_recorded_journal(self, tmp_path, first_write):
+        path = tmp_path / "switchover-journal.json"
+        state = StateManager(str(path))
+        state.ensure_contexts("hub-a", "hub-b")
+        RunRecord(state).record_migration_backups(first_write)
+        with patch("acm_switchover._initialize_clients", return_value=(None, None)):
+            runtime = _prepare_runtime(_cli_args(), logging.getLogger("test"), str(path))
+        assert RunRecord(runtime.state).migration_backups() is None
+
+    def test_an_ordinary_retry_keeps_the_journal(self, tmp_path, first_write):
+        path = tmp_path / "switchover-journal.json"
+        state = StateManager(str(path))
+        state.ensure_contexts("hub-a", "hub-b")
+        RunRecord(state).record_migration_backups(first_write)
+        with patch("acm_switchover._initialize_clients", return_value=(None, None)):
+            runtime = _prepare_runtime(_cli_args(reset_state=False), logging.getLogger("test"), str(path))
+        assert RunRecord(runtime.state).migration_backups() == first_write

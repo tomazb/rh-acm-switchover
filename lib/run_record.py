@@ -23,6 +23,7 @@ from lib.constants import (
     RESUME_START_PHASE_KEY,
     STATE_KEY_RESUME_SUMMARY,
 )
+from lib.migration_journal import validate_journal_transition, validate_migration_journal
 from lib.teardown_record import (
     MalformedTeardownRecord,
     TeardownRecord,
@@ -47,8 +48,11 @@ _KEY_NEW_BACKUP_DETECTED = "new_backup_detected"
 _KEY_NEW_BACKUP_NAME = "post_switchover_backup_name"
 _KEY_ARCHIVED_RESTORES = "archived_restores"
 _KEY_TEARDOWN_RECORDS = "decommission_teardown_records"
+_KEY_MIGRATION_BACKUPS = "migration_backups"
 
 _UNSET = object()
+# Presence sentinel for strict reads: a stored null must not look like "never written".
+_ABSENT = object()
 
 
 @dataclass(frozen=True)
@@ -364,6 +368,34 @@ class RunRecord:
             # "no records" would silently skip the expected_uid immutability guard.
             raise MalformedTeardownRecord(f"{_KEY_TEARDOWN_RECORDS} must be a mapping, got {records!r}")
         return {key: validate_stored(key, stored) for key, stored in records.items()}
+
+    # -- R4-04 migration journal: activation freezes, later phases reconcile --
+
+    def migration_backups(self) -> Optional[dict]:
+        """The validated migration journal, or None when it was never written.
+
+        A present value of any shape is validated, never read as absent: an
+        invalid, partial or unknown-version journal raises MigrationEvidenceError
+        (amendment section 2). The returned journal is a detached copy.
+        """
+        stored = self._get(_KEY_MIGRATION_BACKUPS, _ABSENT)
+        if stored is _ABSENT:
+            return None
+        return validate_migration_journal(stored)
+
+    def record_migration_backups(self, candidate: dict) -> None:
+        """Validate and persist the complete journal, forced durable on return.
+
+        The candidate is validated first, then checked as a transition from the
+        strictly read stored journal (the freeze-write rule when there is none),
+        so a rejected write leaves the stored journal untouched. The whole value
+        replaces the stored one; a failed critical write propagates. Dry-run is
+        the caller's: this operation always writes.
+        """
+        validate_migration_journal(candidate)
+        validate_journal_transition(self.migration_backups(), candidate)
+        self._set(_KEY_MIGRATION_BACKUPS, candidate)
+        self._state.flush_state()
 
     # -- lifecycle view: read side for report writers and show_state --
 

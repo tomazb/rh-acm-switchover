@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from collections.abc import Mapping
 from copy import deepcopy
@@ -17,14 +18,18 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint i
     CHECKPOINT_DEFAULT_PATH,
     CHECKPOINT_REPORT_KIND_JSON,
     CHECKPOINT_VALID_STATUSES,
+    KEY_MIGRATION_BACKUPS,
     KNOWN_PHASES,
     SCHEMA_VERSION,
     CheckpointIdentityMismatch,
     build_checkpoint_record,
     build_operation_identity,
+    check_migration_rewind,
     checkpoint_facts,
+    checkpoint_structure_error,
     is_unsafe_legacy_checkpoint,
     normalize_operation_identity,
+    record_migration_backups,
     record_resume_start_phase,
     record_teardown_phase,
     reset_completed_phases_from,
@@ -70,7 +75,9 @@ class ActionModule(ActionBase):
         phase (str): switchover phase name
         checkpoint (dict): checkpoint config from ``acm_switchover_execution.checkpoint``
             (keys: ``enabled``, ``backend``, ``path``, ``reset``)
-        status (str): one of ``enter``, ``pass``, ``fail``, ``reset``
+        status (str): one of ``enter``, ``pass``, ``fail``, ``reset``, or ``update`` --
+            the mid-phase write of the complete ``migration_backups`` journal in
+            ``operational_data``, which moves no phase marker
         error (str, optional): error message to record on ``status: fail``
         report_ref (str, optional): artifact path to record on ``status: pass``
     """
@@ -182,7 +189,7 @@ class ActionModule(ActionBase):
         except ValidationError as exc:
             return {"failed": True, "msg": str(exc)}
 
-        checkpoint_data = self._load_checkpoint(path, quarantine_corrupt=False)
+        checkpoint_data = self._load_checkpoint(path, preserve_corrupt=False)
         if checkpoint_data.get("failed"):
             return checkpoint_data
         try:
@@ -389,7 +396,7 @@ class ActionModule(ActionBase):
         if status not in CHECKPOINT_VALID_STATUSES:
             return {
                 "failed": True,
-                "msg": (f"Invalid checkpoint status '{status}'. Expected one of: enter, pass, fail, reset."),
+                "msg": (f"Invalid checkpoint status '{status}'. Expected one of: enter, pass, fail, reset, update."),
             }
 
         checkpoint_config = args.get("checkpoint")
@@ -659,7 +666,7 @@ class ActionModule(ActionBase):
         if status not in CHECKPOINT_VALID_STATUSES:
             return {
                 "failed": True,
-                "msg": f"Invalid checkpoint status '{status}'. Expected one of: enter, pass, fail, reset.",
+                "msg": f"Invalid checkpoint status '{status}'. Expected one of: enter, pass, fail, reset, update.",
             }
 
         if not phase:
@@ -696,6 +703,25 @@ class ActionModule(ActionBase):
                 "msg": f"Invalid checkpoint reset_from '{reset_from}'. Expected one of: {valid_phases}.",
             }
 
+        if status == "update":
+            update_failure = self._update_argument_failure(
+                checkpoint_config=checkpoint_config,
+                path=path,
+                error=error,
+                report_ref=report_ref,
+                operational_data=operational_data,
+            )
+            if update_failure is not None:
+                return update_failure
+        elif isinstance(operational_data, Mapping) and KEY_MIGRATION_BACKUPS in operational_data:
+            return {
+                "failed": True,
+                "msg": (
+                    f"Checkpoint status '{status}' cannot carry the migration journal: it is written only by "
+                    "status: update, which validates it as one complete transition."
+                ),
+            }
+
         reset = bool(checkpoint_config.get("reset", False))
         has_explicit_reset = reset or bool(reset_from)
         should_reset = reset and status == "enter" and phase == self.INITIAL_PHASE
@@ -714,7 +740,7 @@ class ActionModule(ActionBase):
                 operation_identity=expected_operation_identity,
             )
         else:
-            checkpoint_data = self._load_checkpoint(path, quarantine_corrupt=not is_non_mutating)
+            checkpoint_data = self._load_checkpoint(path, preserve_corrupt=not is_non_mutating)
         if checkpoint_data.get("failed"):
             return checkpoint_data
 
@@ -747,6 +773,17 @@ class ActionModule(ActionBase):
             )
             if read_only_failure is not None:
                 return read_only_failure
+            # A full reset rebuilds the checkpoint without reading it, so only a
+            # checkpoint that would actually be kept can refuse the rewind.
+            rewind_failure = (
+                None if should_reset else self._migration_rewind_failure(checkpoint_data, reset_from, status)
+            )
+            if rewind_failure is not None:
+                return rewind_failure
+            if status == "update":
+                update_failure = self._apply_migration_update(deepcopy(checkpoint_data), phase, operational_data)
+                if update_failure is not None:
+                    return update_failure
             if status == "enter":
                 already_done = (
                     False if execution_mode == "validate" else not should_resume_phase(checkpoint_data, phase)
@@ -779,6 +816,18 @@ class ActionModule(ActionBase):
         )
         if checkpoint_data.get("failed"):
             return checkpoint_data
+
+        if status == "update":
+            return self._run_migration_update(
+                path=path,
+                checkpoint_data=checkpoint_data,
+                phase=phase,
+                operational_data=operational_data,
+                operation_identity_changed=operation_identity_changed,
+                is_non_mutating=is_non_mutating,
+                is_check_mode=is_check_mode,
+                execution_mode=execution_mode,
+            )
 
         phase_changed = checkpoint_data.get("phase") != phase
         checkpoint_data["phase"] = phase
@@ -880,6 +929,105 @@ class ActionModule(ActionBase):
         return {"changed": changed, "checkpoint": checkpoint_data}
 
     @staticmethod
+    def _update_argument_failure(*, checkpoint_config, path: str, error, report_ref, operational_data) -> dict | None:
+        """Refuse a status: update that is not a pure journal write, before any file access."""
+        if error is not None or report_ref is not None:
+            return {
+                "failed": True,
+                "msg": "status: update accepts operational_data only; error and report_ref belong to phase transitions.",
+            }
+        if not bool(checkpoint_config.get("enabled", False)):
+            # Never a silent no-op: the checkpoint is the only durable store the journal has.
+            return {
+                "failed": True,
+                "msg": "Refusing status: update because checkpointing is disabled; the migration journal needs it.",
+            }
+        journal = operational_data.get(KEY_MIGRATION_BACKUPS) if isinstance(operational_data, Mapping) else None
+        if not isinstance(journal, Mapping) or not journal:
+            return {
+                "failed": True,
+                "msg": "status: update requires a non-empty migration_backups mapping in operational_data.",
+            }
+        if not os.path.exists(path):
+            return {
+                "failed": True,
+                "msg": f"status: update requires an existing checkpoint at '{path}'.",
+            }
+        return None
+
+    @staticmethod
+    def _apply_migration_update(checkpoint_data: dict, phase: str, operational_data) -> dict | None:
+        """Write the journal and any other operational data into `checkpoint_data`, or refuse.
+
+        Only operational_data changes: the phase, completion list, phase status,
+        errors and report refs are never touched here.
+        """
+        if checkpoint_data.get("schema_version") != SCHEMA_VERSION:
+            return {"failed": True, "msg": f"status: update requires a schema {SCHEMA_VERSION} checkpoint."}
+        if checkpoint_data.get("phase") != phase:
+            return {
+                "failed": True,
+                "msg": (
+                    f"status: update requires the checkpoint's current phase to be '{phase}', "
+                    f"found '{checkpoint_data.get('phase')}'."
+                ),
+            }
+        try:
+            record_migration_backups(checkpoint_data, operational_data[KEY_MIGRATION_BACKUPS])
+        except ValueError as exc:
+            return {"failed": True, "msg": f"Refusing the migration journal update: {exc}"}
+        current_operational_data = checkpoint_data["operational_data"]
+        for key, value in operational_data.items():
+            if key != KEY_MIGRATION_BACKUPS and value not in (None, ""):
+                current_operational_data[key] = value
+        return None
+
+    def _run_migration_update(
+        self,
+        *,
+        path: str,
+        checkpoint_data: dict,
+        phase: str,
+        operational_data,
+        operation_identity_changed: bool,
+        is_non_mutating: bool,
+        is_check_mode: bool,
+        execution_mode,
+    ) -> dict:
+        if operation_identity_changed:
+            return {"failed": True, "msg": "status: update requires an established operation identity."}
+        candidate = deepcopy(checkpoint_data)
+        failure = self._apply_migration_update(candidate, phase, operational_data)
+        if failure is not None:
+            return failure
+        if is_non_mutating:
+            result = {"changed": False, "checkpoint": checkpoint_data}
+            if is_check_mode:
+                result["check_mode"] = True
+            if execution_mode in {"dry_run", "validate"}:
+                result[execution_mode] = True
+            return result
+        changed = candidate["operational_data"] != checkpoint_data.get("operational_data")
+        if changed:
+            candidate["updated_at"] = datetime.now(timezone.utc).isoformat()
+            save_result = self._save_checkpoint(path, candidate)
+            if save_result is not None and save_result.get("failed"):
+                return save_result
+        return {"changed": changed, "checkpoint": candidate}
+
+    @staticmethod
+    def _migration_rewind_failure(checkpoint_data: dict, reset_from, status: str) -> dict | None:
+        """Amendment §10: the journal decides a reset_from rewind before any pruning."""
+        if not reset_from or status not in {"enter", "reset"}:
+            return None
+        prunes = reset_from in checkpoint_data.get("completed_phases", [])
+        try:
+            check_migration_rewind(checkpoint_data, reset_from, prunes=prunes)
+        except ValueError as exc:
+            return {"failed": True, "msg": str(exc)}
+        return None
+
+    @staticmethod
     def _missing_operation_identity_failure() -> dict:
         return {
             "failed": True,
@@ -979,6 +1127,9 @@ class ActionModule(ActionBase):
         has_explicit_reset: bool,
         expected_operation_identity: dict,
     ) -> tuple[dict, bool]:
+        rewind_failure = self._migration_rewind_failure(checkpoint_data, reset_from, status)
+        if rewind_failure is not None:
+            return rewind_failure, False
         if reset_from and status in {"enter", "reset"}:
             # Only prune when reset_from is still in completed_phases.
             # By invariant, if reset_from is absent, all downstream phases are too
@@ -1083,42 +1234,54 @@ class ActionModule(ActionBase):
         normalized_checkpoint["updated_at"] = datetime.now(timezone.utc).isoformat()
         return normalized_checkpoint
 
-    def _load_checkpoint(self, path: str, *, quarantine_corrupt: bool = True) -> dict:
+    def _load_checkpoint(self, path: str, *, preserve_corrupt: bool = True) -> dict:
+        """Read the checkpoint: readable, corrupt, or unreadable (R4-04 amendment §2).
+
+        Corrupt means invalid JSON or a structure checkpoint_structure_error rejects.
+        A corrupt checkpoint always fails and is never moved or deleted, so every later
+        invocation stays blocked until the operator repairs or removes it or runs the full
+        reset. With `preserve_corrupt` a forensic copy is taken first; a non-mutating run
+        writes nothing. An unreadable file fails without a copy.
+        """
         if not os.path.exists(path):
             return build_checkpoint_record("", {})
         try:
             with open(path, encoding="utf-8") as fh:
-                return json.load(fh)
+                checkpoint = json.load(fh)
         except json.JSONDecodeError as e:
-            if quarantine_corrupt:
-                quarantine_path = self._build_corrupt_checkpoint_path(path)
-                try:
-                    os.replace(path, quarantine_path)
-                except OSError as rename_error:
-                    return {
-                        "failed": True,
-                        "msg": (
-                            f"Checkpoint file '{path}' is corrupted (invalid JSON): {e}. "
-                            f"Unable to quarantine it at '{quarantine_path}': {rename_error}."
-                        ),
-                    }
-                return {
-                    "failed": True,
-                    "msg": (
-                        f"Checkpoint file '{path}' is corrupted (invalid JSON): {e}. "
-                        f"It was quarantined to '{quarantine_path}'."
-                    ),
-                }
-            return {
-                "failed": True,
-                "msg": f"Checkpoint file '{path}' is corrupted (invalid JSON): {e}. "
-                f"Delete or repair the file to resume.",
-            }
+            return self._corrupt_checkpoint_failure(path, f"invalid JSON: {e}", preserve_corrupt)
         except OSError as e:
             return {
                 "failed": True,
                 "msg": f"Cannot read checkpoint file '{path}': {e}.",
             }
+        structure_error = checkpoint_structure_error(checkpoint)
+        if structure_error is not None:
+            return self._corrupt_checkpoint_failure(path, structure_error, preserve_corrupt)
+        return checkpoint
+
+    def _corrupt_checkpoint_failure(self, path: str, reason: str, preserve_corrupt: bool) -> dict:
+        prefix = f"Checkpoint file '{path}' is corrupted ({reason})."
+        if not preserve_corrupt:
+            return {"failed": True, "msg": f"{prefix} Delete or repair the file to resume."}
+        forensic_path = self._build_corrupt_checkpoint_path(path)
+        try:
+            shutil.copy2(path, forensic_path)
+        except OSError as copy_error:
+            return {
+                "failed": True,
+                "msg": (
+                    f"{prefix} Unable to preserve a forensic copy at '{forensic_path}': {copy_error}. "
+                    "The original was left in place; repair or remove it, or run the full checkpoint reset."
+                ),
+            }
+        return {
+            "failed": True,
+            "msg": (
+                f"{prefix} A forensic copy was preserved at '{forensic_path}'. The original stays in place "
+                "and blocks every run until you repair or remove it, or run the full checkpoint reset."
+            ),
+        }
 
     def _build_corrupt_checkpoint_path(self, path: str) -> str:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

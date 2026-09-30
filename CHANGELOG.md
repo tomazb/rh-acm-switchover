@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- R4-04 PR B migration journal persistence facades, dormant: Python `RunRecord.migration_backups()`
+  / `record_migration_backups()` and the collection `checkpoint_phase` `status: update` read and
+  write the `migration_backups` journal only through each side's journal validators, as one complete,
+  durably written value; an invalid, partial or unknown-version journal blocks rather than
+  reading as absent. A collection `reset_from` rewind to `preflight` or `primary_prep` is refused
+  while a journal exists, and an invalid journal refuses every `reset_from`. No phase writes a
+  journal yet, so runs without one are unaffected.
+
 - R4-03 PR D ManagedCluster teardown (Python + Collection): strict inventory, Hive
   `preserveOnDelete` guard, durable UID before UID-preconditioned DELETE, no-drain
   phase sequence, survivor aggregation, and dry-run/check-mode parity.
@@ -27,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validators require these on standalone and integrated decommission.
 
 ### Fixed
+
+- A corrupt collection checkpoint now keeps blocking (R4-04 PR B, aligned with Python). A
+  checkpoint that is not valid JSON or whose top level is not a JSON object is copied to
+  `<path>.corrupt-<UTC timestamp>`, left in place, and the run fails, so every later run stays
+  blocked until the operator repairs or removes it or sets `checkpoint.reset: true`. Previously
+  the file was moved aside and the next run silently started from an empty checkpoint; a
+  non-object top level crashed the action. A failed copy fails without touching the original;
+  non-mutating runs make no copy.
 
 - State and checkpoint replacement is now durably acknowledged (R4-04 PR A, the narrow R4-05
   §2 prerequisite before R4-04 journal writes). Python `StateManager` fsyncs the state

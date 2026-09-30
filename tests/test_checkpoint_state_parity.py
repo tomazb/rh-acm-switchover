@@ -58,6 +58,10 @@ def test_teardown_record_key_is_the_same_string_on_both_sides():
     assert ansible_checkpoint.KEY_DECOMMISSION_TEARDOWN_RECORDS == py_run_record._KEY_TEARDOWN_RECORDS
 
 
+def test_migration_journal_key_is_the_same_string_on_both_sides():
+    assert ansible_checkpoint.KEY_MIGRATION_BACKUPS == py_run_record._KEY_MIGRATION_BACKUPS
+
+
 @pytest.mark.parametrize(
     "api_version, kind, namespace, name",
     [

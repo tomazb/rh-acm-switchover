@@ -14,14 +14,21 @@ way to consume that data and are excluded from the playbook scan below.
 """
 
 import pathlib
+import re
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
     KEY_DECOMMISSION_TEARDOWN_RECORDS,
+    KEY_MIGRATION_BACKUPS,
 )
 
 COLLECTION_ROOT = pathlib.Path(__file__).resolve().parents[2]
 ROLES_DIR = COLLECTION_ROOT / "roles"
 PLAYBOOKS_DIR = COLLECTION_ROOT / "playbooks"
+PLUGINS_DIR = COLLECTION_ROOT / "plugins"
+# R4-04 amendment AC13: module_utils/checkpoint.py owns the migration journal key and
+# checkpoint_phase reaches it only through that module's constant and functions.
+MIGRATION_JOURNAL_KEY_OWNER = PLUGINS_DIR / "module_utils" / "checkpoint.py"
+QUOTED_MIGRATION_JOURNAL_KEY = re.compile(r"""["']""" + KEY_MIGRATION_BACKUPS + r"""["']""")
 
 FORBIDDEN_PATTERNS = (
     ".get('operational_data'",
@@ -101,3 +108,46 @@ def test_playbooks_do_not_read_operational_data_directly():
         "(playbooks/argocd_resume.yml is exempt — see module docstring). "
         f"Offenders: {offenders}"
     )
+
+
+def _yaml_files():
+    for directory in (ROLES_DIR, PLAYBOOKS_DIR):
+        for pattern in ("*.yml", "*.yaml"):
+            yield from sorted(directory.rglob(pattern))
+
+
+def test_migration_journal_key_is_never_named_in_role_or_playbook_yaml():
+    """No YAML reads or writes the journal key; the facade is checkpoint_phase status: update.
+
+    A future journal writer is a checkpoint_phase `status: update` task and needs an
+    explicit, narrow allowance here rather than a silent exemption.
+    """
+    offenders = [
+        str(path.relative_to(COLLECTION_ROOT))
+        for path in _yaml_files()
+        if KEY_MIGRATION_BACKUPS in path.read_text(encoding="utf-8")
+    ]
+    assert not offenders, (
+        f"The '{KEY_MIGRATION_BACKUPS}' operational_data key is owned by module_utils/checkpoint.py "
+        f"and must not be named in YAML. Offenders: {offenders}"
+    )
+
+
+def test_migration_journal_key_literal_lives_only_in_its_owner():
+    offenders = []
+    for path in sorted(PLUGINS_DIR.rglob("*.py")):
+        if path == MIGRATION_JOURNAL_KEY_OWNER:
+            continue
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if QUOTED_MIGRATION_JOURNAL_KEY.search(line):
+                offenders.append(f"{path.relative_to(COLLECTION_ROOT)}:{lineno}: {line.strip()}")
+    assert not offenders, "raw migration journal key outside module_utils/checkpoint.py:\n" + "\n".join(offenders)
+
+
+def test_migration_journal_key_detector_catches_quoted_uses():
+    for line in ('data["migration_backups"]', "data.get('migration_backups')", 'KEY = "migration_backups"'):
+        assert QUOTED_MIGRATION_JOURNAL_KEY.search(line), line
+    # the constant and prose mentions are the supported shapes
+    for line in ("data[KEY_MIGRATION_BACKUPS]", "the ``migration_backups`` record"):
+        assert not QUOTED_MIGRATION_JOURNAL_KEY.search(line), line
+    assert QUOTED_MIGRATION_JOURNAL_KEY.search(MIGRATION_JOURNAL_KEY_OWNER.read_text(encoding="utf-8"))

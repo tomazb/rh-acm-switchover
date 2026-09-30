@@ -114,7 +114,7 @@ Path: controlled by `acm_switchover_execution.checkpoint.path`.
 Written by the `tomazb.acm_switchover.checkpoint_phase` action plugin after each phase during live execution.
 When `acm_switchover_execution.mode` is `validate` or `dry_run`, or when the play runs under native Ansible check mode
 (`ansible-playbook --check`), the plugin reports the transition as non-mutating without creating, migrating, resetting,
-quarantining, or mutating the checkpoint file.
+copying, or mutating the checkpoint file.
 
 ```json
 {
@@ -180,6 +180,22 @@ Use `acm_switchover_execution.checkpoint.reset_from` to remove the named phase a
 all downstream phases from `completed_phases`. For example,
 `checkpoint.reset_from: primary_prep` keeps `preflight` complete and reruns
 `primary_prep`, `activation`, `post_activation`, and `finalization`.
+
+A checkpoint file that is not valid JSON, or whose top level is not a JSON object,
+is corrupt. An execute-mode run copies it to `<path>.corrupt-<UTC timestamp>`, leaves
+the original in place, and fails; every later run stays blocked until the operator
+repairs or removes the file or sets `checkpoint.reset: true`. If the copy fails, the
+run still fails and the original is untouched. An unreadable file fails without a copy.
+
+`operational_data.migration_backups` is reserved for the R4-04 migration journal,
+which no role writes yet. Only `checkpoint_phase` `status: update` writes it: that
+status needs checkpointing enabled and an existing checkpoint whose current phase is
+the requested one, accepts `operational_data` only (no `error` or `report_ref`),
+validates the complete journal and its transition from the stored one, and changes
+only `operational_data` and `updated_at`. Other statuses refuse the key. While a
+journal is present, a `reset_from` that would rewind to `preflight` or `primary_prep`
+is refused, a rewind to `activation` or later keeps it, and an invalid journal refuses
+every `reset_from`; only `checkpoint.reset: true` starts a checkpoint without it.
 
 During execute-mode resume, the action plugin records
 `operational_data.resume_summary.resume_start_phase` the first time it enters a
