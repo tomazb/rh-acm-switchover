@@ -1,0 +1,6034 @@
+{
+  "fixture_format": 1,
+  "lanes": {
+    "2.12": {
+      "controller_sha": "74b54988a5bd6712ea3fe3e9ceb770e06db91e8b",
+      "controller_contract": "legacy_2_12_2_16"
+    },
+    "2.13": {
+      "controller_sha": "7a7b240b3df71105da3f15620e4116498f9e2a23",
+      "controller_contract": "legacy_2_12_2_16"
+    },
+    "2.14": {
+      "controller_sha": "8b489db488739e7d9adca50cb3be0eae79293f22",
+      "controller_contract": "legacy_2_12_2_16"
+    },
+    "2.15": {
+      "controller_sha": "25b28b762355a14b4fb7f145efe173f73659e740",
+      "controller_contract": "legacy_2_12_2_16"
+    },
+    "2.16": {
+      "controller_sha": "9efe77eaec2139f106c957051e2297dafc84b482",
+      "controller_contract": "legacy_2_12_2_16"
+    },
+    "2.17": {
+      "controller_sha": "c8578f94df09deab561e1aa5a7e9fc9b57f7d113",
+      "controller_contract": "active_2_17"
+    }
+  },
+  "cases": [
+    {
+      "id": "contract-2.12",
+      "lanes": [
+        "2.12"
+      ],
+      "source_refs": [],
+      "function": "controller_contract_for_acm_minor",
+      "input": {
+        "minor": "2.12"
+      },
+      "expect": {
+        "result": "legacy_2_12_2_16"
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "contract-2.13",
+      "lanes": [
+        "2.13"
+      ],
+      "source_refs": [],
+      "function": "controller_contract_for_acm_minor",
+      "input": {
+        "minor": "2.13"
+      },
+      "expect": {
+        "result": "legacy_2_12_2_16"
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "contract-2.14",
+      "lanes": [
+        "2.14"
+      ],
+      "source_refs": [],
+      "function": "controller_contract_for_acm_minor",
+      "input": {
+        "minor": "2.14"
+      },
+      "expect": {
+        "result": "legacy_2_12_2_16"
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "contract-2.15",
+      "lanes": [
+        "2.15"
+      ],
+      "source_refs": [],
+      "function": "controller_contract_for_acm_minor",
+      "input": {
+        "minor": "2.15"
+      },
+      "expect": {
+        "result": "legacy_2_12_2_16"
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "contract-2.16",
+      "lanes": [
+        "2.16"
+      ],
+      "source_refs": [],
+      "function": "controller_contract_for_acm_minor",
+      "input": {
+        "minor": "2.16"
+      },
+      "expect": {
+        "result": "legacy_2_12_2_16"
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "contract-2.17",
+      "lanes": [
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "controller_contract_for_acm_minor",
+      "input": {
+        "minor": "2.17"
+      },
+      "expect": {
+        "result": "active_2_17"
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "contract-unknown-future",
+      "lanes": [],
+      "source_refs": [],
+      "function": "controller_contract_for_acm_minor",
+      "input": {
+        "minor": "2.18"
+      },
+      "expect": {
+        "error_code": "unknown_acm_minor"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "contract-unknown-older",
+      "lanes": [],
+      "source_refs": [],
+      "function": "controller_contract_for_acm_minor",
+      "input": {
+        "minor": "2.11"
+      },
+      "expect": {
+        "error_code": "unknown_acm_minor"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "contract-unknown-patch-level",
+      "lanes": [],
+      "source_refs": [],
+      "function": "controller_contract_for_acm_minor",
+      "input": {
+        "minor": "2.12.3"
+      },
+      "expect": {
+        "error_code": "unknown_acm_minor"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "contract-unknown-empty",
+      "lanes": [],
+      "source_refs": [],
+      "function": "controller_contract_for_acm_minor",
+      "input": {
+        "minor": ""
+      },
+      "expect": {
+        "error_code": "unknown_acm_minor"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "contract-unknown-float",
+      "lanes": [],
+      "source_refs": [],
+      "function": "controller_contract_for_acm_minor",
+      "input": {
+        "minor": 2.12
+      },
+      "expect": {
+        "error_code": "unknown_acm_minor"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "contract-unknown-null",
+      "lanes": [],
+      "source_refs": [],
+      "function": "controller_contract_for_acm_minor",
+      "input": {
+        "minor": null
+      },
+      "expect": {
+        "error_code": "unknown_acm_minor"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-absent-counters-are-zero",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "result": {
+          "namespace": "open-cluster-management-backup",
+          "name": "acm-managed-clusters-schedule-20240101120000",
+          "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+          "phase": "Completed",
+          "completed_at": "2024-01-01T12:05:00Z",
+          "errors": 0,
+          "warnings": 0
+        }
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "normalize-present-zero-counters-kept",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z",
+            "errors": 0,
+            "warnings": 0
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "result": {
+          "namespace": "open-cluster-management-backup",
+          "name": "acm-managed-clusters-schedule-20240101120000",
+          "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+          "phase": "Completed",
+          "completed_at": "2024-01-01T12:05:00Z",
+          "errors": 0,
+          "warnings": 0
+        }
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "normalize-positive-warnings-kept",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z",
+            "errors": 0,
+            "warnings": 7
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "result": {
+          "namespace": "open-cluster-management-backup",
+          "name": "acm-managed-clusters-schedule-20240101120000",
+          "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+          "phase": "Completed",
+          "completed_at": "2024-01-01T12:05:00Z",
+          "errors": 0,
+          "warnings": 7
+        }
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "normalize-offset-completion-kept-verbatim",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T14:05:00.25+02:00"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "result": {
+          "namespace": "open-cluster-management-backup",
+          "name": "acm-managed-clusters-schedule-20240101120000",
+          "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+          "phase": "Completed",
+          "completed_at": "2024-01-01T14:05:00.25+02:00",
+          "errors": 0,
+          "warnings": 0
+        }
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "normalize-errors-positive-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z",
+            "errors": 2
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "backup_has_errors"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-errors-null-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z",
+            "errors": null
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_backup_counter"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-errors-true-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z",
+            "errors": true
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_backup_counter"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-errors-false-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z",
+            "errors": false
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_backup_counter"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-errors-string-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z",
+            "errors": "0"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_backup_counter"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-errors-float-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z",
+            "errors": 0.0
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_backup_counter"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-errors-negative-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z",
+            "errors": -1
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_backup_counter"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-errors-list-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z",
+            "errors": []
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_backup_counter"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-warnings-null-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z",
+            "warnings": null
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_backup_counter"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-warnings-true-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z",
+            "warnings": true
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_backup_counter"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-warnings-false-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z",
+            "warnings": false
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_backup_counter"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-warnings-string-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z",
+            "warnings": "0"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_backup_counter"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-warnings-float-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z",
+            "warnings": 0.0
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_backup_counter"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-warnings-negative-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z",
+            "warnings": -1
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_backup_counter"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-warnings-list-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z",
+            "warnings": []
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_backup_counter"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-phase-partially-failed-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "PartiallyFailed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "backup_not_completed"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-phase-failed-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Failed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "backup_not_completed"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-phase-in-progress-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "InProgress",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "backup_not_completed"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-phase-absent-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "backup_not_completed"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-namespace-mismatch-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "velero"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "backup_namespace_mismatch"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-namespace-absent-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "backup_namespace_mismatch"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-completion-absent-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_completion_timestamp"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-completion-null-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": null
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_completion_timestamp"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-completion-space-separator-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01 12:05:00Z"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_completion_timestamp"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-completion-no-zone-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_completion_timestamp"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-completion-lowercase-zone-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00z"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_completion_timestamp"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-completion-date-only-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_completion_timestamp"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-completion-out-of-range-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-13-01T12:05:00Z"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_completion_timestamp"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-completion-integer-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": 1704110700
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_completion_timestamp"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-completion-empty-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": ""
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_completion_timestamp"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-empty-name-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "",
+            "uid": "uid-1",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_backup"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-empty-uid-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_backup"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-missing-uid-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Completed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_backup"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-non-object-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": [],
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_backup"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "normalize-status-not-object-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": "Completed"
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "malformed_backup"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "latest-empty-inventory-none",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "result": [
+          "none",
+          null
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "latest-selects-newest-start",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101110000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101110000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T11:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "latest-other-type-none",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-credentials-schedule-20240101130000",
+              "uid": "uid-acm-credentials-schedule-20240101130000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T13:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "result": [
+          "none",
+          null
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "latest-prefix-without-hyphen-included",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-schedule-20240101120000",
+              "uid": "uid-acm-resources-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-resources-schedulex-20240101130000",
+              "uid": "uid-acm-resources-schedulex-20240101130000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T13:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "Resources"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-resources-schedulex-20240101130000",
+              "uid": "uid-acm-resources-schedulex-20240101130000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T13:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "latest-embedded-token-excluded",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-schedule-20240101120000",
+              "uid": "uid-acm-resources-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "x-acm-resources-schedule-20240101140000",
+              "uid": "uid-x-acm-resources-schedule-20240101140000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T14:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "Resources"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-resources-schedule-20240101120000",
+              "uid": "uid-acm-resources-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "latest-generic-not-an-ordinary-resources-candidate",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-schedule-20240101120000",
+              "uid": "uid-acm-resources-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101150000",
+              "uid": "uid-acm-resources-generic-schedule-20240101150000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T15:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "Resources"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-resources-schedule-20240101120000",
+              "uid": "uid-acm-resources-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "latest-generic-selects-generic",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-schedule-20240101120000",
+              "uid": "uid-acm-resources-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101150000",
+              "uid": "uid-acm-resources-generic-schedule-20240101150000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T15:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101150000",
+              "uid": "uid-acm-resources-generic-schedule-20240101150000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T15:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "latest-newer-partially-failed-selected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101110000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101110000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T11:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "PartiallyFailed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "PartiallyFailed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "latest-selected-partially-failed-fails-eligibility",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-managed-clusters-schedule-20240101120000",
+            "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "PartiallyFailed",
+            "startTimestamp": "2024-01-01T12:00:00Z",
+            "completionTimestamp": "2024-01-01T12:05:00Z"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "backup_not_completed"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "latest-raw-failed-excluded",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101110000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101110000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T11:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Failed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101110000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101110000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T11:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "latest-status-absent-excluded",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101110000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101110000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T11:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101130000",
+              "uid": "u",
+              "namespace": "open-cluster-management-backup"
+            }
+          }
+        ],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101110000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101110000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T11:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "latest-orders-by-start-not-completion",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T13:00:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101110000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101110000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:30:00Z",
+              "completionTimestamp": "2024-01-01T12:31:00Z"
+            }
+          }
+        ],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101110000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101110000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:30:00Z",
+              "completionTimestamp": "2024-01-01T12:31:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "latest-tie-at-maximum-blocks",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101110000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101110000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T11:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120001",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120001",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "error_code": "latest_ambiguous"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "latest-tie-same-instant-different-offset-blocks",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120002",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120002",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T14:00:00+02:00",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "error_code": "latest_ambiguous"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "latest-older-tie-selects-maximum",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101100000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101100000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T10:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101100001",
+              "uid": "uid-acm-managed-clusters-schedule-20240101100001",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T10:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "latest-tie-partially-failed-and-completed-blocks",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120009",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120009",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "PartiallyFailed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "error_code": "latest_ambiguous"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "latest-start-missing-blocks",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101130000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101130000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "error_code": "latest_start_timestamp_invalid"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "latest-start-null-blocks",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101130000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101130000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": null,
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "error_code": "latest_start_timestamp_invalid"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "latest-start-malformed-blocks",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101130000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101130000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "yesterday",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "error_code": "latest_start_timestamp_invalid"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "latest-start-no-zone-blocks",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101130000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101130000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T13:00:00",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "error_code": "latest_start_timestamp_invalid"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "latest-start-integer-blocks",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101130000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101130000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": 1704114000,
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "error_code": "latest_start_timestamp_invalid"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "latest-start-missing-on-excluded-phase-ignored",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101130000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101130000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Failed",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "latest-start-missing-on-other-type-ignored",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-credentials-schedule-20240101130000",
+              "uid": "uid-acm-credentials-schedule-20240101130000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "latest-credentials-ignores-hive-prefix",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:502-529",
+        "2.12:restore_controller.go:385-386",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:502-529",
+        "2.13:restore_controller.go:385-386",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:509-536",
+        "2.14:restore_controller.go:488-489",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:509-536",
+        "2.15:restore_controller.go:488-489",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:509-536",
+        "2.16:restore_controller.go:488-489",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:597-624",
+        "2.17:restore_controller.go:611-612"
+      ],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-credentials-schedule-20240101120000",
+              "uid": "uid-acm-credentials-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-credentials-hive-schedule-20240101130000",
+              "uid": "uid-acm-credentials-hive-schedule-20240101130000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T13:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "Credentials"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-credentials-schedule-20240101120000",
+              "uid": "uid-acm-credentials-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "latest-unsupported-type-CredentialsHive",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "CredentialsHive"
+      },
+      "expect": {
+        "error_code": "unsupported_resource_type"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "latest-unsupported-type-CredentialsCluster",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "CredentialsCluster"
+      },
+      "expect": {
+        "error_code": "unsupported_resource_type"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "latest-unsupported-type-CredentialsActive",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "CredentialsActive"
+      },
+      "expect": {
+        "error_code": "unsupported_resource_type"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "latest-unsupported-type-ResourcesGenericActive",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "ResourcesGenericActive"
+      },
+      "expect": {
+        "error_code": "unsupported_resource_type"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "latest-unsupported-type-Validation",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "Validation"
+      },
+      "expect": {
+        "error_code": "unsupported_resource_type"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "latest-inventory-not-a-list",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": {
+          "items": []
+        },
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "error_code": "malformed_inventory"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "latest-item-without-name",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {},
+            "status": {}
+          }
+        ],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "error_code": "malformed_inventory"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "latest-duplicate-name",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "predict_latest_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-managed-clusters-schedule-20240101120000",
+              "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "error_code": "malformed_inventory"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "correlated-exact-wins-over-fallbacks",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120000",
+              "uid": "uid-acm-resources-generic-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:40Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120010",
+              "uid": "uid-acm-resources-generic-schedule-20240101120010",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:10Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120000",
+              "uid": "uid-acm-resources-generic-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:40Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-exact-failing-eligibility-still-selected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120000",
+              "uid": "uid-acm-resources-generic-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Failed",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120000",
+              "uid": "uid-acm-resources-generic-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Failed",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-exact-failing-eligibility-blocks",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "normalize_backup_evidence",
+      "input": {
+        "raw": {
+          "metadata": {
+            "name": "acm-resources-generic-schedule-20240101120000",
+            "uid": "uid-acm-resources-generic-schedule-20240101120000",
+            "namespace": "open-cluster-management-backup"
+          },
+          "status": {
+            "phase": "Failed",
+            "completionTimestamp": "2024-01-01T12:05:00Z"
+          }
+        },
+        "namespace": "open-cluster-management-backup"
+      },
+      "expect": {
+        "error_code": "backup_not_completed"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "correlated-exact-with-unparseable-suffix-selected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-manual",
+              "uid": "uid-acm-resources-generic-schedule-manual",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-manual",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-manual",
+              "uid": "uid-acm-resources-generic-schedule-manual",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-no-hyphen-none",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-x",
+              "uid": "uid-acm-resources-generic-schedule-x",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acmresourcesschedule20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "none",
+          null
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-source-non-digit-none",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-manual",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "none",
+          null
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-source-short-none",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-2024010112",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "none",
+          null
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-source-long-none",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-202401011200000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "none",
+          null
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-source-trailing-hyphen-none",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000-",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "none",
+          null
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-source-bad-month-none",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20241301120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "none",
+          null
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-source-bad-day-none",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240230120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "none",
+          null
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-source-bad-second-none",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120060",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "none",
+          null
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-source-zero-time-none",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-00010101000000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "none",
+          null
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-parses-after-last-hyphen-only",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule--20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-window-plus-30-included",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101115959",
+              "uid": "uid-acm-resources-generic-schedule-20240101115959",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:30Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101115959",
+              "uid": "uid-acm-resources-generic-schedule-20240101115959",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:30Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-window-minus-30-included",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101115959",
+              "uid": "uid-acm-resources-generic-schedule-20240101115959",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T11:59:30Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101115959",
+              "uid": "uid-acm-resources-generic-schedule-20240101115959",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T11:59:30Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-window-plus-31-excluded",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101115959",
+              "uid": "uid-acm-resources-generic-schedule-20240101115959",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:31Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "none",
+          null
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-window-minus-31-excluded",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101115959",
+              "uid": "uid-acm-resources-generic-schedule-20240101115959",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T11:59:29Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "none",
+          null
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-window-plus-30-fraction-excluded",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101115959",
+              "uid": "uid-acm-resources-generic-schedule-20240101115959",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:30.5Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "none",
+          null
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-window-offset-within-range",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101115959",
+              "uid": "uid-acm-resources-generic-schedule-20240101115959",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T14:00:20+02:00",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101115959",
+              "uid": "uid-acm-resources-generic-schedule-20240101115959",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T14:00:20+02:00",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-nil-start-excluded",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120003",
+              "uid": "uid-acm-resources-generic-schedule-20240101120003",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": null,
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120004",
+              "uid": "uid-acm-resources-generic-schedule-20240101120004",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "none",
+          null
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-malformed-start-blocks",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120003",
+              "uid": "uid-acm-resources-generic-schedule-20240101120003",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "noon",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "error_code": "malformed_inventory"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "correlated-zero-time-none-despite-nearby-start",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-zero",
+              "uid": "uid-acm-resources-generic-schedule-zero",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "0001-01-01T00:00:10Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-00010101000000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "none",
+          null
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-empty-string-start-blocks",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120003",
+              "uid": "uid-acm-resources-generic-schedule-20240101120003",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "error_code": "malformed_inventory"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "correlated-non-prefix-contains-selected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "restore-acm-resources-generic-schedule-copy",
+              "uid": "uid-restore-acm-resources-generic-schedule-copy",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:02Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "restore-acm-resources-generic-schedule-copy",
+              "uid": "uid-restore-acm-resources-generic-schedule-copy",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:02Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-zero-raw-none",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-schedule-20240101120001",
+              "uid": "uid-acm-resources-schedule-20240101120001",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:01Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "none",
+          null
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-one-raw-any-phase-selected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Failed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Failed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-two-raw-blocks",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120010",
+              "uid": "uid-acm-resources-generic-schedule-20240101120010",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:10Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "error_code": "correlated_ambiguous"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "correlated-two-raw-one-failed-blocks",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Failed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120010",
+              "uid": "uid-acm-resources-generic-schedule-20240101120010",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:10Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "error_code": "correlated_ambiguous"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "correlated-target-from-name-not-source-status",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-schedule-20240101120000",
+              "uid": "uid-acm-resources-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T13:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-empty-inventory-none",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147",
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "result": [
+          "none",
+          null
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-credentials-active-exact-is-source",
+      "lanes": [
+        "2.17"
+      ],
+      "source_refs": [
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-credentials-schedule-20240101120000",
+              "uid": "uid-acm-credentials-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-credentials-schedule-20240101120000",
+        "resource_type": "CredentialsActive"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-credentials-schedule-20240101120000",
+              "uid": "uid-acm-credentials-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-generic-active-exact",
+      "lanes": [
+        "2.17"
+      ],
+      "source_refs": [
+        "2.17:restore.go:65-72",
+        "2.17:restore.go:630-674",
+        "2.17:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120000",
+              "uid": "uid-acm-resources-generic-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:40Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGenericActive"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120000",
+              "uid": "uid-acm-resources-generic-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:40Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-hive-exact-selected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-credentials-schedule-20240101120000",
+              "uid": "uid-acm-credentials-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-credentials-hive-schedule-20240101120000",
+              "uid": "uid-acm-credentials-hive-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-credentials-schedule-20240101120000",
+        "resource_type": "CredentialsHive"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-credentials-hive-schedule-20240101120000",
+              "uid": "uid-acm-credentials-hive-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-cluster-fallback-selected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-credentials-schedule-20240101120000",
+              "uid": "uid-acm-credentials-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-credentials-cluster-schedule-20240101120010",
+              "uid": "uid-acm-credentials-cluster-schedule-20240101120010",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:10Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-credentials-schedule-20240101120000",
+        "resource_type": "CredentialsCluster"
+      },
+      "expect": {
+        "result": [
+          "selected",
+          {
+            "metadata": {
+              "name": "acm-credentials-cluster-schedule-20240101120010",
+              "uid": "uid-acm-credentials-cluster-schedule-20240101120010",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:10Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-hive-none",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16"
+      ],
+      "source_refs": [
+        "2.12:restore.go:58-65",
+        "2.12:restore.go:537-587",
+        "2.12:utils.go:132-139",
+        "2.13:restore.go:58-65",
+        "2.13:restore.go:537-587",
+        "2.13:utils.go:132-139",
+        "2.14:restore.go:65-72",
+        "2.14:restore.go:544-594",
+        "2.14:utils.go:141-148",
+        "2.15:restore.go:65-72",
+        "2.15:restore.go:544-594",
+        "2.15:utils.go:140-147",
+        "2.16:restore.go:65-72",
+        "2.16:restore.go:544-594",
+        "2.16:utils.go:140-147"
+      ],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-credentials-schedule-20240101120000",
+              "uid": "uid-acm-credentials-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:00Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-credentials-schedule-20240101120000",
+        "resource_type": "CredentialsHive"
+      },
+      "expect": {
+        "result": [
+          "none",
+          null
+        ]
+      },
+      "r4_stricter": false
+    },
+    {
+      "id": "correlated-unsupported-type-ManagedClusters",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ManagedClusters"
+      },
+      "expect": {
+        "error_code": "unsupported_resource_type"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "correlated-unsupported-type-Credentials",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "Credentials"
+      },
+      "expect": {
+        "error_code": "unsupported_resource_type"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "correlated-unsupported-type-Resources",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "Resources"
+      },
+      "expect": {
+        "error_code": "unsupported_resource_type"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "correlated-unsupported-type-Validation",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "Validation"
+      },
+      "expect": {
+        "error_code": "unsupported_resource_type"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "correlated-source-empty-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "error_code": "malformed_source_name"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "correlated-source-null-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": null,
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "error_code": "malformed_source_name"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "correlated-source-integer-rejected",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120005",
+              "uid": "uid-acm-resources-generic-schedule-20240101120005",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:05Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": 20240101120000,
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "error_code": "malformed_source_name"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "correlated-inventory-not-a-list",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": "nope",
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "error_code": "malformed_inventory"
+      },
+      "r4_stricter": true
+    },
+    {
+      "id": "correlated-duplicate-exact-name",
+      "lanes": [
+        "2.12",
+        "2.13",
+        "2.14",
+        "2.15",
+        "2.16",
+        "2.17"
+      ],
+      "source_refs": [],
+      "function": "predict_correlated_backup",
+      "input": {
+        "inventory": [
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120000",
+              "uid": "uid-acm-resources-generic-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:40Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          },
+          {
+            "metadata": {
+              "name": "acm-resources-generic-schedule-20240101120000",
+              "uid": "uid-acm-resources-generic-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup"
+            },
+            "status": {
+              "phase": "Completed",
+              "startTimestamp": "2024-01-01T12:00:40Z",
+              "completionTimestamp": "2024-01-01T12:05:00Z"
+            }
+          }
+        ],
+        "source_name": "acm-resources-schedule-20240101120000",
+        "resource_type": "ResourcesGeneric"
+      },
+      "expect": {
+        "error_code": "malformed_inventory"
+      },
+      "r4_stricter": true
+    }
+  ]
+}
