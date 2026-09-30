@@ -83,6 +83,34 @@ _ONE_SHOT_PREDICTIONS[("full_restore", _ACTIVE)] = _FULL_PREDICTIONS + (
     ("CredentialsActive", "correlated", "credentials", "equals", "credentials"),
     ("ResourcesGenericActive", "correlated", "resources", "equals", "resources_generic"),
 )
+# August sections 3 and 4 step 4: the Backups frozen before the passive_patch
+# PATCH. The patched sync Restore requests every type with `latest`; each lane
+# selects ManagedClusters, Credentials, Resources and ResourcesGeneric directly
+# (U2.12-2.16 restore.go getVeleroBackupName `latest` branch). 2.17 also
+# requests CredentialsActive and ResourcesGenericActive: the latest
+# Credentials/ResourcesGeneric Backup, correlated from its own name
+# (U2.17 restore.go:597-674), which must be that same frozen Backup. R4-04
+# requires all four categories where the controller ignores a missing generic.
+_PATCH_LATEST_PREDICTIONS: Tuple[_Prediction, ...] = (
+    ("ManagedClusters", "latest", None, "required", "managed_clusters"),
+    ("Credentials", "latest", None, "required", "activation_credentials"),
+    ("Resources", "latest", None, "required", "activation_resources"),
+    ("ResourcesGeneric", "latest", None, "required", "activation_resources_generic"),
+)
+_PATCH_PREDICTIONS = {
+    _LEGACY: _PATCH_LATEST_PREDICTIONS,
+    _ACTIVE: _PATCH_LATEST_PREDICTIONS
+    + (
+        ("CredentialsActive", "correlated", "activation_credentials", "equals", "activation_credentials"),
+        (
+            "ResourcesGenericActive",
+            "correlated",
+            "activation_resources_generic",
+            "equals",
+            "activation_resources_generic",
+        ),
+    ),
+}
 
 # Amendment-2 section 4.1 roles as (role, bound category, status field). A role
 # without a status field is a 2.17 unpublished -active role located through the
@@ -224,18 +252,13 @@ def one_shot_required_predictions(mutation_kind: Any, controller_contract: Any) 
     """Return the Backup predictions a one-shot create freezes, in evaluation order."""
     _require_kind(mutation_kind, _ONE_SHOT_KINDS)
     _require_contract(controller_contract)
-    return [
-        {
-            "resource_type": resource_type,
-            "selection": selection,
-            "source_category": source,
-            "decision": decision,
-            "freeze_as": category,
-        }
-        for resource_type, selection, source, decision, category in _ONE_SHOT_PREDICTIONS[
-            (mutation_kind, controller_contract)
-        ]
-    ]
+    return _prediction_dicts(_ONE_SHOT_PREDICTIONS[(mutation_kind, controller_contract)])
+
+
+def passive_patch_required_predictions(controller_contract: Any) -> List[Dict[str, Any]]:
+    """Return the Backup predictions a passive_patch freezes before the PATCH, in evaluation order."""
+    _require_contract(controller_contract)
+    return _prediction_dicts(_PATCH_PREDICTIONS[controller_contract])
 
 
 def freeze_one_shot_backups(
@@ -252,35 +275,18 @@ def freeze_one_shot_backups(
     predictions = one_shot_required_predictions(mutation_kind, controller_contract)
     concrete_categories = [p["freeze_as"] for p in predictions if p["selection"] == "concrete"]
     frozen = _concrete_backups(concrete_backups, concrete_categories, namespace)
-    for prediction in predictions:
-        if prediction["selection"] == "concrete":
-            continue
-        resource_type = prediction["resource_type"]
-        source = frozen[prediction["source_category"]]["name"] if prediction["source_category"] else None
-        if prediction["selection"] == "latest":
-            decision, evidence = select_latest_evidence(inventory, resource_type, namespace)
-        elif prediction["decision"] == "none_required":
-            # Every selected candidate blocks, so the raw prediction suffices.
-            if predict_correlated_backup(inventory, source, resource_type)[0] != "none":
-                raise MigrationEvidenceError(
-                    "legacy_credential_variant_selected", f"a {resource_type} Backup correlates with {source}"
-                )
-            continue
-        else:
-            decision, evidence = select_correlated_evidence(inventory, source, resource_type, namespace)
-        if prediction["decision"] == "equals":
-            if evidence is None or evidence["name"] != frozen[prediction["freeze_as"]]["name"]:
-                raise MigrationEvidenceError(
-                    "active_prediction_mismatch",
-                    f"the {resource_type} prediction differs from backups.{prediction['freeze_as']}",
-                )
-            continue
-        if decision == "none":
-            if prediction["decision"] == "required":
-                raise MigrationEvidenceError("required_prediction_missing", f"no {resource_type} Backup is selected")
-            continue
-        frozen[prediction["freeze_as"]] = evidence
-    return frozen
+    return _freeze(predictions, inventory, namespace, frozen)
+
+
+def freeze_passive_patch_backups(controller_contract: Any, inventory: Any, namespace: str) -> Dict[str, Dict[str, Any]]:
+    """Return the four frozen Backup categories of a passive_patch, or raise before the PATCH.
+
+    Upstream selection first, R4-04 eligibility on the selected Backup only: a
+    missing, tied or ineligible selection, or a 2.17 -active prediction that
+    differs from its category, blocks. Resume reuses the journaled result and
+    never calls this again (August section 4).
+    """
+    return _freeze(passive_patch_required_predictions(controller_contract), inventory, namespace, {})
 
 
 def predict_one_shot_child_names(
@@ -457,6 +463,54 @@ def _require_categories(frozen_backups: Any, required: Tuple[str, ...], optional
     for backup in frozen_backups.values():
         if not isinstance(backup, dict) or not _non_empty_str(backup.get("name")):
             raise MigrationEvidenceError("frozen_backups_invalid", "a frozen Backup has no name")
+
+
+def _prediction_dicts(predictions: Tuple[_Prediction, ...]) -> List[Dict[str, Any]]:
+    return [
+        {
+            "resource_type": resource_type,
+            "selection": selection,
+            "source_category": source,
+            "decision": decision,
+            "freeze_as": category,
+        }
+        for resource_type, selection, source, decision, category in predictions
+    ]
+
+
+def _freeze(
+    predictions: List[Dict[str, Any]], inventory: Any, namespace: str, frozen: Dict[str, Dict[str, Any]]
+) -> Dict[str, Dict[str, Any]]:
+    """Evaluate the predictions in order onto the frozen categories, or raise."""
+    for prediction in predictions:
+        if prediction["selection"] == "concrete":
+            continue
+        resource_type = prediction["resource_type"]
+        source = frozen[prediction["source_category"]]["name"] if prediction["source_category"] else None
+        if prediction["selection"] == "latest":
+            decision, evidence = select_latest_evidence(inventory, resource_type, namespace)
+        elif prediction["decision"] == "none_required":
+            # Every selected candidate blocks, so the raw prediction suffices.
+            if predict_correlated_backup(inventory, source, resource_type)[0] != "none":
+                raise MigrationEvidenceError(
+                    "legacy_credential_variant_selected", f"a {resource_type} Backup correlates with {source}"
+                )
+            continue
+        else:
+            decision, evidence = select_correlated_evidence(inventory, source, resource_type, namespace)
+        if prediction["decision"] == "equals":
+            if evidence is None or evidence["name"] != frozen[prediction["freeze_as"]]["name"]:
+                raise MigrationEvidenceError(
+                    "active_prediction_mismatch",
+                    f"the {resource_type} prediction differs from backups.{prediction['freeze_as']}",
+                )
+            continue
+        if decision == "none":
+            if prediction["decision"] == "required":
+                raise MigrationEvidenceError("required_prediction_missing", f"no {resource_type} Backup is selected")
+            continue
+        frozen[prediction["freeze_as"]] = evidence
+    return frozen
 
 
 def _concrete_backups(concrete_backups: Any, categories: List[str], namespace: str) -> Dict[str, Dict[str, Any]]:

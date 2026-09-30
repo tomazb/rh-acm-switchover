@@ -3798,7 +3798,13 @@ for name, changes in (
     ("names-verified", {"post_activation__names_verified_at": T_POST_NAMES}),
     ("completed", {"post_activation__completed_at": T_POST_DONE, "waiver": waiver("both")}),
 ):
-    jcase(f"journal-post-activation-{name}-before-restore-blocks", ALL, ("J:136-137",), mut(PRE_L, **changes), "post_activation_premature")
+    jcase(
+        f"journal-post-activation-{name}-before-restore-blocks",
+        ALL,
+        ("J:136-137",),
+        mut(PRE_L, **changes),
+        "post_activation_premature",
+    )
 jtrans(
     "transition-freeze-write-post-activation-blocks",
     ALL,
@@ -3929,7 +3935,220 @@ DEFAULT_SPOTS = {
     "passive_patch_completion": ("A:544-616",),
     "predict_passive_patch_child_names": ("A:544-616", "C:236-264"),
     "acm_phase_accepts": ("A:617-642",),
+    "passive_patch_required_predictions": ("A:213-243", "A:359-428"),
+    "freeze_passive_patch_backups": ("A:213-243", "A:359-428"),
 }
+
+# passive_patch auxiliary Backup freeze (A §3 "Journal categories" and §4 step 4; C §§1-2). Under the
+# patched skip->latest/latest/latest sync Restore every lane resolves ManagedClusters, Credentials,
+# Resources and ResourcesGeneric by direct `latest`; 2.17 also resolves CredentialsActive and
+# ResourcesGenericActive as the latest Credentials/ResourcesGeneric Backup correlated from its own
+# name, which must be that same Backup. R4-04 requires all four categories (the journal does).
+PP_REQ_L = refs(LEGACY, "tokens", "latest", "sort") + refs2(LEGACY, "only_mc", "sync_branch")
+PP_REQ_17 = refs(V17, "tokens", "latest", "sort", "correlated") + refs2(V17, "only_mc", "sync_branch", "active")
+PP_LANES = ((LEGACY, LEG, PP_REQ_L, "legacy"), (V17, A17, PP_REQ_17, "2.17"))
+PATCH_LATEST_REQS = [
+    req("ManagedClusters", "latest", "required", "managed_clusters"),
+    req("Credentials", "latest", "required", "activation_credentials"),
+    req("Resources", "latest", "required", "activation_resources"),
+    req("ResourcesGeneric", "latest", "required", "activation_resources_generic"),
+]
+fn = "passive_patch_required_predictions"
+case("patch-predictions-legacy", LEGACY, PP_REQ_L, fn, {"controller_contract": LEG}, ok(PATCH_LATEST_REQS))
+case(
+    "patch-predictions-2.17",
+    V17,
+    PP_REQ_17,
+    fn,
+    {"controller_contract": A17},
+    ok(
+        PATCH_LATEST_REQS
+        + [
+            req("CredentialsActive", "correlated", "equals", "activation_credentials", "activation_credentials"),
+            req(
+                "ResourcesGenericActive",
+                "correlated",
+                "equals",
+                "activation_resources_generic",
+                "activation_resources_generic",
+            ),
+        ]
+    ),
+)
+case(
+    "patch-predictions-unknown-contract-rejected",
+    ALL,
+    [],
+    fn,
+    {"controller_contract": "legacy"},
+    err("unknown_controller_contract"),
+    True,
+)
+
+fn = "freeze_passive_patch_backups"
+NEW = "2024-01-02T12:00:00Z"
+PATCH_INVENTORY = [
+    backup(MC_B),
+    backup(CRED_B),
+    backup(ACT_CRED_B, start=NEW),
+    backup(RES_B),
+    backup(ACT_RES_B, start=NEW),
+    backup(GEN_B),
+    backup(ACT_GEN_B, start=NEW),
+]
+PREFIX_OF = {
+    "managed_clusters": "acm-managed-clusters-schedule",
+    "activation_credentials": "acm-credentials-schedule",
+    "activation_resources": "acm-resources-schedule-",
+    "activation_resources_generic": "acm-resources-generic-schedule",
+}
+
+
+def pfreeze(contract, inventory):
+    return {"controller_contract": contract, "inventory": inventory, "namespace": NS}
+
+
+for lanes, contract, spots, tag in PP_LANES:
+    # The derived freeze is the PATCH_FROZEN evidence every passive_patch vector above uses.
+    case(f"patch-freeze-{tag}", lanes, spots, fn, pfreeze(contract, PATCH_INVENTORY), ok(PATCH_FROZEN))
+    for category, prefix in PREFIX_OF.items():
+        inventory = [raw for raw in PATCH_INVENTORY if not raw["metadata"]["name"].startswith(prefix)]
+        case(
+            f"patch-freeze-{tag}-{category}-missing-blocks",
+            lanes,
+            spots,
+            fn,
+            pfreeze(contract, inventory),
+            err("required_prediction_missing"),
+            category == "activation_resources_generic",
+        )
+    for label, extra in (
+        ("credentials", backup("acm-credentials-schedule-20240102120001", start=NEW)),
+        ("resources", backup("acm-resources-schedule-20240102120001", start=NEW)),
+        ("generic", backup("acm-resources-generic-schedule-20240102120001", start=NEW)),
+    ):
+        case(
+            f"patch-freeze-{tag}-{label}-latest-tie-blocks",
+            lanes,
+            spots,
+            fn,
+            pfreeze(contract, PATCH_INVENTORY + [extra]),
+            err("latest_ambiguous"),
+            True,
+        )
+    for label, extra in (
+        ("credentials", backup("acm-credentials-schedule-20240103120000", "PartiallyFailed", "2024-01-03T12:00:00Z")),
+        ("generic", backup("acm-resources-generic-schedule-20240103120000", "PartiallyFailed", "2024-01-03T12:00:00Z")),
+    ):
+        case(
+            f"patch-freeze-{tag}-newest-{label}-partially-failed-blocks",
+            lanes,
+            spots,
+            fn,
+            pfreeze(contract, PATCH_INVENTORY + [extra]),
+            err("backup_not_completed"),
+            True,
+        )
+    failed_newest = backup("acm-resources-schedule-20240103120000", "Failed", "2024-01-03T12:00:00Z")
+    case(
+        f"patch-freeze-{tag}-newest-failed-resources-not-a-candidate",
+        lanes,
+        spots,
+        fn,
+        pfreeze(contract, PATCH_INVENTORY + [failed_newest]),
+        ok(PATCH_FROZEN),
+    )
+    case(
+        f"patch-freeze-{tag}-unknown-contract-rejected",
+        lanes,
+        [],
+        fn,
+        pfreeze("active_2_18", PATCH_INVENTORY),
+        err("unknown_controller_contract"),
+        True,
+    )
+
+# A latest generic Backup whose name is not "<token>-<suffix>": the legacy lanes take it directly; 2.17's
+# ResourcesGenericActive request correlates from its name (exact hit, fallback or none) and must land
+# on the same Backup.
+odd_gen = backup("acm-resources-generic-schedulex-20240102120000", start="2024-01-02T12:00:00Z")
+odd_inventory = [raw for raw in PATCH_INVENTORY if raw["metadata"]["name"] != ACT_GEN_B] + [odd_gen]
+odd_frozen = dict(PATCH_FROZEN, activation_resources_generic=projection(odd_gen))
+case(
+    "patch-freeze-legacy-noncanonical-generic-taken-directly",
+    LEGACY,
+    PP_REQ_L,
+    fn,
+    pfreeze(LEG, odd_inventory),
+    ok(odd_frozen),
+)
+case(
+    "patch-freeze-2.17-generic-active-fallback-to-same-backup",
+    V17,
+    PP_REQ_17,
+    fn,
+    pfreeze(A17, odd_inventory),
+    ok(odd_frozen),
+)
+exact_other = backup("acm-resources-generic-schedule-20240102120000", start="2024-01-01T09:00:00Z")
+case(
+    "patch-freeze-2.17-generic-active-exact-hit-other-backup-blocks",
+    V17,
+    PP_REQ_17,
+    fn,
+    pfreeze(A17, odd_inventory + [exact_other]),
+    err("active_prediction_mismatch"),
+    True,
+)
+far_gen = backup("acm-resources-generic-schedulex-20240102120000", start="2024-01-02T13:00:00Z")
+near_copy = backup("copy-acm-resources-generic-schedule", start="2024-01-02T12:00:05Z")
+far_inventory = [raw for raw in PATCH_INVENTORY if raw["metadata"]["name"] != ACT_GEN_B] + [far_gen, near_copy]
+case(
+    "patch-freeze-2.17-generic-active-fallback-other-backup-blocks",
+    V17,
+    PP_REQ_17,
+    fn,
+    pfreeze(A17, far_inventory),
+    err("active_prediction_mismatch"),
+    True,
+)
+case(
+    "patch-freeze-2.17-generic-active-fallback-ambiguous-blocks",
+    V17,
+    PP_REQ_17,
+    fn,
+    pfreeze(A17, odd_inventory + [near_copy]),
+    err("correlated_ambiguous"),
+    True,
+)
+manual_gen = backup("acm-resources-generic-schedulex-manual", start="2024-01-02T12:00:00Z")
+case(
+    "patch-freeze-2.17-generic-active-none-blocks",
+    V17,
+    PP_REQ_17,
+    fn,
+    pfreeze(A17, [raw for raw in PATCH_INVENTORY if raw["metadata"]["name"] != ACT_GEN_B] + [manual_gen]),
+    err("active_prediction_mismatch"),
+    True,
+)
+case(
+    "patch-freeze-legacy-generic-without-timestamp-taken-directly",
+    LEGACY,
+    PP_REQ_L,
+    fn,
+    pfreeze(LEG, [raw for raw in PATCH_INVENTORY if raw["metadata"]["name"] != ACT_GEN_B] + [manual_gen]),
+    ok(dict(PATCH_FROZEN, activation_resources_generic=projection(manual_gen))),
+)
+odd_cred = backup("acm-credentials-schedulex-manual", start="2024-01-02T12:00:00Z")
+case(
+    "patch-freeze-2.17-credentials-active-none-blocks",
+    V17,
+    PP_REQ_17,
+    fn,
+    pfreeze(A17, [raw for raw in PATCH_INVENTORY if raw["metadata"]["name"] != ACT_CRED_B] + [odd_cred]),
+    err("active_prediction_mismatch"),
+    True,
+)
 
 
 def build():
