@@ -218,7 +218,7 @@ class TestDryRunStateGuard:
         ), patch(
             "acm_switchover._build_cli_operation_hooks", return_value={}
         ), patch(
-            "acm_switchover.cli_outcomes.run_operation_mode", side_effect=_mutate_state_then_raise
+            "acm_switchover.cli_outcomes.run_operation_outcome", side_effect=_mutate_state_then_raise
         ), patch(
             "acm_switchover.GitOpsCollector.get_instance"
         ):

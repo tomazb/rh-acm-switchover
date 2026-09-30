@@ -41,7 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rebuilds remain allowed, in check mode as in execution; and, only while a journal is present,
   Python refuses the implicit resets (context mismatch, missing contexts on an in-progress state,
   `--force` on a stale completed or unresumable failed state) with a pointer to `--reset-state`,
-  writing nothing to the state file. Every collection reset guard checks for the journal slot
+  writing nothing to the state file: the refusal is not recorded as a run error, and a `--dry-run`
+  rehearsal skips its state rollback, which would be the only write. Every collection reset guard checks for the journal slot
   first, so a checkpoint without one, a non-mapping `operational_data` included, resets exactly as
   before. No phase writes a journal yet, so runs without one are unaffected.
 - R4-03 PR D ManagedCluster teardown (Python + Collection): strict inventory, Hive

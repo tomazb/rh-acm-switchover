@@ -8,12 +8,15 @@ import argparse
 import copy
 import json
 import logging
+import sys
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
+import acm_switchover
 from acm_switchover import _prepare_runtime
 from lib import run_record as run_record_module
 from lib.cli_outcomes import CliOperationHooks, run_operation_mode
@@ -666,3 +669,82 @@ class TestResetRefusalWritesNothing:
                     )
         assert exc_info.value.code == 1
         assert path.read_bytes() == before
+
+
+def _cli_journal_state(tmp_path, first_write, primary, **fields):
+    """A journal-bearing state bound to (primary, hub-b), with top-level `fields` overwritten."""
+    path = tmp_path / "switchover-cli.json"
+    state = StateManager(str(path))
+    state.ensure_contexts(primary, "hub-b")
+    RunRecord(state).record_migration_backups(first_write)
+    state = StateManager(str(path))
+    state.state.update(fields)
+    state.flush_state()
+    return path
+
+
+_FORCE_REFUSAL_STATES = [
+    pytest.param({"current_phase": "failed", "errors": []}, id="failed-unresumable"),
+    pytest.param({"current_phase": "completed"}, id="stale-completed"),
+]
+
+
+class TestDryRunForceRefusalWritesNothing:
+    """--force --dry-run over a journal: the refusal crosses every rollback boundary unwritten."""
+
+    @pytest.mark.parametrize("fields", _FORCE_REFUSAL_STATES)
+    @pytest.mark.parametrize(
+        "argv, primary",
+        [
+            pytest.param(
+                ["--primary-context", "hub-a", "--secondary-context", "hub-b", "--method", "passive"]
+                + ["--old-hub-action", "secondary"],
+                "hub-a",
+                id="switchover",
+            ),
+            pytest.param(["--restore-only", "--secondary-context", "hub-b"], None, id="restore-only"),
+        ],
+    )
+    def test_the_cli_refuses_without_a_rollback_write(self, tmp_path, first_write, fields, argv, primary):
+        path = _cli_journal_state(tmp_path, first_write, primary, **fields)
+        if fields["current_phase"] == "completed":
+            raw = json.loads(path.read_text())
+            raw["last_updated"] = "2020-01-01T00:00:00+00:00"
+            path.write_text(json.dumps(raw, indent=2))
+        before = path.read_bytes()
+        cli = ["acm_switchover.py", *argv, "--dry-run", "--force", "--state-file", str(path)]
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(sys, "argv", cli))
+            stack.enter_context(patch("acm_switchover._initialize_clients", return_value=(Mock(), Mock())))
+            stack.enter_context(patch("acm_switchover._bind_runtime_hub_identities"))
+            stack.enter_context(patch("acm_switchover._write_python_report"))
+            restore = stack.enter_context(patch.object(StateManager, "restore_state_snapshot"))
+            write = stack.enter_context(patch.object(StateManager, "_write_state"))
+            with pytest.raises(SystemExit) as exc_info:
+                acm_switchover.main()
+        assert exc_info.value.code == 1
+        restore.assert_not_called()
+        write.assert_not_called()
+        assert path.read_bytes() == before
+
+    def test_an_ordinary_dry_run_failure_still_rolls_back(self, tmp_path):
+        path = tmp_path / "switchover-plain.json"
+        state = StateManager(str(path))
+        state.ensure_contexts("hub-a", "hub-b")
+        state.state.update(current_phase="failed", errors=[])
+        state.flush_state()
+        cli = ["acm_switchover.py", "--primary-context", "hub-a", "--secondary-context", "hub-b"]
+        cli += ["--method", "passive", "--old-hub-action", "secondary", "--dry-run", "--state-file", str(path)]
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(sys, "argv", cli))
+            stack.enter_context(patch("acm_switchover._initialize_clients", return_value=(Mock(), Mock())))
+            stack.enter_context(patch("acm_switchover._bind_runtime_hub_identities"))
+            stack.enter_context(patch("acm_switchover._write_python_report"))
+            restore = stack.enter_context(
+                patch.object(StateManager, "restore_state_snapshot", autospec=True, side_effect=lambda *a: None)
+            )
+            with pytest.raises(SystemExit) as exc_info:
+                acm_switchover.main()
+        assert exc_info.value.code == 1
+        # The wrapper and main() both put the rehearsal back, exactly as before.
+        assert restore.call_count == 2

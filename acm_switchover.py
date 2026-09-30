@@ -452,6 +452,10 @@ def run_switchover(
     dry_run_snapshot = state.capture_state_snapshot() if getattr(args, "dry_run", False) else None
     try:
         return _run_switchover_impl(args, state, primary, secondary, logger)
+    except MigrationJournalResetRefused:
+        # Refused before any change: restoring the rehearsal would be the only write.
+        dry_run_snapshot = None
+        raise
     finally:
         if dry_run_snapshot is not None:
             state.restore_state_snapshot(dry_run_snapshot)
@@ -540,6 +544,10 @@ def run_restore_only(
     dry_run_snapshot = state.capture_state_snapshot() if getattr(args, "dry_run", False) else None
     try:
         return _run_restore_only_impl(args, state, secondary, logger)
+    except MigrationJournalResetRefused:
+        # Refused before any change: restoring the rehearsal would be the only write.
+        dry_run_snapshot = None
+        raise
     finally:
         if dry_run_snapshot is not None:
             state.restore_state_snapshot(dry_run_snapshot)
@@ -1323,8 +1331,9 @@ def main():
     runtime = _prepare_runtime(args, logger, resolved_state_file)
     state = runtime.state
 
+    outcome: Optional[cli_outcomes.OperationOutcome] = None
     try:
-        operation_exit_code = cli_outcomes.run_operation_mode(
+        outcome = cli_outcomes.run_operation_outcome(
             args,
             state,
             runtime.primary,
@@ -1338,12 +1347,14 @@ def main():
             exit_interrupt=EXIT_INTERRUPT,
         )
     finally:
-        if runtime.dry_run_state_guard is not None:
+        # A migration-journal reset refusal changed nothing; rolling back would only write.
+        refused = outcome is not None and outcome.journal_reset_refused
+        if runtime.dry_run_state_guard is not None and not refused:
             # H10 guard: put the state file back exactly as it was before the
             # dry-run rehearsal, including a context-mismatch reset that
             # ensure_contexts may have flushed in _prepare_runtime.
             state.restore_state_snapshot(runtime.dry_run_state_guard)
-    sys.exit(operation_exit_code)
+    sys.exit(outcome.exit_code)
 
 
 def _initialize_clients(

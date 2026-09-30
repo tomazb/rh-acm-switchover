@@ -205,7 +205,24 @@ def _report_interrupted_state(args: Any, state: StateManager, logger: logging.Lo
         logger.info("Re-run the same command to resume from last successful step")
 
 
-def run_operation_mode(
+@dataclass(frozen=True)
+class OperationOutcome:
+    """The exit code, and whether the run ended in a migration-journal reset refusal.
+
+    A refusal changed nothing, so main() must not roll a dry-run back over it: the
+    rollback itself would be the only write.
+    """
+
+    exit_code: int
+    journal_reset_refused: bool = False
+
+
+def run_operation_mode(*args: Any, **kwargs: Any) -> int:
+    """Run the prepared non-setup operation path and return the final exit code."""
+    return run_operation_outcome(*args, **kwargs).exit_code
+
+
+def run_operation_outcome(
     args: Any,
     state: StateManager,
     primary: Any,
@@ -218,9 +235,10 @@ def run_operation_mode(
     exit_success: int,
     exit_failure: int,
     exit_interrupt: int,
-) -> int:
-    """Run the prepared non-setup operation path and return the final exit code."""
+) -> OperationOutcome:
+    """Run the prepared non-setup operation path and return its outcome."""
     exit_code = exit_failure
+    journal_reset_refused = False
     refusal_report_message: Optional[str] = None
     try:
         if should_bind_state:
@@ -238,6 +256,7 @@ def run_operation_mode(
         # this is a refusal, not a run error: never record it into the state file.
         logger.error("\n✗ %s", exc)
         exit_code = exit_failure
+        journal_reset_refused = True
     except StateIdentityMismatch as exc:
         # The binding guard refused this state file; never write into it.
         # The finally block still emits a report from a read-only snapshot,
@@ -284,4 +303,4 @@ def run_operation_mode(
             )
         hooks.gitops_reporter_factory().print_report()
 
-    return exit_code
+    return OperationOutcome(exit_code, journal_reset_refused)
