@@ -7,6 +7,18 @@ from pathlib import Path
 
 import pytest
 
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_child_evidence import (
+    acm_phase_accepts,
+    freeze_one_shot_backups,
+    generated_child_name,
+    is_owned_by,
+    one_shot_completion,
+    one_shot_required_predictions,
+    passive_patch_cohort,
+    passive_patch_completion,
+    predict_one_shot_child_names,
+    validate_velero_child,
+)
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_evidence import (
     ACM_MINOR_CONTRACTS,
     SCHEDULE_TOKENS,
@@ -30,6 +42,16 @@ FUNCTIONS = {
     "predict_correlated_backup": predict_correlated_backup,
     "select_latest_evidence": select_latest_evidence,
     "select_correlated_evidence": select_correlated_evidence,
+    "acm_phase_accepts": acm_phase_accepts,
+    "freeze_one_shot_backups": freeze_one_shot_backups,
+    "generated_child_name": generated_child_name,
+    "is_owned_by": is_owned_by,
+    "one_shot_completion": one_shot_completion,
+    "one_shot_required_predictions": one_shot_required_predictions,
+    "passive_patch_cohort": passive_patch_cohort,
+    "passive_patch_completion": passive_patch_completion,
+    "predict_one_shot_child_names": predict_one_shot_child_names,
+    "validate_velero_child": validate_velero_child,
 }
 NS = "open-cluster-management-backup"
 
