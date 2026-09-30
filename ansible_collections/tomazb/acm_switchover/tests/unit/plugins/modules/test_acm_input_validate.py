@@ -3,6 +3,7 @@
 import pathlib
 from typing import Any
 
+import pytest
 import yaml
 
 from ansible_collections.tomazb.acm_switchover.plugins.modules import acm_input_validate
@@ -765,3 +766,30 @@ def test_repair_block_that_is_not_a_dict_is_malformed():
 def test_repair_block_with_an_undocumented_key_is_a_malformed_request():
     result = _migration_input_result({"migration_cleanup_repair": {"acknowledged_at": ""}})
     assert result["message"].startswith("malformed_repair:")
+
+
+def test_omitted_request_id_is_optional():
+    """Review finding 1: request_id is optional, so omitting the key equals null."""
+    waiver = {key: value for key, value in _WAIVER.items() if key != "request_id"}
+    result = _migration_input_result(
+        {"skip_managed_cluster_expectations": True, "managed_cluster_expectation_waiver": waiver}
+    )
+    assert result["status"] == "pass"
+    assert result["details"]["managed_cluster_expectation_waiver"] == dict(waiver, request_id=None)
+
+
+def test_omitted_request_id_does_not_mutate_the_operator_input():
+    waiver = {key: value for key, value in _WAIVER.items() if key != "request_id"}
+    _migration_input_result({"skip_managed_cluster_expectations": True, "managed_cluster_expectation_waiver": waiver})
+    assert "request_id" not in waiver
+
+
+@pytest.mark.parametrize("value", ["false", "true", "yes", 1, 0, None, []])
+def test_skip_flag_must_be_a_real_boolean(value):
+    """Review finding 3: only a real boolean enables or disables the waiver."""
+    result = _migration_input_result(
+        {"skip_managed_cluster_expectations": value, "managed_cluster_expectation_waiver": _WAIVER}
+    )
+    assert result["status"] == "fail"
+    assert result["message"].startswith("malformed_waiver:")
+    assert "must be a boolean" in result["message"]

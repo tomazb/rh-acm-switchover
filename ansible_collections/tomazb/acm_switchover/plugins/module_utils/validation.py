@@ -145,12 +145,18 @@ def _names_any_field(value: object, keys: Sequence[str]) -> bool:
 def _waiver_request(operation: dict) -> dict | None:
     """Mirror of the Python CLI's --skip-managed-cluster-expectations waiver request."""
     waiver = operation.get("managed_cluster_expectation_waiver")
-    if not operation.get("skip_managed_cluster_expectations", False):
+    enabled = operation.get("skip_managed_cluster_expectations", False)
+    if not isinstance(enabled, bool):
+        raise ValidationError("malformed_waiver: skip_managed_cluster_expectations must be a boolean")
+    if not enabled:
         if _names_any_field(waiver, _WAIVER_KEYS):
             raise ValidationError(
                 "malformed_waiver: managed_cluster_expectation_waiver requires skip_managed_cluster_expectations: true"
             )
         return None
+    if isinstance(waiver, dict):
+        # request_id is optional: an omitted key is null, as the CLI's unset option is.
+        waiver = {"request_id": None, **waiver}
     try:
         return validate_waiver_request(waiver)
     except MigrationEvidenceError:

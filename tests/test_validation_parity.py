@@ -103,7 +103,8 @@ def _python_args(case_input: dict) -> MockArgs:
         # the variable the plan's decision record names, so the shared fixture does
         # too and the CLI flag is mapped from that block.
         acknowledge_observability_not_migrated=bool(decommission.get("acknowledge_observability_not_migrated", False)),
-        skip_managed_cluster_expectations=bool(operation.get("skip_managed_cluster_expectations", False)),
+        # Passed through uncoerced: a non-boolean collection value must stay invalid here too.
+        skip_managed_cluster_expectations=operation.get("skip_managed_cluster_expectations", False),
         managed_cluster_expectation_waiver_scope=waiver.get("scope"),
         managed_cluster_expectation_waiver_actor=waiver.get("actor"),
         managed_cluster_expectation_waiver_reason=waiver.get("reason"),

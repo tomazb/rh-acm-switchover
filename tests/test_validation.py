@@ -1598,6 +1598,13 @@ class TestManagedClusterExpectationWaiverInputs:
         )
         InputValidator.validate_all_cli_args(args)
 
+    @pytest.mark.parametrize("value", ["false", "true", 1, None])
+    def test_skip_flag_must_be_a_real_boolean(self, value):
+        """Review finding 3: a non-boolean enabling field is malformed, never truthy or falsy."""
+        message = self._reject(self._args(skip_managed_cluster_expectations=value))
+        assert message.startswith("malformed_waiver:")
+        assert "must be a boolean" in message
+
     def test_waiver_is_independent_of_an_explicit_minimum(self):
         InputValidator.validate_all_cli_args(self._args(min_managed_clusters=0))
 
@@ -1663,6 +1670,12 @@ class TestMigrationCleanupRepairInputs:
         message = self._reject(self._args(**overrides))
         assert message.startswith("malformed_repair:")
         assert "--repair-migration-cleanup" in message
+
+    @pytest.mark.parametrize("value", ["false", "true", 1, None])
+    def test_repair_flag_must_be_a_real_boolean(self, value):
+        message = self._reject(self._args(repair_migration_cleanup=value))
+        assert message.startswith("malformed_repair:")
+        assert "must be a boolean" in message
 
     def test_flag_alone_is_malformed(self):
         args = _switchover_args(repair_migration_cleanup=True)

@@ -70,6 +70,13 @@ def test_preflight_rejects_a_waiver_whose_scope_has_no_expected_name(scope, rest
     assert _waiver_accepted(scope, restore_only, names, configured) is accepted
 
 
+def test_preflight_reads_the_enabling_field_as_a_real_boolean_only():
+    """Review finding 3: the assert and input validation share one interpretation."""
+    condition = " ".join(_waiver_task()["ansible.builtin.assert"]["that"])
+    assert "skip_managed_cluster_expectations | default(false)) is sameas true" in condition
+    assert "skip_managed_cluster_expectations | default(false) | bool" not in condition
+
+
 def test_waiver_rejection_names_its_error_class_and_runs_before_the_checkpoint_pass():
     tasks = _load(POST_IDENTITY)
     names = [task.get("name") for task in tasks]

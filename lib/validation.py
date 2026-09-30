@@ -150,7 +150,10 @@ def managed_cluster_expectation_waiver_request(args: object) -> Optional[dict]:
     recorded expectation and proves nothing until a phase journals it.
     """
     request = {field: getattr(args, dest, None) for field, dest in _WAIVER_ARGS}
-    if not getattr(args, "skip_managed_cluster_expectations", False):
+    enabled = getattr(args, "skip_managed_cluster_expectations", False)
+    if not isinstance(enabled, bool):
+        raise ValidationError("malformed_waiver: --skip-managed-cluster-expectations must be a boolean")
+    if not enabled:
         if any(value not in _UNSET_INPUTS for value in request.values()):
             raise ValidationError(
                 "malformed_waiver: --managed-cluster-expectation-waiver-* options require "
@@ -170,7 +173,10 @@ def migration_cleanup_repair_request(args: object) -> Optional[dict]:
     delete succeeded; the cleanup gate checks it against the journal and live state.
     """
     request = {field: getattr(args, dest, None) for field, dest in _REPAIR_ARGS}
-    if not getattr(args, "repair_migration_cleanup", False):
+    enabled = getattr(args, "repair_migration_cleanup", False)
+    if not isinstance(enabled, bool):
+        raise ValidationError("malformed_repair: --repair-migration-cleanup must be a boolean")
+    if not enabled:
         if any(value not in _UNSET_INPUTS for value in request.values()):
             raise ValidationError("malformed_repair: --cleanup-repair-* options require --repair-migration-cleanup")
         return None

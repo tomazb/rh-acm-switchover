@@ -885,3 +885,98 @@
       mode: execute
   expected:
     passed: true
+
+# Task 6 review findings: an omitted optional request_id equals null, and the
+# enabling field accepts only a real boolean.
+- name: waiver with the optional request id omitted is accepted
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      skip_managed_cluster_expectations: true
+      managed_cluster_expectation_waiver:
+        scope: both
+        actor: operator
+        reason: stale inventory
+    execution:
+      mode: execute
+  expected:
+    passed: true
+
+- name: string false skip flag with a complete waiver is malformed
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      skip_managed_cluster_expectations: "false"
+      managed_cluster_expectation_waiver:
+        scope: both
+        actor: operator
+        reason: stale inventory
+        request_id: null
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "malformed_waiver:"
+
+- name: string true skip flag is malformed
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      skip_managed_cluster_expectations: "true"
+      managed_cluster_expectation_waiver:
+        scope: both
+        actor: operator
+        reason: stale inventory
+        request_id: null
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "malformed_waiver:"
+
+- name: integer skip flag is malformed
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      skip_managed_cluster_expectations: 1
+      managed_cluster_expectation_waiver:
+        scope: both
+        actor: operator
+        reason: stale inventory
+        request_id: null
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "malformed_waiver:"
+
+- name: null skip flag is malformed
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      skip_managed_cluster_expectations: null
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "malformed_waiver:"

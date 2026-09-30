@@ -73,7 +73,7 @@ from lib.constants import (
 )
 from lib.decommission_outcome import DecommissionResult, SubstepOutcome
 from lib.exceptions import SwitchoverError
-from lib.utils import StateIdentityMismatch, StateManager
+from lib.utils import Phase, StateIdentityMismatch, StateManager
 from lib.validation import ValidationError
 from tests.main_test_helpers import make_restore_only_args, make_switchover_args
 
@@ -3135,6 +3135,57 @@ class TestPreflightPhase:
         expectation = RunRecord(state).managed_cluster_expectation()
         assert expectation.names == ("cluster-a",)
         assert expectation.count == 1
+
+    @pytest.mark.parametrize(
+        "handler, patched, phase_at_resume, restore_only",
+        [
+            (_run_phase_primary_prep, "acm_switchover.PrimaryPreparation", Phase.PREFLIGHT, False),
+            (_run_restore_only_argocd_pause, "acm_switchover.argocd_lib", Phase.PREFLIGHT, True),
+            (_run_phase_finalization, "acm_switchover.Finalization", Phase.POST_ACTIVATION, False),
+            (_run_phase_finalization, "acm_switchover.Finalization", Phase.POST_ACTIVATION, True),
+        ],
+        ids=["primary-prep", "restore-only-argocd-pause", "finalization", "restore-only-finalization"],
+    )
+    def test_resumed_phase_rejects_a_waiver_without_recorded_names(
+        self, tmp_path, handler, patched, phase_at_resume, restore_only
+    ):
+        """Review finding 2: every resume entry point checks the waiver before it changes phase or runs."""
+        from lib.run_record import HubFacts, RunRecord
+        from lib.utils import StateManager
+
+        args = SimpleNamespace(
+            method="full" if restore_only else "passive",
+            old_hub_action=None if restore_only else "secondary",
+            restore_only=restore_only,
+            dry_run=False,
+            argocd_manage=True,
+            manage_auto_import_strategy=False,
+            min_managed_clusters=None,
+            skip_managed_cluster_expectations=True,
+            managed_cluster_expectation_waiver_scope="post_activation" if restore_only else "both",
+            managed_cluster_expectation_waiver_actor="operator@example.com",
+            managed_cluster_expectation_waiver_reason="stale inventory",
+            managed_cluster_expectation_waiver_request_id=None,
+        )
+        state = StateManager(str(tmp_path / "state.json"))
+        run_record = RunRecord(state)
+        run_record.record_managed_cluster_expectation(
+            names=[],
+            count=0,
+            mode=(
+                MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY
+                if restore_only
+                else MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT
+            ),
+        )
+        run_record.record_hub_facts(HubFacts(secondary_has_observability=False))
+        state.set_phase(phase_at_resume)
+
+        with patch(patched) as phase_dependency, pytest.raises(SwitchoverError, match="^waiver_expected_names_empty:"):
+            handler(args, state, Mock(), Mock(), Mock())
+
+        assert phase_dependency.mock_calls == []
+        assert state.get_current_phase() == phase_at_resume
 
     def test_preflight_rejects_a_waiver_when_primary_has_no_expected_names(self, tmp_path):
         """The waiver fails at preflight, before any phase could consume it."""

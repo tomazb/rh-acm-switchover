@@ -181,12 +181,13 @@
     - not acm_switchover_preflight_summary.passed
 
 # July design section 2: a waiver is rejected when a scope it covers has no
-# expected name to waive. The input is already well formed (acm_input_validate).
+# expected name to waive. The input is already well formed (acm_input_validate
+# accepts only a real boolean enabling field, which `is sameas true` reads alike).
 - name: Reject a ManagedCluster expectation waiver with no expected name to waive
   ansible.builtin.assert:
     that:
       - >-
-        not (acm_switchover_operation.skip_managed_cluster_expectations | default(false) | bool)
+        not ((acm_switchover_operation.skip_managed_cluster_expectations | default(false)) is sameas true)
         or (
           (
             _acm_waiver_scope not in ['activation', 'both']

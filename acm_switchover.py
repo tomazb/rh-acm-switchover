@@ -570,6 +570,7 @@ def _run_restore_only_argocd_pause(
     targeting only the secondary hub. Uses the same state keys (argocd_run_id,
     argocd_paused_apps) so --argocd-resume-only works after restore completes.
     """
+    _require_waivable_recorded_expectation(args, state)
     if not getattr(args, "argocd_manage", False):
         return True
     if state.is_step_completed(STEP_PAUSE_ARGOCD_APPS):
@@ -882,6 +883,7 @@ def _run_phase_primary_prep(
     secondary: KubeClient,
     logger: logging.Logger,
 ) -> bool:
+    _require_waivable_recorded_expectation(args, state)
     _log_phase_banner("PHASE 2: PRIMARY HUB PREPARATION", logger)
     state.set_phase(Phase.PRIMARY_PREP)
 
@@ -989,6 +991,12 @@ def _resolve_managed_cluster_expectation(
     return int(raw_min), expected_names, bool(expected_names)
 
 
+def _require_waivable_recorded_expectation(args: argparse.Namespace, state: StateManager) -> None:
+    """Check a requested waiver against the recorded expectation before a resumed phase does any work."""
+    if managed_cluster_expectation_waiver_request(args) is not None:
+        _require_waivable_expectation(args, list(RunRecord(state).managed_cluster_expectation().names))
+
+
 def _require_waivable_expectation(args: argparse.Namespace, expected_names: list[str]) -> None:
     """Reject a requested waiver when the recorded expectation has no name to waive.
 
@@ -1009,6 +1017,7 @@ def _run_phase_finalization(
     secondary: KubeClient,
     logger: logging.Logger,
 ) -> bool:
+    _require_waivable_recorded_expectation(args, state)
     _log_phase_banner("PHASE 5: FINALIZATION", logger)
     state.set_phase(Phase.FINALIZATION)
 
