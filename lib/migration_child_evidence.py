@@ -19,8 +19,10 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from lib.migration_evidence import (
     ACM_MINOR_CONTRACTS,
+    SCHEDULE_TOKENS,
     MigrationEvidenceError,
     predict_correlated_backup,
+    predict_latest_backup,
     select_correlated_evidence,
     select_latest_evidence,
     validate_backup_projection,
@@ -170,6 +172,9 @@ _PATCH_NAME_ROLES = {
         ("ResourcesGeneric", "activation_resources_generic", False),
     ),
 }
+# PR C decisions amendment section 1: the legacy-only credential request types the
+# passive_patch sync branch may add from `latest`.
+_CREDENTIAL_VARIANTS = ("CredentialsHive", "CredentialsCluster")
 # passive_patch status associations and the category each binds to.
 _PATCH_CATEGORIES = {
     _MC: "managed_clusters",
@@ -314,6 +319,75 @@ def predict_passive_patch_child_names(
     return _predict_names(acm_restore_name, frozen_backups, _PATCH_NAME_ROLES[controller_contract])
 
 
+def predict_passive_patch_credential_variants(
+    controller_contract: Any, inventory: Any, activation_credentials_name: Any
+) -> str:
+    """Decide the legacy passive_patch hive/cluster credential requests before the PATCH.
+
+    PR C decisions amendment section 1.2 rule 1, on the strictly complete Backup
+    inventory of the final pre-PATCH boundary. The controller resolves both
+    requests from the latest Credentials Backup, which must be the frozen
+    activation_credentials Backup. "shortcut": its spec.orLabelSelectors is
+    non-empty, so both requests reuse it. "no_candidate": neither token
+    correlates with it. "not_requested": 2.17 has no such request types.
+    A different latest Backup, a correlated selection, an ambiguity or a
+    malformed inventory raises, so the PATCH is never issued.
+    """
+    _require_contract(controller_contract)
+    if not _non_empty_str(activation_credentials_name):
+        raise MigrationEvidenceError("frozen_backups_invalid", "the frozen credentials Backup has no name")
+    if controller_contract == _ACTIVE:
+        return "not_requested"
+    raw = predict_latest_backup(inventory, "Credentials")[1]
+    if raw is None or raw["metadata"]["name"] != activation_credentials_name:
+        raise MigrationEvidenceError(
+            "credential_variant_source_mismatch",
+            f"the latest Credentials Backup is not the frozen {activation_credentials_name}",
+        )
+    spec = raw.get("spec", {})
+    selectors = spec.get("orLabelSelectors") if isinstance(spec, dict) else None
+    if not isinstance(spec, dict) or not (selectors is None or isinstance(selectors, list)):
+        raise MigrationEvidenceError(
+            "malformed_inventory", f"Backup {activation_credentials_name} has a malformed spec"
+        )
+    if selectors:
+        return "shortcut"
+    for resource_type in _CREDENTIAL_VARIANTS:
+        if predict_correlated_backup(inventory, activation_credentials_name, resource_type)[0] != "none":
+            raise MigrationEvidenceError(
+                "legacy_credential_variant_selected",
+                f"a {resource_type} Backup correlates with {activation_credentials_name}",
+            )
+    return "no_candidate"
+
+
+def require_no_credential_variant_children(
+    controller_contract: Any, *, acm_restore_name: str, acm_restore_uid: str, namespace_restores: Any
+) -> None:
+    """Raise when a legacy owner child restores a dedicated hive or cluster credential Backup.
+
+    PR C decisions amendment section 1.2 rules 3 and 6, for completion and every
+    later evidence revalidation of a legacy passive_patch: every exact-owner
+    child of the strictly complete namespace LIST counts, historical ones
+    included, and the test is the controller's own substring predicate.
+    """
+    _require_contract(controller_contract)
+    if not _non_empty_str(acm_restore_name) or not _non_empty_str(acm_restore_uid):
+        raise MigrationEvidenceError("malformed_child_expectation", "the owner identity must be non-empty")
+    _, members = _namespace_restores(namespace_restores, acm_restore_name, acm_restore_uid)
+    if controller_contract == _ACTIVE:
+        return
+    tokens = [SCHEDULE_TOKENS[resource_type] for resource_type in _CREDENTIAL_VARIANTS]
+    for name, raw in members:
+        backup_name = _child_backup_name(raw)
+        if not isinstance(backup_name, str):
+            raise MigrationEvidenceError("malformed_velero_restore", f"owner child {name} has no spec.backupName")
+        if any(token in backup_name for token in tokens):
+            raise MigrationEvidenceError(
+                "credential_variant_child", f"owner child {name} restores a dedicated hive/cluster credential Backup"
+            )
+
+
 def one_shot_completion(
     mutation_kind: Any,
     controller_contract: Any,
@@ -391,7 +465,9 @@ def passive_patch_completion(
     August section 5 legacy and 2.17 passive_patch contracts. Every cohort
     member must be Completed, but only children consumed by this transaction
     are returned; historical cohort children are checked, never journaled
-    (amendment-2 section 5.2).
+    (amendment-2 section 5.2). On the legacy lanes a hive/cluster child blocks,
+    and the unsuffixed child of the frozen credentials Backup, when the LIST
+    holds it, is bound and journaled (PR C decisions amendment section 1.2).
     """
     _require_contract(controller_contract)
     _require_categories(frozen_backups, PASSIVE_PATCH_CATEGORIES, ())
@@ -402,9 +478,19 @@ def passive_patch_completion(
     by_name, members = _namespace_restores(namespace_restores, acm_restore_name, acm_restore_uid)
     if not acm_phase_accepts("passive_patch", controller_contract, acm_phase):
         raise MigrationEvidenceError("acm_phase_not_accepted", f"ACM Restore phase {acm_phase!r} is not accepted")
+    require_no_credential_variant_children(
+        controller_contract,
+        acm_restore_name=acm_restore_name,
+        acm_restore_uid=acm_restore_uid,
+        namespace_restores=namespace_restores,
+    )
     owner = (namespace, acm_restore_name, acm_restore_uid)
     bound = _patch_bound_fields(controller_contract, before, after)
     consumed: List[Tuple[str, Dict[str, Any]]] = []
+    if controller_contract == _LEGACY:
+        shared = generated_child_name(acm_restore_name, frozen_backups["activation_credentials"]["name"])
+        if shared in by_name:
+            _check_child(consumed, by_name[shared], owner, frozen_backups, "activation_credentials")
     # Every current locator resolves to an owned, Completed child; only the
     # bound associations are journaled, so unchanged historical children are
     # checked but never rebound.

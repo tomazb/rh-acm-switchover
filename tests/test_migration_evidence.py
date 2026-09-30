@@ -22,6 +22,8 @@ from lib.migration_child_evidence import (
     passive_patch_required_predictions,
     predict_one_shot_child_names,
     predict_passive_patch_child_names,
+    predict_passive_patch_credential_variants,
+    require_no_credential_variant_children,
     validate_velero_child,
 )
 from lib.migration_evidence import (
@@ -34,6 +36,7 @@ from lib.migration_evidence import (
     normalize_backup_evidence,
     predict_correlated_backup,
     predict_latest_backup,
+    require_same_backup_generation,
     rfc3339_ns,
     select_correlated_evidence,
     select_latest_evidence,
@@ -73,6 +76,9 @@ FUNCTIONS = {
     "passive_patch_required_predictions": passive_patch_required_predictions,
     "freeze_passive_patch_backups": freeze_passive_patch_backups,
     "validate_velero_child": validate_velero_child,
+    "predict_passive_patch_credential_variants": predict_passive_patch_credential_variants,
+    "require_no_credential_variant_children": require_no_credential_variant_children,
+    "require_same_backup_generation": require_same_backup_generation,
     "normalize_child_list": normalize_child_list,
     "canonical_restore_projection": canonical_restore_projection,
     "restore_spec_fingerprint": restore_spec_fingerprint,

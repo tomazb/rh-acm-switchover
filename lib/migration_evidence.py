@@ -248,6 +248,27 @@ def predict_correlated_backup(
     return ("selected", matches[0]) if matches else ("none", None)
 
 
+def require_same_backup_generation(backup_names: Any) -> int:
+    """Return the name timestamp every Backup name shares, in nanoseconds, or raise.
+
+    July design section 1: the Backups a full_restore consumes come from one
+    BackupSchedule run, matched by the schedule's name timestamp (the suffix
+    getBackupTimestamp parses). An unparseable or zero suffix, or two different
+    timestamps, block before mutation.
+    """
+    if not isinstance(backup_names, list) or not backup_names or not all(_non_empty_str(n) for n in backup_names):
+        raise MigrationEvidenceError("malformed_backup_names", "the Backup names must be a non-empty list of names")
+    stamps = set()
+    for name in backup_names:
+        stamp = _name_timestamp_ns(name)
+        if stamp is None:
+            raise MigrationEvidenceError("backup_generation_unparseable", f"Backup {name} has no name timestamp")
+        stamps.add(stamp)
+    if len(stamps) != 1:
+        raise MigrationEvidenceError("mixed_backup_generation", "the Backups come from different schedule runs")
+    return stamps.pop()
+
+
 def _non_empty_str(value: Any) -> bool:
     return isinstance(value, str) and bool(value)
 

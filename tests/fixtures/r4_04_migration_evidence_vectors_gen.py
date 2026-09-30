@@ -4222,6 +4222,344 @@ case(
     True,
 )
 
+# --- PR C Task 7: legacy passive_patch hive/cluster requests (PR C decisions amendment §1.2) -----
+# D is the PR C decisions amendment. On the legacy lanes the sync branch can request CredentialsHive
+# and CredentialsCluster from `latest`: the controller selects the latest Credentials Backup and, when
+# its spec.orLabelSelectors is non-empty, returns that same Backup; otherwise it correlates the hive
+# and cluster tokens from its name (U2.12-2.16 restore.go getVeleroBackupName).
+DOCS["D"] = "2026-09-30-r4-04-pr-c-decisions-amendment.md"
+REF_TABLES["shortcut"] = {
+    "2.12": "restore.go:502-580",
+    "2.13": "restore.go:502-580",
+    "2.14": "restore.go:509-587",
+    "2.15": "restore.go:509-587",
+    "2.16": "restore.go:509-587",
+}
+REF_TABLES["variant_requests"] = {
+    "2.12": "restore.go:607-625",
+    "2.13": "restore.go:607-625",
+    "2.14": "restore.go:614-632",
+    "2.15": "restore.go:614-632",
+    "2.16": "restore.go:614-632",
+    "2.17": "restore.go:53-73",
+}
+REF_TABLES["variant_substring"] = {
+    "2.12": "restore.go:561-573",
+    "2.13": "restore.go:561-573",
+    "2.14": "restore.go:568-580",
+    "2.15": "restore.go:568-580",
+    "2.16": "restore.go:568-580",
+}
+DEFAULT_SPOTS["predict_passive_patch_credential_variants"] = ("D:61-78",)
+DEFAULT_SPOTS["require_no_credential_variant_children"] = ("D:79-94",)
+DEFAULT_SPOTS["require_same_backup_generation"] = ("J:88-91",)
+VAR_L = refs2(LEGACY, "shortcut", "variant_requests", "sync_branch") + refs(LEGACY, "latest", "sort")
+VAR_C = VAR_L + refs(LEGACY, "correlated", "timestamp")
+HIVE_EXACT = backup("acm-credentials-hive-schedule-20240102120000", start=NEW)
+CLUSTER_EXACT = backup("acm-credentials-cluster-schedule-20240102120000", start=NEW)
+HIVE_NEAR = backup("acm-credentials-hive-schedule-20240102120010", start="2024-01-02T12:00:10Z")
+HIVE_NEAR2 = backup("acm-credentials-hive-schedule-20240102120020", start="2024-01-02T12:00:20Z")
+CLUSTER_NEAR = backup("acm-credentials-cluster-schedule-20240102120015", start="2024-01-02T12:00:15Z")
+HIVE_FAR = backup("acm-credentials-hive-schedule-20240102130000", start="2024-01-02T13:00:00Z")
+
+
+def with_selectors(raw, selectors):
+    raw = copy.deepcopy(raw)
+    raw["spec"] = {} if selectors is ABSENT else {"orLabelSelectors": selectors}
+    return raw
+
+
+SELECTORS = [{"matchExpressions": [{"key": "cluster.open-cluster-management.io/type", "operator": "Exists"}]}]
+CRED_SHORTCUT = with_selectors(backup(ACT_CRED_B, start=NEW), SELECTORS)
+CRED_PLAIN = with_selectors(backup(ACT_CRED_B, start=NEW), [])
+
+
+def variants(inventory, contract=LEG, name=ACT_CRED_B):
+    others = [raw for raw in PATCH_INVENTORY if raw["metadata"]["name"] != ACT_CRED_B]
+    return {"controller_contract": contract, "inventory": others + inventory, "activation_credentials_name": name}
+
+
+fn = "predict_passive_patch_credential_variants"
+case("variants-legacy-shortcut", LEGACY, VAR_L, fn, variants([CRED_SHORTCUT]), ok("shortcut"))
+case(
+    "variants-legacy-shortcut-with-dedicated-backups-unselected",
+    LEGACY,
+    VAR_L,
+    fn,
+    variants([CRED_SHORTCUT, HIVE_EXACT, CLUSTER_EXACT]),
+    ok("shortcut"),
+)
+case("variants-legacy-no-candidate", LEGACY, VAR_C, fn, variants([CRED_PLAIN, HIVE_FAR]), ok("no_candidate"))
+case(
+    "variants-legacy-no-candidate-without-spec",
+    LEGACY,
+    VAR_C,
+    fn,
+    variants([with_selectors(backup(ACT_CRED_B, start=NEW), ABSENT)]),
+    ok("no_candidate"),
+)
+case(
+    "variants-legacy-null-selectors-no-candidate",
+    LEGACY,
+    VAR_C,
+    fn,
+    variants([with_selectors(backup(ACT_CRED_B, start=NEW), None)]),
+    ok("no_candidate"),
+)
+for label, extra in [
+    ("hive-exact", [HIVE_EXACT]),
+    ("hive-fallback", [HIVE_NEAR]),
+    ("cluster-only-exact", [CLUSTER_EXACT]),
+    ("cluster-only-fallback", [CLUSTER_NEAR]),
+]:
+    case(
+        f"variants-legacy-{label}-blocks",
+        LEGACY,
+        VAR_C,
+        fn,
+        variants([CRED_PLAIN] + extra),
+        err("legacy_credential_variant_selected"),
+        True,
+    )
+case(
+    "variants-legacy-fallback-ambiguous-blocks",
+    LEGACY,
+    VAR_C,
+    fn,
+    variants([CRED_PLAIN, HIVE_NEAR, HIVE_NEAR2]),
+    err("correlated_ambiguous"),
+    True,
+)
+newer_cred = with_selectors(backup("acm-credentials-schedule-20240103120000", start="2024-01-03T12:00:00Z"), SELECTORS)
+case(
+    "variants-legacy-latest-credentials-moved-blocks",
+    LEGACY,
+    VAR_L,
+    fn,
+    variants([CRED_SHORTCUT, newer_cred]),
+    err("credential_variant_source_mismatch"),
+    True,
+)
+case(
+    "variants-legacy-frozen-credentials-missing-blocks",
+    LEGACY,
+    VAR_L,
+    fn,
+    variants([]),
+    err("credential_variant_source_mismatch"),
+    True,
+)
+tied_cred = with_selectors(backup("acm-credentials-schedule-20240102120000x", start=NEW), SELECTORS)
+case(
+    "variants-legacy-latest-tie-blocks",
+    LEGACY,
+    VAR_L,
+    fn,
+    variants([CRED_SHORTCUT, tied_cred]),
+    err("latest_ambiguous"),
+    True,
+)
+for label, selectors in [("string", "matchLabels"), ("object", {"matchLabels": {}})]:
+    case(
+        f"variants-legacy-selectors-{label}-malformed-blocks",
+        LEGACY,
+        VAR_L,
+        fn,
+        variants([with_selectors(backup(ACT_CRED_B, start=NEW), selectors)]),
+        err("malformed_inventory"),
+        True,
+    )
+malformed_spec = backup(ACT_CRED_B, start=NEW)
+malformed_spec["spec"] = ["orLabelSelectors"]
+case(
+    "variants-legacy-spec-malformed-blocks",
+    LEGACY,
+    VAR_L,
+    fn,
+    variants([malformed_spec]),
+    err("malformed_inventory"),
+    True,
+)
+case(
+    "variants-2.17-not-requested",
+    V17,
+    refs2(V17, "variant_requests"),
+    fn,
+    variants([CRED_PLAIN, HIVE_EXACT], A17),
+    ok("not_requested"),
+)
+for label, contract, name, code in [
+    ("unknown-contract", "legacy", ACT_CRED_B, "unknown_controller_contract"),
+    ("empty-name", LEG, "", "frozen_backups_invalid"),
+    ("null-name", A17, None, "frozen_backups_invalid"),
+]:
+    case(
+        f"variants-{label}-rejected",
+        ALL,
+        [],
+        fn,
+        variants([CRED_SHORTCUT], contract, name),
+        err(code),
+        True,
+    )
+
+fn = "require_no_credential_variant_children"
+VARC_L = refs2(LEGACY, "variant_substring", "owner", "index")
+hive_child = child(gname(HIVE_EXACT["metadata"]["name"]), HIVE_EXACT["metadata"]["name"])
+cluster_child_later = child(gname(CLUSTER_NEAR["metadata"]["name"]), CLUSTER_NEAR["metadata"]["name"])
+contains_child = child(f"{R}-copy-of-hive", "copy-acm-credentials-hive-schedule")
+foreign_hive = child(gname(HIVE_EXACT["metadata"]["name"]) + "-x", HIVE_EXACT["metadata"]["name"])
+foreign_hive["metadata"]["ownerReferences"] = [owner_ref(uid="uid-previous")]
+
+
+def no_variants(children, contract=LEG, owner_name=R, owner_uid=RUID):
+    return {
+        "controller_contract": contract,
+        "acm_restore_name": owner_name,
+        "acm_restore_uid": owner_uid,
+        "namespace_restores": children,
+    }
+
+
+case("variant-children-legacy-clean", LEGACY, VARC_L, fn, no_variants(LEG_CHILDREN), ok(None))
+for label, extra in [
+    ("historical-hive", child(gname(HIVE_EXACT["metadata"]["name"]), HIVE_EXACT["metadata"]["name"], "Failed")),
+    ("current-hive", hive_child),
+    ("later-cluster", cluster_child_later),
+    ("contains-token", contains_child),
+]:
+    case(
+        f"variant-children-legacy-{label}-blocks",
+        LEGACY,
+        VARC_L,
+        fn,
+        no_variants(LEG_CHILDREN + [extra]),
+        err("credential_variant_child"),
+        True,
+    )
+case(
+    "variant-children-legacy-foreign-owner-ignored",
+    LEGACY,
+    VARC_L,
+    fn,
+    no_variants(LEG_CHILDREN + [foreign_hive]),
+    ok(None),
+)
+case(
+    "variant-children-2.17-not-requested",
+    V17,
+    refs2(V17, "variant_requests"),
+    fn,
+    no_variants(LEG_CHILDREN + [hive_child], A17),
+    ok(None),
+)
+bad_backup_name = child(gname("x"), "x")
+bad_backup_name["spec"]["backupName"] = 7
+for label, inp, code in [
+    ("malformed-backup-name", no_variants(LEG_CHILDREN + [bad_backup_name]), "malformed_velero_restore"),
+    ("malformed-list", no_variants({"items": []}), "malformed_restore_list"),
+    ("empty-owner", no_variants(LEG_CHILDREN, owner_uid=""), "malformed_child_expectation"),
+    ("unknown-contract", no_variants(LEG_CHILDREN, "active"), "unknown_controller_contract"),
+]:
+    case(f"variant-children-{label}-rejected", ALL, [], fn, inp, err(code), True)
+
+# passive_patch_completion: the D §1.2 rule 3 backstop and the rule 4 shared unsuffixed child.
+fn = "passive_patch_completion"
+VARP_L = PP_L + refs2(LEGACY, "variant_substring", "shortcut")
+shared_cred = child(gname(ACT_CRED_B), ACT_CRED_B)
+active_cred = child(gname(ACT_CRED_B, True), ACT_CRED_B)
+SHARED_POST = dict(LEG_POST, veleroCredentialsRestoreName=gname(ACT_CRED_B, True))
+SHARED_CHILDREN = [old_cred, old_res, old_gen, p_mc, active_cred, p_gen]
+case(
+    "patch-legacy-shared-credentials-child-journaled",
+    LEGACY,
+    VARP_L,
+    fn,
+    patch(LEG, SHARED_POST, SHARED_CHILDREN + [shared_cred]),
+    ok(
+        lists(
+            managed_clusters=[p_mc],
+            activation_credentials=[active_cred, shared_cred],
+            activation_resources_generic=[p_gen],
+        )
+    ),
+)
+case(
+    "patch-legacy-shared-credentials-child-absent-not-required",
+    LEGACY,
+    VARP_L,
+    fn,
+    patch(LEG, SHARED_POST, SHARED_CHILDREN),
+    ok(lists(managed_clusters=[p_mc], activation_credentials=[active_cred], activation_resources_generic=[p_gen])),
+)
+foreign_shared = child(gname(ACT_CRED_B), ACT_CRED_B, refs=[owner_ref(uid="uid-previous")])
+wrong_shared = child(gname(ACT_CRED_B), CRED_B)
+running_shared = child(gname(ACT_CRED_B), ACT_CRED_B, "InProgress")
+for label, extra, code in [
+    ("foreign-owner", foreign_shared, "velero_restore_owner_mismatch"),
+    ("wrong-backup", wrong_shared, "velero_restore_backup_mismatch"),
+    ("not-completed", running_shared, "velero_restore_not_completed"),
+]:
+    case(
+        f"patch-legacy-shared-credentials-child-{label}-blocks",
+        LEGACY,
+        VARP_L,
+        fn,
+        patch(LEG, SHARED_POST, SHARED_CHILDREN + [extra]),
+        err(code),
+        True,
+    )
+for label, extra in [("historical-hive", hive_child), ("later-cluster", cluster_child_later)]:
+    case(
+        f"patch-legacy-{label}-child-blocks-completion",
+        LEGACY,
+        VARP_L,
+        fn,
+        patch(LEG, LEG_POST, LEG_CHILDREN + [extra]),
+        err("credential_variant_child"),
+        True,
+    )
+case(
+    "patch-2.17-hive-named-child-outside-cohort-ignored",
+    V17,
+    PP_17,
+    fn,
+    patch(A17, P17_POST, P17_CHILDREN + [child("stray-hive", HIVE_EXACT["metadata"]["name"], refs=[])]),
+    ok(lists(managed_clusters=[p_mc], activation_credentials=[p_cred_act], activation_resources_generic=[p_gen_act])),
+)
+
+# --- PR C Task 7: the full_restore same-generation rule (July design §1) ---------------------------
+fn = "require_same_backup_generation"
+GEN_ALL = refs(ALL, "timestamp")
+case("generation-same", ALL, GEN_ALL, fn, {"backup_names": [MC_B, CRED_B, RES_B]}, ok(1704110400000000000), True)
+case(
+    "generation-same-fraction",
+    ALL,
+    GEN_ALL,
+    fn,
+    {"backup_names": [MC_B + ".5", CRED_B + ".50"]},
+    ok(1704110400500000000),
+    True,
+)
+case(
+    "generation-mixed-blocks",
+    ALL,
+    GEN_ALL,
+    fn,
+    {"backup_names": [MC_B, "acm-credentials-schedule-20240101120001", RES_B]},
+    err("mixed_backup_generation"),
+    True,
+)
+for label, names, code in [
+    ("no-hyphen", [MC_B, "manual"], "backup_generation_unparseable"),
+    ("bad-suffix", [MC_B, "acm-credentials-schedule-2024"], "backup_generation_unparseable"),
+    ("zero-time", ["acm-managed-clusters-schedule-00010101000000"], "backup_generation_unparseable"),
+    ("empty-list", [], "malformed_backup_names"),
+    ("empty-name", [MC_B, ""], "malformed_backup_names"),
+    ("not-a-list", MC_B, "malformed_backup_names"),
+]:
+    case(f"generation-{label}-rejected", ALL, [], fn, {"backup_names": names}, err(code), True)
+
 
 def build():
     """Return the fixture text: a readable header, then one compact case per line."""
