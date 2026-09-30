@@ -1173,10 +1173,7 @@ class ActionModule(ActionBase):
         try:
             os.fsync(dir_fd)
         finally:
-            try:
-                os.close(dir_fd)
-            except OSError:
-                pass
+            os.close(dir_fd)
 
     def _build_temp_checkpoint_path(self, path: str) -> str:
         dir_path = os.path.dirname(path) or "."

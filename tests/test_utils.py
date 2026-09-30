@@ -1905,6 +1905,8 @@ class TestStateWriteDurability:
             return real_replace(src, dst)
 
         def open_(path, flags, *args, **kwargs):
+            if os.path.isdir(path):
+                events.append(("open_dir", flags))
             if fail_open is not None and os.path.isdir(path):
                 raise fail_open
             return real_open(path, flags, *args, **kwargs)
@@ -1917,7 +1919,8 @@ class TestStateWriteDurability:
         fsync, replace, open_ = self._recording(events)
         with patch.object(os, "fsync", fsync), patch.object(os, "replace", replace), patch.object(os, "open", open_):
             sm.flush_state()
-        assert events == [("fsync_file",), ("replace",), ("fsync_dir",)]
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        assert events == [("fsync_file",), ("replace",), ("open_dir", directory_flags), ("fsync_dir",)]
 
     @pytest.mark.parametrize(
         "failure",

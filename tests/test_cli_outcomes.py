@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from lib.cli_outcomes import (
     CliOperationHooks,
@@ -610,3 +610,74 @@ def test_run_operation_mode_skips_state_error_when_recording_disabled():
     assert exit_code == 1
     state.add_error.assert_not_called()
     hooks.write_python_report.assert_called_once_with(args, state, "fail", logger)
+
+
+def test_an_interrupt_never_reports_state_saved_when_the_state_write_is_not_durable():
+    """R4-04 PR A: an interrupted run says "State saved" only after the state write succeeded.
+
+    The SIGINT handler flushes before the interrupt reaches this handler, and a failed directory
+    fsync leaves the state dirty; the handler retries the save and, if that fails too, reports the
+    on-disk state as indeterminate instead of claiming it was saved.
+    """
+    args = SimpleNamespace(argocd_resume_only=False, verbose=False, state_file="state.json")
+    state = Mock()
+    state.save_state.side_effect = OSError(5, "directory fsync failed")
+    logger = Mock()
+    hooks = CliOperationHooks(
+        bind_runtime_hub_identities=Mock(side_effect=KeyboardInterrupt),
+        run_argocd_resume_only=Mock(),
+        execute_operation=Mock(),
+        write_python_report=Mock(),
+        gitops_reporter_factory=lambda: Mock(),
+    )
+
+    exit_code = run_operation_mode(
+        args,
+        state,
+        Mock(),
+        Mock(),
+        logger,
+        should_bind_state=True,
+        should_record_state_errors=True,
+        hooks=hooks,
+        exit_success=0,
+        exit_failure=1,
+        exit_interrupt=130,
+    )
+
+    assert exit_code == 130
+    state.save_state.assert_called_once_with()
+    assert call("State saved to: %s", "state.json") not in logger.info.call_args_list
+    logged = " ".join(str(c) for c in logger.error.call_args_list)
+    assert "indeterminate" in logged and "state.json" in logged
+
+
+def test_an_interrupt_reports_state_saved_after_a_successful_state_write():
+    args = SimpleNamespace(argocd_resume_only=False, verbose=False, state_file="state.json")
+    state = Mock()
+    logger = Mock()
+    hooks = CliOperationHooks(
+        bind_runtime_hub_identities=Mock(side_effect=KeyboardInterrupt),
+        run_argocd_resume_only=Mock(),
+        execute_operation=Mock(),
+        write_python_report=Mock(),
+        gitops_reporter_factory=lambda: Mock(),
+    )
+
+    exit_code = run_operation_mode(
+        args,
+        state,
+        Mock(),
+        Mock(),
+        logger,
+        should_bind_state=True,
+        should_record_state_errors=True,
+        hooks=hooks,
+        exit_success=0,
+        exit_failure=1,
+        exit_interrupt=130,
+    )
+
+    assert exit_code == 130
+    state.save_state.assert_called_once_with()
+    logger.info.assert_any_call("State saved to: %s", "state.json")
