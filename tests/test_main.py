@@ -3104,7 +3104,7 @@ class TestPreflightPhase:
         phase_class.assert_not_called()
 
     def test_waiver_does_not_change_enforcement_or_the_recorded_expectation(self, tmp_path):
-        """Task 6 only validates the waiver; journaling and consumption belong to later tasks."""
+        """The waiver never rewrites the expectation; activation receives the validated request to journal."""
         from lib.run_record import RunRecord
         from lib.utils import StateManager
 
@@ -3132,6 +3132,12 @@ class TestPreflightPhase:
         kwargs = activation_class.call_args.kwargs
         assert kwargs["expected_managed_cluster_names"] == ["cluster-a"]
         assert kwargs["enforce_expected_managed_cluster_names"] is True
+        assert kwargs["managed_cluster_expectation_waiver"] == {
+            "scope": "both",
+            "actor": "operator@example.com",
+            "reason": "stale inventory",
+            "request_id": "CHG-1",
+        }
         expectation = RunRecord(state).managed_cluster_expectation()
         assert expectation.names == ("cluster-a",)
         assert expectation.count == 1

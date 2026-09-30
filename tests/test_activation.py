@@ -21,22 +21,18 @@ from lib.constants import (
     AUTO_IMPORT_STRATEGY_DEFAULT,
     AUTO_IMPORT_STRATEGY_KEY,
     AUTO_IMPORT_STRATEGY_SYNC,
-    BACKUP_NAMESPACE,
     IMMEDIATE_IMPORT_ANNOTATION,
     IMPORT_CONTROLLER_CONFIG_CM,
-    MANAGED_CLUSTER_RESTORE_NAME,
+    MANAGED_CLUSTER_API_GROUP,
+    MANAGED_CLUSTER_API_VERSION,
+    MANAGED_CLUSTER_PLURAL,
     MCE_NAMESPACE,
-    PATCH_VERIFY_RETRY_DELAY,
     RESTORE_PASSIVE_SYNC_NAME,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
-    SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
-    VELERO_BACKUP_LATEST,
-    VELERO_BACKUP_SKIP,
 )
 from lib.exceptions import FatalError
 from lib.run_record import HubFacts, RunRecord
 from lib.strict_read import StrictReadOutcome
-from lib.waiter import WaitConditionResult
 
 SecondaryActivation = activation_module.SecondaryActivation
 
@@ -92,8 +88,16 @@ def mock_secondary_client():
             return StrictReadOutcome.object_absent("object_not_found")
         return StrictReadOutcome.from_resource(resource)
 
+    def strict_managed_clusters():
+        return StrictReadOutcome.from_items(
+            mock.list_custom_resources(
+                group=MANAGED_CLUSTER_API_GROUP, version=MANAGED_CLUSTER_API_VERSION, plural=MANAGED_CLUSTER_PLURAL
+            )
+        )
+
     mock.list_custom_resources_strict.side_effect = strict_list
     mock.get_custom_resource_strict.side_effect = strict_get
+    mock.list_managed_clusters_strict.side_effect = strict_managed_clusters
     return mock
 
 
@@ -189,278 +193,6 @@ class TestSecondaryActivation:
         assert result is False
 
     @patch("modules.activation.wait_for_condition")
-    def test_wait_for_restore_timeout(self, mock_wait, activation_passive, mock_secondary_client):
-        """Test timeout waiting for restore."""
-        mock_wait.return_value = False  # Timeout
-
-        # Discover a passive sync restore
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
-            }
-        ]
-
-        with pytest.raises(FatalError, match="Timeout waiting for restore"):
-            activation_passive._wait_for_restore_completion()
-
-    def test_poll_restore_logic(self, activation_passive, mock_secondary_client):
-        """Test the internal _poll_restore logic via _wait_for_restore_completion."""
-        # Mock get_custom_resource to return appropriate values for different resources
-        call_count = [0]
-
-        def get_custom_resource_side_effect(**kwargs):
-            call_count[0] += 1
-            if kwargs.get("plural") == "restores" and kwargs.get("group") == "cluster.open-cluster-management.io":
-                return {
-                    "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": "100"},
-                    "status": {
-                        "phase": "Enabled",
-                        "veleroManagedClustersRestoreName": "test-velero-mc-restore",
-                    },
-                }
-            if kwargs.get("plural") == "restores" and kwargs.get("group") == "velero.io":
-                return {
-                    "status": {
-                        "phase": "Completed",
-                        "progress": {"itemsRestored": 50},
-                    }
-                }
-            return None
-
-        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
-
-        def list_custom_resources_side_effect(**kwargs):
-            if kwargs.get("plural") == "restores":
-                return [
-                    {
-                        "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-                        "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
-                    }
-                ]
-            return [
-                {"metadata": {"name": "cluster1"}},
-                {"metadata": {"name": "local-cluster"}},
-            ]
-
-        mock_secondary_client.list_custom_resources.side_effect = list_custom_resources_side_effect
-
-        with patch("modules.activation.wait_for_condition") as mock_wait:
-            # Define side effect to execute the callback passed to wait_for_condition
-            def side_effect(desc, callback, **kwargs):
-                result = callback()
-                assert isinstance(result, WaitConditionResult)
-                return result.done  # Execute callback and return done status
-
-            mock_wait.side_effect = side_effect
-
-            # We need to bypass the earlier steps to get to wait
-            activation_passive.state.is_step_completed.side_effect = lambda step: step != "wait_restore_completion"
-
-            activation_passive._wait_for_restore_completion()
-
-            # Verify get_custom_resource was called by the callback
-            assert mock_secondary_client.get_custom_resource.called
-
-    def test_poll_restore_finished_with_errors_clusters_already_available(
-        self, activation_passive, mock_secondary_client
-    ):
-        """FinishedWithErrors with exact ManagedCluster already-available messages should succeed."""
-        call_count = [0]
-
-        def get_custom_resource_side_effect(**kwargs):
-            call_count[0] += 1
-            if kwargs.get("plural") == "restores" and kwargs.get("group") == "cluster.open-cluster-management.io":
-                return {
-                    "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": "200"},
-                    "status": {
-                        "phase": "FinishedWithErrors",
-                        "lastMessage": "Velero restores have run to completion but encountered 1+ errors",
-                        "messages": [
-                            "ManagedCluster prod1 already available",
-                            "ManagedCluster prod2 already available",
-                            "ManagedCluster prod3 already available",
-                        ],
-                        "veleroManagedClustersRestoreName": "test-velero-mc-restore",
-                    },
-                }
-            if kwargs.get("plural") == "restores" and kwargs.get("group") == "velero.io":
-                return {"status": {"phase": "Completed", "progress": {"itemsRestored": 50}}}
-            return None
-
-        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
-
-        def list_custom_resources_side_effect(**kwargs):
-            if kwargs.get("plural") == "restores":
-                return [
-                    {
-                        "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-                        "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
-                    }
-                ]
-            return [
-                {"metadata": {"name": "prod1"}},
-                {"metadata": {"name": "prod2"}},
-                {"metadata": {"name": "prod3"}},
-                {"metadata": {"name": "local-cluster"}},
-            ]
-
-        mock_secondary_client.list_custom_resources.side_effect = list_custom_resources_side_effect
-
-        with patch("modules.activation.wait_for_condition") as mock_wait:
-
-            def side_effect(desc, callback, **kwargs):
-                result = callback()
-                assert isinstance(result, WaitConditionResult)
-                return result.done
-
-            mock_wait.side_effect = side_effect
-            activation_passive.state.is_step_completed.side_effect = lambda step: step != "wait_restore_completion"
-
-            # Should NOT raise - FinishedWithErrors with "already available" is treated as success
-            activation_passive._wait_for_restore_completion()
-
-    def test_poll_restore_finished_with_errors_loose_already_available_message_raises(
-        self, activation_passive, mock_secondary_client
-    ):
-        """Loose already-available substrings are not benign FinishedWithErrors messages."""
-
-        def get_custom_resource_side_effect(**kwargs):
-            if kwargs.get("plural") == "restores" and kwargs.get("group") == "cluster.open-cluster-management.io":
-                return {
-                    "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": "300"},
-                    "status": {
-                        "phase": "FinishedWithErrors",
-                        "lastMessage": "Velero restores failed",
-                        "messages": ["managed cluster prod1 already available"],
-                    },
-                }
-            return None
-
-        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
-        mock_secondary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": RESTORE_PASSIVE_SYNC_NAME}, "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True}},
-        ]
-
-        with patch("modules.activation.wait_for_condition") as mock_wait:
-
-            def side_effect(desc, callback, **kwargs):
-                result = callback()
-                assert isinstance(result, WaitConditionResult)
-                return result.done
-
-            mock_wait.side_effect = side_effect
-            activation_passive.state.is_step_completed.side_effect = lambda step: step != "wait_restore_completion"
-
-            with pytest.raises(FatalError, match="Restore failed: FinishedWithErrors"):
-                activation_passive._wait_for_restore_completion()
-
-    def test_poll_restore_finished_with_errors_real_errors_raises(self, activation_passive, mock_secondary_client):
-        """FinishedWithErrors with non-'already available' messages should still raise."""
-
-        def get_custom_resource_side_effect(**kwargs):
-            if kwargs.get("plural") == "restores" and kwargs.get("group") == "cluster.open-cluster-management.io":
-                return {
-                    "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": "300"},
-                    "status": {
-                        "phase": "FinishedWithErrors",
-                        "lastMessage": "Velero restores failed",
-                        "messages": ["restore of secret xyz failed"],
-                    },
-                }
-            return None
-
-        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
-        mock_secondary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": RESTORE_PASSIVE_SYNC_NAME}, "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True}},
-        ]
-
-        with patch("modules.activation.wait_for_condition") as mock_wait:
-
-            def side_effect(desc, callback, **kwargs):
-                result = callback()
-                assert isinstance(result, WaitConditionResult)
-                return result.done
-
-            mock_wait.side_effect = side_effect
-            activation_passive.state.is_step_completed.side_effect = lambda step: step != "wait_restore_completion"
-
-            with pytest.raises(FatalError, match="Restore failed: FinishedWithErrors"):
-                activation_passive._wait_for_restore_completion()
-
-    def test_poll_restore_error_phase_raises(self, activation_full, mock_secondary_client):
-        """Restore phase Error must fail immediately instead of timing out."""
-
-        def get_custom_resource_side_effect(**kwargs):
-            if kwargs.get("plural") == "restores" and kwargs.get("group") == "cluster.open-cluster-management.io":
-                return {
-                    "metadata": {"name": "restore-acm-full", "resourceVersion": "400"},
-                    "status": {
-                        "phase": "Error",
-                        "lastMessage": "Velero restore restore-acm-full-acm-managed-clusters-schedule-123 failed validation",
-                    },
-                }
-            return None
-
-        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
-        mock_secondary_client.list_custom_resources.return_value = []
-
-        with patch("modules.activation.wait_for_condition") as mock_wait:
-
-            def side_effect(desc, callback, **kwargs):
-                result = callback()
-                assert isinstance(result, WaitConditionResult)
-                return result.done
-
-            mock_wait.side_effect = side_effect
-
-            with pytest.raises(FatalError, match="Restore failed: Error"):
-                activation_full._wait_for_restore_completion()
-
-    def test_poll_restore_failed_with_errors_phase_keeps_waiting(self, activation_full, mock_secondary_client):
-        """FailedWithErrors is not a real terminal ACM restore phase and should not fail immediately."""
-        restore_states = iter(
-            [
-                {
-                    "metadata": {"name": "restore-acm-full", "resourceVersion": "500"},
-                    "status": {
-                        "phase": "FailedWithErrors",
-                        "lastMessage": "controller still reconciling",
-                    },
-                },
-                {
-                    "metadata": {"name": "restore-acm-full", "resourceVersion": "501"},
-                    "status": {
-                        "phase": "Completed",
-                        "lastMessage": "restore completed",
-                    },
-                },
-            ]
-        )
-
-        def get_custom_resource_side_effect(**kwargs):
-            if kwargs.get("plural") == "restores" and kwargs.get("group") == "cluster.open-cluster-management.io":
-                return next(restore_states)
-            return None
-
-        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
-        mock_secondary_client.list_custom_resources.return_value = []
-
-        with patch("modules.activation.wait_for_condition") as mock_wait:
-
-            def side_effect(_desc, callback, **_kwargs):
-                result = callback()
-                assert isinstance(result, WaitConditionResult)
-                assert result.done is False
-                result = callback()
-                assert isinstance(result, WaitConditionResult)
-                return result.done
-
-            mock_wait.side_effect = side_effect
-
-            activation_full._wait_for_restore_completion()
-
-    @patch("modules.activation.wait_for_condition")
     def test_full_restore_enforces_min_managed_clusters_after_restore(
         self, mock_wait, mock_secondary_client, mock_state_manager
     ):
@@ -480,18 +212,14 @@ class TestSecondaryActivation:
             return callback().done
 
         mock_wait.side_effect = wait_side_effect
-        mock_secondary_client.get_custom_resource.return_value = {
-            "metadata": {"name": "restore-acm-full"},
-            "status": {"phase": "Completed"},
-        }
         mock_secondary_client.list_custom_resources.return_value = [
             {"metadata": {"name": "local-cluster"}},
         ]
 
         with pytest.raises(FatalError, match="Expected at least 1 ManagedCluster"):
-            activation._wait_for_restore_completion()
+            activation._wait_for_managed_clusters_restored(60)
 
-        assert mock_wait.call_count == 2
+        assert mock_wait.call_count == 1
 
     @patch("modules.activation.wait_for_condition")
     def test_full_restore_waits_for_min_managed_clusters_after_restore(
@@ -504,10 +232,6 @@ class TestSecondaryActivation:
             method="full",
             min_managed_clusters=1,
         )
-        mock_secondary_client.get_custom_resource.return_value = {
-            "metadata": {"name": "restore-acm-full"},
-            "status": {"phase": "Completed"},
-        }
         mock_secondary_client.list_custom_resources.side_effect = [
             [{"metadata": {"name": "local-cluster"}}],
             [{"metadata": {"name": "local-cluster"}}, {"metadata": {"name": "cluster-a"}}],
@@ -524,49 +248,8 @@ class TestSecondaryActivation:
 
         mock_wait.side_effect = wait_side_effect
 
-        activation._wait_for_restore_completion()
-        assert mock_wait.call_count == 2
-
-    def test_poll_velero_restore_waits_when_acm_restore_missing(self, activation_passive, mock_secondary_client):
-        """Velero restore wait must return structured pending status when ACM restore is absent."""
-        mock_secondary_client.get_custom_resource.return_value = None
-
-        with patch("modules.activation.wait_for_condition") as mock_wait:
-
-            def side_effect(_desc, callback, **_kwargs):
-                result = callback()
-                assert isinstance(result, WaitConditionResult)
-                assert result.done is False
-                assert result.public_detail == "ACM restore not found"
-                return result.done
-
-            mock_wait.side_effect = side_effect
-
-            with pytest.raises(FatalError, match="Timeout waiting for Velero managed clusters restore"):
-                activation_passive._wait_for_managed_clusters_velero_restore("restore-acm-passive-sync", timeout=1)
-
-    def test_poll_velero_restore_waits_when_velero_restore_name_missing(
-        self, activation_passive, mock_secondary_client
-    ):
-        """Velero restore wait must return structured pending status until the Velero restore is created."""
-        mock_secondary_client.get_custom_resource.return_value = {
-            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-            "status": {"phase": "Enabled"},
-        }
-
-        with patch("modules.activation.wait_for_condition") as mock_wait:
-
-            def side_effect(_desc, callback, **_kwargs):
-                result = callback()
-                assert isinstance(result, WaitConditionResult)
-                assert result.done is False
-                assert result.public_detail == "Velero managed clusters restore not yet created"
-                return result.done
-
-            mock_wait.side_effect = side_effect
-
-            with pytest.raises(FatalError, match="Timeout waiting for Velero managed clusters restore"):
-                activation_passive._wait_for_managed_clusters_velero_restore("restore-acm-passive-sync", timeout=1)
+        activation._wait_for_managed_clusters_restored(60)
+        assert mock_wait.call_count == 1
 
     def test_recreate_restore_from_snapshot_raises_on_conflict(self, mock_secondary_client, mock_state_manager):
         """Rollback recreation must surface 409 conflicts to the caller."""

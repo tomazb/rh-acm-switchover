@@ -49,11 +49,18 @@ from lib.kube_client import KubeClient
 from lib.migration_child_evidence import (
     STATUS_NAME_FIELDS,
     VELERO_RESTORE_LISTS,
+    acm_phase_accepts,
     freeze_one_shot_backups,
     freeze_passive_patch_backups,
+    is_owned_by,
+    one_shot_completion,
+    passive_patch_cohort,
+    passive_patch_completion,
     predict_one_shot_child_names,
     predict_passive_patch_child_names,
     predict_passive_patch_credential_variants,
+    require_no_credential_variant_children,
+    validate_velero_child,
 )
 from lib.migration_evidence import (
     MigrationEvidenceError,
@@ -63,7 +70,7 @@ from lib.migration_evidence import (
     require_same_backup_generation,
     select_latest_evidence,
 )
-from lib.migration_journal import validate_journal_transition
+from lib.migration_journal import restore_spec_fingerprint, validate_journal_transition, validate_waiver
 from lib.run_record import RunRecord, StateStructureError
 from lib.strict_read import StrictReadStatus
 from lib.utils import Phase, StateManager, is_acm_version_ge, parse_acm_version
@@ -99,6 +106,23 @@ _FULL_RESTORE_SELECTIONS = (
     ("Credentials", "credentials", _CREDENTIALS_FIELD),
     ("Resources", "resources", _RESOURCES_FIELD),
 )
+# ACM Restore phases that precede completion, and Velero Restore phases that are not
+# terminal yet: both keep the completion wait polling (August section 5).
+_ACM_PENDING_PHASES = (None, "", "New", "Started", "Running")
+_VELERO_PENDING_PHASES = (
+    "",
+    "New",
+    "InProgress",
+    "WaitingForPluginOperations",
+    "WaitingForPluginOperationsPartiallyFailed",
+    "Finalizing",
+    "FinalizingPartiallyFailed",
+)
+# Completion refusals that mean "the controller has not produced this yet".
+_PENDING_CHILD_CODES = frozenset(
+    {"required_status_name_missing", "required_child_missing", "active_child_missing", "velero_restore_phase_missing"}
+)
+_WAIVER_FLAG = "--skip-managed-cluster-expectations"
 _CLEANUP_NOT_STARTED = {
     "operation_id": None,
     "state": "not_started",
@@ -145,6 +169,7 @@ class SecondaryActivation:
         min_managed_clusters: int = MIN_MANAGED_CLUSTERS,
         expected_managed_cluster_names: Optional[List[str]] = None,
         enforce_expected_managed_cluster_names: bool = False,
+        managed_cluster_expectation_waiver: Optional[Dict] = None,
     ):
         self.secondary = secondary_client
         self.state = state_manager
@@ -155,10 +180,10 @@ class SecondaryActivation:
         self.min_managed_clusters = min_managed_clusters
         self.expected_managed_cluster_names = sorted(expected_managed_cluster_names or [])
         self.enforce_expected_managed_cluster_names = enforce_expected_managed_cluster_names
+        # A validated waiver request (lib.validation), journaled only when it covers activation.
+        self.managed_cluster_expectation_waiver = managed_cluster_expectation_waiver
         # Cache for discovered passive sync restore name
         self._passive_sync_restore_name: Optional[str] = None
-        self._activation_restore_name: Optional[str] = None
-        self._require_new_velero_restore_signal = False
         self._status_subresource_verified = False
         self.run_record = RunRecord(self.state)
 
@@ -227,6 +252,8 @@ class SecondaryActivation:
             with self.state.step("wait_restore_completion", logger) as should_run:
                 if should_run:
                     self._wait_for_restore_completion()
+                else:
+                    self._reconcile_restore_completion()
 
             # Apply immediate-import annotations when ImportOnly is in effect (ACM 2.14+)
             with self.state.step("apply_immediate_import_annotations", logger) as should_run:
@@ -286,7 +313,6 @@ class SecondaryActivation:
         """Freeze or reload the journal, then perform the kind's guarded Restore mutation."""
         kind = self._mutation_kind()
         journal = self._load_or_freeze_migration_journal(kind)
-        self._activation_restore_name = journal["restore"]["name"]
         self._require_status_subresource()
         if kind == "passive_patch":
             self._apply_passive_patch_guarded(journal)
@@ -306,17 +332,13 @@ class SecondaryActivation:
                 "and start again with --reset-state."
             )
         self._require_journal_matches_run(journal, kind, self._live_acm_minor())
-        self._activation_restore_name = journal["restore"]["name"]
         if journal["restore"]["generation"] is None:
             raise FatalError(
                 "The Restore mutation step is recorded as complete, but the migration journal holds no "
                 "accepted mutation; the live Restore is not owned by this run."
             )
         self._require_status_subresource()
-        if kind == "passive_patch":
-            self._reconcile_patched_restore(journal)
-        else:
-            self._reconcile_created_restore(journal)
+        self._reconcile_journaled_mutation(journal)
 
     def _load_or_freeze_migration_journal(self, kind: str) -> Dict:
         """Return the recorded journal, or freeze a new one and persist it before any mutation."""
@@ -354,7 +376,9 @@ class SecondaryActivation:
             concrete = self._select_full_restore_backups(inventory)
             backups = self._evidence(freeze_one_shot_backups, kind, contract, inventory, BACKUP_NAMESPACE, concrete)
             backup_fields = {field: concrete[category]["name"] for _, category, field in _FULL_RESTORE_SELECTIONS}
-        if kind != "passive_patch":
+        if kind == "passive_patch":
+            self._evidence(predict_passive_patch_child_names, contract, restore_name, backups)
+        else:
             self._evidence(predict_one_shot_child_names, kind, contract, restore_name, backups)
 
         restore: Dict = {
@@ -401,7 +425,7 @@ class SecondaryActivation:
         restore = journal["restore"]
         name = restore["name"]
         if restore["generation"] is not None:
-            self._reconcile_patched_restore(journal)
+            self._reconcile_journaled_mutation(journal)
             return
         live = self._strict_get_restore(name)
         if live is None:
@@ -477,7 +501,7 @@ class SecondaryActivation:
         restore = journal["restore"]
         name = restore["name"]
         if restore["uid"] is not None:
-            self._reconcile_created_restore(journal)
+            self._reconcile_journaled_mutation(journal)
             return
         self._require_unowned_restore_absent(name)
         self._revalidate_frozen_backups(journal)
@@ -500,6 +524,8 @@ class SecondaryActivation:
             self._delete_passive_sync_restore_guarded(passive_name)
         else:
             logger.info("No passive sync restore found; creating %s", name)
+        # The deletion wait can take minutes: re-prove the frozen Backups at the create itself.
+        self._revalidate_frozen_backups(journal)
 
         body = {
             "apiVersion": CLUSTER_BACKUP_API_VERSION_FULL,
@@ -531,19 +557,11 @@ class SecondaryActivation:
         self._persist_journal(_with_restore(journal, uid=result["uid"], generation=generation))
         logger.info("Created %s (uid %s, generation %s)", name, result["uid"], generation)
 
-    def _reconcile_patched_restore(self, journal: Dict) -> None:
+    def _reconcile_journaled_mutation(self, journal: Dict) -> None:
+        """The journaled mutation was accepted: the live Restore must still be exactly that object and spec."""
         restore = journal["restore"]
-        live = self._require_journaled_restore(journal)
-        spec = live.get("spec") or {}
-        if spec.get(SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME) != VELERO_BACKUP_LATEST:
-            raise FatalError(f"{restore['name']} no longer holds the patched ManagedClusters '{VELERO_BACKUP_LATEST}'")
-        logger.info("Guarded patch of %s already accepted (generation %s)", restore["name"], restore["generation"])
-
-    def _reconcile_created_restore(self, journal: Dict) -> None:
-        restore = journal["restore"]
-        live = self._require_journaled_restore(journal)
-        self._require_one_shot_spec(live, journal, restore["name"])
-        logger.info("%s already created by this run (generation %s)", restore["name"], restore["generation"])
+        self._require_owned_spec(self._require_journaled_restore(journal), journal)
+        logger.info("%s already mutated by this run (generation %s)", restore["name"], restore["generation"])
 
     def _require_journaled_restore(self, journal: Dict) -> Dict:
         """Strictly read the journaled Restore and require its UID, generation and cleanup policy."""
@@ -803,10 +821,10 @@ class SecondaryActivation:
             raise FatalError(f"The migration journal could not be recorded durably: {exc}") from exc
 
     @staticmethod
-    def _evidence(function, *args):
+    def _evidence(function, *args, **kwargs):
         """Call a pure evidence helper, turning its fail-closed refusal into a FatalError."""
         try:
-            return function(*args)
+            return function(*args, **kwargs)
         except MigrationEvidenceError as exc:
             raise FatalError(f"Migration evidence refused ({exc})") from exc
 
@@ -1051,170 +1069,229 @@ class SecondaryActivation:
             logger.warning("Failed to annotate %s with immediate-import: %s", cluster_name, exc)
             return False
 
-    def _wait_for_restore_completion(self, timeout: int = RESTORE_WAIT_TIMEOUT):
-        """Wait for restore to complete and verify managed clusters are restored."""
-
-        # Skip waiting in dry-run mode since no actual activation occurred
+    def _wait_for_restore_completion(self, timeout: int = RESTORE_WAIT_TIMEOUT) -> None:
+        """Wait for the journaled Restore's lane-specific completion proof, then record it, completed_at last."""
         if self.secondary.dry_run:
             logger.info("[DRY-RUN] Skipping wait for restore completion")
             return
-
-        restore_name = self._activation_restore_name
-        if not restore_name:
-            if self.method == "passive":
-                if self.activation_method == "restore":
-                    restore_name = MANAGED_CLUSTER_RESTORE_NAME
-                else:
-                    restore_name = self._get_passive_sync_restore_name()
-            else:
-                restore_name = RESTORE_FULL_NAME
-            self._activation_restore_name = restore_name
-
-        def _poll_restore():
-            restore = self.secondary.get_custom_resource(
-                group=CLUSTER_BACKUP_API_GROUP,
-                version=CLUSTER_BACKUP_API_VERSION,
-                plural=RESTORE_PLURAL,
-                name=restore_name,
-                namespace=BACKUP_NAMESPACE,
+        journal = self._require_journal_for_completion()
+        if journal["restore"]["completed_at"] is not None:
+            self._revalidate_completed_evidence(journal)
+            return
+        children = self._collect_and_validate_velero_children(journal, timeout)
+        waiver = self._activation_waiver(journal)
+        if waiver is not None:
+            logger.warning(
+                "Expected ManagedCluster name check waived for activation by %s (%s); the count floor still applies",
+                waiver["actor"],
+                waiver["reason"],
             )
-
-            if not restore:
-                raise FatalError(f"Restore {restore_name} disappeared during wait")
-
-            status = restore.get("status", {})
-            phase = status.get("phase", "unknown")
-            message = status.get("lastMessage", "")
-
-            # For passive sync, "Enabled" means the restore is actively syncing - this is the success state
-            # For full restore, "Finished"/"Completed" mean the restore completed
-            if self.method == "passive" and phase == "Enabled":
-                return WaitConditionResult.complete("phase=Enabled")
-            if phase in ("Finished", "Completed"):
-                return WaitConditionResult.complete(f"phase={phase}")
-            if phase == "FinishedWithErrors":
-                messages = status.get("messages", [])
-                if restore_messages_are_benign_already_available(messages):
-                    logger.warning(
-                        "Restore %s reported FinishedWithErrors but all errors are"
-                        " 'already available' clusters (expected for consecutive"
-                        " switchovers): %s",
-                        restore_name,
-                        "; ".join(messages),
-                    )
-                    return WaitConditionResult.complete("phase=FinishedWithErrors (clusters already available)")
-                raise FatalError(f"Restore failed: {phase} - {message}")
-            if phase in ("Error", "Failed", "PartiallyFailed"):
-                raise FatalError(f"Restore failed: {phase} - {message}")
-
-            return WaitConditionResult.pending(f"phase={phase}")
-
-        completed = wait_for_condition(
-            f"restore {restore_name}",
-            _poll_restore,
-            timeout=timeout,
-            interval=RESTORE_POLL_INTERVAL,
-            fast_interval=RESTORE_FAST_POLL_INTERVAL,
-            fast_timeout=RESTORE_FAST_POLL_TIMEOUT,
-            logger=logger,
-        )
-
-        if not completed:
-            raise FatalError(f"Timeout waiting for restore to complete after {timeout}s")
-
-        # For passive sync, wait for the managed clusters Velero restore to actually complete.
-        # For full restore, the ACM Restore completion is the terminal signal; then enforce
-        # the ManagedCluster count contract exposed by --min-managed-clusters.
         if self.method == "passive":
-            # Skip waiting for Velero restore in dry-run mode since the patch wasn't applied
-            if self.secondary.dry_run:
-                logger.info("[DRY-RUN] Skipping wait for Velero managed clusters restore")
-            else:
-                self._wait_for_managed_clusters_velero_restore(restore_name, timeout)
+            self._verify_managed_clusters_restored(enforce_names=waiver is None)
         else:
-            self._wait_for_managed_clusters_restored(timeout)
+            self._wait_for_managed_clusters_restored(timeout, enforce_names=waiver is None)
+        self._record_restore_completion_evidence(journal, children, waiver)
 
-    def _wait_for_managed_clusters_velero_restore(self, restore_name: str, timeout: int = 300):
-        """
-        Wait for the Velero managed clusters restore to complete.
-
-        This is critical because:
-        1. The ACM restore controller patches the passive sync restore
-        2. This triggers creation of a Velero restore for managed clusters
-        3. The Velero restore needs to complete before ManagedCluster resources exist
-        4. Only after this can we safely create a BackupSchedule
-
-        If we create a BackupSchedule before the managed clusters restore completes,
-        the new backups won't contain the managed clusters!
-        """
-        logger.info("Waiting for managed clusters Velero restore to complete...")
-        previous_velero_restore_name = (
-            self.run_record.pre_activation_velero_restore() if self._require_new_velero_restore_signal else None
-        )
-
-        def _poll_velero_restore():
-            # Get the ACM restore to find the Velero restore name
-            restore = self.secondary.get_custom_resource(
-                group=CLUSTER_BACKUP_API_GROUP,
-                version=CLUSTER_BACKUP_API_VERSION,
-                plural=RESTORE_PLURAL,
-                name=restore_name,
-                namespace=BACKUP_NAMESPACE,
+    def _reconcile_restore_completion(self) -> None:
+        """The wait step is marked complete: its completion evidence must be journaled and still hold."""
+        if self.secondary.dry_run:
+            return
+        journal = self._require_journal_for_completion()
+        if journal["restore"]["completed_at"] is None:
+            raise FatalError(
+                "The Restore wait step is recorded as complete, but the migration journal holds no completion "
+                "evidence; resume cannot treat the Restore as completed."
             )
+        self._revalidate_completed_evidence(journal)
 
-            if not restore:
-                return WaitConditionResult.pending("ACM restore not found")
+    def _require_journal_for_completion(self) -> Dict:
+        journal = self._load_journal()
+        if journal is None or journal["restore"]["generation"] is None:
+            raise FatalError("No journaled Restore mutation to wait for; completion evidence cannot be established")
+        return journal
 
-            status = restore.get("status", {})
-            velero_mc_restore_name = status.get("veleroManagedClustersRestoreName")
+    def _collect_and_validate_velero_children(self, journal: Dict, timeout: int) -> Dict[str, List[Dict]]:
+        """Poll the journaled Restore until its ACM phase and Velero children prove completion.
 
-            if not velero_mc_restore_name:
-                return WaitConditionResult.pending("Velero managed clusters restore not yet created")
+        Each poll strictly re-reads the ACM Restore (identity, generation, owned spec,
+        cleanup policy) and the complete Velero Restore list of the namespace. A
+        non-terminal ACM or child phase, or a child the controller has not created yet,
+        keeps waiting; anything else, and a timeout, fails with no evidence written.
+        """
+        restore = journal["restore"]
+        kind = restore["mutation_kind"]
+        proof: Dict[str, Dict[str, List[Dict]]] = {}
 
-            if previous_velero_restore_name and velero_mc_restore_name == previous_velero_restore_name:
-                return WaitConditionResult.pending("waiting for new Velero managed clusters restore")
+        def _poll() -> WaitConditionResult:
+            live = self._require_journaled_restore(journal)
+            self._require_owned_spec(live, journal)
+            status = live.get("status", {})
+            if not isinstance(status, dict):
+                raise FatalError(f"{restore['name']} status is malformed")
+            phase = status.get("phase")
+            if not self._evidence(acm_phase_accepts, kind, restore["controller_contract"], phase):
+                if phase in _ACM_PENDING_PHASES:
+                    return WaitConditionResult.pending(f"phase={phase}")
+                raise FatalError(f"Restore {restore['name']} reached phase {phase!r}: {status.get('lastMessage', '')}")
+            names = {field: status.get(field, "") for field in STATUS_NAME_FIELDS}
+            if not all(isinstance(value, str) for value in names.values()):
+                raise FatalError(f"{restore['name']} status Restore names are malformed")
+            children = self._strict_velero_restores()
+            if self._children_in_progress(journal, children, names):
+                return WaitConditionResult.pending("Velero restores in progress")
+            try:
+                proof["lists"] = self._completion_lists(journal, names, children, phase)
+            except MigrationEvidenceError as exc:
+                if exc.code in _PENDING_CHILD_CODES:
+                    return WaitConditionResult.pending(exc.code)
+                raise FatalError(f"Restore {restore['name']} completion evidence refused ({exc})") from exc
+            return WaitConditionResult.complete(f"phase={phase}")
 
-            # Check the Velero restore status
-            velero_restore = self.secondary.get_custom_resource(
-                group="velero.io",
-                version="v1",
-                plural="restores",
-                name=velero_mc_restore_name,
-                namespace=BACKUP_NAMESPACE,
-            )
-
-            if not velero_restore:
-                return WaitConditionResult.pending(f"waiting for Velero restore {velero_mc_restore_name}")
-
-            velero_phase = velero_restore.get("status", {}).get("phase", "unknown")
-
-            if velero_phase == "Completed":
-                items_restored = velero_restore.get("status", {}).get("progress", {}).get("itemsRestored", 0)
-                logger.info(
-                    "Velero managed clusters restore completed: %s items restored",
-                    items_restored,
-                )
-                return WaitConditionResult.complete(f"phase=Completed ({items_restored} items)")
-            if velero_phase in ("Failed", "PartiallyFailed"):
-                raise FatalError(f"Velero managed clusters restore failed: {velero_phase}")
-
-            return WaitConditionResult.pending(f"phase={velero_phase}")
-
-        completed = wait_for_condition(
-            "Velero managed clusters restore",
-            _poll_velero_restore,
+        if not wait_for_condition(
+            f"restore {restore['name']}",
+            _poll,
             timeout=timeout,
             interval=RESTORE_POLL_INTERVAL,
             fast_interval=RESTORE_FAST_POLL_INTERVAL,
             fast_timeout=RESTORE_FAST_POLL_TIMEOUT,
             logger=logger,
+        ):
+            raise FatalError(f"Timeout waiting for restore to complete after {timeout}s")
+        return proof["lists"]
+
+    def _completion_lists(
+        self, journal: Dict, names: Dict[str, str], children: List[Dict], phase: str
+    ) -> Dict[str, List[Dict]]:
+        restore = journal["restore"]
+        common = {
+            "acm_restore_name": restore["name"],
+            "acm_restore_uid": restore["uid"],
+            "namespace": restore["namespace"],
+            "frozen_backups": journal["backups"],
+            "status_names": names,
+            "namespace_restores": children,
+            "acm_phase": phase,
+        }
+        if restore["mutation_kind"] == "passive_patch":
+            return passive_patch_completion(
+                restore["controller_contract"],
+                precondition_status_names=restore["passive_patch_precondition"]["status_restore_names"],
+                **common,
+            )
+        return one_shot_completion(restore["mutation_kind"], restore["controller_contract"], **common)
+
+    def _children_in_progress(self, journal: Dict, children: List[Dict], names: Dict[str, str]) -> bool:
+        """True while a child the completion proof aggregates is still running (or has no phase yet)."""
+        restore = journal["restore"]
+        owned = [child for child in children if self._evidence(is_owned_by, child, restore["name"], restore["uid"])]
+        if restore["mutation_kind"] == "passive_patch":
+            owned = self._evidence(passive_patch_cohort, restore["controller_contract"], owned, names)
+        for child in owned:
+            status = child.get("status", {})
+            phase = status.get("phase") if isinstance(status, dict) else None
+            if phase is None or phase in _VELERO_PENDING_PHASES:
+                return True
+        return False
+
+    def _require_owned_spec(self, live: Dict, journal: Dict) -> None:
+        restore = journal["restore"]
+        if restore["mutation_kind"] == "passive_patch":
+            if (live.get("spec") or {}).get(SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME) != VELERO_BACKUP_LATEST:
+                raise FatalError(
+                    f"{restore['name']} no longer holds the patched ManagedClusters '{VELERO_BACKUP_LATEST}'"
+                )
+        else:
+            self._require_one_shot_spec(live, journal, restore["name"])
+
+    def _strict_velero_restores(self) -> List[Dict]:
+        outcome = self.secondary.list_custom_resources_strict(
+            group=_VELERO_GROUP, version=_VELERO_VERSION, plural=RESTORE_PLURAL, namespace=BACKUP_NAMESPACE
         )
+        if not outcome.is_success:
+            raise FatalError(f"Velero Restore list read failed ({outcome.status.value}: {outcome.reason})")
+        return outcome.items
 
-        if not completed:
-            raise FatalError(f"Timeout waiting for Velero managed clusters restore after {timeout}s")
+    def _activation_waiver(self, journal: Dict) -> Optional[Dict]:
+        """The waiver covering the activation name check: the journaled one, else a matching request."""
+        journaled = journal["waiver"]
+        requested = self.managed_cluster_expectation_waiver
+        if journaled is not None:
+            if requested is not None and any(requested[key] != journaled[key] for key in requested):
+                raise FatalError(
+                    "A different expected-ManagedCluster waiver is already journaled for this migration; "
+                    "resume with the journaled waiver"
+                )
+            return journaled if journaled["scope"] in ("activation", "both") else None
+        if requested is None or requested["scope"] not in ("activation", "both"):
+            return None
+        record = dict(requested, flag=_WAIVER_FLAG, journaled_at=_now_iso(), outcome="waived")
+        return self._evidence(validate_waiver, record, list(self.expected_managed_cluster_names), "activation")
 
-        # Verify ManagedCluster resources actually exist
-        self._verify_managed_clusters_restored()
+    def _record_restore_completion_evidence(
+        self, journal: Dict, children: Dict[str, List[Dict]], waiver: Optional[Dict]
+    ) -> None:
+        """Record the July section 1a bundle, then restore.completed_at as the strictly last write.
+
+        A partial bundle from an interrupted attempt is reconciled, never rewritten:
+        every persisted child entry and the persisted fingerprint must equal what the
+        fresh validation produced, and set-once timestamps keep their values.
+        """
+        restore = journal["restore"]
+        fingerprint = self._evidence(restore_spec_fingerprint, journal)
+        if restore["spec_fingerprint"] not in (None, fingerprint):
+            raise FatalError(f"{restore['name']} journaled fingerprint disagrees with the validated spec")
+        for key, entries in restore["velero_restores"].items():
+            fresh = {entry["name"]: entry for entry in children[key]}
+            if any(fresh.get(entry["name"]) != entry for entry in entries):
+                raise FatalError(f"Journaled {key} child evidence disagrees with the live Velero Restores")
+        now = _now_iso()
+        bundle = _with_restore(
+            journal,
+            velero_restores=children,
+            spec_fingerprint=fingerprint,
+            backup_names_verified_at=restore["backup_names_verified_at"] or now,
+            names_verified_at=None if waiver is not None else (restore["names_verified_at"] or now),
+        )
+        if waiver is not None:
+            bundle["waiver"] = waiver
+        self._persist_journal(bundle)
+        self._persist_journal(_with_restore(bundle, completed_at=_now_iso()))
+        logger.info("Recorded completion evidence for %s", restore["name"])
+
+    def _revalidate_completed_evidence(self, journal: Dict) -> None:
+        """Resume over completed evidence: re-prove it live, never rewrite it."""
+        restore = journal["restore"]
+        live = self._require_journaled_restore(journal)
+        self._require_owned_spec(live, journal)
+        if self._evidence(restore_spec_fingerprint, journal) != restore["spec_fingerprint"]:
+            raise FatalError(f"{restore['name']} journaled fingerprint disagrees with the journaled spec")
+        children = {child["metadata"]["name"]: child for child in self._strict_velero_restores()}
+        for key, entries in restore["velero_restores"].items():
+            for entry in entries:
+                child = children.get(entry["name"])
+                observed = (
+                    self._evidence(
+                        validate_velero_child,
+                        child,
+                        namespace=restore["namespace"],
+                        owner_name=restore["name"],
+                        owner_uid=restore["uid"],
+                        expected_backup_name=entry["backup_name"],
+                    )
+                    if child is not None
+                    else None
+                )
+                if observed != entry:
+                    raise FatalError(f"Journaled {key} child {entry['name']} was replaced or changed")
+        if restore["mutation_kind"] == "passive_patch":
+            self._evidence(
+                require_no_credential_variant_children,
+                restore["controller_contract"],
+                acm_restore_name=restore["name"],
+                acm_restore_uid=restore["uid"],
+                namespace_restores=list(children.values()),
+            )
+        logger.info("Completion evidence for %s revalidated", restore["name"])
 
     def _list_restored_managed_cluster_names(
         self,
@@ -1225,13 +1302,11 @@ class SecondaryActivation:
         if name_cache is not None and not force_refresh and "non_local_names" in name_cache:
             return list(name_cache["non_local_names"])
 
-        managed_clusters = self.secondary.list_custom_resources(
-            group=MANAGED_CLUSTER_API_GROUP,
-            version=MANAGED_CLUSTER_API_VERSION,
-            plural=MANAGED_CLUSTER_PLURAL,
-        )
+        outcome = self.secondary.list_managed_clusters_strict()
+        if not outcome.is_success:
+            raise FatalError(f"ManagedCluster inventory read failed ({outcome.status.value}: {outcome.reason})")
         names = []
-        for mc in managed_clusters:
+        for mc in outcome.items:
             name = mc.get("metadata", {}).get("name")
             if name and name != LOCAL_CLUSTER_NAME:
                 names.append(name)
@@ -1239,20 +1314,22 @@ class SecondaryActivation:
             name_cache["non_local_names"] = list(names)
         return names
 
-    def _wait_for_managed_clusters_restored(self, timeout: int) -> None:
-        """Wait for full-restore ManagedCluster resources before enforcing the minimum."""
+    def _wait_for_managed_clusters_restored(self, timeout: int, enforce_names: bool = True) -> None:
+        """Wait for full-restore ManagedCluster resources before enforcing the minimum.
+
+        enforce_names False is the journaled activation waiver: it lifts only the name check.
+        """
+        enforce = self.enforce_expected_managed_cluster_names and enforce_names
         # A zero floor has nothing to wait for only when no expected name is enforced (AC25).
-        if self.min_managed_clusters == 0 and not (
-            self.enforce_expected_managed_cluster_names and self.expected_managed_cluster_names
-        ):
-            self._verify_managed_clusters_restored()
+        if self.min_managed_clusters == 0 and not (enforce and self.expected_managed_cluster_names):
+            self._verify_managed_clusters_restored(enforce_names=enforce_names)
             return
 
         def _poll_managed_clusters():
             non_local_clusters = self._list_restored_managed_cluster_names()
             count = len(non_local_clusters)
             missing_expected = sorted(set(self.expected_managed_cluster_names) - set(non_local_clusters))
-            if self.enforce_expected_managed_cluster_names and missing_expected:
+            if enforce and missing_expected:
                 return WaitConditionResult.pending(
                     f"found {count}/{self.min_managed_clusters} ManagedCluster(s); "
                     f"missing expected: {missing_expected}"
@@ -1274,27 +1351,30 @@ class SecondaryActivation:
         )
 
         if not completed:
-            self._verify_managed_clusters_restored()
+            self._verify_managed_clusters_restored(enforce_names=enforce_names)
 
-    def _verify_managed_clusters_restored(self):
+    def _verify_managed_clusters_restored(self, enforce_names: bool = True):
         """
         Verify that ManagedCluster resources were actually restored.
 
         This is a sanity check to ensure the restore actually brought over
         the managed clusters before we proceed with creating a BackupSchedule.
+        enforce_names False is the journaled activation waiver: it lifts only the
+        name check, never the count floor.
         """
         logger.info("Verifying ManagedCluster resources were restored...")
         non_local_clusters = self._list_restored_managed_cluster_names()
         count = len(non_local_clusters)
+        enforce = self.enforce_expected_managed_cluster_names and enforce_names
 
         missing_expected = sorted(set(self.expected_managed_cluster_names) - set(non_local_clusters))
-        if self.enforce_expected_managed_cluster_names and missing_expected:
+        if enforce and missing_expected:
             raise FatalError(
                 "Missing expected ManagedCluster(s) after restore: "
                 f"{', '.join(missing_expected)}. Found {count}: {non_local_clusters}"
             )
 
-        if self.enforce_expected_managed_cluster_names and count < self.min_managed_clusters:
+        if enforce and count < self.min_managed_clusters:
             raise FatalError(
                 f"Expected {self.min_managed_clusters} ManagedCluster(s) from primary preflight after restore, "
                 f"but found only {count}: {non_local_clusters}"

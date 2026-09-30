@@ -100,6 +100,8 @@ class FakeHub:
         self.patch_override = None
         self.create_override = None
         self.after_mutation = None
+        self.managed_clusters = ["cluster-a"]
+        self.controller = None
         self._rv = 2000
 
     def add_backups(self, *raws):
@@ -127,6 +129,8 @@ class FakeHub:
     def get_custom_resource_strict(self, group, version, plural, name, namespace=None):
         if f"get:{name}" in self.failures:
             return self.failures[f"get:{name}"]
+        if self.controller is not None and group == CLUSTER_BACKUP_API_GROUP:
+            self.controller(self, name)
         store = self._store(group, plural)
         if name not in store:
             return StrictReadOutcome.object_absent("object_not_found")
@@ -139,6 +143,12 @@ class FakeHub:
 
     def list_custom_resources(self, **_kwargs):
         return []
+
+    def list_managed_clusters_strict(self):
+        if "list:managedclusters" in self.failures:
+            return self.failures["list:managedclusters"]
+        names = self.managed_clusters + ["local-cluster"]
+        return StrictReadOutcome.from_items([{"metadata": {"name": name}} for name in names])
 
     def create_custom_resource(self, group, version, plural, body, namespace=None):
         """The unguarded create the rollback uses to recreate the deleted passive sync Restore."""
@@ -294,7 +304,7 @@ def _no_wait():
 
 def _drain(poll):
     for _ in range(3):
-        if poll().complete:
+        if poll().done:
             return True
     return False
 
@@ -825,3 +835,489 @@ def test_a_failed_rollback_is_reported_with_the_create_failure(state):
     hub.create_custom_resource = refuse
     with _no_wait(), pytest.raises(FatalError, match="Rollback failed to recreate passive sync restore"):
         _activation(hub, state, "passive_restore")._apply_migration_mutation()
+
+
+# --- completion evidence (plan Task 7 items 12-17 and D section 1.2 rules 3-4) ----------------------
+
+
+def velero_child(name, backup_name, owner, owner_uid, phase="Completed", uid=None):
+    return {
+        "apiVersion": "velero.io/v1",
+        "kind": "Restore",
+        "metadata": {
+            "name": name,
+            "namespace": NS,
+            "uid": uid or f"uid-{name}",
+            "ownerReferences": [
+                {
+                    "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+                    "kind": "Restore",
+                    "name": owner,
+                    "uid": owner_uid,
+                    "controller": True,
+                }
+            ],
+        },
+        "spec": {"backupName": backup_name},
+        "status": {"phase": phase},
+    }
+
+
+def child_name(owner, backup_name, active=False):
+    return f"{owner}-{backup_name}"[:252] + ("-active" if active else "")
+
+
+def complete(hub, name, *, version, kind, phase=None, child_phase="Completed", overrides=None):
+    """Play the controller: publish the lane's children and status for the journaled Restore."""
+    restore = hub.acm[name]
+    owner_uid = restore["metadata"]["uid"]
+    legacy = not version.startswith("2.17")
+    children = {}
+    status = {}
+    if kind == "passive_patch":
+        children["mc"] = (child_name(name, MC_B), MC_B)
+        children["cred_active"] = (child_name(name, CRED_B, True), CRED_B)
+        children["gen_active"] = (child_name(name, GEN_B, True), GEN_B)
+        children["cred_shared"] = (child_name(name, CRED_B), CRED_B)
+        status["veleroManagedClustersRestoreName"] = children["mc"][0]
+        if legacy:
+            status["veleroCredentialsRestoreName"] = children["cred_active"][0]
+            status["veleroGenericResourcesRestoreName"] = children["gen_active"][0]
+        phase = phase or "Enabled"
+    else:
+        children["mc"] = (child_name(name, MC_B), MC_B)
+        status["veleroManagedClustersRestoreName"] = children["mc"][0]
+        if kind == "full_restore" or legacy:
+            children["cred"] = (child_name(name, CRED_B), CRED_B)
+            children["gen"] = (child_name(name, GEN_B), GEN_B)
+            status["veleroCredentialsRestoreName"] = children["cred"][0]
+            status["veleroGenericResourcesRestoreName"] = children["gen"][0]
+        if kind == "full_restore":
+            children["res"] = (child_name(name, RES_B), RES_B)
+            status["veleroResourcesRestoreName"] = children["res"][0]
+            if not legacy:
+                children["cred_active"] = (child_name(name, CRED_B, True), CRED_B)
+                children["gen_active"] = (child_name(name, GEN_B, True), GEN_B)
+        phase = phase or "Finished"
+    children.update(overrides or {})
+    for role, (child, backup_name) in children.items():
+        hub.velero[child] = velero_child(child, backup_name, name, owner_uid, phase=child_phase)
+    restore.setdefault("status", {}).update(status, phase=phase)
+    return children
+
+
+RESTORE_NAMES = {
+    "passive_patch": RESTORE_PASSIVE_SYNC_NAME,
+    "passive_restore": MANAGED_CLUSTER_RESTORE_NAME,
+    "full_restore": RESTORE_FULL_NAME,
+}
+LANES = [pytest.param("2.14.3", id="legacy"), pytest.param("2.17.1", id="2.17")]
+KINDS = ["passive_patch", "passive_restore", "full_restore"]
+
+
+def _mutated(state, kind, version="2.14.3", waiver=None, expected=("cluster-a",)):
+    """A hub and an activation whose journaled Restore mutation is accepted."""
+    hub = _hub(state, version=version, passive=kind != "full_restore")
+    activation = SecondaryActivation(
+        hub,
+        state,
+        method="full" if kind == "full_restore" else "passive",
+        activation_method="restore" if kind == "passive_restore" else "patch",
+        expected_managed_cluster_names=list(expected),
+        enforce_expected_managed_cluster_names=bool(expected),
+        managed_cluster_expectation_waiver=waiver,
+    )
+    with _no_wait():
+        activation._apply_migration_mutation()
+    return hub, activation
+
+
+def _wait(activation):
+    with _no_wait():
+        activation._wait_for_restore_completion()
+
+
+class TestCompletionEvidence:
+    @pytest.mark.parametrize("version", LANES)
+    @pytest.mark.parametrize("kind", KINDS)
+    def test_completion_is_recorded_with_completed_at_strictly_last(self, state, kind, version):
+        hub, activation = _mutated(state, kind, version)
+        complete(hub, RESTORE_NAMES[kind], version=version, kind=kind)
+        writes = []
+        original = RunRecord.record_migration_backups
+
+        def record(record_self, candidate):
+            writes.append(copy.deepcopy(candidate["restore"]))
+            return original(record_self, candidate)
+
+        with patch.object(RunRecord, "record_migration_backups", autospec=True, side_effect=record):
+            _wait(activation)
+        assert [write["completed_at"] is None for write in writes] == [True, False]
+        bundle, final = writes
+        assert bundle["spec_fingerprint"] and bundle["backup_names_verified_at"] and bundle["names_verified_at"]
+        assert {key: value for key, value in final.items() if key != "completed_at"} == {
+            key: value for key, value in bundle.items() if key != "completed_at"
+        }
+        journal = RunRecord(state).migration_backups()
+        assert journal["restore"]["velero_restores"]["managed_clusters"][0]["backup_name"] == MC_B
+
+    def test_legacy_passive_patch_journals_the_shared_credentials_child(self, state):
+        hub, activation = _mutated(state, "passive_patch")
+        complete(hub, RESTORE_PASSIVE_SYNC_NAME, version="2.14.3", kind="passive_patch")
+        _wait(activation)
+        credentials = RunRecord(state).migration_backups()["restore"]["velero_restores"]["activation_credentials"]
+        assert [entry["name"] for entry in credentials] == [
+            child_name(RESTORE_PASSIVE_SYNC_NAME, CRED_B),
+            child_name(RESTORE_PASSIVE_SYNC_NAME, CRED_B, True),
+        ]
+
+    def test_pending_polls_complete_once_the_controller_publishes(self, state):
+        hub, activation = _mutated(state, "full_restore")
+        calls = {"n": 0}
+
+        def controller(fake, name):
+            calls["n"] += 1
+            if calls["n"] == 3:
+                complete(fake, RESTORE_FULL_NAME, version="2.14.3", kind="full_restore")
+
+        hub.controller = controller
+        _wait(activation)
+        assert RunRecord(state).migration_backups()["restore"]["completed_at"] is not None
+
+    def test_a_running_child_keeps_the_wait_pending_until_timeout(self, state):
+        hub, activation = _mutated(state, "full_restore")
+        complete(hub, RESTORE_FULL_NAME, version="2.14.3", kind="full_restore", child_phase="InProgress")
+        with pytest.raises(FatalError, match="Timeout"):
+            _wait(activation)
+        assert RunRecord(state).migration_backups()["restore"]["spec_fingerprint"] is None
+
+    @pytest.mark.parametrize(
+        "kind, version, phase",
+        [
+            ("passive_patch", "2.17.1", "EnabledWithErrors"),
+            ("passive_patch", "2.14.3", "FinishedWithErrors"),
+            ("passive_restore", "2.14.3", "FinishedWithErrors"),
+            ("full_restore", "2.17.1", "FinishedWithErrors"),
+            ("full_restore", "2.14.3", "Enabled"),
+            ("full_restore", "2.14.3", "Error"),
+            ("full_restore", "2.14.3", "Completed"),
+        ],
+    )
+    def test_a_non_accepted_acm_phase_writes_no_evidence(self, state, kind, version, phase):
+        hub, activation = _mutated(state, kind, version)
+        complete(hub, RESTORE_NAMES[kind], version=version, kind=kind, phase=phase)
+        hub.acm[RESTORE_NAMES[kind]]["status"]["messages"] = ["ManagedCluster prod1 already available"]
+        with pytest.raises(FatalError, match="reached phase"):
+            _wait(activation)
+        assert RunRecord(state).migration_backups()["restore"]["spec_fingerprint"] is None
+
+    @pytest.mark.parametrize("child_phase", ["Failed", "PartiallyFailed", "FailedValidation"])
+    def test_a_failed_child_writes_no_evidence(self, state, child_phase):
+        hub, activation = _mutated(state, "passive_restore")
+        complete(hub, MANAGED_CLUSTER_RESTORE_NAME, version="2.14.3", kind="passive_restore", child_phase=child_phase)
+        with pytest.raises(FatalError, match="velero_restore_not_completed"):
+            _wait(activation)
+        assert RunRecord(state).migration_backups()["restore"]["spec_fingerprint"] is None
+
+    def test_a_child_that_consumed_a_newer_backup_blocks(self, state):
+        hub, activation = _mutated(state, "passive_patch")
+        newer = "acm-managed-clusters-schedule-20240103120000"
+        raced = child_name(RESTORE_PASSIVE_SYNC_NAME, newer)
+        complete(
+            hub, RESTORE_PASSIVE_SYNC_NAME, version="2.14.3", kind="passive_patch", overrides={"mc": (raced, newer)}
+        )
+        hub.acm[RESTORE_PASSIVE_SYNC_NAME]["status"]["veleroManagedClustersRestoreName"] = raced
+        with pytest.raises(FatalError, match="velero_restore_backup_mismatch"):
+            _wait(activation)
+        assert RunRecord(state).migration_backups()["restore"]["completed_at"] is None
+
+    @pytest.mark.parametrize("child_phase", ["Completed", "Failed"])
+    def test_a_historical_hive_child_blocks_legacy_completion(self, state, child_phase):
+        hub, activation = _mutated(state, "passive_patch")
+        complete(hub, RESTORE_PASSIVE_SYNC_NAME, version="2.14.3", kind="passive_patch")
+        hive = f"acm-credentials-hive-schedule-{STAMP}"
+        name = child_name(RESTORE_PASSIVE_SYNC_NAME, hive)
+        hub.velero[name] = velero_child(name, hive, RESTORE_PASSIVE_SYNC_NAME, "uid-passive", phase=child_phase)
+        with pytest.raises(FatalError, match="credential_variant_child|velero_restore_not_completed"):
+            _wait(activation)
+        assert RunRecord(state).migration_backups()["restore"]["completed_at"] is None
+
+    def test_an_owner_child_of_an_unfrozen_backup_blocks_one_shot_completion(self, state):
+        hub, activation = _mutated(state, "passive_restore", "2.17.1")
+        complete(hub, MANAGED_CLUSTER_RESTORE_NAME, version="2.17.1", kind="passive_restore")
+        extra = child_name(MANAGED_CLUSTER_RESTORE_NAME, CRED_B)
+        hub.velero[extra] = velero_child(
+            extra, CRED_B, MANAGED_CLUSTER_RESTORE_NAME, f"uid-{MANAGED_CLUSTER_RESTORE_NAME}"
+        )
+        with pytest.raises(FatalError, match="owner_child_unfrozen_backup"):
+            _wait(activation)
+
+    def test_a_missing_expected_name_blocks_before_any_evidence(self, state):
+        hub, activation = _mutated(state, "passive_patch", expected=("cluster-a", "cluster-b"))
+        complete(hub, RESTORE_PASSIVE_SYNC_NAME, version="2.14.3", kind="passive_patch")
+        with pytest.raises(FatalError, match="Missing expected ManagedCluster"):
+            _wait(activation)
+        assert RunRecord(state).migration_backups()["restore"]["spec_fingerprint"] is None
+
+    def test_an_activation_waiver_is_journaled_and_never_verifies_names(self, state):
+        waiver = {"scope": "activation", "actor": "ops@example.com", "reason": "stale list", "request_id": None}
+        hub, activation = _mutated(state, "passive_patch", waiver=waiver, expected=("cluster-a", "cluster-b"))
+        complete(hub, RESTORE_PASSIVE_SYNC_NAME, version="2.14.3", kind="passive_patch")
+        _wait(activation)
+        journal = RunRecord(state).migration_backups()
+        assert journal["restore"]["names_verified_at"] is None
+        assert journal["restore"]["completed_at"] is not None
+        assert journal["waiver"]["outcome"] == "waived" and journal["waiver"]["scope"] == "activation"
+        assert journal["waiver"]["flag"] == "--skip-managed-cluster-expectations"
+
+    def test_a_waiver_never_lifts_the_count_floor(self, state):
+        waiver = {"scope": "both", "actor": "ops@example.com", "reason": "stale list", "request_id": None}
+        hub, activation = _mutated(state, "passive_patch", waiver=waiver, expected=("cluster-a", "cluster-b"))
+        activation.min_managed_clusters = 2
+        complete(hub, RESTORE_PASSIVE_SYNC_NAME, version="2.14.3", kind="passive_patch")
+        with pytest.raises(FatalError, match="at least 2"):
+            _wait(activation)
+        assert RunRecord(state).migration_backups()["restore"]["completed_at"] is None
+
+    def test_a_post_activation_waiver_does_not_cover_activation(self, state):
+        waiver = {"scope": "post_activation", "actor": "ops@example.com", "reason": "stale", "request_id": None}
+        hub, activation = _mutated(state, "passive_patch", waiver=waiver, expected=("cluster-a", "cluster-b"))
+        complete(hub, RESTORE_PASSIVE_SYNC_NAME, version="2.14.3", kind="passive_patch")
+        with pytest.raises(FatalError, match="Missing expected ManagedCluster"):
+            _wait(activation)
+
+    @pytest.mark.parametrize(
+        "failure, match",
+        [
+            ("list:restores", "Velero Restore list"),
+            ("list:managedclusters", "ManagedCluster inventory"),
+        ],
+    )
+    def test_a_failed_strict_read_writes_no_evidence(self, state, failure, match):
+        hub, activation = _mutated(state, "full_restore")
+        complete(hub, RESTORE_FULL_NAME, version="2.14.3", kind="full_restore")
+        # The ACM Restore list is served from the same key; fail only the Velero read.
+        if failure == "list:restores":
+            original = hub.list_custom_resources_strict
+
+            def velero_fails(group, version, plural, namespace=None, label_selector=None):
+                if group == "velero.io":
+                    return StrictReadOutcome.error("read_failed")
+                return original(group, version, plural, namespace, label_selector)
+
+            hub.list_custom_resources_strict = velero_fails
+        else:
+            hub.failures[failure] = StrictReadOutcome.error("read_failed")
+        with pytest.raises(FatalError, match=match):
+            _wait(activation)
+        assert RunRecord(state).migration_backups()["restore"]["spec_fingerprint"] is None
+
+
+class TestCompletionResume:
+    def _completed(self, state, kind="passive_patch", version="2.14.3"):
+        hub, activation = _mutated(state, kind, version)
+        complete(hub, RESTORE_NAMES[kind], version=version, kind=kind)
+        _wait(activation)
+        return hub, RunRecord(state).migration_backups()
+
+    def test_an_interrupted_bundle_is_reconciled_and_completed_last(self, state):
+        hub, activation = _mutated(state, "full_restore")
+        complete(hub, RESTORE_FULL_NAME, version="2.14.3", kind="full_restore")
+        original = RunRecord.record_migration_backups
+        calls = {"n": 0}
+
+        def fail_second(record_self, candidate):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError("EIO")
+            return original(record_self, candidate)
+
+        with patch.object(RunRecord, "record_migration_backups", autospec=True, side_effect=fail_second):
+            with pytest.raises(FatalError, match="durably"):
+                _wait(activation)
+        partial = RunRecord(state).migration_backups()
+        assert partial["restore"]["spec_fingerprint"] and partial["restore"]["completed_at"] is None
+
+        _wait(_activation(hub, state, "full_restore"))
+        final = RunRecord(state).migration_backups()["restore"]
+        assert final["completed_at"] is not None
+        for key in ("spec_fingerprint", "backup_names_verified_at", "names_verified_at", "velero_restores"):
+            assert final[key] == partial["restore"][key]
+
+    def test_a_partial_bundle_that_disagrees_with_live_children_blocks(self, state):
+        hub, activation = _mutated(state, "full_restore")
+        children = complete(hub, RESTORE_FULL_NAME, version="2.14.3", kind="full_restore")
+        original = RunRecord.record_migration_backups
+        calls = {"n": 0}
+
+        def fail_second(record_self, candidate):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError("EIO")
+            return original(record_self, candidate)
+
+        with patch.object(RunRecord, "record_migration_backups", autospec=True, side_effect=fail_second):
+            with pytest.raises(FatalError):
+                _wait(activation)
+        hub.velero[children["res"][0]]["metadata"]["uid"] = "uid-replaced"
+        with pytest.raises(FatalError, match="disagrees"):
+            _wait(_activation(hub, state, "full_restore"))
+        assert RunRecord(state).migration_backups()["restore"]["completed_at"] is None
+
+    def test_completed_evidence_is_revalidated_without_a_rewrite(self, state):
+        hub, journal = self._completed(state)
+        before = open(state.state_file, "rb").read()
+        _wait(_activation(hub, state, "passive_patch"))
+        _activation(hub, state, "passive_patch")._reconcile_restore_completion()
+        assert open(state.state_file, "rb").read() == before
+
+    @pytest.mark.parametrize(
+        "mutate, match",
+        [
+            pytest.param(
+                lambda hub: hub.velero[child_name(RESTORE_PASSIVE_SYNC_NAME, MC_B)]["metadata"].update(uid="u2"),
+                "replaced or changed",
+                id="child-uid",
+            ),
+            pytest.param(
+                lambda hub: hub.velero.pop(child_name(RESTORE_PASSIVE_SYNC_NAME, MC_B)),
+                "replaced or changed",
+                id="gone",
+            ),
+            pytest.param(
+                lambda hub: hub.acm[RESTORE_PASSIVE_SYNC_NAME]["spec"].update(cleanupBeforeRestore="None"),
+                "cleanupBeforeRestore",
+                id="cleanup",
+            ),
+            pytest.param(
+                lambda hub: hub.acm[RESTORE_PASSIVE_SYNC_NAME]["metadata"].update(generation=9),
+                "generation drift",
+                id="generation",
+            ),
+            pytest.param(
+                lambda hub: hub.velero.update(
+                    {
+                        "hive": velero_child(
+                            "hive",
+                            f"acm-credentials-hive-schedule-{STAMP}",
+                            RESTORE_PASSIVE_SYNC_NAME,
+                            "uid-passive",
+                        )
+                    }
+                ),
+                "credential_variant_child",
+                id="later-hive-child",
+            ),
+        ],
+    )
+    def test_completed_evidence_drift_blocks_resume(self, state, mutate, match):
+        hub, journal = self._completed(state)
+        mutate(hub)
+        with pytest.raises(FatalError, match=match):
+            _wait(_activation(hub, state, "passive_patch"))
+        assert RunRecord(state).migration_backups() == journal
+
+    def test_a_completed_wait_marker_without_completion_evidence_blocks(self, state):
+        hub, activation = _mutated(state, "full_restore")
+        with pytest.raises(FatalError, match="no completion evidence"):
+            activation._reconcile_restore_completion()
+
+    def test_a_different_requested_waiver_blocks_resume(self, state):
+        waiver = {"scope": "activation", "actor": "ops@example.com", "reason": "stale list", "request_id": None}
+        hub, activation = _mutated(state, "full_restore", waiver=waiver, expected=("cluster-a", "cluster-z"))
+        children = complete(hub, RESTORE_FULL_NAME, version="2.14.3", kind="full_restore")
+        original = RunRecord.record_migration_backups
+        calls = {"n": 0}
+
+        def fail_second(record_self, candidate):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError("EIO")
+            return original(record_self, candidate)
+
+        with patch.object(RunRecord, "record_migration_backups", autospec=True, side_effect=fail_second):
+            with pytest.raises(FatalError):
+                _wait(activation)
+        assert children
+        other = dict(waiver, actor="someone-else")
+        resumed = SecondaryActivation(
+            hub,
+            state,
+            method="full",
+            expected_managed_cluster_names=["cluster-a", "cluster-z"],
+            enforce_expected_managed_cluster_names=True,
+            managed_cluster_expectation_waiver=other,
+        )
+        with pytest.raises(FatalError, match="different expected-ManagedCluster waiver"):
+            _wait(resumed)
+
+
+def test_dry_run_skips_the_completion_wait(state):
+    hub = _hub(state, dry_run=True)
+    activation = _activation(hub, state, "passive_patch")
+    activation._wait_for_restore_completion()
+    activation._reconcile_restore_completion()
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_activate_runs_the_transaction_and_a_rerun_only_reconciles(state, kind):
+    hub = _hub(state, passive=kind != "full_restore")
+    hub.after_mutation = lambda fake: complete(fake, RESTORE_NAMES[kind], version="2.14.3", kind=kind)
+    activation = SecondaryActivation(
+        hub,
+        state,
+        method="full" if kind == "full_restore" else "passive",
+        activation_method="restore" if kind == "passive_restore" else "patch",
+        expected_managed_cluster_names=["cluster-a"],
+        enforce_expected_managed_cluster_names=True,
+    )
+    with _no_wait():
+        assert activation.activate() is True
+    journal = RunRecord(state).migration_backups()
+    assert journal["restore"]["completed_at"] is not None
+    mutations = len(hub.mutations)
+    with _no_wait():
+        assert _activation(hub, state, kind).activate() is True
+    assert len(hub.mutations) == mutations
+    assert RunRecord(state).migration_backups() == journal
+
+
+def test_a_child_not_yet_listed_keeps_the_wait_pending(state):
+    hub, activation = _mutated(state, "full_restore")
+    children = complete(hub, RESTORE_FULL_NAME, version="2.14.3", kind="full_restore")
+    held = hub.velero.pop(children["gen"][0])
+    calls = {"n": 0}
+
+    def controller(fake, name):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            fake.velero[held["metadata"]["name"]] = held
+
+    hub.controller = controller
+    _wait(activation)
+    assert RunRecord(state).migration_backups()["restore"]["completed_at"] is not None
+
+
+def test_activate_blocks_a_completed_wait_marker_without_completion_evidence(state):
+    hub, activation = _mutated(state, "full_restore")
+    state.mark_step_completed("create_full_restore")
+    state.mark_step_completed("wait_restore_completion")
+    with _no_wait():
+        assert _activation(hub, state, "full_restore").activate() is False
+    assert "no completion evidence" in state.get_errors()[-1]["error"]
+
+
+def test_a_backup_drifting_during_the_passive_delete_blocks_the_create(state):
+    hub = _hub(state)
+    original = hub.delete_restore_guarded
+
+    def delete_then_drift(name, **kwargs):
+        result = original(name, **kwargs)
+        hub.backups[MC_B]["metadata"]["uid"] = "uid-replacement"
+        return result
+
+    hub.delete_restore_guarded = delete_then_drift
+    with _no_wait(), pytest.raises(FatalError, match="replaced or its status drifted"):
+        _activation(hub, state, "passive_restore")._apply_migration_mutation()
+    assert [kind for kind, _, _ in hub.mutations] == ["delete"]
+    assert RunRecord(state).migration_backups()["restore"]["uid"] is None
