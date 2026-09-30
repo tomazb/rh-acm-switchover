@@ -1961,3 +1961,27 @@ class TestStateWriteDurability:
         with patch.object(os, "fsync", fsync), patch.object(os, "replace", replace), patch.object(os, "open", open_):
             assert sm._do_flush(force=False, suppress_errors=True) is False
         assert sm._dirty is True
+
+
+class TestInterruptedStateWrite:
+    """R4-04 PR A: a write interrupted by SIGINT is still pending, never silently clean."""
+
+    def test_a_write_interrupted_after_the_replace_leaves_the_state_dirty(self, tmp_path):
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm.flush_state()
+        sm.state["config"]["marker"] = "after"
+        sm._dirty = True
+        real_fsync = os.fsync
+
+        def interrupted_directory_fsync(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise KeyboardInterrupt
+            return real_fsync(fd)
+
+        with patch.object(os, "fsync", interrupted_directory_fsync):
+            with pytest.raises(KeyboardInterrupt):
+                sm.save_state()
+        assert sm._dirty is True
+        sm.save_state()
+        assert sm._dirty is False
+        assert json.loads((tmp_path / "state.json").read_text())["config"]["marker"] == "after"

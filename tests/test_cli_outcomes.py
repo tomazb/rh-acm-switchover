@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
+import pytest
+
 from lib.cli_outcomes import (
     CliOperationHooks,
     phase_report_from_state,
@@ -681,3 +683,67 @@ def test_an_interrupt_reports_state_saved_after_a_successful_state_write():
     assert exit_code == 130
     state.save_state.assert_called_once_with()
     logger.info.assert_any_call("State saved to: %s", "state.json")
+
+
+@pytest.mark.parametrize("retry_succeeds", [True, False], ids=["retry-succeeds", "retry-fails"])
+def test_an_interrupted_state_write_is_saved_or_reported_indeterminate_never_assumed(tmp_path, retry_succeeds):
+    """A SIGINT that lands inside a state write must not end in an unearned "State saved".
+
+    Drives a real StateManager through the real interrupt handler: the directory fsync of the
+    operation's write is interrupted, so the handler's retry decides the message.
+    """
+    import os
+    import stat
+
+    from lib.utils import StateManager
+
+    state = StateManager(str(tmp_path / "state.json"))
+    state.flush_state()
+    real_fsync = os.fsync
+    calls = {"directory": 0}
+
+    def directory_fsync(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            calls["directory"] += 1
+            if calls["directory"] == 1:
+                raise KeyboardInterrupt
+            if not retry_succeeds:
+                raise OSError(5, "directory fsync failed")
+        return real_fsync(fd)
+
+    def operation(*_args):
+        state.state["config"]["marker"] = "after"
+        state._dirty = True
+        state.save_state()
+
+    args = SimpleNamespace(argocd_resume_only=False, verbose=False, state_file=str(tmp_path / "state.json"))
+    logger = Mock()
+    hooks = CliOperationHooks(
+        bind_runtime_hub_identities=Mock(),
+        run_argocd_resume_only=Mock(),
+        execute_operation=operation,
+        write_python_report=Mock(),
+        gitops_reporter_factory=lambda: Mock(),
+    )
+    with patch.object(os, "fsync", directory_fsync):
+        exit_code = run_operation_mode(
+            args,
+            state,
+            Mock(),
+            Mock(),
+            logger,
+            should_bind_state=False,
+            should_record_state_errors=False,
+            hooks=hooks,
+            exit_success=0,
+            exit_failure=1,
+            exit_interrupt=130,
+        )
+
+    assert exit_code == 130
+    # The interrupted write left the state pending, so the handler retried it.
+    assert calls["directory"] == 2
+    saved = call("State saved to: %s", args.state_file) in logger.info.call_args_list
+    assert saved is retry_succeeds
+    if not retry_succeeds:
+        assert "indeterminate" in " ".join(str(c) for c in logger.error.call_args_list)
