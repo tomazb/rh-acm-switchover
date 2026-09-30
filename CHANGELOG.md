@@ -28,6 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- State and checkpoint replacement is now durably acknowledged (R4-04 PR A, the narrow R4-05
+  §2 prerequisite before R4-04 journal writes). Python `StateManager` fsyncs the state
+  directory after `os.replace`, and the collection checkpoint save no longer suppresses a
+  failed directory open or fsync. Either failure fails the write — `ENOTSUP`/`EINVAL`
+  included, since no up-front filesystem capability determination is made — and is reported
+  as an indeterminate outcome, never as success or as the previous state still holding: the
+  Python state stays dirty so the next flush rewrites the same content, and the collection
+  checkpoint action fails with an indeterminate-outcome message. Dry-run, check and validate
+  modes still write no authoritative checkpoint. Other R4-05 durability points (the corrupt
+  checkpoint quarantine rename, absent-file restoration) are unchanged.
+
 - Python's custom-resource discovery proof (`KubeClient._discovery_serves`, used by
   `get_custom_resource_strict` and `list_custom_resources_strict`) now requires the discovery
   document to declare the requested group/version (#321). A readable `APIResourceList` whose
