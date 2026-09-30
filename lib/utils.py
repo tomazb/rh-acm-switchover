@@ -466,21 +466,18 @@ class StateManager:
                 force = False
                 self._dirty = False
                 self.state["last_updated"] = _utc_timestamp()
-                if suppress_errors:
-                    try:
-                        self._write_state(self.state)
-                    except Exception as e:
-                        self._dirty = True
+                try:
+                    self._write_state(self.state)
+                except BaseException as e:
+                    # A failed or interrupted write (a SIGINT inside it included) leaves the state
+                    # pending, never silently clean, so the next flush rewrites it (R4-04 PR A).
+                    self._dirty = True
+                    if suppress_errors and isinstance(e, Exception):
                         import sys
 
                         print(f"Error flushing state: {e}", file=sys.stderr)
                         return False
-                else:
-                    try:
-                        self._write_state(self.state)
-                    except Exception:
-                        self._dirty = True
-                        raise
+                    raise
                 performed = True
             return performed
         finally:

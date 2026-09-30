@@ -2238,16 +2238,17 @@ def test_save_checkpoint_fsyncs_file_before_replace_and_directory_after_replace(
 
 
 @pytest.mark.parametrize(
-    "fsync_effect, open_effect",
+    "fsync_effect, open_effect, close_effect",
     [
-        ([None, OSError(errno.EIO, "directory fsync failed")], None),
-        ([None, OSError(errno.ENOTSUP, "directory fsync not supported")], None),
-        ([None, OSError(errno.EINVAL, "directory fsync invalid")], None),
-        (None, OSError(errno.EACCES, "directory not readable")),
+        ([None, OSError(errno.EIO, "directory fsync failed")], None, None),
+        ([None, OSError(errno.ENOTSUP, "directory fsync not supported")], None, None),
+        ([None, OSError(errno.EINVAL, "directory fsync invalid")], None, None),
+        (None, OSError(errno.EACCES, "directory not readable"), None),
+        ([None, None], None, OSError(errno.EIO, "directory close failed")),
     ],
-    ids=["fsync-eio", "fsync-enotsup", "fsync-einval", "open-eacces"],
+    ids=["fsync-eio", "fsync-enotsup", "fsync-einval", "open-eacces", "close-eio"],
 )
-def test_save_checkpoint_fails_when_directory_durability_is_not_acknowledged(fsync_effect, open_effect):
+def test_save_checkpoint_fails_when_directory_durability_is_not_acknowledged(fsync_effect, open_effect, close_effect):
     """R4-04 PR A / R4-05 §2: the replaced checkpoint is durable only once its directory is fsynced.
 
     A failed directory open or fsync after the replace is an indeterminate outcome, so the save
@@ -2262,7 +2263,8 @@ def test_save_checkpoint_fails_when_directory_durability_is_not_acknowledged(fsy
         return_value=77,
         side_effect=open_effect,
     ), patch(
-        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.close"
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.close",
+        side_effect=close_effect,
     ), patch(
         "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.fsync",
         side_effect=fsync_effect,
