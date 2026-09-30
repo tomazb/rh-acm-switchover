@@ -2717,3 +2717,95 @@ class TestPreconditionedDelete:
         assert hasattr(
             KubeClient.delete_custom_resource, "__wrapped__"
         ), "the decorated neighbour must be detectable, or this guard proves nothing"
+
+
+# A sentinel for a discovery document with no `groupVersion` key at all (#321).
+_MISSING_GROUP_VERSION = object()
+
+
+class TestDiscoveryGroupVersionProof:
+    """#321: a discovery document proves nothing unless it declares the requested group/version.
+
+    The collection's prover has rejected a missing, empty, non-string or mismatched
+    `APIResourceList.groupVersion` since #317; Python now does the same, so such a document
+    can establish neither a served kind (and so no object absence after a 404) nor kind absence.
+    """
+
+    _GROUP = "operator.open-cluster-management.io"
+    _PLURAL = "multiclusterhubs"
+
+    @staticmethod
+    def _document(group_version, *, listed):
+        resources = (
+            [{"name": "multiclusterhubs", "kind": "MultiClusterHub"}]
+            if listed
+            else [{"name": "somethingelse", "kind": "SomethingElse"}]
+        )
+        document = {"kind": "APIResourceList", "resources": resources}
+        if group_version is not _MISSING_GROUP_VERSION:
+            document["groupVersion"] = group_version
+        return Mock(data=json.dumps(document).encode("utf-8"))
+
+    def _client(self, document):
+        client = KubeClient.__new__(KubeClient)
+        client.request_timeout = 30
+        client.dry_run = False
+        client._api_client = Mock()
+        client._api_client.call_api = Mock(return_value=document)
+        client.custom_api = Mock()
+        client.custom_api.get_cluster_custom_object = Mock(side_effect=ApiException(status=404))
+        client.custom_api.list_cluster_custom_object = Mock(
+            return_value={"items": [], "metadata": {"resourceVersion": "1"}}
+        )
+        return client
+
+    @pytest.mark.parametrize("listed", [True, False], ids=["resource-listed", "resource-omitted"])
+    @pytest.mark.parametrize(
+        "group_version",
+        [_MISSING_GROUP_VERSION, "", 7, None, "operator.open-cluster-management.io/v2", "other.io/v1"],
+        ids=["missing", "empty", "non-string", "null", "other-version", "other-group"],
+    )
+    def test_a_document_not_declaring_the_requested_group_version_is_unverifiable(self, group_version, listed):
+        outcome = self._client(self._document(group_version, listed=listed))._discovery_serves(
+            self._GROUP, "v1", self._PLURAL
+        )
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE
+
+    @pytest.mark.parametrize("listed", [True, False], ids=["resource-listed", "resource-omitted"])
+    @pytest.mark.parametrize("group_version", [_MISSING_GROUP_VERSION, "", 7, "other.io/v1"])
+    def test_a_named_get_never_proves_absence_from_such_a_document(self, group_version, listed):
+        client = self._client(self._document(group_version, listed=listed))
+        outcome = client.get_custom_resource_strict(self._GROUP, "v1", self._PLURAL, "multiclusterhub")
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.proves_absence is False
+        client.custom_api.get_cluster_custom_object.assert_not_called()
+
+    @pytest.mark.parametrize("listed", [True, False], ids=["resource-listed", "resource-omitted"])
+    @pytest.mark.parametrize("group_version", [_MISSING_GROUP_VERSION, "", 7, "other.io/v1"])
+    def test_a_list_never_proves_absence_or_inventory_from_such_a_document(self, group_version, listed):
+        client = self._client(self._document(group_version, listed=listed))
+        outcome = client.list_custom_resources_strict(self._GROUP, "v1", self._PLURAL)
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.proves_absence is False
+        client.custom_api.list_cluster_custom_object.assert_not_called()
+
+    def test_the_requested_group_version_keeps_every_positive_outcome(self):
+        """Positive controls: a document for the requested group/version proves as before."""
+        served = self._client(self._document("operator.open-cluster-management.io/v1", listed=True))
+        assert served._discovery_serves(self._GROUP, "v1", self._PLURAL).status is StrictReadStatus.ITEMS
+        absent_object = served.get_custom_resource_strict(self._GROUP, "v1", self._PLURAL, "multiclusterhub")
+        assert absent_object.status is StrictReadStatus.OBJECT_ABSENT
+        unserved = self._client(self._document("operator.open-cluster-management.io/v1", listed=False))
+        assert unserved._discovery_serves(self._GROUP, "v1", self._PLURAL).status is StrictReadStatus.CRD_ABSENT
+        assert unserved.list_custom_resources_strict(self._GROUP, "v1", self._PLURAL).status is (
+            StrictReadStatus.CRD_ABSENT
+        )
+
+    def test_the_core_group_is_declared_as_its_bare_version(self):
+        document = Mock(
+            data=json.dumps(
+                {"kind": "APIResourceList", "groupVersion": "v1", "resources": [{"name": "pods", "kind": "Pod"}]}
+            ).encode("utf-8")
+        )
+        assert self._client(document)._discovery_serves("", "v1", "pods").status is StrictReadStatus.ITEMS
