@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- R4-04 PR B migration-evidence model, dormant (Python + Collection, mirrored, pure): pinned
+  cluster-backup-operator Backup selection for ACM 2.12–2.17 (direct `latest` and exact-first
+  correlated generic selection, seven-field Backup projection), Velero child evidence (owner,
+  role, cohort and completion rules for `passive_patch`, `passive_restore` and `full_restore`,
+  generated-name collision prediction before mutation), and the `migration_backups` journal
+  validator (lifecycle, cleanup state machine, transitions, waiver, repair, Restore spec
+  fingerprint). One shared vector fixture holds both form factors equal.
+- R4-04 PR B guarded ACM Restore mutation primitives, dormant: Python
+  `KubeClient.json_patch_custom_resource_guarded` / `delete_restore_guarded` and the collection
+  module `acm_restore_guarded_mutation` send one JSON Patch guarded by `test` operations on UID,
+  resourceVersion and the raw ManagedClusters Backup name (replacement `latest` only), or one
+  UID- and resourceVersion-preconditioned delete; a conflict, timeout, unreadable or
+  identity-mismatched response is never reported as an accepted change, and dry-run/check mode
+  sends nothing. No new RBAC: existing Restore `patch`/`delete`.
+
 - R4-04 PR B migration journal persistence facades, dormant: Python `RunRecord.migration_backups()`
   / `record_migration_backups()` and the collection `checkpoint_phase` `status: update` read and
   write the `migration_backups` journal only through each side's journal validators, as one complete,

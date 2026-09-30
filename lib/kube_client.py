@@ -160,7 +160,7 @@ def _create_result_matches_requested_body(existing: Dict[str, Any], requested: D
 _RESTART_READ = object()
 
 # Guarded Restore JSON Patch (R4-04). Mirrored by the collection's
-# acm_restore_guarded_mutation module; the two test suites hold the same vectors.
+# acm_restore_guarded_mutation module; tests/test_restore_guarded_mutation_parity.py pins parity.
 GUARDED_PATCH_CONTENT_TYPE = "application/json-patch+json"
 GUARDED_PATCH_REPLACEMENT_MANAGED_CLUSTERS_BACKUP_NAME = "latest"
 # A failed `test` operation or a conditional conflict: the atomic PATCH mutated nothing.

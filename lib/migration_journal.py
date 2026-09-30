@@ -398,7 +398,7 @@ def validate_journal_transition(previous: Any, candidate: Any) -> Dict[str, Any]
         validate_migration_journal(previous)
     result = validate_migration_journal(candidate)
     if previous is None:
-        if candidate["cleanup"]["state"] != "not_started" or candidate["restore"]["completed_at"] is not None:
+        if candidate["restore"]["completed_at"] is not None:
             raise MigrationEvidenceError("invalid_freeze_write", "the first journal write must precede completion")
         return result
     for key in ("schema_version", "run_id", "resolved_at", "backups"):
