@@ -29,7 +29,8 @@ validate_migration_journal checks in this fixed order, so each rejected record
 reports one code: (1) root shape, malformed_journal or
 unsupported_schema_version; (2) restore fields, malformed_restore, then
 activation_method_mismatch and controller_contract_mismatch; (3) Backup
-categories, invalid_category_set, then malformed_backup_projection; (4)
+categories, invalid_category_set, then per Backup malformed_backup_projection and
+backup_namespace_mismatch; (4)
 invalid_backup_fields; (5) invalid_precondition; (6) each child list in
 VELERO_RESTORE_LISTS order: malformed_child_entry, child_namespace_mismatch,
 child_list_not_permitted, child_backup_mismatch, child_list_unsorted,
@@ -335,7 +336,7 @@ def validate_migration_journal(candidate: Any) -> Dict[str, Any]:
     restore = candidate["restore"]
     kind, contract = _require_restore(restore)
     backups = candidate["backups"]
-    _require_backups(backups, kind, contract)
+    _require_backups(backups, kind, contract, restore["namespace"])
     _require_backup_fields(restore, backups, kind)
     if kind == "passive_patch":
         _require_precondition(restore["passive_patch_precondition"])
@@ -526,12 +527,17 @@ def _require_restore(restore: Dict[str, Any]) -> Tuple[str, str]:
     return kind, restore["controller_contract"]
 
 
-def _require_backups(backups: Dict[str, Any], kind: str, contract: str) -> None:
+def _require_backups(backups: Dict[str, Any], kind: str, contract: str, namespace: str) -> None:
     required, optional = FROZEN_CATEGORIES.get((kind, contract), (PASSIVE_PATCH_CATEGORIES, ()))
     if not set(required) <= set(backups) <= set(required + optional):
         raise MigrationEvidenceError("invalid_category_set", f"the Backup categories do not fit {kind} on {contract}")
     for category, backup in backups.items():
         _require_fields(backup, _BACKUP_FIELDS, "malformed_backup_projection", f"backups.{category}", exact=True)
+        # Every pinned controller lists Velero Backups only in the ACM Restore's namespace.
+        if backup["namespace"] != namespace:
+            raise MigrationEvidenceError(
+                "backup_namespace_mismatch", f"backups.{category} is not in the Restore namespace {namespace!r}"
+            )
 
 
 def _require_backup_fields(restore: Dict[str, Any], backups: Dict[str, Any], kind: str) -> None:

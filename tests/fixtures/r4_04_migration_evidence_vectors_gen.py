@@ -3810,6 +3810,15 @@ for name, changes in (
         mut(PRE_L, **changes),
         "invalid_freeze_write",
     )
+# Every pinned controller lists Velero Backups only in the ACM Restore's namespace
+# (U2.12-2.13/restore.go:371,646; U2.14-2.16/restore.go:378,653; U2.17/restore.go:466,747).
+jcase(
+    "journal-backup-outside-restore-namespace-blocks",
+    ALL,
+    ("A:199-206",),
+    mut(PRE_L, backups__credentials__namespace="another-namespace"),
+    "backup_namespace_mismatch",
+)
 # Post-activation evidence follows restore completion (July §1).
 for name, changes in (
     ("names-verified", {"post_activation__names_verified_at": T_POST_NAMES}),
