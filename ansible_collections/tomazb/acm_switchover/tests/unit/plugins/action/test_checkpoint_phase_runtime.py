@@ -4385,3 +4385,125 @@ def test_a_non_mutating_update_requires_the_established_identity(tmp_path, ident
     assert result["failed"] is True
     assert "established operation identity" in result["msg"]
     assert _dir_snapshot(tmp_path) == before
+
+
+# --- explicit status: reset and the legacy-rebuild preview ----------------------------------
+
+
+def _bare_reset_action(path, phase, *, check_mode=False, **checkpoint):
+    action = _enter_action(path, phase=phase, status="reset", **checkpoint)
+    action._play_context.check_mode = check_mode
+    return action
+
+
+@pytest.mark.parametrize("mode, check_mode", [("execute", False), ("dry_run", False), ("execute", True)])
+@pytest.mark.parametrize("stored", [None, {"schema_version": 9}])
+@pytest.mark.parametrize("phase", ["primary_prep", "activation", "finalization"])
+def test_a_bare_reset_is_refused_over_an_invalid_journal(tmp_path, mode, check_mode, stored, phase):
+    """Codex's input: no reset_from, status: reset still un-completes a phase."""
+    path = _write_phase_checkpoint(tmp_path, data={"migration_backups": stored})
+    before = _dir_snapshot(tmp_path)
+    result = _bare_reset_action(path, phase, check_mode=check_mode).run(
+        task_vars=_task_vars_with_operation_identity(mode=mode)
+    )
+    assert result["failed"] is True
+    assert "invalid" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("mode, check_mode", [("execute", False), ("dry_run", False), ("execute", True)])
+@pytest.mark.parametrize("phase", ["preflight", "primary_prep"])
+def test_a_bare_pre_freeze_reset_is_refused_over_a_valid_journal(tmp_path, mode, check_mode, phase):
+    path = _write_phase_checkpoint(tmp_path, data={"migration_backups": _first_journal()})
+    before = _dir_snapshot(tmp_path)
+    result = _bare_reset_action(path, phase, check_mode=check_mode).run(
+        task_vars=_task_vars_with_operation_identity(mode=mode)
+    )
+    assert result["failed"] is True
+    assert "full checkpoint reset" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_the_failure_rescue_reset_is_refused_once_a_journal_exists(tmp_path):
+    """switchover.yml's rescue task (phase primary_prep, reset_from primary_prep, status reset)."""
+    path = _write_phase_checkpoint(tmp_path, data={"migration_backups": _first_journal()})
+    before = _dir_snapshot(tmp_path)
+    result = _bare_reset_action(path, "primary_prep", reset_from="primary_prep").run(
+        task_vars=_task_vars_with_operation_identity()
+    )
+    assert result["failed"] is True
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("phase", ["activation", "post_activation", "finalization"])
+def test_a_bare_reset_at_or_after_activation_keeps_a_valid_journal(tmp_path, phase):
+    path = _write_phase_checkpoint(
+        tmp_path,
+        phase=phase,
+        completed=("preflight", "primary_prep", "activation", "post_activation", "finalization"),
+        data={"migration_backups": _first_journal()},
+    )
+    result = _bare_reset_action(path, phase).run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    assert phase not in _stored(path)["completed_phases"]
+    assert _stored(path)["operational_data"]["migration_backups"] == _first_journal()
+
+
+def test_a_journal_free_bare_reset_is_unchanged(tmp_path):
+    path = _write_phase_checkpoint(tmp_path, data={"argocd_run_id": "run-1"})
+    result = _bare_reset_action(path, "primary_prep").run(task_vars=_task_vars_with_operation_identity())
+    assert result["changed"] is True
+    stored = _stored(path)
+    assert stored["phase"] == "primary_prep"
+    assert stored["phase_status"] == "reset"
+    assert stored["completed_phases"] == ["preflight"]
+    assert stored["operational_data"] == {"argocd_run_id": "run-1"}
+
+
+@pytest.mark.parametrize("mode, check_mode", [("execute", False), ("dry_run", False), ("execute", True)])
+def test_every_mode_refuses_a_journal_bearing_legacy_rebuild(tmp_path, mode, check_mode):
+    """The preview shares the execution eligibility check for the legacy rebuild."""
+    path = tmp_path / "checkpoint.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "phase": "preflight",
+                "completed_phases": ["preflight"],
+                "operational_data": {"migration_backups": _first_journal()},
+            }
+        )
+    )
+    before = _dir_snapshot(tmp_path)
+    action = _enter_action(path, phase="activation", reset_from="activation")
+    action._play_context.check_mode = check_mode
+    result = action.run(task_vars=_task_vars_with_operation_identity(mode=mode))
+    assert result["failed"] is True
+    assert "migration journal" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_check_mode_still_previews_a_journal_free_legacy_rebuild(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    path.write_text(json.dumps({"schema_version": "1.0", "completed_phases": ["preflight"], "operational_data": {}}))
+    before = _dir_snapshot(tmp_path)
+    action = _enter_action(path, phase="activation", reset_from="activation")
+    action._play_context.check_mode = True
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_check_mode_previews_the_full_reset_over_a_journal_bearing_legacy_checkpoint(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    path.write_text(
+        json.dumps(
+            {"schema_version": "1.0", "completed_phases": ["preflight"], "operational_data": {"migration_backups": {}}}
+        )
+    )
+    before = _dir_snapshot(tmp_path)
+    action = _enter_action(path, phase="preflight", reset=True)
+    action._play_context.check_mode = True
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    assert _dir_snapshot(tmp_path) == before

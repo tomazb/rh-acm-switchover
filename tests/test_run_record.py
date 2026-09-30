@@ -509,14 +509,29 @@ def _journal_state(tmp_path, first_write, **fields):
     return path
 
 
+class _Untouched:
+    """The state file bytes and the live in-memory state, captured before a refusal."""
+
+    def __init__(self, path, state):
+        self.path, self.state = path, state
+        self.bytes = path.read_bytes()
+        self.snapshot = state.capture_state_snapshot()
+
+    def assert_unchanged(self):
+        assert self.path.read_bytes() == self.bytes
+        assert self.state.capture_state_snapshot() == self.snapshot
+
+
 class TestImplicitResetsKeepTheJournal:
     """Amendment section 10: only --reset-state may drop a recorded journal."""
 
     def test_a_context_mismatch_refuses_instead_of_resetting(self, tmp_path, first_write):
         path = _journal_state(tmp_path, first_write)
         state = StateManager(str(path))
+        untouched = _Untouched(path, state)
         with pytest.raises(StateIdentityMismatch, match="--reset-state"):
             state.ensure_contexts("hub-a", "hub-c")
+        untouched.assert_unchanged()
         assert RunRecord(StateManager(str(path))).migration_backups() == first_write
 
     def test_missing_contexts_on_progress_refuse_instead_of_resetting(self, tmp_path, first_write):
@@ -524,8 +539,10 @@ class TestImplicitResetsKeepTheJournal:
             tmp_path, first_write, contexts={"primary": None, "secondary": None}, current_phase="activation"
         )
         state = StateManager(str(path))
+        untouched = _Untouched(path, state)
         with pytest.raises(StateIdentityMismatch, match="--reset-state"):
             state.ensure_contexts("hub-a", "hub-b")
+        untouched.assert_unchanged()
         assert RunRecord(StateManager(str(path))).migration_backups() == first_write
 
     def test_an_invalid_journal_also_refuses_the_context_reset(self, tmp_path):
@@ -534,8 +551,11 @@ class TestImplicitResetsKeepTheJournal:
             contexts={"primary": "hub-a", "secondary": "hub-b"},
             config={run_record_module._KEY_MIGRATION_BACKUPS: None},
         )
+        state = StateManager(str(path))
+        untouched = _Untouched(path, state)
         with pytest.raises(StateIdentityMismatch, match="--reset-state"):
-            StateManager(str(path)).ensure_contexts("hub-a", "hub-c")
+            state.ensure_contexts("hub-a", "hub-c")
+        untouched.assert_unchanged()
 
     def test_a_journal_free_context_mismatch_still_resets(self, tmp_path):
         path = tmp_path / "switchover-plain.json"
@@ -549,19 +569,23 @@ class TestImplicitResetsKeepTheJournal:
 
     def test_the_cli_reports_the_refusal_and_keeps_the_journal(self, tmp_path, first_write):
         path = _journal_state(tmp_path, first_write)
+        before = path.read_bytes()
         with patch("acm_switchover._initialize_clients", return_value=(None, None)):
             with pytest.raises(SystemExit):
                 _prepare_runtime(
                     _cli_args(reset_state=False, secondary_context="hub-c"), logging.getLogger("test"), str(path)
                 )
+        assert path.read_bytes() == before
         assert RunRecord(StateManager(str(path))).migration_backups() == first_write
 
     def test_force_on_an_unresumable_failed_state_refuses(self, tmp_path, first_write):
         path = _journal_state(tmp_path, first_write, current_phase="failed", errors=[])
         state = StateManager(str(path))
         config = FailedStateConfig(resumable_phases=(Phase.ACTIVATION,), operation_noun="switchover")
+        untouched = _Untouched(path, state)
         with pytest.raises(SwitchoverError, match="--reset-state"):
             handle_failed_state(argparse.Namespace(force=True), state, logging.getLogger("test"), config)
+        untouched.assert_unchanged()
         assert RunRecord(StateManager(str(path))).migration_backups() == first_write
 
     def test_force_on_a_stale_completed_state_refuses(self, tmp_path, first_write):
@@ -570,8 +594,10 @@ class TestImplicitResetsKeepTheJournal:
         )
         state = StateManager(str(path))
         config = CompletedStateConfig(operation_label="Switchover", operation_noun="switchover")
+        untouched = _Untouched(path, state)
         with pytest.raises(SwitchoverError, match="--reset-state"):
             handle_completed_state(argparse.Namespace(force=True), state, logging.getLogger("test"), config)
+        untouched.assert_unchanged()
         assert RunRecord(StateManager(str(path))).migration_backups() == first_write
 
     def test_journal_free_force_resets_are_unchanged(self, tmp_path):

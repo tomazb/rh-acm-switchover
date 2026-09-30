@@ -16,6 +16,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint i
     MIGRATION_JOURNAL_VALID,
     CheckpointStructureError,
     MigrationRewindRefused,
+    check_migration_reset,
     check_migration_rewind,
     checkpoint_structure_error,
     classify_migration_backups,
@@ -295,3 +296,28 @@ def test_presence_counts_an_invalid_journal(stored):
 )
 def test_presence_is_false_where_no_slot_can_exist(checkpoint):
     assert has_migration_backups(checkpoint) is False
+
+
+# --- explicit status: reset ------------------------------------------------------
+
+
+@pytest.mark.parametrize("phase", ["preflight", "primary_prep"])
+def test_a_reset_of_a_pre_freeze_phase_is_refused_over_a_valid_journal(first_write, phase):
+    with pytest.raises(MigrationRewindRefused, match="full checkpoint reset"):
+        check_migration_reset(_checkpoint({KEY_MIGRATION_BACKUPS: first_write}), phase)
+
+
+@pytest.mark.parametrize("phase", ["activation", "post_activation", "finalization", "decommission"])
+def test_a_reset_at_or_after_activation_keeps_a_valid_journal(first_write, phase):
+    assert check_migration_reset(_checkpoint({KEY_MIGRATION_BACKUPS: first_write}), phase) == MIGRATION_JOURNAL_VALID
+
+
+@pytest.mark.parametrize("phase", ["preflight", "activation", "finalization"])
+def test_an_invalid_journal_refuses_every_reset(phase):
+    with pytest.raises(MigrationRewindRefused, match="invalid"):
+        check_migration_reset(_checkpoint({KEY_MIGRATION_BACKUPS: None}), phase)
+
+
+@pytest.mark.parametrize("phase", ["preflight", "primary_prep", "activation"])
+def test_a_reset_without_a_journal_is_unaffected(phase):
+    assert check_migration_reset(_checkpoint({}), phase) == MIGRATION_JOURNAL_ABSENT

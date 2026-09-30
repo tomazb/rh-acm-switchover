@@ -16,8 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reading as absent, and so is a Python state whose `config` is not a mapping. While a journal
   exists, a collection `reset_from: preflight`/`primary_prep` is refused when it would move the
   checkpoint back before the freeze (it would prune a completed phase, or the requested phase is
-  pre-freeze) and is otherwise a no-op; an invalid journal refuses every `reset_from`; a schema
-  1.0 checkpoint carrying a journal is not rebuilt; and Python refuses the implicit resets
+  pre-freeze) and is otherwise a no-op; an explicit `status: reset` of `preflight` or
+  `primary_prep` is refused with or without `reset_from`; an invalid journal refuses every
+  `reset_from` and every `status: reset`; a schema 1.0 checkpoint carrying a journal is not
+  rebuilt, in check mode as in execution; and Python refuses the implicit resets
   (context mismatch, missing contexts on an in-progress state, `--force` on a stale completed or
   unresumable failed state) with a pointer to `--reset-state`. No phase writes a journal yet, so
   runs without one are unaffected.

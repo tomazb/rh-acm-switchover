@@ -796,6 +796,17 @@ def record_migration_backups(checkpoint, candidate) -> None:
     checkpoint["operational_data"][KEY_MIGRATION_BACKUPS] = copy.deepcopy(candidate)
 
 
+def _journal_outcome_or_refuse(checkpoint, request: str) -> str:
+    """The journal outcome; an invalid journal refuses every reset or rewind `request`."""
+    outcome, value = classify_migration_backups(checkpoint)
+    if outcome == MIGRATION_JOURNAL_INVALID:
+        raise MigrationRewindRefused(
+            f"Refusing {request}: the stored migration journal is invalid ({value}). "
+            "Repair the checkpoint, or start a new migration with the full checkpoint reset."
+        )
+    return outcome
+
+
 def check_migration_rewind(checkpoint, reset_from: str, *, prunes: bool, requested_phase: str) -> str:
     """Decide whether `reset_from` may run against this checkpoint's journal.
 
@@ -809,17 +820,28 @@ def check_migration_rewind(checkpoint, reset_from: str, *, prunes: bool, request
     The full checkpoint reset rebuilds the record without reading it and so never
     reaches this rule; it is the only path that may drop a journal.
     """
-    outcome, value = classify_migration_backups(checkpoint)
-    if outcome == MIGRATION_JOURNAL_INVALID:
-        raise MigrationRewindRefused(
-            f"Refusing checkpoint.reset_from '{reset_from}': the stored migration journal is invalid ({value}). "
-            "Repair the checkpoint, or start a new migration with the full checkpoint reset."
-        )
+    outcome = _journal_outcome_or_refuse(checkpoint, f"checkpoint.reset_from '{reset_from}'")
     moves_back = prunes or requested_phase in PRE_FREEZE_PHASES
     if outcome == MIGRATION_JOURNAL_VALID and reset_from in PRE_FREEZE_PHASES and moves_back:
         raise MigrationRewindRefused(
             f"Refusing checkpoint.reset_from '{reset_from}' for phase '{requested_phase}': the checkpoint records "
             "a migration transaction frozen after that phase. Remove reset_from or rewind to activation or later "
             "to reuse it, or start a new migration with the full checkpoint reset (checkpoint.reset)."
+        )
+    return outcome
+
+
+def check_migration_reset(checkpoint, phase: str) -> str:
+    """Decide whether an explicit `status: reset` of `phase` may run against the journal.
+
+    Independent of reset_from: the status itself un-completes `phase`. An invalid
+    journal refuses every reset; a valid one refuses a reset of a pre-freeze phase and is
+    kept by any later one. Returns the journal outcome.
+    """
+    outcome = _journal_outcome_or_refuse(checkpoint, f"status: reset of phase '{phase}'")
+    if outcome == MIGRATION_JOURNAL_VALID and phase in PRE_FREEZE_PHASES:
+        raise MigrationRewindRefused(
+            f"Refusing status: reset of phase '{phase}': the checkpoint records a migration transaction frozen "
+            "after that phase. Start a new migration with the full checkpoint reset (checkpoint.reset)."
         )
     return outcome

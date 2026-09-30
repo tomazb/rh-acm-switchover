@@ -201,7 +201,10 @@ itself `preflight` or `primary_prep`. Otherwise that option is a no-op and allow
 a `reset_from` left in the config for the rest of a run does not block later phases,
 but a rerun that starts at `preflight` with it still set is refused. A `reset_from` of
 `activation` or later keeps the journal, and an invalid journal refuses every
-`reset_from`. A schema `1.0` checkpoint that carries a journal is not rebuilt. Only
+`reset_from`. An explicit `status: reset` is checked on its own, with or without
+`reset_from`: an invalid journal refuses every reset, and a valid one refuses a reset
+of `preflight` or `primary_prep`. A schema `1.0` checkpoint that carries a journal is
+not rebuilt. Check mode previews every one of these refusals. Only
 `checkpoint.reset: true` starts a checkpoint without the journal.
 
 During execute-mode resume, the action plugin records

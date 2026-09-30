@@ -24,6 +24,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint i
     CheckpointIdentityMismatch,
     build_checkpoint_record,
     build_operation_identity,
+    check_migration_reset,
     check_migration_rewind,
     checkpoint_facts,
     checkpoint_structure_error,
@@ -781,12 +782,13 @@ class ActionModule(ActionBase):
             if read_only_failure is not None:
                 return read_only_failure
             # A full reset rebuilds the checkpoint without reading it, so only a
-            # checkpoint that would actually be kept can refuse the rewind.
-            rewind_failure = (
-                None if should_reset else self._migration_rewind_failure(checkpoint_data, reset_from, status, phase)
-            )
-            if rewind_failure is not None:
-                return rewind_failure
+            # checkpoint that would actually be kept can refuse the reset or rebuild.
+            if not should_reset:
+                journal_failure = self._migration_journal_reset_failure(
+                    checkpoint_data, reset_from, status, phase
+                ) or self._legacy_rebuild_failure(checkpoint_data, reset_from, status, has_explicit_reset)
+                if journal_failure is not None:
+                    return journal_failure
             if status == "update":
                 # The execution path refuses an identity it would have to backfill or
                 # normalize; the preview refuses the same checkpoints.
@@ -1032,15 +1034,46 @@ class ActionModule(ActionBase):
         return {"failed": True, "msg": "status: update requires an established operation identity."}
 
     @staticmethod
-    def _migration_rewind_failure(checkpoint_data: dict, reset_from, status: str, phase: str) -> dict | None:
-        """Amendment §10: the journal decides a reset_from rewind before any pruning."""
-        if not reset_from or status not in {"enter", "reset"}:
-            return None
-        prunes = reset_from in checkpoint_data.get("completed_phases", [])
+    def _migration_journal_reset_failure(checkpoint_data: dict, reset_from, status: str, phase: str) -> dict | None:
+        """Amendment §10: the journal decides an explicit reset or rewind before any pruning.
+
+        A `status: reset` is checked on its own, then any reset_from it carries.
+        """
         try:
-            check_migration_rewind(checkpoint_data, reset_from, prunes=prunes, requested_phase=phase)
+            if status == "reset":
+                check_migration_reset(checkpoint_data, phase)
+            if reset_from and status in {"enter", "reset"}:
+                prunes = reset_from in checkpoint_data.get("completed_phases", [])
+                check_migration_rewind(checkpoint_data, reset_from, prunes=prunes, requested_phase=phase)
         except ValueError as exc:
             return {"failed": True, "msg": str(exc)}
+        return None
+
+    @staticmethod
+    def _legacy_rebuild_failure(
+        checkpoint_data: dict, reset_from, status: str, has_explicit_reset: bool
+    ) -> dict | None:
+        """Refuse the unsafe-legacy rebuild of a journal-bearing checkpoint, for preview and execution alike.
+
+        That rebuild starts from empty operational_data, and only the full checkpoint reset
+        may drop a migration journal (amendment §10). It runs on an explicit-reset enter
+        that did not prune (pruning keeps operational_data).
+        """
+        prunes = bool(reset_from) and reset_from in checkpoint_data.get("completed_phases", [])
+        if (
+            is_unsafe_legacy_checkpoint(checkpoint_data)
+            and has_explicit_reset
+            and status == "enter"
+            and not prunes
+            and has_migration_backups(checkpoint_data)
+        ):
+            return {
+                "failed": True,
+                "msg": (
+                    "Refusing to rebuild a schema 1.0 checkpoint that carries a migration journal. "
+                    "Start a new migration with the full checkpoint reset (checkpoint.reset)."
+                ),
+            }
         return None
 
     @staticmethod
@@ -1143,9 +1176,9 @@ class ActionModule(ActionBase):
         has_explicit_reset: bool,
         expected_operation_identity: dict,
     ) -> tuple[dict, bool]:
-        rewind_failure = self._migration_rewind_failure(checkpoint_data, reset_from, status, phase)
-        if rewind_failure is not None:
-            return rewind_failure, False
+        journal_failure = self._migration_journal_reset_failure(checkpoint_data, reset_from, status, phase)
+        if journal_failure is not None:
+            return journal_failure, False
         if reset_from and status in {"enter", "reset"}:
             # Only prune when reset_from is still in completed_phases.
             # By invariant, if reset_from is absent, all downstream phases are too
@@ -1170,19 +1203,9 @@ class ActionModule(ActionBase):
                     False,
                 )
             if status == "enter":
-                if has_migration_backups(checkpoint_data):
-                    # This rebuild starts from empty operational_data; only the full
-                    # checkpoint reset may drop a migration journal (amendment §10).
-                    return (
-                        {
-                            "failed": True,
-                            "msg": (
-                                "Refusing to rebuild a schema 1.0 checkpoint that carries a migration journal. "
-                                "Start a new migration with the full checkpoint reset (checkpoint.reset)."
-                            ),
-                        },
-                        False,
-                    )
+                legacy_failure = self._legacy_rebuild_failure(checkpoint_data, reset_from, status, has_explicit_reset)
+                if legacy_failure is not None:
+                    return legacy_failure, False
                 return (
                     build_checkpoint_record(
                         phase,
