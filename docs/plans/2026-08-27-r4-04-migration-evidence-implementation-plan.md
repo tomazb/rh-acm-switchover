@@ -12,7 +12,7 @@
 
 - `docs/plans/2026-07-29-migration-evidence-design.md`
 - `docs/plans/2026-08-27-r4-04-current-base-design-amendment.md` at accepted exact head `f5f7505d55d7ef97b4642c87844e0c254b635018`
-- `docs/plans/2026-09-30-r4-04-controller-child-evidence-amendment.md` (operator-directed amendment of 2026-09-30; wins over the two documents above where they conflict: exact-first generic selection, direct-`latest` determinism, one-shot `passive_restore` keeps the `latest` trigger with frozen predictions, one-shot child roles and owner membership, and recorded journal-shape resolutions). Task 2's vectors and Tasks 7–8 include its acceptance criteria 31–38.
+- `docs/plans/2026-09-30-r4-04-controller-child-evidence-amendment.md` at merged exact head `97fb161735e43f9ea01ad47c3bf081e467fa96b1` (operator-directed amendment of 2026-09-30; wins over the two documents above where they conflict: exact-first generic selection, direct-`latest` determinism, one-shot `passive_restore` keeps the `latest` trigger with frozen predictions, one-shot child roles and owner membership, and recorded journal-shape resolutions). Task 2's vectors and Tasks 7–8 include its acceptance criteria 31–38.
 
 **Plan status:** reviewed and approved for publication. This document does **not** authorize runtime implementation by itself.
 
@@ -195,7 +195,7 @@ The shared JSON fixture must cover at least:
 
 - all six ACM minor -> controller-contract mappings;
 - Backup counter normalization: omitted errors/warnings -> `0`; present non-negative integer retained; null/bool/string/float/negative rejected;
-- direct `latest` selection ordering: resource-type prefix -> `{Completed, PartiallyFailed}` raw phase eligibility -> `startTimestamp` descending -> first, then R4 eligibility;
+- direct `latest` selection ordering: resource-type prefix -> `{Completed, PartiallyFailed}` raw phase eligibility -> `startTimestamp` descending -> first, then R4 eligibility; a missing or malformed filtered start time, or a tie at the maximum start time, blocks (controller child-evidence amendment §1);
 - a `PartiallyFailed` newest Backup blocks instead of selecting an older successful Backup;
 - passive-patch auxiliary Backup categories `activation_credentials`, `activation_resources`, and `activation_resources_generic`: controller-selectable inputs are derived with the pinned lane's upstream-first selection algebra, a required auxiliary input that cannot be selected deterministically blocks before mutation, and resume keeps the frozen category identities rather than re-resolving later aliases;
 - generic exact-name match;
