@@ -1127,6 +1127,7 @@ class ActionModule(ActionBase):
     def _save_checkpoint(self, path: str, data: dict) -> dict | None:
         dir_path = os.path.dirname(path)
         temp_path = self._build_temp_checkpoint_path(path)
+        replaced = False
         try:
             if dir_path:
                 os.makedirs(dir_path, exist_ok=True)
@@ -1135,8 +1136,19 @@ class ActionModule(ActionBase):
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(temp_path, path)
+            replaced = True
             self._fsync_parent_directory(path)
         except OSError as e:
+            if replaced:
+                # The new checkpoint may already be visible, so the previous one cannot be assumed to
+                # hold (R4-05 section 2): the outcome is indeterminate, never success or "unchanged".
+                return {
+                    "failed": True,
+                    "msg": (
+                        f"Checkpoint file '{path}' was replaced but its directory durability could not be "
+                        f"acknowledged: {e}. The on-disk checkpoint outcome is indeterminate."
+                    ),
+                }
             if os.path.exists(temp_path):
                 try:
                     os.unlink(temp_path)
@@ -1149,22 +1161,22 @@ class ActionModule(ActionBase):
         return None
 
     def _fsync_parent_directory(self, path: str) -> None:
+        """Make the replace durable, or raise (R4-04 PR A, R4-05 section 2).
+
+        The checkpoint file was fsynced before the replace, but the rename survives a power loss
+        only once the directory entry is fsynced. Every failure propagates, including
+        ENOTSUP/EINVAL: only an explicit up-front capability determination could exempt a
+        filesystem, and none is made here.
+        """
         dir_path = os.path.dirname(path) or "."
-        dir_fd = None
+        dir_fd = os.open(dir_path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
-            dir_fd = os.open(dir_path, os.O_RDONLY)
             os.fsync(dir_fd)
-        except OSError:
-            # Some platforms/filesystems do not support opening or fsyncing
-            # directories. The checkpoint file itself was already fsynced before
-            # replace; directory fsync is a best-effort durability improvement.
-            return
         finally:
-            if dir_fd is not None:
-                try:
-                    os.close(dir_fd)
-                except OSError:
-                    pass
+            try:
+                os.close(dir_fd)
+            except OSError:
+                pass
 
     def _build_temp_checkpoint_path(self, path: str) -> str:
         dir_path = os.path.dirname(path) or "."
