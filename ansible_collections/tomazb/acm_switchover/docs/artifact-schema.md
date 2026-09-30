@@ -203,8 +203,13 @@ but a rerun that starts at `preflight` with it still set is refused. A `reset_fr
 `activation` or later keeps the journal, and an invalid journal refuses every
 `reset_from`. An explicit `status: reset` is checked on its own, with or without
 `reset_from`: an invalid journal refuses every reset, and a valid one refuses a reset
-of `preflight` or `primary_prep`. A schema `1.0` checkpoint that carries a journal is
-not rebuilt. Check mode previews every one of these refusals. Only
+of `preflight` or `primary_prep`. A `status: fail` of `preflight` or `primary_prep` is
+refused while the journal key is present, valid or not, because a fail also
+un-completes the phase; a fail of `activation` or any later phase is always recorded
+and keeps the journal. For a schema `1.0` checkpoint that carries a journal, the
+collection refuses the schema 1.0 rebuild that would discard operational data;
+journal-preserving `reset_from` rebuilds remain allowed. Check mode previews every one
+of these refusals. Only
 `checkpoint.reset: true` starts a checkpoint without the journal.
 
 During execute-mode resume, the action plugin records

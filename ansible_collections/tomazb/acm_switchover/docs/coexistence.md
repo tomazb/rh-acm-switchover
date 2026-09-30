@@ -66,8 +66,11 @@ stale completed state or of a failed state with no resumable phase — and point
 operator at `--reset-state`. The collection refuses a pre-freeze `reset_from` that
 would move the checkpoint back before the freeze and a `status: reset` of a
 pre-freeze phase (an invalid journal refuses every `reset_from` and every
-`status: reset`), and will not rebuild a schema `1.0` checkpoint that carries a
-journal; its other reset paths keep `operational_data`. Without a journal every one of these paths behaves as before.
+`status: reset`), and a `status: fail` of a pre-freeze phase while the journal key is
+present; a fail of `activation` or later is always recorded. For a journal-bearing
+schema `1.0` checkpoint it refuses the schema 1.0 rebuild that would discard
+operational data; journal-preserving `reset_from` rebuilds remain allowed. Its other
+reset paths keep `operational_data`. Without a journal every one of these paths behaves as before.
 
 Dry-run, validate, and native Ansible check-mode collection runs do not write
 pass/fail/reset checkpoint transitions, so they cannot make a later live run

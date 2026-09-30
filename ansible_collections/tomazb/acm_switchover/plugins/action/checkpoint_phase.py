@@ -24,6 +24,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint i
     CheckpointIdentityMismatch,
     build_checkpoint_record,
     build_operation_identity,
+    check_migration_fail,
     check_migration_reset,
     check_migration_rewind,
     checkpoint_facts,
@@ -1037,11 +1038,14 @@ class ActionModule(ActionBase):
     def _migration_journal_reset_failure(checkpoint_data: dict, reset_from, status: str, phase: str) -> dict | None:
         """Amendment §10: the journal decides an explicit reset or rewind before any pruning.
 
-        A `status: reset` is checked on its own, then any reset_from it carries.
+        A `status: reset` or `status: fail` is checked on its own (both un-complete the
+        phase), then any reset_from a reset carries.
         """
         try:
             if status == "reset":
                 check_migration_reset(checkpoint_data, phase)
+            if status == "fail":
+                check_migration_fail(checkpoint_data, phase)
             if reset_from and status in {"enter", "reset"}:
                 prunes = reset_from in checkpoint_data.get("completed_phases", [])
                 check_migration_rewind(checkpoint_data, reset_from, prunes=prunes, requested_phase=phase)

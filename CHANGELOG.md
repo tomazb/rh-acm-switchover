@@ -33,8 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checkpoint back before the freeze (it would prune a completed phase, or the requested phase is
   pre-freeze) and is otherwise a no-op; an explicit `status: reset` of `preflight` or
   `primary_prep` is refused with or without `reset_from`; an invalid journal refuses every
-  `reset_from` and every `status: reset`; a schema 1.0 checkpoint carrying a journal is not
-  rebuilt, in check mode as in execution; and Python refuses the implicit resets
+  `reset_from` and every `status: reset`; a `status: fail` of `preflight` or `primary_prep` is
+  refused while the journal key is present (valid or not), while a fail of `activation` or later
+  is always recorded; for a journal-bearing schema 1.0 checkpoint the collection refuses the
+  schema 1.0 rebuild that would discard operational data, while journal-preserving `reset_from`
+  rebuilds remain allowed, in check mode as in execution; and Python refuses the implicit resets
   (context mismatch, missing contexts on an in-progress state, `--force` on a stale completed or
   unresumable failed state) with a pointer to `--reset-state`. No phase writes a journal yet, so
   runs without one are unaffected.

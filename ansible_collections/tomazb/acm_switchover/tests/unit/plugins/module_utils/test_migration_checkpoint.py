@@ -16,6 +16,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint i
     MIGRATION_JOURNAL_VALID,
     CheckpointStructureError,
     MigrationRewindRefused,
+    check_migration_fail,
     check_migration_reset,
     check_migration_rewind,
     checkpoint_structure_error,
@@ -321,3 +322,27 @@ def test_an_invalid_journal_refuses_every_reset(phase):
 @pytest.mark.parametrize("phase", ["preflight", "primary_prep", "activation"])
 def test_a_reset_without_a_journal_is_unaffected(phase):
     assert check_migration_reset(_checkpoint({}), phase) == MIGRATION_JOURNAL_ABSENT
+
+
+# --- status: fail ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("stored", ["valid", None, {}, {"schema_version": 9}])
+@pytest.mark.parametrize("phase", ["preflight", "primary_prep"])
+def test_a_pre_freeze_fail_is_refused_whenever_the_key_is_present(first_write, stored, phase):
+    journal = first_write if stored == "valid" else stored
+    with pytest.raises(MigrationRewindRefused, match="status: fail"):
+        check_migration_fail(_checkpoint({KEY_MIGRATION_BACKUPS: journal}), phase)
+
+
+@pytest.mark.parametrize("stored", ["valid", None, {"schema_version": 9}])
+@pytest.mark.parametrize("phase", ["activation", "post_activation", "finalization", "decommission"])
+def test_a_post_freeze_fail_is_never_blocked(first_write, stored, phase):
+    journal = first_write if stored == "valid" else stored
+    check_migration_fail(_checkpoint({KEY_MIGRATION_BACKUPS: journal}), phase)
+
+
+@pytest.mark.parametrize("checkpoint", [_checkpoint(), _checkpoint({}), {"operational_data": "x"}])
+@pytest.mark.parametrize("phase", ["preflight", "primary_prep"])
+def test_a_journal_free_fail_is_unaffected(checkpoint, phase):
+    check_migration_fail(checkpoint, phase)

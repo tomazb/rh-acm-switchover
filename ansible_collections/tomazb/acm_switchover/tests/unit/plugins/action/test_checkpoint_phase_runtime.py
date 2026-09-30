@@ -4507,3 +4507,67 @@ def test_check_mode_previews_the_full_reset_over_a_journal_bearing_legacy_checkp
     result = action.run(task_vars=_task_vars_with_operation_identity())
     assert result.get("failed") is not True
     assert _dir_snapshot(tmp_path) == before
+
+
+# --- status: fail across the freeze -------------------------------------------------------
+
+
+def _fail_action(path, phase, *, check_mode=False):
+    action = _make_checkpoint_action(
+        {
+            "phase": phase,
+            "checkpoint": {"enabled": True, "backend": "file", "path": str(path)},
+            "status": "fail",
+            "error": "boom",
+        }
+    )
+    action._play_context.check_mode = check_mode
+    return action
+
+
+@pytest.mark.parametrize("mode, check_mode", [("execute", False), ("dry_run", False), ("execute", True)])
+@pytest.mark.parametrize("journal", ["valid", "invalid"])
+@pytest.mark.parametrize("phase", ["preflight", "primary_prep"])
+def test_a_pre_freeze_fail_is_refused_over_a_journal(tmp_path, mode, check_mode, journal, phase):
+    """Codex's input: a fail of a pre-freeze phase un-completes it, rewinding across the freeze."""
+    stored = _first_journal() if journal == "valid" else None
+    path = _write_phase_checkpoint(tmp_path, data={"migration_backups": stored})
+    before = _dir_snapshot(tmp_path)
+    result = _fail_action(path, phase, check_mode=check_mode).run(
+        task_vars=_task_vars_with_operation_identity(mode=mode)
+    )
+    assert result["failed"] is True
+    assert "status: fail" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("journal", ["valid", "invalid"])
+@pytest.mark.parametrize("phase", ["activation", "post_activation", "finalization"])
+def test_a_post_freeze_fail_is_recorded_and_keeps_the_journal(tmp_path, journal, phase):
+    stored = _first_journal() if journal == "valid" else {"schema_version": 9}
+    path = _write_phase_checkpoint(
+        tmp_path,
+        phase=phase,
+        completed=("preflight", "primary_prep", "activation", "post_activation", "finalization"),
+        data={"migration_backups": stored},
+    )
+    result = _fail_action(path, phase).run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    after = _stored(path)
+    assert after["phase_status"] == "fail"
+    assert phase not in after["completed_phases"]
+    assert after["errors"][-1] == {"phase": phase, "error": "boom"}
+    assert after["operational_data"]["migration_backups"] == stored
+
+
+@pytest.mark.parametrize("phase", ["preflight", "primary_prep"])
+def test_a_journal_free_pre_freeze_fail_is_unchanged(tmp_path, phase):
+    path = _write_phase_checkpoint(tmp_path, data={"argocd_run_id": "run-1"})
+    result = _fail_action(path, phase).run(task_vars=_task_vars_with_operation_identity())
+    assert result["changed"] is True
+    after = _stored(path)
+    assert after["phase"] == phase
+    assert after["phase_status"] == "fail"
+    assert after["completed_phases"] == [p for p in ("preflight", "primary_prep") if p != phase]
+    assert after["errors"][-1] == {"phase": phase, "error": "boom"}
+    assert after["operational_data"] == {"argocd_run_id": "run-1"}
