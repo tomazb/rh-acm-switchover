@@ -503,14 +503,14 @@ Cover all mutation kinds and resume:
 4. `passive_patch` fresh precondition requires sync=true, normalized `skip/latest/latest`, exact empty MC status locator, and a strict live read of `spec.cleanupBeforeRestore` that normalizes to the exact `CleanupRestored` value and is bound into the journal before mutation; non-empty locator or cleanup mismatch causes **zero Backup freeze and zero PATCH**;
 5. before `passive_patch`, freeze `activation_credentials`, `activation_resources`, and `activation_resources_generic` in addition to `managed_clusters`, using the pinned lane's exact upstream-first selection rules; if any controller-required auxiliary input cannot be selected deterministically, record no accepted mutation intent and issue zero PATCH; resume revalidates these frozen categories and never re-resolves them to later alias targets;
 6. immediately before `passive_patch`, a strict live re-read tests that normalized `cleanupBeforeRestore` still equals the journaled value, then the guarded patch tests UID/resourceVersion/raw MC field and replaces only MC with canonical `latest`; cleanup mismatch fails before mutation;
-7. `passive_restore` creates one-shot concrete MC with credential/resource skips and sends the journaled normalized `cleanupBeforeRestore` value;
+7. `passive_restore` creates the one-shot Restore with `latest` ManagedClusters and credential/resource skips (controller child-evidence amendment §3), after freezing the lane's predicted Backups (legacy: `managed_clusters`, `activation_credentials`, optional `activation_resources_generic`; 2.17: `managed_clusters`), and sends the journaled normalized `cleanupBeforeRestore` value;
 8. `full_restore` uses concrete managed/credential/resource fields, freezes/validates correlated `resources_generic`, and sends the journaled normalized `cleanupBeforeRestore` value;
 9. each create response plus mandatory strict post-create read, and each patch response plus strict post-patch read, binds ACM Restore namespace/name/UID/generation/mutation kind/cleanupBeforeRestore/fingerprint and rejects a cleanup mismatch;
 10. resume loads/revalidates the journal, checks `cleanupBeforeRestore` at every governed post-read/evidence/revalidation boundary, and never refreezes any managed or passive auxiliary category to later `latest` targets;
 11. same-name different Backup UID or status drift blocks;
-12. lane-specific child sweep uses strict complete Velero Restore list + exact owner UID filtering, never `.metadata.controller` server selector;
-13. legacy 2.12–2.16 requires the legacy owner cohort and ManagedClusters/Credentials/ResourcesGeneric provenance, with each consumed credential/resource/generic child bound to its corresponding frozen `activation_*` evidence;
-14. 2.17 reproduces the all-status-empty/otherwise-current+`-active` cohort, requires all current children `Completed`, and binds any consumed credentials/resources/generic child to `activation_credentials`, `activation_resources`, or `activation_resources_generic` respectively;
+12. lane-specific child sweep uses strict complete Velero Restore list + exact owner UID filtering, never `.metadata.controller` server selector; one-shot `passive_restore` and `full_restore` completion follows the amendment's §4 required roles and owner-membership rule;
+13. for `passive_patch`, legacy 2.12–2.16 requires the legacy owner cohort and ManagedClusters/Credentials/ResourcesGeneric provenance, with each consumed credential/resource/generic child bound to its corresponding frozen `activation_*` evidence;
+14. for `passive_patch`, 2.17 reproduces the all-status-empty/otherwise-current+`-active` cohort, requires all current children `Completed`, and binds any consumed credentials/resources/generic child to `activation_credentials`, `activation_resources`, or `activation_resources_generic` respectively;
 15. child `spec.backupName` mismatch blocks, including post-PATCH alias race detection and auxiliary child mismatch;
 16. ACM phase `Enabled` is accepted only with the full passive-patch conjunctive proof; `EnabledWithErrors` blocks on 2.17; one-shot/full require `Finished`;
 17. `restore.completed_at` is written only after every required identity/provenance/completion/name predicate is complete, and written last.
@@ -579,7 +579,7 @@ Mirror every Python decision listed in Task 7, plus:
 - `check_mode`/dry-run reports prediction but neither mutates Restore nor persists authoritative journal transitions;
 - checkpoint `status:update` receives one complete `migration_backups` mapping per transition;
 - passive patch uses `acm_restore_guarded_mutation`, not `kubernetes.core.k8s state: patched`;
-- one-shot/full create paths use concrete journaled fields;
+- the one-shot passive create path uses `latest`/`skip`/`skip` with the frozen predicted Backups, and the full create path uses concrete journaled fields (controller child-evidence amendment §3);
 - all strict LISTs use the R4-03 complete-outcome module/seam;
 - no role/playbook raw checkpoint vocabulary bypass.
 
