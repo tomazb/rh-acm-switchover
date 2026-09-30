@@ -464,13 +464,14 @@ class StateManager:
         try:
             while force or self._dirty:
                 force = False
-                self._dirty = False
-                self.state["last_updated"] = _utc_timestamp()
                 try:
+                    self._dirty = False
+                    self.state["last_updated"] = _utc_timestamp()
                     self._write_state(self.state)
                 except BaseException as e:
-                    # A failed or interrupted write (a SIGINT inside it included) leaves the state
-                    # pending, never silently clean, so the next flush rewrites it (R4-04 PR A).
+                    # A failed or interrupted write (a SIGINT anywhere from clearing the flag to
+                    # the end of the write included) leaves the state pending, never silently
+                    # clean, so the next flush rewrites it (R4-04 PR A).
                     self._dirty = True
                     if suppress_errors and isinstance(e, Exception):
                         import sys

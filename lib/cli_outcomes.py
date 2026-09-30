@@ -184,6 +184,27 @@ def run_setup_mode(
     return exit_failure
 
 
+def _report_interrupted_state(args: Any, state: StateManager, logger: logging.Logger) -> None:
+    """Say "State saved" only after the pending state is durably written (R4-04 PR A).
+
+    The SIGINT handler already flushed; this is a no-op unless that write failed or was
+    interrupted, and it retries the pending state once.
+    """
+    state_file = getattr(args, "state_file", None)
+    try:
+        state.save_state()
+    except Exception as exc:
+        logger.error(
+            "State file %s could not be durably saved (%s); its on-disk content is indeterminate. "
+            "Re-run the same command to resume; resume re-validates the state file.",
+            state_file,
+            exc,
+        )
+    else:
+        logger.info("State saved to: %s", state_file)
+        logger.info("Re-run the same command to resume from last successful step")
+
+
 def run_operation_mode(
     args: Any,
     state: StateManager,
@@ -210,21 +231,7 @@ def run_operation_mode(
             success = hooks.execute_operation(args, state, primary, secondary, logger)
     except KeyboardInterrupt:
         logger.warning("\n\nOperation interrupted by user")
-        state_file = getattr(args, "state_file", None)
-        try:
-            # The SIGINT handler already flushed; this is a no-op unless that write failed, and it
-            # retries the pending state once. "State saved" is claimed only after a durable write.
-            state.save_state()
-        except Exception as exc:
-            logger.error(
-                "State file %s could not be durably saved (%s); its on-disk content is indeterminate. "
-                "Re-run the same command to resume; resume re-validates the state file.",
-                state_file,
-                exc,
-            )
-        else:
-            logger.info("State saved to: %s", state_file)
-            logger.info("Re-run the same command to resume from last successful step")
+        _report_interrupted_state(args, state, logger)
         exit_code = exit_interrupt
     except StateIdentityMismatch as exc:
         # The binding guard refused this state file; never write into it.
