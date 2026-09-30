@@ -32,17 +32,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   §2 prerequisite before R4-04 journal writes). Python `StateManager` fsyncs the state
   directory after `os.replace`, and the collection checkpoint save no longer suppresses a
   failed directory open or fsync. Either failure fails the write — `ENOTSUP`/`EINVAL`
-  included, since no up-front filesystem capability determination is made — and is reported
-  as an indeterminate outcome, never as success or as the previous state still holding: a
-  failed or interrupted Python flush or save leaves the state dirty so the next flush rewrites
-  the current in-memory state, an interrupted CLI run says "State saved" only after a successful write (otherwise it
-  reports the state file as indeterminate), and the collection checkpoint action fails with an
-  indeterminate-outcome message. The collection's dry-run, check and validate modes still
-  write no authoritative checkpoint. Operators: keep the state and checkpoint directories on a
-  filesystem that supports directory fsync; on one that rejects it, state writes now fail
-  instead of silently losing durability. Other R4-05
-  durability points (the corrupt-checkpoint quarantine rename, absent-file restoration, retry
-  of the direct restore writes) are unchanged.
+  included, since no up-front filesystem capability determination is made — and is reported as
+  an indeterminate outcome, never as success or as the previous state still holding: a failed
+  or interrupted Python flush or save leaves the state dirty so the next flush rewrites the
+  current in-memory state, an interrupted CLI run says "State saved" only after a successful
+  write (otherwise it reports the state file as indeterminate), and the collection checkpoint
+  action fails with an indeterminate-outcome message. The collection's dry-run, check and
+  validate modes still write no authoritative checkpoint. Operators: keep the state and
+  checkpoint directories on a filesystem that supports directory fsync; on one that rejects
+  it, state writes now fail instead of silently losing durability. Other R4-05 durability
+  points (the corrupt-checkpoint quarantine rename, absent-file restoration, retry of the
+  direct restore writes) are unchanged.
 
 - Python's custom-resource discovery proof (`KubeClient._discovery_serves`, used by
   `get_custom_resource_strict` and `list_custom_resources_strict`) now requires the discovery

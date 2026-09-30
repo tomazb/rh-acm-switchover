@@ -1985,3 +1985,16 @@ class TestInterruptedStateWrite:
         sm.save_state()
         assert sm._dirty is False
         assert json.loads((tmp_path / "state.json").read_text())["config"]["marker"] == "after"
+
+    @pytest.mark.parametrize("interrupt", [KeyboardInterrupt, SystemExit], ids=["keyboard-interrupt", "system-exit"])
+    def test_an_exit_flush_never_swallows_an_interrupt(self, tmp_path, interrupt):
+        """The signal/atexit flush suppresses ordinary errors only; an interrupt propagates, state stays dirty."""
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm.flush_state()
+        sm.state["config"]["marker"] = "after"
+        sm._dirty = True
+        with patch.object(sm, "_write_state", side_effect=interrupt):
+            with pytest.raises(interrupt):
+                sm._do_flush(force=False, suppress_errors=True)
+        assert sm._dirty is True
+        assert sm._flushing is False
