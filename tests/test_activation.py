@@ -35,6 +35,7 @@ from lib.constants import (
 )
 from lib.exceptions import FatalError
 from lib.run_record import HubFacts, RunRecord
+from lib.strict_read import StrictReadOutcome
 from lib.waiter import WaitConditionResult
 
 SecondaryActivation = activation_module.SecondaryActivation
@@ -73,10 +74,35 @@ def valid_auto_import_configmap(data):
 
 @pytest.fixture
 def mock_secondary_client():
-    """Create a mock KubeClient for secondary hub."""
+    """Create a mock KubeClient for secondary hub.
+
+    The strict readers answer from the advisory mocks, so a test seeds one list/get
+    result and every strict read of it is a positively complete outcome.
+    """
     mock = Mock()
     mock.dry_run = False  # Ensure dry_run is False for tests
+
+    def strict_list(**kwargs):
+        items = mock.list_custom_resources(**kwargs)
+        return StrictReadOutcome.from_items([_created(item) for item in items])
+
+    def strict_get(**kwargs):
+        resource = mock.get_custom_resource(**kwargs)
+        if not resource:
+            return StrictReadOutcome.object_absent("object_not_found")
+        return StrictReadOutcome.from_resource(resource)
+
+    mock.list_custom_resources_strict.side_effect = strict_list
+    mock.get_custom_resource_strict.side_effect = strict_get
     return mock
+
+
+def _created(item):
+    """A listed object with the creationTimestamp every live object carries."""
+    item = copy.deepcopy(item)
+    if isinstance(item.get("metadata"), dict):
+        item["metadata"].setdefault("creationTimestamp", "2026-03-30T09:00:00Z")
+    return item
 
 
 @pytest.fixture
@@ -134,173 +160,6 @@ def activation_full(mock_secondary_client, mock_state_manager):
 class TestSecondaryActivation:
     """Tests for SecondaryActivation class."""
 
-    @patch("modules.activation.time.sleep")
-    @patch("modules.activation.wait_for_condition")
-    def test_activate_passive_success(
-        self, mock_wait, mock_sleep, activation_passive, mock_secondary_client, mock_state_manager
-    ):
-        """Test successful passive activation."""
-        mock_wait.return_value = True
-        mock_sleep.return_value = None  # Skip real sleep in patch verification loop
-
-        # Track if patch has been applied to simulate the patched state
-        patch_applied = {"value": False}
-
-        # Mock verify_passive_sync - return Enabled state
-        # This will be called multiple times for different resources
-        def get_custom_resource_side_effect(**kwargs):
-            if kwargs.get("plural") == "restores" and kwargs.get("name") == RESTORE_PASSIVE_SYNC_NAME:
-                result = {
-                    "metadata": {
-                        "name": RESTORE_PASSIVE_SYNC_NAME,
-                        # resourceVersion changes after patch is applied
-                        "resourceVersion": "200" if patch_applied["value"] else "100",
-                    },
-                    "status": {
-                        "phase": "Enabled",
-                        "lastMessage": "Synced",
-                        "veleroManagedClustersRestoreName": "test-velero-restore",
-                    },
-                    "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
-                }
-                # After patch is applied, include the patched field
-                if patch_applied["value"]:
-                    result["spec"][SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME] = VELERO_BACKUP_LATEST
-                return result
-            if kwargs.get("plural") == "restores" and kwargs.get("group") == "velero.io":
-                return {
-                    "status": {
-                        "phase": "Completed",
-                        "progress": {"itemsRestored": 100},
-                    }
-                }
-            return None
-
-        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
-
-        # Mock list_custom_resources for both restore discovery and managed clusters verification
-        def list_custom_resources_side_effect(**kwargs):
-            if kwargs.get("plural") == "restores":
-                # Return the passive sync restore for discovery
-                return [
-                    {
-                        "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-                        "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
-                        "status": {"phase": "Enabled"},
-                    }
-                ]
-            if kwargs.get("plural") == "managedclusters":
-                return [
-                    {"metadata": {"name": "cluster1"}},
-                    {"metadata": {"name": "local-cluster"}},
-                ]
-            return []
-
-        mock_secondary_client.list_custom_resources.side_effect = list_custom_resources_side_effect
-
-        # Mock patch for activation - mark patch as applied and return patched resource
-        def patch_side_effect(**kwargs):
-            patch_applied["value"] = True
-            return {"spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST}}
-
-        mock_secondary_client.patch_custom_resource.side_effect = patch_side_effect
-
-        result = activation_passive.activate()
-
-        assert result is True
-
-        # 2. Activate (patch)
-        mock_secondary_client.patch_custom_resource.assert_called_with(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="restores",
-            name=RESTORE_PASSIVE_SYNC_NAME,
-            patch={"spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST}},
-            namespace=BACKUP_NAMESPACE,
-        )
-        # Patch verification loop sleeps once before detecting the resourceVersion change
-        mock_sleep.assert_called_once_with(PATCH_VERIFY_RETRY_DELAY)
-
-    @patch("modules.activation.wait_for_condition")
-    def test_activate_full_success(self, mock_wait, activation_full, mock_secondary_client):
-        """Test successful full activation."""
-        mock_wait.return_value = True
-
-        # No existing passive-sync restore to delete
-        mock_secondary_client.list_custom_resources.return_value = []
-        # Mock check for existing restore (returns None -> create new)
-        mock_secondary_client.get_custom_resource.return_value = None
-
-        result = activation_full.activate()
-
-        assert result is True
-
-        # Verify creation
-        mock_secondary_client.create_custom_resource.assert_called_once()
-        args = mock_secondary_client.create_custom_resource.call_args[1]
-        assert args["body"]["metadata"]["name"] == "restore-acm-full"
-
-        # Verify wait
-        mock_wait.assert_called_once()
-        assert "restore-acm-full" in mock_wait.call_args[0][0]
-
-    @patch("modules.activation.wait_for_condition")
-    def test_activate_full_deletes_existing_passive_sync(self, mock_wait, activation_full, mock_secondary_client):
-        """Test full activation deletes existing passive-sync restore first."""
-        mock_wait.return_value = True
-
-        # Simulate an existing passive-sync restore
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "restore-acm-passive-sync"},
-                "spec": {"syncRestoreWithNewBackups": True},
-            }
-        ]
-        mock_secondary_client.get_custom_resource.return_value = None
-
-        result = activation_full.activate()
-
-        assert result is True
-
-        # Verify passive-sync restore was deleted before full restore created
-        delete_calls = mock_secondary_client.delete_custom_resource.call_args_list
-        assert len(delete_calls) == 1
-        assert delete_calls[0][1]["name"] == "restore-acm-passive-sync"
-
-        # Verify full restore was created
-        create_calls = mock_secondary_client.create_custom_resource.call_args_list
-        assert len(create_calls) == 1
-        assert create_calls[0][1]["body"]["metadata"]["name"] == "restore-acm-full"
-
-    def test_full_restore_rolls_back_passive_restore_on_create_failure(self, activation_full, mock_secondary_client):
-        """Full restore create failure after passive deletion should recreate the passive restore."""
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {
-                    "name": RESTORE_PASSIVE_SYNC_NAME,
-                    "namespace": BACKUP_NAMESPACE,
-                    "labels": {"managed-by": "test"},
-                },
-                "spec": {
-                    SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True,
-                    SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_SKIP,
-                },
-            }
-        ]
-        mock_secondary_client.get_custom_resource.return_value = None
-        mock_secondary_client.create_custom_resource.side_effect = [Exception("full create failed"), None]
-
-        with patch.object(activation_full, "_wait_for_restore_deletion", return_value=None):
-            with pytest.raises(FatalError, match="Recreated passive sync restore"):
-                activation_full._create_full_restore()
-
-        assert mock_secondary_client.create_custom_resource.call_count == 2
-        rollback_body = mock_secondary_client.create_custom_resource.call_args_list[1].kwargs["body"]
-        assert rollback_body["metadata"]["name"] == RESTORE_PASSIVE_SYNC_NAME
-        assert rollback_body["metadata"]["namespace"] == BACKUP_NAMESPACE
-        assert rollback_body["metadata"]["labels"] == {"managed-by": "test"}
-        assert rollback_body["spec"][SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS] is True
-
     def test_verify_passive_sync_failure(self, activation_passive, mock_secondary_client):
         """Test failure when passive sync restore is not found."""
         # No restores discovered and fallback name lookup also fails
@@ -310,86 +169,6 @@ class TestSecondaryActivation:
         result = activation_passive.activate()
 
         assert result is False
-
-    @patch("modules.activation.time.sleep")
-    @patch("modules.activation.wait_for_condition")
-    def test_verify_passive_sync_completed_phase_is_valid(
-        self, mock_wait, mock_sleep, activation_passive, mock_secondary_client
-    ):
-        """Test that phase=Completed is treated as a ready passive sync state.
-
-        This test fully mocks the activate() flow so patch verification succeeds:
-        - time.sleep is patched to avoid real sleeps
-        - get_custom_resource returns increasing resourceVersion after patch
-        - patch_custom_resource returns a dict including the patched spec
-        - downstream Velero/ManagedCluster checks are mocked
-        """
-        mock_wait.return_value = True
-        mock_sleep.return_value = None
-
-        patch_applied = {"value": False}
-
-        def list_custom_resources_side_effect(**kwargs):
-            if kwargs.get("plural") == "restores":
-                return [
-                    {
-                        "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-                        "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
-                    }
-                ]
-            if kwargs.get("plural") == "managedclusters":
-                return [
-                    {"metadata": {"name": "cluster1"}},
-                    {"metadata": {"name": "local-cluster"}},
-                ]
-            return []
-
-        mock_secondary_client.list_custom_resources.side_effect = list_custom_resources_side_effect
-
-        def get_custom_resource_side_effect(**kwargs):
-            # Passive sync Restore (used by _verify_passive_sync, _get_restore_or_raise, and _verify_patch_applied)
-            if kwargs.get("plural") == "restores" and kwargs.get("name") == RESTORE_PASSIVE_SYNC_NAME:
-                resource_version = "101" if patch_applied["value"] else "100"
-                spec = {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True}
-                if patch_applied["value"]:
-                    spec[SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME] = VELERO_BACKUP_LATEST
-
-                return {
-                    "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": resource_version},
-                    "status": {
-                        "phase": "Completed",
-                        "lastMessage": "Initial sync complete",
-                        "veleroManagedClustersRestoreName": "test-velero-restore",
-                    },
-                    "spec": spec,
-                }
-
-            # Velero Restore (defensive: only needed if wait_for_condition calls the poller)
-            if kwargs.get("plural") == "restores" and kwargs.get("group") == "velero.io":
-                return {
-                    "status": {
-                        "phase": "Completed",
-                        "progress": {"itemsRestored": 100},
-                    }
-                }
-
-            return None
-
-        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
-
-        def patch_custom_resource_side_effect(**kwargs):
-            patch_applied["value"] = True
-            return {
-                "spec": {
-                    SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST,
-                }
-            }
-
-        mock_secondary_client.patch_custom_resource.side_effect = patch_custom_resource_side_effect
-
-        result = activation_passive.activate()
-
-        assert result is True
 
     def test_verify_passive_sync_wrong_phase(self, activation_passive, mock_secondary_client):
         """Test failure when passive sync is in wrong phase."""
@@ -410,56 +189,6 @@ class TestSecondaryActivation:
         assert result is False
 
     @patch("modules.activation.wait_for_condition")
-    def test_activate_already_activated_idempotent(
-        self, mock_wait, activation_passive, mock_secondary_client, mock_state_manager
-    ):
-        """Test that activation is idempotent when already activated.
-
-        If veleroManagedClustersBackupName is already 'latest', the tool should
-        skip the patch and proceed without errors. This handles resume scenarios
-        where activation was previously completed.
-        """
-        mock_wait.return_value = True
-
-        # Mock restore already activated (veleroManagedClustersBackupName = latest)
-        def get_custom_resource_side_effect(**kwargs):
-            if kwargs.get("plural") == "restores" and kwargs.get("name") == RESTORE_PASSIVE_SYNC_NAME:
-                return {
-                    "metadata": {
-                        "name": RESTORE_PASSIVE_SYNC_NAME,
-                        "resourceVersion": "100",
-                    },
-                    "status": {
-                        "phase": "Finished",  # Already completed
-                        "lastMessage": "All Velero restores have run successfully",
-                    },
-                    "spec": {
-                        SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True,
-                        SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST,  # Already set!
-                    },
-                }
-            if kwargs.get("plural") == "restores" and kwargs.get("group") == "velero.io":
-                return {"status": {"phase": "Completed"}}
-            return None
-
-        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
-
-        # Mock list for restore discovery
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
-            }
-        ]
-
-        result = activation_passive.activate()
-
-        assert result is True
-
-        # Patch should NOT have been called since value was already correct
-        mock_secondary_client.patch_custom_resource.assert_not_called()
-
-    @patch("modules.activation.wait_for_condition")
     def test_wait_for_restore_timeout(self, mock_wait, activation_passive, mock_secondary_client):
         """Test timeout waiting for restore."""
         mock_wait.return_value = False  # Timeout
@@ -472,19 +201,8 @@ class TestSecondaryActivation:
             }
         ]
 
-        # Make activation idempotent by indicating managed clusters backup is already activated
-        mock_secondary_client.get_custom_resource.return_value = {
-            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": "100"},
-            "status": {"phase": "Enabled"},
-            "spec": {
-                SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True,
-                SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST,
-            },
-        }
-
-        result = activation_passive.activate()
-
-        assert result is False
+        with pytest.raises(FatalError, match="Timeout waiting for restore"):
+            activation_passive._wait_for_restore_completion()
 
     def test_poll_restore_logic(self, activation_passive, mock_secondary_client):
         """Test the internal _poll_restore logic via _wait_for_restore_completion."""
@@ -850,248 +568,6 @@ class TestSecondaryActivation:
             with pytest.raises(FatalError, match="Timeout waiting for Velero managed clusters restore"):
                 activation_passive._wait_for_managed_clusters_velero_restore("restore-acm-passive-sync", timeout=1)
 
-    def test_poll_velero_restore_rejects_stale_pre_activation_restore_name(
-        self, activation_passive, mock_secondary_client, mock_state_manager
-    ):
-        """Activation must wait for a new Velero managed-clusters restore signal after patching."""
-        RunRecord(mock_state_manager).record_pre_activation_velero_restore("velero-mc-old")
-        mock_secondary_client.get_custom_resource.return_value = {
-            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-            "status": {
-                "phase": "Enabled",
-                "veleroManagedClustersRestoreName": "velero-mc-old",
-            },
-        }
-
-        with patch("modules.activation.wait_for_condition") as mock_wait:
-
-            def side_effect(_desc, callback, **_kwargs):
-                result = callback()
-                assert isinstance(result, WaitConditionResult)
-                assert result.done is False
-                assert result.public_detail == "waiting for new Velero managed clusters restore"
-                return result.done
-
-            mock_wait.side_effect = side_effect
-
-            with pytest.raises(FatalError, match="Timeout waiting for Velero managed clusters restore"):
-                activation_passive._wait_for_managed_clusters_velero_restore("restore-acm-passive-sync", timeout=1)
-
-    def test_poll_velero_restore_allows_existing_signal_when_activation_already_applied(
-        self, activation_passive, mock_secondary_client, mock_state_manager
-    ):
-        """Idempotent passive reruns must not reject the existing Velero restore signal as stale."""
-        activation_passive._require_new_velero_restore_signal = False
-        RunRecord(mock_state_manager).record_pre_activation_velero_restore("velero-mc-existing")
-
-        def get_custom_resource_side_effect(**kwargs):
-            if kwargs.get("plural") == "restores" and kwargs.get("group") == "cluster.open-cluster-management.io":
-                return {
-                    "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-                    "status": {
-                        "phase": "Enabled",
-                        "veleroManagedClustersRestoreName": "velero-mc-existing",
-                    },
-                }
-            if kwargs.get("plural") == "restores" and kwargs.get("group") == "velero.io":
-                return {
-                    "metadata": {"name": "velero-mc-existing"},
-                    "status": {
-                        "phase": "Completed",
-                        "progress": {"itemsRestored": 7},
-                    },
-                }
-            return None
-
-        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
-        mock_secondary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "local-cluster"}},
-            {"metadata": {"name": "cluster-a"}},
-        ]
-
-        with patch("modules.activation.wait_for_condition") as mock_wait:
-
-            def side_effect(_desc, callback, **_kwargs):
-                result = callback()
-                assert isinstance(result, WaitConditionResult)
-                assert result.done is True
-                assert "phase=Completed" in result.public_detail
-                return result.done
-
-            mock_wait.side_effect = side_effect
-
-            activation_passive._wait_for_managed_clusters_velero_restore(
-                RESTORE_PASSIVE_SYNC_NAME,
-                timeout=1,
-            )
-
-    def test_activate_already_applied_clears_stale_pre_activation_signal(
-        self, activation_passive, mock_secondary_client, mock_state_manager
-    ):
-        """Already-applied passive activation must clear stale signal enforcement for idempotent reruns."""
-        restore_before = {
-            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-            "spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST},
-            "status": {"veleroManagedClustersRestoreName": "velero-mc-existing"},
-        }
-        activation_passive._passive_sync_restore_name = RESTORE_PASSIVE_SYNC_NAME
-        mock_secondary_client.get_custom_resource.return_value = restore_before
-        run_record = RunRecord(mock_state_manager)
-        run_record.record_pre_activation_velero_restore("velero-mc-stale")
-
-        activation_passive._activate_via_passive_sync()
-
-        mock_secondary_client.patch_custom_resource.assert_not_called()
-        assert run_record.pre_activation_velero_restore() is None
-        assert activation_passive._require_new_velero_restore_signal is False
-
-    @patch("lib.waiter.wait_for_condition", return_value=True)
-    @patch("modules.activation.wait_for_condition")
-    def test_activate_passive_restore_method(
-        self, mock_wait, _mock_waiter_wait, mock_secondary_client, mock_state_manager
-    ):
-        """Test passive activation using restore-acm-activate (Option B)."""
-        mock_wait.return_value = True
-        RunRecord(mock_state_manager).record_hub_facts(HubFacts(secondary_version="2.13.0"))
-
-        activation = SecondaryActivation(
-            secondary_client=mock_secondary_client,
-            state_manager=mock_state_manager,
-            method="passive",
-            activation_method="restore",
-        )
-
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
-                "status": {"phase": "Enabled"},
-            }
-        ]
-
-        def get_custom_resource_side_effect(**kwargs):
-            name = kwargs.get("name")
-            if name == RESTORE_PASSIVE_SYNC_NAME:
-                return {"metadata": {"name": name}, "status": {"phase": "Enabled"}}
-            if name == MANAGED_CLUSTER_RESTORE_NAME:
-                return None
-            return None
-
-        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
-
-        with patch.object(activation, "_wait_for_managed_clusters_velero_restore") as mock_wait_mc:
-            result = activation.activate()
-
-        assert result is True
-        mock_secondary_client.delete_custom_resource.assert_called_once()
-        mock_secondary_client.create_custom_resource.assert_called_once()
-        body = mock_secondary_client.create_custom_resource.call_args.kwargs["body"]
-        assert body["metadata"]["name"] == MANAGED_CLUSTER_RESTORE_NAME
-        assert body["spec"][SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME] == VELERO_BACKUP_LATEST
-        assert body["spec"]["veleroCredentialsBackupName"] == VELERO_BACKUP_SKIP
-        assert body["spec"]["veleroResourcesBackupName"] == VELERO_BACKUP_SKIP
-        mock_wait_mc.assert_called_once()
-
-    def test_activate_restore_rolls_back_passive_restore_on_create_failure(
-        self, mock_secondary_client, mock_state_manager
-    ):
-        """Activation restore create failure should recreate passive restore as rollback."""
-        activation = SecondaryActivation(
-            secondary_client=mock_secondary_client,
-            state_manager=mock_state_manager,
-            method="passive",
-            activation_method="restore",
-        )
-
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {
-                    "name": RESTORE_PASSIVE_SYNC_NAME,
-                    "namespace": BACKUP_NAMESPACE,
-                    "labels": {"managed-by": "test"},
-                    "annotations": {"example": "annotation"},
-                },
-                "spec": {
-                    SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True,
-                    SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_SKIP,
-                },
-                "status": {"phase": "Enabled"},
-            }
-        ]
-        mock_secondary_client.get_custom_resource.return_value = None
-        mock_secondary_client.create_custom_resource.side_effect = [Exception("activation create failed"), None]
-
-        with patch.object(activation, "_wait_for_restore_deletion", return_value=None):
-            with pytest.raises(FatalError, match="Recreated passive sync restore"):
-                activation._activate_via_restore_resource()
-
-        assert mock_secondary_client.create_custom_resource.call_count == 2
-        rollback_body = mock_secondary_client.create_custom_resource.call_args_list[1].kwargs["body"]
-        assert rollback_body["metadata"]["name"] == RESTORE_PASSIVE_SYNC_NAME
-        assert rollback_body["metadata"]["namespace"] == BACKUP_NAMESPACE
-        assert rollback_body["metadata"]["labels"] == {"managed-by": "test"}
-        assert rollback_body["metadata"]["annotations"] == {"example": "annotation"}
-        assert rollback_body["spec"][SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS] is True
-
-    def test_activate_restore_reports_when_rollback_recreate_fails(self, mock_secondary_client, mock_state_manager):
-        """Activation restore create failure should include rollback failure details."""
-        activation = SecondaryActivation(
-            secondary_client=mock_secondary_client,
-            state_manager=mock_state_manager,
-            method="passive",
-            activation_method="restore",
-        )
-
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {
-                    "name": RESTORE_PASSIVE_SYNC_NAME,
-                    "namespace": BACKUP_NAMESPACE,
-                },
-                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
-                "status": {"phase": "Enabled"},
-            }
-        ]
-        mock_secondary_client.get_custom_resource.return_value = None
-        mock_secondary_client.create_custom_resource.side_effect = [
-            Exception("activation create failed"),
-            Exception("rollback recreate failed"),
-        ]
-
-        with patch.object(activation, "_wait_for_restore_deletion", return_value=None):
-            with pytest.raises(FatalError, match="Rollback failed to recreate passive sync restore"):
-                activation._activate_via_restore_resource()
-
-        assert mock_secondary_client.create_custom_resource.call_count == 2
-
-    def test_activate_restore_does_not_attempt_rollback_when_delete_was_404(
-        self, mock_secondary_client, mock_state_manager
-    ):
-        """No rollback recreate should be attempted when passive restore delete returned 404."""
-        activation = SecondaryActivation(
-            secondary_client=mock_secondary_client,
-            state_manager=mock_state_manager,
-            method="passive",
-            activation_method="restore",
-        )
-
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
-                "status": {"phase": "Enabled"},
-            }
-        ]
-        mock_secondary_client.get_custom_resource.return_value = None
-        mock_secondary_client.delete_custom_resource.side_effect = ApiException(status=404)
-        mock_secondary_client.create_custom_resource.side_effect = Exception("activation create failed")
-
-        with patch.object(activation, "_wait_for_restore_deletion", return_value=None):
-            with pytest.raises(FatalError, match="Failed to create activation restore"):
-                activation._activate_via_restore_resource()
-
-        assert mock_secondary_client.create_custom_resource.call_count == 1
-
     def test_recreate_restore_from_snapshot_raises_on_conflict(self, mock_secondary_client, mock_state_manager):
         """Rollback recreation must surface 409 conflicts to the caller."""
         activation = SecondaryActivation(
@@ -1286,95 +762,6 @@ class TestSecondaryActivation:
 
 
 @pytest.mark.unit
-class TestFindPassiveSyncRestore:
-    """Tests for the find_passive_sync_restore discovery function."""
-
-    def test_find_by_sync_restore_with_new_backups(self, mock_secondary_client):
-        """Test discovery finds restore by syncRestoreWithNewBackups=true."""
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "my-custom-restore"},
-                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
-            }
-        ]
-        mock_secondary_client.get_custom_resource.return_value = None
-
-        result = activation_module.find_passive_sync_restore(mock_secondary_client)
-
-        assert result is not None
-        assert result["metadata"]["name"] == "my-custom-restore"
-        # Should not have called get_custom_resource since found via list
-        mock_secondary_client.get_custom_resource.assert_not_called()
-
-    def test_find_rejects_well_known_name_without_sync_restore_flag(self, mock_secondary_client):
-        """Conventional restore name is not enough without syncRestoreWithNewBackups=true."""
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-                "spec": {},
-            },
-            {
-                "metadata": {"name": "sync-disabled-restore"},
-                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: False},
-            },
-        ]
-
-        result = activation_module.find_passive_sync_restore(mock_secondary_client)
-
-        assert result is None
-        mock_secondary_client.get_custom_resource.assert_not_called()
-
-    def test_find_no_restore_found(self, mock_secondary_client):
-        """Test discovery returns None when no restore found."""
-        mock_secondary_client.list_custom_resources.return_value = []
-        mock_secondary_client.get_custom_resource.return_value = None
-
-        result = activation_module.find_passive_sync_restore(mock_secondary_client)
-
-        assert result is None
-        mock_secondary_client.get_custom_resource.assert_not_called()
-
-    def test_find_prefers_sync_restore_over_well_known(self, mock_secondary_client):
-        """Test that syncRestoreWithNewBackups is preferred over well-known name."""
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "custom-passive-sync"},
-                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
-            },
-            {
-                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: False},
-            },
-        ]
-
-        result = activation_module.find_passive_sync_restore(mock_secondary_client)
-
-        assert result is not None
-        assert result["metadata"]["name"] == "custom-passive-sync"
-        # Should not have tried fallback
-        mock_secondary_client.get_custom_resource.assert_not_called()
-
-    def test_find_prefers_newest_passive_sync_restore(self, mock_secondary_client):
-        """Passive restore discovery should prefer the newest sync-enabled restore."""
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "older-passive-sync", "creationTimestamp": "2026-03-29T09:00:00Z"},
-                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
-            },
-            {
-                "metadata": {"name": "newer-passive-sync", "creationTimestamp": "2026-03-30T09:00:00Z"},
-                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
-            },
-        ]
-
-        result = activation_module.find_passive_sync_restore(mock_secondary_client)
-
-        assert result is not None
-        assert result["metadata"]["name"] == "newer-passive-sync"
-        mock_secondary_client.get_custom_resource.assert_not_called()
-
-
-@pytest.mark.unit
 class TestMinManagedClusters:
     """Tests for the min_managed_clusters sanity check."""
 
@@ -1537,97 +924,6 @@ class TestMinManagedClusters:
 
 
 @pytest.mark.unit
-class TestPatchVerificationErrors:
-    """Tests for _verify_patch_applied error branches."""
-
-    @patch("modules.activation.time.sleep")
-    def test_patch_verify_no_version_change_retries_then_raises(
-        self, mock_sleep, activation_passive, mock_secondary_client
-    ):
-        """When resourceVersion never changes after all retries, raise FatalError."""
-        restore_before = {
-            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": "100"},
-            "spec": {},
-        }
-
-        # Always return the same resourceVersion — simulates API caching
-        mock_secondary_client.get_custom_resource.return_value = {
-            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": "100"},
-            "spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_SKIP},
-        }
-
-        with pytest.raises(FatalError, match="resourceVersion remained 100"):
-            activation_passive._verify_patch_applied(RESTORE_PASSIVE_SYNC_NAME, restore_before)
-
-        from lib.constants import PATCH_VERIFY_MAX_RETRIES
-
-        assert mock_sleep.call_count == PATCH_VERIFY_MAX_RETRIES
-
-    @patch("modules.activation.time.sleep")
-    def test_patch_verify_wrong_value_after_version_change_raises(
-        self, mock_sleep, activation_passive, mock_secondary_client
-    ):
-        """When resourceVersion changes but spec value is wrong, raise FatalError immediately."""
-        restore_before = {
-            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": "100"},
-            "spec": {},
-        }
-
-        # resourceVersion changes but the spec field has the wrong value
-        mock_secondary_client.get_custom_resource.return_value = {
-            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": "200"},
-            "spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_SKIP},
-        }
-
-        with pytest.raises(FatalError, match="expected 'latest'"):
-            activation_passive._verify_patch_applied(RESTORE_PASSIVE_SYNC_NAME, restore_before)
-
-        # Should fail on first attempt — no retries needed
-        mock_sleep.assert_called_once()
-
-    @patch("modules.activation.time.sleep")
-    def test_patch_verify_restore_disappeared_after_patch_raises(
-        self, mock_sleep, activation_passive, mock_secondary_client
-    ):
-        """When restore resource disappears after patching, raise FatalError."""
-        restore_before = {
-            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": "100"},
-            "spec": {},
-        }
-
-        mock_secondary_client.get_custom_resource.return_value = None
-
-        with pytest.raises(FatalError, match="disappeared after patching"):
-            activation_passive._verify_patch_applied(RESTORE_PASSIVE_SYNC_NAME, restore_before)
-
-    @patch("modules.activation.time.sleep")
-    def test_patch_verify_retries_then_succeeds_on_version_change(
-        self, mock_sleep, activation_passive, mock_secondary_client
-    ):
-        """Version unchanged on first attempt, then changes with correct value on retry."""
-        restore_before = {
-            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": "100"},
-            "spec": {},
-        }
-
-        # First call: unchanged resourceVersion; second call: updated
-        mock_secondary_client.get_custom_resource.side_effect = [
-            {
-                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": "100"},
-                "spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_SKIP},
-            },
-            {
-                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": "200"},
-                "spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST},
-            },
-        ]
-
-        # Should succeed without raising
-        activation_passive._verify_patch_applied(RESTORE_PASSIVE_SYNC_NAME, restore_before)
-        assert mock_sleep.call_count == 2
-
-
-@pytest.mark.unit
 class TestPassiveSyncRestoreMissingName:
     """Tests for FatalError when restore is missing metadata.name."""
 
@@ -1640,7 +936,7 @@ class TestPassiveSyncRestoreMissingName:
             }
         ]
 
-        with pytest.raises(FatalError, match="missing metadata.name"):
+        with pytest.raises(FatalError, match="malformed Restore"):
             activation_passive._get_passive_sync_restore_name()
 
     def test_build_restore_snapshot_raises_when_name_missing(self):
@@ -1698,114 +994,10 @@ class TestVerifyPassiveSyncFinishedWithErrors:
         with pytest.raises(FatalError, match="Passive sync restore not ready"):
             activation_passive._verify_passive_sync()
 
-    @patch("modules.activation.time.sleep")
-    @patch("modules.activation.wait_for_condition")
-    def test_finished_with_errors_all_already_available_proceeds(
-        self, mock_wait, mock_sleep, activation_passive, mock_secondary_client
-    ):
-        """FinishedWithErrors with only exact ManagedCluster already-available messages should proceed."""
-        mock_wait.return_value = True
-        mock_sleep.return_value = None
-
-        patch_applied = {"value": False}
-
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
-            }
-        ]
-
-        def get_custom_resource_side_effect(**kwargs):
-            if kwargs.get("plural") == "restores" and kwargs.get("name") == RESTORE_PASSIVE_SYNC_NAME:
-                resource_version = "200" if patch_applied["value"] else "100"
-                spec = {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True}
-                if patch_applied["value"]:
-                    spec[SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME] = VELERO_BACKUP_LATEST
-                return {
-                    "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": resource_version},
-                    "status": {
-                        "phase": "FinishedWithErrors",
-                        "lastMessage": "Some clusters already available",
-                        "messages": [
-                            "ManagedCluster prod1 already available",
-                            "ManagedCluster prod2 already available",
-                        ],
-                    },
-                    "spec": spec,
-                }
-            return None
-
-        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
-
-        def patch_side_effect(**kwargs):
-            patch_applied["value"] = True
-            return {"spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST}}
-
-        mock_secondary_client.patch_custom_resource.side_effect = patch_side_effect
-
-        # Should not raise — proceeds through verify and activate
-        activation_passive._verify_passive_sync()
-        activation_passive._activate_via_passive_sync()
-
 
 @pytest.mark.unit
 class TestActivateResumeAndEdgeCases:
     """Tests for resume scenarios and edge cases in activation."""
-
-    @patch("modules.activation.time.sleep")
-    @patch("modules.activation.wait_for_condition")
-    def test_activate_passive_resumes_after_mid_patch_failure(
-        self, mock_wait, mock_sleep, mock_secondary_client, mock_state_manager
-    ):
-        """Resume after prior run failed mid-patch: verify_passive_sync already done, patch re-applied."""
-        mock_wait.return_value = True
-        mock_sleep.return_value = None
-
-        # verify_passive_sync is already completed, activate_managed_clusters is not
-        mock_state_manager.is_step_completed.side_effect = lambda step: step == "verify_passive_sync"
-
-        activation = SecondaryActivation(
-            secondary_client=mock_secondary_client,
-            state_manager=mock_state_manager,
-            method="passive",
-        )
-
-        patch_applied = {"value": False}
-
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
-            }
-        ]
-
-        def get_custom_resource_side_effect(**kwargs):
-            if kwargs.get("plural") == "restores" and kwargs.get("name") == RESTORE_PASSIVE_SYNC_NAME:
-                resource_version = "200" if patch_applied["value"] else "100"
-                spec = {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True}
-                if patch_applied["value"]:
-                    spec[SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME] = VELERO_BACKUP_LATEST
-                return {
-                    "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": resource_version},
-                    "status": {"phase": "Enabled"},
-                    "spec": spec,
-                }
-            return None
-
-        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
-
-        def patch_side_effect(**kwargs):
-            patch_applied["value"] = True
-            return {"spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST}}
-
-        mock_secondary_client.patch_custom_resource.side_effect = patch_side_effect
-
-        result = activation.activate()
-
-        assert result is True
-        # Patch was called because activate_managed_clusters was not completed
-        mock_secondary_client.patch_custom_resource.assert_called_once()
 
     def test_activate_catches_switchover_error(self, mock_secondary_client, mock_state_manager):
         """SwitchoverError during activation returns False and records error."""
@@ -1852,75 +1044,3 @@ class TestActivateResumeAndEdgeCases:
 
         with pytest.raises(TypeError, match="bad type"):
             activation.activate()
-
-
-class TestActivationResumeStalenessGuard:
-    """Thermos R2-M2: activation paths must re-validate passive-restore readiness on entry."""
-
-    def _activation(self, mock_secondary_client, mock_state_manager, activation_method):
-        return SecondaryActivation(
-            secondary_client=mock_secondary_client,
-            state_manager=mock_state_manager,
-            method="passive",
-            activation_method=activation_method,
-        )
-
-    def test_patch_activation_fails_closed_on_degraded_restore(self, mock_secondary_client, mock_state_manager):
-        """Resume after crash-mid-verification must not patch a degraded passive restore."""
-        activation = self._activation(mock_secondary_client, mock_state_manager, "patch")
-        degraded = {
-            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-            "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
-            "status": {"phase": "Error", "lastMessage": "sync broke"},
-        }
-        mock_secondary_client.list_custom_resources.return_value = [degraded]
-        mock_secondary_client.get_custom_resource.return_value = degraded
-        mock_secondary_client.get_custom_resource.side_effect = None
-
-        with pytest.raises(FatalError, match="Passive sync restore not ready: Error"):
-            activation._activate_via_passive_sync()
-
-        mock_secondary_client.patch_custom_resource.assert_not_called()
-        mock_state_manager._set_config.assert_not_called()
-
-    def test_patch_activation_already_applied_skips_revalidation(self, mock_secondary_client, mock_state_manager):
-        """A patched restore legitimately transitions phases; already-applied must stay an early return."""
-        activation = self._activation(mock_secondary_client, mock_state_manager, "patch")
-        applied = {
-            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-            "spec": {
-                SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True,
-                SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST,
-            },
-            "status": {"phase": "FinishedWithErrors", "lastMessage": "post-patch churn"},
-        }
-        mock_secondary_client.list_custom_resources.return_value = [applied]
-        mock_secondary_client.get_custom_resource.return_value = applied
-        mock_secondary_client.get_custom_resource.side_effect = None
-
-        activation._activate_via_passive_sync()
-
-        mock_secondary_client.patch_custom_resource.assert_not_called()
-
-    def test_restore_activation_fails_closed_on_degraded_passive_restore(
-        self, mock_secondary_client, mock_state_manager
-    ):
-        """Option B must never delete a passive restore that is not activation-ready."""
-        activation = self._activation(mock_secondary_client, mock_state_manager, "restore")
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
-                "status": {"phase": "Error", "lastMessage": "sync broke"},
-            }
-        ]
-
-        # Bound the pre-fix behavior: without the guard the path proceeds to
-        # delete + wait; patch the waiter so the red run fails fast instead of
-        # polling forever.
-        with patch("lib.waiter.wait_for_condition", return_value=True):
-            with pytest.raises(FatalError, match="Passive sync restore not ready: Error"):
-                activation._activate_via_restore_resource()
-
-        mock_secondary_client.delete_custom_resource.assert_not_called()
-        mock_secondary_client.create_custom_resource.assert_not_called()

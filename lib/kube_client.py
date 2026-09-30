@@ -1568,6 +1568,82 @@ class KubeClient:
         )
         return result
 
+    def create_restore_guarded(
+        self, body: Dict[str, Any], *, namespace: str, timeout_seconds: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Create an ACM Restore with exactly one request and no inferred acceptance.
+
+        Unlike `create_custom_resource`, nothing is retried and a 409 is never reconciled by
+        re-reading the object: the create is accepted only when the 2xx response names the
+        requested object with a non-empty `metadata.uid` and `metadata.resourceVersion`. A
+        409 is `already_exists` with `conflict` True; a timeout or any other failure is
+        `unverifiable`. The integer `generation` is published only from an accepted
+        response, with `generation_reported` False when it is missing. Callers still owe a
+        strict post-create read. In dry-run no request is made and the result is a
+        prediction. Returns the guarded-mutation result shape of
+        `json_patch_custom_resource_guarded`; no body or exception text is included.
+
+        Raises:
+            ValidationError: invalid name or namespace.
+        """
+        metadata = body.get("metadata") if isinstance(body, dict) else None
+        name = metadata.get("name") if isinstance(metadata, dict) else None
+        if not isinstance(namespace, str) or not namespace:
+            raise ValidationError(f"A namespace is required to create {RESTORE_PLURAL}/{name}.")
+        self._validate_resource_inputs(namespace, name, "custom resource")
+        result = self._guarded_restore_result()
+        result.update(generation=None, generation_reported=False)
+
+        if self.dry_run:
+            logger.info("[DRY-RUN] Would create %s/%s", RESTORE_PLURAL, name)
+            result.update(would_change=True, reason="predicted")
+            return result
+
+        try:
+            created = self.custom_api.create_namespaced_custom_object(
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                namespace=namespace,
+                plural=RESTORE_PLURAL,
+                body=body,
+                _request_timeout=(timeout_seconds if timeout_seconds is not None else self.request_timeout),
+            )
+        except ApiException as exc:
+            if exc.status == 409:
+                logger.warning("Create of %s/%s rejected: the name is already taken", RESTORE_PLURAL, name)
+                result.update(conflict=True, reason="already_exists")
+            else:
+                logger.error("Create of %s/%s failed with HTTP %s", RESTORE_PLURAL, name, exc.status)
+            return result
+        except Exception as exc:
+            logger.error(
+                "Create of %s/%s did not complete (%s); it is not accepted", RESTORE_PLURAL, name, type(exc).__name__
+            )
+            return result
+
+        result.update(http_accepted=True, reason="malformed_response")
+        created_metadata = created.get("metadata") if isinstance(created, dict) else None
+        if not isinstance(created_metadata, dict) or created_metadata.get("name") != name:
+            return result
+        uid = created_metadata.get("uid")
+        revision = created_metadata.get("resourceVersion")
+        if not isinstance(uid, str) or not uid or not isinstance(revision, str) or not revision:
+            return result
+        result.update(accepted=True, changed=True, reason="ok", uid=uid, resource_version=revision)
+        generation = created_metadata.get("generation")
+        if isinstance(generation, int) and not isinstance(generation, bool):
+            result.update(generation=generation, generation_reported=True)
+        return result
+
+    def api_resource_served(self, group: str, version: str, resource_name: str) -> StrictReadOutcome:
+        """Strictly determine whether discovery lists `resource_name` (a kind or `plural/subresource`).
+
+        ITEMS when listed, CRD_ABSENT when a valid discovery document for the group/version
+        omits it, ERROR when discovery cannot be verified. A CRD publishes
+        `<plural>/status` only while its status subresource is enabled.
+        """
+        return self._discovery_serves(group, version, resource_name)
+
     def create_custom_resource(
         self,
         group: str,

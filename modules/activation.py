@@ -4,14 +4,17 @@ Secondary hub activation module for ACM switchover.
 
 # Runbook: Step 4-5 (Method 1) / F4-F5 (Method 2)
 
+import copy
 import logging
-import time
+import uuid
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from kubernetes.client.rest import ApiException
 
 from lib.constants import (
+    ACM_NAMESPACE,
     AUTO_IMPORT_STRATEGY_DEFAULT,
     AUTO_IMPORT_STRATEGY_KEY,
     AUTO_IMPORT_STRATEGY_SYNC,
@@ -29,12 +32,9 @@ from lib.constants import (
     MANAGED_CLUSTER_PLURAL,
     MANAGED_CLUSTER_RESTORE_NAME,
     MCE_NAMESPACE,
-    PATCH_VERIFY_MAX_RETRIES,
-    PATCH_VERIFY_RETRY_DELAY,
     RESTORE_FAST_POLL_INTERVAL,
     RESTORE_FAST_POLL_TIMEOUT,
     RESTORE_FULL_NAME,
-    RESTORE_PASSIVE_SYNC_NAME,
     RESTORE_PLURAL,
     RESTORE_POLL_INTERVAL,
     RESTORE_WAIT_TIMEOUT,
@@ -46,11 +46,30 @@ from lib.constants import (
 from lib.exceptions import FatalError, SwitchoverError
 from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
-from lib.run_record import RunRecord
-from lib.utils import Phase, StateManager, is_acm_version_ge
-from lib.waiter import WaitConditionResult, wait_for_condition, wait_for_restore_deletion
+from lib.migration_child_evidence import (
+    STATUS_NAME_FIELDS,
+    VELERO_RESTORE_LISTS,
+    freeze_one_shot_backups,
+    freeze_passive_patch_backups,
+    predict_one_shot_child_names,
+    predict_passive_patch_child_names,
+    predict_passive_patch_credential_variants,
+)
+from lib.migration_evidence import (
+    MigrationEvidenceError,
+    controller_contract_for_acm_minor,
+    go_normalize,
+    normalize_backup_evidence,
+    require_same_backup_generation,
+    select_latest_evidence,
+)
+from lib.migration_journal import validate_journal_transition
+from lib.run_record import RunRecord, StateStructureError
+from lib.strict_read import StrictReadStatus
+from lib.utils import Phase, StateManager, is_acm_version_ge, parse_acm_version
+from lib.waiter import WaitConditionResult, wait_for_condition
 
-from .restore_discovery import find_passive_sync_restore, restore_messages_are_benign_already_available
+from .restore_discovery import find_passive_sync_restore_strict, restore_messages_are_benign_already_available
 
 logger = logging.getLogger("acm_switchover")
 
@@ -59,6 +78,57 @@ logger = logging.getLogger("acm_switchover")
 MIN_MANAGED_CLUSTERS = 0
 
 AUTO_IMPORT_VERIFY_ERROR = "Unable to verify autoImportStrategy on the destination hub; verify API access and retry."
+
+_VELERO_GROUP = "velero.io"
+_VELERO_VERSION = "v1"
+_VELERO_BACKUPS = "backups"
+_MCH_GROUP = "operator.open-cluster-management.io"
+_MCH_VERSION = "v1"
+_MCH_PLURAL = "multiclusterhubs"
+_RESTORE_STATUS_SUBRESOURCE = f"{RESTORE_PLURAL}/status"
+_CREDENTIALS_FIELD = "veleroCredentialsBackupName"
+_RESOURCES_FIELD = "veleroResourcesBackupName"
+# August section 4: the three sync options a fresh passive_patch reads and the
+# upstream-normalized values it requires.
+_PATCH_FIELDS = (SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME, _CREDENTIALS_FIELD, _RESOURCES_FIELD)
+_PATCH_NORMALIZED = dict(zip(_PATCH_FIELDS, (VELERO_BACKUP_SKIP, VELERO_BACKUP_LATEST, VELERO_BACKUP_LATEST)))
+# July section 1: a full_restore names the controller's direct `latest` choice for
+# each concrete field, as (resource type, frozen category, Restore spec field).
+_FULL_RESTORE_SELECTIONS = (
+    ("ManagedClusters", "managed_clusters", SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME),
+    ("Credentials", "credentials", _CREDENTIALS_FIELD),
+    ("Resources", "resources", _RESOURCES_FIELD),
+)
+_CLEANUP_NOT_STARTED = {
+    "operation_id": None,
+    "state": "not_started",
+    "namespace": None,
+    "name": None,
+    "uid": None,
+    "generation": None,
+    "activation_method": None,
+    "mutation_kind": None,
+    "cleanup_before_restore": None,
+    "spec_fingerprint": None,
+    "intent_at": None,
+    "final_get_resource_version": None,
+    "delete_accepted_at": None,
+    "absence_verified_at": None,
+    "completed_at": None,
+    "recovery": None,
+    "repair": None,
+}
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _with_restore(journal: Dict, **fields) -> Dict:
+    """A detached copy of the journal with `fields` set on its restore record."""
+    candidate = copy.deepcopy(journal)
+    candidate["restore"].update(fields)
+    return candidate
 
 
 class SecondaryActivation:
@@ -88,7 +158,8 @@ class SecondaryActivation:
         # Cache for discovered passive sync restore name
         self._passive_sync_restore_name: Optional[str] = None
         self._activation_restore_name: Optional[str] = None
-        self._require_new_velero_restore_signal = True
+        self._require_new_velero_restore_signal = False
+        self._status_subresource_verified = False
         self.run_record = RunRecord(self.state)
 
     def _get_passive_sync_restore_name(self) -> str:
@@ -96,28 +167,26 @@ class SecondaryActivation:
         Get the name of the passive sync restore, discovering it if needed.
 
         This uses cached value if available, otherwise discovers the restore
-        by looking for one with syncRestoreWithNewBackups = true.
+        by looking for one with syncRestoreWithNewBackups = true in a strictly
+        complete Restore list.
 
         Returns:
             The name of the passive sync restore
 
         Raises:
-            FatalError: If no passive sync restore is found
+            FatalError: If discovery fails or no passive sync restore is found
         """
         if self._passive_sync_restore_name:
             return self._passive_sync_restore_name
 
-        restore = find_passive_sync_restore(self.secondary, BACKUP_NAMESPACE)
+        restore = find_passive_sync_restore_strict(self.secondary, BACKUP_NAMESPACE)
         if not restore:
             raise FatalError(
                 "No sync-enabled passive Restore found on secondary hub. "
                 f"Expected a Restore with spec.{SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS}=true."
             )
 
-        restore_name = restore.get("metadata", {}).get("name")
-        if not restore_name:
-            raise FatalError("Passive sync restore missing metadata.name")
-        self._passive_sync_restore_name = restore_name
+        self._passive_sync_restore_name = restore["metadata"]["name"]
         logger.info("Discovered passive sync restore: %s", self._passive_sync_restore_name)
         return self._passive_sync_restore_name
 
@@ -139,20 +208,20 @@ class SecondaryActivation:
 
                 # Optional: set ImportAndSync before activation when applicable
                 self._maybe_set_auto_import_strategy()
-
-                with self.state.step("activate_managed_clusters", logger) as should_run:
-                    if should_run:
-                        if self.activation_method == "restore":
-                            self._activate_via_restore_resource()
-                        else:
-                            self._activate_via_passive_sync()
+                mutation_step = "activate_managed_clusters"
             else:
                 # Method 2: One-Time Full Restore
                 # Optional: set ImportAndSync pre-restore when applicable
                 self._maybe_set_auto_import_strategy()
-                with self.state.step("create_full_restore", logger) as should_run:
-                    if should_run:
-                        self._create_full_restore()
+                mutation_step = "create_full_restore"
+
+            # The migration journal, not the step marker, decides what the Restore
+            # mutation still owes: a completed marker only skips to reconciliation.
+            with self.state.step(mutation_step, logger) as should_run:
+                if should_run:
+                    self._apply_migration_mutation()
+                else:
+                    self._reconcile_migration_mutation()
 
             # Wait for restore to complete
             with self.state.step("wait_restore_completion", logger) as should_run:
@@ -185,15 +254,8 @@ class SecondaryActivation:
         logger.info("Verifying passive sync restore status...")
 
         restore_name = self._get_passive_sync_restore_name()
-        restore = self.secondary.get_custom_resource(
-            group=CLUSTER_BACKUP_API_GROUP,
-            version=CLUSTER_BACKUP_API_VERSION,
-            plural=RESTORE_PLURAL,
-            name=restore_name,
-            namespace=BACKUP_NAMESPACE,
-        )
-
-        if not restore:
+        restore = self._strict_get_restore(restore_name)
+        if restore is None:
             raise FatalError(f"{restore_name} not found on secondary hub")
 
         # Record GitOps markers if present
@@ -208,6 +270,545 @@ class SecondaryActivation:
         )
 
         self._assert_passive_restore_ready(restore, restore_name)
+
+    # -- R4-04 migration-evidence transaction (plan Task 7) -----------------------------
+    #
+    # The journal is frozen and durably acknowledged through RunRecord before any Restore
+    # mutation, including the preparatory passive-sync deletion; resume reuses it and
+    # never refreezes. Dry-run performs the same reads and predictions and writes nothing.
+
+    def _mutation_kind(self) -> str:
+        if self.method == "passive":
+            return "passive_restore" if self.activation_method == "restore" else "passive_patch"
+        return "full_restore"
+
+    def _apply_migration_mutation(self) -> None:
+        """Freeze or reload the journal, then perform the kind's guarded Restore mutation."""
+        kind = self._mutation_kind()
+        journal = self._load_or_freeze_migration_journal(kind)
+        self._activation_restore_name = journal["restore"]["name"]
+        self._require_status_subresource()
+        if kind == "passive_patch":
+            self._apply_passive_patch_guarded(journal)
+        elif kind == "passive_restore":
+            self._create_passive_restore_from_journal(journal)
+        else:
+            self._create_full_restore_from_journal(journal)
+
+    def _reconcile_migration_mutation(self) -> None:
+        """The mutation step is marked complete: require its journaled evidence and a matching live Restore."""
+        kind = self._mutation_kind()
+        journal = self._load_journal()
+        if journal is None:
+            raise FatalError(
+                "The Restore mutation step is recorded as complete, but no migration journal records its "
+                "evidence. Resume cannot prove which Restore this run mutated; review the destination hub "
+                "and start again with --reset-state."
+            )
+        self._require_journal_matches_run(journal, kind, self._live_acm_minor())
+        self._activation_restore_name = journal["restore"]["name"]
+        if journal["restore"]["generation"] is None:
+            raise FatalError(
+                "The Restore mutation step is recorded as complete, but the migration journal holds no "
+                "accepted mutation; the live Restore is not owned by this run."
+            )
+        self._require_status_subresource()
+        if kind == "passive_patch":
+            self._reconcile_patched_restore(journal)
+        else:
+            self._reconcile_created_restore(journal)
+
+    def _load_or_freeze_migration_journal(self, kind: str) -> Dict:
+        """Return the recorded journal, or freeze a new one and persist it before any mutation."""
+        minor = self._live_acm_minor()
+        journal = self._load_journal()
+        if journal is not None:
+            self._require_journal_matches_run(journal, kind, minor)
+            logger.info("Reusing migration journal %s (%s)", journal["run_id"], kind)
+            return journal
+
+        contract = self._evidence(controller_contract_for_acm_minor, minor)
+        precondition: Optional[Dict] = None
+        uid: Optional[str] = None
+        if kind == "passive_patch":
+            restore_name = self._get_passive_sync_restore_name()
+            live = self._strict_get_restore(restore_name)
+            if live is None:
+                raise FatalError(f"{restore_name} not found before the migration freeze")
+            self._assert_passive_restore_ready(live, restore_name)
+            # Fresh intent (August section 4): refused before any Backup is frozen.
+            precondition = self._passive_patch_precondition(live, restore_name)
+            uid = live["metadata"]["uid"]
+        else:
+            restore_name = MANAGED_CLUSTER_RESTORE_NAME if kind == "passive_restore" else RESTORE_FULL_NAME
+            self._require_unowned_restore_absent(restore_name)
+
+        inventory = self._strict_backup_inventory()
+        if kind == "passive_patch":
+            backups = self._evidence(freeze_passive_patch_backups, contract, inventory, BACKUP_NAMESPACE)
+            backup_fields = {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST}
+        elif kind == "passive_restore":
+            backups = self._evidence(freeze_one_shot_backups, kind, contract, inventory, BACKUP_NAMESPACE)
+            backup_fields = {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST}
+        else:
+            concrete = self._select_full_restore_backups(inventory)
+            backups = self._evidence(freeze_one_shot_backups, kind, contract, inventory, BACKUP_NAMESPACE, concrete)
+            backup_fields = {field: concrete[category]["name"] for _, category, field in _FULL_RESTORE_SELECTIONS}
+        if kind != "passive_patch":
+            self._evidence(predict_one_shot_child_names, kind, contract, restore_name, backups)
+
+        restore: Dict = {
+            "namespace": BACKUP_NAMESPACE,
+            "name": restore_name,
+            "uid": uid,
+            "generation": None,
+            "activation_method": "full" if kind == "full_restore" else "passive",
+            "mutation_kind": kind,
+            "acm_minor": minor,
+            "controller_contract": contract,
+            "backup_fields": backup_fields,
+            "cleanup_before_restore": CLEANUP_BEFORE_RESTORE_VALUE,
+            "spec_fingerprint": None,
+            "backup_names_verified_at": None,
+            "completed_at": None,
+            "names_verified_at": None,
+            "teardown_revalidated_at": None,
+            "velero_restores": {key: [] for key in VELERO_RESTORE_LISTS},
+        }
+        if precondition is not None:
+            restore["passive_patch_precondition"] = precondition
+        journal = {
+            "schema_version": 2,
+            "run_id": str(uuid.uuid4()),
+            "resolved_at": _now_iso(),
+            "backups": backups,
+            "restore": restore,
+            "cleanup": dict(_CLEANUP_NOT_STARTED, backup_fields={}),
+            "post_activation": {"names_verified_at": None, "completed_at": None},
+            "waiver": None,
+        }
+        self._evidence(validate_journal_transition, None, journal)
+        frozen = ", ".join(f"{category}={backup['name']}" for category, backup in sorted(backups.items()))
+        if self.secondary.dry_run:
+            logger.info("[DRY-RUN] Would journal the %s migration evidence before mutation: %s", kind, frozen)
+            return journal
+        self._persist_journal(journal)
+        logger.info("Journaled migration evidence %s (%s): %s", journal["run_id"], kind, frozen)
+        return journal
+
+    def _apply_passive_patch_guarded(self, journal: Dict) -> None:
+        """Patch the passive sync Restore's ManagedClusters option to `latest` under the UID/resourceVersion guard."""
+        restore = journal["restore"]
+        name = restore["name"]
+        if restore["generation"] is not None:
+            self._reconcile_patched_restore(journal)
+            return
+        live = self._strict_get_restore(name)
+        if live is None:
+            raise FatalError(f"{name} not found before the guarded patch")
+        self._require_uid(live, restore["uid"], name)
+        precondition = restore["passive_patch_precondition"]
+        raw_mc = (live.get("spec") or {}).get(SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME)
+        if isinstance(raw_mc, str) and go_normalize(raw_mc) == VELERO_BACKUP_LATEST:
+            raise FatalError(
+                f"{name} already requests ManagedClusters '{raw_mc}', but the migration journal holds no accepted "
+                "patch: the live `latest` is stale or unowned. Review the destination hub before any retry."
+            )
+        # Final pre-PATCH boundary: fresh strict reads, frozen evidence never changes.
+        self._assert_passive_restore_ready(live, name)
+        observed = self._passive_patch_precondition(live, name)
+        if {k: v for k, v in observed.items() if k != "resource_version"} != {
+            k: v for k, v in precondition.items() if k != "resource_version"
+        }:
+            raise FatalError(f"{name} changed since the migration freeze; the journaled precondition no longer holds")
+        self._revalidate_frozen_backups(journal)
+        contract = restore["controller_contract"]
+        credentials = journal["backups"]["activation_credentials"]["name"]
+        variants = self._evidence(
+            predict_passive_patch_credential_variants, contract, self._strict_backup_inventory(), credentials
+        )
+        logger.info("Hive/cluster credential requests before the patch: %s", variants)
+        self._evidence(predict_passive_patch_child_names, contract, name, journal["backups"])
+
+        raw_value = precondition["backup_fields_raw"][SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME]
+        result = self.secondary.json_patch_custom_resource_guarded(
+            name,
+            namespace=BACKUP_NAMESPACE,
+            uid=restore["uid"],
+            resource_version=observed["resource_version"],
+            expected_managed_clusters_backup_name=raw_value,
+            replacement_managed_clusters_backup_name=VELERO_BACKUP_LATEST,
+        )
+        if self.secondary.dry_run:
+            logger.info("[DRY-RUN] Would patch %s to ManagedClusters '%s'", name, VELERO_BACKUP_LATEST)
+            return
+        if not result["accepted"] or result["reason"] != "ok":
+            raise FatalError(
+                f"The guarded patch of {name} was not accepted ({result['reason']}); no applied evidence was "
+                "recorded. Retry re-reads the Restore and re-proves every precondition."
+            )
+        post = self._strict_get_restore(name)
+        if post is None:
+            raise FatalError(f"{name} is absent after an accepted guarded patch")
+        generation = self._post_mutation_generation(post, restore["uid"], result, name)
+        if generation <= precondition["generation"]:
+            raise FatalError(f"{name} generation {generation} did not advance past the patched precondition")
+        spec = post.get("spec") or {}
+        if (
+            spec.get(SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME) != VELERO_BACKUP_LATEST
+            or spec.get(_CREDENTIALS_FIELD) != precondition["backup_fields_raw"][_CREDENTIALS_FIELD]
+            or spec.get(_RESOURCES_FIELD) != precondition["backup_fields_raw"][_RESOURCES_FIELD]
+            or spec.get(SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS) is not True
+        ):
+            raise FatalError(f"{name} does not hold the patched owned spec after the accepted patch")
+        self._require_cleanup_policy(post, restore, name)
+        self._persist_journal(_with_restore(journal, generation=generation))
+        logger.info("Patched %s to activate managed clusters (generation %s)", name, generation)
+
+    def _create_passive_restore_from_journal(self, journal: Dict) -> None:
+        """Create the one-shot activation Restore: `latest` ManagedClusters, skipped credentials and resources."""
+        self._create_one_shot_restore(journal)
+
+    def _create_full_restore_from_journal(self, journal: Dict) -> None:
+        """Create the full Restore with the journaled concrete Backup names."""
+        self._create_one_shot_restore(journal)
+
+    def _create_one_shot_restore(self, journal: Dict) -> None:
+        restore = journal["restore"]
+        name = restore["name"]
+        if restore["uid"] is not None:
+            self._reconcile_created_restore(journal)
+            return
+        self._require_unowned_restore_absent(name)
+        self._revalidate_frozen_backups(journal)
+        self._evidence(
+            predict_one_shot_child_names,
+            restore["mutation_kind"],
+            restore["controller_contract"],
+            name,
+            journal["backups"],
+        )
+
+        # Only one ACM Restore may be active: remove the passive sync Restore first,
+        # under its UID and resourceVersion, after the journal is durable.
+        passive = find_passive_sync_restore_strict(self.secondary, BACKUP_NAMESPACE)
+        snapshot: Optional[Dict] = None
+        if passive is not None:
+            passive_name = passive["metadata"]["name"]
+            self._assert_passive_restore_ready(passive, passive_name)
+            snapshot = self._build_restore_snapshot(passive)
+            self._delete_passive_sync_restore_guarded(passive_name)
+        else:
+            logger.info("No passive sync restore found; creating %s", name)
+
+        body = {
+            "apiVersion": CLUSTER_BACKUP_API_VERSION_FULL,
+            "kind": "Restore",
+            "metadata": {"name": name, "namespace": BACKUP_NAMESPACE},
+            "spec": self._one_shot_spec(journal),
+        }
+        result = self.secondary.create_restore_guarded(body, namespace=BACKUP_NAMESPACE)
+        if self.secondary.dry_run:
+            logger.info("[DRY-RUN] Would create %s", name)
+            return
+        if not result["accepted"] or result["reason"] != "ok":
+            message = f"Failed to create {name} ({result['reason']}); the create is not accepted"
+            if snapshot is not None:
+                try:
+                    self._recreate_restore_from_snapshot(snapshot)
+                except Exception as rollback_error:
+                    raise FatalError(
+                        f"{message}. Rollback failed to recreate passive sync restore "
+                        f"{snapshot['metadata']['name']}: {rollback_error}"
+                    ) from rollback_error
+                raise FatalError(f"{message}. Recreated passive sync restore {snapshot['metadata']['name']}.")
+            raise FatalError(message)
+        post = self._strict_get_restore(name)
+        if post is None:
+            raise FatalError(f"{name} is absent after an accepted create")
+        generation = self._post_mutation_generation(post, result["uid"], result, name)
+        self._require_one_shot_spec(post, journal, name)
+        self._persist_journal(_with_restore(journal, uid=result["uid"], generation=generation))
+        logger.info("Created %s (uid %s, generation %s)", name, result["uid"], generation)
+
+    def _reconcile_patched_restore(self, journal: Dict) -> None:
+        restore = journal["restore"]
+        live = self._require_journaled_restore(journal)
+        spec = live.get("spec") or {}
+        if spec.get(SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME) != VELERO_BACKUP_LATEST:
+            raise FatalError(f"{restore['name']} no longer holds the patched ManagedClusters '{VELERO_BACKUP_LATEST}'")
+        logger.info("Guarded patch of %s already accepted (generation %s)", restore["name"], restore["generation"])
+
+    def _reconcile_created_restore(self, journal: Dict) -> None:
+        restore = journal["restore"]
+        live = self._require_journaled_restore(journal)
+        self._require_one_shot_spec(live, journal, restore["name"])
+        logger.info("%s already created by this run (generation %s)", restore["name"], restore["generation"])
+
+    def _require_journaled_restore(self, journal: Dict) -> Dict:
+        """Strictly read the journaled Restore and require its UID, generation and cleanup policy."""
+        restore = journal["restore"]
+        live = self._strict_get_restore(restore["name"])
+        if live is None:
+            raise FatalError(f"{restore['name']} recorded by the migration journal is absent")
+        self._require_uid(live, restore["uid"], restore["name"])
+        if live["metadata"].get("generation") != restore["generation"]:
+            raise FatalError(f"{restore['name']} spec changed since this run mutated it (generation drift)")
+        self._require_cleanup_policy(live, restore, restore["name"])
+        return live
+
+    def _one_shot_spec(self, journal: Dict) -> Dict[str, str]:
+        restore = journal["restore"]
+        if restore["mutation_kind"] == "passive_restore":
+            spec = {
+                SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST,
+                _CREDENTIALS_FIELD: VELERO_BACKUP_SKIP,
+                _RESOURCES_FIELD: VELERO_BACKUP_SKIP,
+            }
+        else:
+            spec = dict(restore["backup_fields"])
+        spec["cleanupBeforeRestore"] = restore["cleanup_before_restore"]
+        return spec
+
+    def _require_one_shot_spec(self, live: Dict, journal: Dict, name: str) -> None:
+        spec = live.get("spec") or {}
+        expected = self._one_shot_spec(journal)
+        if any(spec.get(field) != value for field, value in expected.items()):
+            raise FatalError(f"{name} does not hold the journaled Backup names and cleanup policy")
+
+    def _post_mutation_generation(self, post: Dict, uid: str, result: Dict, name: str) -> int:
+        """The generation evidence of an accepted mutation, bound by the strict post-read (C section 5.1)."""
+        self._require_uid(post, uid, name)
+        generation = post["metadata"].get("generation")
+        if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
+            raise FatalError(f"{name} has no valid metadata.generation after the mutation")
+        if result["generation_reported"] and result["generation"] != generation:
+            raise FatalError(f"{name} generation {generation} differs from the accepted response")
+        return generation
+
+    def _passive_patch_precondition(self, live: Dict, name: str) -> Dict:
+        """Build the August section 4 fresh-intent precondition from a strict read, or refuse."""
+        metadata = live.get("metadata") or {}
+        spec = live.get("spec")
+        status = live.get("status", {})
+        uid, revision, generation = metadata.get("uid"), metadata.get("resourceVersion"), metadata.get("generation")
+        if not isinstance(uid, str) or not uid or not isinstance(revision, str) or not revision:
+            raise FatalError(f"{name} has no readable metadata.uid/resourceVersion")
+        if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
+            raise FatalError(f"{name} has no valid metadata.generation")
+        if not isinstance(spec, dict) or spec.get(SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS) is not True:
+            raise FatalError(f"{name} is not a {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS}=true passive Restore")
+        raw = {field: spec.get(field) for field in _PATCH_FIELDS}
+        if not all(isinstance(value, str) and value for value in raw.values()):
+            raise FatalError(f"{name} does not carry all three Backup name options")
+        normalized = {field: go_normalize(value) for field, value in raw.items()}
+        if normalized != _PATCH_NORMALIZED:
+            raise FatalError(
+                f"{name} Backup options are not the skip/latest/latest sync contract required before activation"
+            )
+        if not isinstance(status, dict):
+            raise FatalError(f"{name} status is malformed")
+        names = {field: status.get(field, "") for field in STATUS_NAME_FIELDS}
+        if not all(isinstance(value, str) for value in names.values()):
+            raise FatalError(f"{name} status Restore names are malformed")
+        if names[STATUS_NAME_FIELDS[0]] != "":
+            raise FatalError(
+                f"{name} already publishes {STATUS_NAME_FIELDS[0]}={names[STATUS_NAME_FIELDS[0]]}; fresh "
+                "passive activation requires it to be empty"
+            )
+        if spec.get("cleanupBeforeRestore") != CLEANUP_BEFORE_RESTORE_VALUE:
+            raise FatalError(f"{name} cleanupBeforeRestore is not {CLEANUP_BEFORE_RESTORE_VALUE}")
+        return {
+            "generation": generation,
+            "resource_version": revision,
+            "backup_fields_raw": raw,
+            "backup_fields_normalized": normalized,
+            "status_restore_names": names,
+        }
+
+    def _select_full_restore_backups(self, inventory: List[Dict]) -> Dict[str, Dict]:
+        """The controller's direct `latest` choice for the three concrete full_restore fields, one generation."""
+        concrete = {}
+        for resource_type, category, _ in _FULL_RESTORE_SELECTIONS:
+            decision, evidence = self._evidence(select_latest_evidence, inventory, resource_type, BACKUP_NAMESPACE)
+            if decision != "selected" or evidence is None:
+                raise FatalError(f"No {resource_type} Backup can be selected for the full restore")
+            concrete[category] = evidence
+        self._evidence(require_same_backup_generation, [backup["name"] for backup in concrete.values()])
+        return concrete
+
+    def _revalidate_frozen_backups(self, journal: Dict) -> None:
+        """Strictly re-read every frozen Backup and require its complete seven-field projection."""
+        for category, frozen in sorted(journal["backups"].items()):
+            outcome = self.secondary.get_custom_resource_strict(
+                group=_VELERO_GROUP,
+                version=_VELERO_VERSION,
+                plural=_VELERO_BACKUPS,
+                name=frozen["name"],
+                namespace=BACKUP_NAMESPACE,
+            )
+            if not outcome.is_success:
+                raise FatalError(
+                    f"Frozen {category} Backup {frozen['name']} could not be re-read "
+                    f"({outcome.status.value}: {outcome.reason})"
+                )
+            observed = self._evidence(normalize_backup_evidence, outcome.resource, BACKUP_NAMESPACE)
+            if observed != frozen:
+                raise FatalError(
+                    f"Frozen {category} Backup {frozen['name']} was replaced or its status drifted since the freeze"
+                )
+
+    def _strict_backup_inventory(self) -> List[Dict]:
+        outcome = self.secondary.list_custom_resources_strict(
+            group=_VELERO_GROUP, version=_VELERO_VERSION, plural=_VELERO_BACKUPS, namespace=BACKUP_NAMESPACE
+        )
+        if not outcome.is_success:
+            raise FatalError(f"Velero Backup inventory read failed ({outcome.status.value}: {outcome.reason})")
+        return outcome.items
+
+    def _strict_get_restore(self, name: str) -> Optional[Dict]:
+        """Strictly GET an ACM Restore: the object, None for a proven 404, or FatalError."""
+        outcome = self.secondary.get_custom_resource_strict(
+            group=CLUSTER_BACKUP_API_GROUP,
+            version=CLUSTER_BACKUP_API_VERSION,
+            plural=RESTORE_PLURAL,
+            name=name,
+            namespace=BACKUP_NAMESPACE,
+        )
+        if outcome.status is StrictReadStatus.OBJECT_ABSENT:
+            return None
+        if not outcome.is_success:
+            raise FatalError(f"Restore {name} could not be read ({outcome.status.value}: {outcome.reason})")
+        return outcome.resource
+
+    def _require_unowned_restore_absent(self, name: str) -> None:
+        if self._strict_get_restore(name) is not None:
+            raise FatalError(
+                f"Restore {name} already exists, but this run's migration journal never recorded creating it; "
+                "it is never adopted. Review and delete it, then retry."
+            )
+
+    def _delete_passive_sync_restore_guarded(self, name: str) -> None:
+        live = self._strict_get_restore(name)
+        if live is None:
+            logger.info("Passive sync restore %s already deleted", name)
+            return
+        metadata = live["metadata"]
+        uid, revision = metadata.get("uid"), metadata.get("resourceVersion")
+        if not isinstance(uid, str) or not uid or not isinstance(revision, str) or not revision:
+            raise FatalError(f"{name} has no readable metadata.uid/resourceVersion")
+        logger.info("Deleting passive sync restore %s before creating the activation restore", name)
+        result = self.secondary.delete_restore_guarded(
+            name, namespace=BACKUP_NAMESPACE, uid=uid, resource_version=revision, timeout_seconds=DELETE_REQUEST_TIMEOUT
+        )
+        if self.secondary.dry_run:
+            return
+        if result["reason"] not in ("ok", "not_found"):
+            raise FatalError(f"Guarded delete of passive sync restore {name} was not accepted ({result['reason']})")
+        self._wait_for_restore_absent(name, uid)
+
+    def _wait_for_restore_absent(self, name: str, uid: str, timeout: int = RESTORE_WAIT_TIMEOUT) -> None:
+        """Poll strict reads until the deleted Restore is gone; a replacement or read failure stops the wait."""
+
+        def _poll() -> WaitConditionResult:
+            live = self._strict_get_restore(name)
+            if live is None:
+                return WaitConditionResult.complete("deleted")
+            if live["metadata"].get("uid") != uid:
+                raise FatalError(f"{name} was replaced while its deletion was pending")
+            return WaitConditionResult.pending("still present")
+
+        if not wait_for_condition(
+            f"deletion of restore {name}",
+            _poll,
+            timeout=timeout,
+            interval=RESTORE_POLL_INTERVAL,
+            fast_interval=RESTORE_FAST_POLL_INTERVAL,
+            fast_timeout=RESTORE_FAST_POLL_TIMEOUT,
+            logger=logger,
+        ):
+            raise FatalError(f"Timeout waiting for deletion of restore {name} after {timeout}s")
+
+    def _require_status_subresource(self) -> None:
+        """First use: generation guards spec changes only while the Restore CRD serves the status subresource."""
+        if self._status_subresource_verified:
+            return
+        outcome = self.secondary.api_resource_served(
+            CLUSTER_BACKUP_API_GROUP, CLUSTER_BACKUP_API_VERSION, _RESTORE_STATUS_SUBRESOURCE
+        )
+        if outcome.status is StrictReadStatus.CRD_ABSENT:
+            raise FatalError(
+                "The ACM Restore CRD does not serve the status subresource; metadata.generation cannot guard "
+                "its spec, so migration evidence cannot be established"
+            )
+        if not outcome.is_success:
+            raise FatalError(f"The ACM Restore status subresource could not be verified ({outcome.reason})")
+        self._status_subresource_verified = True
+
+    def _live_acm_minor(self) -> str:
+        """The destination hub's live ACM minor, read strictly from its MultiClusterHub."""
+        outcome = self.secondary.list_custom_resources_strict(
+            group=_MCH_GROUP, version=_MCH_VERSION, plural=_MCH_PLURAL, namespace=ACM_NAMESPACE
+        )
+        if not outcome.is_success:
+            raise FatalError(f"MultiClusterHub read failed ({outcome.status.value}: {outcome.reason})")
+        if len(outcome.items) != 1:
+            raise FatalError(f"Expected exactly one MultiClusterHub in {ACM_NAMESPACE}, found {len(outcome.items)}")
+        status = outcome.items[0].get("status")
+        parsed = parse_acm_version(status.get("currentVersion") if isinstance(status, dict) else None)
+        if parsed is None:
+            raise FatalError("The MultiClusterHub reports no parseable status.currentVersion")
+        minor = f"{parsed[0]}.{parsed[1]}"
+        self._evidence(controller_contract_for_acm_minor, minor)
+        return minor
+
+    def _require_journal_matches_run(self, journal: Dict, kind: str, minor: str) -> None:
+        restore = journal["restore"]
+        if restore["mutation_kind"] != kind:
+            raise FatalError(
+                f"The migration journal records a {restore['mutation_kind']} transaction, but this run requests "
+                f"{kind}; resume with the original activation method"
+            )
+        if restore["acm_minor"] != minor:
+            raise FatalError(
+                f"The migration journal was frozen on ACM {restore['acm_minor']}, but the destination hub now runs "
+                f"ACM {minor}; the controller contract cannot change mid-transaction"
+            )
+
+    def _require_uid(self, live: Dict, uid: Optional[str], name: str) -> None:
+        if not uid or live.get("metadata", {}).get("uid") != uid:
+            raise FatalError(f"{name} is not the Restore this run journaled (UID mismatch); it is never adopted")
+
+    def _require_cleanup_policy(self, live: Dict, restore: Dict, name: str) -> None:
+        if (live.get("spec") or {}).get("cleanupBeforeRestore") != restore["cleanup_before_restore"]:
+            raise FatalError(
+                f"{name} cleanupBeforeRestore differs from the journaled {restore['cleanup_before_restore']}"
+            )
+
+    def _load_journal(self) -> Optional[Dict]:
+        try:
+            return self.run_record.migration_backups()
+        except (MigrationEvidenceError, StateStructureError) as exc:
+            raise FatalError(f"The recorded migration journal is invalid and blocks activation: {exc}") from exc
+
+    def _persist_journal(self, candidate: Dict) -> None:
+        """Durably record a journal transition; a failure stops the run before the next mutation."""
+        if self.secondary.dry_run:
+            raise FatalError("Refusing to write migration evidence in dry-run mode")
+        try:
+            self.run_record.record_migration_backups(candidate)
+        except MigrationEvidenceError as exc:
+            raise FatalError(f"The migration journal transition was refused: {exc}") from exc
+        except OSError as exc:
+            raise FatalError(f"The migration journal could not be recorded durably: {exc}") from exc
+
+    @staticmethod
+    def _evidence(function, *args):
+        """Call a pure evidence helper, turning its fail-closed refusal into a FatalError."""
+        try:
+            return function(*args)
+        except MigrationEvidenceError as exc:
+            raise FatalError(f"Migration evidence refused ({exc})") from exc
 
     def _assert_passive_restore_ready(self, restore: Dict, restore_name: str) -> None:
         """Raise FatalError unless the passive-sync restore is in an activation-ready phase.
@@ -239,145 +840,6 @@ class SecondaryActivation:
                 )
                 return
         raise FatalError(f"Passive sync restore not ready: {phase} - {message}")
-
-    def _activate_via_passive_sync(self):
-        """Activate managed clusters by patching passive sync restore."""
-        logger.info("Activating managed clusters via passive sync...")
-
-        restore_name = self._get_passive_sync_restore_name()
-        self._activation_restore_name = restore_name
-        restore_before = self._get_restore_or_raise(restore_name)
-
-        if self._activation_already_applied(restore_before):
-            self.run_record.record_pre_activation_velero_restore(None)
-            self._require_new_velero_restore_signal = False
-            return
-
-        # Thermos R2-M2: re-validate freshness on entry so a crash-resume
-        # cannot activate against a degraded restore.
-        self._assert_passive_restore_ready(restore_before, restore_name)
-
-        self.run_record.record_pre_activation_velero_restore(
-            restore_before.get("status", {}).get("veleroManagedClustersRestoreName")
-        )
-        self._require_new_velero_restore_signal = True
-
-        patch = self._build_activation_patch()
-        logger.info("PATCHING: Applying patch = %s", patch)
-
-        result = self.secondary.patch_custom_resource(
-            group=CLUSTER_BACKUP_API_GROUP,
-            version=CLUSTER_BACKUP_API_VERSION,
-            plural=RESTORE_PLURAL,
-            name=restore_name,
-            patch=patch,
-            namespace=BACKUP_NAMESPACE,
-        )
-
-        self._log_patch_result(result)
-
-        # Skip verification in dry-run mode since the patch wasn't actually applied
-        if self.secondary.dry_run:
-            logger.info("[DRY-RUN] Skipping patch verification (patch was not applied)")
-            logger.info("Patched %s to activate managed clusters", restore_name)
-            return
-
-        # Verify patch was applied correctly
-        self._verify_patch_applied(restore_name, restore_before)
-
-    def _activate_via_restore_resource(self):
-        """Activate managed clusters by deleting passive sync and creating activation restore."""
-        logger.info("Activating managed clusters via activation restore (Option B)...")
-
-        self._activation_restore_name = MANAGED_CLUSTER_RESTORE_NAME
-        self.run_record.record_pre_activation_velero_restore(None)
-        self._require_new_velero_restore_signal = False
-
-        # Discover passive sync restore if it still exists; tolerate missing restore on resume
-        restore = find_passive_sync_restore(self.secondary, BACKUP_NAMESPACE)
-        restore_name = (restore or {}).get("metadata", {}).get("name")
-        passive_restore_snapshot: Optional[Dict] = None
-        passive_restore_deleted = False
-
-        if restore_name:
-            # Thermos R2-M2: never delete a passive restore that is not
-            # activation-ready (crash-resume re-validation).
-            self._assert_passive_restore_ready(restore, restore_name)
-            passive_restore_snapshot = self._build_restore_snapshot(restore)
-            try:
-                logger.info("Deleting passive sync restore %s before activation restore", restore_name)
-                self.secondary.delete_custom_resource(
-                    group=CLUSTER_BACKUP_API_GROUP,
-                    version=CLUSTER_BACKUP_API_VERSION,
-                    plural=RESTORE_PLURAL,
-                    name=restore_name,
-                    namespace=BACKUP_NAMESPACE,
-                    timeout_seconds=DELETE_REQUEST_TIMEOUT,
-                )
-                passive_restore_deleted = True
-            except ApiException as e:
-                if getattr(e, "status", None) == 404:
-                    logger.info(
-                        "Passive sync restore %s already deleted; continuing with activation restore", restore_name
-                    )
-                else:
-                    raise FatalError(f"Failed to delete passive sync restore {restore_name}: {e}") from e
-
-            # Only wait when we actually had a restore to delete
-            self._wait_for_restore_deletion(restore_name)
-        else:
-            logger.info("No passive sync restore found before activation; proceeding with activation restore creation")
-
-        existing_restore = self.secondary.get_custom_resource(
-            group=CLUSTER_BACKUP_API_GROUP,
-            version=CLUSTER_BACKUP_API_VERSION,
-            plural=RESTORE_PLURAL,
-            name=MANAGED_CLUSTER_RESTORE_NAME,
-            namespace=BACKUP_NAMESPACE,
-        )
-        if existing_restore:
-            logger.info("%s already exists", MANAGED_CLUSTER_RESTORE_NAME)
-            return
-
-        restore_body = {
-            "apiVersion": CLUSTER_BACKUP_API_VERSION_FULL,
-            "kind": "Restore",
-            "metadata": {
-                "name": MANAGED_CLUSTER_RESTORE_NAME,
-                "namespace": BACKUP_NAMESPACE,
-            },
-            "spec": {
-                "cleanupBeforeRestore": CLEANUP_BEFORE_RESTORE_VALUE,
-                SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST,
-                "veleroCredentialsBackupName": VELERO_BACKUP_SKIP,
-                "veleroResourcesBackupName": VELERO_BACKUP_SKIP,
-            },
-        }
-
-        try:
-            self.secondary.create_custom_resource(
-                group=CLUSTER_BACKUP_API_GROUP,
-                version=CLUSTER_BACKUP_API_VERSION,
-                plural=RESTORE_PLURAL,
-                body=restore_body,
-                namespace=BACKUP_NAMESPACE,
-            )
-            logger.info("Created %s resource", MANAGED_CLUSTER_RESTORE_NAME)
-        except Exception as e:
-            if passive_restore_deleted and passive_restore_snapshot:
-                try:
-                    self._recreate_restore_from_snapshot(passive_restore_snapshot)
-                except Exception as rollback_error:
-                    raise FatalError(
-                        f"Failed to create activation restore {MANAGED_CLUSTER_RESTORE_NAME}: {e}. "
-                        f"Rollback failed to recreate passive sync restore {restore_name}: {rollback_error}"
-                    ) from e
-
-                raise FatalError(
-                    f"Failed to create activation restore {MANAGED_CLUSTER_RESTORE_NAME}: {e}. "
-                    f"Recreated passive sync restore {restore_name} as rollback."
-                ) from e
-            raise FatalError(f"Failed to create activation restore {MANAGED_CLUSTER_RESTORE_NAME}: {e}") from e
 
     @staticmethod
     def _build_restore_snapshot(restore: Dict) -> Dict:
@@ -427,171 +889,6 @@ class SecondaryActivation:
                     restore_name,
                 )
             raise
-
-    def _wait_for_restore_deletion(self, restore_name: str, timeout: int = RESTORE_WAIT_TIMEOUT) -> None:
-        """Wait until a restore resource is fully deleted."""
-        wait_for_restore_deletion(
-            self.secondary, restore_name, dry_run=self.secondary.dry_run, timeout=timeout, logger=logger
-        )
-
-    def _get_restore_or_raise(self, restore_name: str) -> Dict:
-        """Fetch restore resource or raise a fatal error if missing."""
-        restore = self.secondary.get_custom_resource(
-            group=CLUSTER_BACKUP_API_GROUP,
-            version=CLUSTER_BACKUP_API_VERSION,
-            plural=RESTORE_PLURAL,
-            name=restore_name,
-            namespace=BACKUP_NAMESPACE,
-        )
-
-        if not restore:
-            logger.error("BEFORE PATCH: %s not found!", restore_name)
-            raise FatalError(f"{restore_name} not found before patching")
-
-        return restore
-
-    @staticmethod
-    def _build_activation_patch() -> Dict[str, Dict[str, str]]:
-        """Build patch payload for activating managed clusters."""
-        return {"spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST}}
-
-    def _activation_already_applied(self, restore: Dict) -> bool:
-        """Check if activation already applied and log current state."""
-        current_mc_backup = restore.get("spec", {}).get(SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME, "<not set>")
-        logger.info(
-            "BEFORE PATCH: %s = %s",
-            SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
-            current_mc_backup,
-        )
-        logger.debug("BEFORE PATCH: Full spec = %s", restore.get("spec", {}))
-
-        if current_mc_backup == VELERO_BACKUP_LATEST:
-            logger.info(
-                "%s is already set to '%s' - activation already applied (idempotent)",
-                SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
-                VELERO_BACKUP_LATEST,
-            )
-            return True
-        return False
-
-    def _log_patch_result(self, result: Optional[Dict]) -> None:
-        """Log patch response details."""
-        logger.info(
-            "PATCH RESULT: patch_custom_resource returned type=%s",
-            type(result).__name__,
-        )
-        if result:
-            result_mc_backup = result.get("spec", {}).get(SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME, "<not set>")
-            logger.info(
-                "PATCH RESULT: %s in response = %s",
-                SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
-                result_mc_backup,
-            )
-            logger.debug("PATCH RESULT: Full spec in response = %s", result.get("spec", {}))
-        else:
-            logger.warning("PATCH RESULT: patch_custom_resource returned empty/None result")
-
-    def _verify_patch_applied(self, restore_name: str, restore_before: Dict) -> None:
-        """Verify that a patch was applied correctly by checking resourceVersion changes.
-
-        Args:
-            restore_name: Name of the restore resource
-            restore_before: Restore resource state before patching (for resourceVersion comparison)
-        """
-        # Get resourceVersion from before patch for comparison
-        before_resource_version = restore_before.get("metadata", {}).get("resourceVersion", "")
-
-        # Track whether we've seen version changes
-        seen_version_change = False
-
-        # Verify patch with retry loop and resourceVersion comparison
-        # This handles API sync delays more robustly than a single sleep
-        for attempt in range(1, PATCH_VERIFY_MAX_RETRIES + 1):
-            time.sleep(PATCH_VERIFY_RETRY_DELAY)
-
-            restore_after = self.secondary.get_custom_resource(
-                group=CLUSTER_BACKUP_API_GROUP,
-                version=CLUSTER_BACKUP_API_VERSION,
-                plural=RESTORE_PLURAL,
-                name=restore_name,
-                namespace=BACKUP_NAMESPACE,
-            )
-
-            if not restore_after:
-                logger.error("AFTER PATCH: %s not found after patching!", restore_name)
-                raise FatalError(f"{restore_name} disappeared after patching")
-
-            after_resource_version = restore_after.get("metadata", {}).get("resourceVersion", "")
-            after_mc_backup = restore_after.get("spec", {}).get(SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME, "<not set>")
-
-            logger.debug(
-                "Patch verify attempt %d/%d: resourceVersion %s -> %s, %s = %s",
-                attempt,
-                PATCH_VERIFY_MAX_RETRIES,
-                before_resource_version,
-                after_resource_version,
-                SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
-                after_mc_backup,
-            )
-
-            # Check if resourceVersion changed (patch was processed)
-            if after_resource_version != before_resource_version:
-                seen_version_change = True
-                if after_mc_backup == VELERO_BACKUP_LATEST:
-                    logger.info(
-                        "AFTER PATCH (re-read): %s = %s",
-                        SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
-                        after_mc_backup,
-                    )
-                    logger.info(
-                        "PATCH VERIFICATION SUCCESS: %s is now '%s' (resourceVersion: %s -> %s)",
-                        SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
-                        VELERO_BACKUP_LATEST,
-                        before_resource_version,
-                        after_resource_version,
-                    )
-                    return  # Success!
-                else:
-                    # resourceVersion changed but value is wrong
-                    logger.error(
-                        "PATCH VERIFICATION FAILED: Expected '%s', got '%s'",
-                        VELERO_BACKUP_LATEST,
-                        after_mc_backup,
-                    )
-                    raise FatalError(
-                        f"Patch verification failed: {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME} is '{after_mc_backup}', "
-                        f"expected '{VELERO_BACKUP_LATEST}'. The patch may not have been applied correctly."
-                    )
-
-            # resourceVersion hasn't changed yet, continue retry loop
-            if attempt < PATCH_VERIFY_MAX_RETRIES:
-                logger.debug(
-                    "resourceVersion unchanged, retrying (%d/%d)...",
-                    attempt,
-                    PATCH_VERIFY_MAX_RETRIES,
-                )
-
-        # Exhausted retries - check what happened
-        if not seen_version_change:
-            # Version never changed - likely API caching issue
-            logger.error(
-                "PATCH VERIFICATION FAILED: resourceVersion never changed after %d attempts (API may be returning cached responses)",
-                PATCH_VERIFY_MAX_RETRIES,
-            )
-            raise FatalError(
-                f"Patch verification failed: resourceVersion remained {before_resource_version} after "
-                f"{PATCH_VERIFY_MAX_RETRIES} retries. The API may be returning cached responses and not processing the patch."
-            )
-        else:
-            # Version changed but we didn't see correct value (shouldn't happen with current logic)
-            logger.error(
-                "PATCH VERIFICATION FAILED: resourceVersion changed but correct value not verified after %d attempts",
-                PATCH_VERIFY_MAX_RETRIES,
-            )
-            raise FatalError(
-                f"Patch verification failed: resourceVersion changed but {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME} "
-                f"was not verified as '{VELERO_BACKUP_LATEST}' after {PATCH_VERIFY_MAX_RETRIES} retries."
-            )
 
     def _maybe_set_auto_import_strategy(self) -> None:
         """If requested, set ImportAndSync on secondary for ACM 2.14+ with existing clusters."""
@@ -753,95 +1050,6 @@ class SecondaryActivation:
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("Failed to annotate %s with immediate-import: %s", cluster_name, exc)
             return False
-
-    def _create_full_restore(self):
-        """Create full restore resource (Method 2)."""
-        logger.info("Creating full restore resource...")
-        self._activation_restore_name = RESTORE_FULL_NAME
-
-        # Delete any existing passive-sync restore first — ACM only allows one active
-        # Restore resource at a time; a full restore will be rejected if one is active.
-        passive_restore = find_passive_sync_restore(self.secondary, BACKUP_NAMESPACE)
-        passive_restore_snapshot: Optional[Dict] = None
-        passive_restore_deleted = False
-        if passive_restore:
-            passive_name = passive_restore["metadata"]["name"]
-            passive_restore_snapshot = self._build_restore_snapshot(passive_restore)
-            logger.info(
-                "Deleting existing passive sync restore %s before creating full restore",
-                passive_name,
-            )
-            try:
-                self.secondary.delete_custom_resource(
-                    group=CLUSTER_BACKUP_API_GROUP,
-                    version=CLUSTER_BACKUP_API_VERSION,
-                    plural=RESTORE_PLURAL,
-                    name=passive_name,
-                    namespace=BACKUP_NAMESPACE,
-                    timeout_seconds=DELETE_REQUEST_TIMEOUT,
-                )
-                passive_restore_deleted = True
-                self._wait_for_restore_deletion(passive_name)
-            except ApiException as e:
-                if getattr(e, "status", None) == 404:
-                    logger.info("Passive sync restore %s already deleted", passive_name)
-                else:
-                    raise FatalError(f"Failed to delete passive sync restore {passive_name}: {e}") from e
-
-        # Check if full restore already exists (idempotent resume)
-        existing_restore = self.secondary.get_custom_resource(
-            group=CLUSTER_BACKUP_API_GROUP,
-            version=CLUSTER_BACKUP_API_VERSION,
-            plural=RESTORE_PLURAL,
-            name=RESTORE_FULL_NAME,
-            namespace=BACKUP_NAMESPACE,
-        )
-
-        if existing_restore:
-            logger.info("%s already exists", RESTORE_FULL_NAME)
-            return
-
-        # Create restore resource
-        restore_body = {
-            "apiVersion": CLUSTER_BACKUP_API_VERSION_FULL,
-            "kind": "Restore",
-            "metadata": {
-                "name": RESTORE_FULL_NAME,
-                "namespace": BACKUP_NAMESPACE,
-            },
-            "spec": {
-                SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST,
-                "veleroCredentialsBackupName": VELERO_BACKUP_LATEST,
-                "veleroResourcesBackupName": VELERO_BACKUP_LATEST,
-                "cleanupBeforeRestore": CLEANUP_BEFORE_RESTORE_VALUE,
-            },
-        }
-
-        try:
-            self.secondary.create_custom_resource(
-                group=CLUSTER_BACKUP_API_GROUP,
-                version=CLUSTER_BACKUP_API_VERSION,
-                plural=RESTORE_PLURAL,
-                body=restore_body,
-                namespace=BACKUP_NAMESPACE,
-            )
-        except Exception as e:
-            if passive_restore_deleted and passive_restore_snapshot:
-                passive_name = passive_restore_snapshot.get("metadata", {}).get("name", RESTORE_PASSIVE_SYNC_NAME)
-                try:
-                    self._recreate_restore_from_snapshot(passive_restore_snapshot)
-                except Exception as rollback_error:
-                    raise FatalError(
-                        f"Failed to create full restore {RESTORE_FULL_NAME}: {e}. "
-                        f"Rollback failed to recreate passive sync restore {passive_name}: {rollback_error}"
-                    ) from e
-                raise FatalError(
-                    f"Failed to create full restore {RESTORE_FULL_NAME}: {e}. "
-                    f"Recreated passive sync restore {passive_name} as rollback."
-                ) from e
-            raise FatalError(f"Failed to create full restore {RESTORE_FULL_NAME}: {e}") from e
-
-        logger.info("Created %s resource", RESTORE_FULL_NAME)
 
     def _wait_for_restore_completion(self, timeout: int = RESTORE_WAIT_TIMEOUT):
         """Wait for restore to complete and verify managed clusters are restored."""

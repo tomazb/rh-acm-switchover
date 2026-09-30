@@ -3259,3 +3259,108 @@ class TestGuardedRestoreDelete:
             result = self._delete(kube_client)
         assert "abc123" not in json.dumps(result)
         assert "abc123" not in caplog.text
+
+
+class TestGuardedRestoreCreate:
+    """R4-04 PR C Task 7: one create request; acceptance only from a 2xx body that names the
+    created object. A 409, a timeout or any other failure is never reconciled into success."""
+
+    _BODY = {
+        "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+        "kind": "Restore",
+        "metadata": {"name": "restore-acm-full", "namespace": "open-cluster-management-backup"},
+        "spec": {"veleroManagedClustersBackupName": "acm-managed-clusters-schedule-20240101120000"},
+    }
+
+    def _create(self, client, body=None):
+        return client.create_restore_guarded(body or self._BODY, namespace="open-cluster-management-backup")
+
+    @staticmethod
+    def _created(**metadata):
+        base = {"name": "restore-acm-full", "namespace": "open-cluster-management-backup"}
+        base.update(metadata)
+        return {"kind": "Restore", "metadata": base, "spec": {}}
+
+    def test_an_accepted_create_reports_identity_and_generation(self, kube_client):
+        kube_client.custom_api.create_namespaced_custom_object = Mock(
+            return_value=self._created(uid="u-1", resourceVersion="10", generation=1)
+        )
+        result = self._create(kube_client)
+        assert result["accepted"] is True and result["changed"] is True and result["reason"] == "ok"
+        assert (result["uid"], result["resource_version"], result["generation"]) == ("u-1", "10", 1)
+        assert result["generation_reported"] is True
+        kube_client.custom_api.create_namespaced_custom_object.assert_called_once()
+
+    def test_a_missing_generation_is_not_inferred(self, kube_client):
+        kube_client.custom_api.create_namespaced_custom_object = Mock(
+            return_value=self._created(uid="u-1", resourceVersion="10")
+        )
+        result = self._create(kube_client)
+        assert result["accepted"] is True
+        assert result["generation"] is None and result["generation_reported"] is False
+
+    @pytest.mark.parametrize(
+        "metadata",
+        [
+            {"resourceVersion": "10"},
+            {"uid": "", "resourceVersion": "10"},
+            {"uid": "u-1"},
+            {"uid": "u-1", "resourceVersion": "10", "name": "other"},
+        ],
+    )
+    def test_a_2xx_without_the_created_identity_is_not_accepted(self, kube_client, metadata):
+        kube_client.custom_api.create_namespaced_custom_object = Mock(return_value=self._created(**metadata))
+        result = self._create(kube_client)
+        assert result["accepted"] is False and result["http_accepted"] is True
+        assert result["reason"] == "malformed_response" and result["uid"] is None
+
+    def test_a_conflict_is_never_reconciled(self, kube_client):
+        kube_client.custom_api.create_namespaced_custom_object = Mock(side_effect=ApiException(status=409))
+        kube_client.custom_api.get_namespaced_custom_object = Mock()
+        result = self._create(kube_client)
+        assert result["accepted"] is False and result["conflict"] is True and result["reason"] == "already_exists"
+        kube_client.custom_api.get_namespaced_custom_object.assert_not_called()
+        kube_client.custom_api.create_namespaced_custom_object.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "error", [ApiException(status=504), TimeoutError("read timed out"), ApiException(status=500)]
+    )
+    def test_a_timeout_or_server_error_is_unverifiable_and_not_retried(self, kube_client, error):
+        kube_client.custom_api.create_namespaced_custom_object = Mock(side_effect=error)
+        result = self._create(kube_client)
+        assert result["accepted"] is False and result["reason"] == "unverifiable"
+        kube_client.custom_api.create_namespaced_custom_object.assert_called_once()
+
+    def test_dry_run_predicts_without_a_request(self, dry_run_client):
+        dry_run_client.custom_api.create_namespaced_custom_object = Mock()
+        result = self._create(dry_run_client)
+        assert result["accepted"] is False and result["would_change"] is True and result["reason"] == "predicted"
+        dry_run_client.custom_api.create_namespaced_custom_object.assert_not_called()
+
+    def test_failures_never_expose_exception_text(self, kube_client, caplog):
+        secret = "R4-04-CREATE-SECRET token=abc123"
+        exc = ApiException(status=500, reason=secret)
+        exc.body = secret
+        kube_client.custom_api.create_namespaced_custom_object = Mock(side_effect=exc)
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            result = self._create(kube_client)
+        assert "abc123" not in json.dumps(result)
+        assert "abc123" not in caplog.text
+
+
+class TestApiResourceServed:
+    """The public discovery check: the Restore status subresource is served, absent, or unverifiable."""
+
+    def test_status_subresource_is_asserted_through_discovery(self):
+        body = {
+            "kind": "APIResourceList",
+            "groupVersion": "cluster.open-cluster-management.io/v1beta1",
+            "resources": [{"name": "restores", "kind": "Restore"}, {"name": "restores/status", "kind": "Restore"}],
+        }
+        client = TestDiscoveryProver()._client(Mock(return_value=TestDiscoveryProver._body(body)))
+        served = client.api_resource_served("cluster.open-cluster-management.io", "v1beta1", "restores/status")
+        assert served.status is StrictReadStatus.ITEMS
+        body["resources"] = body["resources"][:1]
+        client = TestDiscoveryProver()._client(Mock(return_value=TestDiscoveryProver._body(body)))
+        absent = client.api_resource_served("cluster.open-cluster-management.io", "v1beta1", "restores/status")
+        assert absent.status is StrictReadStatus.CRD_ABSENT
