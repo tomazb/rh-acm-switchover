@@ -5,6 +5,7 @@ share no runtime code, so equality is proven here, executably: every shared vect
 is fed to both modules and must produce the same result or the same error code.
 """
 
+import importlib.util
 import json
 from pathlib import Path
 
@@ -14,6 +15,7 @@ import lib.migration_evidence as py_evidence
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils import migration_evidence as col_evidence
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "r4_04_migration_evidence_vectors.json"
+GENERATOR_PATH = Path(__file__).parent / "fixtures" / "r4_04_migration_evidence_vectors_gen.py"
 FIXTURE = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 CASES = FIXTURE["cases"]
 
@@ -30,6 +32,13 @@ def _run(module, case):
 
 def test_fixture_format_is_pinned():
     assert FIXTURE["fixture_format"] == 1
+
+
+def test_fixture_is_the_generator_output():
+    spec = importlib.util.spec_from_file_location("r4_04_migration_evidence_vectors_gen", GENERATOR_PATH)
+    generator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(generator)
+    assert FIXTURE_PATH.read_bytes() == generator.build().encode("utf-8")
 
 
 @pytest.mark.parametrize("module", [py_evidence, col_evidence], ids=["python", "collection"])
