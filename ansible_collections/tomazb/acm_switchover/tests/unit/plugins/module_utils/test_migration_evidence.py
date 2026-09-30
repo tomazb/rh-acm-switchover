@@ -15,6 +15,8 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_ev
     normalize_backup_evidence,
     predict_correlated_backup,
     predict_latest_backup,
+    select_correlated_evidence,
+    select_latest_evidence,
 )
 
 # The shared vectors live in the repository's root test fixtures; outside a
@@ -26,6 +28,8 @@ FUNCTIONS = {
     "normalize_backup_evidence": normalize_backup_evidence,
     "predict_latest_backup": predict_latest_backup,
     "predict_correlated_backup": predict_correlated_backup,
+    "select_latest_evidence": select_latest_evidence,
+    "select_correlated_evidence": select_correlated_evidence,
 }
 NS = "open-cluster-management-backup"
 
@@ -102,3 +106,16 @@ def test_counter_normalization():
     with pytest.raises(MigrationEvidenceError) as excinfo:
         normalize_backup_evidence(raw, NS)
     assert excinfo.value.code == "malformed_backup_counter"
+
+
+def test_selected_evidence_is_detached_from_the_inventory():
+    newest = _backup("acm-managed-clusters-schedule-20240101120000")
+    decision, evidence = select_latest_evidence([newest], "ManagedClusters", NS)
+    assert decision == "selected" and evidence is not newest
+    assert set(evidence) == {"namespace", "name", "uid", "phase", "completed_at", "errors", "warnings"}
+
+
+def test_fractional_name_suffix_reaches_the_fallback():
+    near = _backup("acm-resources-generic-schedule-fallback", start="2024-01-01T12:00:30.5Z")
+    source = "acm-resources-schedule-20240101120000.5"
+    assert predict_correlated_backup([near], source, "ResourcesGeneric") == ("selected", near)

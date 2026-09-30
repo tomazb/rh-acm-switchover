@@ -78,8 +78,9 @@ _GO_ZERO_TIME = datetime(1, 1, 1, tzinfo=timezone.utc)
 _RFC3339 = re.compile(
     r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]+))?(?:(Z)|([+-])([0-9]{2}):([0-9]{2}))"
 )
-# The Velero TimestampedName suffix, Go layout 20060102150405.
-_NAME_TIMESTAMP = re.compile(r"([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})")
+# The Velero TimestampedName suffix, Go layout 20060102150405. Go's time.Parse also
+# accepts a fractional second ('.' or ',' then digits) the layout does not declare.
+_NAME_TIMESTAMP = re.compile(r"([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})(?:[.,]([0-9]+))?")
 
 
 def controller_contract_for_acm_minor(minor: Any) -> str:
@@ -125,12 +126,35 @@ def normalize_backup_evidence(raw: Any, namespace: str) -> Dict[str, Any]:
     }
 
 
+def select_latest_evidence(inventory: Any, resource_type: str, namespace: str) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """Return the controller's direct `latest` choice as journalable evidence.
+
+    ("selected", seven-field projection) or ("none", None); a selected Backup
+    that fails R4-04 eligibility raises instead of yielding an older one.
+    """
+    decision, raw = predict_latest_backup(inventory, resource_type)
+    return (decision, normalize_backup_evidence(raw, namespace) if raw is not None else None)
+
+
+def select_correlated_evidence(
+    inventory: Any, source_name: Any, resource_type: str, namespace: str
+) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """Return the controller's correlated choice as journalable evidence.
+
+    ("selected", seven-field projection) or ("none", None); a selected Backup
+    that fails R4-04 eligibility raises and never falls back to another one.
+    """
+    decision, raw = predict_correlated_backup(inventory, source_name, resource_type)
+    return (decision, normalize_backup_evidence(raw, namespace) if raw is not None else None)
+
+
 def predict_latest_backup(inventory: Any, resource_type: str) -> Tuple[str, Optional[Dict[str, Any]]]:
     """Predict the controller's direct `latest` choice (child-evidence amendment section 1).
 
-    Returns ("selected", raw) with the inventory object itself, or ("none", None)
-    when no Backup passes the prefix and raw-phase filters. Eligibility is not
-    applied here: the caller runs normalize_backup_evidence on the selection.
+    An upstream-prediction primitive, not journalable evidence: it returns
+    ("selected", raw) with the inventory object itself, or ("none", None) when
+    no Backup passes the prefix and raw-phase filters, and applies no R4-04
+    eligibility. Journal only what select_latest_evidence returns.
     """
     token = _token(resource_type, LATEST_RESOURCE_TYPES)
     candidates = [
@@ -157,8 +181,9 @@ def predict_correlated_backup(
 
     Child-evidence amendment section 2: an existing exact-name candidate wins
     with no pre-filter; otherwise exactly one raw +-30 s candidate is selected,
-    none is ("none", None), and more than one raises. Eligibility is applied by
-    the caller, never used to skip past a candidate.
+    none is ("none", None), and more than one raises. Like predict_latest_backup
+    this returns the raw inventory object and applies no eligibility; journal
+    only what select_correlated_evidence returns.
     """
     token = _token(resource_type, CORRELATED_RESOURCE_TYPES)
     if not _non_empty_str(source_name):
@@ -223,6 +248,10 @@ def _inventory(inventory: Any) -> List[Tuple[str, Dict[str, Any]]]:
         name = metadata.get("name")
         if not _non_empty_str(name):
             raise MigrationEvidenceError("malformed_inventory", "an inventory Backup has no metadata.name")
+        # A non-string phase fails the controller's typed decode of the whole LIST;
+        # an absent or null phase decodes to "" and is merely not a candidate.
+        if _status(item).get("phase") is not None and not isinstance(_status(item)["phase"], str):
+            raise MigrationEvidenceError("malformed_inventory", f"Backup {name} status.phase is not a string")
         entries.append((name, item))
     if len({name for name, _ in entries}) != len(entries):
         raise MigrationEvidenceError("malformed_inventory", "the Backup inventory repeats a name")
@@ -278,13 +307,16 @@ def _name_timestamp_ns(source_name: str) -> Optional[int]:
     match = _NAME_TIMESTAMP.fullmatch(source_name[hyphen:].strip("-"))
     if match is None:
         return None
+    *fields, fraction = match.groups()
     try:
-        instant = datetime(*(int(part) for part in match.groups()), tzinfo=timezone.utc)
+        instant = datetime(*(int(part) for part in fields), tzinfo=timezone.utc)
     except ValueError:
         return None
-    if instant == _GO_ZERO_TIME:
+    # Go keeps only the first nine fractional digits.
+    nanos = int((fraction or "").ljust(9, "0")[:9])
+    if instant == _GO_ZERO_TIME and nanos == 0:
         return None
-    return _to_ns(instant)
+    return _to_ns(instant) + nanos
 
 
 def _to_ns(instant: datetime) -> int:

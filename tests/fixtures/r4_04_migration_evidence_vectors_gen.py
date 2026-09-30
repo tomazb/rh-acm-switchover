@@ -734,6 +734,212 @@ case(
     True,
 )
 
+# --- Task 2a review fixes -----------------------------------------------------------------
+# Go time.Parse accepts a fractional-second tail ('.' or ',' then digits, only the first nine
+# significant) after the seconds even though the layout 20060102150405 omits it.
+fn = "predict_correlated_backup"
+FRACTION = "acm-resources-schedule-20240101120000.5"
+for label, source, start, expected in [
+    ("period-inclusive-bound", FRACTION, "2024-01-01T12:00:30.5Z", True),
+    ("period-past-bound", FRACTION, "2024-01-01T12:00:30.6Z", False),
+    ("period-lower-bound", FRACTION, "2024-01-01T11:59:30.5Z", True),
+    ("comma", "acm-resources-schedule-20240101120000,5", "2024-01-01T12:00:30.5Z", True),
+    ("nine-digits", "acm-resources-schedule-20240101120000.123456789", "2024-01-01T12:00:30.123456789Z", True),
+    ("tenth-digit-dropped", "acm-resources-schedule-20240101120000.1234567891", "2024-01-01T12:00:30.123456789Z", True),
+    (
+        "tenth-digit-past-bound",
+        "acm-resources-schedule-20240101120000.1234567891",
+        "2024-01-01T12:00:30.12345679Z",
+        False,
+    ),
+    ("zero-date-with-fraction", "acm-resources-schedule-00010101000000.5", "0001-01-01T00:00:10Z", True),
+]:
+    cand = gen("fallback", start=start)
+    case(
+        f"correlated-source-fraction-{label}",
+        ALL,
+        C,
+        fn,
+        corr([cand], source=source),
+        ok(["selected", cand] if expected else ["none", None]),
+    )
+for label, source in [
+    ("separator-only", "acm-resources-schedule-20240101120000."),
+    ("double-separator", "acm-resources-schedule-20240101120000..5"),
+    ("trailing-text", "acm-resources-schedule-20240101120000.5x"),
+    ("signed", "acm-resources-schedule-20240101120000.-5"),
+    ("short-seconds", "acm-resources-schedule-2024010112000.5"),
+]:
+    case(
+        f"correlated-source-fraction-{label}-none",
+        ALL,
+        C,
+        fn,
+        corr([gen("fallback", start="2024-01-01T12:00:00Z")], source=source),
+        ok(["none", None]),
+    )
+cred_fraction = backup("acm-credentials-schedule-20240101120000.5")
+hive_near = backup("acm-credentials-hive-schedule-manual", start="2024-01-01T12:00:20Z")
+case(
+    "correlated-hive-fraction-source-selected",
+    LEGACY,
+    CL,
+    fn,
+    corr([cred_fraction, hive_near], source=cred_fraction["metadata"]["name"], rtype="CredentialsHive"),
+    ok(["selected", hive_near]),
+)
+
+# A present status.phase that is not a string fails the controller's typed LIST decode, so it
+# is malformed inventory wherever it appears; an absent or null phase decodes to "".
+for label, value in [("list", []), ("object", {}), ("integer", 42), ("boolean", True)]:
+    bad = mc("20240101130000", phase=value)
+    case(
+        f"latest-phase-{label}-blocks",
+        ALL,
+        L,
+        "predict_latest_backup",
+        {"inventory": [newer, bad], "resource_type": "ManagedClusters"},
+        err("malformed_inventory"),
+        True,
+    )
+    case(
+        f"latest-phase-{label}-on-other-type-blocks",
+        ALL,
+        L,
+        "predict_latest_backup",
+        {
+            "inventory": [newer, backup("acm-credentials-schedule-20240101130000", phase=value)],
+            "resource_type": "ManagedClusters",
+        },
+        err("malformed_inventory"),
+        True,
+    )
+    case(
+        f"correlated-phase-{label}-blocks",
+        ALL,
+        C,
+        fn,
+        corr([gen("20240101120005", phase=value, start="2024-01-01T12:00:05Z")]),
+        err("malformed_inventory"),
+        True,
+    )
+case(
+    "latest-phase-null-excluded",
+    ALL,
+    L,
+    "predict_latest_backup",
+    {"inventory": [older, mc("20240101130000", phase=None)], "resource_type": "ManagedClusters"},
+    ok(["selected", older]),
+)
+
+# Sub-second start ordering.
+tenth = mc("20240101120001", start="2024-01-01T12:00:00.1Z")
+fifth = mc("20240101120002", start="2024-01-01T12:00:00.2Z")
+case(
+    "latest-sub-second-newer-selected",
+    ALL,
+    L,
+    "predict_latest_backup",
+    {"inventory": [fifth, tenth], "resource_type": "ManagedClusters"},
+    ok(["selected", fifth]),
+)
+for label, spelling in [("offset", "2024-01-01T14:00:00.5+02:00"), ("trailing-zero", "2024-01-01T12:00:00.50Z")]:
+    case(
+        f"latest-sub-second-tie-{label}-blocks",
+        ALL,
+        L,
+        "predict_latest_backup",
+        {
+            "inventory": [mc("20240101120003", start="2024-01-01T12:00:00.5Z"), mc("20240101120004", start=spelling)],
+            "resource_type": "ManagedClusters",
+        },
+        err("latest_ambiguous"),
+        True,
+    )
+
+# Eligibility-applying selection: the only entry points whose result may be journaled.
+fn = "select_latest_evidence"
+case(
+    "select-latest-returns-projection",
+    ALL,
+    L,
+    fn,
+    {"inventory": [older, newer], "resource_type": "ManagedClusters", "namespace": NS},
+    ok(["selected", projection(newer)]),
+)
+case(
+    "select-latest-none",
+    ALL,
+    L,
+    fn,
+    {"inventory": [], "resource_type": "ManagedClusters", "namespace": NS},
+    ok(["none", None]),
+)
+case(
+    "select-latest-partially-failed-blocks",
+    ALL,
+    L,
+    fn,
+    {"inventory": [older, partial], "resource_type": "ManagedClusters", "namespace": NS},
+    err("backup_not_completed"),
+    True,
+)
+case(
+    "select-latest-namespace-mismatch-blocks",
+    ALL,
+    L,
+    fn,
+    {"inventory": [older, newer], "resource_type": "ManagedClusters", "namespace": "velero"},
+    err("backup_namespace_mismatch"),
+    True,
+)
+case(
+    "select-latest-ambiguous-blocks",
+    ALL,
+    L,
+    fn,
+    {"inventory": [tie_a, tie_b], "resource_type": "ManagedClusters", "namespace": NS},
+    err("latest_ambiguous"),
+    True,
+)
+fn = "select_correlated_evidence"
+case(
+    "select-correlated-exact-returns-projection",
+    ALL,
+    C,
+    fn,
+    dict(corr([near, exact]), namespace=NS),
+    ok(["selected", projection(exact)]),
+)
+case("select-correlated-none", ALL, C, fn, dict(corr([]), namespace=NS), ok(["none", None]))
+case(
+    "select-correlated-failed-exact-blocks",
+    ALL,
+    C,
+    fn,
+    dict(corr([near, exact_bad]), namespace=NS),
+    err("backup_not_completed"),
+    True,
+)
+case(
+    "select-correlated-failed-fallback-blocks",
+    ALL,
+    C,
+    fn,
+    dict(corr([failed_near]), namespace=NS),
+    err("backup_not_completed"),
+    True,
+)
+case(
+    "select-correlated-ambiguous-blocks",
+    ALL,
+    C,
+    fn,
+    dict(corr([near, near2]), namespace=NS),
+    err("correlated_ambiguous"),
+    True,
+)
+
 
 def build():
     """Return the fixture text: the vector document as indented JSON."""

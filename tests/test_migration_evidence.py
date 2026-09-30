@@ -15,6 +15,8 @@ from lib.migration_evidence import (
     normalize_backup_evidence,
     predict_correlated_backup,
     predict_latest_backup,
+    select_correlated_evidence,
+    select_latest_evidence,
 )
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "r4_04_migration_evidence_vectors.json"
@@ -24,6 +26,8 @@ FUNCTIONS = {
     "normalize_backup_evidence": normalize_backup_evidence,
     "predict_latest_backup": predict_latest_backup,
     "predict_correlated_backup": predict_correlated_backup,
+    "select_latest_evidence": select_latest_evidence,
+    "select_correlated_evidence": select_correlated_evidence,
 }
 NS = "open-cluster-management-backup"
 
@@ -100,3 +104,16 @@ def test_predictions_do_not_mutate_the_inventory():
 def test_projection_is_exactly_seven_fields():
     projection = normalize_backup_evidence(_backup("acm-managed-clusters-schedule-20240101120000"), NS)
     assert set(projection) == {"namespace", "name", "uid", "phase", "completed_at", "errors", "warnings"}
+
+
+def test_selected_evidence_is_detached_from_the_inventory():
+    newest = _backup("acm-managed-clusters-schedule-20240101120000")
+    decision, evidence = select_latest_evidence([newest], "ManagedClusters", NS)
+    assert decision == "selected" and evidence is not newest
+    evidence["name"] = "changed"
+    assert newest["metadata"]["name"] == "acm-managed-clusters-schedule-20240101120000"
+    generic = _backup("acm-resources-generic-schedule-20240101120000")
+    decision, evidence = select_correlated_evidence(
+        [generic], "acm-resources-schedule-20240101120000", "ResourcesGeneric", NS
+    )
+    assert decision == "selected" and evidence is not generic and evidence["uid"] == generic["metadata"]["uid"]
