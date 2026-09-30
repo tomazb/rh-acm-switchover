@@ -3506,16 +3506,16 @@ rcase("repair-invalid-journal-blocks", REPAIR, mut(RR, cleanup__recovery=None), 
 
 
 def build():
-    """Return the fixture text: the vector document as indented JSON."""
+    """Return the fixture text: a readable header, then one compact case per line."""
     ids = [c["id"] for c in cases]
     if len(ids) != len(set(ids)):
         raise ValueError("duplicate case id")
-    doc = {
+    header = {
         "fixture_format": 1,
         "lanes": {m: {"controller_sha": sha, "controller_contract": contract} for m, (sha, contract) in LANES.items()},
-        "cases": cases,
     }
-    return json.dumps(doc, indent=2) + "\n"
+    lines = [json.dumps(case, sort_keys=True, separators=(",", ":"), ensure_ascii=True) for case in cases]
+    return json.dumps(header, indent=2)[:-2] + ',\n  "cases": [\n    ' + ",\n    ".join(lines) + "\n  ]\n}\n"
 
 
 if __name__ == "__main__":
