@@ -6,6 +6,8 @@ The JSON is committed; tests/test_migration_evidence_parity.py requires it to
 equal build() byte for byte, so the fixture is never hand-edited.
 """
 
+import copy
+import hashlib
 import json
 import sys
 
@@ -2295,6 +2297,1212 @@ case(
     err("velero_restore_owner_mismatch"),
     True,
 )
+
+
+# --- Task 2c: migration journal (July §§1/1a/4/4a, August §§2-6 and 10, amendment-2 §§3-5) -------------
+# Journal vectors cite the design documents as "<lane>:<document>:<lines>": J is the July design,
+# A the August amendment and C the controller child-evidence amendment, all under docs/plans/.
+DOCS = {
+    "J": "2026-07-29-migration-evidence-design.md",
+    "A": "2026-08-27-r4-04-current-base-design-amendment.md",
+    "C": "2026-09-30-r4-04-controller-child-evidence-amendment.md",
+}
+
+
+def drefs(lanes, *spots):
+    out = []
+    for lane in lanes:
+        for spot in spots:
+            doc, lines = spot.split(":")
+            out.append(f"{lane}:{DOCS[doc]}:{lines}")
+    return out
+
+
+DELETE = object()
+ACT = "active_2_17"
+JRUN = "5b7c9a1e-3f2d-4c8b-9e6a-0d1f2a3b4c5d"
+JOP = "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a"
+OTHER_UUID = "00000000-0000-4000-8000-000000000001"
+MC_F = "veleroManagedClustersBackupName"
+CREDS_F = "veleroCredentialsBackupName"
+RES_F = "veleroResourcesBackupName"
+MINOR = {LEG: "2.14", ACT: "2.17"}
+JLANES = {LEG: LEGACY, ACT: V17}
+KINDS = [
+    ("passive_patch", LEG),
+    ("passive_patch", ACT),
+    ("passive_restore", LEG),
+    ("passive_restore", ACT),
+    ("full_restore", LEG),
+    ("full_restore", ACT),
+]
+T_RESOLVED = "2024-01-01T12:30:00Z"
+T_VERIFIED = "2024-01-01T13:00:00Z"
+T_COMPLETED = "2024-01-01T13:05:00Z"
+T_NAMES = "2024-01-01T13:06:00Z"
+T_POST_NAMES = "2024-01-01T14:00:00Z"
+T_POST_DONE = "2024-01-01T14:05:00Z"
+T_REVALIDATED = "2024-01-01T15:00:00Z"
+T_INTENT = "2024-01-01T15:01:00Z"
+T_ACCEPTED = "2024-01-01T15:02:00Z"
+T_ABSENT = "2024-01-01T15:03:00Z"
+T_RECOVERY = "2024-01-01T15:04:00Z"
+T_REPAIR = "2024-01-01T16:00:00+02:00"
+NORMALIZED = {MC_F: "skip", CREDS_F: "latest", RES_F: "latest"}
+COPIED = ["namespace", "name", "uid", "generation", "activation_method", "mutation_kind"]
+COPIED += ["cleanup_before_restore", "spec_fingerprint"]
+WAIVED_FLAG = "skip-managed-cluster-expectations"
+REPAIR = {
+    "actor": "operator@example.com",
+    "acknowledged_at": T_REPAIR,
+    "reason": "the Restore was deleted by this run; confirmed from the audit log",
+    "run_id": JRUN,
+    "operation_id": JOP,
+    "inspected_evidence": ["audit-log:restore-delete", "oc get restore"],
+}
+
+
+def tag(kind, contract):
+    return f"{kind.replace('_', '-')}-{'legacy' if contract == LEG else '2.17'}"
+
+
+def waiver(scope, **kw):
+    out = {
+        "flag": WAIVED_FLAG,
+        "journaled_at": T_NAMES,
+        "actor": "operator@example.com",
+        "reason": "the expected ManagedCluster list is stale",
+        "request_id": None,
+        "scope": scope,
+        "outcome": "waived",
+    }
+    out.update(kw)
+    return {key: value for key, value in out.items() if value is not DELETE}
+
+
+def precondition(**kw):
+    out = {
+        "generation": 3,
+        "resource_version": "1001",
+        "backup_fields_raw": {MC_F: "skip", CREDS_F: "latest", RES_F: "latest"},
+        "backup_fields_normalized": dict(NORMALIZED),
+        "status_restore_names": PRE,
+    }
+    out.update(kw)
+    return out
+
+
+def jbackups(kind, contract):
+    if kind == "passive_patch":
+        return copy.deepcopy(PATCH_FROZEN)
+    if kind == "passive_restore":
+        out = {"managed_clusters": proj(MC_B)}
+        if contract == LEG:
+            out.update(activation_credentials=proj(CRED_B), activation_resources_generic=proj(GEN_B))
+        return out
+    return {
+        "managed_clusters": proj(MC_B),
+        "credentials": proj(CRED_B),
+        "resources": proj(RES_B),
+        "resources_generic": proj(GEN_B),
+    }
+
+
+def completed_children(kind, contract):
+    """Return the raw children of a completed transaction, per child list."""
+    if kind == "passive_patch":
+        active = contract == ACT
+        return {
+            "managed_clusters": [p_mc],
+            "activation_credentials": [p_cred_act if active else p_cred],
+            "activation_resources_generic": [p_gen_act if active else p_gen],
+        }
+    out = {"managed_clusters": [child(gname(MC_B), MC_B)]}
+    if kind == "passive_restore":
+        if contract == LEG:
+            out["activation_credentials"] = [child(gname(CRED_B), CRED_B)]
+            out["activation_resources_generic"] = [child(gname(GEN_B), GEN_B)]
+        return out
+    out["credentials"] = [child(gname(CRED_B), CRED_B)]
+    out["resources"] = [child(gname(RES_B), RES_B)]
+    out["resources_generic"] = [child(gname(GEN_B), GEN_B)]
+    if contract == ACT:
+        out["credentials"].append(child(gname(CRED_B, True), CRED_B))
+        out["resources_generic"].append(child(gname(GEN_B, True), GEN_B))
+    return out
+
+
+def fingerprint(restore):
+    """Compute the spec fingerprint independently of both modules (August §6)."""
+    keys = ("activation_method", "mutation_kind", "backup_fields", "cleanup_before_restore")
+    text = json.dumps({key: restore[key] for key in keys}, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(text.encode("ascii")).hexdigest()
+
+
+def cleanup_record(state, restore=None, accepted=None, reason="absent_without_completion"):
+    out = {
+        "operation_id": None,
+        "state": state,
+        "namespace": None,
+        "name": None,
+        "uid": None,
+        "generation": None,
+        "activation_method": None,
+        "mutation_kind": None,
+        "cleanup_before_restore": None,
+        "spec_fingerprint": None,
+        "backup_fields": {},
+        "intent_at": None,
+        "final_get_resource_version": None,
+        "delete_accepted_at": None,
+        "absence_verified_at": None,
+        "completed_at": None,
+        "recovery": None,
+        "repair": None,
+    }
+    if state == "not_started":
+        return out
+    out.update({key: restore[key] for key in COPIED})
+    out.update(operation_id=JOP, intent_at=T_INTENT, backup_fields=copy.deepcopy(restore["backup_fields"]))
+    if accepted is None:
+        accepted = state in ("delete_accepted", "completed")
+    if accepted:
+        out.update(final_get_resource_version="2002", delete_accepted_at=T_ACCEPTED)
+    if state == "completed":
+        out.update(absence_verified_at=T_ABSENT, completed_at=T_ABSENT)
+    if state in ("recovery_required", "repaired"):
+        out["recovery"] = {
+            "required_at": T_RECOVERY,
+            "reason_code": reason,
+            "observed_uid": None,
+            "observed_resource_version": None,
+        }
+    if state == "repaired":
+        out["repair"] = copy.deepcopy(REPAIR)
+    return out
+
+
+def journal(kind, contract, stage="pre", state="not_started", accepted=None):
+    """Return a valid journal: pre-mutation, completed, post (post-activation done) or revalidated."""
+    restore = {
+        "namespace": NS,
+        "name": R,
+        "uid": RUID if kind == "passive_patch" else None,
+        "generation": None,
+        "activation_method": "full" if kind == "full_restore" else "passive",
+        "mutation_kind": kind,
+        "acm_minor": MINOR[contract],
+        "controller_contract": contract,
+        "backup_fields": {MC_F: MC_B, CREDS_F: CRED_B, RES_F: RES_B} if kind == "full_restore" else {MC_F: "latest"},
+        "cleanup_before_restore": "CleanupRestored",
+        "spec_fingerprint": None,
+        "backup_names_verified_at": None,
+        "completed_at": None,
+        "names_verified_at": None,
+        "teardown_revalidated_at": None,
+        "velero_restores": lists(),
+    }
+    if kind == "passive_patch":
+        restore["passive_patch_precondition"] = precondition()
+    doc = {
+        "schema_version": 2,
+        "run_id": JRUN,
+        "resolved_at": T_RESOLVED,
+        "backups": jbackups(kind, contract),
+        "restore": restore,
+        "cleanup": cleanup_record("not_started"),
+        "post_activation": {"names_verified_at": None, "completed_at": None},
+        "waiver": None,
+    }
+    if stage == "pre":
+        return doc
+    restore.update(uid=RUID, generation=4, backup_names_verified_at=T_VERIFIED, completed_at=T_COMPLETED)
+    restore.update(names_verified_at=T_NAMES, spec_fingerprint=fingerprint(restore))
+    restore["velero_restores"] = lists(**completed_children(kind, contract))
+    if stage in ("post", "revalidated"):
+        doc["post_activation"] = {"names_verified_at": T_POST_NAMES, "completed_at": T_POST_DONE}
+    if stage == "revalidated":
+        restore["teardown_revalidated_at"] = T_REVALIDATED
+        doc["cleanup"] = cleanup_record(state, restore, accepted)
+    return doc
+
+
+def at(doc, path):
+    target = doc
+    for part in path.split("."):
+        target = target[int(part)] if part.isdigit() else target[part]
+    return target
+
+
+def mut(doc, **changes):
+    """Return a deep copy with each dotted path ("__" separated) set, or removed with DELETE."""
+    out = copy.deepcopy(doc)
+    for path, value in changes.items():
+        *parents, last = path.split("__")
+        target = at(out, ".".join(parents)) if parents else out
+        if last.isdigit():
+            last = int(last)
+        if value is DELETE:
+            del target[last]
+        else:
+            target[last] = value
+    return out
+
+
+def jcase(case_id, lanes, spots, candidate, expect, r4_stricter=False):
+    result = ok(candidate) if expect is None else err(expect)
+    case(
+        case_id,
+        lanes,
+        drefs(lanes, *spots),
+        "validate_migration_journal",
+        {"candidate": candidate},
+        result,
+        r4_stricter,
+    )
+
+
+FULL_L = journal("full_restore", LEG, "completed")
+FULL_17 = journal("full_restore", ACT, "completed")
+PATCH_L = journal("passive_patch", LEG, "completed")
+PATCH_17 = journal("passive_patch", ACT, "completed")
+PR_LEG = journal("passive_restore", LEG, "completed")
+DONE_L = journal("full_restore", LEG, "revalidated")
+
+# validate_migration_journal: accepted lifecycle states ------------------------------------------------
+SHAPE = ("J:96-149", "A:152-169", "C:277-284")
+for kind, contract in KINDS:
+    lanes = JLANES[contract]
+    if kind != "passive_patch":
+        jcase(
+            f"journal-pre-mutation-{tag(kind, contract)}", lanes, SHAPE + ("J:238-243",), journal(kind, contract), None
+        )
+    jcase(
+        f"journal-completed-{tag(kind, contract)}",
+        lanes,
+        ("J:290-317", "A:544-612", "C:186-234"),
+        journal(kind, contract, "completed"),
+        None,
+    )
+for contract in (LEG, ACT):
+    jcase(
+        f"journal-passive-patch-pre-patch-null-generation-{tag('x', contract)[2:]}",
+        JLANES[contract],
+        ("C:267-272", "A:327-357"),
+        journal("passive_patch", contract),
+        None,
+    )
+    jcase(
+        f"journal-passive-patch-accepted-patch-{tag('x', contract)[2:]}",
+        JLANES[contract],
+        ("C:267-272", "J:238-243"),
+        mut(journal("passive_patch", contract), restore__generation=4),
+        None,
+    )
+PARTIAL = mut(
+    journal("full_restore", LEG),
+    restore__uid=RUID,
+    restore__generation=4,
+    restore__backup_names_verified_at=T_VERIFIED,
+    restore__velero_restores__managed_clusters=[entry(child(gname(MC_B), MC_B))],
+)
+PARTIAL["restore"]["spec_fingerprint"] = fingerprint(PARTIAL["restore"])
+jcase("journal-partial-bundle", LEGACY, ("J:305-317", "J:345-366"), PARTIAL, None)
+jcase(
+    "journal-partial-bundle-children-only",
+    LEGACY,
+    ("J:345-366", "A:537-542"),
+    mut(journal("full_restore", LEG), restore__velero_restores__credentials=[entry(child(gname(CRED_B), CRED_B))]),
+    None,
+)
+jcase(
+    "journal-passive-restore-legacy-without-generic-completed",
+    LEGACY,
+    ("C:161-167", "C:245-250", "C:285-289"),
+    mut(
+        PR_LEG,
+        backups__activation_resources_generic=DELETE,
+        restore__velero_restores__activation_resources_generic=[],
+    ),
+    None,
+)
+jcase(
+    "journal-full-2.17-three-credentials-before-completion",
+    V17,
+    ("C:186-234", "A:537-542"),
+    mut(
+        journal("full_restore", ACT),
+        restore__velero_restores__credentials=[
+            entry(child(gname(CRED_B), CRED_B)),
+            entry(child(gname(CRED_B, True), CRED_B)),
+            entry(child(gname(CRED_B) + "-x", CRED_B)),
+        ],
+    ),
+    None,
+)
+jcase(
+    "journal-passive-patch-activation-resources-consumed",
+    LEGACY,
+    ("A:572-580",),
+    mut(PATCH_L, restore__velero_restores__activation_resources=[entry(p_res)]),
+    None,
+)
+jcase(
+    "journal-passive-patch-completed-activation-waived",
+    LEGACY,
+    ("A:624-635", "J:454-470"),
+    mut(PATCH_L, restore__names_verified_at=None, waiver=waiver("activation")),
+    None,
+)
+jcase(
+    "journal-post-activation-completed",
+    LEGACY,
+    ("J:545-552",),
+    journal("full_restore", LEG, "post"),
+    None,
+)
+jcase(
+    "journal-post-activation-waived",
+    LEGACY,
+    ("J:545-552", "J:566-571"),
+    mut(
+        journal("full_restore", LEG, "post"),
+        post_activation__names_verified_at=None,
+        waiver=waiver("both", request_id="CHG-1234"),
+    ),
+    None,
+)
+jcase(
+    "journal-teardown-revalidated",
+    LEGACY,
+    ("J:614-653",),
+    journal("full_restore", LEG, "revalidated"),
+    None,
+)
+NON_ASCII = {
+    "managed_clusters": "acm-managed-clusters-schedule-čćž-20240101120000",
+    "credentials": "acm-credentials-schedule-ü-20240101120000",
+    "resources": "acm-resources-schedule-日本-20240101120000",
+}
+FULL_UNICODE = copy.deepcopy(FULL_L)
+for category, name in NON_ASCII.items():
+    FULL_UNICODE["backups"][category]["name"] = name
+    FULL_UNICODE["restore"]["velero_restores"][category] = [entry(child(gname(name), name))]
+FULL_UNICODE["restore"]["backup_fields"] = {
+    MC_F: NON_ASCII["managed_clusters"],
+    CREDS_F: NON_ASCII["credentials"],
+    RES_F: NON_ASCII["resources"],
+}
+FULL_UNICODE["restore"]["spec_fingerprint"] = fingerprint(FULL_UNICODE["restore"])
+jcase("journal-full-non-ascii-backup-names", LEGACY, ("J:275-288", "A:662-686"), FULL_UNICODE, None)
+CLEANUP_SPOTS = ("J:203-228", "J:657-672")
+for state in ("intent_persisted", "delete_accepted", "recovery_required", "completed", "repaired"):
+    jcase(
+        f"journal-cleanup-{state.replace('_', '-')}",
+        LEGACY,
+        CLEANUP_SPOTS,
+        journal("full_restore", LEG, "revalidated", state),
+        None,
+    )
+for state in ("recovery_required", "repaired"):
+    jcase(
+        f"journal-cleanup-{state.replace('_', '-')}-after-accepted-delete",
+        LEGACY,
+        CLEANUP_SPOTS,
+        journal("full_restore", LEG, "revalidated", state, accepted=True),
+        None,
+    )
+jcase(
+    "journal-cleanup-recovery-with-observed-replacement",
+    V17,
+    ("J:198-201", "J:746-748"),
+    mut(
+        journal("passive_patch", ACT, "revalidated", "recovery_required"),
+        cleanup__recovery__reason_code="replacement_uid",
+        cleanup__recovery__observed_uid="uid-replacement",
+        cleanup__recovery__observed_resource_version="3003",
+    ),
+    None,
+)
+jcase(
+    "journal-precondition-upstream-normalization-accepted",
+    ALL,
+    ("A:359-384",),
+    mut(
+        journal("passive_patch", LEG),
+        restore__passive_patch_precondition__backup_fields_raw={
+            MC_F: "\xa0SK\u0130P\t",
+            CREDS_F: " Latest\u3000",
+            RES_F: "LATEST\n",
+        },
+    ),
+    None,
+)
+
+# validate_migration_journal: rejects, in check order -----------------------------------------------------
+PRE_L = journal("full_restore", LEG)
+jcase("journal-not-an-object", ALL, SHAPE, [PRE_L], "malformed_journal")
+jcase("journal-missing-waiver-key", ALL, SHAPE, mut(PRE_L, waiver=DELETE), "malformed_journal")
+jcase(
+    "journal-schema-version-1",
+    ALL,
+    ("A:165-167", "C:277-279"),
+    mut(PRE_L, schema_version=1),
+    "unsupported_schema_version",
+)
+jcase("journal-schema-version-bool", ALL, SHAPE, mut(PRE_L, schema_version=True), "unsupported_schema_version")
+jcase("journal-schema-version-string", ALL, SHAPE, mut(PRE_L, schema_version="2"), "unsupported_schema_version")
+jcase("journal-run-id-not-uuid", ALL, SHAPE, mut(PRE_L, run_id="run-1"), "malformed_journal")
+jcase("journal-resolved-at-not-rfc3339", ALL, SHAPE, mut(PRE_L, resolved_at="2024-01-01 12:30:00"), "malformed_journal")
+jcase("journal-backups-not-an-object", ALL, SHAPE, mut(PRE_L, backups=[]), "malformed_journal")
+jcase("journal-waiver-wrong-type", ALL, SHAPE, mut(PRE_L, waiver=False), "malformed_journal")
+for name, path, value in (
+    ("missing-velero-restores", "restore__velero_restores", DELETE),
+    ("missing-cleanup-before-restore", "restore__cleanup_before_restore", DELETE),
+    ("missing-acm-minor", "restore__acm_minor", DELETE),
+    ("unknown-mutation-kind", "restore__mutation_kind", "passive"),
+    ("unknown-acm-minor", "restore__acm_minor", "2.18"),
+    ("unknown-controller-contract", "restore__controller_contract", "legacy"),
+    ("unknown-activation-method", "restore__activation_method", "patch"),
+    ("empty-namespace", "restore__namespace", ""),
+    ("empty-uid", "restore__uid", ""),
+    ("bool-generation", "restore__generation", True),
+    ("string-generation", "restore__generation", "4"),
+    ("uppercase-fingerprint", "restore__spec_fingerprint", "A" * 64),
+    ("short-fingerprint", "restore__spec_fingerprint", "a" * 63),
+    ("malformed-completed-at", "restore__completed_at", "2024-01-01T13:05:00"),
+    ("cleanup-before-restore-none", "restore__cleanup_before_restore", "None"),
+    ("backup-fields-not-an-object", "restore__backup_fields", [MC_B]),
+    ("velero-restores-missing-list", "restore__velero_restores__activation_resources", DELETE),
+    ("velero-restores-extra-list", "restore__velero_restores__credentials_active", []),
+    ("velero-restores-list-not-a-list", "restore__velero_restores__resources", {}),
+    ("precondition-on-full-restore", "restore__passive_patch_precondition", precondition()),
+):
+    jcase(f"journal-restore-{name}", ALL, SHAPE + ("A:309-325",), mut(PRE_L, **{path: value}), "malformed_restore")
+jcase(
+    "journal-restore-passive-patch-without-precondition",
+    ALL,
+    ("A:327-357",),
+    mut(journal("passive_patch", LEG), restore__passive_patch_precondition=DELETE),
+    "malformed_restore",
+)
+jcase(
+    "journal-full-restore-with-passive-method",
+    ALL,
+    ("J:166-171", "A:309-325"),
+    mut(PRE_L, restore__activation_method="passive"),
+    "activation_method_mismatch",
+)
+jcase(
+    "journal-passive-restore-with-full-method",
+    ALL,
+    ("J:166-171", "A:309-325"),
+    mut(journal("passive_restore", ACT), restore__activation_method="full"),
+    "activation_method_mismatch",
+)
+jcase(
+    "journal-contract-not-the-minor-contract",
+    ALL,
+    ("A:309-325", "C:284"),
+    mut(PRE_L, restore__acm_minor="2.17"),
+    "controller_contract_mismatch",
+)
+CATEGORY_SPOTS = ("A:213-242", "C:285-289")
+for name, doc, path, value in (
+    ("full-missing-resources-generic", PRE_L, "backups__resources_generic", DELETE),
+    ("full-with-activation-credentials", PRE_L, "backups__activation_credentials", proj(CRED_B)),
+    ("full-unknown-category", PRE_L, "backups__credentials_hive", proj(CRED_B)),
+    ("patch-missing-activation-resources", journal("passive_patch", LEG), "backups__activation_resources", DELETE),
+    ("patch-with-credentials", journal("passive_patch", LEG), "backups__credentials", proj(CRED_B)),
+    (
+        "passive-restore-legacy-missing-credentials",
+        journal("passive_restore", LEG),
+        "backups__activation_credentials",
+        DELETE,
+    ),
+    (
+        "passive-restore-legacy-with-resources",
+        journal("passive_restore", LEG),
+        "backups__activation_resources",
+        proj(RES_B),
+    ),
+    (
+        "passive-restore-2.17-with-credentials",
+        journal("passive_restore", ACT),
+        "backups__activation_credentials",
+        proj(CRED_B),
+    ),
+    (
+        "passive-restore-2.17-with-generic",
+        journal("passive_restore", ACT),
+        "backups__activation_resources_generic",
+        proj(GEN_B),
+    ),
+):
+    # Only a legacy passive_restore requires activation_credentials (amendment-2 §5.4).
+    lanes = V17 if "2.17" in name else LEGACY if name == "passive-restore-legacy-missing-credentials" else ALL
+    jcase(f"journal-categories-{name}", lanes, CATEGORY_SPOTS, mut(doc, **{path: value}), "invalid_category_set")
+for name, path, value, stricter in (
+    ("extra-field", "backups__credentials__start", "2024-01-01T12:00:00Z", False),
+    ("missing-warnings", "backups__credentials__warnings", DELETE, False),
+    ("errors-nonzero", "backups__credentials__errors", 1, False),
+    ("warnings-negative", "backups__credentials__warnings", -1, False),
+    ("warnings-bool", "backups__credentials__warnings", True, False),
+    ("phase-partially-failed", "backups__credentials__phase", "PartiallyFailed", False),
+    ("completed-at-malformed", "backups__credentials__completed_at", "yesterday", False),
+    ("empty-namespace", "backups__credentials__namespace", "", False),
+    ("empty-uid", "backups__credentials__uid", "", False),
+    ("name-latest", "backups__credentials__name", "latest", False),
+    ("name-skip", "backups__credentials__name", "skip", False),
+    ("name-normalizes-to-latest", "backups__credentials__name", " Latest", True),
+):
+    jcase(
+        f"journal-backup-projection-{name}",
+        ALL,
+        ("A:173-211", "J:160-164"),
+        mut(PRE_L, **{path: value}),
+        "malformed_backup_projection",
+        stricter,
+    )
+for name, doc, fields in (
+    ("passive-restore-concrete", journal("passive_restore", LEG), {MC_F: MC_B}),
+    ("passive-patch-uppercase-latest", journal("passive_patch", LEG), {MC_F: "Latest"}),
+    ("passive-with-skipped-field", journal("passive_restore", ACT), {MC_F: "latest", CREDS_F: "skip"}),
+    ("full-latest", PRE_L, {MC_F: "latest", CREDS_F: CRED_B, RES_F: RES_B}),
+    ("full-not-the-frozen-name", PRE_L, {MC_F: MC_B, CREDS_F: CRED_B, RES_F: RES_B + "-x"}),
+    ("full-missing-resources", PRE_L, {MC_F: MC_B, CREDS_F: CRED_B}),
+    ("full-with-generic-key", PRE_L, {MC_F: MC_B, CREDS_F: CRED_B, RES_F: RES_B, "veleroGenericBackupName": GEN_B}),
+):
+    jcase(
+        f"journal-backup-fields-{name}",
+        ALL,
+        ("J:151-196", "A:399-402", "C:109-122"),
+        mut(doc, restore__backup_fields=fields),
+        "invalid_backup_fields",
+    )
+PP_PRE = journal("passive_patch", LEG)
+PC = "restore__passive_patch_precondition"
+for name, changes, stricter in (
+    ("generation-zero", {f"{PC}__generation": 0}, False),
+    ("generation-bool", {f"{PC}__generation": True}, False),
+    ("resource-version-empty", {f"{PC}__resource_version": ""}, False),
+    ("extra-key", {f"{PC}__uid": RUID}, False),
+    ("raw-missing-key", {f"{PC}__backup_fields_raw__{RES_F}": DELETE}, False),
+    ("raw-empty", {f"{PC}__backup_fields_raw__{MC_F}": "", f"{PC}__backup_fields_normalized__{MC_F}": ""}, False),
+    ("raw-not-normalized-value", {f"{PC}__backup_fields_raw__{MC_F}": "latest"}, False),
+    (
+        "normalized-latest-managed-clusters",
+        {f"{PC}__backup_fields_raw__{MC_F}": "latest", f"{PC}__backup_fields_normalized__{MC_F}": "latest"},
+        False,
+    ),
+    ("raw-with-non-go-space", {f"{PC}__backup_fields_raw__{MC_F}": "skip\x1c"}, False),
+    (
+        "status-managed-clusters-non-empty",
+        {f"{PC}__status_restore_names__veleroManagedClustersRestoreName": "x"},
+        False,
+    ),
+    ("status-name-not-a-string", {f"{PC}__status_restore_names__veleroResourcesRestoreName": None}, False),
+    ("status-missing-generic", {f"{PC}__status_restore_names__veleroGenericResourcesRestoreName": DELETE}, False),
+):
+    jcase(
+        f"journal-precondition-{name}",
+        ALL,
+        ("A:327-357", "A:372-384"),
+        mut(PP_PRE, **changes),
+        "invalid_precondition",
+        stricter,
+    )
+CHILD_SPOTS = ("A:511-542", "C:277-284")
+VR = "restore__velero_restores"
+MC_ENTRY = entry(child(gname(MC_B), MC_B))
+for name, doc, changes, code in (
+    ("entry-extra-field", FULL_L, {f"{VR}__managed_clusters__0__owner": R}, "malformed_child_entry"),
+    ("entry-missing-uid", FULL_L, {f"{VR}__managed_clusters__0__uid": DELETE}, "malformed_child_entry"),
+    ("entry-failed-phase", FULL_L, {f"{VR}__resources__0__phase": "Failed"}, "malformed_child_entry"),
+    ("entry-not-an-object", FULL_L, {f"{VR}__resources__0": gname(RES_B)}, "malformed_child_entry"),
+    ("entry-other-namespace", FULL_L, {f"{VR}__resources__0__namespace": "default"}, "child_namespace_mismatch"),
+    (
+        "list-for-absent-category",
+        FULL_L,
+        {f"{VR}__activation_credentials": [entry(child(gname(CRED_B), CRED_B))]},
+        "child_list_not_permitted",
+    ),
+    (
+        "passive-restore-credentials-in-full-list",
+        journal("passive_restore", LEG),
+        {f"{VR}__credentials": [entry(child(gname(CRED_B), CRED_B))]},
+        "child_list_not_permitted",
+    ),
+    (
+        "passive-restore-generic-without-category",
+        mut(journal("passive_restore", LEG), backups__activation_resources_generic=DELETE),
+        {f"{VR}__activation_resources_generic": [entry(child(gname(GEN_B), GEN_B))]},
+        "child_list_not_permitted",
+    ),
+    ("entry-other-backup", FULL_L, {f"{VR}__resources__0__backup_name": GEN_B}, "child_backup_mismatch"),
+    (
+        "unsorted",
+        FULL_17,
+        {f"{VR}__credentials": list(reversed(FULL_17["restore"]["velero_restores"]["credentials"]))},
+        "child_list_unsorted",
+    ),
+    ("identical-duplicate", FULL_L, {f"{VR}__managed_clusters": [MC_ENTRY, MC_ENTRY]}, "duplicate_child_name"),
+    (
+        "same-name-different-uid",
+        FULL_L,
+        {f"{VR}__managed_clusters": [MC_ENTRY, dict(MC_ENTRY, uid="uid-other")]},
+        "duplicate_child_name",
+    ),
+):
+    jcase(f"journal-children-{name}", ALL, CHILD_SPOTS, mut(doc, **changes), code)
+jcase(
+    "journal-waiver-missing-actor",
+    ALL,
+    ("J:454-470",),
+    mut(PRE_L, waiver=waiver("both", actor=DELETE)),
+    "malformed_waiver",
+)
+jcase(
+    "journal-waiver-empty-reason", ALL, ("J:454-470",), mut(PRE_L, waiver=waiver("both", reason="")), "malformed_waiver"
+)
+jcase("journal-waiver-unknown-scope", ALL, ("J:454-470",), mut(PRE_L, waiver=waiver("all")), "malformed_waiver")
+jcase(
+    "journal-waiver-outcome-passed",
+    ALL,
+    ("J:454-470",),
+    mut(PRE_L, waiver=waiver("both", outcome="passed")),
+    "malformed_waiver",
+)
+jcase(
+    "journal-waiver-extra-key", ALL, ("J:454-470",), mut(PRE_L, waiver=waiver("both", expected=[])), "malformed_waiver"
+)
+jcase(
+    "journal-waiver-request-id-empty",
+    ALL,
+    ("J:454-470",),
+    mut(PRE_L, waiver=waiver("both", request_id="")),
+    "malformed_waiver",
+)
+jcase(
+    "journal-post-activation-missing-completed-at",
+    ALL,
+    ("J:135-137",),
+    mut(PRE_L, post_activation__completed_at=DELETE),
+    "invalid_post_activation",
+)
+jcase(
+    "journal-post-activation-malformed-timestamp",
+    ALL,
+    ("J:135-137",),
+    mut(PRE_L, post_activation__names_verified_at="soon"),
+    "invalid_post_activation",
+)
+for name, path, value in (
+    ("unknown-state", "cleanup__state", "deleting"),
+    ("missing-mutation-kind", "cleanup__mutation_kind", DELETE),
+    ("missing-cleanup-before-restore", "cleanup__cleanup_before_restore", DELETE),
+    ("operation-id-not-uuid", "cleanup__operation_id", "op-1"),
+    ("string-generation", "cleanup__generation", "4"),
+    ("backup-fields-null", "cleanup__backup_fields", None),
+    ("backup-field-empty-value", "cleanup__backup_fields", {MC_F: ""}),
+    ("recovery-not-an-object", "cleanup__recovery", "absent"),
+):
+    jcase(
+        f"journal-cleanup-shape-{name}",
+        ALL,
+        ("J:118-149", "C:282-283"),
+        mut(PRE_L, **{path: value}),
+        "malformed_cleanup",
+    )
+RR = journal("full_restore", LEG, "revalidated", "recovery_required")
+RP = journal("full_restore", LEG, "revalidated", "repaired")
+for name, changes in (
+    ("unknown-reason", {"cleanup__recovery__reason_code": "operator_deleted"}),
+    ("missing-required-at", {"cleanup__recovery__required_at": DELETE}),
+    ("extra-key", {"cleanup__recovery__detail": "x"}),
+    ("half-observed-pair", {"cleanup__recovery__observed_uid": "uid-replacement"}),
+):
+    jcase(f"journal-recovery-{name}", ALL, ("J:133", "J:198-201"), mut(RR, **changes), "malformed_recovery")
+for name, changes in (
+    ("empty-inspected-evidence", {"cleanup__repair__inspected_evidence": []}),
+    ("inspected-evidence-empty-reference", {"cleanup__repair__inspected_evidence": [""]}),
+    ("missing-actor", {"cleanup__repair__actor": DELETE}),
+    ("extra-key", {"cleanup__repair__state": "repaired"}),
+    ("run-id-not-uuid", {"cleanup__repair__run_id": "run"}),
+):
+    jcase(f"journal-repair-{name}", ALL, ("J:134", "J:766-787"), mut(RP, **changes), "malformed_repair")
+DA = journal("full_restore", LEG, "revalidated", "delete_accepted")
+CO = journal("full_restore", LEG, "revalidated", "completed")
+IP = journal("full_restore", LEG, "revalidated", "intent_persisted")
+for name, doc, changes in (
+    ("not-started-with-operation-id", PRE_L, {"cleanup__operation_id": JOP}),
+    ("not-started-with-backup-fields", PRE_L, {"cleanup__backup_fields": {MC_F: MC_B}}),
+    ("not-started-with-mutation-kind", PRE_L, {"cleanup__mutation_kind": "full_restore"}),
+    ("not-started-with-cleanup-before-restore", PRE_L, {"cleanup__cleanup_before_restore": "CleanupRestored"}),
+    ("intent-without-intent-at", IP, {"cleanup__intent_at": None}),
+    ("intent-without-cleanup-before-restore", IP, {"cleanup__cleanup_before_restore": None}),
+    ("intent-with-empty-backup-fields", IP, {"cleanup__backup_fields": {}}),
+    ("intent-with-accepted-delete", IP, {"cleanup__delete_accepted_at": T_ACCEPTED}),
+    ("intent-with-recovery", IP, {"cleanup__recovery": RR["cleanup"]["recovery"]}),
+    ("delete-accepted-without-resource-version", DA, {"cleanup__final_get_resource_version": None}),
+    ("delete-accepted-with-absence", DA, {"cleanup__absence_verified_at": T_ABSENT}),
+    ("recovery-with-half-accepted-pair", RR, {"cleanup__delete_accepted_at": T_ACCEPTED}),
+    ("recovery-without-recovery", RR, {"cleanup__recovery": None}),
+    ("recovery-with-repair", RR, {"cleanup__repair": REPAIR}),
+    ("completed-without-absence", CO, {"cleanup__absence_verified_at": None}),
+    ("completed-with-recovery", CO, {"cleanup__recovery": RR["cleanup"]["recovery"]}),
+    ("repaired-with-absence", RP, {"cleanup__absence_verified_at": T_ABSENT}),
+    ("repaired-with-completion", RP, {"cleanup__completed_at": T_ABSENT}),
+    ("repaired-without-repair", RP, {"cleanup__repair": None}),
+):
+    jcase(
+        f"journal-cleanup-state-{name}", ALL, ("J:203-220", "C:282-283"), mut(doc, **changes), "invalid_cleanup_state"
+    )
+jcase(
+    "journal-passive-patch-without-uid",
+    ALL,
+    ("C:267-272",),
+    mut(journal("passive_patch", LEG), restore__uid=None),
+    "patch_identity_missing",
+)
+jcase(
+    "journal-fingerprint-mismatch",
+    ALL,
+    ("J:275-288", "A:662-686"),
+    mut(PARTIAL, restore__spec_fingerprint="0" * 64),
+    "fingerprint_mismatch",
+)
+jcase(
+    "journal-fingerprint-without-mutation-kind",
+    ALL,
+    ("A:662-686",),
+    mut(
+        PARTIAL,
+        restore__spec_fingerprint=hashlib.sha256(
+            json.dumps(
+                {
+                    "activation_method": "full",
+                    "backup_fields": PARTIAL["restore"]["backup_fields"],
+                    "cleanup_before_restore": "CleanupRestored",
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("ascii")
+        ).hexdigest(),
+    ),
+    "fingerprint_mismatch",
+)
+for name in ("uid", "generation", "spec_fingerprint", "backup_names_verified_at"):
+    jcase(
+        f"journal-completed-without-{name.replace('_', '-')}",
+        ALL,
+        ("J:305-317", "J:345-352"),
+        mut(FULL_L, **{f"restore__{name}": None}),
+        "incomplete_bundle",
+    )
+COUNT_SPOTS = ("C:186-234", "A:544-612")
+for name, doc, lanes, changes in (
+    ("full-legacy-no-generic-child", FULL_L, LEGACY, {f"{VR}__resources_generic": []}),
+    ("full-legacy-no-managed-clusters-child", FULL_L, LEGACY, {f"{VR}__managed_clusters": []}),
+    ("full-2.17-one-credentials-child", FULL_17, V17, {f"{VR}__credentials__1": DELETE}),
+    ("full-2.17-one-generic-child", FULL_17, V17, {f"{VR}__resources_generic__1": DELETE}),
+    (
+        "full-2.17-three-credentials-children",
+        FULL_17,
+        V17,
+        {
+            f"{VR}__credentials": FULL_17["restore"]["velero_restores"]["credentials"]
+            + [entry(child(gname(CRED_B, True) + "x", CRED_B))]
+        },
+    ),
+    ("passive-restore-legacy-no-generic-child", PR_LEG, LEGACY, {f"{VR}__activation_resources_generic": []}),
+    ("passive-restore-legacy-no-credentials-child", PR_LEG, LEGACY, {f"{VR}__activation_credentials": []}),
+    (
+        "passive-restore-2.17-no-child",
+        journal("passive_restore", ACT, "completed"),
+        V17,
+        {f"{VR}__managed_clusters": []},
+    ),
+    ("passive-patch-legacy-no-generic-child", PATCH_L, LEGACY, {f"{VR}__activation_resources_generic": []}),
+    ("passive-patch-2.17-no-credentials-child", PATCH_17, V17, {f"{VR}__activation_credentials": []}),
+):
+    jcase(f"journal-completion-count-{name}", lanes, COUNT_SPOTS, mut(doc, **changes), "completion_child_count")
+jcase(
+    "journal-passive-patch-completed-names-unverified",
+    ALL,
+    ("A:624-635",),
+    mut(PATCH_L, restore__names_verified_at=None),
+    "activation_names_unverified",
+)
+jcase(
+    "journal-passive-patch-completed-post-activation-waiver-only",
+    ALL,
+    ("A:624-635", "J:459-466"),
+    mut(PATCH_L, restore__names_verified_at=None, waiver=waiver("post_activation")),
+    "activation_names_unverified",
+)
+jcase(
+    "journal-teardown-revalidated-before-post-activation",
+    ALL,
+    ("J:614-619", "J:647-649"),
+    mut(FULL_L, restore__teardown_revalidated_at=T_REVALIDATED),
+    "teardown_revalidation_premature",
+)
+jcase(
+    "journal-teardown-revalidated-before-completion",
+    ALL,
+    ("J:614-619",),
+    mut(PRE_L, restore__teardown_revalidated_at=T_REVALIDATED, post_activation__completed_at=T_POST_DONE),
+    "teardown_revalidation_premature",
+)
+POST = journal("full_restore", LEG, "post")
+jcase(
+    "journal-post-activation-completed-names-unverified",
+    ALL,
+    ("J:545-552",),
+    mut(POST, post_activation__names_verified_at=None),
+    "post_activation_names_unverified",
+)
+jcase(
+    "journal-post-activation-completed-activation-waiver-only",
+    ALL,
+    ("J:545-552", "J:459-466"),
+    mut(POST, post_activation__names_verified_at=None, waiver=waiver("activation")),
+    "post_activation_names_unverified",
+)
+jcase(
+    "journal-repair-run-id-mismatch",
+    ALL,
+    ("J:216-218", "J:774"),
+    mut(RP, cleanup__repair__run_id=OTHER_UUID),
+    "repair_identity_mismatch",
+)
+jcase(
+    "journal-repair-operation-id-mismatch",
+    ALL,
+    ("J:216-218", "J:774"),
+    mut(RP, cleanup__repair__operation_id=OTHER_UUID),
+    "repair_identity_mismatch",
+)
+for name, path, value in (
+    ("namespace", "cleanup__namespace", "default"),
+    ("uid", "cleanup__uid", "uid-other"),
+    ("generation", "cleanup__generation", 5),
+    ("activation-method", "cleanup__activation_method", "passive"),
+    ("mutation-kind", "cleanup__mutation_kind", "passive_restore"),
+    ("spec-fingerprint", "cleanup__spec_fingerprint", "0" * 64),
+    ("backup-fields", "cleanup__backup_fields", {MC_F: MC_B}),
+):
+    jcase(
+        f"journal-cleanup-copy-{name}",
+        ALL,
+        ("J:187-196", "J:220-228", "C:282-283"),
+        mut(IP, **{path: value}),
+        "cleanup_copy_mismatch",
+    )
+for name, changes in (
+    ("teardown-revalidation", {"restore__teardown_revalidated_at": None}),
+    ("post-activation-completion", {"restore__teardown_revalidated_at": None, "post_activation__completed_at": None}),
+):
+    jcase(
+        f"journal-cleanup-without-{name}",
+        ALL,
+        ("J:614-619", "J:621-653"),
+        mut(IP, **changes),
+        "cleanup_prerequisite_missing",
+    )
+
+# canonical_restore_projection and restore_spec_fingerprint (July §1a, August §6) --------------------------
+FP_SPOTS = ("J:275-288", "A:662-686")
+for label, doc in (
+    ("passive-patch", journal("passive_patch", LEG)),
+    ("passive-restore", journal("passive_restore", ACT)),
+    ("full-restore", FULL_L),
+    ("non-ascii", FULL_UNICODE),
+):
+    restore = doc["restore"]
+    keys = ("activation_method", "mutation_kind", "backup_fields", "cleanup_before_restore")
+    case(
+        f"projection-{label}",
+        ALL,
+        drefs(ALL, *FP_SPOTS),
+        "canonical_restore_projection",
+        {"journal": doc},
+        ok({key: restore[key] for key in keys}),
+    )
+    case(
+        f"fingerprint-golden-{label}",
+        ALL,
+        drefs(ALL, *FP_SPOTS),
+        "restore_spec_fingerprint",
+        {"journal": doc},
+        ok(fingerprint(restore)),
+    )
+for name, doc, code in (
+    ("not-an-object", "journal", "malformed_restore"),
+    ("missing-restore", {"backups": {}}, "malformed_restore"),
+    ("missing-mutation-kind", mut(PRE_L, restore__mutation_kind=DELETE), "malformed_restore"),
+    ("backup-field-not-a-string", mut(PRE_L, restore__backup_fields={MC_F: 1}), "malformed_restore"),
+):
+    for label, fn in (("projection", "canonical_restore_projection"), ("fingerprint", "restore_spec_fingerprint")):
+        case(f"{label}-{name}", ALL, drefs(ALL, *FP_SPOTS), fn, {"journal": doc}, err(code))
+
+# normalize_child_list (August §5 "Journaled child evidence", amendment-2 §5.3) ------------------------
+fn = "normalize_child_list"
+E_MC, E_CRED = entry(child(gname(MC_B), MC_B)), entry(child(gname(CRED_B), CRED_B))
+E_EARLY = entry(child("a-" + gname(CRED_B), CRED_B))
+NCL = drefs(ALL, "A:537-542", "C:280-281")
+case("child-list-sorts", ALL, NCL, fn, {"entries": [E_MC, E_CRED, E_EARLY]}, ok([E_EARLY, E_CRED, E_MC]))
+case("child-list-collapses-identical-duplicate", ALL, NCL, fn, {"entries": [E_MC, E_CRED, E_MC]}, ok([E_CRED, E_MC]))
+case("child-list-empty", ALL, NCL, fn, {"entries": []}, ok([]))
+case(
+    "child-list-conflicting-duplicate-blocks",
+    ALL,
+    NCL,
+    fn,
+    {"entries": [E_MC, dict(E_MC, uid="uid-other")]},
+    err("conflicting_child_evidence"),
+)
+case("child-list-not-a-list", ALL, NCL, fn, {"entries": E_MC}, err("malformed_child_entry"))
+case("child-list-entry-without-name", ALL, NCL, fn, {"entries": [dict(E_MC, name="")]}, err("malformed_child_entry"))
+
+# validate_cleanup_transition (July §4a state machine) --------------------------------------------------
+fn = "validate_cleanup_transition"
+CT = drefs(ALL, "J:657-672")
+C_NS = cleanup_record("not_started")
+DR = DONE_L["restore"]
+C_IP = cleanup_record("intent_persisted", DR)
+C_DA = cleanup_record("delete_accepted", DR)
+C_RR = cleanup_record("recovery_required", DR)
+C_RR_ACC = cleanup_record("recovery_required", DR, accepted=True)
+C_CO = cleanup_record("completed", DR)
+C_RP = cleanup_record("repaired", DR)
+C_RP_ACC = cleanup_record("repaired", DR, accepted=True)
+C_DA_RETRY = dict(C_DA, final_get_resource_version="2010", delete_accepted_at="2024-01-01T15:10:00Z")
+
+
+def ctrans(case_id, previous, candidate, expect):
+    result = ok(candidate) if expect is None else err(expect)
+    case(case_id, ALL, CT, fn, {"previous_cleanup": previous, "candidate_cleanup": candidate}, result)
+
+
+for name, previous, candidate in (
+    ("not-started-idempotent", C_NS, C_NS),
+    ("not-started-to-intent", C_NS, C_IP),
+    ("intent-idempotent", C_IP, C_IP),
+    ("intent-to-delete-accepted", C_IP, C_DA),
+    ("intent-to-recovery", C_IP, C_RR),
+    ("delete-accepted-retry", C_DA, C_DA_RETRY),
+    ("delete-accepted-to-completed", C_DA, C_CO),
+    ("delete-accepted-to-recovery", C_DA, C_RR_ACC),
+    ("recovery-idempotent", C_RR, C_RR),
+    ("recovery-to-repaired", C_RR, C_RP),
+    ("recovery-after-accepted-to-repaired", C_RR_ACC, C_RP_ACC),
+    ("completed-idempotent", C_CO, C_CO),
+    ("repaired-idempotent", C_RP, C_RP),
+):
+    ctrans(f"cleanup-edge-{name}", previous, candidate, None)
+for name, previous, candidate in (
+    ("not-started-to-delete-accepted", C_NS, C_DA),
+    ("not-started-to-completed", C_NS, C_CO),
+    ("intent-to-completed", C_IP, C_CO),
+    ("intent-to-repaired", C_IP, C_RP),
+    ("intent-to-not-started", C_IP, C_NS),
+    ("delete-accepted-to-intent", C_DA, C_IP),
+    ("delete-accepted-to-repaired", C_DA, C_RP_ACC),
+    ("recovery-to-completed", C_RR_ACC, C_CO),
+    ("recovery-to-intent", C_RR, C_IP),
+    ("completed-to-recovery", C_CO, C_RR_ACC),
+    ("completed-to-not-started", C_CO, C_NS),
+    ("repaired-to-recovery", C_RP, C_RR),
+    ("repaired-to-completed", C_RP_ACC, C_CO),
+):
+    ctrans(f"cleanup-edge-{name}-blocks", previous, candidate, "invalid_cleanup_transition")
+for name, previous, candidate in (
+    ("intent-rewrites-intent-at", C_IP, dict(C_IP, intent_at="2024-01-01T15:09:00Z")),
+    ("intent-to-delete-accepted-new-operation", C_IP, dict(C_DA, operation_id=OTHER_UUID)),
+    ("retry-rewrites-intent-at", C_DA, dict(C_DA_RETRY, intent_at="2024-01-01T15:09:00Z")),
+    ("completed-rewrites-accepted-pair", C_DA, dict(C_CO, delete_accepted_at="2024-01-01T15:10:00Z")),
+    ("recovery-drops-accepted-pair", C_DA, C_RR),
+    ("recovery-invents-accepted-pair", C_IP, C_RR_ACC),
+    ("recovery-rewritten", C_RR, dict(C_RR, recovery=dict(C_RR["recovery"], required_at=T_REPAIR))),
+    ("repaired-rewrites-recovery", C_RR, dict(C_RP, recovery=dict(C_RP["recovery"], reason_code="replacement_uid"))),
+    ("repaired-drops-accepted-pair", C_RR_ACC, C_RP),
+    ("completed-rewritten", C_CO, dict(C_CO, completed_at="2024-01-01T15:30:00Z")),
+):
+    ctrans(f"cleanup-edge-{name}-blocks", previous, candidate, "frozen_field_changed")
+ctrans("cleanup-edge-invalid-candidate-blocks", C_IP, dict(C_DA, delete_accepted_at=None), "invalid_cleanup_state")
+ctrans("cleanup-edge-invalid-previous-blocks", dict(C_NS, state="deleting"), C_IP, "malformed_cleanup")
+
+# validate_journal_transition (July §§1a/4a, August §§4-5 and 10) --------------------------------------
+fn = "validate_journal_transition"
+JT = ("J:220-228", "J:354-366", "A:537-542", "A:777-788")
+
+
+def jtrans(case_id, lanes, spots, previous, candidate, expect):
+    result = ok(candidate) if expect is None else err(expect)
+    case(case_id, lanes, drefs(lanes, *spots), fn, {"previous": previous, "candidate": candidate}, result)
+
+
+for kind, contract in KINDS:
+    jtrans(
+        f"transition-freeze-write-{tag(kind, contract)}",
+        JLANES[contract],
+        ("A:152-163", "J:92-94"),
+        None,
+        journal(kind, contract),
+        None,
+    )
+jtrans("transition-freeze-write-completed-blocks", ALL, ("A:152-163",), None, FULL_L, "invalid_freeze_write")
+jtrans("transition-freeze-write-with-cleanup-blocks", ALL, ("A:152-163",), None, DONE_L, "invalid_freeze_write")
+jtrans("transition-freeze-write-invalid-blocks", ALL, ("A:152-163",), None, mut(PRE_L, run_id=""), "malformed_journal")
+jtrans("transition-invalid-previous-blocks", ALL, ("A:165-169",), mut(PRE_L, run_id=""), PRE_L, "malformed_journal")
+PP_PATCHED = mut(journal("passive_patch", LEG), restore__generation=4)
+for name, lanes, previous, candidate in (
+    ("idempotent", ALL, PRE_L, PRE_L),
+    ("pre-to-partial", LEGACY, PRE_L, PARTIAL),
+    ("partial-to-completed", LEGACY, PARTIAL, FULL_L),
+    ("pre-to-completed", LEGACY, PRE_L, FULL_L),
+    ("passive-patch-accepted", LEGACY, journal("passive_patch", LEG), PP_PATCHED),
+    ("passive-patch-completed", LEGACY, PP_PATCHED, PATCH_L),
+    ("completed-to-post", LEGACY, FULL_L, POST),
+    ("post-to-revalidated", LEGACY, POST, journal("full_restore", LEG, "revalidated")),
+    ("cleanup-intent", LEGACY, journal("full_restore", LEG, "revalidated"), IP),
+    ("cleanup-delete-accepted", LEGACY, IP, DA),
+    ("cleanup-retry", LEGACY, DA, mut(DA, cleanup=C_DA_RETRY)),
+    ("cleanup-completed", LEGACY, DA, CO),
+    ("cleanup-repaired", LEGACY, RR, RP),
+    (
+        "child-added-before-existing",
+        LEGACY,
+        PARTIAL,
+        mut(PARTIAL, **{f"{VR}__managed_clusters": [entry(child("a-" + gname(MC_B), MC_B)), MC_ENTRY]}),
+    ),
+    ("waiver-recorded", LEGACY, PRE_L, mut(PRE_L, waiver=waiver("both"))),
+):
+    jtrans(f"transition-{name}", lanes, JT, previous, candidate, None)
+for name, previous, candidate in (
+    ("run-id", PRE_L, mut(PRE_L, run_id=OTHER_UUID)),
+    ("resolved-at", PRE_L, mut(PRE_L, resolved_at=T_VERIFIED)),
+    ("backup-uid", PRE_L, mut(PRE_L, backups__credentials__uid="uid-replacement")),
+    ("backup-warnings", PRE_L, mut(PRE_L, backups__credentials__warnings=1)),
+    (
+        "category-removed",
+        journal("passive_restore", LEG),
+        mut(journal("passive_restore", LEG), backups__activation_resources_generic=DELETE),
+    ),
+    (
+        "category-added",
+        mut(journal("passive_restore", LEG), backups__activation_resources_generic=DELETE),
+        journal("passive_restore", LEG),
+    ),
+    ("restore-name", PRE_L, mut(PRE_L, restore__name="acm-restore-2")),
+    ("acm-minor", PRE_L, mut(PRE_L, restore__acm_minor="2.15")),
+    (
+        "precondition",
+        journal("passive_patch", LEG),
+        mut(journal("passive_patch", LEG), restore__passive_patch_precondition__resource_version="1002"),
+    ),
+    ("restore-uid", PARTIAL, mut(PARTIAL, restore__uid="uid-replacement")),
+    ("restore-generation", PARTIAL, mut(PARTIAL, restore__generation=5)),
+    ("restore-uid-cleared", PARTIAL, mut(PARTIAL, restore__uid=None)),
+    ("backup-names-verified-at", PARTIAL, mut(PARTIAL, restore__backup_names_verified_at=T_COMPLETED)),
+    ("completed-at", FULL_L, mut(FULL_L, restore__completed_at=T_NAMES)),
+    ("names-verified-at", FULL_L, mut(FULL_L, restore__names_verified_at=T_COMPLETED)),
+    ("post-activation-completed-at", POST, mut(POST, post_activation__completed_at=T_REVALIDATED)),
+    ("post-activation-names-cleared", POST, mut(POST, post_activation__names_verified_at=None, waiver=waiver("both"))),
+    (
+        "teardown-revalidated-at",
+        journal("full_restore", LEG, "revalidated"),
+        mut(journal("full_restore", LEG, "revalidated"), restore__teardown_revalidated_at=T_INTENT),
+    ),
+):
+    jtrans(f"transition-{name}-changed-blocks", ALL, JT, previous, candidate, "frozen_field_changed")
+for name, previous, candidate in (
+    ("child-removed", PARTIAL, mut(PARTIAL, **{f"{VR}__managed_clusters": []})),
+    (
+        "child-uid-rewritten",
+        PARTIAL,
+        mut(PARTIAL, **{f"{VR}__managed_clusters__0__uid": "uid-other"}),
+    ),
+):
+    jtrans(f"transition-{name}-blocks", ALL, JT, previous, candidate, "child_entry_rewritten")
+jtrans(
+    "transition-cleanup-skips-intent-blocks",
+    ALL,
+    ("J:657-672",),
+    journal("full_restore", LEG, "revalidated"),
+    DA,
+    "invalid_cleanup_transition",
+)
+jtrans("transition-cleanup-terminal-blocks", ALL, ("J:668-670",), CO, RR, "invalid_cleanup_transition")
+jtrans(
+    "transition-cleanup-retry-rewrites-operation-blocks",
+    ALL,
+    ("J:663",),
+    DA,
+    mut(DA, cleanup=dict(C_DA_RETRY, operation_id=OTHER_UUID)),
+    "frozen_field_changed",
+)
+
+# validate_waiver (July §2 and §4) ---------------------------------------------------------------------
+fn = "validate_waiver"
+WV = drefs(ALL, "J:454-470", "J:566-571")
+NAMES = ["cluster-a", "cluster-b"]
+
+
+def wcase(case_id, candidate, expected_names, scope, expect):
+    result = ok(candidate) if expect is None else err(expect)
+    inp = {"candidate": candidate, "expected_names": expected_names, "scope": scope}
+    case(case_id, ALL, WV, fn, inp, result)
+
+
+wcase("waiver-activation", waiver("activation"), NAMES, "activation", None)
+wcase("waiver-both-covers-post-activation", waiver("both", request_id="CHG-1"), NAMES, "post_activation", None)
+wcase("waiver-both-covers-both", waiver("both"), NAMES, "both", None)
+wcase("waiver-null-blocks", None, NAMES, "activation", "malformed_waiver")
+wcase("waiver-missing-reason-blocks", waiver("activation", reason=DELETE), NAMES, "activation", "malformed_waiver")
+wcase(
+    "waiver-journaled-at-malformed-blocks",
+    waiver("activation", journaled_at="now"),
+    NAMES,
+    "activation",
+    "malformed_waiver",
+)
+wcase("waiver-scope-not-covered-blocks", waiver("activation"), NAMES, "post_activation", "waiver_scope_mismatch")
+wcase("waiver-partial-scope-for-both-blocks", waiver("post_activation"), NAMES, "both", "waiver_scope_mismatch")
+wcase("waiver-unknown-requested-scope-blocks", waiver("both"), NAMES, "teardown", "waiver_scope_mismatch")
+wcase("waiver-no-expected-names-blocks", waiver("both"), [], "activation", "waiver_expected_names_empty")
+wcase("waiver-expected-names-not-a-list-blocks", waiver("both"), "cluster-a", "activation", "malformed_expected_names")
+wcase("waiver-expected-name-empty-blocks", waiver("both"), ["cluster-a", ""], "activation", "malformed_expected_names")
+
+# validate_repair (July §4a "Resume and operator repair") ------------------------------------------------
+fn = "validate_repair"
+RPS = drefs(ALL, "J:216-218", "J:766-787")
+RR_ACC = journal("full_restore", LEG, "revalidated", "recovery_required", accepted=True)
+
+
+def rcase(case_id, candidate, doc, expect):
+    result = expect if isinstance(expect, dict) else err(expect)
+    case(case_id, ALL, RPS, fn, {"candidate": candidate, "journal": doc}, result)
+
+
+rcase("repair-recovery-required", REPAIR, RR, ok(dict(RR["cleanup"], state="repaired", repair=REPAIR)))
+rcase(
+    "repair-preserves-accepted-delete",
+    REPAIR,
+    RR_ACC,
+    ok(dict(RR_ACC["cleanup"], state="repaired", repair=REPAIR)),
+)
+rcase("repair-delete-accepted-blocks", REPAIR, DA, "repair_not_permitted")
+rcase("repair-completed-blocks", REPAIR, CO, "repair_not_permitted")
+rcase("repair-repaired-blocks", REPAIR, RP, "repair_not_permitted")
+rcase("repair-missing-actor-blocks", dict(REPAIR, actor=""), RR, "malformed_repair")
+rcase("repair-extra-key-blocks", dict(REPAIR, absence_verified_at=T_ABSENT), RR, "malformed_repair")
+rcase("repair-no-inspected-evidence-blocks", dict(REPAIR, inspected_evidence=[]), RR, "malformed_repair")
+rcase("repair-run-id-mismatch-blocks", dict(REPAIR, run_id=OTHER_UUID), RR, "repair_identity_mismatch")
+rcase("repair-operation-id-mismatch-blocks", dict(REPAIR, operation_id=OTHER_UUID), RR, "repair_identity_mismatch")
+rcase("repair-invalid-journal-blocks", REPAIR, mut(RR, cleanup__recovery=None), "invalid_cleanup_state")
 
 
 def build():

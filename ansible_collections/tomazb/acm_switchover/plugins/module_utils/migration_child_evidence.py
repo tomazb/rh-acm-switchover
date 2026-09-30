@@ -104,13 +104,13 @@ _ONE_SHOT_ROLES[("full_restore", _ACTIVE)] = _FULL_ROLES + (
 _ACTIVE_PUBLISHED_ROLE = {"CredentialsActive": "Credentials", "ResourcesGenericActive": "ResourcesGeneric"}
 # Frozen Backup categories per mutation: (required, optional). Amendment-2
 # section 5.4 for passive_restore; August sections 3 and 4 for the others.
-_FROZEN_CATEGORIES = {
+FROZEN_CATEGORIES = {
     ("passive_restore", _LEGACY): (("managed_clusters", "activation_credentials"), ("activation_resources_generic",)),
     ("passive_restore", _ACTIVE): (("managed_clusters",), ()),
     ("full_restore", _LEGACY): (("managed_clusters", "credentials", "resources", "resources_generic"), ()),
     ("full_restore", _ACTIVE): (("managed_clusters", "credentials", "resources", "resources_generic"), ()),
 }
-_PASSIVE_PATCH_CATEGORIES = (
+PASSIVE_PATCH_CATEGORIES = (
     "managed_clusters",
     "activation_credentials",
     "activation_resources",
@@ -355,7 +355,7 @@ def passive_patch_completion(
     (amendment-2 section 5.2).
     """
     _require_contract(controller_contract)
-    _require_categories(frozen_backups, _PASSIVE_PATCH_CATEGORIES, ())
+    _require_categories(frozen_backups, PASSIVE_PATCH_CATEGORIES, ())
     before = _status_names(precondition_status_names)
     after = _status_names(status_names)
     if before[_MC] != "":
@@ -389,6 +389,25 @@ def passive_patch_completion(
     for raw in passive_patch_cohort(controller_contract, [raw for _, raw in children], after):
         _child_entry(raw, *owner, None)
     return _child_lists(consumed)
+
+
+def normalize_child_list(entries: Any) -> List[Dict[str, Any]]:
+    """Return one child list sorted by name, collapsing identical duplicate entries.
+
+    August section 5 "Journaled child evidence": a duplicate locator collapses
+    only when every observed field agrees; conflicting evidence is malformed.
+    """
+    if not isinstance(entries, list) or not all(
+        isinstance(entry, dict) and _non_empty_str(entry.get("name")) for entry in entries
+    ):
+        raise MigrationEvidenceError("malformed_child_entry", "a child list must hold entries with non-empty names")
+    by_name: Dict[str, Dict[str, Any]] = {}
+    for entry in entries:
+        if by_name.setdefault(entry["name"], entry) != entry:
+            raise MigrationEvidenceError(
+                "conflicting_child_evidence", f"child {entry['name']} has conflicting evidence"
+            )
+    return [by_name[name] for name in sorted(by_name)]
 
 
 def _non_empty_str(value: Any) -> bool:
@@ -432,7 +451,7 @@ def _one_shot_roles(
 ) -> Tuple[Tuple[str, str, Optional[str]], ...]:
     _require_kind(mutation_kind, _ONE_SHOT_KINDS)
     _require_contract(controller_contract)
-    _require_categories(frozen_backups, *_FROZEN_CATEGORIES[(mutation_kind, controller_contract)])
+    _require_categories(frozen_backups, *FROZEN_CATEGORIES[(mutation_kind, controller_contract)])
     # An absent optional category is the immutable no-candidate decision: no role.
     return tuple(role for role in _ONE_SHOT_ROLES[(mutation_kind, controller_contract)] if role[1] in frozen_backups)
 
@@ -580,15 +599,11 @@ def _child_entry(
 
 
 def _child_lists(pairs: Any) -> Dict[str, List[Dict[str, Any]]]:
-    """Return the seven name-sorted child lists; a repeated name must repeat the entry."""
-    lists: Dict[str, Dict[str, Dict[str, Any]]] = {key: {} for key in VELERO_RESTORE_LISTS}
+    """Return the seven name-sorted child lists."""
+    lists: Dict[str, List[Dict[str, Any]]] = {key: [] for key in VELERO_RESTORE_LISTS}
     for category, entry in pairs:
-        existing = lists[category].setdefault(entry["name"], entry)
-        if existing != entry:
-            raise MigrationEvidenceError(
-                "conflicting_child_evidence", f"child {entry['name']} has conflicting evidence"
-            )
-    return {key: [by_name[name] for name in sorted(by_name)] for key, by_name in lists.items()}
+        lists[category].append(entry)
+    return {key: normalize_child_list(entries) for key, entries in lists.items()}
 
 
 def _trim_active(name: str) -> str:

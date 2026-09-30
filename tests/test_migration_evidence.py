@@ -1,6 +1,7 @@
 """R4-04 migration-evidence pure model: Python CLI unit tests (plan Task 2)."""
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from lib.migration_child_evidence import (
     freeze_one_shot_backups,
     generated_child_name,
     is_owned_by,
+    normalize_child_list,
     one_shot_completion,
     one_shot_required_predictions,
     passive_patch_cohort,
@@ -29,6 +31,15 @@ from lib.migration_evidence import (
     predict_latest_backup,
     select_correlated_evidence,
     select_latest_evidence,
+)
+from lib.migration_journal import (
+    canonical_restore_projection,
+    restore_spec_fingerprint,
+    validate_cleanup_transition,
+    validate_journal_transition,
+    validate_migration_journal,
+    validate_repair,
+    validate_waiver,
 )
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "r4_04_migration_evidence_vectors.json"
@@ -50,6 +61,14 @@ FUNCTIONS = {
     "passive_patch_completion": passive_patch_completion,
     "predict_one_shot_child_names": predict_one_shot_child_names,
     "validate_velero_child": validate_velero_child,
+    "normalize_child_list": normalize_child_list,
+    "canonical_restore_projection": canonical_restore_projection,
+    "restore_spec_fingerprint": restore_spec_fingerprint,
+    "validate_migration_journal": validate_migration_journal,
+    "validate_cleanup_transition": validate_cleanup_transition,
+    "validate_journal_transition": validate_journal_transition,
+    "validate_waiver": validate_waiver,
+    "validate_repair": validate_repair,
 }
 NS = "open-cluster-management-backup"
 
@@ -139,3 +158,39 @@ def test_selected_evidence_is_detached_from_the_inventory():
         [generic], "acm-resources-schedule-20240101120000", "ResourcesGeneric", NS
     )
     assert decision == "selected" and evidence is not generic and evidence["uid"] == generic["metadata"]["uid"]
+
+
+def _case_input(case_id):
+    return copy.deepcopy(next(case for case in CASES if case["id"] == case_id)["input"])
+
+
+def test_fingerprint_escapes_non_ascii_like_json_dumps():
+    restore = {
+        "activation_method": "full",
+        "mutation_kind": "full_restore",
+        "backup_fields": {"veleroManagedClustersBackupName": "acm-managed-clusters-schedule-\u010d-20240101120000"},
+        "cleanup_before_restore": "CleanupRestored",
+    }
+    expected = hashlib.sha256(
+        b'{"activation_method":"full","backup_fields":{"veleroManagedClustersBackupName":'
+        b'"acm-managed-clusters-schedule-\\u010d-20240101120000"},"cleanup_before_restore":"CleanupRestored",'
+        b'"mutation_kind":"full_restore"}'
+    ).hexdigest()
+    assert restore_spec_fingerprint({"restore": restore}) == expected
+
+
+def test_validated_journal_is_detached_from_the_candidate():
+    candidate = _case_input("journal-completed-full-restore-2.17")["candidate"]
+    validated = validate_migration_journal(candidate)
+    assert validated == candidate and validated is not candidate
+    validated["restore"]["velero_restores"]["credentials"].clear()
+    assert len(candidate["restore"]["velero_restores"]["credentials"]) == 2
+
+
+def test_repair_never_synthesizes_absence_or_completion():
+    inputs = _case_input("repair-preserves-accepted-delete")
+    repaired = validate_repair(**inputs)
+    assert repaired["state"] == "repaired"
+    assert repaired["absence_verified_at"] is None and repaired["completed_at"] is None
+    assert repaired["delete_accepted_at"] == inputs["journal"]["cleanup"]["delete_accepted_at"]
+    assert repaired["recovery"] == inputs["journal"]["cleanup"]["recovery"]

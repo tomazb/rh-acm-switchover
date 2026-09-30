@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_ch
     freeze_one_shot_backups,
     generated_child_name,
     is_owned_by,
+    normalize_child_list,
     one_shot_completion,
     one_shot_required_predictions,
     passive_patch_cohort,
@@ -29,6 +31,15 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_ev
     predict_latest_backup,
     select_correlated_evidence,
     select_latest_evidence,
+)
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_journal import (
+    canonical_restore_projection,
+    restore_spec_fingerprint,
+    validate_cleanup_transition,
+    validate_journal_transition,
+    validate_migration_journal,
+    validate_repair,
+    validate_waiver,
 )
 
 # The shared vectors live in the repository's root test fixtures; outside a
@@ -52,6 +63,14 @@ FUNCTIONS = {
     "passive_patch_completion": passive_patch_completion,
     "predict_one_shot_child_names": predict_one_shot_child_names,
     "validate_velero_child": validate_velero_child,
+    "normalize_child_list": normalize_child_list,
+    "canonical_restore_projection": canonical_restore_projection,
+    "restore_spec_fingerprint": restore_spec_fingerprint,
+    "validate_migration_journal": validate_migration_journal,
+    "validate_cleanup_transition": validate_cleanup_transition,
+    "validate_journal_transition": validate_journal_transition,
+    "validate_waiver": validate_waiver,
+    "validate_repair": validate_repair,
 }
 NS = "open-cluster-management-backup"
 
@@ -141,3 +160,28 @@ def test_fractional_name_suffix_reaches_the_fallback():
     near = _backup("acm-resources-generic-schedule-fallback", start="2024-01-01T12:00:30.5Z")
     source = "acm-resources-schedule-20240101120000.5"
     assert predict_correlated_backup([near], source, "ResourcesGeneric") == ("selected", near)
+
+
+def test_fingerprint_escapes_non_ascii_like_json_dumps():
+    restore = {
+        "activation_method": "full",
+        "mutation_kind": "full_restore",
+        "backup_fields": {"veleroManagedClustersBackupName": "acm-managed-clusters-schedule-\u010d-20240101120000"},
+        "cleanup_before_restore": "CleanupRestored",
+    }
+    expected = hashlib.sha256(
+        b'{"activation_method":"full","backup_fields":{"veleroManagedClustersBackupName":'
+        b'"acm-managed-clusters-schedule-\\u010d-20240101120000"},"cleanup_before_restore":"CleanupRestored",'
+        b'"mutation_kind":"full_restore"}'
+    ).hexdigest()
+    assert restore_spec_fingerprint({"restore": restore}) == expected
+    assert canonical_restore_projection({"restore": restore}) == restore
+
+
+def test_normalize_child_list_collapses_identical_duplicates():
+    entry = {"namespace": "ns", "name": "b", "uid": "u", "backup_name": "x", "phase": "Completed"}
+    earlier = dict(entry, name="a")
+    assert normalize_child_list([entry, earlier, entry]) == [earlier, entry]
+    with pytest.raises(MigrationEvidenceError) as excinfo:
+        normalize_child_list([entry, dict(entry, uid="v")])
+    assert excinfo.value.code == "conflicting_child_evidence"
