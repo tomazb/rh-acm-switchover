@@ -1998,3 +1998,16 @@ class TestInterruptedStateWrite:
                 sm._do_flush(force=False, suppress_errors=True)
         assert sm._dirty is True
         assert sm._flushing is False
+
+    def test_an_interrupt_before_the_write_starts_leaves_the_state_dirty(self, tmp_path):
+        """A SIGINT between clearing the dirty flag and the write must not lose the pending state."""
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm.flush_state()
+        sm.state["config"]["marker"] = "after"
+        sm._dirty = True
+        with patch("lib.utils._utc_timestamp", side_effect=KeyboardInterrupt):
+            with pytest.raises(KeyboardInterrupt):
+                sm.save_state()
+        assert sm._dirty is True
+        sm.save_state()
+        assert json.loads((tmp_path / "state.json").read_text())["config"]["marker"] == "after"
