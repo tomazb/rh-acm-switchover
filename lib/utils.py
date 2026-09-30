@@ -144,6 +144,19 @@ def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _fsync_directory(path: str) -> None:
+    """Make a rename or unlink in ``path`` durable, or raise.
+
+    Every failure propagates, including ENOTSUP/EINVAL: R4-05 section 2 exempts a filesystem
+    only through an explicit up-front capability determination, and none is made here.
+    """
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 class StateManager:
     """Manages switchover state for idempotent operations."""
 
@@ -366,6 +379,7 @@ class StateManager:
 
         def _write_temp_file() -> None:
             error: Optional[Exception] = None
+            replaced = False
             try:
                 # Write to temporary file with restrictive permissions
                 fd = os.open(
@@ -380,10 +394,25 @@ class StateManager:
 
                 # Atomic rename (POSIX guarantees this is atomic on same filesystem)
                 os.replace(temp_file, self.state_file)
-                # Success - remove from tracking since file was successfully renamed
+                replaced = True
+                # The temp file no longer exists under its own name
                 self._active_temp_files.discard(temp_file)
+                # The rename survives a power loss only once its directory entry is durable
+                # (R4-05 section 2); until then the write has not succeeded.
+                _fsync_directory(os.path.dirname(self.state_file) or ".")
 
             except (OSError, ValueError, TypeError) as e:
+                if replaced:
+                    # The new content may already be visible, so the previous state cannot be
+                    # assumed to hold: the outcome is indeterminate. The caller keeps the state
+                    # dirty and the next flush rewrites the same content.
+                    logging.error(
+                        "State file %s was replaced but its directory durability was not acknowledged; "
+                        "the on-disk outcome is indeterminate: %s",
+                        self.state_file,
+                        e,
+                    )
+                    raise
                 # Clean up temp file if it exists
                 try:
                     if os.path.exists(temp_file):
@@ -435,23 +464,21 @@ class StateManager:
         try:
             while force or self._dirty:
                 force = False
-                self._dirty = False
-                self.state["last_updated"] = _utc_timestamp()
-                if suppress_errors:
-                    try:
-                        self._write_state(self.state)
-                    except Exception as e:
-                        self._dirty = True
+                try:
+                    self._dirty = False
+                    self.state["last_updated"] = _utc_timestamp()
+                    self._write_state(self.state)
+                except BaseException as e:
+                    # A failed or interrupted write (a SIGINT anywhere from clearing the flag to
+                    # the end of the write included) leaves the state pending, never silently
+                    # clean, so the next flush rewrites it (R4-04 PR A).
+                    self._dirty = True
+                    if suppress_errors and isinstance(e, Exception):
                         import sys
 
                         print(f"Error flushing state: {e}", file=sys.stderr)
                         return False
-                else:
-                    try:
-                        self._write_state(self.state)
-                    except Exception:
-                        self._dirty = True
-                        raise
+                    raise
                 performed = True
             return performed
         finally:

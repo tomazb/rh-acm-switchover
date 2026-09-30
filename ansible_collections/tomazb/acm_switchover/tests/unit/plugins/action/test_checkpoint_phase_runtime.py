@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 """Tests for checkpoint_phase and artifact runtime helpers."""
 
+import errno
 import json
 import os
 import pathlib
@@ -2225,7 +2226,7 @@ def test_save_checkpoint_fsyncs_file_before_replace_and_directory_after_replace(
     temp_path = mocked_open.call_args.args[0]
     temp_fileno = mocked_open().fileno.return_value
     mocked_replace.assert_called_once_with(temp_path, "/tmp/state/checkpoint.json")
-    mocked_os_open.assert_called_once_with("/tmp/state", os.O_RDONLY)
+    mocked_os_open.assert_called_once_with("/tmp/state", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     mocked_fsync.assert_any_call(temp_fileno)
     mocked_fsync.assert_any_call(77)
     assert mocked_fsync.call_args_list.index(call(temp_fileno)) < mocked_fsync.call_args_list.index(call(77))
@@ -2236,17 +2237,37 @@ def test_save_checkpoint_fsyncs_file_before_replace_and_directory_after_replace(
     mocked_close.assert_called_once_with(77)
 
 
-def test_save_checkpoint_ignores_unsupported_directory_fsync():
+@pytest.mark.parametrize(
+    "fsync_effect, open_effect, close_effect",
+    [
+        ([None, OSError(errno.EIO, "directory fsync failed")], None, None),
+        ([None, OSError(errno.ENOTSUP, "directory fsync not supported")], None, None),
+        ([None, OSError(errno.EINVAL, "directory fsync invalid")], None, None),
+        (None, OSError(errno.EACCES, "directory not readable"), None),
+        ([None, None], None, OSError(errno.EIO, "directory close failed")),
+    ],
+    ids=["fsync-eio", "fsync-enotsup", "fsync-einval", "open-eacces", "close-eio"],
+)
+def test_save_checkpoint_fails_when_directory_durability_is_not_acknowledged(fsync_effect, open_effect, close_effect):
+    """R4-04 PR A / R4-05 §2: the replaced checkpoint is durable only once its directory is fsynced.
+
+    A failed directory open or fsync after the replace is an indeterminate outcome, so the save
+    fails and says so; ENOTSUP/EINVAL are not exempt without an up-front capability determination.
+    """
     action = ActionModule.__new__(ActionModule)
 
-    with patch("ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.replace"), patch(
+    with patch("ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.makedirs"), patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.replace"
+    ) as mocked_replace, patch(
         "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.open",
         return_value=77,
+        side_effect=open_effect,
     ), patch(
-        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.close"
-    ) as mocked_close, patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.close",
+        side_effect=close_effect,
+    ), patch(
         "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.fsync",
-        side_effect=[None, OSError("directory fsync unsupported")],
+        side_effect=fsync_effect,
     ), patch(
         "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.open",
         mock_open(),
@@ -2254,8 +2275,9 @@ def test_save_checkpoint_ignores_unsupported_directory_fsync():
     ):
         result = action._save_checkpoint("/tmp/state/checkpoint.json", {"schema_version": "2.0"})
 
-    assert result is None
-    mocked_close.assert_called_once_with(77)
+    mocked_replace.assert_called_once()
+    assert result is not None and result["failed"] is True
+    assert "indeterminate" in result["msg"]
 
 
 def test_build_report_ref_accepts_custom_kind():

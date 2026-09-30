@@ -4,8 +4,10 @@ Modernized pytest tests with fixtures, markers, and better organization.
 Tests cover StateManager, Phase enum, version comparison, and logging setup.
 """
 
+import errno
 import json
 import os
+import stat
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1876,3 +1878,136 @@ class TestSignalAndAtexitHandlers:
         sm._forward_signal(signal.SIGTERM, None)
 
         prev_handler.assert_called_once_with(signal.SIGTERM, None)
+
+
+class TestStateWriteDurability:
+    """R4-04 PR A / R4-05 §2: a state write succeeds only once its directory entry is durable.
+
+    `os.replace` publishes the new file, but the rename itself survives a power loss only after
+    the containing directory is fsynced. A failed directory open or fsync after the replace is an
+    indeterminate outcome, never success and never "unchanged": the write raises, the state stays
+    dirty, and the next flush rewrites the same content.
+    """
+
+    @staticmethod
+    def _recording(events, *, fail_directory=None, fail_open=None):
+        real_fsync, real_replace, real_open = os.fsync, os.replace, os.open
+
+        def fsync(fd):
+            is_dir = stat.S_ISDIR(os.fstat(fd).st_mode)
+            events.append(("fsync_dir" if is_dir else "fsync_file",))
+            if is_dir and fail_directory is not None:
+                raise fail_directory
+            return real_fsync(fd)
+
+        def replace(src, dst):
+            events.append(("replace",))
+            return real_replace(src, dst)
+
+        def open_(path, flags, *args, **kwargs):
+            if os.path.isdir(path):
+                events.append(("open_dir", flags))
+            if fail_open is not None and os.path.isdir(path):
+                raise fail_open
+            return real_open(path, flags, *args, **kwargs)
+
+        return fsync, replace, open_
+
+    def test_the_file_is_fsynced_then_replaced_then_its_directory_fsynced(self, tmp_path):
+        sm = StateManager(str(tmp_path / "state.json"))
+        events: list = []
+        fsync, replace, open_ = self._recording(events)
+        with patch.object(os, "fsync", fsync), patch.object(os, "replace", replace), patch.object(os, "open", open_):
+            sm.flush_state()
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        assert events == [("fsync_file",), ("replace",), ("open_dir", directory_flags), ("fsync_dir",)]
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            {"fail_directory": OSError(errno.EIO, "directory fsync failed")},
+            {"fail_directory": OSError(errno.ENOTSUP, "directory fsync not supported")},
+            {"fail_directory": OSError(errno.EINVAL, "directory fsync invalid")},
+            {"fail_open": OSError(errno.EACCES, "directory not readable")},
+        ],
+        ids=["fsync-eio", "fsync-enotsup", "fsync-einval", "open-eacces"],
+    )
+    def test_a_directory_durability_failure_fails_the_write_and_keeps_state_dirty(self, tmp_path, failure):
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm.state["config"]["marker"] = "before"
+        sm.flush_state()
+        events: list = []
+        fsync, replace, open_ = self._recording(events, **failure)
+        sm.state["config"]["marker"] = "after"
+        sm._dirty = True
+        with patch.object(os, "fsync", fsync), patch.object(os, "replace", replace), patch.object(os, "open", open_):
+            with pytest.raises(OSError):
+                sm.flush_state()
+        # The replace happened, so the outcome is indeterminate, not "unchanged": the state is still
+        # pending and the next flush rewrites the same content.
+        assert ("replace",) in events
+        assert sm._dirty is True
+        sm.flush_state()
+        assert sm._dirty is False
+        assert json.loads((tmp_path / "state.json").read_text())["config"]["marker"] == "after"
+
+    def test_an_exit_flush_never_reports_a_durability_failure_as_a_clean_state(self, tmp_path):
+        """The signal/atexit path cannot raise, so it must leave the state dirty and report failure."""
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm.flush_state()
+        sm.state["config"]["marker"] = "after"
+        sm._dirty = True
+        fsync, replace, open_ = self._recording([], fail_directory=OSError(errno.EIO, "directory fsync failed"))
+        with patch.object(os, "fsync", fsync), patch.object(os, "replace", replace), patch.object(os, "open", open_):
+            assert sm._do_flush(force=False, suppress_errors=True) is False
+        assert sm._dirty is True
+
+
+class TestInterruptedStateWrite:
+    """R4-04 PR A: a write interrupted by SIGINT is still pending, never silently clean."""
+
+    def test_a_write_interrupted_after_the_replace_leaves_the_state_dirty(self, tmp_path):
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm.flush_state()
+        sm.state["config"]["marker"] = "after"
+        sm._dirty = True
+        real_fsync = os.fsync
+
+        def interrupted_directory_fsync(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise KeyboardInterrupt
+            return real_fsync(fd)
+
+        with patch.object(os, "fsync", interrupted_directory_fsync):
+            with pytest.raises(KeyboardInterrupt):
+                sm.save_state()
+        assert sm._dirty is True
+        sm.save_state()
+        assert sm._dirty is False
+        assert json.loads((tmp_path / "state.json").read_text())["config"]["marker"] == "after"
+
+    @pytest.mark.parametrize("interrupt", [KeyboardInterrupt, SystemExit], ids=["keyboard-interrupt", "system-exit"])
+    def test_an_exit_flush_never_swallows_an_interrupt(self, tmp_path, interrupt):
+        """The signal/atexit flush suppresses ordinary errors only; an interrupt propagates, state stays dirty."""
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm.flush_state()
+        sm.state["config"]["marker"] = "after"
+        sm._dirty = True
+        with patch.object(sm, "_write_state", side_effect=interrupt):
+            with pytest.raises(interrupt):
+                sm._do_flush(force=False, suppress_errors=True)
+        assert sm._dirty is True
+        assert sm._flushing is False
+
+    def test_an_interrupt_before_the_write_starts_leaves_the_state_dirty(self, tmp_path):
+        """A SIGINT between clearing the dirty flag and the write must not lose the pending state."""
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm.flush_state()
+        sm.state["config"]["marker"] = "after"
+        sm._dirty = True
+        with patch("lib.utils._utc_timestamp", side_effect=KeyboardInterrupt):
+            with pytest.raises(KeyboardInterrupt):
+                sm.save_state()
+        assert sm._dirty is True
+        sm.save_state()
+        assert json.loads((tmp_path / "state.json").read_text())["config"]["marker"] == "after"
