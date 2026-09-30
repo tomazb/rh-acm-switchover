@@ -44,6 +44,34 @@ types); the facts layer coerces digit strings and Ansible's boolean vocabulary
 back to native types on read, so those checkpoints resume identically.
 A fresh run (or `checkpoint.reset: true`) starts from the beginning regardless of any
 pre-existing checkpoint file.
+
+Corrupt state is handled alike on both sides (R4-04 PR B). A Python state file or
+collection checkpoint that is not valid JSON, or whose top level is not a JSON
+object, is copied for inspection (`<state file>.corrupt.<UTC timestamp>` /
+`<checkpoint path>.corrupt-<UTC timestamp>`), left in place, and the run fails.
+Every later run stays blocked by the original until the operator repairs or
+removes it or resets (`--reset-state` / `checkpoint.reset: true`); a failed copy
+also fails without touching the original. Earlier collection releases moved the
+corrupt checkpoint aside instead, so the next run silently started fresh.
+Non-mutating collection runs report the corruption without making the copy. An
+unreadable file blocks on both sides without a copy. Python also treats a state
+file with an unknown `current_phase` as corrupt; the collection checks no
+checkpoint field beyond the top-level object.
+
+A recorded R4-04 migration journal is dropped only by the explicit full reset on
+both sides (`--reset-state` / `checkpoint.reset: true`). Python refuses the implicit
+resets that would otherwise discard it — a context mismatch with the stored
+contexts, missing contexts on an in-progress state, and the `--force` restart of a
+stale completed state or of a failed state with no resumable phase — and points the
+operator at `--reset-state`. The collection refuses a pre-freeze `reset_from` that
+would move the checkpoint back before the freeze and a `status: reset` of a
+pre-freeze phase (an invalid journal refuses every `reset_from` and every
+`status: reset`), and a `status: fail` of a pre-freeze phase while the journal key is
+present; a fail of `activation` or later is always recorded. For a journal-bearing
+schema `1.0` checkpoint it refuses the schema 1.0 rebuild that would discard
+operational data; journal-preserving `reset_from` rebuilds remain allowed. Its other
+reset paths keep `operational_data`. Without a journal every one of these paths behaves as before.
+
 Dry-run, validate, and native Ansible check-mode collection runs do not write
 pass/fail/reset checkpoint transitions, so they cannot make a later live run
 skip phases. Check mode remains non-mutating even when

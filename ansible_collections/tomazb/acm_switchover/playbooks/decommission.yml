@@ -53,8 +53,9 @@
   # Standalone mode is therefore explicit on every transition here and is never
   # inferred anywhere.
   #
-  # There is no `exit` status: CHECKPOINT_VALID_STATUSES is {enter, pass, fail, reset}
-  # and completion is expressed as `status: pass`, exactly as finalization does.
+  # There is no `exit` status: the phase statuses are {enter, pass, fail, reset} (plus the
+  # mid-phase `update` data write) and completion is expressed as `status: pass`, exactly
+  # as finalization does.
   # PR B issues no `reset` transition -- the action accepts one on the standalone
   # path, but nothing here may emit it.
   tasks:

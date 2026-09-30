@@ -210,3 +210,47 @@ def test_public_accessors_are_gone():
     assert not hasattr(StateManager, "get_config")
     assert hasattr(StateManager, "_set_config")
     assert hasattr(StateManager, "_get_config")
+
+
+# R4-04 amendment AC13: the migration journal key has exactly one production owner.
+# The register allowance above does not extend to it -- lib/utils.py and the Argo CD
+# register modules may not name it either.
+MIGRATION_JOURNAL_OWNER = REPO / "lib" / "run_record.py"
+MIGRATION_JOURNAL_KEY = "migration_backups"
+MIGRATION_JOURNAL_REFERENCE = re.compile(r"[\"']" + MIGRATION_JOURNAL_KEY + r"[\"']|\b_KEY_MIGRATION_BACKUPS\b")
+
+
+def _migration_journal_offenders():
+    offenders = []
+    for path in _production_files():
+        if path == MIGRATION_JOURNAL_OWNER:
+            continue
+        source = path.read_text(encoding="utf-8")
+        for lineno, line in enumerate(source.splitlines(), 1):
+            if MIGRATION_JOURNAL_REFERENCE.search(line) or (
+                RAW_CONFIG_KEY.search(line) and MIGRATION_JOURNAL_KEY in line
+            ):
+                offenders.append(f"{path.relative_to(REPO)}:{lineno}: {line.strip()}")
+        for lineno, key in _config_bag_bypasses(source):
+            if key == MIGRATION_JOURNAL_KEY:
+                offenders.append(f"{path.relative_to(REPO)}:{lineno}: config-bag read of {key!r}")
+    return offenders
+
+
+def test_migration_journal_key_is_owned_by_run_record_alone():
+    offenders = _migration_journal_offenders()
+    assert not offenders, "migration journal key outside lib/run_record.py:\n" + "\n".join(offenders)
+
+
+def test_migration_journal_detector_catches_every_access_shape():
+    for line in (
+        'state._get_config("migration_backups")',
+        "snapshot['config']['migration_backups']",
+        "from lib.run_record import _KEY_MIGRATION_BACKUPS",
+    ):
+        assert MIGRATION_JOURNAL_REFERENCE.search(line), line
+    two_step = 'c = s["config"]\nv = c["migration_backups"]\n'
+    assert [key for _, key in _config_bag_bypasses(two_step)] == [MIGRATION_JOURNAL_KEY]
+    for line in ("record.migration_backups()", "the ``migration_backups`` record"):
+        assert not MIGRATION_JOURNAL_REFERENCE.search(line), line
+    assert MIGRATION_JOURNAL_REFERENCE.search(MIGRATION_JOURNAL_OWNER.read_text(encoding="utf-8"))

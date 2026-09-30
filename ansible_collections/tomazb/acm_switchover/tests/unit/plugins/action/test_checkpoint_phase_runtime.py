@@ -1705,9 +1705,15 @@ def test_action_module_reset_status_with_reset_from_prunes_downstream_phases(tmp
     assert json.loads(checkpoint_file.read_text())["completed_phases"] == ["preflight"]
 
 
-def test_action_module_quarantines_corrupt_checkpoint_json(tmp_path):
+def test_action_module_preserves_corrupt_checkpoint_json_with_a_forensic_copy(tmp_path):
+    """R4-04 amendment section 2: preserve the original and a forensic copy, then fail.
+
+    The original stays in place so a later invocation cannot read the earlier
+    corruption as "no checkpoint" (the pre-R4-04 behaviour moved it away).
+    """
     checkpoint_file = tmp_path / "checkpoint.json"
-    checkpoint_file.write_text('{"schema_version": "2.0", bad json')
+    corrupt_text = '{"schema_version": "2.0", bad json'
+    checkpoint_file.write_text(corrupt_text)
     fixed_now = datetime(2026, 4, 16, 12, 30, 45, tzinfo=timezone.utc)
     action = _make_checkpoint_action(
         {
@@ -1732,12 +1738,12 @@ def test_action_module_quarantines_corrupt_checkpoint_json(tmp_path):
     ):
         result = action.run(task_vars=_task_vars_with_operation_identity())
 
-    quarantined_path = f"{checkpoint_file}.corrupt-{fixed_now.strftime('%Y%m%dT%H%M%SZ')}"
+    forensic_path = f"{checkpoint_file}.corrupt-{fixed_now.strftime('%Y%m%dT%H%M%SZ')}"
     assert result["failed"] is True
     assert "corrupted" in result["msg"].lower()
-    assert "quarantined" in result["msg"].lower()
-    assert not checkpoint_file.exists()
-    assert os.path.exists(quarantined_path)
+    assert forensic_path in result["msg"]
+    assert checkpoint_file.read_text() == corrupt_text
+    assert pathlib.Path(forensic_path).read_text() == corrupt_text
 
 
 def test_action_module_operation_identity_includes_collection_version_when_available(
@@ -3729,3 +3735,920 @@ def test_standalone_identity_writes_nothing_outside_the_configured_checkpoint_pa
     assert result.get("failed") is not True
     assert configured.exists(), "the execute transition must persist to the configured path"
     assert configured.parent == tmp_path
+
+
+# --- R4-04 Task 3: corrupt/unreadable store, status: update, rewind guard -------------
+
+_R4_04_VECTORS = (
+    pathlib.Path(__file__).resolve().parents[7] / "tests" / "fixtures" / "r4_04_migration_evidence_vectors.json"
+)
+_ACTION = "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase"
+
+
+def _journal_transition(case_id: str) -> dict:
+    if not _R4_04_VECTORS.is_file():
+        pytest.skip("the shared R4-04 vectors live in the repository checkout")
+    cases = json.loads(_R4_04_VECTORS.read_text(encoding="utf-8"))["cases"]
+    return next(case["input"] for case in cases if case["id"] == case_id)
+
+
+def _first_journal() -> dict:
+    """A pre-mutation journal: the legal freeze write."""
+    return _journal_transition("transition-pre-to-completed")["previous"]
+
+
+def _next_journal() -> dict:
+    """A legal successor of _first_journal()."""
+    return _journal_transition("transition-pre-to-completed")["candidate"]
+
+
+def _rewritten_journal() -> dict:
+    """Valid on its own, but rewrites _first_journal()'s frozen run_id."""
+    return _journal_transition("transition-run-id-changed-blocks")["candidate"]
+
+
+def _write_phase_checkpoint(tmp_path, *, phase="activation", completed=("preflight", "primary_prep"), data=None):
+    path = tmp_path / "checkpoint.json"
+    checkpoint = {
+        "schema_version": "2.0",
+        "phase": phase,
+        "phase_status": "enter",
+        "completed_phases": list(completed),
+        "operational_data": dict({"argocd_run_id": "run-1"} if data is None else data),
+        "operation_identity": _canonical_normal_operation_identity(),
+        "errors": [{"phase": "primary_prep", "error": "earlier"}],
+        "report_refs": [{"phase": "preflight", "path": "reports/preflight.json", "kind": "json-report"}],
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+    }
+    path.write_text(json.dumps(checkpoint), encoding="utf-8")
+    return path
+
+
+def _dir_snapshot(tmp_path) -> dict:
+    return {entry.name: entry.read_bytes() for entry in sorted(tmp_path.iterdir())}
+
+
+def _update_action(path, *, phase="activation", enabled=True, operational_data=None, **extra):
+    args = {
+        "phase": phase,
+        "checkpoint": {"enabled": enabled, "backend": "file", "path": str(path)},
+        "status": "update",
+        "operational_data": {"migration_backups": _first_journal()} if operational_data is None else operational_data,
+    }
+    args.update(extra)
+    return _make_checkpoint_action(args)
+
+
+def _enter_action(path, *, phase="activation", status="enter", **checkpoint):
+    config = {"enabled": True, "backend": "file", "path": str(path)}
+    config.update(checkpoint)
+    return _make_checkpoint_action({"phase": phase, "checkpoint": config, "status": status})
+
+
+# corrupt / unreadable store
+
+
+def test_a_corrupt_checkpoint_keeps_blocking_later_invocations(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    path.write_text("{not json")
+    first = _enter_action(path, phase="preflight").run(task_vars=_task_vars_with_operation_identity())
+    second = _enter_action(path, phase="preflight").run(task_vars=_task_vars_with_operation_identity())
+    assert first["failed"] is True
+    assert second["failed"] is True
+    assert "corrupted" in second["msg"]
+    assert path.read_text() == "{not json"
+
+
+def test_a_failed_forensic_copy_fails_closed_and_keeps_the_original(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    path.write_text("{not json")
+    with patch(f"{_ACTION}.shutil.copy2", side_effect=OSError("disk full")):
+        result = _enter_action(path, phase="preflight").run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert "disk full" in result["msg"]
+    assert _dir_snapshot(tmp_path) == {"checkpoint.json": b"{not json"}
+
+
+@pytest.mark.parametrize(
+    "decoded",
+    [[], "text", 7, None],
+)
+def test_structurally_corrupt_json_is_preserved_like_invalid_json(tmp_path, decoded):
+    path = tmp_path / "checkpoint.json"
+    text = json.dumps(decoded)
+    path.write_text(text)
+    result = _enter_action(path, phase="preflight").run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert "corrupted" in result["msg"]
+    assert path.read_text() == text
+    copies = [entry for entry in tmp_path.iterdir() if entry.name.startswith("checkpoint.json.corrupt-")]
+    assert len(copies) == 1
+    assert copies[0].read_text() == text
+
+
+def test_a_checkpoint_that_is_not_valid_utf8_is_preserved_like_invalid_json(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    raw = b'{"schema_version": "\xff\xfe"}'
+    path.write_bytes(raw)
+    result = _enter_action(path, phase="preflight").run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert "corrupted" in result["msg"]
+    assert path.read_bytes() == raw
+    copies = [entry for entry in tmp_path.iterdir() if entry.name.startswith("checkpoint.json.corrupt-")]
+    assert len(copies) == 1
+    assert copies[0].read_bytes() == raw
+
+
+@pytest.mark.parametrize("mode, check_mode", [("dry_run", False), ("validate", False), ("execute", True)])
+@pytest.mark.parametrize("text", ["{not json", "[]"])
+def test_a_non_mutating_run_reports_corruption_without_writing(tmp_path, mode, check_mode, text):
+    path = tmp_path / "checkpoint.json"
+    path.write_text(text)
+    action = _enter_action(path, phase="preflight")
+    action._play_context.check_mode = check_mode
+    result = action.run(task_vars=_task_vars_with_operation_identity(mode=mode))
+    assert result["failed"] is True
+    assert "corrupted" in result["msg"]
+    assert _dir_snapshot(tmp_path) == {"checkpoint.json": text.encode()}
+
+
+def test_the_teardown_data_route_never_copies_a_corrupt_checkpoint(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    path.write_text("[1]")
+    action = _make_checkpoint_action(
+        {"read_facts": True, "checkpoint": {"enabled": True, "backend": "file", "path": str(path)}}
+    )
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert _dir_snapshot(tmp_path) == {"checkpoint.json": b"[1]"}
+
+
+def test_an_unreadable_checkpoint_blocks_without_a_forensic_copy(tmp_path):
+    path = _write_phase_checkpoint(tmp_path)
+    before = _dir_snapshot(tmp_path)
+    with patch("builtins.open", side_effect=PermissionError("denied")):
+        result = _enter_action(path).run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert "Cannot read checkpoint file" in result["msg"]
+    assert "corrupted" not in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_the_full_reset_still_recovers_a_corrupt_checkpoint(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    path.write_text("{not json")
+    result = _enter_action(path, phase="preflight", reset=True).run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    stored = json.loads(path.read_text())
+    assert stored["phase"] == "preflight"
+    assert stored["operational_data"] == {}
+
+
+# status: update
+
+
+def _stored(path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_update_writes_the_journal_and_leaves_every_phase_field_unchanged(tmp_path):
+    path = _write_phase_checkpoint(tmp_path)
+    before = _stored(path)
+    result = _update_action(path).run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    assert result["changed"] is True
+    after = _stored(path)
+    assert after["operational_data"] == {"argocd_run_id": "run-1", "migration_backups": _first_journal()}
+    assert after["updated_at"] != before["updated_at"]
+    for key in set(before) - {"operational_data", "updated_at"}:
+        assert after[key] == before[key], key
+    assert set(after) == set(before)
+    assert result["checkpoint"] == after
+
+
+def test_update_replaces_the_whole_journal_on_a_legal_transition(tmp_path):
+    path = _write_phase_checkpoint(tmp_path, data={"migration_backups": _first_journal()})
+    action = _update_action(path, operational_data={"migration_backups": _next_journal()})
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+    assert result["changed"] is True
+    assert _stored(path)["operational_data"] == {"migration_backups": _next_journal()}
+
+
+def test_an_identical_update_is_not_a_change(tmp_path):
+    path = _write_phase_checkpoint(tmp_path, data={"migration_backups": _first_journal()})
+    before = _dir_snapshot(tmp_path)
+    action = _update_action(path)
+    with patch.object(action, "_save_checkpoint", side_effect=AssertionError("no write expected")):
+        result = action.run(task_vars=_task_vars_with_operation_identity())
+    assert result["changed"] is False
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize(
+    "stored, candidate, fragment",
+    [
+        ("first", "rewritten", "frozen_field_changed"),
+        (None, "next", "invalid_freeze_write"),
+        (None, {"schema_version": 2}, "malformed_journal"),
+        (None, {}, "non-empty"),
+        (None, None, "non-empty"),
+        (None, "journal-as-text", "non-empty"),
+        (None, "omitted", "non-empty"),
+    ],
+)
+def test_an_unacceptable_update_fails_without_writing(tmp_path, stored, candidate, fragment):
+    journals = {"first": _first_journal, "next": _next_journal, "rewritten": _rewritten_journal}
+    data = {"migration_backups": journals[stored]()} if stored else None
+    path = _write_phase_checkpoint(tmp_path, data=data)
+    operational_data: dict
+    if candidate == "omitted":
+        operational_data = {"argocd_run_id": "run-2"}
+    elif candidate == "journal-as-text":
+        operational_data = {"migration_backups": "journal"}
+    else:
+        value = journals[candidate]() if isinstance(candidate, str) else candidate
+        operational_data = {"migration_backups": value}
+    before = _dir_snapshot(tmp_path)
+    result = _update_action(path, operational_data=operational_data).run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert fragment in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_an_update_over_an_invalid_stored_journal_fails(tmp_path):
+    path = _write_phase_checkpoint(tmp_path, data={"migration_backups": {"schema_version": 9}})
+    before = _dir_snapshot(tmp_path)
+    result = _update_action(path).run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("extra", [{"error": "boom"}, {"report_ref": "reports/activation.json"}])
+def test_update_rejects_error_and_report_ref(tmp_path, extra):
+    path = _write_phase_checkpoint(tmp_path)
+    before = _dir_snapshot(tmp_path)
+    result = _update_action(path, **extra).run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert "status: update" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_update_requires_an_existing_checkpoint(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    result = _update_action(path).run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert "existing checkpoint" in result["msg"]
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("requested", ["primary_prep", "post_activation"])
+def test_update_requires_the_current_phase(tmp_path, requested):
+    path = _write_phase_checkpoint(tmp_path)
+    before = _dir_snapshot(tmp_path)
+    result = _update_action(path, phase=requested).run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert "current phase" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_update_refuses_a_legacy_checkpoint(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    path.write_text(json.dumps({"schema_version": "1.0", "phase": "activation", "completed_phases": []}))
+    before = _dir_snapshot(tmp_path)
+    result = _update_action(path).run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_update_refuses_a_checkpoint_without_an_operation_identity(tmp_path):
+    path = _write_phase_checkpoint(tmp_path)
+    stored = _stored(path)
+    stored["operation_identity"] = None
+    path.write_text(json.dumps(stored))
+    before = _dir_snapshot(tmp_path)
+    result = _update_action(path).run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert "operation identity" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("mode", ["execute", "dry_run", "validate"])
+def test_a_journal_update_with_checkpointing_disabled_is_refused(tmp_path, mode):
+    path = _write_phase_checkpoint(tmp_path)
+    before = _dir_snapshot(tmp_path)
+    result = _update_action(path, enabled=False).run(task_vars=_task_vars_with_operation_identity(mode=mode))
+    assert result["failed"] is True
+    assert "checkpointing is disabled" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("mode, check_mode", [("dry_run", False), ("validate", False), ("execute", True)])
+def test_a_non_mutating_update_validates_but_writes_nothing(tmp_path, mode, check_mode):
+    path = _write_phase_checkpoint(tmp_path)
+    before = _dir_snapshot(tmp_path)
+    action = _update_action(path)
+    action._play_context.check_mode = check_mode
+    with patch.object(action, "_save_checkpoint", side_effect=AssertionError("no write expected")):
+        result = action.run(task_vars=_task_vars_with_operation_identity(mode=mode))
+    assert result.get("failed") is not True
+    assert result["changed"] is False
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("mode, check_mode", [("dry_run", False), ("execute", True)])
+def test_a_non_mutating_update_still_rejects_a_bad_candidate(tmp_path, mode, check_mode):
+    path = _write_phase_checkpoint(tmp_path, data={"migration_backups": _first_journal()})
+    action = _update_action(path, operational_data={"migration_backups": _rewritten_journal()})
+    action._play_context.check_mode = check_mode
+    result = action.run(task_vars=_task_vars_with_operation_identity(mode=mode))
+    assert result["failed"] is True
+    assert "frozen_field_changed" in result["msg"]
+
+
+def test_an_update_write_failure_propagates(tmp_path):
+    path = _write_phase_checkpoint(tmp_path)
+    with patch(f"{_ACTION}.os.replace", side_effect=OSError("read-only file system")):
+        result = _update_action(path).run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert "read-only file system" in result["msg"]
+
+
+def test_an_update_directory_durability_failure_is_indeterminate(tmp_path):
+    path = _write_phase_checkpoint(tmp_path)
+    action = _update_action(path)
+    with patch.object(action, "_fsync_parent_directory", side_effect=OSError("EIO")):
+        result = action.run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert "indeterminate" in result["msg"]
+
+
+@pytest.mark.parametrize("status", ["enter", "pass", "fail", "reset"])
+def test_phase_transitions_cannot_carry_the_journal(tmp_path, status):
+    path = _write_phase_checkpoint(tmp_path)
+    before = _dir_snapshot(tmp_path)
+    action = _make_checkpoint_action(
+        {
+            "phase": "activation",
+            "checkpoint": {"enabled": True, "backend": "file", "path": str(path)},
+            "status": status,
+            "operational_data": {"migration_backups": _first_journal()},
+        }
+    )
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert "status: update" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_a_pass_transition_is_unchanged_and_keeps_a_stored_journal(tmp_path):
+    path = _write_phase_checkpoint(tmp_path, data={"argocd_run_id": "run-1", "migration_backups": _first_journal()})
+    before = _stored(path)
+    action = _make_checkpoint_action(
+        {
+            "phase": "activation",
+            "checkpoint": {"enabled": True, "backend": "file", "path": str(path)},
+            "status": "pass",
+            "operational_data": {"argocd_run_id": "run-1"},
+        }
+    )
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+    after = _stored(path)
+    assert result["changed"] is True
+    assert after["completed_phases"] == ["preflight", "primary_prep", "activation"]
+    assert after["phase_status"] == "pass"
+    assert after["operational_data"] == before["operational_data"]
+    for key in set(before) - {"completed_phases", "phase_status", "updated_at"}:
+        assert after[key] == before[key], key
+
+
+# reset_from / rewind
+
+
+def test_a_pre_freeze_rewind_with_a_journal_is_refused_before_mutation(tmp_path):
+    path = _write_phase_checkpoint(
+        tmp_path, completed=("preflight", "primary_prep", "activation"), data={"migration_backups": _first_journal()}
+    )
+    before = _dir_snapshot(tmp_path)
+    action = _enter_action(path, phase="primary_prep", reset_from="primary_prep")
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert "full checkpoint reset" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("status", ["enter", "reset"])
+def test_a_rewind_to_activation_keeps_the_journal(tmp_path, status):
+    path = _write_phase_checkpoint(
+        tmp_path,
+        phase="post_activation",
+        completed=("preflight", "primary_prep", "activation"),
+        data={"argocd_run_id": "run-1", "migration_backups": _first_journal()},
+    )
+    action = _enter_action(path, phase="activation", status=status, reset_from="activation")
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    after = _stored(path)
+    assert after["completed_phases"] == ["preflight", "primary_prep"]
+    assert after["operational_data"]["migration_backups"] == _first_journal()
+    assert after["operational_data"]["argocd_run_id"] == "run-1"
+
+
+def test_a_stale_pre_freeze_reset_from_does_not_block_a_later_phase(tmp_path):
+    """reset_from rides along in every task's checkpoint config; once its phase is no
+    longer completed nothing is rewound, so an existing journal is not refused."""
+    path = _write_phase_checkpoint(
+        tmp_path,
+        phase="activation",
+        completed=("preflight", "activation"),
+        data={"migration_backups": _first_journal()},
+    )
+    action = _enter_action(path, phase="post_activation", reset_from="primary_prep")
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    assert _stored(path)["operational_data"]["migration_backups"] == _first_journal()
+
+
+@pytest.mark.parametrize("reset_from", ["primary_prep", "activation", "finalization"])
+def test_an_invalid_journal_blocks_reset_from_even_without_pruning(tmp_path, reset_from):
+    path = _write_phase_checkpoint(tmp_path, completed=("preflight",), data={"migration_backups": {"bad": 1}})
+    before = _dir_snapshot(tmp_path)
+    result = _enter_action(path, reset_from=reset_from).run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert "invalid" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+def _write_non_mapping_operational_data_checkpoint(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "2.0",
+                "phase": "activation",
+                "completed_phases": ["preflight", "primary_prep"],
+                "operational_data": "bad",
+                "operation_identity": _canonical_normal_operation_identity(),
+            }
+        )
+    )
+    return path
+
+
+@pytest.mark.parametrize("status", ["enter", "reset"])
+def test_a_reset_from_over_a_non_mapping_operational_data_behaves_as_before(tmp_path, status):
+    """Dormancy: no journal slot can exist in a non-mapping container, so the journal
+    guards stay out of the way and pruning plus the resume summary heal it, as on the base."""
+    path = _write_non_mapping_operational_data_checkpoint(tmp_path)
+    result = _enter_action(path, phase="primary_prep", status=status, reset_from="primary_prep").run(
+        task_vars=_task_vars_with_operation_identity()
+    )
+    assert result.get("failed") is not True
+    stored = _stored(path)
+    assert stored["completed_phases"] == ["preflight"]
+    if status == "enter":
+        assert stored["operational_data"] == {"resume_summary": {"resume_start_phase": "primary_prep"}}
+
+
+@pytest.mark.parametrize("status", ["enter", "reset", "fail"])
+def test_check_mode_over_a_non_mapping_operational_data_behaves_as_before(tmp_path, status):
+    path = _write_non_mapping_operational_data_checkpoint(tmp_path)
+    before = _dir_snapshot(tmp_path)
+    action = _enter_action(path, phase="primary_prep", status=status, reset_from="primary_prep")
+    action._play_context.check_mode = True
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    assert result["changed"] is False
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_a_bare_reset_over_a_non_mapping_operational_data_behaves_as_before(tmp_path):
+    path = _write_non_mapping_operational_data_checkpoint(tmp_path)
+    result = _bare_reset_action(path, "primary_prep").run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    assert _stored(path)["completed_phases"] == ["preflight"]
+
+
+def test_check_mode_previews_the_rewind_refusal(tmp_path):
+    path = _write_phase_checkpoint(
+        tmp_path, completed=("preflight", "primary_prep", "activation"), data={"migration_backups": _first_journal()}
+    )
+    before = _dir_snapshot(tmp_path)
+    action = _enter_action(path, phase="primary_prep", reset_from="primary_prep")
+    action._play_context.check_mode = True
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert "full checkpoint reset" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_the_full_reset_is_the_path_that_drops_a_journal(tmp_path):
+    path = _write_phase_checkpoint(
+        tmp_path, completed=("preflight", "primary_prep", "activation"), data={"migration_backups": _first_journal()}
+    )
+    result = _enter_action(path, phase="preflight", reset=True).run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    assert "migration_backups" not in _stored(path)["operational_data"]
+
+
+def test_a_rewind_without_a_journal_prunes_as_before(tmp_path):
+    path = _write_phase_checkpoint(tmp_path, completed=("preflight", "primary_prep", "activation"))
+    result = _enter_action(path, phase="primary_prep", reset_from="primary_prep").run(
+        task_vars=_task_vars_with_operation_identity()
+    )
+    assert result.get("failed") is not True
+    assert _stored(path)["completed_phases"] == ["preflight"]
+
+
+# --- Task 3 review findings -------------------------------------------------------------
+
+
+def test_a_legacy_rebuild_refuses_a_journal_bearing_checkpoint(tmp_path):
+    """Finding 1: the unsafe-legacy rebuild would otherwise start from empty operational_data."""
+    path = tmp_path / "checkpoint.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "phase": "preflight",
+                "completed_phases": ["preflight"],
+                "operational_data": {"migration_backups": _first_journal()},
+            }
+        )
+    )
+    before = _dir_snapshot(tmp_path)
+    result = _enter_action(path, phase="activation", reset_from="activation").run(
+        task_vars=_task_vars_with_operation_identity()
+    )
+    assert result["failed"] is True
+    assert "migration journal" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("stored", [None, {"schema_version": 9}])
+def test_a_legacy_rebuild_refuses_an_invalid_journal_too(tmp_path, stored):
+    path = tmp_path / "checkpoint.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "completed_phases": ["preflight"],
+                "operational_data": {"migration_backups": stored},
+            }
+        )
+    )
+    before = _dir_snapshot(tmp_path)
+    result = _enter_action(path, phase="activation", reset=True).run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_a_journal_free_legacy_rebuild_is_unchanged(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    path.write_text(
+        json.dumps({"schema_version": "1.0", "completed_phases": ["preflight"], "operational_data": {"x": "y"}})
+    )
+    result = _enter_action(path, phase="activation", reset_from="activation").run(
+        task_vars=_task_vars_with_operation_identity()
+    )
+    assert result.get("failed") is not True
+    assert _stored(path)["schema_version"] == "2.0"
+    assert _stored(path)["completed_phases"] == []
+    assert "x" not in _stored(path)["operational_data"]
+
+
+def test_the_full_reset_still_replaces_a_journal_bearing_legacy_checkpoint(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    path.write_text(
+        json.dumps(
+            {"schema_version": "1.0", "completed_phases": ["preflight"], "operational_data": {"migration_backups": {}}}
+        )
+    )
+    result = _enter_action(path, phase="preflight", reset=True).run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    assert _stored(path)["operational_data"] == {}
+
+
+def test_entering_a_pre_freeze_phase_under_a_pre_freeze_reset_from_is_refused_without_pruning(tmp_path):
+    """Finding 2, Codex's input: nothing to prune, but the phase would move back before the freeze."""
+    path = _write_phase_checkpoint(
+        tmp_path, phase="activation", completed=("preflight",), data={"migration_backups": _first_journal()}
+    )
+    before = _dir_snapshot(tmp_path)
+    result = _enter_action(path, phase="primary_prep", reset_from="primary_prep").run(
+        task_vars=_task_vars_with_operation_identity()
+    )
+    assert result["failed"] is True
+    assert "full checkpoint reset" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_a_realistic_run_with_a_stale_reset_from_primary_prep(tmp_path):
+    """Finding 2 walk-through: reset_from rides along on every task of the run.
+
+    The journal is written in activation (PR C), after the activation enter. Every
+    later enter carrying the stale option is allowed: nothing is pruned and no phase
+    moves back. A later rerun with the same option is refused at its first enter.
+    """
+    path = _write_phase_checkpoint(
+        tmp_path,
+        phase="finalization",
+        completed=("preflight", "primary_prep", "activation", "post_activation"),
+        data={},
+    )
+    task_vars = _task_vars_with_operation_identity()
+
+    def step(phase, status="enter", **extra):
+        action = _make_checkpoint_action(
+            {
+                "phase": phase,
+                "checkpoint": {"enabled": True, "backend": "file", "path": str(path), "reset_from": "primary_prep"},
+                "status": status,
+                **extra,
+            }
+        )
+        return action.run(task_vars=task_vars)
+
+    # No journal yet: the operator's rewind prunes primary_prep and everything after it.
+    assert step("preflight").get("failed") is not True
+    assert _stored(path)["completed_phases"] == ["preflight"]
+    assert step("primary_prep").get("failed") is not True
+    assert step("primary_prep", "pass").get("failed") is not True
+    assert _stored(path)["completed_phases"] == ["preflight", "primary_prep"]
+    # Existing behaviour, reported rather than changed here: the stale option re-prunes
+    # the primary_prep marker this same run just completed, on the activation enter.
+    assert step("activation").get("failed") is not True
+    assert _stored(path)["completed_phases"] == ["preflight"]
+    # Activation freezes the journal mid-phase, then completes.
+    assert step("activation", "update", operational_data={"migration_backups": _first_journal()})["changed"] is True
+    assert step("activation", "pass").get("failed") is not True
+    assert _stored(path)["completed_phases"] == ["preflight", "activation"]
+    # Later enters carry the stale option but prune nothing and move nothing back.
+    for phase in ("post_activation", "finalization"):
+        assert step(phase).get("failed") is not True, phase
+        assert step(phase, "pass").get("failed") is not True, phase
+    assert _stored(path)["completed_phases"] == ["preflight", "activation", "post_activation", "finalization"]
+    assert _stored(path)["operational_data"]["migration_backups"] == _first_journal()
+    # A rerun with the same option starts at preflight: that is a pre-freeze phase.
+    before = _dir_snapshot(tmp_path)
+    assert step("preflight")["failed"] is True
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("mode", ["execute", "dry_run", "validate"])
+def test_standalone_decommission_refuses_status_update(standalone_args, mode):
+    """Finding 5: no standalone journal exists, and the preview path validates nothing."""
+    result, execute_module = _run_standalone(
+        standalone_args(status="update", operational_data={"migration_backups": {"x": 1}}),
+        _standalone_task_vars(mode=mode),
+    )
+    assert result["failed"] is True
+    assert "status: update" in result["msg"]
+    execute_module.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [None, dict(_canonical_normal_operation_identity(), primary_kubeconfig="/legacy/primary")],
+)
+@pytest.mark.parametrize("mode, check_mode", [("execute", True), ("dry_run", False)])
+def test_a_non_mutating_update_requires_the_established_identity(tmp_path, identity, mode, check_mode):
+    """Finding 5: check mode applies the same established-identity rule as execution."""
+    path = _write_phase_checkpoint(tmp_path, completed=())
+    stored = _stored(path)
+    stored["operation_identity"] = identity
+    path.write_text(json.dumps(stored))
+    before = _dir_snapshot(tmp_path)
+    action = _update_action(path)
+    action._play_context.check_mode = check_mode
+    result = action.run(task_vars=_task_vars_with_operation_identity(mode=mode))
+    assert result["failed"] is True
+    assert "established operation identity" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+# --- explicit status: reset and the legacy-rebuild preview ----------------------------------
+
+
+def _bare_reset_action(path, phase, *, check_mode=False, **checkpoint):
+    action = _enter_action(path, phase=phase, status="reset", **checkpoint)
+    action._play_context.check_mode = check_mode
+    return action
+
+
+@pytest.mark.parametrize("mode, check_mode", [("execute", False), ("dry_run", False), ("execute", True)])
+@pytest.mark.parametrize("stored", [None, {"schema_version": 9}])
+@pytest.mark.parametrize("phase", ["primary_prep", "activation", "finalization"])
+def test_a_bare_reset_is_refused_over_an_invalid_journal(tmp_path, mode, check_mode, stored, phase):
+    """Codex's input: no reset_from, status: reset still un-completes a phase."""
+    path = _write_phase_checkpoint(tmp_path, data={"migration_backups": stored})
+    before = _dir_snapshot(tmp_path)
+    result = _bare_reset_action(path, phase, check_mode=check_mode).run(
+        task_vars=_task_vars_with_operation_identity(mode=mode)
+    )
+    assert result["failed"] is True
+    assert "invalid" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("mode, check_mode", [("execute", False), ("dry_run", False), ("execute", True)])
+@pytest.mark.parametrize("phase", ["preflight", "primary_prep"])
+def test_a_bare_pre_freeze_reset_is_refused_over_a_valid_journal(tmp_path, mode, check_mode, phase):
+    path = _write_phase_checkpoint(tmp_path, data={"migration_backups": _first_journal()})
+    before = _dir_snapshot(tmp_path)
+    result = _bare_reset_action(path, phase, check_mode=check_mode).run(
+        task_vars=_task_vars_with_operation_identity(mode=mode)
+    )
+    assert result["failed"] is True
+    assert "full checkpoint reset" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_the_failure_rescue_reset_is_refused_once_a_journal_exists(tmp_path):
+    """switchover.yml's rescue task (phase primary_prep, reset_from primary_prep, status reset)."""
+    path = _write_phase_checkpoint(tmp_path, data={"migration_backups": _first_journal()})
+    before = _dir_snapshot(tmp_path)
+    result = _bare_reset_action(path, "primary_prep", reset_from="primary_prep").run(
+        task_vars=_task_vars_with_operation_identity()
+    )
+    assert result["failed"] is True
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("phase", ["activation", "post_activation", "finalization"])
+def test_a_bare_reset_at_or_after_activation_keeps_a_valid_journal(tmp_path, phase):
+    path = _write_phase_checkpoint(
+        tmp_path,
+        phase=phase,
+        completed=("preflight", "primary_prep", "activation", "post_activation", "finalization"),
+        data={"migration_backups": _first_journal()},
+    )
+    result = _bare_reset_action(path, phase).run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    assert phase not in _stored(path)["completed_phases"]
+    assert _stored(path)["operational_data"]["migration_backups"] == _first_journal()
+
+
+def test_a_journal_free_bare_reset_is_unchanged(tmp_path):
+    path = _write_phase_checkpoint(tmp_path, data={"argocd_run_id": "run-1"})
+    result = _bare_reset_action(path, "primary_prep").run(task_vars=_task_vars_with_operation_identity())
+    assert result["changed"] is True
+    stored = _stored(path)
+    assert stored["phase"] == "primary_prep"
+    assert stored["phase_status"] == "reset"
+    assert stored["completed_phases"] == ["preflight"]
+    assert stored["operational_data"] == {"argocd_run_id": "run-1"}
+
+
+@pytest.mark.parametrize("mode, check_mode", [("execute", False), ("dry_run", False), ("execute", True)])
+def test_every_mode_refuses_a_journal_bearing_legacy_rebuild(tmp_path, mode, check_mode):
+    """The preview shares the execution eligibility check for the legacy rebuild."""
+    path = tmp_path / "checkpoint.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "phase": "preflight",
+                "completed_phases": ["preflight"],
+                "operational_data": {"migration_backups": _first_journal()},
+            }
+        )
+    )
+    before = _dir_snapshot(tmp_path)
+    action = _enter_action(path, phase="activation", reset_from="activation")
+    action._play_context.check_mode = check_mode
+    result = action.run(task_vars=_task_vars_with_operation_identity(mode=mode))
+    assert result["failed"] is True
+    assert "migration journal" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_check_mode_still_previews_a_journal_free_legacy_rebuild(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    path.write_text(json.dumps({"schema_version": "1.0", "completed_phases": ["preflight"], "operational_data": {}}))
+    before = _dir_snapshot(tmp_path)
+    action = _enter_action(path, phase="activation", reset_from="activation")
+    action._play_context.check_mode = True
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_check_mode_previews_the_full_reset_over_a_journal_bearing_legacy_checkpoint(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    path.write_text(
+        json.dumps(
+            {"schema_version": "1.0", "completed_phases": ["preflight"], "operational_data": {"migration_backups": {}}}
+        )
+    )
+    before = _dir_snapshot(tmp_path)
+    action = _enter_action(path, phase="preflight", reset=True)
+    action._play_context.check_mode = True
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    assert _dir_snapshot(tmp_path) == before
+
+
+# --- status: fail across the freeze -------------------------------------------------------
+
+
+def _fail_action(path, phase, *, check_mode=False):
+    action = _make_checkpoint_action(
+        {
+            "phase": phase,
+            "checkpoint": {"enabled": True, "backend": "file", "path": str(path)},
+            "status": "fail",
+            "error": "boom",
+        }
+    )
+    action._play_context.check_mode = check_mode
+    return action
+
+
+@pytest.mark.parametrize("mode, check_mode", [("execute", False), ("dry_run", False), ("execute", True)])
+@pytest.mark.parametrize("journal", ["valid", "invalid"])
+@pytest.mark.parametrize("phase", ["preflight", "primary_prep"])
+def test_a_pre_freeze_fail_is_refused_over_a_journal(tmp_path, mode, check_mode, journal, phase):
+    """Codex's input: a fail of a pre-freeze phase un-completes it, rewinding across the freeze."""
+    stored = _first_journal() if journal == "valid" else None
+    path = _write_phase_checkpoint(tmp_path, data={"migration_backups": stored})
+    before = _dir_snapshot(tmp_path)
+    result = _fail_action(path, phase, check_mode=check_mode).run(
+        task_vars=_task_vars_with_operation_identity(mode=mode)
+    )
+    assert result["failed"] is True
+    assert "status: fail" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("journal", ["valid", "invalid"])
+@pytest.mark.parametrize("phase", ["activation", "post_activation", "finalization"])
+def test_a_post_freeze_fail_is_recorded_and_keeps_the_journal(tmp_path, journal, phase):
+    stored = _first_journal() if journal == "valid" else {"schema_version": 9}
+    path = _write_phase_checkpoint(
+        tmp_path,
+        phase=phase,
+        completed=("preflight", "primary_prep", "activation", "post_activation", "finalization"),
+        data={"migration_backups": stored},
+    )
+    result = _fail_action(path, phase).run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    after = _stored(path)
+    assert after["phase_status"] == "fail"
+    assert phase not in after["completed_phases"]
+    assert after["errors"][-1] == {"phase": phase, "error": "boom"}
+    assert after["operational_data"]["migration_backups"] == stored
+
+
+@pytest.mark.parametrize("phase", ["preflight", "primary_prep"])
+def test_a_journal_free_pre_freeze_fail_is_unchanged(tmp_path, phase):
+    path = _write_phase_checkpoint(tmp_path, data={"argocd_run_id": "run-1"})
+    result = _fail_action(path, phase).run(task_vars=_task_vars_with_operation_identity())
+    assert result["changed"] is True
+    after = _stored(path)
+    assert after["phase"] == phase
+    assert after["phase_status"] == "fail"
+    assert after["completed_phases"] == [p for p in ("preflight", "primary_prep") if p != phase]
+    assert after["errors"][-1] == {"phase": phase, "error": "boom"}
+    assert after["operational_data"] == {"argocd_run_id": "run-1"}
+
+
+# --- status: update never resets, so it always proves the operation identity -----------------
+
+
+@pytest.mark.parametrize("config", [{"reset_from": "primary_prep"}, {"reset_from": "activation"}, {"reset": True}])
+@pytest.mark.parametrize("mode, check_mode", [("execute", False), ("dry_run", False), ("execute", True)])
+def test_update_refuses_another_operations_checkpoint_even_with_reset_options(tmp_path, config, mode, check_mode):
+    path = _write_phase_checkpoint(tmp_path)
+    stored = _stored(path)
+    stored["operation_identity"]["secondary_cluster_uid"] = "uid-elsewhere"
+    path.write_text(json.dumps(stored))
+    before = _dir_snapshot(tmp_path)
+    action = _update_action(path)
+    action._task.args["checkpoint"].update(config)
+    action._play_context.check_mode = check_mode
+    result = action.run(task_vars=_task_vars_with_operation_identity(mode=mode, collection_version="9.8.7"))
+    assert result["failed"] is True
+    assert "identity" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_update_with_reset_options_still_writes_for_the_same_operation(tmp_path):
+    path = _write_phase_checkpoint(tmp_path)
+    action = _update_action(path)
+    action._task.args["checkpoint"]["reset_from"] = "activation"
+    result = action.run(task_vars=_task_vars_with_operation_identity(collection_version="9.8.7"))
+    assert result.get("failed") is not True
+    assert _stored(path)["operational_data"]["migration_backups"] == _first_journal()
+
+
+@pytest.mark.parametrize("mode, check_mode", [("execute", False), ("dry_run", False), ("execute", True)])
+def test_update_refuses_operational_data_beyond_the_journal(tmp_path, mode, check_mode):
+    path = _write_phase_checkpoint(tmp_path)
+    before = _dir_snapshot(tmp_path)
+    action = _update_action(path, operational_data={"migration_backups": _first_journal(), "argocd_run_id": "run-2"})
+    action._play_context.check_mode = check_mode
+    result = action.run(task_vars=_task_vars_with_operation_identity(mode=mode))
+    assert result["failed"] is True
+    assert "only migration_backups" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before

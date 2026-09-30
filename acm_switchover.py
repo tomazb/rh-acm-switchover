@@ -57,7 +57,7 @@ from lib.constants import (
 from lib.exceptions import StateLoadError, StateLockError, SwitchoverError
 from lib.gitops_detector import GitOpsCollector
 from lib.report_artifacts import validate_report_artifact_directory
-from lib.run_record import HubFacts, RunRecord
+from lib.run_record import HubFacts, MigrationJournalResetRefused, RunRecord
 from lib.utils import StateIdentityMismatch
 from lib.validation import InputValidator, ValidationError, validate_distinct_hub_identities
 from modules import (
@@ -452,6 +452,10 @@ def run_switchover(
     dry_run_snapshot = state.capture_state_snapshot() if getattr(args, "dry_run", False) else None
     try:
         return _run_switchover_impl(args, state, primary, secondary, logger)
+    except MigrationJournalResetRefused:
+        # Refused before any change: restoring the rehearsal would be the only write.
+        dry_run_snapshot = None
+        raise
     finally:
         if dry_run_snapshot is not None:
             state.restore_state_snapshot(dry_run_snapshot)
@@ -540,6 +544,10 @@ def run_restore_only(
     dry_run_snapshot = state.capture_state_snapshot() if getattr(args, "dry_run", False) else None
     try:
         return _run_restore_only_impl(args, state, secondary, logger)
+    except MigrationJournalResetRefused:
+        # Refused before any change: restoring the rehearsal would be the only write.
+        dry_run_snapshot = None
+        raise
     finally:
         if dry_run_snapshot is not None:
             state.restore_state_snapshot(dry_run_snapshot)
@@ -1139,6 +1147,9 @@ def _bind_contexts_with_dry_run_guard(state: StateManager, args: argparse.Namesp
         dry_run_state_guard = state.capture_state_snapshot()
     try:
         state.ensure_contexts(getattr(args, "primary_context", None), getattr(args, "secondary_context", None))
+    except MigrationJournalResetRefused:
+        # Refused before any change: there is nothing to restore, and restoring would write.
+        raise
     except BaseException:
         # H10 guard: ensure_contexts flushes its context-mismatch reset as a
         # critical checkpoint, so an interrupt or I/O error raised during the
@@ -1190,7 +1201,12 @@ def _prepare_runtime(
 
     dry_run_state_guard = None
     if should_bind_state:
-        dry_run_state_guard = _bind_contexts_with_dry_run_guard(state, args)
+        try:
+            dry_run_state_guard = _bind_contexts_with_dry_run_guard(state, args)
+        except MigrationJournalResetRefused as exc:
+            # ensure_contexts refused a reset that would drop a migration journal.
+            logger.error("%s", exc)
+            sys.exit(EXIT_FAILURE)
 
     sanitize_identity_errors = (
         not getattr(args, "decommission", False)
@@ -1315,8 +1331,9 @@ def main():
     runtime = _prepare_runtime(args, logger, resolved_state_file)
     state = runtime.state
 
+    outcome: Optional[cli_outcomes.OperationOutcome] = None
     try:
-        operation_exit_code = cli_outcomes.run_operation_mode(
+        outcome = cli_outcomes.run_operation_outcome(
             args,
             state,
             runtime.primary,
@@ -1330,12 +1347,14 @@ def main():
             exit_interrupt=EXIT_INTERRUPT,
         )
     finally:
-        if runtime.dry_run_state_guard is not None:
+        # A migration-journal reset refusal changed nothing; rolling back would only write.
+        refused = outcome is not None and outcome.journal_reset_refused
+        if runtime.dry_run_state_guard is not None and not refused:
             # H10 guard: put the state file back exactly as it was before the
             # dry-run rehearsal, including a context-mismatch reset that
             # ensure_contexts may have flushed in _prepare_runtime.
             state.restore_state_snapshot(runtime.dry_run_state_guard)
-    sys.exit(operation_exit_code)
+    sys.exit(outcome.exit_code)
 
 
 def _initialize_clients(

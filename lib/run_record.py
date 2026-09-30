@@ -23,6 +23,7 @@ from lib.constants import (
     RESUME_START_PHASE_KEY,
     STATE_KEY_RESUME_SUMMARY,
 )
+from lib.migration_journal import validate_journal_transition, validate_migration_journal
 from lib.teardown_record import (
     MalformedTeardownRecord,
     TeardownRecord,
@@ -47,8 +48,40 @@ _KEY_NEW_BACKUP_DETECTED = "new_backup_detected"
 _KEY_NEW_BACKUP_NAME = "post_switchover_backup_name"
 _KEY_ARCHIVED_RESTORES = "archived_restores"
 _KEY_TEARDOWN_RECORDS = "decommission_teardown_records"
+_KEY_MIGRATION_BACKUPS = "migration_backups"
 
 _UNSET = object()
+# Presence sentinel for strict reads: a stored null must not look like "never written".
+_ABSENT = object()
+
+# Amendment section 10: --reset-state is the only fresh-run boundary once a journal exists.
+MIGRATION_JOURNAL_IMPLICIT_RESET_REFUSAL = (
+    "Refusing to reset the state file: it records a migration journal (the frozen Backup evidence of "
+    "an in-progress migration). Resume with the same contexts, or start a new migration explicitly "
+    "with --reset-state."
+)
+
+
+class MigrationJournalResetRefused(RuntimeError):
+    """An implicit reset would discard a recorded migration journal; --reset-state is required.
+
+    A refusal, not a run error: nothing was changed, so no caller records it in the state.
+    """
+
+
+class StateStructureError(ValueError):
+    """The state's config bag is not a mapping, so no journal read can be trusted. Fail closed."""
+
+
+def migration_journal_present(state_snapshot: Any) -> bool:
+    """True when a state snapshot's config carries a migration journal slot, valid or not.
+
+    For StateManager and workflow code that must not drop a journal by resetting the
+    state: they ask this facade instead of naming the key. A config that is not a
+    mapping cannot hold the slot.
+    """
+    config = state_snapshot.get("config") if isinstance(state_snapshot, dict) else None
+    return isinstance(config, dict) and _KEY_MIGRATION_BACKUPS in config
 
 
 @dataclass(frozen=True)
@@ -364,6 +397,38 @@ class RunRecord:
             # "no records" would silently skip the expected_uid immutability guard.
             raise MalformedTeardownRecord(f"{_KEY_TEARDOWN_RECORDS} must be a mapping, got {records!r}")
         return {key: validate_stored(key, stored) for key, stored in records.items()}
+
+    # -- R4-04 migration journal: activation freezes, later phases reconcile --
+
+    def migration_backups(self) -> Optional[dict]:
+        """The validated migration journal, or None when it was never written.
+
+        A present value of any shape is validated, never read as absent: an
+        invalid, partial or unknown-version journal raises MigrationEvidenceError
+        (amendment section 2). The returned journal is a detached copy.
+        """
+        config = self._state.state.get("config")
+        if not isinstance(config, dict):
+            # A malformed bag would read every key as absent, the journal included.
+            raise StateStructureError(f"state config must be a mapping, got {type(config).__name__}")
+        stored = self._get(_KEY_MIGRATION_BACKUPS, _ABSENT)
+        if stored is _ABSENT:
+            return None
+        return validate_migration_journal(stored)
+
+    def record_migration_backups(self, candidate: dict) -> None:
+        """Validate and persist the complete journal, forced durable on return.
+
+        The candidate is validated first, then checked as a transition from the
+        strictly read stored journal (the freeze-write rule when there is none),
+        so a rejected write leaves the stored journal untouched. The whole value
+        replaces the stored one; a failed critical write propagates. Dry-run is
+        the caller's: this operation always writes.
+        """
+        validate_migration_journal(candidate)
+        validate_journal_transition(self.migration_backups(), candidate)
+        self._set(_KEY_MIGRATION_BACKUPS, candidate)
+        self._state.flush_state()
 
     # -- lifecycle view: read side for report writers and show_state --
 

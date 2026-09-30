@@ -37,7 +37,12 @@ from lib.constants import (
     WORKFLOW_STATE_FILE_MESSAGE,
 )
 from lib.exceptions import SwitchoverError
-from lib.run_record import RunRecord
+from lib.run_record import (
+    MIGRATION_JOURNAL_IMPLICIT_RESET_REFUSAL,
+    MigrationJournalResetRefused,
+    RunRecord,
+    migration_journal_present,
+)
 from lib.utils import CANONICAL_PHASE_NAMES, Phase, StateManager
 
 PhaseHandler = Callable[
@@ -107,6 +112,12 @@ def log_operation_completion(
         logger.info(message)
 
 
+def _refuse_reset_of_migration_journal(state: StateManager, logger: logging.Logger) -> None:
+    """--force never discards a migration journal; only --reset-state does (R4-04 amendment section 10)."""
+    if migration_journal_present(state.capture_state_snapshot()):
+        raise MigrationJournalResetRefused(MIGRATION_JOURNAL_IMPLICIT_RESET_REFUSAL)
+
+
 def handle_completed_state(
     args: argparse.Namespace,
     state: StateManager,
@@ -147,6 +158,7 @@ def handle_completed_state(
         if not getattr(args, "force", False):
             logger.error(WORKFLOW_STALE_STATE_FORCE_REQUIRED_MESSAGE)
             raise SwitchoverError(WORKFLOW_STALE_STATE_FORCE_REQUIRED_MESSAGE)
+        _refuse_reset_of_migration_journal(state, logger)
         logger.warning(WORKFLOW_FORCE_RESET_FRESH_MESSAGE, operation_noun)
         state.reset()
         return False
@@ -191,6 +203,7 @@ def handle_failed_state(
     if not getattr(args, "force", False):
         logger.error(WORKFLOW_FAILED_STATE_FORCE_REQUIRED_MESSAGE)
         raise SwitchoverError(WORKFLOW_FAILED_STATE_FORCE_REQUIRED_MESSAGE)
+    _refuse_reset_of_migration_journal(state, logger)
     logger.warning(WORKFLOW_FORCE_RESET_FRESH_MESSAGE, config.operation_noun)
     state.reset()
 

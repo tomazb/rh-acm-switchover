@@ -1046,6 +1046,20 @@ class TestStateLoadSafety:
         corrupt_files = list(tmp_path.glob("state.json.corrupt.*"))
         assert len(corrupt_files) == 1, f"Expected one .corrupt.* file, found: {corrupt_files}"
 
+    def test_state_file_that_is_not_valid_utf8_is_preserved_like_corrupt_json(self, tmp_path):
+        """Invalid UTF-8 is corruption: a forensic copy is taken and the original keeps blocking."""
+        state_file = tmp_path / "state.json"
+        raw = b'{"current_phase": "\xff\xfe"}'
+        state_file.write_bytes(raw)
+
+        with pytest.raises(StateLoadError, match="corrupt"):
+            StateManager(str(state_file))
+
+        assert state_file.read_bytes() == raw
+        corrupt_files = list(tmp_path.glob("state.json.corrupt.*"))
+        assert len(corrupt_files) == 1
+        assert corrupt_files[0].read_bytes() == raw
+
     def test_corrupt_file_continues_blocking_until_removed(self, tmp_path):
         """The same corrupt state path must keep failing until the operator resets it."""
         state_file = tmp_path / "state.json"

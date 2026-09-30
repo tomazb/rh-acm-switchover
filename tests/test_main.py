@@ -3636,8 +3636,8 @@ class TestCliOutcomesDelegation:
             "acm_switchover._build_cli_operation_hooks",
             return_value="hooks",
         ), patch(
-            "acm_switchover.cli_outcomes.run_operation_mode",
-            return_value=EXIT_SUCCESS,
+            "acm_switchover.cli_outcomes.run_operation_outcome",
+            return_value=cli_outcomes.OperationOutcome(EXIT_SUCCESS),
         ) as run_operation_mode:
             with pytest.raises(SystemExit) as exc_info:
                 main()

@@ -21,6 +21,13 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
     RESOURCE_VERSION_LABELS,
     TEARDOWN_PHASES,
 )
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_evidence import (
+    MigrationEvidenceError,
+)
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_journal import (
+    validate_journal_transition,
+    validate_migration_journal,
+)
 
 SCHEMA_VERSION = "2.0"
 KNOWN_PHASES = (
@@ -36,7 +43,9 @@ KNOWN_PHASES = (
     "decommission",
 )
 
-CHECKPOINT_VALID_STATUSES = frozenset({"enter", "pass", "fail", "reset"})
+# `update` is the mid-phase operational-data write (R4-04 amendment AC26): it moves no
+# phase marker, so it is not a phase transition.
+CHECKPOINT_VALID_STATUSES = frozenset({"enter", "pass", "fail", "reset", "update"})
 CHECKPOINT_BACKEND_FILE = "file"
 CHECKPOINT_DEFAULT_PATH = ".state/checkpoint.json"
 CHECKPOINT_REPORT_KIND_JSON = "json-report"
@@ -682,3 +691,181 @@ def record_teardown_phase(
         data = {}
         checkpoint["operational_data"] = data
     data[KEY_DECOMMISSION_TEARDOWN_RECORDS] = {**records, key: stored}
+
+
+# -- R4-04 migration journal (amendment sections 2 and 10) ---------------------
+#
+# The collection side of the persistence ownership lib/run_record.py holds for the
+# Python CLI. Schema and transition rules belong to module_utils/migration_journal.py;
+# this module owns only the key, the store-structure check that decides whether a
+# decoded checkpoint is readable at all, and the reset/rewind rule. Like the teardown
+# records above it only edits the mapping: the action plugin owns the durable write.
+
+KEY_MIGRATION_BACKUPS = "migration_backups"
+MIGRATION_JOURNAL_ABSENT = "absent"
+MIGRATION_JOURNAL_VALID = "valid"
+MIGRATION_JOURNAL_INVALID = "invalid"
+# The phases before the first Backup freeze: rewinding to one would start a new
+# migration transaction, which only the explicit full checkpoint reset may do.
+PRE_FREEZE_PHASES = ("preflight", "primary_prep")
+
+
+class CheckpointStructureError(ValueError):
+    """The decoded checkpoint is not a readable checkpoint store. Fail closed."""
+
+
+class MigrationRewindRefused(ValueError):
+    """A reset_from rewind would discard or launder the migration journal."""
+
+
+def checkpoint_structure_error(checkpoint) -> str | None:
+    """Why a decoded checkpoint is structurally corrupt, or None when it is readable.
+
+    The one structural rule every checkpoint reader already relies on: the top level is
+    a JSON object. No key becomes required; the ordinary transition path keeps its
+    tolerance of a malformed operational_data value, which enter heals.
+    """
+    if not isinstance(checkpoint, dict):
+        return f"the top level is a JSON {type(checkpoint).__name__}, not an object"
+    return None
+
+
+def _migration_data(checkpoint) -> dict:
+    """The operational_data a journal read may trust, or CheckpointStructureError.
+
+    Stricter than checkpoint_structure_error for the same reason _stored_records is:
+    the journal is mutation authority, so a present non-mapping container is not read
+    as "no journal".
+    """
+    error = checkpoint_structure_error(checkpoint)
+    if error is None and "operational_data" in checkpoint and not isinstance(checkpoint["operational_data"], dict):
+        error = f"operational_data is a {type(checkpoint['operational_data']).__name__}, not a mapping"
+    if error is not None:
+        raise CheckpointStructureError(f"Checkpoint is not readable: {error}.")
+    return checkpoint.get("operational_data", {})
+
+
+def classify_migration_backups(checkpoint) -> tuple:
+    """The journal outcome of a readable checkpoint: (absent, None), (valid, journal),
+    or (invalid, MigrationEvidenceError).
+
+    Only a missing key is absent; a present key of any value is valid or invalid, never
+    absent. The valid journal is a detached copy. Raises CheckpointStructureError when
+    the checkpoint is not readable, which is never an absent journal either.
+    """
+    data = _migration_data(checkpoint)
+    if KEY_MIGRATION_BACKUPS not in data:
+        return MIGRATION_JOURNAL_ABSENT, None
+    try:
+        return MIGRATION_JOURNAL_VALID, validate_migration_journal(data[KEY_MIGRATION_BACKUPS])
+    except MigrationEvidenceError as exc:
+        return MIGRATION_JOURNAL_INVALID, exc
+
+
+def migration_backups(checkpoint):
+    """The validated journal, or None when it was never written. An invalid one raises."""
+    outcome, value = classify_migration_backups(checkpoint)
+    if outcome == MIGRATION_JOURNAL_INVALID:
+        raise value
+    return value
+
+
+def has_migration_backups(checkpoint) -> bool:
+    """True when the checkpoint carries a journal slot, valid or not.
+
+    For the paths that rebuild a checkpoint from scratch: they must not drop the slot.
+    A checkpoint or operational_data that is not a mapping cannot hold one.
+    """
+    if not isinstance(checkpoint, dict):
+        return False
+    data = checkpoint.get("operational_data")
+    return isinstance(data, dict) and KEY_MIGRATION_BACKUPS in data
+
+
+def record_migration_backups(checkpoint, candidate) -> None:
+    """Validate `candidate` and store it as the one complete journal value.
+
+    The candidate is validated first, then checked as a transition from the strictly
+    read stored journal (the freeze-write rule when there is none). A rejected write
+    leaves the mapping untouched.
+    """
+    validate_migration_journal(candidate)
+    validate_journal_transition(migration_backups(checkpoint), candidate)
+    if "operational_data" not in checkpoint:
+        checkpoint["operational_data"] = {}
+    checkpoint["operational_data"][KEY_MIGRATION_BACKUPS] = copy.deepcopy(candidate)
+
+
+def _journal_outcome_or_refuse(checkpoint, request: str) -> str:
+    """The journal outcome; an invalid journal refuses every reset or rewind `request`.
+
+    Slot presence is decided first: a checkpoint without the slot -- a non-mapping
+    operational_data included, which cannot hold one -- is journal-free, so these
+    guards leave journal-free transitions exactly as they were. Only a present slot is
+    classified strictly.
+    """
+    if not has_migration_backups(checkpoint):
+        return MIGRATION_JOURNAL_ABSENT
+    outcome, value = classify_migration_backups(checkpoint)
+    if outcome == MIGRATION_JOURNAL_INVALID:
+        raise MigrationRewindRefused(
+            f"Refusing {request}: the stored migration journal is invalid ({value}). "
+            "Repair the checkpoint, or start a new migration with the full checkpoint reset."
+        )
+    return outcome
+
+
+def check_migration_rewind(checkpoint, reset_from: str, *, prunes: bool, requested_phase: str) -> str:
+    """Decide whether `reset_from` may run against this checkpoint's journal.
+
+    The rule is about effect, because reset_from rides along in the checkpoint config of
+    every task in a run. An invalid journal refuses every reset_from: dropping a phase
+    marker never turns bad evidence into absence. With a valid journal, a pre-freeze
+    reset_from is refused when it would move the checkpoint back before the freeze --
+    `prunes` (it still names a completed phase, so pruning happens) or a
+    `requested_phase` that is itself pre-freeze -- and is otherwise a no-op that keeps
+    the journal. Any later reset_from keeps the journal. Returns the journal outcome.
+    The full checkpoint reset rebuilds the record without reading it and so never
+    reaches this rule; it is the only path that may drop a journal.
+    """
+    outcome = _journal_outcome_or_refuse(checkpoint, f"checkpoint.reset_from '{reset_from}'")
+    moves_back = prunes or requested_phase in PRE_FREEZE_PHASES
+    if outcome == MIGRATION_JOURNAL_VALID and reset_from in PRE_FREEZE_PHASES and moves_back:
+        raise MigrationRewindRefused(
+            f"Refusing checkpoint.reset_from '{reset_from}' for phase '{requested_phase}': the checkpoint records "
+            "a migration transaction frozen after that phase. Remove reset_from or rewind to activation or later "
+            "to reuse it, or start a new migration with the full checkpoint reset (checkpoint.reset)."
+        )
+    return outcome
+
+
+def check_migration_reset(checkpoint, phase: str) -> str:
+    """Decide whether an explicit `status: reset` of `phase` may run against the journal.
+
+    Independent of reset_from: the status itself un-completes `phase`. An invalid
+    journal refuses every reset; a valid one refuses a reset of a pre-freeze phase and is
+    kept by any later one. Returns the journal outcome.
+    """
+    outcome = _journal_outcome_or_refuse(checkpoint, f"status: reset of phase '{phase}'")
+    if outcome == MIGRATION_JOURNAL_VALID and phase in PRE_FREEZE_PHASES:
+        _refuse_pre_freeze_transition("reset", phase)
+    return outcome
+
+
+def check_migration_fail(checkpoint, phase: str) -> None:
+    """Decide whether `status: fail` of `phase` may run against the journal.
+
+    A fail un-completes `phase`, so failing a pre-freeze phase while the journal key is
+    present, valid or not, rewinds across the freeze and is refused. A fail of any later
+    phase is always recorded, even over an invalid journal: a real failure must never be
+    blocked, and it leaves the journal in place.
+    """
+    if phase in PRE_FREEZE_PHASES and has_migration_backups(checkpoint):
+        _refuse_pre_freeze_transition("fail", phase)
+
+
+def _refuse_pre_freeze_transition(status: str, phase: str) -> NoReturn:
+    raise MigrationRewindRefused(
+        f"Refusing status: {status} of phase '{phase}': the checkpoint records a migration transaction frozen "
+        "after that phase. Start a new migration with the full checkpoint reset (checkpoint.reset)."
+    )

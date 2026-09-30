@@ -27,9 +27,12 @@ from urllib3.exceptions import HTTPError, MaxRetryError, NewConnectionError
 from urllib3.exceptions import TimeoutError as Urllib3TimeoutError
 
 from lib.constants import (
+    CLUSTER_BACKUP_API_GROUP,
+    CLUSTER_BACKUP_API_VERSION,
     MANAGED_CLUSTER_API_GROUP,
     MANAGED_CLUSTER_API_VERSION,
     MANAGED_CLUSTER_PLURAL,
+    RESTORE_PLURAL,
     STRICT_READ_MAX_PAGES,
     STRICT_READ_MAX_RESTARTS,
     STRICT_READ_PAGE_LIMIT,
@@ -155,6 +158,60 @@ def _create_result_matches_requested_body(existing: Dict[str, Any], requested: D
 # Sentinel returned internally by a strict-list drain helper to signal that its
 # whole-read attempt hit an expired continuation and must restart from page 1.
 _RESTART_READ = object()
+
+# Guarded Restore JSON Patch (R4-04). Mirrored by the collection's
+# acm_restore_guarded_mutation module; tests/test_restore_guarded_mutation_parity.py pins parity.
+GUARDED_PATCH_CONTENT_TYPE = "application/json-patch+json"
+GUARDED_PATCH_REPLACEMENT_MANAGED_CLUSTERS_BACKUP_NAME = "latest"
+# A failed `test` operation or a conditional conflict: the atomic PATCH mutated nothing.
+GUARDED_PATCH_CONFLICT_STATUSES = frozenset({409, 412, 422})
+_MANAGED_CLUSTERS_BACKUP_NAME_PATH = "/spec/veleroManagedClustersBackupName"
+
+
+def build_guarded_restore_patch(
+    *,
+    uid: str,
+    resource_version: str,
+    expected_managed_clusters_backup_name: str,
+    replacement_managed_clusters_backup_name: str,
+) -> List[Dict[str, Any]]:
+    """Build the RFC 6902 document for the guarded passive Restore patch.
+
+    The three `test` operations precede the `replace`, so the API server applies the
+    replacement only while the object is still the proved UID, at the proved
+    resourceVersion, holding the proved raw ManagedClusters backup value. Values are
+    compared exactly: none is trimmed or normalized here.
+
+    Raises:
+        ValidationError: an empty identity or raw value, or a replacement other than `latest`.
+    """
+    for field, value in (
+        ("uid", uid),
+        ("resource_version", resource_version),
+        ("expected_managed_clusters_backup_name", expected_managed_clusters_backup_name),
+    ):
+        if not isinstance(value, str) or not value:
+            raise ValidationError(f"A non-empty {field} is required for a guarded Restore patch.")
+    _require_unpadded_identity(uid, resource_version, "patch")
+    if replacement_managed_clusters_backup_name != GUARDED_PATCH_REPLACEMENT_MANAGED_CLUSTERS_BACKUP_NAME:
+        raise ValidationError("The guarded Restore patch only replaces veleroManagedClustersBackupName with 'latest'.")
+    return [
+        {"op": "test", "path": "/metadata/uid", "value": uid},
+        {"op": "test", "path": "/metadata/resourceVersion", "value": resource_version},
+        {"op": "test", "path": _MANAGED_CLUSTERS_BACKUP_NAME_PATH, "value": expected_managed_clusters_backup_name},
+        {
+            "op": "replace",
+            "path": _MANAGED_CLUSTERS_BACKUP_NAME_PATH,
+            "value": replacement_managed_clusters_backup_name,
+        },
+    ]
+
+
+def _require_unpadded_identity(uid: str, resource_version: str, action: str) -> None:
+    """Refuse a uid or resourceVersion with surrounding whitespace: it names no live object."""
+    for field, value in (("uid", uid), ("resource_version", resource_version)):
+        if value != value.strip():
+            raise ValidationError(f"The {field} for a guarded Restore {action} carries surrounding whitespace.")
 
 
 # Standard retry decorator for API calls
@@ -1296,6 +1353,220 @@ class KubeClient:
                 e,
             )
             raise
+
+    def json_patch_custom_resource_guarded(
+        self,
+        name: str,
+        *,
+        namespace: str,
+        uid: str,
+        resource_version: str,
+        expected_managed_clusters_backup_name: str,
+        replacement_managed_clusters_backup_name: str,
+        timeout_seconds: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Replace a Restore's veleroManagedClustersBackupName under a server-enforced guard.
+
+        Submits one RFC 6902 JSON Patch (`application/json-patch+json`) to the ACM Restore
+        whose `test` operations bind the exact UID, resourceVersion and raw current
+        ManagedClusters backup value before the `replace`; see `build_guarded_restore_patch`.
+        The generated CustomObjectsApi PATCH hard-codes merge patch, so this sends the request
+        through the same per-instance ApiClient. Nothing else is mutated and the generic
+        merge-patch helper is untouched.
+
+        This method is deliberately undecorated and makes exactly one request: a failed test
+        or a conflict means the live object is not the proved one, and a retry must start
+        again from a fresh strict read, never repeat this request or fall back to merge patch.
+        A timeout is not acceptance, whether it strikes the request or the later read of the
+        response body. Acceptance is verified only when the decoded response carries the
+        proved `metadata.uid` and a non-empty `metadata.resourceVersion`; only then is its
+        integer `generation` published, and a missing generation is reported as None with
+        `generation_reported` False, never inferred. A 2xx whose identity is malformed is
+        `malformed_response` with `accepted` False, `changed` False and no identity or
+        generation evidence; `http_accepted` records that the server answered 2xx.
+
+        In dry-run no request is made; `would_change` carries the prediction and `changed`
+        stays False.
+
+        Returns:
+            dict with `accepted`, `http_accepted`, `changed`, `would_change`, `conflict`,
+            `dry_run`, `reason` (`ok`, `predicted`, `precondition_failed`, `not_found`,
+            `unverifiable` or `malformed_response`), `uid`, `resource_version`, `generation`
+            and `generation_reported`. No response body or exception text is included.
+
+        Raises:
+            ValidationError: invalid name/namespace, empty identity or raw value, a
+                whitespace-padded uid or resourceVersion, or a replacement other than `latest`.
+        """
+        if not isinstance(namespace, str) or not namespace:
+            raise ValidationError(f"A namespace is required to patch {RESTORE_PLURAL}/{name}.")
+        self._validate_resource_inputs(namespace, name, "custom resource")
+        patch_ops = build_guarded_restore_patch(
+            uid=uid,
+            resource_version=resource_version,
+            expected_managed_clusters_backup_name=expected_managed_clusters_backup_name,
+            replacement_managed_clusters_backup_name=replacement_managed_clusters_backup_name,
+        )
+        would_change = expected_managed_clusters_backup_name != replacement_managed_clusters_backup_name
+        result = self._guarded_restore_result()
+        result.update(generation=None, generation_reported=False)
+
+        if self.dry_run:
+            logger.info("[DRY-RUN] Would apply the guarded JSON Patch to %s/%s", RESTORE_PLURAL, name)
+            result.update(would_change=would_change, reason="predicted")
+            return result
+
+        try:
+            raw = self._api_client.call_api(
+                "/apis/{group}/{version}/namespaces/{namespace}/{plural}/{name}",
+                "PATCH",
+                path_params={
+                    "group": CLUSTER_BACKUP_API_GROUP,
+                    "version": CLUSTER_BACKUP_API_VERSION,
+                    "namespace": namespace,
+                    "plural": RESTORE_PLURAL,
+                    "name": name,
+                },
+                header_params={"Content-Type": GUARDED_PATCH_CONTENT_TYPE, "Accept": "application/json"},
+                body=patch_ops,
+                auth_settings=["BearerToken"],
+                _preload_content=False,
+                _return_http_data_only=True,
+                _request_timeout=(timeout_seconds if timeout_seconds is not None else self.request_timeout),
+            )
+            # The body is read lazily (`_preload_content=False`); a failure reading it leaves
+            # the outcome unknown, so it stays inside this boundary, before any acceptance.
+            body = raw.data
+        except ApiException as exc:
+            # Status only: API error bodies echo request content.
+            if exc.status in GUARDED_PATCH_CONFLICT_STATUSES:
+                logger.warning(
+                    "Guarded JSON Patch of %s/%s rejected with HTTP %s: the live object is not the proved one",
+                    RESTORE_PLURAL,
+                    name,
+                    exc.status,
+                )
+                result.update(conflict=True, reason="precondition_failed")
+            elif exc.status == 404:
+                result["reason"] = "not_found"
+            else:
+                logger.error("Guarded JSON Patch of %s/%s failed with HTTP %s", RESTORE_PLURAL, name, exc.status)
+            return result
+        except Exception as exc:
+            logger.error(
+                "Guarded JSON Patch of %s/%s did not complete (%s); it is not accepted",
+                RESTORE_PLURAL,
+                name,
+                type(exc).__name__,
+            )
+            return result
+
+        result.update(http_accepted=True, reason="malformed_response")
+        try:
+            response = json.loads(body.decode("utf-8"))
+        except Exception:
+            return result
+        metadata = response.get("metadata") if isinstance(response, dict) else None
+        if not isinstance(metadata, dict):
+            return result
+        response_revision = metadata.get("resourceVersion")
+        # Identity first: a generation is evidence only for the proved object (C §5.1).
+        if metadata.get("uid") != uid or not isinstance(response_revision, str) or not response_revision:
+            return result
+        result.update(accepted=True, changed=would_change, reason="ok", uid=uid, resource_version=response_revision)
+        generation = metadata.get("generation")
+        if isinstance(generation, int) and not isinstance(generation, bool):
+            result.update(generation=generation, generation_reported=True)
+        return result
+
+    def _guarded_restore_result(self) -> Dict[str, Any]:
+        """The result shape shared by the guarded Restore patch and delete."""
+        return {
+            "accepted": False,
+            "http_accepted": False,
+            "changed": False,
+            "would_change": False,
+            "conflict": False,
+            "dry_run": self.dry_run,
+            "reason": "unverifiable",
+            "uid": None,
+            "resource_version": None,
+        }
+
+    def delete_restore_guarded(
+        self,
+        name: str,
+        *,
+        namespace: str,
+        uid: str,
+        resource_version: str,
+        timeout_seconds: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Delete an ACM Restore only while it is the proved UID at the proved resourceVersion.
+
+        Delegates the one request to `delete_custom_resource_preconditioned` with both
+        preconditions and maps its outcome to the guarded-mutation result shape (see
+        `json_patch_custom_resource_guarded`), without `generation`. A 409/412 is
+        `precondition_failed` with `conflict` True, a 404 is `not_found`, and anything else,
+        including a timeout, is `unverifiable`. Nothing is retried and no exception text is
+        returned. In dry-run the primitive is never reached: the result is a prediction.
+
+        Raises:
+            ValidationError: invalid name/namespace, or an empty or whitespace-padded uid or
+                resourceVersion.
+        """
+        if not isinstance(namespace, str) or not namespace:
+            raise ValidationError(f"A namespace is required to delete {RESTORE_PLURAL}/{name}.")
+        self._validate_resource_inputs(namespace, name, "custom resource")
+        for field, value in (("uid", uid), ("resource_version", resource_version)):
+            if not isinstance(value, str) or not value:
+                raise ValidationError(f"A non-empty {field} is required for a guarded Restore delete.")
+        _require_unpadded_identity(uid, resource_version, "delete")
+        result = self._guarded_restore_result()
+
+        if self.dry_run:
+            logger.info("[DRY-RUN] Would delete %s/%s under its UID and resourceVersion", RESTORE_PLURAL, name)
+            result.update(would_change=True, reason="predicted")
+            return result
+
+        try:
+            self.delete_custom_resource_preconditioned(
+                CLUSTER_BACKUP_API_GROUP,
+                CLUSTER_BACKUP_API_VERSION,
+                RESTORE_PLURAL,
+                name,
+                uid=uid,
+                resource_version=resource_version,
+                namespace=namespace,
+                timeout_seconds=(timeout_seconds if timeout_seconds is not None else self.request_timeout),
+            )
+        except PreconditionConflict:
+            logger.warning(
+                "Guarded delete of %s/%s rejected: the live object is not the proved one", RESTORE_PLURAL, name
+            )
+            result.update(conflict=True, reason="precondition_failed")
+            return result
+        except TargetDisappeared:
+            result["reason"] = "not_found"
+            return result
+        except Exception as exc:
+            logger.error(
+                "Guarded delete of %s/%s did not complete (%s); it is not accepted",
+                RESTORE_PLURAL,
+                name,
+                type(exc).__name__,
+            )
+            return result
+
+        result.update(
+            accepted=True,
+            http_accepted=True,
+            changed=True,
+            reason="ok",
+            uid=uid,
+            resource_version=resource_version,
+        )
+        return result
 
     def create_custom_resource(
         self,

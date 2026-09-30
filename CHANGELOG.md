@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- R4-04 PR B migration-evidence model, dormant (Python + Collection, mirrored, pure): pinned
+  cluster-backup-operator Backup selection for ACM 2.12–2.17 (direct `latest` and exact-first
+  correlated generic selection, seven-field Backup projection), Velero child evidence (owner,
+  role, cohort and completion rules for `passive_patch`, `passive_restore` and `full_restore`,
+  generated-name collision prediction before mutation), and the `migration_backups` journal
+  validator (lifecycle, cleanup state machine, transitions, waiver, repair, Restore spec
+  fingerprint). One shared vector fixture holds both form factors equal.
+- R4-04 PR B guarded ACM Restore mutation primitives, dormant: Python
+  `KubeClient.json_patch_custom_resource_guarded` / `delete_restore_guarded` and the collection
+  module `acm_restore_guarded_mutation` send one JSON Patch guarded by `test` operations on UID,
+  resourceVersion and the raw ManagedClusters Backup name (replacement `latest` only), or one
+  UID- and resourceVersion-preconditioned delete; a conflict, timeout, unreadable or
+  identity-mismatched response is never reported as an accepted change, and dry-run/check mode
+  sends nothing. No new RBAC: existing Restore `patch`/`delete`.
+- R4-04 PR B migration journal persistence facades, dormant: Python `RunRecord.migration_backups()`
+  / `record_migration_backups()` and the collection `checkpoint_phase` `status: update` read and
+  write the `migration_backups` journal only through each side's journal validators, as one complete,
+  durably written value; an invalid, partial or unknown-version journal blocks rather than
+  reading as absent, and the Python `RunRecord` journal read also blocks on a state whose `config`
+  is not a mapping. `status: update` accepts only `migration_backups` in `operational_data` and
+  always proves the operation identity, reset options or not. While a journal
+  exists, a collection `reset_from: preflight`/`primary_prep` is refused when it would move the
+  checkpoint back before the freeze (it would prune a completed phase, or the requested phase is
+  pre-freeze) and is otherwise a no-op; an explicit `status: reset` of `preflight` or
+  `primary_prep` is refused with or without `reset_from`; an invalid journal refuses every
+  `reset_from` and every `status: reset`; a `status: fail` of `preflight` or `primary_prep` is
+  refused while the journal key is present (valid or not), while a fail of `activation` or later
+  is always recorded; for a journal-bearing schema 1.0 checkpoint the collection refuses the
+  schema 1.0 rebuild that would discard operational data, while journal-preserving `reset_from`
+  rebuilds remain allowed, in check mode as in execution; and, only while a journal is present,
+  Python refuses the implicit resets (context mismatch, missing contexts on an in-progress state,
+  `--force` on a stale completed or unresumable failed state) with a pointer to `--reset-state`,
+  writing nothing to the state file: the refusal is not recorded as a run error, and a `--dry-run`
+  rehearsal skips its state rollback, which would be the only write. Every collection reset guard checks for the journal slot
+  first, so a checkpoint without one, a non-mapping `operational_data` included, resets exactly as
+  before. No phase writes a journal yet, so runs without one are unaffected.
 - R4-03 PR D ManagedCluster teardown (Python + Collection): strict inventory, Hive
   `preserveOnDelete` guard, durable UID before UID-preconditioned DELETE, no-drain
   phase sequence, survivor aggregation, and dry-run/check-mode parity.
@@ -27,6 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validators require these on standalone and integrated decommission.
 
 ### Fixed
+
+- A corrupt collection checkpoint now keeps blocking (R4-04 PR B, aligned with Python). A
+  checkpoint that is not valid JSON (including invalid UTF-8) or whose top level is not a JSON object is copied to
+  `<path>.corrupt-<UTC timestamp>`, left in place, and the run fails, so every later run stays
+  blocked until the operator repairs or removes it or sets `checkpoint.reset: true`. Previously
+  the file was moved aside and the next run silently started from an empty checkpoint; a
+  non-object top level crashed the action. A failed copy fails without touching the original;
+  non-mutating runs make no copy.
 
 - State and checkpoint replacement is now durably acknowledged (R4-04 PR A, the narrow R4-05
   §2 prerequisite before R4-04 journal writes). Python `StateManager` fsyncs the state
