@@ -217,7 +217,12 @@ missing Backup for them (`U2.12–2.13/restore.go:700-719`, `U2.14–2.16/restor
 and publishes neither in status. R4-04 adds no hive/cluster evidence category: before
 mutation it predicts both with §2 and their tokens, and **blocks if either prediction selects
 a candidate or is blocking** (the legacy three-credential backup format is outside the R4-04
-evidence model).
+evidence model). This removes no supported configuration: the Backup schedules of the
+supported controllers define only the credentials, resources, generic-resources,
+managed-clusters, and validation types (`U2.12/backup.go:138-144`, `U2.16/backup.go:138-144`),
+so a hive or cluster credential Backup correlated — by the exact name suffix or within ±30
+seconds — to a credentials Backup produced by a supported schedule can only come from an
+unsupported producer.
 
 For `full_restore` on every lane, a ResourcesGeneric "no candidate" is blocking before
 mutation, as August §5 requires a generic child for full restore — deliberately stricter than
@@ -247,6 +252,15 @@ generic owner child blocks completion rather than adding the category.
 Generated child names are not an identity. Accepted child entries are keyed by name within a
 list and carry the five fields of August §5; a generated-name collision between two roles, or
 a name that resolves to an object bound to a different role's Backup, is blocking.
+
+The generated names are predictable before mutation: the pinned helper derives each child name
+only from the ACM Restore name and the child's Backup name, truncated to 252 characters
+(`U2.12–2.13/utils.go:118-125`, `U2.14/utils.go:127-134`, `U2.15–2.17/utils.go:126-133`), plus
+the 2.17 `-active` suffix of §4.1. Before creating or patching the ACM Restore, R4-04 computes
+the generated names of every required role from the Restore name and the frozen Backups and
+**blocks with zero ACM Restore mutation** when two roles would share a name. The post-mutation
+check above remains the backstop for children the controller creates from Backups that were
+not frozen.
 
 ## 5. Recorded resolutions of existing ambiguities
 
@@ -314,7 +328,8 @@ New criteria:
     fallback with multiple raw matches (blocks); legacy `passive_restore` with zero generic
     candidates, one candidate, two candidates with a unique maximum start time (selects the
     newest), two candidates tied at the maximum (blocks), and the credentials prediction
-    missing (blocks); a truncation-induced generated-name collision (blocks); a legacy full restore with a hive candidate (blocks); a 2.17 full
+    missing (blocks); a truncation-induced generated-name collision predicted before mutation
+    (blocks with zero ACM Restore mutation); a legacy full restore with a hive candidate (blocks); a 2.17 full
     restore with a missing, failed, or duplicated `-active` child (blocks); a one-shot owner
     child bound to an unfrozen Backup (blocks); and direct `latest` with a maximum-time tie
     (blocks), an older tie (selects), and a missing start time (blocks).
