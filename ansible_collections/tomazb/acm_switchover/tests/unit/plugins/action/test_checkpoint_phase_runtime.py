@@ -3847,6 +3847,19 @@ def test_structurally_corrupt_json_is_preserved_like_invalid_json(tmp_path, deco
     assert copies[0].read_text() == text
 
 
+def test_a_checkpoint_that_is_not_valid_utf8_is_preserved_like_invalid_json(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    raw = b'{"schema_version": "\xff\xfe"}'
+    path.write_bytes(raw)
+    result = _enter_action(path, phase="preflight").run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert "corrupted" in result["msg"]
+    assert path.read_bytes() == raw
+    copies = [entry for entry in tmp_path.iterdir() if entry.name.startswith("checkpoint.json.corrupt-")]
+    assert len(copies) == 1
+    assert copies[0].read_bytes() == raw
+
+
 @pytest.mark.parametrize("mode, check_mode", [("dry_run", False), ("validate", False), ("execute", True)])
 @pytest.mark.parametrize("text", ["{not json", "[]"])
 def test_a_non_mutating_run_reports_corruption_without_writing(tmp_path, mode, check_mode, text):

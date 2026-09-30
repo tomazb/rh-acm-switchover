@@ -1322,7 +1322,7 @@ class ActionModule(ActionBase):
         try:
             with open(path, encoding="utf-8") as fh:
                 checkpoint = json.load(fh)
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
             return self._corrupt_checkpoint_failure(path, f"invalid JSON: {e}", preserve_corrupt)
         except OSError as e:
             return {

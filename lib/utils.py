@@ -285,7 +285,7 @@ class StateManager:
                 state = json.load(f)
                 self._validate_loaded_state(state)
                 return state
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
             corrupt_path = self._preserve_corrupt_state_file()
             raise StateLoadError(
                 f"State file is corrupt and cannot be loaded: {self.state_file}\n"

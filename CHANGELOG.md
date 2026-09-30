@@ -65,7 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - A corrupt collection checkpoint now keeps blocking (R4-04 PR B, aligned with Python). A
-  checkpoint that is not valid JSON or whose top level is not a JSON object is copied to
+  checkpoint that is not valid JSON (including invalid UTF-8) or whose top level is not a JSON object is copied to
   `<path>.corrupt-<UTC timestamp>`, left in place, and the run fails, so every later run stays
   blocked until the operator repairs or removes it or sets `checkpoint.reset: true`. Previously
   the file was moved aside and the next run silently started from an empty checkpoint; a

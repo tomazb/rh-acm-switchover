@@ -181,7 +181,7 @@ all downstream phases from `completed_phases`. For example,
 `checkpoint.reset_from: primary_prep` keeps `preflight` complete and reruns
 `primary_prep`, `activation`, `post_activation`, and `finalization`.
 
-A checkpoint file that is not valid JSON, or whose top level is not a JSON object,
+A checkpoint file that is not valid JSON (including bytes that are not valid UTF-8), or whose top level is not a JSON object,
 is corrupt. An execute-mode run copies it to `<path>.corrupt-<UTC timestamp>`, leaves
 the original in place, and fails; every later run stays blocked until the operator
 repairs or removes the file or sets `checkpoint.reset: true`. If the copy fails, the
