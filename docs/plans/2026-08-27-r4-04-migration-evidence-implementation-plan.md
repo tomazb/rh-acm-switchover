@@ -761,7 +761,7 @@ PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/un
 Document:
 
 - exact new waiver/repair interfaces;
-- `latest` permitted only for the passive-patch upstream trigger while accepted provenance remains concrete;
+- `latest` permitted for `passive_patch` and one-shot `passive_restore`; full restoration uses concrete owned fields, and all accepted Backup and child provenance remains concrete;
 - strict resume/no-refreeze behavior;
 - cleanup recovery/repair states and operator action;
 - count/name additivity;
