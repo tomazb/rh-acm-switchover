@@ -305,7 +305,8 @@ class KubeClient:
         """Positively determine whether one kind is served, or fail closed.
 
         Kind absence is proven only by a successful, decodable discovery
-        response that does not list the exact canonical `resource_name`. A discovery call that fails,
+        response for the requested group/version that does not list the exact
+        canonical `resource_name`. A discovery call that fails,
         times out, is unauthorized, or returns an unparseable body is an
         error: an unserved kind and an unreachable API server are not
         distinguishable by exception type, and the client library's own
@@ -336,6 +337,12 @@ class KubeClient:
         if not isinstance(response, dict):
             return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
         if response.get("kind") != "APIResourceList":
+            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
+        # A document that does not declare the requested group/version says nothing about it:
+        # it can prove neither that the resource is served nor that it is absent (#321).
+        requested_group_version = f"{group}/{version}" if group else version
+        group_version = response.get("groupVersion")
+        if not isinstance(group_version, str) or not group_version or group_version != requested_group_version:
             return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
         resources = response.get("resources")
         if not isinstance(resources, list):

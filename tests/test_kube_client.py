@@ -1684,6 +1684,7 @@ class TestDiscoveryProver:
             return_value=self._body(
                 {
                     "kind": "APIResourceList",
+                    "groupVersion": "operator.open-cluster-management.io/v1",
                     "resources": [{"name": "multiclusterhubs", "kind": "MultiClusterHub"}],
                 }
             )
@@ -1697,6 +1698,7 @@ class TestDiscoveryProver:
             return_value=self._body(
                 {
                     "kind": "APIResourceList",
+                    "groupVersion": "g/v1",
                     "resources": [{"name": "somethingelse", "kind": "SomethingElse"}],
                 }
             )
@@ -1723,7 +1725,7 @@ class TestDiscoveryProver:
         assert self._client(call)._discovery_serves("g", "v1", "p").status is StrictReadStatus.ERROR
 
     def test_missing_resources_key_is_error_not_absence(self):
-        call = Mock(return_value=self._body({"kind": "APIResourceList"}))
+        call = Mock(return_value=self._body({"kind": "APIResourceList", "groupVersion": "g/v1"}))
         assert self._client(call)._discovery_serves("g", "v1", "p").status is StrictReadStatus.ERROR
 
     def test_discovery_404_is_error_not_absence(self):
@@ -1736,7 +1738,9 @@ class TestDiscoveryProver:
         assert self._client(call)._discovery_serves("g", "v1", "p").status is StrictReadStatus.ERROR
 
     def test_malformed_api_resource_list_is_error_not_absence(self):
-        call = Mock(return_value=self._body({"kind": "APIResourceList", "resources": [{"name": 7}]}))
+        call = Mock(
+            return_value=self._body({"kind": "APIResourceList", "groupVersion": "g/v1", "resources": [{"name": 7}]})
+        )
         assert self._client(call)._discovery_serves("g", "v1", "p").status is StrictReadStatus.ERROR
 
     @pytest.mark.parametrize(
@@ -1755,7 +1759,9 @@ class TestDiscoveryProver:
         parity vector can pin down. Absence was never order-sensitive — it already requires
         the full list to validate — so only the served verdict needed closing.
         """
-        call = Mock(return_value=self._body({"kind": "APIResourceList", "resources": resources}))
+        call = Mock(
+            return_value=self._body({"kind": "APIResourceList", "groupVersion": "g/v1", "resources": resources})
+        )
         outcome = self._client(call)._discovery_serves("g", "v1", "p")
         assert outcome.status is StrictReadStatus.ERROR
         assert outcome.reason == STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE
@@ -1765,6 +1771,7 @@ class TestDiscoveryProver:
             return_value=self._body(
                 {
                     "kind": "APIResourceList",
+                    "groupVersion": "observability.open-cluster-management.io/v1beta2",
                     "resources": [
                         {
                             "name": "multiclusterobservabilities",
@@ -1812,6 +1819,7 @@ class TestDiscoveryProver:
             return _FakeRESTResponse(
                 {
                     "kind": "APIResourceList",
+                    "groupVersion": "v1",
                     "resources": [{"name": "pods", "kind": "Pod"}],
                 }
             )
@@ -1835,6 +1843,7 @@ class TestDiscoveryProver:
             return_value=self._body(
                 {
                     "kind": "APIResourceList",
+                    "groupVersion": "v1",
                     "resources": [{"name": "pods", "kind": "Pod"}],
                 }
             )
