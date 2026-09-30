@@ -459,6 +459,10 @@ def test_check_mode_makes_no_api_call_and_reports_the_prediction_separately(monk
         _delete_args(replacement_managed_clusters_backup_name="latest"),
         _delete_args(expected_uid=""),
         _delete_args(expected_resource_version=None),
+        _patch_args(expected_uid=" 3f0c2a4e-uid"),
+        _patch_args(expected_resource_version="48213\n"),
+        _delete_args(expected_uid="3f0c2a4e-uid "),
+        _delete_args(expected_resource_version=" 48213"),
         _patch_args(unexpected_option="x"),
     ],
 )

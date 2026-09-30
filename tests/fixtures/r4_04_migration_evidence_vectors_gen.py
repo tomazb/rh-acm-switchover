@@ -3205,7 +3205,10 @@ for name, path, value in (
     )
 for name, changes in (
     ("teardown-revalidation", {"restore__teardown_revalidated_at": None}),
-    ("post-activation-completion", {"restore__teardown_revalidated_at": None, "post_activation__completed_at": None}),
+    (
+        "teardown-revalidation-and-post-activation-completion",
+        {"restore__teardown_revalidated_at": None, "post_activation__completed_at": None},
+    ),
 ):
     jcase(
         f"journal-cleanup-without-{name}",
@@ -3214,6 +3217,15 @@ for name, changes in (
         mut(IP, **changes),
         "cleanup_prerequisite_missing",
     )
+# With teardown revalidation still recorded, a missing post-activation completion is caught by the
+# lifecycle check first: teardown revalidation may not precede post-activation completion.
+jcase(
+    "journal-cleanup-teardown-revalidated-without-post-activation-completion",
+    ALL,
+    ("J:614-619", "J:621-653"),
+    mut(IP, post_activation__completed_at=None),
+    "teardown_revalidation_premature",
+)
 
 # canonical_restore_projection and restore_spec_fingerprint (July §1a, August §6) --------------------------
 FP_SPOTS = ("J:275-288", "A:662-686")
@@ -3336,6 +3348,15 @@ for name, previous, candidate in (
     ctrans(f"cleanup-edge-{name}-blocks", previous, candidate, "frozen_field_changed")
 ctrans("cleanup-edge-invalid-candidate-blocks", C_IP, dict(C_DA, delete_accepted_at=None), "invalid_cleanup_state")
 ctrans("cleanup-edge-invalid-previous-blocks", dict(C_NS, state="deleting"), C_IP, "malformed_cleanup")
+# The direct helper sees only the two cleanup records, so it binds the repair to their operation.
+OP_1 = "00000000-0000-4000-8000-000000000001"
+OP_2 = "00000000-0000-4000-8000-000000000002"
+ctrans(
+    "cleanup-edge-repair-names-another-operation-blocks",
+    dict(C_RR, operation_id=OP_1),
+    dict(C_RP, operation_id=OP_1, repair=dict(C_RP["repair"], operation_id=OP_2)),
+    "repair_identity_mismatch",
+)
 
 # validate_journal_transition (July §§1a/4a, August §§4-5 and 10) --------------------------------------
 fn = "validate_journal_transition"
@@ -3357,7 +3378,7 @@ for kind, contract in KINDS:
         None,
     )
 jtrans("transition-freeze-write-completed-blocks", ALL, ("A:152-163",), None, FULL_L, "invalid_freeze_write")
-jtrans("transition-freeze-write-with-cleanup-blocks", ALL, ("A:152-163",), None, DONE_L, "invalid_freeze_write")
+jtrans("transition-freeze-write-with-cleanup-blocks", ALL, ("A:152-163",), None, IP, "invalid_freeze_write")
 jtrans("transition-freeze-write-invalid-blocks", ALL, ("A:152-163",), None, mut(PRE_L, run_id=""), "malformed_journal")
 jtrans("transition-invalid-previous-blocks", ALL, ("A:165-169",), mut(PRE_L, run_id=""), PRE_L, "malformed_journal")
 PP_PATCHED = mut(journal("passive_patch", LEG), restore__generation=4)

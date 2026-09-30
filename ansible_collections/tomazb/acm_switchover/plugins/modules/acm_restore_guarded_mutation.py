@@ -254,6 +254,7 @@ def build_guarded_restore_patch(
     ):
         if not isinstance(value, str) or not value:
             raise ValueError(f"A non-empty {field} is required for a guarded Restore patch.")
+    _require_unpadded_identity(uid, resource_version)
     if replacement_managed_clusters_backup_name != GUARDED_PATCH_REPLACEMENT_MANAGED_CLUSTERS_BACKUP_NAME:
         raise ValueError("The guarded Restore patch only replaces veleroManagedClustersBackupName with 'latest'.")
     return [
@@ -323,6 +324,13 @@ def _record_patch_response(result: dict, body, expected_uid: str, would_change: 
         result.update(generation=generation, generation_reported=True)
 
 
+def _require_unpadded_identity(uid: str, resource_version: str) -> None:
+    """Refuse an identity with surrounding whitespace: it names no live object."""
+    for option, value in (("expected_uid", uid), ("expected_resource_version", resource_version)):
+        if value != value.strip():
+            raise ValueError(f"{option} may not carry surrounding whitespace.")
+
+
 def _resolve_restore_resource(kubeconfig: str, context: str, request_timeout):
     """The explicitly routed client, resolved to the Restore resource by live discovery."""
     client = build_dynamic_client(kubeconfig, context, request_timeout)
@@ -340,6 +348,7 @@ def _validated_request(params: dict):
     for option in ("namespace", "expected_uid", "expected_resource_version"):
         if not params[option]:
             raise ValueError(f"{option} may not be empty.")
+    _require_unpadded_identity(params["expected_uid"], params["expected_resource_version"])
     request_timeout = normalize_timeout(params.get("request_timeout"), "request_timeout", DEFAULT_REQUEST_TIMEOUT)
     if action == "delete":
         return request_timeout, None, True

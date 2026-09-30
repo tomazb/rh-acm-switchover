@@ -43,7 +43,8 @@ cleanup_copy_mismatch; (13) cleanup_prerequisite_missing. The other
 validators check the previous record, then the candidate, then:
 validate_journal_transition invalid_freeze_write, frozen_field_changed,
 child_entry_rewritten, then the cleanup edge; validate_cleanup_transition
-invalid_cleanup_transition, then frozen_field_changed; validate_waiver
+invalid_cleanup_transition, frozen_field_changed, then
+repair_identity_mismatch; validate_waiver
 malformed_waiver, waiver_scope_mismatch, malformed_expected_names,
 waiver_expected_names_empty; validate_repair the journal, then
 repair_not_permitted, malformed_repair, repair_identity_mismatch.
@@ -378,6 +379,9 @@ def validate_cleanup_transition(previous_cleanup: Any, candidate_cleanup: Any) -
     for field in (set(previous_cleanup) | set(candidate_cleanup)) - _CLEANUP_EDGES[edge]:
         if previous_cleanup.get(field, _ABSENT) != candidate_cleanup.get(field, _ABSENT):
             raise MigrationEvidenceError("frozen_field_changed", f"cleanup.{field} changed on {edge[0]} -> {edge[1]}")
+    repair = candidate_cleanup["repair"]
+    if repair is not None and repair["operation_id"] != candidate_cleanup["operation_id"]:
+        raise MigrationEvidenceError("repair_identity_mismatch", "the repair names another cleanup operation")
     return copy.deepcopy(candidate_cleanup)
 
 

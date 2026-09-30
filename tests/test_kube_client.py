@@ -3093,6 +3093,9 @@ class TestGuardedRestoreJsonPatch:
             {"uid": None},
             {"resource_version": ""},
             {"resource_version": 48213},
+            {"uid": " 3f0c2a4e-uid"},
+            {"uid": "3f0c2a4e-uid\n"},
+            {"resource_version": "48213 "},
             {"expected_managed_clusters_backup_name": ""},
             {"expected_managed_clusters_backup_name": None},
             {"replacement_managed_clusters_backup_name": "Latest"},
@@ -3207,6 +3210,12 @@ class TestGuardedRestoreDelete:
         assert self._delete(kube_client) == self._shape(conflict=conflict, reason=reason)
         assert kube_client.custom_api.delete_namespaced_custom_object.call_count == 1
 
+    def test_the_default_timeout_is_the_client_request_timeout(self, kube_client):
+        kube_client.custom_api.delete_namespaced_custom_object = Mock(return_value={})
+        assert self._delete(kube_client)["accepted"] is True
+        call = kube_client.custom_api.delete_namespaced_custom_object.call_args
+        assert call.kwargs["_request_timeout"] == kube_client.request_timeout
+
     def test_dry_run_predicts_without_any_api_call(self, dry_run_client):
         dry_run_client.custom_api.delete_namespaced_custom_object = Mock()
         dry_run_client._api_client.call_api = Mock()
@@ -3222,6 +3231,10 @@ class TestGuardedRestoreDelete:
             {"resource_version": ""},
             {"resource_version": None},
             {"resource_version": 48213},
+            {"uid": " 3f0c2a4e-uid"},
+            {"uid": "3f0c2a4e-uid\t"},
+            {"resource_version": " 48213"},
+            {"resource_version": "48213\n"},
             {"namespace": ""},
             {"namespace": None},
             {"namespace": "Bad_Namespace"},

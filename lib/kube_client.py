@@ -192,6 +192,7 @@ def build_guarded_restore_patch(
     ):
         if not isinstance(value, str) or not value:
             raise ValidationError(f"A non-empty {field} is required for a guarded Restore patch.")
+    _require_unpadded_identity(uid, resource_version, "patch")
     if replacement_managed_clusters_backup_name != GUARDED_PATCH_REPLACEMENT_MANAGED_CLUSTERS_BACKUP_NAME:
         raise ValidationError("The guarded Restore patch only replaces veleroManagedClustersBackupName with 'latest'.")
     return [
@@ -204,6 +205,13 @@ def build_guarded_restore_patch(
             "value": replacement_managed_clusters_backup_name,
         },
     ]
+
+
+def _require_unpadded_identity(uid: str, resource_version: str, action: str) -> None:
+    """Refuse a uid or resourceVersion with surrounding whitespace: it names no live object."""
+    for field, value in (("uid", uid), ("resource_version", resource_version)):
+        if value != value.strip():
+            raise ValidationError(f"The {field} for a guarded Restore {action} carries surrounding whitespace.")
 
 
 # Standard retry decorator for API calls
@@ -1387,8 +1395,8 @@ class KubeClient:
             and `generation_reported`. No response body or exception text is included.
 
         Raises:
-            ValidationError: invalid name/namespace, empty identity or raw value, or a
-                replacement other than `latest`.
+            ValidationError: invalid name/namespace, empty identity or raw value, a
+                whitespace-padded uid or resourceVersion, or a replacement other than `latest`.
         """
         if not isinstance(namespace, str) or not namespace:
             raise ValidationError(f"A namespace is required to patch {RESTORE_PLURAL}/{name}.")
@@ -1504,7 +1512,8 @@ class KubeClient:
         returned. In dry-run the primitive is never reached: the result is a prediction.
 
         Raises:
-            ValidationError: invalid name/namespace, or an empty uid or resourceVersion.
+            ValidationError: invalid name/namespace, or an empty or whitespace-padded uid or
+                resourceVersion.
         """
         if not isinstance(namespace, str) or not namespace:
             raise ValidationError(f"A namespace is required to delete {RESTORE_PLURAL}/{name}.")
@@ -1512,6 +1521,7 @@ class KubeClient:
         for field, value in (("uid", uid), ("resource_version", resource_version)):
             if not isinstance(value, str) or not value:
                 raise ValidationError(f"A non-empty {field} is required for a guarded Restore delete.")
+        _require_unpadded_identity(uid, resource_version, "delete")
         result = self._guarded_restore_result()
 
         if self.dry_run:
@@ -1528,7 +1538,7 @@ class KubeClient:
                 uid=uid,
                 resource_version=resource_version,
                 namespace=namespace,
-                timeout_seconds=timeout_seconds,
+                timeout_seconds=(timeout_seconds if timeout_seconds is not None else self.request_timeout),
             )
         except PreconditionConflict:
             logger.warning(

@@ -320,6 +320,50 @@ def test_delete_dry_run_and_check_mode_predict_identically_without_a_request(pyt
     assert resource.calls == []
 
 
+# --- identity inputs ------------------------------------------------------------------
+
+PADDED_IDENTITIES = [
+    {"uid": " " + UID, "resource_version": RESOURCE_VERSION},
+    {"uid": UID + "\n", "resource_version": RESOURCE_VERSION},
+    {"uid": UID, "resource_version": RESOURCE_VERSION + " "},
+    {"uid": UID, "resource_version": "\t" + RESOURCE_VERSION},
+]
+
+
+def _python_guarded(client, action, identity):
+    if action == "patch":
+        return client.json_patch_custom_resource_guarded(NAME, namespace=NAMESPACE, **identity, **PATCH_INPUTS[0])
+    return client.delete_restore_guarded(NAME, namespace=NAMESPACE, **identity)
+
+
+@pytest.mark.parametrize("action", ["patch", "delete"])
+@pytest.mark.parametrize("identity", PADDED_IDENTITIES)
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_both_form_factors_refuse_a_padded_identity_before_any_request(
+    python_client, monkeypatch, action, identity, dry_run
+):
+    python_client.dry_run = dry_run
+    python_client._api_client.call_api = Mock()
+    delete = python_client.custom_api.delete_namespaced_custom_object
+    with pytest.raises(ValidationError):
+        _python_guarded(python_client, action, identity)
+    python_client._api_client.call_api.assert_not_called()
+    delete.assert_not_called()
+
+    args = {
+        "action": action,
+        "expected_uid": identity["uid"],
+        "expected_resource_version": identity["resource_version"],
+    }
+    if action == "patch":
+        args.update(PATCH_INPUTS[0])
+    resource = _Resource(("raise", lambda: AssertionError("no request for an invalid identity")))
+    collection_result = _run_collection(monkeypatch, args, resource, check_mode=dry_run)
+    assert collection_result["failed"] is True
+    assert collection_result["reason"] == "invalid_input"
+    assert resource.calls == []
+
+
 # --- no shared runtime code -----------------------------------------------------------
 
 
