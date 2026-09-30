@@ -409,10 +409,20 @@ def validate_journal_transition(previous: Any, candidate: Any) -> Dict[str, Any]
     if previous is None:
         # A cleanup past not_started or teardown revalidation needs completion, and so does
         # post-activation evidence: validate_migration_journal has already refused those.
-        if any(candidate["restore"][field] is not None for field in _FREEZE_WRITE_NULL):
+        restore = candidate["restore"]
+        if any(restore[field] is not None for field in _FREEZE_WRITE_NULL):
             raise MigrationEvidenceError(
                 "invalid_freeze_write", "the first journal write must precede verification and completion"
             )
+        # The freeze precedes every mutation: no accepted generation, fingerprint or child
+        # evidence yet, and only passive_patch has a Restore UID (persisted before its PATCH).
+        if (
+            restore["generation"] is not None
+            or restore["spec_fingerprint"] is not None
+            or any(restore["velero_restores"].values())
+            or (restore["mutation_kind"] != "passive_patch" and restore["uid"] is not None)
+        ):
+            raise MigrationEvidenceError("invalid_freeze_write", "the first journal write must precede the mutation")
         return result
     for key in ("schema_version", "run_id", "resolved_at", "backups"):
         if previous[key] != candidate[key]:

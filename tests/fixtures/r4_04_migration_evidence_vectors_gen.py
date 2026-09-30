@@ -3793,6 +3793,23 @@ for name, changes in (
         mut(PRE_L, **changes),
         "invalid_freeze_write",
     )
+# The first write precedes every mutation: no accepted generation, no fingerprint, no child
+# evidence, and no Restore UID for a one-shot create (July §1 steps 1-3, amendment-2 §5.1).
+# passive_patch persists its UID before the PATCH, covered by the accept vectors above.
+for name, changes in (
+    ("generation", {"restore__generation": FULL_L["restore"]["generation"]}),
+    ("spec-fingerprint", {"restore__spec_fingerprint": FULL_L["restore"]["spec_fingerprint"]}),
+    ("child-entries", {"restore__velero_restores": FULL_L["restore"]["velero_restores"]}),
+    ("one-shot-uid", {"restore__uid": FULL_L["restore"]["uid"]}),
+):
+    jtrans(
+        f"transition-freeze-write-{name}-blocks",
+        ALL,
+        ("J:92-115", "J:238-243", "C:267-272"),
+        None,
+        mut(PRE_L, **changes),
+        "invalid_freeze_write",
+    )
 # Post-activation evidence follows restore completion (July §1).
 for name, changes in (
     ("names-verified", {"post_activation__names_verified_at": T_POST_NAMES}),
