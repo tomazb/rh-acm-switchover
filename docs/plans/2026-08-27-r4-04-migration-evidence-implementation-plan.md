@@ -489,6 +489,7 @@ PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/un
 - Modify: `modules/restore_discovery.py`
 - Modify: `modules/activation.py`
 - Modify: `acm_switchover.py` only for wiring already validated inputs/effective expectations
+- Modify: `lib/argocd_resume.py` and `lib/workflow.py` (PR C decisions amendment §2.2 failure rescue)
 - Create: `tests/test_restore_discovery.py`
 - Modify: `tests/test_activation.py`
 - Modify: `tests/test_main.py`
@@ -517,7 +518,7 @@ Cover all mutation kinds and resume:
 17. `restore.completed_at` is written only after every required identity/provenance/completion/name predicate is complete, and written last.
 18. cleanup-policy tests prove a pre-PATCH mismatch issues zero PATCH, one-shot and full create bodies send the normalized journal value, post-create/post-patch mismatch blocks, and resume drift blocks.
 19. legacy `passive_patch` hive/cluster requests follow the PR C decisions amendment §1.2: before PATCH, the `orLabelSelectors` shortcut reusing the frozen `activation_credentials` Backup is permitted, while a selected distinct hive/cluster Backup or a blocking prediction issues zero PATCH; at completion any exact-owner child bound to a dedicated hive/cluster credential Backup blocks (including historical), and the shared unsuffixed credentials child is bound to `activation_credentials` when present;
-20. activation-failure rescue under a journal follows the PR C decisions amendment §2.2 in `lib/argocd_resume.py`: no rewind to `PRIMARY_PREP`/`PREFLIGHT`, a durable Argo CD re-pause marker outside the journal persisted before any resume mutation, re-pause on retry before any further activation step, marker cleared only on success, and every failure visible; journal-free behavior unchanged.
+20. phase-failure rescue under a journal (activation, post-activation, finalization) follows the PR C decisions amendment §2.2 in `lib/argocd_resume.py`: no rewind to `PRIMARY_PREP`/`PREFLIGHT`, a durable Argo CD re-pause marker outside the journal persisted before any resume mutation, re-pause on retry before any further activation step, marker cleared only on success, and every failure visible; journal-free behavior unchanged.
 
 Run before implementation:
 
@@ -564,6 +565,7 @@ python -m pytest tests/test_restore_discovery.py tests/test_activation.py tests/
 - Modify: `ansible_collections/tomazb/acm_switchover/roles/activation/tasks/activate_restore.yml`
 - Modify: `ansible_collections/tomazb/acm_switchover/roles/activation/tasks/wait_for_restore.yml`
 - Modify: `ansible_collections/tomazb/acm_switchover/roles/activation/tasks/main.yml`
+- Modify: `ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml` and the affected phase roles (PR C decisions amendment §2.2 failure rescue)
 - Modify/add unit, integration, and scenario tests for activation.
 
 `acm_migration_evidence.py` is a thin adapter over `plugins/module_utils/migration_evidence.py`; it validates/builds evidence but performs no cluster mutation. Role YAML must consume validated module/checkpoint facts and must not walk raw `operational_data`.

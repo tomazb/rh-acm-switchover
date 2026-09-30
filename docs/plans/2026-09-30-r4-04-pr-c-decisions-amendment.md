@@ -87,7 +87,11 @@ For `passive_patch` on the legacy lanes:
    must be exact-owner-bound, `Completed`, and bound to that Backup; it is recorded in
    `restore.velero_restores.activation_credentials` (duplicate observations collapse only when
    all five fields agree). It is not required: the controller may take the activation-only
-   branch.
+   branch. On the legacy lanes the sync-phase Credentials child is unsuffixed
+   (`U2.12–2.13/restore_controller.go:451-461`), so this child may predate the PATCH; it is still
+   journaled because it is bound to the frozen `activation_credentials` Backup — an explicit
+   exception to child-evidence amendment §5.2, which otherwise leaves historical children
+   unjournaled.
 5. The hive and cluster shortcut requests share the unsuffixed output already represented by
    the legacy predictor's `Credentials` entry for `activation_credentials`. Represent this
    permitted shared output once for name-collision checking; do not add independent hive/cluster
@@ -102,34 +106,37 @@ The August amendment's "Journal categories" claim that `passive_patch` freezes e
 controller-selectable input is qualified accordingly: legacy hive/cluster requests are admitted
 only as reuse of the frozen `activation_credentials` Backup or as a proven "no candidate".
 
-## 2. Activation-failure rescue under a migration journal
+## 2. Failure rescue under a migration journal
 
 ### 2.1 Current behavior
 
-With Argo CD management and resume-on-failure enabled, an activation failure resumes the paused
-Argo CD Applications on the primary hub and then rewinds to primary preparation so that the
+With Argo CD management and resume-on-failure enabled, a phase failure (Python `on_phase_failure`
+in `lib/workflow.py` for every phase; the collection's rescue block in `playbooks/switchover.yml`
+covering activation, post-activation and finalization) resumes the paused Argo CD Applications on the primary hub and then rewinds to primary preparation so that the
 retry re-pauses them: Python clears the pause step and records the retry at `PRIMARY_PREP`
 (`PREFLIGHT` for restore-only) in `lib/argocd_resume.py`; the collection issues `status: reset`
 of `primary_prep` with `reset_from: primary_prep` in `playbooks/switchover.yml` with
 `ignore_errors: true`. Once a journal exists, August §10 forbids that pre-freeze rewind, and the
 PR B collection guard refuses it; with `ignore_errors` the refusal is hidden, the checkpoint
-keeps `primary_prep` complete, and a retry would continue activation with Argo CD auto-sync live
-on the primary hub — while Python would still re-pause. The two form factors diverge.
+keeps `primary_prep` complete, and a retry would continue with Argo CD auto-sync live on the
+primary hub — while Python would still re-pause. The two form factors diverge. A journal exists
+for every failure after the Backup freeze: in activation, post-activation, and finalization.
 
 ### 2.2 Rule: explicit Argo CD recovery
 
 1. **Without a migration journal** (the failure happened before the Backup freeze), behavior is
-   unchanged in both form factors.
+   unchanged in both form factors. The rule applies to every phase failure while a journal exists
+   (activation, post-activation, finalization), with the same mechanism.
 2. **With a journal present** (valid or invalid), neither form factor rewinds to a pre-freeze
    phase. **Before attempting any Argo CD resume mutation**, each durably records a
    re-pause-required marker through its own state or checkpoint owner, **not** in the migration
-   journal (the collection can carry it as operational data of the activation `fail`
+   journal (the collection can carry it as operational data of the failed phase's `fail`
    transition; `status: update` stays journal-only). If that persistence fails, issue no resume
    mutation. The marker survives a partial resume, a failed resume and process interruption. The
-   retry stays positioned at activation and the journal is unchanged.
+   retry stays positioned at the failed phase and the journal is unchanged.
 3. A retry that finds the marker re-pauses the Argo CD Applications with the same pause
-   semantics and register as primary preparation **before any further ACM Restore mutation or
-   evidence step**, and clears the marker only after the re-pause succeeds. It never replays the
+   semantics and register as primary preparation **before any further ACM Restore mutation,
+   evidence step, or phase work**, and clears the marker only after the re-pause succeeds. It never replays the
    rest of primary preparation (in particular the BackupSchedule pause).
 4. Every refusal and failure on this path is visible: a failed resume, a failed marker write, or
    a failed re-pause fails the run with an operator-actionable message. The collection must not
@@ -140,11 +147,12 @@ on the primary hub — while Python would still re-pause. The two form factors d
 
 - The normative specification list adds this document.
 - Task 7 (Python) and Task 8 (collection) implement §1.2 in `passive_patch` legacy activation
-  and completion and §2.2 in the activation-failure path (Python `lib/argocd_resume.py`;
-  collection `playbooks/switchover.yml` and the activation role).
+  and completion and §2.2 in the phase-failure rescue path (Python `lib/argocd_resume.py` and
+  `lib/workflow.py`; collection `playbooks/switchover.yml` and the affected roles).
 - Task 12 documents both rules and the §1.2 rule 3 compatibility restriction.
-- Carry-forwards (i), (i-b) and the hive/cluster design question of #332 are resolved by this
-  document.
+- The #332 items "Failure-rescue parity conflict (A §10)" and "Design decision — legacy
+  `passive_patch` hive/cluster credentials" are resolved by this document. The #332 item on a
+  stale `reset_from: primary_prep` re-pruning `primary_prep` remains open for PR C.
 
 ## 4. Acceptance-criteria changes
 
@@ -158,7 +166,7 @@ New criteria:
     cluster credential Backup blocks, including a historical child; the shared unsuffixed child
     of the frozen credentials Backup is bound to `activation_credentials` when present and is
     not required.
-41. With a journal, an activation-failure rescue never rewinds to a pre-freeze phase; both form
+41. With a journal, a phase-failure rescue (activation, post-activation, finalization) never rewinds to a pre-freeze phase; both form
     factors durably record an Argo CD re-pause marker outside the journal before any resume
     mutation, the retry re-pauses before
     any further activation step and clears the marker only on success, and every failure on the
