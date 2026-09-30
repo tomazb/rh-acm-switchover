@@ -517,7 +517,7 @@ Cover all mutation kinds and resume:
 17. `restore.completed_at` is written only after every required identity/provenance/completion/name predicate is complete, and written last.
 18. cleanup-policy tests prove a pre-PATCH mismatch issues zero PATCH, one-shot and full create bodies send the normalized journal value, post-create/post-patch mismatch blocks, and resume drift blocks.
 19. legacy `passive_patch` hive/cluster requests follow the PR C decisions amendment §1.2: before PATCH, the `orLabelSelectors` shortcut reusing the frozen `activation_credentials` Backup is permitted, while a selected distinct hive/cluster Backup or a blocking prediction issues zero PATCH; at completion any exact-owner child bound to a dedicated hive/cluster credential Backup blocks (including historical), and the shared unsuffixed credentials child is bound to `activation_credentials` when present;
-20. activation-failure rescue under a journal follows the PR C decisions amendment §2.2 in `lib/argocd_resume.py`: no rewind to `PRIMARY_PREP`/`PREFLIGHT`, a durable Argo CD re-pause marker outside the journal, re-pause on retry before any further activation step, marker cleared only on success, and every failure visible; journal-free behavior unchanged.
+20. activation-failure rescue under a journal follows the PR C decisions amendment §2.2 in `lib/argocd_resume.py`: no rewind to `PRIMARY_PREP`/`PREFLIGHT`, a durable Argo CD re-pause marker outside the journal persisted before any resume mutation, re-pause on retry before any further activation step, marker cleared only on success, and every failure visible; journal-free behavior unchanged.
 
 Run before implementation:
 

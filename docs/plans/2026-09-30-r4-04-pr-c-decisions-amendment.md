@@ -47,7 +47,8 @@ optional types is ignored (`U2.12–2.13/restore.go:700-742`, `U2.14–2.16/rest
 
 The supported Backup schedules construct non-empty credentials OR selectors and define no
 separate hive or cluster schedule (`U2.12/backup.go:138-144,238-280`,
-`U2.16/backup.go:138-144,255-280`). On a supported installation the hive/cluster requests
+`U2.16/backup.go:138-144,255-280`; the 2.13–2.15 producer sources are not pinned here, so their
+producer behavior is inferred from these two and from their identical restore-side shortcut). On a supported installation the hive/cluster requests
 therefore **reuse the frozen `activation_credentials` Backup**, and because a generated child
 name depends only on the ACM Restore name and the Backup name (child-evidence amendment §4.2),
 both requests share the unsuffixed child name of that Backup. A child created by a hive/cluster
@@ -72,7 +73,8 @@ For `passive_patch` on the legacy lanes:
    the correlation branch.
 2. The decision is made from strict reads at the final pre-PATCH boundary, together with the
    other pre-mutation revalidations, and adds no journal field (`schema_version` stays `2`).
-   After the PATCH it is never re-evaluated to expand frozen evidence; only rule 3 applies. A
+   After the PATCH, the prediction is not recomputed to expand frozen evidence; the completion
+   and revalidation requirements in rules 3, 4 and 6 apply. A
    strict-read failure, malformed input, or ambiguous selection is never "no candidate".
 3. **At completion** and at every later evidence revalidation, using the strictly complete
    exact-owner child inventory: any child whose `spec.backupName` contains
@@ -86,9 +88,12 @@ For `passive_patch` on the legacy lanes:
    `restore.velero_restores.activation_credentials` (duplicate observations collapse only when
    all five fields agree). It is not required: the controller may take the activation-only
    branch.
-5. The hive and cluster shortcut requests intentionally share one generated name and one Backup
-   with each other; this shared optional output is not a collision between required roles.
-   Every other generated-name collision remains blocking before mutation.
+5. The hive and cluster shortcut requests share the unsuffixed output already represented by
+   the legacy predictor's `Credentials` entry for `activation_credentials`. Represent this
+   permitted shared output once for name-collision checking; do not add independent hive/cluster
+   entries that collide with that existing entry. This does not make the optional unsuffixed
+   child required or relax the required status-published `Credentials` child check. All other
+   generated-name collisions remain blocking before mutation.
 6. A later dedicated hive/cluster child or a changed consumed Backup blocks completion and
    finalization and never adds a category on resume. This detects divergence after the PATCH; it
    does not prevent a child Restore that already ran.
@@ -116,9 +121,12 @@ on the primary hub — while Python would still re-pause. The two form factors d
 1. **Without a migration journal** (the failure happened before the Backup freeze), behavior is
    unchanged in both form factors.
 2. **With a journal present** (valid or invalid), neither form factor rewinds to a pre-freeze
-   phase. After the Argo CD resume succeeds, each durably records, through its own state or
-   checkpoint owner and **not** in the migration journal, that an Argo CD re-pause is required
-   for this run, and leaves the retry positioned at activation with the journal untouched.
+   phase. **Before attempting any Argo CD resume mutation**, each durably records a
+   re-pause-required marker through its own state or checkpoint owner, **not** in the migration
+   journal (the collection can carry it as operational data of the activation `fail`
+   transition; `status: update` stays journal-only). If that persistence fails, issue no resume
+   mutation. The marker survives a partial resume, a failed resume and process interruption. The
+   retry stays positioned at activation and the journal is unchanged.
 3. A retry that finds the marker re-pauses the Argo CD Applications with the same pause
    semantics and register as primary preparation **before any further ACM Restore mutation or
    evidence step**, and clears the marker only after the re-pause succeeds. It never replays the
@@ -151,7 +159,8 @@ New criteria:
     of the frozen credentials Backup is bound to `activation_credentials` when present and is
     not required.
 41. With a journal, an activation-failure rescue never rewinds to a pre-freeze phase; both form
-    factors record an Argo CD re-pause marker outside the journal, the retry re-pauses before
+    factors durably record an Argo CD re-pause marker outside the journal before any resume
+    mutation, the retry re-pauses before
     any further activation step and clears the marker only on success, and every failure on the
     path is visible. Without a journal, behavior is unchanged.
 42. Tests cover, per legacy lane and in both form factors: the shortcut with no dedicated
@@ -159,4 +168,10 @@ New criteria:
     unreadable prediction (blocks); a later dedicated child after an absent decision (blocks
     completion); a historical dedicated child (blocks); shared-name deduplication; and, for the
     rescue, journal-free unchanged behavior, marker recording, re-pause on retry, and a failed
-    re-pause blocking visibly.
+    re-pause blocking visibly. Also test both predictions returning no candidate; cluster-only
+    exact and fallback candidates; the shortcut with dedicated Backups present but unselected; and
+    a pre-PATCH retry using fresh reads without changing frozen evidence. Recovery tests apply to
+    all supported lanes, including 2.17, and cover valid and invalid journals, partial and failed
+    resume, marker persistence failure before resume (no resume mutation), interruption after
+    resume begins, failed marker clearing, and dry-run/check-mode zero writes; they assert that the
+    retry preserves the journal and does not replay BackupSchedule preparation.
