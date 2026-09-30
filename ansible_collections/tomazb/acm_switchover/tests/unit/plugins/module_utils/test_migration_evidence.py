@@ -46,7 +46,9 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_jo
     validate_journal_transition,
     validate_migration_journal,
     validate_repair,
+    validate_repair_request,
     validate_waiver,
+    validate_waiver_request,
 )
 
 # The shared vectors live in the repository's root test fixtures; outside a
@@ -81,6 +83,8 @@ FUNCTIONS: Dict[str, Callable[..., Any]] = {
     "validate_journal_transition": validate_journal_transition,
     "validate_waiver": validate_waiver,
     "validate_repair": validate_repair,
+    "validate_waiver_request": validate_waiver_request,
+    "validate_repair_request": validate_repair_request,
     "rfc3339_ns": rfc3339_ns,
     "go_normalize": go_normalize,
     "validate_backup_projection": validate_backup_projection,

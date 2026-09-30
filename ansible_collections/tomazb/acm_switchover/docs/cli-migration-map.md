@@ -8,6 +8,17 @@
 | `--old-hub-action` | `acm_switchover_operation.old_hub_action` |
 | `--activation-method` | `acm_switchover_operation.activation_method` |
 | `--min-managed-clusters` | `acm_switchover_operation.min_managed_clusters` |
+| `--skip-managed-cluster-expectations` | `acm_switchover_operation.skip_managed_cluster_expectations` |
+| `--managed-cluster-expectation-waiver-scope {activation,post_activation,both}` | `acm_switchover_operation.managed_cluster_expectation_waiver.scope` |
+| `--managed-cluster-expectation-waiver-actor` | `acm_switchover_operation.managed_cluster_expectation_waiver.actor` |
+| `--managed-cluster-expectation-waiver-reason` | `acm_switchover_operation.managed_cluster_expectation_waiver.reason` |
+| `--managed-cluster-expectation-waiver-request-id` | `acm_switchover_operation.managed_cluster_expectation_waiver.request_id` (optional) |
+| `--repair-migration-cleanup` | No separate variable; a `acm_switchover_operation.migration_cleanup_repair` block that names any field is the request |
+| `--cleanup-repair-actor` | `acm_switchover_operation.migration_cleanup_repair.actor` |
+| `--cleanup-repair-reason` | `acm_switchover_operation.migration_cleanup_repair.reason` |
+| `--cleanup-repair-evidence` (repeatable) | `acm_switchover_operation.migration_cleanup_repair.inspected_evidence` (list) |
+| `--cleanup-repair-run-id` | `acm_switchover_operation.migration_cleanup_repair.run_id` |
+| `--cleanup-repair-operation-id` | `acm_switchover_operation.migration_cleanup_repair.operation_id` |
 | `--manage-auto-import-strategy` | `acm_switchover_features.manage_auto_import_strategy` |
 | `--validate-only` | `acm_switchover_execution.mode=validate` |
 | `--dry-run` | `acm_switchover_execution.mode=dry_run` |
@@ -40,9 +51,21 @@
 `acm_switchover_operation.min_managed_clusters` unset or null to derive the
 expected non-local ManagedCluster names/count from preflight. In restore-only,
 the omitted value requires at least one restored non-local ManagedCluster unless
-`acm_switchover_operation.allow_zero_managed_clusters=true` is set. Set
-`min_managed_clusters` to `0` to opt into an empty non-local ManagedCluster
-target, or set a positive value to enforce that explicit minimum count.
+`acm_switchover_operation.allow_zero_managed_clusters=true` is set. An explicit
+`min_managed_clusters` is an additional count floor beside the expected names,
+never a replacement for them: `0` opts into an empty non-local ManagedCluster
+target only when no expected name exists, and a positive value enforces that
+minimum count while the derived names stay enforced. `allow_zero_managed_clusters`
+likewise resolves to false whenever expected names exist.
+
+The expected-name waiver and the cleanup-repair request are validated identically
+in both form factors (`tests/fixtures/validation_parity_cases.yml`). A waiver needs
+`skip_managed_cluster_expectations: true`, a `scope` and a non-empty `actor` and
+`reason`; it is rejected in validate mode, for the standalone decommission playbook,
+for `restore_only` activation scopes, and at preflight when a covered scope has no
+expected name. A cleanup repair is accepted only as the complete set and is an
+acknowledgement request, not evidence of a delete. Neither input changes the
+recorded expectation.
 
 The `old_hub_action: secondary` finalization adapter
 (`roles/finalization/tasks/disable_old_hub_observability.yml`) gates its MultiClusterObservability delete on

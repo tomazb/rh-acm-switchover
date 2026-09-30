@@ -64,6 +64,7 @@ from lib.constants import (
     HUB_ROLE_SECONDARY,
     MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
     MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED,
+    MANAGED_CLUSTER_EXPECTATION_EXPLICIT_MINIMUM,
     MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
     RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE,
     STEP_PAUSE_ARGOCD_APPS,
@@ -353,6 +354,85 @@ class TestArgParsing:
         with patch("sys.argv", base_argv + ["--min-managed-clusters", "0"]):
             args = parse_args()
             assert args.min_managed_clusters == 0
+
+    def test_migration_evidence_operator_flags_parse_to_their_exact_destinations(self):
+        """Plan Task 6: the waiver and cleanup-repair flag names are fixed."""
+        base_argv = [
+            "script.py",
+            "--primary-context",
+            "p1",
+            "--secondary-context",
+            "p2",
+            "--method",
+            "passive",
+            "--old-hub-action",
+            "secondary",
+        ]
+
+        with patch("sys.argv", base_argv):
+            args = parse_args()
+        assert args.skip_managed_cluster_expectations is False
+        assert args.managed_cluster_expectation_waiver_scope is None
+        assert args.managed_cluster_expectation_waiver_actor is None
+        assert args.managed_cluster_expectation_waiver_reason is None
+        assert args.managed_cluster_expectation_waiver_request_id is None
+        assert args.repair_migration_cleanup is False
+        assert args.cleanup_repair_actor is None
+        assert args.cleanup_repair_reason is None
+        assert args.cleanup_repair_evidence is None
+        assert args.cleanup_repair_run_id is None
+        assert args.cleanup_repair_operation_id is None
+
+        argv = base_argv + [
+            "--skip-managed-cluster-expectations",
+            "--managed-cluster-expectation-waiver-scope",
+            "both",
+            "--managed-cluster-expectation-waiver-actor",
+            "operator@example.com",
+            "--managed-cluster-expectation-waiver-reason",
+            "stale inventory",
+            "--managed-cluster-expectation-waiver-request-id",
+            "CHG-1",
+            "--repair-migration-cleanup",
+            "--cleanup-repair-actor",
+            "operator@example.com",
+            "--cleanup-repair-reason",
+            "deleted by this run",
+            "--cleanup-repair-evidence",
+            "audit-log",
+            "--cleanup-repair-evidence",
+            "oc get restore",
+            "--cleanup-repair-run-id",
+            "not-validated-by-argparse",
+            "--cleanup-repair-operation-id",
+            "9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+        ]
+        with patch("sys.argv", argv):
+            args = parse_args()
+        assert args.skip_managed_cluster_expectations is True
+        assert args.managed_cluster_expectation_waiver_scope == "both"
+        assert args.managed_cluster_expectation_waiver_actor == "operator@example.com"
+        assert args.managed_cluster_expectation_waiver_reason == "stale inventory"
+        assert args.managed_cluster_expectation_waiver_request_id == "CHG-1"
+        assert args.repair_migration_cleanup is True
+        assert args.cleanup_repair_actor == "operator@example.com"
+        assert args.cleanup_repair_reason == "deleted by this run"
+        assert args.cleanup_repair_evidence == ["audit-log", "oc get restore"]
+        assert args.cleanup_repair_run_id == "not-validated-by-argparse"
+        assert args.cleanup_repair_operation_id == "9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+
+    def test_waiver_scope_choices_are_fixed(self):
+        argv = [
+            "script.py",
+            "--primary-context",
+            "p1",
+            "--secondary-context",
+            "p2",
+            "--managed-cluster-expectation-waiver-scope",
+            "teardown",
+        ]
+        with patch("sys.argv", argv), pytest.raises(SystemExit):
+            parse_args()
 
     def test_validate_args_warns_when_argocd_manage_has_no_effect_in_validate_only(
         self,
@@ -2917,7 +2997,8 @@ class TestPreflightPhase:
         assert kwargs["expected_managed_cluster_names"] == ["cluster-a", "cluster-b"]
         assert kwargs["enforce_expected_managed_cluster_names"] is True
 
-    def test_run_phase_activation_preserves_explicit_zero_opt_out(self, tmp_path):
+    def test_run_phase_activation_explicit_zero_keeps_expected_names_enforced(self, tmp_path):
+        """AC25: an explicit 0 lowers only the count floor; recorded names stay enforced."""
         from lib.run_record import RunRecord
         from lib.utils import StateManager
 
@@ -2942,8 +3023,154 @@ class TestPreflightPhase:
 
         kwargs = activation_class.call_args.kwargs
         assert kwargs["min_managed_clusters"] == 0
-        assert kwargs["expected_managed_cluster_names"] == []
-        assert kwargs["enforce_expected_managed_cluster_names"] is False
+        assert kwargs["expected_managed_cluster_names"] == ["cluster-a"]
+        assert kwargs["enforce_expected_managed_cluster_names"] is True
+
+    @pytest.mark.parametrize("phase", ["activation", "post_activation"])
+    def test_explicit_minimum_is_an_additional_floor_beside_expected_names(self, tmp_path, phase):
+        """AC25: an explicit N is a count floor added to, never replacing, the recorded names."""
+        from lib.run_record import HubFacts, RunRecord
+        from lib.utils import StateManager
+
+        args = SimpleNamespace(
+            method="passive",
+            activation_method="patch",
+            manage_auto_import_strategy=False,
+            old_hub_action="secondary",
+            dry_run=False,
+            min_managed_clusters=5,
+        )
+        state = StateManager(str(tmp_path / "state.json"))
+        run_record = RunRecord(state)
+        run_record.record_managed_cluster_expectation(
+            names=["cluster-a", "cluster-b"],
+            count=2,
+            mode=MANAGED_CLUSTER_EXPECTATION_EXPLICIT_MINIMUM,
+        )
+        run_record.record_hub_facts(HubFacts(secondary_has_observability=False))
+
+        target = (
+            "acm_switchover.SecondaryActivation"
+            if phase == "activation"
+            else "acm_switchover.PostActivationVerification"
+        )
+        runner = _run_phase_activation if phase == "activation" else _run_phase_post_activation
+        with patch(target) as phase_class:
+            phase_class.return_value.activate.return_value = True
+            phase_class.return_value.verify.return_value = True
+            assert runner(args, state, None, Mock(), Mock()) is True
+
+        kwargs = phase_class.call_args.kwargs
+        assert kwargs["min_managed_clusters"] == 5
+        assert kwargs["expected_managed_cluster_names"] == ["cluster-a", "cluster-b"]
+        assert kwargs["enforce_expected_managed_cluster_names"] is True
+        expectation = RunRecord(state).managed_cluster_expectation()
+        assert expectation.names == ("cluster-a", "cluster-b")
+        assert expectation.count == 2
+
+    @pytest.mark.parametrize("phase", ["activation", "post_activation"])
+    @pytest.mark.parametrize("scope", ["activation", "post_activation", "both"])
+    def test_waiver_without_recorded_names_is_rejected_before_the_phase_runs(self, tmp_path, phase, scope):
+        """July section 2: a waiver is rejected when there is no expected name to waive."""
+        from lib.run_record import HubFacts, RunRecord
+        from lib.utils import StateManager
+
+        args = SimpleNamespace(
+            method="full",
+            activation_method="patch",
+            manage_auto_import_strategy=False,
+            old_hub_action=None,
+            dry_run=False,
+            min_managed_clusters=None,
+            skip_managed_cluster_expectations=True,
+            managed_cluster_expectation_waiver_scope=scope,
+            managed_cluster_expectation_waiver_actor="operator@example.com",
+            managed_cluster_expectation_waiver_reason="stale inventory",
+            managed_cluster_expectation_waiver_request_id=None,
+        )
+        state = StateManager(str(tmp_path / "state.json"))
+        run_record = RunRecord(state)
+        run_record.record_managed_cluster_expectation(names=[], count=0, mode=MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY)
+        run_record.record_hub_facts(HubFacts(secondary_has_observability=False))
+
+        target = (
+            "acm_switchover.SecondaryActivation"
+            if phase == "activation"
+            else "acm_switchover.PostActivationVerification"
+        )
+        runner = _run_phase_activation if phase == "activation" else _run_phase_post_activation
+        with patch(target) as phase_class, pytest.raises(SwitchoverError, match="^waiver_expected_names_empty:"):
+            runner(args, state, None, Mock(), Mock())
+        phase_class.assert_not_called()
+
+    def test_waiver_does_not_change_enforcement_or_the_recorded_expectation(self, tmp_path):
+        """Task 6 only validates the waiver; journaling and consumption belong to later tasks."""
+        from lib.run_record import RunRecord
+        from lib.utils import StateManager
+
+        args = SimpleNamespace(
+            method="passive",
+            activation_method="patch",
+            manage_auto_import_strategy=False,
+            old_hub_action="secondary",
+            min_managed_clusters=None,
+            skip_managed_cluster_expectations=True,
+            managed_cluster_expectation_waiver_scope="both",
+            managed_cluster_expectation_waiver_actor="operator@example.com",
+            managed_cluster_expectation_waiver_reason="stale inventory",
+            managed_cluster_expectation_waiver_request_id="CHG-1",
+        )
+        state = StateManager(str(tmp_path / "state.json"))
+        RunRecord(state).record_managed_cluster_expectation(
+            names=["cluster-a"], count=1, mode=MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT
+        )
+
+        with patch("acm_switchover.SecondaryActivation") as activation_class:
+            activation_class.return_value.activate.return_value = True
+            assert _run_phase_activation(args, state, None, Mock(), Mock()) is True
+
+        kwargs = activation_class.call_args.kwargs
+        assert kwargs["expected_managed_cluster_names"] == ["cluster-a"]
+        assert kwargs["enforce_expected_managed_cluster_names"] is True
+        expectation = RunRecord(state).managed_cluster_expectation()
+        assert expectation.names == ("cluster-a",)
+        assert expectation.count == 1
+
+    def test_preflight_rejects_a_waiver_when_primary_has_no_expected_names(self, tmp_path):
+        """The waiver fails at preflight, before any phase could consume it."""
+        from lib.utils import StateManager
+
+        args = SimpleNamespace(
+            method="passive",
+            old_hub_action="secondary",
+            skip_rbac_validation=False,
+            argocd_manage=False,
+            skip_gitops_check=True,
+            skip_observability_checks=False,
+            validate_only=False,
+            restore_only=False,
+            min_managed_clusters=None,
+            skip_managed_cluster_expectations=True,
+            managed_cluster_expectation_waiver_scope="post_activation",
+            managed_cluster_expectation_waiver_actor="operator@example.com",
+            managed_cluster_expectation_waiver_reason="stale inventory",
+            managed_cluster_expectation_waiver_request_id=None,
+        )
+        state = StateManager(str(tmp_path / "state.json"))
+        config = {
+            "primary_version": "2.14.0",
+            "secondary_version": "2.14.0",
+            "primary_observability_detected": False,
+            "secondary_observability_detected": False,
+            "has_observability": False,
+            "expected_managed_cluster_names": [],
+            "expected_managed_cluster_count": 0,
+        }
+
+        with patch("acm_switchover.PreflightValidator") as validator_class:
+            validator_class.return_value.validate_all.return_value = (True, config)
+            with pytest.raises(SwitchoverError, match="^waiver_expected_names_empty:"):
+                _run_phase_preflight(args, state, Mock(), Mock(), Mock())
 
     def test_run_phase_activation_restore_only_defaults_to_one_when_min_omitted(self, tmp_path):
         from lib.run_record import RunRecord

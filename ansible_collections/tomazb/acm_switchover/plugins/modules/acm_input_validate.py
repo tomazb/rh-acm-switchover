@@ -20,7 +20,10 @@ options:
     required: true
     type: dict
   operation:
-    description: Operation parameters including C(method) and C(activation_method).
+    description:
+      - Operation parameters including C(method) and C(activation_method).
+      - C(skip_managed_cluster_expectations) with C(managed_cluster_expectation_waiver) and
+        C(migration_cleanup_repair) are validated and returned in the operation result details.
     required: true
     type: dict
   execution:

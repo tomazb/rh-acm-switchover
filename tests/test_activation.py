@@ -1435,8 +1435,8 @@ class TestMinManagedClusters:
         with pytest.raises(FatalError, match="Missing expected ManagedCluster"):
             act._verify_managed_clusters_restored()
 
-    def test_explicit_zero_disables_expected_name_enforcement(self, mock_secondary_client, mock_state_manager):
-        """Explicit --min-managed-clusters 0 should allow an empty hub even if preflight saw clusters."""
+    def test_unenforced_names_with_zero_floor_allow_an_empty_hub(self, mock_secondary_client, mock_state_manager):
+        """With a zero floor and no enforced names an empty hub is informational only."""
         mock_secondary_client.list_custom_resources.return_value = []
         act = SecondaryActivation(
             secondary_client=mock_secondary_client,
@@ -1447,6 +1447,30 @@ class TestMinManagedClusters:
         )
 
         act._verify_managed_clusters_restored()
+
+    def test_zero_floor_with_enforced_names_waits_for_the_names(self, mock_secondary_client, mock_state_manager):
+        """AC25: an explicit 0 keeps expected names enforced, so the restore wait still polls for them."""
+        mock_secondary_client.list_custom_resources.side_effect = [
+            [{"metadata": {"name": "local-cluster"}}],
+            [{"metadata": {"name": "local-cluster"}}, {"metadata": {"name": "cluster-a"}}],
+        ]
+        act = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            min_managed_clusters=0,
+            expected_managed_cluster_names=["cluster-a"],
+            enforce_expected_managed_cluster_names=True,
+        )
+
+        def wait_side_effect(_description, condition_fn, **_kwargs):
+            assert condition_fn().done is False
+            assert condition_fn().done is True
+            return True
+
+        with patch("modules.activation.wait_for_condition", side_effect=wait_side_effect) as wait:
+            act._wait_for_managed_clusters_restored(timeout=10)
+
+        wait.assert_called_once()
 
     def test_managed_cluster_name_listing_can_reuse_single_generation_cache(
         self, mock_secondary_client, mock_state_manager

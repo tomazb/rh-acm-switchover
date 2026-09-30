@@ -1033,7 +1033,10 @@ class SecondaryActivation:
 
     def _wait_for_managed_clusters_restored(self, timeout: int) -> None:
         """Wait for full-restore ManagedCluster resources before enforcing the minimum."""
-        if self.min_managed_clusters == 0:
+        # A zero floor has nothing to wait for only when no expected name is enforced (AC25).
+        if self.min_managed_clusters == 0 and not (
+            self.enforce_expected_managed_cluster_names and self.expected_managed_cluster_names
+        ):
             self._verify_managed_clusters_restored()
             return
 

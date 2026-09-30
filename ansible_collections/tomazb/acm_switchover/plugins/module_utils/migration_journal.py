@@ -47,7 +47,9 @@ invalid_cleanup_transition, frozen_field_changed, then
 repair_identity_mismatch; validate_waiver
 malformed_waiver, waiver_scope_mismatch, malformed_expected_names,
 waiver_expected_names_empty; validate_repair the journal, then
-repair_not_permitted, malformed_repair, repair_identity_mismatch.
+repair_not_permitted, malformed_repair, repair_identity_mismatch;
+validate_waiver_request malformed_waiver; validate_repair_request
+malformed_repair.
 """
 
 from __future__ import annotations
@@ -265,6 +267,10 @@ _REPAIR_FIELDS: _Spec = {
     "operation_id": (_is_uuid, False),
     "inspected_evidence": (_is_evidence_list, False),
 }
+# Plan Task 6: an operator's request is its journal record minus the fields
+# journaling adds, held to the same rules.
+_WAIVER_REQUEST_FIELDS: _Spec = {key: _WAIVER_FIELDS[key] for key in ("scope", "actor", "reason", "request_id")}
+_REPAIR_REQUEST_FIELDS: _Spec = {key: spec for key, spec in _REPAIR_FIELDS.items() if key != "acknowledged_at"}
 # July section 4a: every allowed cleanup edge and the fields it may introduce or
 # change. Every other field, state included, is carried unchanged.
 _ALL_CLEANUP_FIELDS = frozenset(_CLEANUP_FIELDS)
@@ -485,6 +491,27 @@ def validate_repair(candidate: Any, journal: Any) -> Dict[str, Any]:
     if candidate["run_id"] != journal["run_id"] or candidate["operation_id"] != cleanup["operation_id"]:
         raise MigrationEvidenceError("repair_identity_mismatch", "the repair names another run or operation")
     return dict(copy.deepcopy(cleanup), state="repaired", repair=copy.deepcopy(candidate))
+
+
+def validate_waiver_request(candidate: Any) -> Dict[str, Any]:
+    """Return an operator's expected-name waiver request, or raise malformed_waiver.
+
+    The request carries the scope, actor, reason and optional request ID that the
+    journaled waiver records. It proves nothing: whether there is a name to waive in
+    its scope is the caller's check against the recorded expectation.
+    """
+    _require_fields(candidate, _WAIVER_REQUEST_FIELDS, "malformed_waiver", "waiver request", exact=True)
+    return copy.deepcopy(candidate)
+
+
+def validate_repair_request(candidate: Any) -> Dict[str, Any]:
+    """Return an operator's cleanup-repair request, or raise malformed_repair.
+
+    The request is an acknowledgement to be checked by validate_repair against the
+    journal and a fresh strict read; it is never evidence that a delete succeeded.
+    """
+    _require_fields(candidate, _REPAIR_REQUEST_FIELDS, "malformed_repair", "repair request", exact=True)
+    return copy.deepcopy(candidate)
 
 
 def _require_fields(value: Any, spec: _Spec, code: str, label: str, exact: bool = False) -> None:

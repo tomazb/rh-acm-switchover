@@ -59,7 +59,12 @@ from lib.gitops_detector import GitOpsCollector
 from lib.report_artifacts import validate_report_artifact_directory
 from lib.run_record import HubFacts, MigrationJournalResetRefused, RunRecord
 from lib.utils import StateIdentityMismatch
-from lib.validation import InputValidator, ValidationError, validate_distinct_hub_identities
+from lib.validation import (
+    InputValidator,
+    ValidationError,
+    managed_cluster_expectation_waiver_request,
+    validate_distinct_hub_identities,
+)
 from modules import (
     Decommission,
     Finalization,
@@ -218,8 +223,81 @@ Examples:
         help=(
             "Minimum number of non-local ManagedClusters expected on the secondary hub after restore. "
             "Activation fails if fewer than N clusters are found. Default derives the expected count "
-            "from primary preflight; explicit 0 allows an empty hub."
+            "from primary preflight. An explicit N is an additional floor: the expected names derived "
+            "by preflight stay enforced, and explicit 0 allows an empty hub only when none were derived."
         ),
+    )
+    parser.add_argument(
+        "--skip-managed-cluster-expectations",
+        action="store_true",
+        help=(
+            "Request an audited waiver of the expected ManagedCluster name check. Requires "
+            "--managed-cluster-expectation-waiver-scope, -actor and -reason. It never waives the count "
+            "floor and is rejected when there is no expected name to waive in its scope."
+        ),
+    )
+    parser.add_argument(
+        "--managed-cluster-expectation-waiver-scope",
+        choices=["activation", "post_activation", "both"],
+        default=None,
+        help="Name check the waiver covers: activation, post_activation, or both.",
+    )
+    parser.add_argument(
+        "--managed-cluster-expectation-waiver-actor",
+        default=None,
+        metavar="TEXT",
+        help="Who is requesting the waiver (non-empty).",
+    )
+    parser.add_argument(
+        "--managed-cluster-expectation-waiver-reason",
+        default=None,
+        metavar="TEXT",
+        help="Why the waiver is requested (non-empty).",
+    )
+    parser.add_argument(
+        "--managed-cluster-expectation-waiver-request-id",
+        default=None,
+        metavar="TEXT",
+        help="Optional change or ticket reference for the waiver.",
+    )
+    parser.add_argument(
+        "--repair-migration-cleanup",
+        action="store_true",
+        help=(
+            "Acknowledge a migration Restore cleanup that requires recovery. This is an audited operator "
+            "acknowledgement, not evidence of a delete, and requires every --cleanup-repair-* option."
+        ),
+    )
+    parser.add_argument(
+        "--cleanup-repair-actor",
+        default=None,
+        metavar="TEXT",
+        help="Who is acknowledging the cleanup repair (non-empty).",
+    )
+    parser.add_argument(
+        "--cleanup-repair-reason",
+        default=None,
+        metavar="TEXT",
+        help="Why the cleanup repair is acknowledged (non-empty).",
+    )
+    parser.add_argument(
+        "--cleanup-repair-evidence",
+        action="append",
+        default=None,
+        metavar="TEXT",
+        help="Reference to evidence the operator inspected; repeat for each reference (at least one).",
+    )
+    parser.add_argument(
+        "--cleanup-repair-run-id",
+        default=None,
+        metavar="UUID",
+        help="Run ID of the migration journal being repaired.",
+    )
+    parser.add_argument(
+        "--cleanup-repair-operation-id",
+        default=None,
+        metavar="UUID",
+        help="Operation ID of the Restore cleanup being repaired.",
     )
 
     # State management
@@ -714,6 +792,7 @@ def _run_phase_preflight(
         count=len(expected_managed_cluster_names),
         mode=expectation_mode,
     )
+    _require_waivable_expectation(args, expected_managed_cluster_names)
 
     if not getattr(args, "skip_gitops_check", False):
         _report_argocd_acm_impact(
@@ -893,6 +972,8 @@ def _resolve_managed_cluster_expectation(
     expected_names = list(expectation.names)
     expected_count = expectation.count
 
+    _require_waivable_expectation(args, expected_names)
+
     if raw_min is None:
         if expectation.mode is None:
             raise SwitchoverError(
@@ -904,9 +985,21 @@ def _resolve_managed_cluster_expectation(
         if expectation.mode == MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY and expected_count == 0 and not expected_names:
             return 1, [], False
         return expected_count, expected_names, bool(expected_names)
-    if raw_min == 0:
-        return 0, [], False
-    return int(raw_min), [], False
+    # AC25: an explicit minimum is an additional count floor; recorded names stay enforced.
+    return int(raw_min), expected_names, bool(expected_names)
+
+
+def _require_waivable_expectation(args: argparse.Namespace, expected_names: list[str]) -> None:
+    """Reject a requested waiver when the recorded expectation has no name to waive.
+
+    Python records one expected-name set for both the activation and post-activation
+    checks, so every waiver scope is covered by the same set.
+    """
+    if managed_cluster_expectation_waiver_request(args) is not None and not expected_names:
+        raise SwitchoverError(
+            "waiver_expected_names_empty: --skip-managed-cluster-expectations was requested, but no expected "
+            "ManagedCluster name is recorded to waive"
+        )
 
 
 def _run_phase_finalization(

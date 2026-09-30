@@ -180,6 +180,45 @@
     - not ((_checkpoint_enter | default({})).skipped_phase | default(false))
     - not acm_switchover_preflight_summary.passed
 
+# July design section 2: a waiver is rejected when a scope it covers has no
+# expected name to waive. The input is already well formed (acm_input_validate).
+- name: Reject a ManagedCluster expectation waiver with no expected name to waive
+  ansible.builtin.assert:
+    that:
+      - >-
+        not (acm_switchover_operation.skip_managed_cluster_expectations | default(false) | bool)
+        or (
+          (
+            _acm_waiver_scope not in ['activation', 'both']
+            or (_acm_waiver_activation_names | length) > 0
+          )
+          and (
+            _acm_waiver_scope not in ['post_activation', 'both']
+            or (_acm_waiver_post_activation_names | length) > 0
+          )
+        )
+    fail_msg: >-
+      waiver_expected_names_empty: skip_managed_cluster_expectations was requested with scope
+      {{ _acm_waiver_scope }}, but that scope has no expected ManagedCluster name to waive.
+  vars:
+    _acm_waiver_scope: >-
+      {{ (acm_switchover_operation.managed_cluster_expectation_waiver | default({}, true)).get('scope') }}
+    _acm_waiver_activation_names: >-
+      {{
+        []
+        if (acm_switchover_operation.restore_only | default(false) | bool)
+        else (acm_switchover_expected_managed_cluster_names | default([], true))
+      }}
+    _acm_waiver_post_activation_names: >-
+      {{
+        (acm_switchover_expected_managed_cluster_names | default([], true))
+        or (
+          (acm_switchover_managed_clusters | default({}, true) | list)
+          if (acm_switchover_operation.restore_only | default(false) | bool)
+          else []
+        )
+      }}
+
 - name: Mark checkpoint phase completion
   tomazb.acm_switchover.checkpoint_phase:
     phase: preflight

@@ -3530,6 +3530,52 @@ rcase("repair-run-id-mismatch-blocks", dict(REPAIR, run_id=OTHER_UUID), RR, "rep
 rcase("repair-operation-id-mismatch-blocks", dict(REPAIR, operation_id=OTHER_UUID), RR, "repair_identity_mismatch")
 rcase("repair-invalid-journal-blocks", REPAIR, mut(RR, cleanup__recovery=None), "invalid_cleanup_state")
 
+# validate_waiver_request / validate_repair_request (plan Task 6: the operator inputs) ----------------------
+# The request is the journal record minus what journaling adds, held to the same field rules.
+fn = "validate_waiver_request"
+WREQ = {key: value for key, value in waiver("activation").items() if key not in ("flag", "journaled_at", "outcome")}
+
+
+def wrcase(case_id, candidate, expect):
+    case(case_id, ALL, WV, fn, {"candidate": candidate}, ok(candidate) if expect is None else err(expect))
+
+
+wrcase("waiver-request-activation", WREQ, None)
+wrcase("waiver-request-both-with-request-id", dict(WREQ, scope="both", request_id="CHG-1"), None)
+wrcase("waiver-request-post-activation", dict(WREQ, scope="post_activation"), None)
+wrcase("waiver-request-null-blocks", None, "malformed_waiver")
+wrcase("waiver-request-missing-scope-blocks", {k: v for k, v in WREQ.items() if k != "scope"}, "malformed_waiver")
+wrcase("waiver-request-null-scope-blocks", dict(WREQ, scope=None), "malformed_waiver")
+wrcase("waiver-request-unknown-scope-blocks", dict(WREQ, scope="teardown"), "malformed_waiver")
+wrcase("waiver-request-empty-actor-blocks", dict(WREQ, actor=""), "malformed_waiver")
+wrcase("waiver-request-null-reason-blocks", dict(WREQ, reason=None), "malformed_waiver")
+wrcase("waiver-request-empty-request-id-blocks", dict(WREQ, request_id=""), "malformed_waiver")
+wrcase("waiver-request-journal-field-blocks", dict(WREQ, outcome="waived"), "malformed_waiver")
+
+fn = "validate_repair_request"
+RREQ = {key: value for key, value in REPAIR.items() if key != "acknowledged_at"}
+
+
+def rrcase(case_id, candidate, expect):
+    case(case_id, ALL, RPS, fn, {"candidate": candidate}, ok(candidate) if expect is None else err(expect))
+
+
+rrcase("repair-request-complete", RREQ, None)
+rrcase("repair-request-null-blocks", None, "malformed_repair")
+rrcase("repair-request-empty-actor-blocks", dict(RREQ, actor=""), "malformed_repair")
+rrcase("repair-request-null-reason-blocks", dict(RREQ, reason=None), "malformed_repair")
+rrcase("repair-request-no-evidence-blocks", dict(RREQ, inspected_evidence=[]), "malformed_repair")
+rrcase(
+    "repair-request-empty-evidence-item-blocks", dict(RREQ, inspected_evidence=["audit-log", ""]), "malformed_repair"
+)
+rrcase("repair-request-run-id-not-uuid-blocks", dict(RREQ, run_id="run-1"), "malformed_repair")
+rrcase(
+    "repair-request-operation-id-missing-blocks",
+    {k: v for k, v in RREQ.items() if k != "operation_id"},
+    "malformed_repair",
+)
+rrcase("repair-request-journal-field-blocks", dict(RREQ, acknowledged_at=T_REPAIR), "malformed_repair")
+
 # --- Selection, ownership and completion refinements --------------------------------------
 # a non-string resource type is an unsupported type, never an uncoded TypeError.
 for label, rtype in [("list", []), ("object", {}), ("null", None)]:

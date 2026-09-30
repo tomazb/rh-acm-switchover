@@ -46,7 +46,9 @@ from lib.migration_journal import (
     validate_journal_transition,
     validate_migration_journal,
     validate_repair,
+    validate_repair_request,
     validate_waiver,
+    validate_waiver_request,
 )
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "r4_04_migration_evidence_vectors.json"
@@ -79,6 +81,8 @@ FUNCTIONS = {
     "validate_journal_transition": validate_journal_transition,
     "validate_waiver": validate_waiver,
     "validate_repair": validate_repair,
+    "validate_waiver_request": validate_waiver_request,
+    "validate_repair_request": validate_repair_request,
     "rfc3339_ns": rfc3339_ns,
     "go_normalize": go_normalize,
     "validate_backup_projection": validate_backup_projection,

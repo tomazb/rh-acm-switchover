@@ -11,7 +11,25 @@ acm_switchover_operation:
   method: passive
   old_hub_action: secondary
   activation_method: patch
+  # An explicit minimum is an additional count floor; preflight-derived names stay enforced.
   min_managed_clusters: 0
+  # Audited waiver of the expected ManagedCluster name check. To request it, set
+  # skip_managed_cluster_expectations: true with a scope (activation, post_activation
+  # or both) and a non-empty actor and reason; request_id is optional.
+  skip_managed_cluster_expectations: false
+  managed_cluster_expectation_waiver:
+    scope:
+    actor: ""
+    reason: ""
+    request_id:
+  # Operator acknowledgement of a migration Restore cleanup that requires recovery.
+  # Leave every field empty unless requesting it; then all are required.
+  migration_cleanup_repair:
+    actor: ""
+    reason: ""
+    inspected_evidence: []
+    run_id: ""
+    operation_id: ""
 
 acm_switchover_features:
   manage_auto_import_strategy: false
