@@ -459,22 +459,19 @@ class RunRecord:
         return failed_phase
 
     def clear_argocd_repause_required(self) -> None:
-        """The retry re-paused Argo CD; discharge the obligation, forced durable.
+        """The retry re-paused Argo CD; discharge the obligation with one staged durable write.
 
-        A failed write restores the obligation in memory before propagating, so
-        no later state write can drop it.
+        The clear is staged and flushed once. If that write fails or is interrupted,
+        the obligation is staged back as pending state, so the interruption save and
+        the exit flush write the marker rather than the clear.
         """
         previous = self._get(_KEY_ARGOCD_REPAUSE_REQUIRED)
         try:
-            self._set(_KEY_ARGOCD_REPAUSE_REQUIRED, None)
+            self._state._stage_config(_KEY_ARGOCD_REPAUSE_REQUIRED, None)
             self._state.flush_state()
         except BaseException:
-            self._set_in_memory(_KEY_ARGOCD_REPAUSE_REQUIRED, previous)
+            self._state._stage_config(_KEY_ARGOCD_REPAUSE_REQUIRED, previous)
             raise
-
-    def _set_in_memory(self, key: str, value: Any) -> None:
-        # Direct bag access: a write through the accessor would flush again.
-        self._state.state["config"][key] = value
 
     # -- lifecycle view: read side for report writers and show_state --
 

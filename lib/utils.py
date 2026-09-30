@@ -608,6 +608,16 @@ class StateManager:
         self._dirty = True
         self.save_state()
 
+    def _stage_config(self, key: str, value: Any) -> None:
+        """Set a configuration value in memory and mark the state pending, without writing.
+
+        Private storage accessor for lib/run_record.RunRecord: the caller's next forced
+        flush is the one durable write, and until it succeeds every later save or exit
+        flush still writes the staged state.
+        """
+        self.state["config"][key] = copy.deepcopy(value)
+        self._dirty = True
+
     def _get_config(self, key: str, default: Any = None) -> Any:
         """Return an isolated copy of a stored value, or the caller-owned default.
 

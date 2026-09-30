@@ -151,27 +151,21 @@ PASSIVE_PATCH_CATEGORIES = (
     "activation_resources_generic",
 )
 # passive_patch requests whose child names are predicted before the PATCH, as
-# (role, frozen category, -active suffix): the lane's activation-only requests
-# (amendment-2 section 3; U2.12-2.16 restore.go restoreOnlyManagedClusters,
-# U2.17 restore.go:710-719) plus the ordinary requests the sync branch may make
-# from the same frozen Backups (U2.12-2.16 restore_controller.go sync branch,
-# U2.17 restore_controller.go:656-692).
-_PATCH_NAME_ROLES = {
-    _LEGACY: (
-        ("ManagedClusters", "managed_clusters", False),
-        ("Credentials", "activation_credentials", False),
-        ("ResourcesGeneric", "activation_resources_generic", False),
-        ("Resources", "activation_resources", False),
-    ),
-    _ACTIVE: (
-        ("ManagedClusters", "managed_clusters", False),
-        ("CredentialsActive", "activation_credentials", True),
-        ("ResourcesGenericActive", "activation_resources_generic", True),
-        ("Credentials", "activation_credentials", False),
-        ("Resources", "activation_resources", False),
-        ("ResourcesGeneric", "activation_resources_generic", False),
-    ),
-}
+# (role, frozen category, -active suffix): the lane's activation requests, whose
+# credentials and generic children carry -active (U2.12 restore_controller.go:549-552,
+# U2.13 :548-551, U2.14-2.16 :723-726; U2.17 restore.go:710-719), plus the ordinary
+# unsuffixed requests the sync branch may make from the same frozen Backups
+# (U2.12-2.16 restore_controller.go sync branch, U2.17 restore_controller.go:656-692).
+# The legacy hive/cluster shortcut output is the unsuffixed Credentials entry, once
+# (PR C decisions amendment section 1.2 rule 5).
+_PATCH_NAME_ROLES = (
+    ("ManagedClusters", "managed_clusters", False),
+    ("CredentialsActive", "activation_credentials", True),
+    ("ResourcesGenericActive", "activation_resources_generic", True),
+    ("Credentials", "activation_credentials", False),
+    ("Resources", "activation_resources", False),
+    ("ResourcesGeneric", "activation_resources_generic", False),
+)
 # PR C decisions amendment section 1: the legacy-only credential request types the
 # passive_patch sync branch may add from `latest`.
 _CREDENTIAL_VARIANTS = ("CredentialsHive", "CredentialsCluster")
@@ -316,7 +310,7 @@ def predict_passive_patch_child_names(
     """
     _require_contract(controller_contract)
     _require_categories(frozen_backups, PASSIVE_PATCH_CATEGORIES, ())
-    return _predict_names(acm_restore_name, frozen_backups, _PATCH_NAME_ROLES[controller_contract])
+    return _predict_names(acm_restore_name, frozen_backups, _PATCH_NAME_ROLES)
 
 
 def predict_passive_patch_credential_variants(

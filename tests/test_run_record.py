@@ -836,3 +836,38 @@ class TestArgocdRepauseMarker:
         assert record.argocd_repause_required() == "activation"
         state.add_error("later write", "activation")
         assert RunRecord(StateManager(state.state_file)).argocd_repause_required() == "activation"
+
+
+class TestF5InterruptedMarkerClear:
+    """Codex finding 5: an interruption during the clear never leaves the obligation only in memory."""
+
+    @pytest.mark.parametrize("interruption", ["before-flush", "first-write", "second-write"])
+    def test_an_interrupted_clear_keeps_the_marker_durable(self, state, record, interruption):
+        record.record_argocd_repause_required("activation", "2024-01-01T00:00:00+00:00")
+        original_write, original_flush = state._write_state, state.flush_state
+        calls = {"n": 0}
+
+        def write(snapshot):
+            calls["n"] += 1
+            if {"first-write": 1, "second-write": 2}.get(interruption) == calls["n"]:
+                raise KeyboardInterrupt
+            return original_write(snapshot)
+
+        def flush():
+            if interruption == "before-flush":
+                raise KeyboardInterrupt
+            return original_flush()
+
+        with patch.object(state, "_write_state", side_effect=write), patch.object(
+            state, "flush_state", side_effect=flush
+        ):
+            try:
+                record.clear_argocd_repause_required()
+                cleared = True
+            except KeyboardInterrupt:
+                cleared = False
+        # The interruption path saves pending state, as cli_outcomes and the exit flush do.
+        state.save_state()
+        on_disk = RunRecord(StateManager(state.state_file)).argocd_repause_required()
+        assert on_disk == (None if cleared else "activation")
+        assert record.argocd_repause_required() == on_disk

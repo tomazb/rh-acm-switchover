@@ -251,24 +251,6 @@ class TestSecondaryActivation:
         activation._wait_for_managed_clusters_restored(60)
         assert mock_wait.call_count == 1
 
-    def test_recreate_restore_from_snapshot_raises_on_conflict(self, mock_secondary_client, mock_state_manager):
-        """Rollback recreation must surface 409 conflicts to the caller."""
-        activation = SecondaryActivation(
-            secondary_client=mock_secondary_client,
-            state_manager=mock_state_manager,
-            method="passive",
-        )
-        restore_snapshot = {
-            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-            "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
-        }
-        mock_secondary_client.create_custom_resource.side_effect = ApiException(status=409)
-
-        with pytest.raises(ApiException) as exc_info:
-            activation._recreate_restore_from_snapshot(restore_snapshot)
-
-        assert exc_info.value.status == 409
-
     def test_apply_immediate_import_annotations(self, mock_secondary_client, mock_state_manager):
         """Test immediate-import annotation application under ImportOnly."""
         RunRecord(mock_state_manager).record_hub_facts(HubFacts(secondary_version="2.14.0"))
@@ -621,13 +603,6 @@ class TestPassiveSyncRestoreMissingName:
 
         with pytest.raises(FatalError, match="malformed Restore"):
             activation_passive._get_passive_sync_restore_name()
-
-    def test_build_restore_snapshot_raises_when_name_missing(self):
-        """_build_restore_snapshot raises FatalError when restore has no metadata.name."""
-        restore = {"metadata": {}, "spec": {"someField": True}}
-
-        with pytest.raises(FatalError, match="missing metadata.name"):
-            SecondaryActivation._build_restore_snapshot(restore)
 
 
 @pytest.mark.unit

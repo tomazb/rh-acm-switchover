@@ -3616,20 +3616,45 @@ REF_TABLES["sync_branch"] = {
     "2.16": "restore_controller.go:502-527",
     "2.17": "restore_controller.go:656-692",
 }
+# Legacy activation renames the activation-step Credentials and ResourcesGeneric children with
+# "-active" when those options are not skip (U2.12 restore_controller.go:549-552 and equivalents);
+# the sync branch's unsuffixed Credentials output is the one the hive/cluster shortcut shares (D §1.2).
+REF_TABLES["legacy_active"] = {
+    "2.12": "restore_controller.go:549-552",
+    "2.13": "restore_controller.go:548-551",
+    "2.14": "restore_controller.go:723-726",
+    "2.15": "restore_controller.go:723-726",
+    "2.16": "restore_controller.go:723-726",
+}
 case(
     "patch-names-legacy",
     LEGACY,
-    refs2(LEGACY, "name", "only_mc", "sync_branch"),
+    refs2(LEGACY, "name", "only_mc", "sync_branch", "legacy_active"),
     fn,
     {"controller_contract": LEG, "acm_restore_name": R, "frozen_backups": PATCH_FROZEN},
     ok(
         {
             "ManagedClusters": gname(MC_B),
+            "CredentialsActive": gname(ACT_CRED_B, True),
+            "ResourcesGenericActive": gname(ACT_GEN_B, True),
             "Credentials": gname(ACT_CRED_B),
-            "ResourcesGeneric": gname(ACT_GEN_B),
             "Resources": gname(ACT_RES_B),
+            "ResourcesGeneric": gname(ACT_GEN_B),
         }
     ),
+)
+case(
+    "patch-names-legacy-active-collision-blocks",
+    LEGACY,
+    refs2(LEGACY, "name", "legacy_active"),
+    fn,
+    {
+        "controller_contract": LEG,
+        "acm_restore_name": R,
+        "frozen_backups": dict(PATCH_FROZEN, activation_resources=proj(ACT_CRED_B + "-active")),
+    },
+    err("generated_name_collision"),
+    True,
 )
 case(
     "patch-names-2.17",

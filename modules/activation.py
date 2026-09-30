@@ -9,7 +9,7 @@ import logging
 import uuid
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from kubernetes.client.rest import ApiException
 
@@ -59,8 +59,6 @@ from lib.migration_child_evidence import (
     predict_one_shot_child_names,
     predict_passive_patch_child_names,
     predict_passive_patch_credential_variants,
-    require_no_credential_variant_children,
-    validate_velero_child,
 )
 from lib.migration_evidence import (
     MigrationEvidenceError,
@@ -516,12 +514,8 @@ class SecondaryActivation:
         # Only one ACM Restore may be active: remove the passive sync Restore first,
         # under its UID and resourceVersion, after the journal is durable.
         passive = find_passive_sync_restore_strict(self.secondary, BACKUP_NAMESPACE)
-        snapshot: Optional[Dict] = None
         if passive is not None:
-            passive_name = passive["metadata"]["name"]
-            self._assert_passive_restore_ready(passive, passive_name)
-            snapshot = self._build_restore_snapshot(passive)
-            self._delete_passive_sync_restore_guarded(passive_name)
+            self._delete_passive_sync_restore_guarded(passive)
         else:
             logger.info("No passive sync restore found; creating %s", name)
         # The deletion wait can take minutes: re-prove the frozen Backups at the create itself.
@@ -538,17 +532,16 @@ class SecondaryActivation:
             logger.info("[DRY-RUN] Would create %s", name)
             return
         if not result["accepted"] or result["reason"] != "ok":
-            message = f"Failed to create {name} ({result['reason']}); the create is not accepted"
-            if snapshot is not None:
-                try:
-                    self._recreate_restore_from_snapshot(snapshot)
-                except Exception as rollback_error:
-                    raise FatalError(
-                        f"{message}. Rollback failed to recreate passive sync restore "
-                        f"{snapshot['metadata']['name']}: {rollback_error}"
-                    ) from rollback_error
-                raise FatalError(f"{message}. Recreated passive sync restore {snapshot['metadata']['name']}.")
-            raise FatalError(message)
+            # The outcome may be unknown (a create can land and still time out), so nothing
+            # is mutated again here: the next run re-proves the hub from the journal.
+            deleted = f" The passive sync Restore {passive['metadata']['name']} was deleted." if passive else ""
+            raise FatalError(
+                f"The create of {name} was not accepted ({result['reason']}).{deleted} No automatic rollback is "
+                f"attempted. A retry re-proves the destination hub: a {name} this attempt created is refused as "
+                "unowned, otherwise the create is repeated from the migration journal."
+            )
+        if not result["generation_reported"] or result["generation"] < 1:
+            raise FatalError(f"The accepted create of {name} reported no generation; no evidence is recorded")
         post = self._strict_get_restore(name)
         if post is None:
             raise FatalError(f"{name} is absent after an accepted create")
@@ -561,6 +554,7 @@ class SecondaryActivation:
         """The journaled mutation was accepted: the live Restore must still be exactly that object and spec."""
         restore = journal["restore"]
         self._require_owned_spec(self._require_journaled_restore(journal), journal)
+        self._revalidate_frozen_backups(journal)
         logger.info("%s already mutated by this run (generation %s)", restore["name"], restore["generation"])
 
     def _require_journaled_restore(self, journal: Dict) -> Dict:
@@ -706,15 +700,29 @@ class SecondaryActivation:
                 "it is never adopted. Review and delete it, then retry."
             )
 
-    def _delete_passive_sync_restore_guarded(self, name: str) -> None:
+    def _delete_passive_sync_restore_guarded(self, discovered: Dict) -> None:
+        """Delete the discovered passive sync Restore, and only that object.
+
+        The final strict read must still be the discovered UID, still sync-enabled and
+        still activation-ready; the guarded DELETE then binds that read's UID and
+        resourceVersion. A replacement is never deleted.
+        """
+        name = discovered["metadata"]["name"]
+        uid = discovered["metadata"].get("uid")
+        if not isinstance(uid, str) or not uid:
+            raise FatalError(f"Discovered passive sync restore {name} has no readable metadata.uid")
         live = self._strict_get_restore(name)
         if live is None:
             logger.info("Passive sync restore %s already deleted", name)
             return
-        metadata = live["metadata"]
-        uid, revision = metadata.get("uid"), metadata.get("resourceVersion")
-        if not isinstance(uid, str) or not uid or not isinstance(revision, str) or not revision:
-            raise FatalError(f"{name} has no readable metadata.uid/resourceVersion")
+        if live["metadata"].get("uid") != uid:
+            raise FatalError(f"Passive sync restore {name} was replaced after discovery; the replacement is kept")
+        if (live.get("spec") or {}).get(SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS) is not True:
+            raise FatalError(f"{name} is no longer a {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS}=true passive Restore")
+        self._assert_passive_restore_ready(live, name)
+        revision = live["metadata"].get("resourceVersion")
+        if not isinstance(revision, str) or not revision:
+            raise FatalError(f"{name} has no readable metadata.resourceVersion")
         logger.info("Deleting passive sync restore %s before creating the activation restore", name)
         result = self.secondary.delete_restore_guarded(
             name, namespace=BACKUP_NAMESPACE, uid=uid, resource_version=revision, timeout_seconds=DELETE_REQUEST_TIMEOUT
@@ -858,55 +866,6 @@ class SecondaryActivation:
                 )
                 return
         raise FatalError(f"Passive sync restore not ready: {phase} - {message}")
-
-    @staticmethod
-    def _build_restore_snapshot(restore: Dict) -> Dict:
-        """Build a minimal restore body that can be safely recreated."""
-        metadata = restore.get("metadata", {})
-        restore_name = metadata.get("name")
-        if not restore_name:
-            raise FatalError("Passive sync restore missing metadata.name")
-
-        snapshot_metadata = {
-            "name": restore_name,
-            "namespace": metadata.get("namespace", BACKUP_NAMESPACE),
-        }
-        labels = metadata.get("labels")
-        annotations = metadata.get("annotations")
-        if labels:
-            snapshot_metadata["labels"] = labels
-        if annotations:
-            snapshot_metadata["annotations"] = annotations
-
-        return {
-            "apiVersion": CLUSTER_BACKUP_API_VERSION_FULL,
-            "kind": "Restore",
-            "metadata": snapshot_metadata,
-            "spec": restore.get("spec", {}),
-        }
-
-    def _recreate_restore_from_snapshot(self, restore_snapshot: Dict) -> None:
-        """Best-effort rollback helper for recreate-on-failure semantics."""
-        restore_name = restore_snapshot.get("metadata", {}).get("name", "unknown")
-        try:
-            self.secondary.create_custom_resource(
-                group=CLUSTER_BACKUP_API_GROUP,
-                version=CLUSTER_BACKUP_API_VERSION,
-                plural=RESTORE_PLURAL,
-                body=restore_snapshot,
-                namespace=BACKUP_NAMESPACE,
-            )
-            logger.warning(
-                "Recreated passive sync restore %s after activation restore creation failure",
-                restore_name,
-            )
-        except ApiException as e:
-            if getattr(e, "status", None) == 409:
-                logger.warning(
-                    "Passive sync restore %s already exists during rollback recreation; surfacing conflict",
-                    restore_name,
-                )
-            raise
 
     def _maybe_set_auto_import_strategy(self) -> None:
         """If requested, set ImportAndSync on secondary for ACM 2.14+ with existing clusters."""
@@ -1078,7 +1037,7 @@ class SecondaryActivation:
         if journal["restore"]["completed_at"] is not None:
             self._revalidate_completed_evidence(journal)
             return
-        children = self._collect_and_validate_velero_children(journal, timeout)
+        self._collect_and_validate_velero_children(journal, timeout)
         waiver = self._activation_waiver(journal)
         if waiver is not None:
             logger.warning(
@@ -1090,7 +1049,8 @@ class SecondaryActivation:
             self._verify_managed_clusters_restored(enforce_names=waiver is None)
         else:
             self._wait_for_managed_clusters_restored(timeout, enforce_names=waiver is None)
-        self._record_restore_completion_evidence(journal, children, waiver)
+        # The ManagedCluster wait can take minutes: commit only a proof taken after it.
+        self._record_restore_completion_evidence(journal, self._prove_completion(journal), waiver)
 
     def _reconcile_restore_completion(self) -> None:
         """The wait step is marked complete: its completion evidence must be journaled and still hold."""
@@ -1110,37 +1070,28 @@ class SecondaryActivation:
             raise FatalError("No journaled Restore mutation to wait for; completion evidence cannot be established")
         return journal
 
-    def _collect_and_validate_velero_children(self, journal: Dict, timeout: int) -> Dict[str, List[Dict]]:
+    def _collect_and_validate_velero_children(self, journal: Dict, timeout: int) -> None:
         """Poll the journaled Restore until its ACM phase and Velero children prove completion.
 
         Each poll strictly re-reads the ACM Restore (identity, generation, owned spec,
         cleanup policy) and the complete Velero Restore list of the namespace. A
         non-terminal ACM or child phase, or a child the controller has not created yet,
         keeps waiting; anything else, and a timeout, fails with no evidence written.
+        The proof is taken again before it is committed (_prove_completion).
         """
         restore = journal["restore"]
-        kind = restore["mutation_kind"]
-        proof: Dict[str, Dict[str, List[Dict]]] = {}
 
         def _poll() -> WaitConditionResult:
-            live = self._require_journaled_restore(journal)
-            self._require_owned_spec(live, journal)
-            status = live.get("status", {})
-            if not isinstance(status, dict):
-                raise FatalError(f"{restore['name']} status is malformed")
+            status, names, children = self._read_completion_inputs(journal)
             phase = status.get("phase")
-            if not self._evidence(acm_phase_accepts, kind, restore["controller_contract"], phase):
+            if not self._evidence(acm_phase_accepts, restore["mutation_kind"], restore["controller_contract"], phase):
                 if phase in _ACM_PENDING_PHASES:
                     return WaitConditionResult.pending(f"phase={phase}")
                 raise FatalError(f"Restore {restore['name']} reached phase {phase!r}: {status.get('lastMessage', '')}")
-            names = {field: status.get(field, "") for field in STATUS_NAME_FIELDS}
-            if not all(isinstance(value, str) for value in names.values()):
-                raise FatalError(f"{restore['name']} status Restore names are malformed")
-            children = self._strict_velero_restores()
             if self._children_in_progress(journal, children, names):
                 return WaitConditionResult.pending("Velero restores in progress")
             try:
-                proof["lists"] = self._completion_lists(journal, names, children, phase)
+                self._completion_lists(journal, names, children, phase)
             except MigrationEvidenceError as exc:
                 if exc.code in _PENDING_CHILD_CODES:
                     return WaitConditionResult.pending(exc.code)
@@ -1157,7 +1108,35 @@ class SecondaryActivation:
             logger=logger,
         ):
             raise FatalError(f"Timeout waiting for restore to complete after {timeout}s")
-        return proof["lists"]
+
+    def _read_completion_inputs(self, journal: Dict) -> Tuple[Dict, Dict[str, str], List[Dict]]:
+        """Strict reads a completion proof needs: the journaled Restore's status and the Velero Restores."""
+        restore = journal["restore"]
+        live = self._require_journaled_restore(journal)
+        self._require_owned_spec(live, journal)
+        status = live.get("status", {})
+        if not isinstance(status, dict):
+            raise FatalError(f"{restore['name']} status is malformed")
+        names = {field: status.get(field, "") for field in STATUS_NAME_FIELDS}
+        if not all(isinstance(value, str) for value in names.values()):
+            raise FatalError(f"{restore['name']} status Restore names are malformed")
+        return status, names, self._strict_velero_restores()
+
+    def _prove_completion(self, journal: Dict) -> Dict[str, List[Dict]]:
+        """One fresh, non-waiting completion proof: every rule of the method-specific validator, or FatalError.
+
+        Identity, generation, owned spec and cleanup policy; the accepted ACM phase;
+        roles, cohort, provenance, owner membership and the legacy hive/cluster
+        backstop; then the frozen Backups' seven-field projections.
+        """
+        restore = journal["restore"]
+        status, names, children = self._read_completion_inputs(journal)
+        phase = status.get("phase")
+        if not self._evidence(acm_phase_accepts, restore["mutation_kind"], restore["controller_contract"], phase):
+            raise FatalError(f"Restore {restore['name']} reached phase {phase!r}: {status.get('lastMessage', '')}")
+        lists = self._evidence(self._completion_lists, journal, names, children, phase)
+        self._revalidate_frozen_backups(journal)
+        return lists
 
     def _completion_lists(
         self, journal: Dict, names: Dict[str, str], children: List[Dict], phase: str
@@ -1259,38 +1238,16 @@ class SecondaryActivation:
         logger.info("Recorded completion evidence for %s", restore["name"])
 
     def _revalidate_completed_evidence(self, journal: Dict) -> None:
-        """Resume over completed evidence: re-prove it live, never rewrite it."""
+        """Resume over completed evidence: re-run the completion contract live, never rewrite it."""
         restore = journal["restore"]
-        live = self._require_journaled_restore(journal)
-        self._require_owned_spec(live, journal)
+        fresh = self._prove_completion(journal)
         if self._evidence(restore_spec_fingerprint, journal) != restore["spec_fingerprint"]:
             raise FatalError(f"{restore['name']} journaled fingerprint disagrees with the journaled spec")
-        children = {child["metadata"]["name"]: child for child in self._strict_velero_restores()}
         for key, entries in restore["velero_restores"].items():
+            observed = {entry["name"]: entry for entry in fresh[key]}
             for entry in entries:
-                child = children.get(entry["name"])
-                observed = (
-                    self._evidence(
-                        validate_velero_child,
-                        child,
-                        namespace=restore["namespace"],
-                        owner_name=restore["name"],
-                        owner_uid=restore["uid"],
-                        expected_backup_name=entry["backup_name"],
-                    )
-                    if child is not None
-                    else None
-                )
-                if observed != entry:
+                if observed.get(entry["name"]) != entry:
                     raise FatalError(f"Journaled {key} child {entry['name']} was replaced or changed")
-        if restore["mutation_kind"] == "passive_patch":
-            self._evidence(
-                require_no_credential_variant_children,
-                restore["controller_contract"],
-                acm_restore_name=restore["name"],
-                acm_restore_uid=restore["uid"],
-                namespace_restores=list(children.values()),
-            )
         logger.info("Completion evidence for %s revalidated", restore["name"])
 
     def _list_restored_managed_cluster_names(
