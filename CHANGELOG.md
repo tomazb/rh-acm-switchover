@@ -54,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The route refusal is collection-internal and fail-closed, recorded in
   [coexistence.md](ansible_collections/tomazb/acm_switchover/docs/coexistence.md); the Python CLI
   is unchanged. A malformed discovery `groupVersion` also fails such a read; that was a temporary,
-  operator-approved difference from Python until #321, below, aligned it.
+  operator-approved difference from Python until #321, above, aligned it.
 
 - Collection `strict_read` (`acm_k8s_read_outcome`, `acm_pod_owner_classify`) no longer reports
   a named-GET 404 as `not_found` unless a live, bounded discovery read of the requested

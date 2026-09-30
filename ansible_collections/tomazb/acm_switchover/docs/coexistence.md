@@ -212,7 +212,8 @@ checks were implemented in `7d105b30` and the kind check in `3105809b`, before
 any approval for custom resources; the earlier built-in approval (recorded in
 `53179299`) and the since-retired `groupVersion` approval (#321) do not cover this case. An
 independent validation then found the difference (IV-319-F4), and the operator
-explicitly approved it afterwards as a third narrow divergence. It is recorded
+explicitly approved it afterwards as a third narrow divergence (the second still
+open since #321 retired the `groupVersion` one). It is recorded
 as an operator-granted exception to the approval-before-implementation rule
 above. The approval covers only this stale cached-route mismatch on
 custom-resource named reads. It does not cover LIST routing, which #320 owns,

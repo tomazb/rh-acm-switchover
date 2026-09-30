@@ -46,7 +46,7 @@ from lib.strict_read import StrictReadStatus
 # `OBJECT_ABSENT` (or `CRD_ABSENT` when live discovery also omits the canonical name). It also
 # deliberately has no vector here; the collection's route checks are pinned by its own unit tests.
 #
-# A fourth, collection-internal case has no vector for the same reason (#320): before any
+# A third, collection-internal case has no vector for the same reason (#320): before any
 # request, the collection refuses a resolved route that is not the requested group/version,
 # canonical resource name and scope (a stale or foreign cached route, or kubernetes.core's
 # core-`v1` fallback into another group), so a namespaced read is never routed cluster-wide.
@@ -77,6 +77,13 @@ VECTORS = [
     ("malformed_group_version_missing_listed_get_404", "malformed response", StrictReadStatus.ERROR, "error", None),
     ("malformed_group_version_other_listed_get_success", "malformed response", StrictReadStatus.ERROR, "error", None),
     ("malformed_group_version_empty_omitted_list", "malformed response", StrictReadStatus.ERROR, "error", None),
+    (
+        "malformed_group_version_other_version_omitted_list",
+        "malformed response",
+        StrictReadStatus.ERROR,
+        "error",
+        None,
+    ),
     ("malformed_group_version_non_string_omitted_get", "malformed response", StrictReadStatus.ERROR, "error", None),
     (
         "malformed_group_version_missing_omitted_list_unresolved",
@@ -508,6 +515,9 @@ _PYTHON_VECTORS = {
         "other.io/v1", listed=True, get_effects=[{"metadata": {"name": "mch", "resourceVersion": "77"}}]
     ),
     "malformed_group_version_empty_omitted_list": lambda: _python_malformed_group_version_list("", listed=False),
+    "malformed_group_version_other_version_omitted_list": lambda: _python_malformed_group_version_list(
+        "g/v2", listed=False
+    ),
     "malformed_group_version_non_string_omitted_get": lambda: _python_malformed_group_version_get(
         7, listed=False, get_effects=[ApiException(status=404)]
     ),
@@ -1242,6 +1252,9 @@ _COLLECTION_VECTORS = {
     ),
     "malformed_group_version_empty_omitted_list": lambda: _collection_malformed_group_version(
         "", listed=False, read_mode="list"
+    ),
+    "malformed_group_version_other_version_omitted_list": lambda: _collection_malformed_group_version(
+        "g/v2", listed=False, read_mode="list"
     ),
     "malformed_group_version_non_string_omitted_get": lambda: _collection_malformed_group_version(
         7, listed=False, read_mode="get", get_error=_collection_api_error(404)

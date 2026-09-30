@@ -2782,7 +2782,9 @@ class TestDiscoveryGroupVersionProof:
         assert outcome.reason == STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE
 
     @pytest.mark.parametrize("listed", [True, False], ids=["resource-listed", "resource-omitted"])
-    @pytest.mark.parametrize("group_version", [_MISSING_GROUP_VERSION, "", 7, "other.io/v1"])
+    @pytest.mark.parametrize(
+        "group_version", [_MISSING_GROUP_VERSION, "", 7, None, "operator.open-cluster-management.io/v2", "other.io/v1"]
+    )
     def test_a_named_get_never_proves_absence_from_such_a_document(self, group_version, listed):
         client = self._client(self._document(group_version, listed=listed))
         outcome = client.get_custom_resource_strict(self._GROUP, "v1", self._PLURAL, "multiclusterhub")
@@ -2791,7 +2793,9 @@ class TestDiscoveryGroupVersionProof:
         client.custom_api.get_cluster_custom_object.assert_not_called()
 
     @pytest.mark.parametrize("listed", [True, False], ids=["resource-listed", "resource-omitted"])
-    @pytest.mark.parametrize("group_version", [_MISSING_GROUP_VERSION, "", 7, "other.io/v1"])
+    @pytest.mark.parametrize(
+        "group_version", [_MISSING_GROUP_VERSION, "", 7, None, "operator.open-cluster-management.io/v2", "other.io/v1"]
+    )
     def test_a_list_never_proves_absence_or_inventory_from_such_a_document(self, group_version, listed):
         client = self._client(self._document(group_version, listed=listed))
         outcome = client.list_custom_resources_strict(self._GROUP, "v1", self._PLURAL)
@@ -2805,9 +2809,13 @@ class TestDiscoveryGroupVersionProof:
         assert served._discovery_serves(self._GROUP, "v1", self._PLURAL).status is StrictReadStatus.ITEMS
         absent_object = served.get_custom_resource_strict(self._GROUP, "v1", self._PLURAL, "multiclusterhub")
         assert absent_object.status is StrictReadStatus.OBJECT_ABSENT
+        assert served.list_custom_resources_strict(self._GROUP, "v1", self._PLURAL).status is StrictReadStatus.ITEMS
         unserved = self._client(self._document("operator.open-cluster-management.io/v1", listed=False))
         assert unserved._discovery_serves(self._GROUP, "v1", self._PLURAL).status is StrictReadStatus.CRD_ABSENT
         assert unserved.list_custom_resources_strict(self._GROUP, "v1", self._PLURAL).status is (
+            StrictReadStatus.CRD_ABSENT
+        )
+        assert unserved.get_custom_resource_strict(self._GROUP, "v1", self._PLURAL, "multiclusterhub").status is (
             StrictReadStatus.CRD_ABSENT
         )
 

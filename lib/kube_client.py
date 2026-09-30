@@ -306,7 +306,9 @@ class KubeClient:
 
         Kind absence is proven only by a successful, decodable discovery
         response for the requested group/version that does not list the exact
-        canonical `resource_name`. A discovery call that fails,
+        canonical `resource_name`. A response that does not declare that
+        group/version (`groupVersion` missing, empty, not a string, or another
+        group/version) proves nothing about it and is an error. A discovery call that fails,
         times out, is unauthorized, or returns an unparseable body is an
         error: an unserved kind and an unreachable API server are not
         distinguishable by exception type, and the client library's own

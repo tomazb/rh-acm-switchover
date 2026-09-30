@@ -1477,7 +1477,7 @@ def test_a_custom_resource_live_discovery_omits_is_kind_not_served_before_any_re
 def test_a_custom_resource_read_needs_only_the_served_name_before_the_request(monkeypatch, read_mode, live_namespaced):
     """Before the request, live discovery must list the name; its scope field gates nothing.
 
-    Python's prover reads only the name. The route guard has already refused a namespaced request
+    Python's prover never reads the scope field. The route guard has already refused a namespaced request
     on a cluster-scoped route, and the server answers any other scope mismatch at the route itself
     (a namespaced URL for a cluster-scoped kind, or a cluster URL for a named namespaced object, is
     404, which the named-404 classifier then refuses to call absence). Gating on the live scope field
