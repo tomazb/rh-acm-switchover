@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any, Callable, Dict
 
 import pytest
 
@@ -47,7 +48,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_jo
 # repository checkout only the module-specific cases below run.
 FIXTURE_PATH = Path(__file__).resolve().parents[7] / "tests" / "fixtures" / "r4_04_migration_evidence_vectors.json"
 CASES = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))["cases"] if FIXTURE_PATH.is_file() else []
-FUNCTIONS = {
+FUNCTIONS: Dict[str, Callable[..., Any]] = {
     "controller_contract_for_acm_minor": controller_contract_for_acm_minor,
     "normalize_backup_evidence": normalize_backup_evidence,
     "predict_latest_backup": predict_latest_backup,

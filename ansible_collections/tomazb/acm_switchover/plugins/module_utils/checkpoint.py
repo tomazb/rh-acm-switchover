@@ -797,7 +797,15 @@ def record_migration_backups(checkpoint, candidate) -> None:
 
 
 def _journal_outcome_or_refuse(checkpoint, request: str) -> str:
-    """The journal outcome; an invalid journal refuses every reset or rewind `request`."""
+    """The journal outcome; an invalid journal refuses every reset or rewind `request`.
+
+    Slot presence is decided first: a checkpoint without the slot -- a non-mapping
+    operational_data included, which cannot hold one -- is journal-free, so these
+    guards leave journal-free transitions exactly as they were. Only a present slot is
+    classified strictly.
+    """
+    if not has_migration_backups(checkpoint):
+        return MIGRATION_JOURNAL_ABSENT
     outcome, value = classify_migration_backups(checkpoint)
     if outcome == MIGRATION_JOURNAL_INVALID:
         raise MigrationRewindRefused(

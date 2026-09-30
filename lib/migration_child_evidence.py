@@ -55,7 +55,8 @@ _ACTIVE_SUFFIX = "-active"
 # Amendment-2 sections 3.2, 3.3 and 4.1: the Backups frozen before a one-shot
 # create, as (resource type, selection, correlation source, decision, frozen as).
 # "equals" and "none_required" predictions freeze nothing; they gate the create.
-_ONE_SHOT_PREDICTIONS = {
+_Prediction = Tuple[str, str, Optional[str], str, Optional[str]]
+_ONE_SHOT_PREDICTIONS: Dict[Tuple[str, str], Tuple[_Prediction, ...]] = {
     ("passive_restore", _LEGACY): (
         ("ManagedClusters", "latest", None, "required", "managed_clusters"),
         ("Credentials", "latest", None, "required", "activation_credentials"),
@@ -63,7 +64,7 @@ _ONE_SHOT_PREDICTIONS = {
     ),
     ("passive_restore", _ACTIVE): (("ManagedClusters", "latest", None, "required", "managed_clusters"),),
 }
-_FULL_PREDICTIONS = (
+_FULL_PREDICTIONS: Tuple[_Prediction, ...] = (
     ("ManagedClusters", "concrete", None, "required", "managed_clusters"),
     ("Credentials", "concrete", None, "required", "credentials"),
     ("Resources", "concrete", None, "required", "resources"),
@@ -336,7 +337,7 @@ def one_shot_completion(
     if mutation_kind == "passive_restore" and generic_absent and names[_GEN] != "":
         raise MigrationEvidenceError("unexpected_status_name", f"status.{_GEN} names an unfrozen generic child")
     owner = (namespace, acm_restore_name, acm_restore_uid)
-    entries = {}
+    entries: Dict[str, Tuple[str, Dict[str, Any]]] = {}
     for role, category, field in roles:
         backup_name = frozen_backups[category]["name"]
         if field:
@@ -537,7 +538,7 @@ def _patch_active_children(
     bound to that category is still required (August section 5, 2.17 steps 3
     and 5).
     """
-    children = []
+    children: List[Tuple[Any, str]] = []
     for field, category in ((_CREDS, "activation_credentials"), (_GEN, "activation_resources_generic")):
         current = [raw for raw in cohort if _is_active_variant_of(raw, after[field])]
         if not current:

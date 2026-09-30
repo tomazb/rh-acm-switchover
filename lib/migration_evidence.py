@@ -307,9 +307,9 @@ def _name_timestamp_ns(source_name: str) -> Optional[int]:
     match = _NAME_TIMESTAMP.fullmatch(source_name[hyphen:].strip("-"))
     if match is None:
         return None
-    *fields, fraction = match.groups()
+    year, month, day, hour, minute, second, fraction = match.groups()
     try:
-        instant = datetime(*(int(part) for part in fields), tzinfo=timezone.utc)
+        instant = datetime(int(year), int(month), int(day), int(hour), int(minute), int(second), tzinfo=timezone.utc)
     except ValueError:
         return None
     # Go keeps only the first nine fractional digits.

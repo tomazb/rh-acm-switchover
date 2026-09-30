@@ -279,9 +279,17 @@ def test_a_rewind_without_a_journal_is_unaffected(reset_from, requested_phase):
     assert outcome == MIGRATION_JOURNAL_ABSENT
 
 
-def test_a_rewind_refuses_an_unreadable_store():
-    with pytest.raises(CheckpointStructureError):
-        check_migration_rewind({"operational_data": "x"}, "activation", prunes=True, requested_phase="activation")
+@pytest.mark.parametrize("operational_data", ["x", None, []])
+def test_the_reset_guards_treat_a_non_mapping_container_as_journal_free(operational_data):
+    """Dormancy: no slot can exist there, so the guards never classify it strictly.
+    Journal reads and writes still refuse it (test_the_classifier_refuses_an_unreadable_store)."""
+    checkpoint = {"completed_phases": ["preflight", "primary_prep"], "operational_data": operational_data}
+    for phase in ("preflight", "primary_prep", "activation"):
+        assert check_migration_rewind(checkpoint, "primary_prep", prunes=True, requested_phase=phase) == (
+            MIGRATION_JOURNAL_ABSENT
+        )
+        assert check_migration_reset(checkpoint, phase) == MIGRATION_JOURNAL_ABSENT
+        check_migration_fail(checkpoint, phase)
 
 
 # --- presence, for paths that rebuild a checkpoint -------------------------------

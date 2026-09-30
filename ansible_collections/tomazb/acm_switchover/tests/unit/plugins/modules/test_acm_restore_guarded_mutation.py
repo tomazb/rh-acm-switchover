@@ -9,7 +9,7 @@ no-mutation conflict, never retried and never replaced by an unguarded request.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Dict
 from urllib.parse import urlsplit
 
 import pytest
@@ -26,7 +26,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.modules import acm_restor
 # Unit expectations for this module (R4-04 Task 4). Equality with the Python
 # KubeClient helpers is enforced by tests/test_restore_guarded_mutation_parity.py at the
 # repository root, which drives both form factors.
-GUARDED_RESTORE_PATCH_VECTOR = {
+GUARDED_RESTORE_PATCH_VECTOR: Dict[str, Any] = {
     "uid": "3f0c2a4e-uid",
     "resource_version": "48213",
     "expected_managed_clusters_backup_name": " Skip ",

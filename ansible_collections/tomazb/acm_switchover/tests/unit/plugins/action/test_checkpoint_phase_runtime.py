@@ -3948,6 +3948,7 @@ def test_an_unacceptable_update_fails_without_writing(tmp_path, stored, candidat
     journals = {"first": _first_journal, "next": _next_journal, "rewritten": _rewritten_journal}
     data = {"migration_backups": journals[stored]()} if stored else None
     path = _write_phase_checkpoint(tmp_path, data=data)
+    operational_data: dict
     if candidate == "omitted":
         operational_data = {"argocd_run_id": "run-2"}
     elif candidate == "journal-as-text":
@@ -4165,9 +4166,7 @@ def test_an_invalid_journal_blocks_reset_from_even_without_pruning(tmp_path, res
     assert _dir_snapshot(tmp_path) == before
 
 
-def test_a_reset_from_over_a_non_mapping_operational_data_is_refused(tmp_path):
-    """The one rewind a journal-less checkpoint can now refuse: a journal read never
-    treats a malformed container as "no journal" (the teardown-record precedent)."""
+def _write_non_mapping_operational_data_checkpoint(tmp_path):
     path = tmp_path / "checkpoint.json"
     path.write_text(
         json.dumps(
@@ -4180,13 +4179,41 @@ def test_a_reset_from_over_a_non_mapping_operational_data_is_refused(tmp_path):
             }
         )
     )
-    before = _dir_snapshot(tmp_path)
-    result = _enter_action(path, phase="primary_prep", reset_from="primary_prep").run(
+    return path
+
+
+@pytest.mark.parametrize("status", ["enter", "reset"])
+def test_a_reset_from_over_a_non_mapping_operational_data_behaves_as_before(tmp_path, status):
+    """Dormancy: no journal slot can exist in a non-mapping container, so the journal
+    guards stay out of the way and pruning plus the resume summary heal it, as on the base."""
+    path = _write_non_mapping_operational_data_checkpoint(tmp_path)
+    result = _enter_action(path, phase="primary_prep", status=status, reset_from="primary_prep").run(
         task_vars=_task_vars_with_operation_identity()
     )
-    assert result["failed"] is True
-    assert "not readable" in result["msg"]
+    assert result.get("failed") is not True
+    stored = _stored(path)
+    assert stored["completed_phases"] == ["preflight"]
+    if status == "enter":
+        assert stored["operational_data"] == {"resume_summary": {"resume_start_phase": "primary_prep"}}
+
+
+@pytest.mark.parametrize("status", ["enter", "reset", "fail"])
+def test_check_mode_over_a_non_mapping_operational_data_behaves_as_before(tmp_path, status):
+    path = _write_non_mapping_operational_data_checkpoint(tmp_path)
+    before = _dir_snapshot(tmp_path)
+    action = _enter_action(path, phase="primary_prep", status=status, reset_from="primary_prep")
+    action._play_context.check_mode = True
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    assert result["changed"] is False
     assert _dir_snapshot(tmp_path) == before
+
+
+def test_a_bare_reset_over_a_non_mapping_operational_data_behaves_as_before(tmp_path):
+    path = _write_non_mapping_operational_data_checkpoint(tmp_path)
+    result = _bare_reset_action(path, "primary_prep").run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    assert _stored(path)["completed_phases"] == ["preflight"]
 
 
 def test_check_mode_previews_the_rewind_refusal(tmp_path):
