@@ -2,7 +2,7 @@
 - name: Use discovered secondary Restore resources in dry-run mode
   ansible.builtin.set_fact:
     _acm_secondary_restores_to_cleanup: "{{ acm_finalization_restores_info | default({'resources': []}) }}"
-  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') != 'execute'
 
 - name: Read Restore resources on the secondary hub
   kubernetes.core.k8s_info:
@@ -12,7 +12,7 @@
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
   register: _acm_secondary_restores_to_cleanup
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Initialize Restore cleanup classification
   ansible.builtin.set_fact:
@@ -75,7 +75,7 @@
   register: _acm_secondary_restore_cleanup_results
   when:
     - (_acm_secondary_cleanup_candidate_restores | default([]) | length) > 0
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Wait for secondary Restore cleanup to finish
   kubernetes.core.k8s_info:
@@ -100,7 +100,7 @@
     ) == 0
   when:
     - (_acm_secondary_cleanup_candidate_restores | default([]) | length) > 0
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Publish restore cleanup result
   ansible.builtin.set_fact:
@@ -109,7 +109,7 @@
         {{
           (_acm_secondary_restore_cleanup_results.changed | default(false))
           or (
-            acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+            acm_switchover_execution.mode | default('dry_run') != 'execute'
             and (_acm_secondary_cleanup_candidate_restores | default([]) | length) > 0
           )
         }}

@@ -217,7 +217,12 @@ class FakeMigrationHub:
             "/api/v1": {
                 "kind": "APIResourceList",
                 "groupVersion": "v1",
-                "resources": [_resource("namespaces", "Namespace", namespaced=False)],
+                # ConfigMaps are listed so a mutation attempt reaches the API and is recorded;
+                # every ConfigMap read is a 404 (absent import-controller-config: default strategy).
+                "resources": [
+                    _resource("namespaces", "Namespace", namespaced=False),
+                    _resource("configmaps", "ConfigMap", verbs=("get", "list", "create", "patch")),
+                ],
             },
             "/apis": {
                 "kind": "APIGroupList",

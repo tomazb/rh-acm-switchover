@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 from collections.abc import Mapping
 from copy import deepcopy
@@ -55,15 +56,50 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation i
 REWIND_FENCE_FACT = "_acm_switchover_rewind_consumed"
 
 
+def _process_start(pid: int) -> str:
+    """When process ``pid`` started, in a form no later process reusing the PID shares.
+
+    Linux: the boot id plus the start time in clock ticks since boot (/proc/<pid>/stat
+    field 22), so neither PID reuse nor a reboot repeats it. Elsewhere (macOS, the BSDs):
+    the absolute wall-clock start ``ps -o lstart`` reports; a PID is reused only after the
+    PID space wraps, never within the second that resolution distinguishes.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", encoding="ascii") as handle:
+            # The command name may contain spaces and ')'; the fields after it start at 3.
+            starttime = handle.read().rsplit(")", 1)[1].split()[19]
+        with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as handle:
+            return f"{handle.read().strip()}:{starttime}"
+    except (OSError, IndexError):
+        pass
+    try:
+        completed = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"Cannot read the start time of the ansible-playbook process {pid}: {exc}") from exc
+    start = completed.stdout.strip()
+    if completed.returncode != 0 or not start:
+        raise RuntimeError(f"Cannot read the start time of the ansible-playbook process {pid}.")
+    return start
+
+
 def invocation_id() -> str:
     """The ansible-playbook process this action runs under.
 
     Action plugins execute in a task worker forked from the playbook process for every
     task, so the worker's own PID changes between tasks while its parent's stays fixed
-    for the whole invocation. A stale fact from a persistent fact cache names another
-    process and fences nothing.
+    for the whole invocation. The parent's start time joins its PID because a fact from
+    a persistent fact cache can outlive the process and meet a later one that recycled
+    the PID; such a stale fact names another process and fences nothing.
     """
-    return str(os.getppid())
+    ppid = os.getppid()
+    return f"{ppid}@{_process_start(ppid)}"
 
 
 def build_phase_transition(checkpoint: dict, phase: str, status: str) -> dict:
@@ -762,8 +798,12 @@ class ActionModule(ActionBase):
         # the run, but it is applied once per invocation. After the first enter carrying it
         # has been applied and persisted, later enters of the same process treat it as
         # absent, so a phase this run completed is never pruned again.
-        rewind_fence = f"{invocation_id()}:{path}:{reset_from}" if reset_from else None
-        if status == "enter" and rewind_fence and task_vars.get(REWIND_FENCE_FACT) == rewind_fence:
+        try:
+            invocation = invocation_id() if status == "enter" and (reset_from or not is_non_mutating) else None
+        except RuntimeError as exc:
+            return {"failed": True, "msg": str(exc)}
+        rewind_fence = f"{invocation}:{path}:{reset_from}" if invocation and reset_from else None
+        if rewind_fence and task_vars.get(REWIND_FENCE_FACT) == rewind_fence:
             reset_from = None
             rewind_fence = None
 
@@ -962,16 +1002,15 @@ class ActionModule(ActionBase):
                 not is_non_mutating
                 and checkpoint_data.get("completed_phases")
                 and not already_done
-                and task_vars.get("_acm_switchover_resume_recorded") != str(os.getpid())
+                and task_vars.get("_acm_switchover_resume_recorded") != invocation
             ):
                 # First executing phase of this process on a resumed checkpoint:
                 # replace resume_summary wholesale (parity with Python RunRecord —
                 # last resume wins). Later enters in the same process are fenced
                 # by the _acm_switchover_resume_recorded fact returned below. The
-                # sentinel carries the controller PID so a stale value surviving
-                # in a persistent fact cache cannot fence a later process (action
-                # plugins run on the controller, so the PID identifies this
-                # ansible-playbook invocation).
+                # sentinel carries the invocation identity, stable across this
+                # process's task workers, so a stale value surviving in a persistent
+                # fact cache cannot fence a later process.
                 record_resume_start_phase(checkpoint_data, phase)
                 resume_summary_changed = True
             # A phase that will run is the checkpoint's current phase from its enter on:
@@ -1002,7 +1041,7 @@ class ActionModule(ActionBase):
                 result["hub_identities"] = hub_identities
             ansible_facts = {}
             if resume_summary_changed:
-                ansible_facts["_acm_switchover_resume_recorded"] = str(os.getpid())
+                ansible_facts["_acm_switchover_resume_recorded"] = invocation
             if rewind_fence and not is_non_mutating:
                 ansible_facts[REWIND_FENCE_FACT] = rewind_fence
             if ansible_facts:

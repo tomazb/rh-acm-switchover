@@ -550,10 +550,21 @@ def test_the_whole_activation_role_runs_the_transaction_and_completes_the_phase(
     assert journal["restore"]["mutation_kind"] == kind and journal["restore"]["acm_minor"] == "2.13"
 
 
-def _run_whole_role(tmp_path, kind, *, operational_data, managed_clusters, restore_only=False, operation_extra=None):
+def _run_whole_role(
+    tmp_path,
+    kind,
+    *,
+    operational_data,
+    managed_clusters,
+    restore_only=False,
+    operation_extra=None,
+    mode="execute",
+    version="2.13.4",
+    features=None,
+):
     """The activation role entered directly, with only the checkpoint as recorded state."""
     fake = FakeMigrationHub(
-        version="2.13.4",
+        version=version,
         restores=[passive_restore()],
         controller=complete_on_mutation,
         managed_clusters=managed_clusters,
@@ -602,12 +613,14 @@ def _run_whole_role(tmp_path, kind, *, operational_data, managed_clusters, resto
                 **(operation_extra or {}),
             ),
             "acm_switchover_execution": {
-                "mode": "execute",
+                "mode": mode,
                 "report_dir": str(tmp_path / "artifacts"),
                 "checkpoint": {"enabled": True, "backend": "file", "path": str(checkpoint_path)},
             },
             "_acm_restore_poll_delays": [0, 0, 0],
         }
+        if features is not None:
+            variables["acm_switchover_features"] = features
         playbook = tmp_path / "role.yml"
         playbook.write_text(
             yaml.safe_dump(
@@ -688,3 +701,24 @@ def test_direct_restore_only_entry_keeps_its_recorded_empty_expectation(tmp_path
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert stored["operational_data"]["migration_backups"]["restore"]["completed_at"]
+
+
+def test_a_direct_validate_entry_mutates_nothing(tmp_path):
+    """Round-2 finding 1: validate is non-mutating like a dry run, even with auto-import management
+    enabled on ACM 2.14+ with a non-local cluster, the default import strategy and no recorded
+    ManagedCluster expectation or minimum (Codex's input)."""
+    completed, stored, fake = _run_whole_role(
+        tmp_path,
+        "passive_patch",
+        operational_data={},
+        managed_clusters=["cluster-a"],
+        mode="validate",
+        version="2.14.3",
+        features={"manage_auto_import_strategy": True},
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert "Set autoImportStrategy to ImportAndSync] ***\nskipping" in output
+    assert fake.writes == [], output
+    assert fake.mutations == []
+    assert "migration_backups" not in stored["operational_data"]

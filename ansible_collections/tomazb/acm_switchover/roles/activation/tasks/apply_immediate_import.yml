@@ -11,7 +11,7 @@
       mode: "{{ acm_switchover_operation.activation_method | default('patch') }}"
       skipped: true
       reason: dry_run
-  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') != 'execute'
 
 - name: Publish immediate import skip result for older ACM versions
   ansible.builtin.set_fact:
@@ -22,7 +22,7 @@
       skipped: true
       reason: "ACM {{ _acm_secondary_version | default('unknown') }} does not support immediate-import annotations"
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - not (_acm_secondary_supports_auto_import | bool)
 
 - name: Get current autoImportStrategy
@@ -38,7 +38,7 @@
   register: _import_cm_for_annotation
   no_log: true
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - _acm_secondary_supports_auto_import | bool
 
 - name: Validate autoImportStrategy ConfigMap evidence
@@ -64,7 +64,7 @@
         )
       }}
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - _acm_secondary_supports_auto_import | bool
 
 - name: Fail when autoImportStrategy cannot be verified
@@ -73,7 +73,7 @@
       Unable to verify autoImportStrategy on the destination hub;
       verify API access and retry.
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - _acm_secondary_supports_auto_import | bool
     - >-
       _import_cm_for_annotation.read_status is not defined
@@ -94,7 +94,7 @@
         )
       }}
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - _acm_secondary_supports_auto_import | bool
 
 - name: Get ManagedClusters on secondary hub
@@ -106,7 +106,7 @@
   register: _mc_for_import
   when:
     - _apply_immediate_import | default(false) | bool
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - _acm_secondary_supports_auto_import | bool
 
 - name: Clear stale non-empty immediate-import annotations on non-local clusters
@@ -130,7 +130,7 @@
   register: acm_clear_immediate_import_results
   when:
     - _apply_immediate_import | default(false) | bool
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - _acm_secondary_supports_auto_import | bool
     - not ansible_check_mode
     - (item.metadata.annotations | default({})).get('import.open-cluster-management.io/immediate-import', '') | length > 0
@@ -156,7 +156,7 @@
   register: acm_apply_immediate_import_results
   when:
     - _apply_immediate_import | default(false) | bool
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - _acm_secondary_supports_auto_import | bool
     - not ansible_check_mode
 
@@ -170,5 +170,5 @@
         }}
       mode: "{{ acm_switchover_operation.activation_method | default('patch') }}"
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - _acm_secondary_supports_auto_import | bool

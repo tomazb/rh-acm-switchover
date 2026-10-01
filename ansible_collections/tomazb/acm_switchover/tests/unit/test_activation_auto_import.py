@@ -350,7 +350,7 @@ def test_reset_read_is_not_gated_on_legacy_flag():
     read_task = next(t for t in tasks if t.get("name") == "Read import-controller-config before reset")
     when = _when_text(read_task)
     assert "_auto_import_strategy_changed" not in when
-    assert "!= 'dry_run'" in when
+    assert "== 'execute'" in when
 
 
 def test_reset_delete_discharges_on_marker_or_legacy_signal():

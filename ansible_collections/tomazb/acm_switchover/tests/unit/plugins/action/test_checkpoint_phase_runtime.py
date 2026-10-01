@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, call, mock_open, patch
 
 import pytest
 
+from ansible_collections.tomazb.acm_switchover.plugins.action import checkpoint_phase
 from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import (
     ActionModule,
     build_phase_transition,
@@ -2415,8 +2416,8 @@ def test_resumed_enter_replaces_resume_summary_and_flags_process(tmp_path):
     result = action.run(task_vars=task_vars)
     assert result.get("failed") is not True
     assert result["ansible_facts"] == {
-        "_acm_switchover_resume_recorded": str(os.getpid())
-    }, "sentinel must carry the controller PID so a stale cached fact cannot fence a later process"
+        "_acm_switchover_resume_recorded": checkpoint_phase.invocation_id()
+    }, "sentinel must carry the invocation identity so a stale cached fact cannot fence a later process"
     with open(path, encoding="utf-8") as fh:
         persisted = json.load(fh)
     assert persisted["operational_data"]["resume_summary"] == {"resume_start_phase": "activation"}
@@ -2424,7 +2425,7 @@ def test_resumed_enter_replaces_resume_summary_and_flags_process(tmp_path):
 
 def test_same_process_later_enter_does_not_overwrite_resume_summary(tmp_path):
     task_vars = _task_vars_with_operation_identity()
-    task_vars["_acm_switchover_resume_recorded"] = str(os.getpid())
+    task_vars["_acm_switchover_resume_recorded"] = checkpoint_phase.invocation_id()
     path = _write_resumable_checkpoint(tmp_path, task_vars)
     with open(path, encoding="utf-8") as fh:
         record = json.load(fh)
@@ -2473,7 +2474,7 @@ def test_stale_cached_sentinel_from_other_process_does_not_fence(tmp_path):
     )
     result = action.run(task_vars=task_vars)
     assert result.get("failed") is not True
-    assert result["ansible_facts"] == {"_acm_switchover_resume_recorded": str(os.getpid())}
+    assert result["ansible_facts"] == {"_acm_switchover_resume_recorded": checkpoint_phase.invocation_id()}
     with open(path, encoding="utf-8") as fh:
         persisted = json.load(fh)
     assert persisted["operational_data"]["resume_summary"] == {"resume_start_phase": "activation"}

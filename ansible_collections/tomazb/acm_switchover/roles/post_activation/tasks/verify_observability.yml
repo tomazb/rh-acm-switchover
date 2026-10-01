@@ -5,12 +5,12 @@
       changed: false
       status: skipped
       reason: dry_run
-  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') != 'execute'
 
 - name: Publish legacy dry-run observability result alias
   ansible.builtin.set_fact:
     acm_observability_check_result: "{{ acm_switchover_observability_check_result }}"
-  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') != 'execute'
 
 - name: Read observatorium-api Deployment on the secondary hub
   kubernetes.core.k8s_info:
@@ -21,7 +21,7 @@
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
   register: _acm_secondary_observatorium_api_info
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Read thanos-compact StatefulSet on the secondary hub
   kubernetes.core.k8s_info:
@@ -32,7 +32,7 @@
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
   register: _acm_secondary_thanos_compact_info
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Record missing observability workloads
   ansible.builtin.set_fact:
@@ -42,7 +42,7 @@
         + (['observatorium-api'] if (_acm_secondary_observatorium_api_info.resources | default([]) | length) == 0 else [])
         + (['thanos-compact'] if (_acm_secondary_thanos_compact_info.resources | default([]) | length) == 0 else [])
       }}
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Scale observatorium-api to its active default replica count
   kubernetes.core.k8s:
@@ -58,7 +58,7 @@
         replicas: 2
   register: _acm_secondary_observatorium_scale_result
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - (_acm_secondary_observatorium_api_info.resources | default([]) | length) > 0
     - >-
       (((_acm_secondary_observatorium_api_info.resources | first | default({})).get('spec', {}).get('replicas', 0)) | int)
@@ -78,7 +78,7 @@
         replicas: 1
   register: _acm_secondary_thanos_scale_result
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - (_acm_secondary_thanos_compact_info.resources | default([]) | length) > 0
     - >-
       (((_acm_secondary_thanos_compact_info.resources | first | default({})).get('spec', {}).get('replicas', 0)) | int)
@@ -101,7 +101,7 @@
               acm-switchover/restartedAt: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
   register: _acm_secondary_observatorium_restart_result
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - (_acm_secondary_observatorium_api_info.resources | default([]) | length) > 0
 
 - name: Wait for observatorium-api Deployment rollout to stabilize
@@ -145,7 +145,7 @@
     }}
   failed_when: false
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - (_acm_secondary_observatorium_api_info.resources | default([]) | length) > 0
 
 - name: Record observatorium-api rollout readiness
@@ -179,7 +179,7 @@
         )
       }}
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - (_acm_secondary_observatorium_api_info.resources | default([]) | length) > 0
 
 - name: Wait for critical observability Pods to become healthy
@@ -220,7 +220,7 @@
     {%- endfor -%}
     {{ (_acm_secondary_observability_pods_info.resources | default([]) | length) > 0 and (ns.unhealthy | length) == 0 }}
   failed_when: false
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Summarize unhealthy observability Pods
   ansible.builtin.set_fact:
@@ -249,7 +249,7 @@
       {%- endif -%}
       {%- endfor -%}
       {{ unhealthy }}
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Record observability pod readiness
   ansible.builtin.set_fact:
@@ -258,7 +258,7 @@
         (_acm_secondary_observability_pods_info.resources | default([]) | length) > 0
         and (_acm_secondary_unhealthy_observability_pods | default([]) | length) == 0
       }}
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Publish observability verification result
   ansible.builtin.set_fact:
@@ -292,12 +292,12 @@
           .get('readyReplicas', 0))
         }}
       unhealthy_pods: "{{ _acm_secondary_unhealthy_observability_pods | default([]) }}"
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Publish legacy observability verification result alias
   ansible.builtin.set_fact:
     acm_observability_check_result: "{{ acm_switchover_observability_check_result }}"
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Fail when observability checks did not fully pass
   ansible.builtin.fail:
@@ -308,7 +308,7 @@
       observability pods ready={{ _acm_observability_pods_ready | default(false) }}.
       Set acm_switchover_features.skip_observability_checks=true only when explicitly bypassing Observability checks.
   when: >-
-    acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    acm_switchover_execution.mode | default('dry_run') == 'execute'
     and (
       (_acm_observability_missing_workloads | default([]) | length) > 0
       or (_acm_secondary_unhealthy_observability_pods | default([]) | length) > 0

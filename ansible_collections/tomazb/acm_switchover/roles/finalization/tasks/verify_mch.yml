@@ -5,7 +5,7 @@
       changed: false
       status: skipped
       reason: dry_run
-  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') != 'execute'
 
 - name: Wait for MultiClusterHub to report Running on the secondary hub
   kubernetes.core.k8s_info:
@@ -25,7 +25,7 @@
         == 'Running'
       )
     }}
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Wait for ACM pods to become healthy on the secondary hub
   kubernetes.core.k8s_info:
@@ -63,7 +63,7 @@
     {%- endif -%}
     {%- endfor -%}
     {{ (_acm_secondary_mch_pods_info.resources | default([]) | length) > 0 and (ns.unhealthy | length) == 0 }}
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Summarize unhealthy ACM pods
   ansible.builtin.set_fact:
@@ -95,7 +95,7 @@
       {%- endif -%}
       {%- endfor -%}
       {{ unhealthy }}
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Publish MultiClusterHub verification result
   ansible.builtin.set_fact:
@@ -105,4 +105,4 @@
       phase: "{{ (_acm_secondary_verify_mch_info.resources | first | default({})).get('status', {}).get('phase', 'Unknown') }}"
       version: "{{ (_acm_secondary_verify_mch_info.resources | first | default({})).get('status', {}).get('currentVersion', 'unknown') }}"
       unhealthy_pods: "{{ _acm_secondary_unhealthy_mch_pods }}"
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') == 'execute'

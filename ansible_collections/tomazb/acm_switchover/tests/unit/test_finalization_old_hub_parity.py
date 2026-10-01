@@ -92,7 +92,7 @@ def test_handle_old_hub_decommission_includes_decommission_role():
     assert decommission_tasks, "handle_old_hub.yml must include the decommission role"
     when_text = "\n".join(decommission_tasks[0].get("when", []))
     assert "(acm_switchover_operation.old_hub_action | default('secondary')) == 'decommission'" in when_text
-    assert "acm_switchover_execution.mode | default('dry_run') != 'dry_run'" in when_text
+    assert "acm_switchover_execution.mode | default('dry_run') == 'execute'" in when_text
 
 
 def test_embedded_finalization_decommission_passes_scoped_confirmation():
@@ -119,7 +119,7 @@ def test_embedded_finalization_decommission_passes_scoped_confirmation():
     assert "acm_switchover_decommission" in decommission_task.get("vars", {})
 
     settings_when = "\n".join(settings_task.get("when", []))
-    assert "acm_switchover_execution.mode | default('dry_run') != 'dry_run'" in settings_when
+    assert "acm_switchover_execution.mode | default('dry_run') == 'execute'" in settings_when
 
 
 def test_old_hub_disposition_uses_safe_defaults_and_real_decommission_changed_state():

@@ -142,6 +142,13 @@ CANDIDATE_OPERATIONS = frozenset(
 )
 _PLAY_TASK_LISTS = ("pre_tasks", "tasks", "post_tasks", "handlers")
 _SET_FACT_MODULES = ("ansible.builtin.set_fact", "set_fact")
+# Round-2 finding 2: a task file, role or vars file a task pulls in can reassign any name,
+# and this file-local check cannot see into it, so none may run between producer and writer.
+_INCLUDE_MODULES = frozenset(
+    f"{prefix}{name}"
+    for prefix in ("", "ansible.builtin.", "ansible.legacy.")
+    for name in ("include", "include_tasks", "import_tasks", "include_role", "import_role", "include_vars")
+)
 
 
 def _executable_tasks(document) -> list:
@@ -188,12 +195,12 @@ def _assigned_names(node) -> list:
     return names
 
 
-def _candidate_registers(document) -> set:
-    """Registers that can only hold a validated candidate.
+def _candidate_registers(document) -> dict:
+    """Registers that can only hold a validated candidate, mapped to their producer's position.
 
     The register of an executable acm_migration_evidence task running a candidate-producing
     operation, registered exactly once in the file and never reassigned by another register,
-    a set_fact or a vars mapping.
+    a set_fact or a vars mapping. The position indexes `_executable_tasks(document)`.
     """
     tasks = _executable_tasks(document)
     registered = [task["register"] for task in tasks if isinstance(task.get("register"), str)]
@@ -202,17 +209,17 @@ def _candidate_registers(document) -> set:
         for module in _SET_FACT_MODULES:
             if isinstance(task.get(module), dict):
                 reassigned.update(task[module])
-    candidates = set()
-    for task in tasks:
+    candidates = {}
+    for position, task in enumerate(tasks):
         args = task.get(JOURNAL_CANDIDATE_MODULE)
         name = task.get("register")
         if isinstance(args, dict) and args.get("operation") in CANDIDATE_OPERATIONS and isinstance(name, str):
             if registered.count(name) == 1 and name not in reassigned:
-                candidates.add(name)
+                candidates[name] = position
     return candidates
 
 
-def _is_allowed_journal_write(task: dict, registers: set) -> bool:
+def _is_allowed_journal_write(task: dict, registers: dict, tasks: list) -> bool:
     args = task.get(JOURNAL_WRITER_MODULE)
     if not isinstance(args, dict) or args.get("status") != "update":
         return False
@@ -221,15 +228,19 @@ def _is_allowed_journal_write(task: dict, registers: set) -> bool:
         return False
     value = data[KEY_MIGRATION_BACKUPS]
     match = _CANDIDATE_REFERENCE.match(value.strip()) if isinstance(value, str) else None
-    return match is not None and match.group(1) in registers
+    if match is None or match.group(1) not in registers:
+        return False
+    producer = registers[match.group(1)]
+    writer = next(position for position, item in enumerate(tasks) if item is task)
+    return producer < writer and not any(_INCLUDE_MODULES.intersection(item) for item in tasks[producer + 1 : writer])
 
 
-def journal_key_offenders(node, registers: set, where: str = "", executable=None) -> list:
+def journal_key_offenders(node, registers: dict, where: str = "", executable=None) -> list:
     """Locations naming the journal key outside the allowed writer shape of an executable task."""
-    executable = executable if executable is not None else {id(task) for task in _executable_tasks(node)}
+    executable = executable if executable is not None else _executable_tasks(node)
     offenders = []
     if isinstance(node, dict):
-        allowed = id(node) in executable and _is_allowed_journal_write(node, registers)
+        allowed = any(task is node for task in executable) and _is_allowed_journal_write(node, registers, executable)
         for key, value in node.items():
             location = f"{where}/{key}"
             if isinstance(key, str) and KEY_MIGRATION_BACKUPS in key:
@@ -451,4 +462,38 @@ def test_a_registration_inside_play_vars_alone_is_not_a_candidate(tmp_path):
     path = tmp_path / "play.yml"
     path.write_text(_FORGED_IN_PLAY_VARS.replace("    forged:\n      candidate: {}\n", ""), encoding="utf-8")
     assert "forged:\n      candidate" not in path.read_text(encoding="utf-8")
+    assert yaml_journal_key_offenders([path])
+
+
+_INCLUDE_BETWEEN = {
+    "include_tasks": "- name: Run another file\n  ansible.builtin.include_tasks: overwrite.yml\n",
+    "import_tasks": "- name: Run another file\n  ansible.builtin.import_tasks: overwrite.yml\n",
+    "include_role": "- name: Run a role\n  ansible.builtin.include_role:\n    name: overwrite\n",
+    "import_role": "- name: Run a role\n  ansible.builtin.import_role:\n    name: overwrite\n",
+    "include_vars": "- name: Load vars\n  ansible.builtin.include_vars: overwrite.yml\n",
+    "short-name": "- name: Run another file\n  include_tasks: overwrite.yml\n",
+    "nested-in-block": "- block:\n    - ansible.builtin.include_tasks: overwrite.yml\n",
+}
+
+
+@pytest.mark.parametrize("between", list(_INCLUDE_BETWEEN.values()), ids=list(_INCLUDE_BETWEEN))
+def test_an_include_between_producer_and_writer_is_refused(tmp_path, between):
+    """Round-2 finding 2: the included file may reassign the candidate; this check cannot see it."""
+    path = tmp_path / "tasks.yml"
+    head, writer = _ALLOWED_WRITER.split("- name: Persist the candidate")
+    path.write_text(head + between + "- name: Persist the candidate" + writer, encoding="utf-8")
+    assert yaml_journal_key_offenders([path])
+
+
+def test_an_include_outside_the_producer_writer_span_is_admitted(tmp_path):
+    path = tmp_path / "tasks.yml"
+    include = _INCLUDE_BETWEEN["include_tasks"]
+    path.write_text(include + _ALLOWED_WRITER.lstrip("\n") + include, encoding="utf-8")
+    assert yaml_journal_key_offenders([path]) == []
+
+
+def test_a_writer_before_its_producer_is_refused(tmp_path):
+    path = tmp_path / "tasks.yml"
+    head, writer = _ALLOWED_WRITER.split("- name: Persist the candidate")
+    path.write_text("- name: Persist the candidate" + writer + head, encoding="utf-8")
     assert yaml_journal_key_offenders([path])

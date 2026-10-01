@@ -39,7 +39,7 @@
       message: >-
         [dry_run] Would recreate the BackupSchedule to prevent or repair BackupCollision.
   when:
-    - acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') != 'execute'
     - acm_switchover_repair_backup_schedule_collision_result is not defined
 
 - name: Save BackupSchedule body for collision repair
@@ -55,13 +55,13 @@
       spec: "{{ (acm_finalization_backup_schedules_info.resources | first).spec | default({}) }}"
     _backup_schedule_collision_repair_uid: "{{ (acm_finalization_backup_schedules_info.resources | first).metadata.uid | default('') }}"
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - acm_switchover_repair_backup_schedule_collision_result is not defined
     - (acm_finalization_backup_schedules_info.resources | default([]) | length) == 1
 
 - name: Recreate BackupSchedule for collision repair
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - acm_switchover_repair_backup_schedule_collision_result is not defined
   block:
     - name: Delete BackupSchedule for collision repair
@@ -142,7 +142,7 @@
     context: "{{ acm_switchover_hubs.secondary.context }}"
   register: _acm_finalization_backup_schedules_collision_repair_info
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - acm_switchover_repair_backup_schedule_collision_result is not defined
 
 - name: Publish refreshed BackupSchedule facts after collision repair
@@ -160,5 +160,5 @@
       schedule_name: "{{ _backup_schedule_collision_repair_body.metadata.name }}"
       previous_uid: "{{ _backup_schedule_collision_repair_uid }}"
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - acm_switchover_repair_backup_schedule_collision_result is not defined

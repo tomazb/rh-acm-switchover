@@ -20,7 +20,7 @@
     context: "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
   register: _auto_import_reset_cm
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Determine auto-import discharge obligation from cluster marker
   ansible.builtin.set_fact:
@@ -33,7 +33,7 @@
         ) == 'acm-switchover'
       }}
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Delete import-controller-config to restore default autoImportStrategy
   kubernetes.core.k8s:
@@ -47,7 +47,7 @@
   register: acm_switchover_reset_auto_import_result
   when:
     # Strict execute gate: validate mode is documented as read-only, so the
-    # delete must not fire there (reads above stay on the != dry_run gate).
+    # delete must not fire there.
     - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - >-
       (_auto_import_marker_present | default(false) | bool)

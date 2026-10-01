@@ -25,7 +25,7 @@
         state: absent
       when:
         - _old_hub_restore_exists | bool
-        - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+        - acm_switchover_execution.mode | default('dry_run') == 'execute'
 
     - name: Wait for deleted restore to disappear
       kubernetes.core.k8s_info:
@@ -41,7 +41,7 @@
       until: (_old_hub_restore_delete_wait.resources | default([]) | length) == 0
       when:
         - _old_hub_restore_exists | bool
-        - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+        - acm_switchover_execution.mode | default('dry_run') == 'execute'
 
     - name: Create fresh passive sync restore on old hub
       kubernetes.core.k8s:
@@ -66,7 +66,7 @@
             veleroCredentialsBackupName: latest
             veleroResourcesBackupName: latest
       register: _old_hub_restore_applied
-      when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+      when: acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Build embedded decommission settings
   ansible.builtin.set_fact:
@@ -77,7 +77,7 @@
       }}
   when:
     - (acm_switchover_operation.old_hub_action | default('secondary')) == 'decommission'
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Decommission old hub
   ansible.builtin.include_role:
@@ -87,14 +87,14 @@
   register: _old_hub_decommission_role_result
   when:
     - (acm_switchover_operation.old_hub_action | default('secondary')) == 'decommission'
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Determine old hub decommission completion
   ansible.builtin.set_fact:
     _old_hub_decommission_completed: >-
       {{
         (acm_switchover_operation.old_hub_action | default('secondary')) == 'decommission'
-        and (acm_switchover_execution.mode | default('dry_run') != 'dry_run')
+        and (acm_switchover_execution.mode | default('dry_run') == 'execute')
         and ((acm_switchover_decommission_result | default({})).status | default('')) == 'pass'
       }}
 

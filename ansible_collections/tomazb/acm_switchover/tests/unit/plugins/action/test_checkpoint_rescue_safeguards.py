@@ -382,13 +382,7 @@ def test_enter_publishes_the_strict_journal_outcome_and_only_a_valid_journal(tmp
 
 def test_the_fence_survives_a_new_task_worker_for_every_task(tmp_path, monkeypatch):
     """Review finding 4: each task runs in a fresh worker; only the playbook process is stable."""
-    import itertools
-
-    from ansible_collections.tomazb.acm_switchover.plugins.action import checkpoint_phase
-
-    pids = itertools.count(5000)
-    monkeypatch.setattr(checkpoint_phase.os, "getpid", lambda: next(pids))
-    monkeypatch.setattr(checkpoint_phase.os, "getppid", lambda: 4242)
+    _controller(monkeypatch, start="boot-a:100")
     path = _write_phase_checkpoint(
         tmp_path, phase="activation", completed=("preflight", "primary_prep", "activation"), data={}
     )
@@ -402,5 +396,124 @@ def test_the_fence_survives_a_new_task_worker_for_every_task(tmp_path, monkeypat
         ],
     )
     assert all(result.get("failed") is not True for result in results), results[-1]
-    assert task_vars[REWIND_FENCE_FACT] == f"4242:{path}:primary_prep"
+    assert task_vars[REWIND_FENCE_FACT] == f"4242@boot-a:100:{path}:primary_prep"
     assert _stored(path)["completed_phases"] == ["preflight", "primary_prep"]
+
+
+# --- round-2 findings 3 and 4: the invocation identity resists a recycled PID ---------------
+
+
+def _controller(monkeypatch, *, start, ppid=4242):
+    """One ansible-playbook process: every task worker gets a fresh PID under the same parent."""
+    import itertools
+
+    from ansible_collections.tomazb.acm_switchover.plugins.action import checkpoint_phase
+
+    pids = itertools.count(5000)
+    monkeypatch.setattr(checkpoint_phase.os, "getpid", lambda: next(pids))
+    monkeypatch.setattr(checkpoint_phase.os, "getppid", lambda: ppid)
+    monkeypatch.setattr(checkpoint_phase, "_process_start", lambda pid: start)
+
+
+def test_a_cached_fence_with_a_recycled_parent_pid_does_not_suppress_a_later_rewind(tmp_path, monkeypatch):
+    """Finding 3: a persistent fact cache carries the fence into a new playbook process that
+    reuses the old one's PID; that process's explicit rewind is applied, not fenced."""
+    path = _write_phase_checkpoint(
+        tmp_path, phase="activation", completed=("preflight", "primary_prep", "activation"), data={}
+    )
+    _controller(monkeypatch, start="boot-a:100")
+    _, cached = _run_invocation(path, [("preflight", "enter", {}), ("primary_prep", "enter", {})])
+    _run_invocation(path, [("primary_prep", "pass", {})], pid_facts={REWIND_FENCE_FACT: cached[REWIND_FENCE_FACT]})
+    assert _stored(path)["completed_phases"] == ["preflight", "primary_prep"]
+    _controller(monkeypatch, start="boot-a:900")
+    results, _ = _run_invocation(
+        path, [("preflight", "enter", {})], pid_facts={REWIND_FENCE_FACT: cached[REWIND_FENCE_FACT]}
+    )
+    assert results[-1].get("failed") is not True, results[-1]
+    assert _stored(path)["completed_phases"] == ["preflight"]
+
+
+def test_the_resume_summary_is_recorded_once_per_invocation_across_task_workers(tmp_path, monkeypatch):
+    """Finding 4: the first executing enter of a resumed run records where it starts; later
+    enters of the same process, each in a fresh worker, keep it."""
+    path = _write_phase_checkpoint(tmp_path, phase="primary_prep", completed=("preflight", "primary_prep"), data={})
+    _controller(monkeypatch, start="boot-a:100")
+    results, task_vars = _run_invocation(
+        path,
+        [("activation", "enter", {}), ("activation", "pass", {}), ("post_activation", "enter", {})],
+        reset_from=None,
+    )
+    assert all(result.get("failed") is not True for result in results), results[-1]
+    assert _stored(path)["operational_data"]["resume_summary"] == {"resume_start_phase": "activation"}
+    assert "ansible_facts" not in results[-1]
+
+    # A new process that recycles the PID, with the cached sentinel, records its own start.
+    _controller(monkeypatch, start="boot-a:900")
+    results, _ = _run_invocation(path, [("post_activation", "enter", {})], pid_facts=task_vars, reset_from=None)
+    assert results[-1].get("failed") is not True, results[-1]
+    assert _stored(path)["operational_data"]["resume_summary"] == {"resume_start_phase": "post_activation"}
+
+
+def _start_of_a_new_process():
+    import subprocess
+    import sys
+
+    from ansible_collections.tomazb.acm_switchover.plugins.action import checkpoint_phase
+
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        return checkpoint_phase._process_start(child.pid)
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_the_process_start_identifies_one_process_on_this_controller():
+    import os
+
+    from ansible_collections.tomazb.acm_switchover.plugins.action import checkpoint_phase
+
+    own = checkpoint_phase._process_start(os.getpid())
+    assert own and own == checkpoint_phase._process_start(os.getpid())
+    assert checkpoint_phase.invocation_id() == f"{os.getppid()}@{checkpoint_phase._process_start(os.getppid())}"
+    assert _start_of_a_new_process() != own
+
+
+def test_the_ps_fallback_used_off_linux_reads_an_absolute_start(monkeypatch):
+    """macOS and the BSDs have no /proc: ps reports the absolute start time instead."""
+    import builtins
+    import os
+    import shutil
+
+    from ansible_collections.tomazb.acm_switchover.plugins.action import checkpoint_phase
+
+    if shutil.which("ps") is None:
+        pytest.skip("no ps on this controller")
+    real_open = builtins.open
+
+    def no_proc(file, *args, **kwargs):
+        if str(file).startswith("/proc/"):
+            raise FileNotFoundError(file)
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", no_proc)
+    start = checkpoint_phase._process_start(os.getpid())
+    assert len(start.split()) == 5  # e.g. "Thu Oct  1 07:32:09 2026"
+    assert start == checkpoint_phase._process_start(os.getpid())
+
+
+def test_an_unreadable_invocation_identity_fails_the_enter_closed(tmp_path, monkeypatch):
+    from ansible_collections.tomazb.acm_switchover.plugins.action import checkpoint_phase
+
+    def unreadable(pid):
+        raise RuntimeError(f"Cannot read the start time of the ansible-playbook process {pid}.")
+
+    monkeypatch.setattr(checkpoint_phase, "_process_start", unreadable)
+    path = _write_phase_checkpoint(
+        tmp_path, phase="activation", completed=("preflight", "primary_prep", "activation"), data={}
+    )
+    before = _dir_snapshot(tmp_path)
+    results, _ = _run_invocation(path, [("preflight", "enter", {})])
+    assert results[-1]["failed"] is True
+    assert "Cannot read the start time" in results[-1]["msg"]
+    assert _dir_snapshot(tmp_path) == before
