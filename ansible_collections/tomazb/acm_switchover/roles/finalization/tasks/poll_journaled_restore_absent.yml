@@ -1,0 +1,102 @@
+---
+# One absence poll of the deleted journaled Restore (Finalization._delete_journaled_restore):
+# the exact UID still present keeps polling, a replacement is recorded as recovery and blocks,
+# and the first absence is followed by one final strict read. Only a proven 404 there writes
+# absence_verified_at and completed_at together. Included in a bounded loop over
+# _acm_poll_delay values; each poll guards itself at execution time, so the polls after the
+# accepted decision do nothing.
+
+- name: Poll the deleted journaled Restore
+  when: not (_acm_cleanup_done | bool)
+  block:
+    - name: Wait before re-reading the deleted journaled Restore
+      ansible.builtin.pause:
+        seconds: "{{ _acm_poll_delay }}"
+      when: _acm_poll_delay | int > 0
+
+    - name: Re-read the deleted journaled Restore strictly
+      ansible.builtin.include_tasks: "{{ role_path }}/../activation/tasks/strict_read.yml"
+      vars:
+        _acm_read:
+          key: "restore/{{ _acm_journal.restore.name }}"
+          read_mode: get
+          api_version: cluster.open-cluster-management.io/v1beta1
+          kind: Restore
+          resource_name: restores
+          namespace: "{{ _acm_journal.restore.namespace }}"
+          name: "{{ _acm_journal.restore.name }}"
+        _acm_read_fact: _acm_cleanup_poll_read
+
+    - name: Decide the absence poll by the exact UID
+      tomazb.acm_switchover.acm_migration_evidence:
+        operation: cleanup_absence_poll
+        inputs:
+          journal: "{{ _acm_journal }}"
+          live_read: "{{ _acm_cleanup_poll_read }}"
+      register: _acm_cleanup_poll
+
+    - name: Persist the replacement seen while polling
+      tomazb.acm_switchover.checkpoint_phase:
+        phase: finalization
+        checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+        status: update
+        operational_data:
+          migration_backups: "{{ _acm_cleanup_poll.candidate }}"
+      when: _acm_cleanup_poll.state == 'recover'
+
+    - name: Block on the replacement seen while polling
+      ansible.builtin.fail:
+        msg: >-
+          The journaled Restore {{ _acm_journal.restore.name }} cleanup requires recovery
+          (replacement_during_poll, observed UID {{ _acm_cleanup_poll.candidate.cleanup.recovery.observed_uid }}).
+          Nothing at the locator was deleted or adopted. Inspect the destination hub, then acknowledge with
+          acm_switchover_operation.migration_cleanup_repair, naming run ID {{ _acm_journal.run_id }} and
+          operation ID {{ _acm_journal.cleanup.operation_id }}.
+      when: _acm_cleanup_poll.state == 'recover'
+
+    - name: Prove the first absence with one final strict read
+      when: _acm_cleanup_poll.state == 'absent'
+      block:
+        - name: Read the journaled Restore locator a final time
+          ansible.builtin.include_tasks: "{{ role_path }}/../activation/tasks/strict_read.yml"
+          vars:
+            _acm_read:
+              key: "restore/{{ _acm_journal.restore.name }}"
+              read_mode: get
+              api_version: cluster.open-cluster-management.io/v1beta1
+              kind: Restore
+              resource_name: restores
+              namespace: "{{ _acm_journal.restore.namespace }}"
+              name: "{{ _acm_journal.restore.name }}"
+            _acm_read_fact: _acm_cleanup_absence_read
+
+        - name: Decide the final absence
+          tomazb.acm_switchover.acm_migration_evidence:
+            operation: cleanup_final_absence
+            inputs:
+              journal: "{{ _acm_journal }}"
+              live_read: "{{ _acm_cleanup_absence_read }}"
+          register: _acm_cleanup_final
+
+        - name: Persist the completed cleanup or the replacement it found
+          tomazb.acm_switchover.checkpoint_phase:
+            phase: finalization
+            checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+            status: update
+            operational_data:
+              migration_backups: "{{ _acm_cleanup_final.candidate }}"
+
+        - name: Continue from the final absence decision
+          ansible.builtin.set_fact:
+            _acm_journal: "{{ _acm_cleanup_final.candidate }}"
+            _acm_cleanup_done: true
+
+        - name: Block on the replacement the final read found
+          ansible.builtin.fail:
+            msg: >-
+              The journaled Restore {{ _acm_journal.restore.name }} cleanup requires recovery
+              (replacement_during_poll, observed UID {{ _acm_journal.cleanup.recovery.observed_uid }}).
+              Nothing at the locator was deleted or adopted. Inspect the destination hub, then acknowledge with
+              acm_switchover_operation.migration_cleanup_repair, naming run ID {{ _acm_journal.run_id }} and
+              operation ID {{ _acm_journal.cleanup.operation_id }}.
+          when: _acm_cleanup_final.state == 'recover'

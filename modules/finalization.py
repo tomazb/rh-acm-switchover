@@ -4,6 +4,7 @@
 
 import logging
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -54,14 +55,34 @@ from lib.constants import (
 from lib.decommission_outcome import UNSUCCESSFUL_OUTCOMES
 from lib.exceptions import FatalError, SwitchoverError, TransientError
 from lib.kube_client import KubeClient, is_retryable_error
-from lib.run_record import RunRecord
+from lib.migration_cleanup import (
+    absence_poll,
+    cleanup_intent,
+    cleanup_schedule,
+    cleanup_step,
+    delete_outcome,
+    final_absence,
+    generic_cleanup_restores,
+    pre_delete,
+    repair_cleanup,
+    require_locator_absent,
+    teardown_revalidated,
+)
+from lib.migration_evidence import MigrationEvidenceError
+from lib.run_record import RunRecord, StateStructureError
+from lib.strict_read import StrictReadStatus
 from lib.utils import Phase, StateManager, dry_run_skip, is_acm_version_ge
 from lib.waiter import WaitConditionResult, wait_for_condition, wait_for_restore_deletion
 
+from .activation import SecondaryActivation
 from .backup_schedule import BackupScheduleManager, fail_on_multiple_backup_schedules
 from .decommission import Decommission
 
 logger = logging.getLogger("acm_switchover")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 class Finalization:
@@ -80,6 +101,7 @@ class Finalization:
         disable_observability_on_secondary: bool = False,  # deprecated, no-op
         restore_only: bool = False,
         acknowledge_observability_not_migrated: bool = False,
+        migration_cleanup_repair: Optional[Dict] = None,
     ):
         # `disable_observability_on_secondary` is deprecated and intentionally
         # unused: old-hub observability cleanup is now driven by detected
@@ -99,6 +121,9 @@ class Finalization:
         # CLI validation restricts it to old_hub_action=decommission; it converts one
         # proven-absent destination block and nothing else.
         self.acknowledge_observability_not_migrated = acknowledge_observability_not_migrated
+        # A validated --repair-migration-cleanup request (lib.validation): an audited
+        # acknowledgement checked against the journal and a fresh strict read, never evidence.
+        self.migration_cleanup_repair = migration_cleanup_repair
         self.backup_manager = BackupScheduleManager(
             secondary_client,
             state_manager,
@@ -209,6 +234,10 @@ class Finalization:
         logger.info("Starting finalization...")
 
         try:
+            # R4-04: the journaled Restore cleanup runs on every pass, ahead of every old-hub
+            # action and of BackupSchedule enablement; the journal, not a marker, decides it.
+            journal = self._run_restore_cleanup_transaction()
+
             # When the old hub remains as a secondary, the runbook requires MCO deletion.
             if self.primary and self.old_hub_action == "secondary" and self.primary_has_observability:
                 with self.state.step("disable_observability_on_secondary", logger) as should_run:
@@ -218,7 +247,7 @@ class Finalization:
             # Step 11: Enable BackupSchedule on new hub
             with self.state.step("enable_backup_schedule", logger) as should_run:
                 if should_run:
-                    self._enable_backup_schedule()
+                    self._enable_backup_schedule(journal)
 
             with self.state.step("verify_backup_schedule_enabled", logger) as should_run:
                 if should_run:
@@ -267,21 +296,227 @@ class Finalization:
             self.state.add_error(f"Unexpected: {str(e)}", Phase.FINALIZATION.value)
             return False
 
-    def _enable_backup_schedule(self):
+    def _enable_backup_schedule(self, journal: Optional[Dict] = None):
         """Enable BackupSchedule on new hub (version-aware).
 
         Important: Before creating the BackupSchedule, we must delete any active
         restore resources. ACM will not allow a BackupSchedule to run while a
-        restore is active (to prevent data corruption).
+        restore is active (to prevent data corruption). The journaled Restore is
+        already gone through its own transaction; a fresh strict read must still
+        prove its locator empty immediately before enablement.
         """
         logger.info("Enabling BackupSchedule on new hub...")
 
-        # First, delete any active restore resources
-        self._cleanup_restore_resources()
+        # First, delete any other switchover restore resources
+        self._cleanup_restore_resources(journal)
+        if not self.dry_run:
+            self._require_journaled_locator_absent(journal)
 
         # Now create/enable the BackupSchedule
         self.backup_manager.ensure_enabled(self.acm_version)
         self.run_record.record_backup_watch_started(datetime.now(timezone.utc).isoformat())
+
+    # -- R4-04 durable Restore-cleanup transaction (July design section 4a) --
+
+    def _run_restore_cleanup_transaction(self) -> Optional[Dict]:
+        """Reconcile the journaled Restore cleanup to a terminal state, or fail before any other work.
+
+        The strict journal is loaded and validated first; the journal alone decides
+        the step. A fresh teardown barrier and durable intent precede the guarded
+        DELETE; recovery and an operator repair are durable journal writes. A
+        dry-run reads and writes nothing and reports the step it would take.
+        Returns the journal the rest of finalization relies on (None only in a
+        dry-run without one).
+        """
+        if self.dry_run:
+            return self._preview_restore_cleanup()
+        journal = self._load_cleanup_journal()
+        step = self._evidence(
+            cleanup_step, journal=journal, repair_requested=self.migration_cleanup_repair is not None
+        )["step"]
+        if step == "repair":
+            return self._repair_restore_cleanup(journal)
+        if step == "revalidate":
+            journal = self._revalidate_for_teardown(journal)
+            operation_id = str(uuid.uuid4())
+            journal = self._persist_decision(
+                self._evidence(cleanup_intent, journal=journal, operation_id=operation_id, now=_now_iso())
+            )
+            logger.info("Recorded cleanup intent %s for Restore %s", operation_id, journal["restore"]["name"])
+            step = "delete"
+        if step == "delete":
+            journal = self._delete_journaled_restore(journal)
+        return journal
+
+    def _preview_restore_cleanup(self) -> Optional[Dict]:
+        try:
+            journal = self.run_record.migration_backups()
+        except (MigrationEvidenceError, StateStructureError) as exc:
+            raise FatalError(f"The recorded migration journal is invalid and blocks finalization: {exc}") from exc
+        if journal is None:
+            logger.info("[DRY-RUN] Would revalidate and delete the journaled Restore under its UID and resourceVersion")
+            return None
+        step = self._evidence(
+            cleanup_step, journal=journal, repair_requested=self.migration_cleanup_repair is not None
+        )["step"]
+        logger.info("[DRY-RUN] Journaled Restore %s cleanup step: %s", journal["restore"]["name"], step)
+        return journal
+
+    def _load_cleanup_journal(self) -> Optional[Dict]:
+        """The validated migration journal; restore-only and full runs journal it at activation too."""
+        try:
+            return self.run_record.migration_backups()
+        except (MigrationEvidenceError, StateStructureError) as exc:
+            raise FatalError(f"The recorded migration journal is invalid and blocks finalization: {exc}") from exc
+
+    def _revalidate_for_teardown(self, journal: Dict) -> Dict:
+        """The July section 4a evidence barrier, on every pass that has not created intent.
+
+        The completion proof activation recorded is re-run live against the journaled
+        Restore (identity, generation, owned spec, cleanup policy, accepted child
+        evidence and frozen Backups); only its success records
+        restore.teardown_revalidated_at, which a later pass keeps but never trusts.
+        """
+        SecondaryActivation(self.secondary, self.state).revalidate_completion_evidence(journal)
+        decision = self._evidence(teardown_revalidated, journal=journal, now=_now_iso())
+        if decision["write"]:
+            self._persist_journal(decision["candidate"])
+        logger.info("Teardown revalidation passed for Restore %s", journal["restore"]["name"])
+        return decision["candidate"]
+
+    def _delete_journaled_restore(self, journal: Dict) -> Dict:
+        """Delete the journaled Restore under UID and resourceVersion, then prove its absence.
+
+        Every attempt re-reads and re-validates the locator in full; a conflict or a
+        404 retries within the shared bound. Only this uninterrupted attempt, holding
+        the most recent accepted DELETE, may write completion; a replacement or an
+        absence it did not prove is recorded as recovery and blocks.
+        """
+        schedule = cleanup_schedule()
+        name, namespace = journal["restore"]["name"], journal["restore"]["namespace"]
+        for attempt in range(1, schedule["attempts"] + 1):
+            decision = self._evidence(
+                pre_delete, journal=journal, live=self._strict_get_journaled_restore(journal), now=_now_iso()
+            )
+            if decision["action"] == "recover":
+                self._record_recovery(decision["candidate"])
+            logger.info("Deleting journaled Restore %s under its UID and resourceVersion", name)
+            result = self.secondary.delete_restore_guarded(
+                name,
+                namespace=namespace,
+                uid=decision["uid"],
+                resource_version=decision["resource_version"],
+                timeout_seconds=schedule["request_timeout"],
+            )
+            outcome = self._evidence(
+                delete_outcome,
+                journal=journal,
+                result=result,
+                resource_version=decision["resource_version"],
+                attempt=attempt,
+                now=_now_iso(),
+            )
+            if outcome["outcome"] == "accepted":
+                journal = self._persist_decision(outcome)
+                break
+            logger.warning("Guarded delete of %s removed nothing (%s); re-validating", name, result.get("reason"))
+        for delay in schedule["poll_delays"]:
+            if delay:
+                time.sleep(delay)
+            poll = self._evidence(
+                absence_poll, journal=journal, live=self._strict_get_journaled_restore(journal), now=_now_iso()
+            )
+            if poll["state"] == "recover":
+                self._record_recovery(poll["candidate"])
+            if poll["state"] == "absent":
+                final = self._evidence(
+                    final_absence, journal=journal, live=self._strict_get_journaled_restore(journal), now=_now_iso()
+                )
+                if final["state"] == "recover":
+                    self._record_recovery(final["candidate"])
+                logger.info("Journaled Restore %s deleted and its absence verified", name)
+                return self._persist_decision(final)
+        raise FatalError(
+            f"Timeout waiting for the journaled Restore {name} to disappear after "
+            f"{sum(schedule['poll_delays'])}s; the cleanup stays resumable"
+        )
+
+    def _repair_restore_cleanup(self, journal: Dict) -> Dict:
+        """Record the operator's audited repair once a fresh strict read proves the locator absent."""
+        decision = self._evidence(
+            repair_cleanup,
+            journal=journal,
+            request=self.migration_cleanup_repair,
+            live=self._strict_get_journaled_restore(journal),
+            now=_now_iso(),
+        )
+        journal = self._persist_decision(decision)
+        repair = journal["cleanup"]["repair"]
+        logger.warning(
+            "Restore cleanup %s repaired by %s (%s); no delete or absence is claimed for this run",
+            journal["cleanup"]["operation_id"],
+            repair["actor"],
+            repair["reason"],
+        )
+        return journal
+
+    def _require_journaled_locator_absent(self, journal: Optional[Dict]) -> None:
+        """Immediately before enablement: terminal cleanup and a fresh strict read proving absence."""
+        live = self._strict_get_journaled_restore(journal) if journal is not None else None
+        self._evidence(require_locator_absent, journal=journal, live=live)
+
+    def _strict_get_journaled_restore(self, journal: Dict) -> Optional[Dict]:
+        """One strict GET of the journaled locator: the object, None for a proven 404, or FatalError."""
+        restore = journal["restore"]
+        outcome = self.secondary.get_custom_resource_strict(
+            group=CLUSTER_BACKUP_API_GROUP,
+            version=CLUSTER_BACKUP_API_VERSION,
+            plural=RESTORE_PLURAL,
+            name=restore["name"],
+            namespace=restore["namespace"],
+        )
+        if outcome.status is StrictReadStatus.OBJECT_ABSENT:
+            return None
+        if not outcome.is_success:
+            raise FatalError(
+                f"Restore {restore['name']} could not be read ({outcome.status.value}: {outcome.reason}); "
+                "unreadable is never absent, so the cleanup state is unchanged"
+            )
+        return outcome.resource
+
+    def _record_recovery(self, candidate: Dict) -> None:
+        """Durably record recovery_required, then block with the operator's repair guidance."""
+        self._persist_journal(candidate)
+        cleanup = candidate["cleanup"]
+        recovery = cleanup["recovery"]
+        observed = f", observed UID {recovery['observed_uid']}" if recovery["observed_uid"] else ""
+        raise FatalError(
+            f"The journaled Restore {cleanup['name']} cleanup requires recovery ({recovery['reason_code']}{observed}). "
+            "Nothing at the locator was deleted or adopted. Inspect the destination hub, then acknowledge with "
+            "--repair-migration-cleanup and the --cleanup-repair-* options, naming run ID "
+            f"{candidate['run_id']} and operation ID {cleanup['operation_id']}."
+        )
+
+    def _persist_decision(self, decision: Dict) -> Dict:
+        self._persist_journal(decision["candidate"])
+        return decision["candidate"]
+
+    def _persist_journal(self, candidate: Dict) -> None:
+        """Durably record a journal transition through RunRecord; a failure stops before the next mutation."""
+        try:
+            self.run_record.record_migration_backups(candidate)
+        except MigrationEvidenceError as exc:
+            raise FatalError(f"The migration journal transition was refused: {exc}") from exc
+        except OSError as exc:
+            raise FatalError(f"The migration journal could not be recorded durably: {exc}") from exc
+
+    @staticmethod
+    def _evidence(function, *args, **kwargs):
+        """Call a pure evidence helper, turning its fail-closed refusal into a FatalError."""
+        try:
+            return function(*args, **kwargs)
+        except MigrationEvidenceError as exc:
+            raise FatalError(f"Migration evidence refused ({exc})") from exc
 
     @staticmethod
     def _is_cleanup_candidate_restore(restore: Dict) -> bool:
@@ -291,7 +526,7 @@ class Finalization:
             return True
         return (restore.get("spec", {}) or {}).get(SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS) is True
 
-    def _cleanup_restore_resources(self):
+    def _cleanup_restore_resources(self, journal: Optional[Dict] = None):
         """Delete restore resources before enabling BackupSchedule.
 
         ACM backup operator won't allow BackupSchedule to be active while
@@ -300,19 +535,38 @@ class Finalization:
         Before deletion, we archive the restore details to the state file
         for audit trail and troubleshooting purposes.
 
-        This method discovers all restores dynamically by listing all Restore
-        resources in the backup namespace, rather than relying on hardcoded names.
+        This method discovers all restores dynamically by strictly listing all
+        Restore resources in the backup namespace, rather than relying on
+        hardcoded names. The journaled Restore locator is reserved for its own
+        transaction: only once that cleanup is terminal are the other
+        switchover Restores classified here, and an object at the journaled
+        locator blocks instead of being deleted.
         """
         archived_restores = []
         delete_failures = []
 
-        # List all restores in the namespace
-        all_restores = self.secondary.list_custom_resources(
+        # Strictly list all restores in the namespace
+        outcome = self.secondary.list_custom_resources_strict(
             group=CLUSTER_BACKUP_API_GROUP,
             version=CLUSTER_BACKUP_API_VERSION,
             plural=RESTORE_PLURAL,
             namespace=BACKUP_NAMESPACE,
         )
+        if not outcome.is_success:
+            raise SwitchoverError(
+                f"Restore inventory read failed before BackupSchedule enablement ({outcome.status.value}: "
+                f"{outcome.reason})"
+            )
+        all_restores = outcome.items
+        if not self.dry_run:
+            all_restores = self._evidence(generic_cleanup_restores, journal=journal, restores=all_restores)["restores"]
+        elif journal is not None:
+            # A preview predicts the journaled Restore's guarded transaction separately.
+            all_restores = [
+                restore
+                for restore in all_restores
+                if (restore.get("metadata", {}) or {}).get("name") != journal["restore"]["name"]
+            ]
 
         if not all_restores:
             logger.info("No restore resources found to clean up")

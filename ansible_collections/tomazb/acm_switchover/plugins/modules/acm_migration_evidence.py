@@ -1,17 +1,18 @@
 # SPDX-License-Identifier: MIT
-"""Decide one step of the R4-04 activation or post-activation migration-evidence transaction."""
+"""Decide one step of the R4-04 activation, post-activation or Restore-cleanup migration-evidence transaction."""
 
 from __future__ import annotations
 
 DOCUMENTATION = r"""
 ---
 module: acm_migration_evidence
-short_description: Decide one step of the activation or post-activation migration-evidence transaction
+short_description: Decide one step of the activation, post-activation or Restore-cleanup migration-evidence transaction
 version_added: "1.8.0"
 description:
-  - A thin adapter over C(module_utils/migration_activation.py) and
-    C(module_utils/migration_post_activation.py), the collection mirrors of the Python
-    CLI's activation transaction and post-activation evidence. It performs no Kubernetes
+  - A thin adapter over C(module_utils/migration_activation.py),
+    C(module_utils/migration_post_activation.py) and C(module_utils/migration_cleanup.py),
+    the collection mirrors of the Python CLI's activation transaction, post-activation
+    evidence and durable Restore-cleanup transaction. It performs no Kubernetes
     request and no write. The role passes the sanitized results of its strict
     C(acm_k8s_read_outcome) reads and C(acm_restore_guarded_mutation) requests in C(inputs).
   - A step that produces a migration journal transition returns the complete validated
@@ -26,6 +27,16 @@ options:
     choices:
       - acm_minor
       - activation_waiver
+      - cleanup_absence_poll
+      - cleanup_delete_outcome
+      - cleanup_final_absence
+      - cleanup_generic_restores
+      - cleanup_intent
+      - cleanup_locator_absent
+      - cleanup_pre_delete
+      - cleanup_repair
+      - cleanup_schedule
+      - cleanup_step
       - complete
       - completion_bundle
       - completion_poll
@@ -51,12 +62,13 @@ options:
       - require_post_activation_completed
       - revalidate_completed
       - status_subresource
+      - teardown_revalidated
       - verify_managed_clusters
       - verify_passive_sync
   inputs:
     description:
-      - The step's keyword inputs, as the matching C(migration_activation) or
-        C(migration_post_activation) function takes them. Read results are
+      - The step's keyword inputs, as the matching C(migration_activation),
+        C(migration_post_activation) or C(migration_cleanup) function takes them. Read results are
         C(acm_k8s_read_outcome) results; C(journal) is the validated journal published by
         C(checkpoint_phase) or the last persisted C(candidate).
       - C(freeze) generates its C(run_id) and C(resolved_at), and C(activation_waiver),
@@ -65,6 +77,11 @@ options:
         unless they are supplied.
       - C(managed_cluster_readiness) takes C(mc_read) instead of the inventory items, and
         C(post_activation_waiver) journals the collection's waiver variable as the C(flag).
+      - The cleanup steps take the strict read of the journaled Restore locator as C(live_read)
+        instead of the object, C(cleanup_generic_restores) the strict Restore list as
+        C(restores_read); C(cleanup_intent) generates its C(operation_id), and
+        C(teardown_revalidated), C(cleanup_intent) and the cleanup steps that can record a
+        transition their timestamp, unless supplied.
     type: dict
     default: {}
 author:
@@ -101,11 +118,14 @@ candidate:
   description: The complete validated journal transition to persist.
   returned: >-
     for freeze, post_patch, post_create, completion_bundle, complete,
-    post_activation_names_evidence and post_activation_completion
+    post_activation_names_evidence, post_activation_completion, teardown_revalidated,
+    cleanup_intent, cleanup_final_absence and cleanup_repair; for cleanup_pre_delete,
+    cleanup_delete_outcome and cleanup_absence_poll when they record recovery or an accepted DELETE
   type: dict
 write:
-  description: Whether the post-activation C(candidate) differs from the journal it was built from.
-  returned: for post_activation_names_evidence and post_activation_completion
+  description: Whether the C(candidate) differs from the journal it was built from.
+  returned: >-
+    for post_activation_names_evidence, post_activation_completion and teardown_revalidated
   type: bool
 """
 
@@ -118,6 +138,7 @@ from ansible.module_utils.basic import AnsibleModule  # noqa: E402
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils import (  # noqa: E402
     migration_activation as transaction,
 )
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils import migration_cleanup as cleanup  # noqa: E402
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils import (  # noqa: E402
     migration_post_activation as post_activation,
 )
@@ -179,7 +200,44 @@ _OPERATIONS: Dict[str, Callable[[dict], dict]] = {
     "post_activation_completion": lambda inputs: post_activation.post_activation_completion(
         **_with_time(inputs, "now")
     ),
+    "cleanup_schedule": lambda inputs: cleanup.cleanup_schedule(),
+    "cleanup_step": lambda inputs: cleanup.cleanup_step(
+        journal=inputs.get("journal"), repair_requested=_native(inputs["repair_requested"])
+    ),
+    "teardown_revalidated": lambda inputs: cleanup.teardown_revalidated(**_with_time(inputs, "now")),
+    "cleanup_intent": lambda inputs: cleanup.cleanup_intent(**_with_time(_with_operation_id(inputs), "now")),
+    "cleanup_pre_delete": lambda inputs: cleanup.pre_delete(**_with_time(_with_locator(inputs), "now")),
+    "cleanup_delete_outcome": lambda inputs: cleanup.delete_outcome(
+        **_with_time(dict(inputs, attempt=_native(inputs["attempt"])), "now")
+    ),
+    "cleanup_absence_poll": lambda inputs: cleanup.absence_poll(**_with_time(_with_locator(inputs), "now")),
+    "cleanup_final_absence": lambda inputs: cleanup.final_absence(**_with_time(_with_locator(inputs), "now")),
+    "cleanup_repair": lambda inputs: cleanup.repair_cleanup(**_with_time(_with_locator(inputs), "now")),
+    "cleanup_locator_absent": lambda inputs: cleanup.require_locator_absent(**_with_locator(inputs)),
+    "cleanup_generic_restores": lambda inputs: cleanup.generic_cleanup_restores(
+        journal=inputs.get("journal"),
+        restores=transaction.strict_list(inputs["restores_read"], "Restore inventory"),
+    ),
 }
+
+
+def _with_locator(inputs: dict) -> dict:
+    """The strict read of the journaled locator as its object, None for a proven absence.
+
+    Unreadable is never absent: any other read outcome refuses with the state unchanged.
+    """
+    resolved = dict(inputs)
+    journal = resolved.get("journal")
+    label = f"Restore {journal['restore']['name']}" if isinstance(journal, dict) else "The journaled Restore"
+    resolved["live"] = transaction.strict_get(resolved.pop("live_read"), label)
+    return resolved
+
+
+def _with_operation_id(inputs: dict) -> dict:
+    """The immutable cleanup operation ID, minted once like the Python CLI does at intent."""
+    resolved = dict(inputs)
+    resolved.setdefault("operation_id", str(uuid.uuid4()))
+    return resolved
 
 
 def _with_default(inputs: dict, field: str) -> dict:

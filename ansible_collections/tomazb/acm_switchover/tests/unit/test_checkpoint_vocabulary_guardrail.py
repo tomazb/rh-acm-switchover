@@ -138,6 +138,13 @@ CANDIDATE_OPERATIONS = frozenset(
         "complete",
         "post_activation_names_evidence",
         "post_activation_completion",
+        "teardown_revalidated",
+        "cleanup_intent",
+        "cleanup_pre_delete",
+        "cleanup_delete_outcome",
+        "cleanup_absence_poll",
+        "cleanup_final_absence",
+        "cleanup_repair",
     }
 )
 _PLAY_TASK_LISTS = ("pre_tasks", "tasks", "post_tasks", "handlers")

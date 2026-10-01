@@ -25,6 +25,41 @@
       vars:
         _acm_role_entry_phase: finalization
 
+    # R4-04: the journal comes only from the checkpoint enter and is validated before any
+    # Restore cleanup, old-hub action or BackupSchedule enablement. Restore-only and full
+    # runs journal at activation too, so an executing run has no journal-free path.
+    - name: Publish the finalization migration journal facts
+      ansible.builtin.set_fact:
+        _acm_preview: >-
+          {{ (acm_switchover_execution.mode | default('dry_run')) != 'execute' or ansible_check_mode }}
+        # A templated null does not survive the non-native templating of the ansible-core
+        # floor, so the journal is a mapping ({} when none) and its presence a boolean.
+        _acm_journal: >-
+          {{ (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal')) or {} }}
+        _acm_has_journal: >-
+          {{ (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal')) is not none }}
+        # The validated cleanup-repair acknowledgement ({} when none was requested).
+        _acm_cleanup_repair_request: >-
+          {{
+            (((_acm_role_entry_inputs.results | default([])
+              | selectattr('id', 'equalto', 'preflight-input-operation') | list | first | default({}))
+              .get('details') or {}).get('migration_cleanup_repair')) or {}
+          }}
+
+    - name: Refuse an invalid recorded migration journal
+      ansible.builtin.fail:
+        msg: >-
+          The recorded migration journal is invalid and blocks finalization. Repair the checkpoint, or
+          start a new migration with the full checkpoint reset (checkpoint.reset).
+      when: >-
+        (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal_outcome', 'absent'))
+        not in ['absent', 'valid']
+
+    # Ahead of every old-hub action and of BackupSchedule enablement, on every pass: the
+    # journal, not a phase marker, decides what the journaled Restore cleanup still owes.
+    - name: Reconcile the journaled Restore cleanup
+      ansible.builtin.include_tasks: cleanup_journaled_restore.yml
+
     - name: Restore backup verification baseline from checkpoint
       ansible.builtin.set_fact:
         acm_switchover_backup_schedule_enabled_at: >-

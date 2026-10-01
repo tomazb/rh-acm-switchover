@@ -63,6 +63,7 @@ from lib.validation import (
     InputValidator,
     ValidationError,
     managed_cluster_expectation_waiver_request,
+    migration_cleanup_repair_request,
     validate_distinct_hub_identities,
 )
 from modules import (
@@ -1051,6 +1052,7 @@ def _run_phase_finalization(
         disable_observability_on_secondary=getattr(args, "disable_observability_on_secondary", False),
         restore_only=is_restore_only,
         acknowledge_observability_not_migrated=getattr(args, "acknowledge_observability_not_migrated", False),
+        migration_cleanup_repair=migration_cleanup_repair_request(args),
     )
 
     if not finalization.finalize():

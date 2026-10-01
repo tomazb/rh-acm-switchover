@@ -180,3 +180,75 @@ def test_the_evidence_candidates_are_timestamped_and_returned_for_the_checkpoint
     assert named["write"] is True and named["candidate"]["post_activation"]["names_verified_at"]
     done = _run(monkeypatch, "post_activation_completion", {"journal": named["candidate"]})
     assert done["write"] is True and done["candidate"]["post_activation"]["completed_at"]
+
+
+# -- R4-04 Task 10: the Restore-cleanup steps ------------------------------------------------------
+
+_VECTORS = Path(__file__).resolve().parents[7] / "tests" / "fixtures" / "r4_04_migration_evidence_vectors.json"
+
+
+def _journal(case_id):
+    cases = json.loads(_VECTORS.read_text(encoding="utf-8"))["cases"]
+    return next(case for case in cases if case["id"] == case_id)["input"]["candidate"]
+
+
+@pytest.mark.skipif(not _VECTORS.is_file(), reason="the shared vectors live in the repository checkout")
+@pytest.mark.parametrize(
+    ("read", "expected"),
+    [
+        ({"read_status": "not_found", "resources": []}, {"changed": False}),
+        (
+            {
+                "read_status": "ok",
+                "resources": [{"metadata": {"name": "acm-restore", "uid": "u", "resourceVersion": "9"}}],
+            },
+            "locator_occupied",
+        ),
+        ({"read_status": "error", "resources": []}, "Restore acm-restore could not be read (error)"),
+    ],
+    ids=["proven-absent", "occupied", "unreadable"],
+)
+def test_a_cleanup_step_reads_the_locator_strictly(monkeypatch, read, expected):
+    result = _run(
+        monkeypatch, "cleanup_locator_absent", {"journal": _journal("journal-cleanup-completed"), "live_read": read}
+    )
+    if isinstance(expected, dict):
+        assert result == expected
+    else:
+        assert result["failed"] is True and expected in result["msg"]
+
+
+@pytest.mark.skipif(not _VECTORS.is_file(), reason="the shared vectors live in the repository checkout")
+def test_cleanup_intent_mints_one_operation_id_unless_supplied(monkeypatch):
+    journal = _journal("journal-teardown-revalidated")
+    minted = _run(monkeypatch, "cleanup_intent", {"journal": journal})["candidate"]["cleanup"]
+    assert uuid.UUID(minted["operation_id"]) and minted["state"] == "intent_persisted"
+    supplied = "11111111-2222-4333-8444-555555555555"
+    pinned = _run(monkeypatch, "cleanup_intent", {"journal": journal, "operation_id": supplied})
+    assert pinned["candidate"]["cleanup"]["operation_id"] == supplied
+
+
+@pytest.mark.skipif(not _VECTORS.is_file(), reason="the shared vectors live in the repository checkout")
+def test_the_delete_attempt_survives_the_text_rendering_of_the_core_floor(monkeypatch):
+    result = _run(
+        monkeypatch,
+        "cleanup_delete_outcome",
+        {
+            "journal": _journal("journal-cleanup-intent-persisted"),
+            "result": {"accepted": False, "reason": "precondition_failed"},
+            "resource_version": "2002",
+            "attempt": "4",
+        },
+    )
+    assert result["failed"] is True
+    assert result["msg"].startswith("Migration evidence refused (cleanup_conflict_retries_exhausted:")
+
+
+@pytest.mark.skipif(not _VECTORS.is_file(), reason="the shared vectors live in the repository checkout")
+def test_the_repair_flag_survives_the_text_rendering_of_the_core_floor(monkeypatch):
+    result = _run(
+        monkeypatch,
+        "cleanup_step",
+        {"journal": _journal("journal-cleanup-recovery-required"), "repair_requested": "True"},
+    )
+    assert result == {"changed": False, "step": "repair"}

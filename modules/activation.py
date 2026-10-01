@@ -1239,6 +1239,10 @@ class SecondaryActivation:
         self._persist_journal(_with_restore(bundle, completed_at=_now_iso()))
         logger.info("Recorded completion evidence for %s", restore["name"])
 
+    def revalidate_completion_evidence(self, journal: Dict) -> None:
+        """Re-run the recorded completion proof live; finalization's teardown barrier (July section 4a)."""
+        self._revalidate_completed_evidence(journal)
+
     def _revalidate_completed_evidence(self, journal: Dict) -> None:
         """Resume over completed evidence: re-run the completion contract live, never rewrite it."""
         restore = journal["restore"]

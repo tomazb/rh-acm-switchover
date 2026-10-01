@@ -5,6 +5,7 @@ Tests cover Finalization class for completing the switchover.
 
 import copy
 import inspect
+import json
 import logging
 import sys
 from contextlib import contextmanager
@@ -22,7 +23,7 @@ import modules.decommission as decommission_module
 import modules.finalization as finalization_module
 from lib.constants import BACKUP_SCHEDULE_DEFAULT_NAME
 from lib.decommission_outcome import DecommissionResult, SubstepExecution, SubstepOutcome
-from lib.exceptions import SwitchoverError
+from lib.exceptions import FatalError, SwitchoverError
 from lib.run_record import RunRecord
 from lib.strict_read import StrictReadOutcome, StrictReadStatus
 from lib.waiter import WaitConditionResult
@@ -142,6 +143,26 @@ def mock_backup_manager():
         yield mock.return_value
 
 
+def _journal_vector(case_id):
+    path = Path(__file__).parent / "fixtures" / "r4_04_migration_evidence_vectors.json"
+    case = next(case for case in json.loads(path.read_text(encoding="utf-8"))["cases"] if case["id"] == case_id)
+    return case["input"]["candidate"]
+
+
+CLEANUP_DONE = _journal_vector("journal-cleanup-completed")
+
+
+@pytest.fixture
+def terminal_cleanup():
+    """The journaled Restore cleanup is already terminal: the test covers other finalization work."""
+    with (
+        patch.object(Finalization, "_run_restore_cleanup_transaction", return_value=CLEANUP_DONE),
+        patch.object(Finalization, "_require_journaled_locator_absent"),
+        patch.object(Finalization, "_cleanup_restore_resources") as generic,
+    ):
+        yield generic
+
+
 @pytest.fixture
 def finalization(mock_secondary_client, mock_state_manager, mock_backup_manager):
     """Create Finalization instance."""
@@ -174,6 +195,7 @@ class TestFinalization:
     def test_finalize_success(
         self,
         mock_time,
+        terminal_cleanup,
         finalization,
         mock_secondary_client,
         mock_state_manager,
@@ -186,7 +208,6 @@ class TestFinalization:
 
         # Mock list responses: schedule verification, collision check, initial backups, loop 1, loop 2
         mock_secondary_client.list_custom_resources.side_effect = [
-            [],  # _cleanup_restore_resources
             [{"metadata": {"name": "schedule"}, "spec": {"paused": False}}],  # verify_backup_schedule_enabled
             [
                 {
@@ -243,7 +264,9 @@ class TestFinalization:
             ]
         )
 
-    def test_finalize_skips_completed_steps(self, finalization, mock_state_manager, mock_backup_manager):
+    def test_finalize_skips_completed_steps(
+        self, terminal_cleanup, finalization, mock_state_manager, mock_backup_manager
+    ):
         """Test that completed steps are skipped."""
         mock_state_manager.is_step_completed.return_value = True
 
@@ -521,13 +544,13 @@ class TestFinalization:
         self, finalization, mock_secondary_client, mock_state_manager
     ):
         """Restore cleanup must fail closed when a delete request does not succeed."""
-        mock_secondary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "restore-acm-full"}, "status": {"phase": "Running"}}
-        ]
+        mock_secondary_client.list_custom_resources_strict.return_value = StrictReadOutcome.from_items(
+            [{"metadata": {"name": "restore-acm-full"}, "status": {"phase": "Running"}}]
+        )
         mock_secondary_client.delete_custom_resource.side_effect = ApiException(status=403, reason="Forbidden")
 
         with pytest.raises(SwitchoverError, match="Failed to delete restore resource"):
-            finalization._cleanup_restore_resources()
+            finalization._cleanup_restore_resources(CLEANUP_DONE)
 
         mock_state_manager._set_config.assert_called_once_with("archived_restores", ANY)
 
@@ -847,7 +870,7 @@ class TestFinalization:
         mock_secondary_client.delete_configmap.assert_not_called()
 
     def test_finalize_exposes_reset_auto_import_strategy_as_explicit_step(
-        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+        self, terminal_cleanup, mock_secondary_client, mock_state_manager, mock_backup_manager
     ):
         """Finalization should expose auto-import reset in the visible step sequence."""
         fin = Finalization(
@@ -1426,7 +1449,7 @@ class TestFinalization:
         assert "already exists during recreation" in caplog.text
 
     def test_a_rejected_mco_delete_never_writes_a_raw_response_into_the_state_file(
-        self, mock_secondary_client, mock_backup_manager, tmp_path, caplog
+        self, terminal_cleanup, mock_secondary_client, mock_backup_manager, tmp_path, caplog
     ):
         """The persisted end of the leak, through the real StateManager.
 
@@ -1651,7 +1674,7 @@ class TestFinalization:
         assert "marker recording failed" in caplog.text.lower()
         primary.delete_custom_resource_preconditioned.assert_called_once()
 
-    def test_finalize_failure_handling(self, finalization, mock_backup_manager):
+    def test_finalize_failure_handling(self, terminal_cleanup, finalization, mock_backup_manager):
         """Test finalization failure handling."""
         mock_backup_manager.ensure_enabled.side_effect = Exception("Backup Error")
 
@@ -1804,7 +1827,7 @@ class TestFinalization:
 
     @patch("modules.finalization.time")
     def test_finalize_skips_verify_old_hub_state_when_action_none(
-        self, mock_time, mock_secondary_client, mock_state_manager, mock_backup_manager
+        self, mock_time, terminal_cleanup, mock_secondary_client, mock_state_manager, mock_backup_manager
     ):
         """Test that _verify_old_hub_state is not called when old_hub_action is 'none'.
 
@@ -1828,7 +1851,6 @@ class TestFinalization:
 
         # Mock all required responses with side_effect for sequential calls
         mock_secondary_client.list_custom_resources.side_effect = [
-            [],  # _cleanup_restore_resources
             [{"metadata": {"name": "schedule"}, "spec": {"paused": False}}],  # verify_backup_schedule_enabled
             [
                 {
@@ -1878,6 +1900,7 @@ class TestFinalization:
         self,
         mock_time_time,
         mock_time_sleep,
+        terminal_cleanup,
         mock_secondary_client,
         mock_state_manager,
         mock_backup_manager,
@@ -1907,11 +1930,10 @@ class TestFinalization:
         )
 
         # Mock all required responses with side_effect for sequential calls
-        # Order: _cleanup_restore_resources, verify_backup_schedule_enabled, fix_backup_collision,
+        # Order: verify_backup_schedule_enabled, fix_backup_collision,
         # _get_backup_verify_timeout, verify_new_backups (2x). verify_backup_integrity re-reads the
         # recorded backup by name via get_custom_resource, so it consumes no list response.
         mock_secondary_client.list_custom_resources.side_effect = [
-            [],  # _cleanup_restore_resources - no restores to clean up
             [{"metadata": {"name": "schedule"}, "spec": {"paused": False}}],  # verify_backup_schedule_enabled
             [
                 {
@@ -1958,7 +1980,7 @@ class TestFinalization:
                 mock_verify.assert_called_once()
 
     def test_finalize_deletes_old_hub_observability_when_deprecated_flag_is_false(
-        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+        self, terminal_cleanup, mock_secondary_client, mock_state_manager, mock_backup_manager
     ):
         """Detected observability should trigger old-hub MCO deletion without the deprecated flag."""
         primary = Mock()
@@ -2190,12 +2212,12 @@ class TestFinalization:
             },
         }
 
-        # Mock list_custom_resources to return the restore when listing
-        mock_secondary_client.list_custom_resources.return_value = [mock_restore]
+        # The strict Restore list returns the restore
+        mock_secondary_client.list_custom_resources_strict.return_value = StrictReadOutcome.from_items([mock_restore])
 
-        finalization._cleanup_restore_resources()
+        finalization._cleanup_restore_resources(CLEANUP_DONE)
 
-        mock_secondary_client.list_custom_resources.assert_called_once_with(
+        mock_secondary_client.list_custom_resources_strict.assert_called_once_with(
             group="cluster.open-cluster-management.io",
             version="v1beta1",
             plural="restores",
@@ -2247,15 +2269,15 @@ class TestFinalization:
             "spec": {},
             "status": {"phase": "Finished"},
         }
-        mock_secondary_client.list_custom_resources.return_value = [mock_restore]
+        mock_secondary_client.list_custom_resources_strict.return_value = StrictReadOutcome.from_items([mock_restore])
         mock_secondary_client.delete_custom_resource.side_effect = delete_error
 
         with caplog.at_level(logging.WARNING):
             if expect_warning:
                 with pytest.raises(SwitchoverError, match="Failed to delete restore resource"):
-                    finalization._cleanup_restore_resources()
+                    finalization._cleanup_restore_resources(CLEANUP_DONE)
             else:
-                finalization._cleanup_restore_resources()
+                finalization._cleanup_restore_resources(CLEANUP_DONE)
 
         mock_state_manager._set_config.assert_called_once()
         if expect_warning:
@@ -2267,21 +2289,23 @@ class TestFinalization:
         self, finalization, mock_secondary_client, mock_state_manager
     ):
         """Cleanup must fail before deleting unrelated Restore resources."""
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "restore-acm-full"},
-                "spec": {},
-                "status": {"phase": "Finished"},
-            },
-            {
-                "metadata": {"name": "manual-restore"},
-                "spec": {},
-                "status": {"phase": "Finished"},
-            },
-        ]
+        mock_secondary_client.list_custom_resources_strict.return_value = StrictReadOutcome.from_items(
+            [
+                {
+                    "metadata": {"name": "restore-acm-full"},
+                    "spec": {},
+                    "status": {"phase": "Finished"},
+                },
+                {
+                    "metadata": {"name": "manual-restore"},
+                    "spec": {},
+                    "status": {"phase": "Finished"},
+                },
+            ]
+        )
 
         with pytest.raises(SwitchoverError, match="manual-restore"):
-            finalization._cleanup_restore_resources()
+            finalization._cleanup_restore_resources(CLEANUP_DONE)
 
         mock_secondary_client.delete_custom_resource.assert_not_called()
         mock_state_manager._set_config.assert_not_called()
@@ -2461,3 +2485,548 @@ class TestIntegratedDestinationGateWiring:
             fin._disable_observability_on_old_hub()
 
         mock_mco_primary.delete_custom_resource_preconditioned.assert_not_called()
+
+
+# -- R4-04 Task 10: the durable Restore-cleanup transaction (July design section 4a) --
+
+CLEANUP_POST = _journal_vector("journal-post-activation-completed")
+CLEANUP_REVALIDATED = _journal_vector("journal-teardown-revalidated")
+CLEANUP_INTENT = _journal_vector("journal-cleanup-intent-persisted")
+CLEANUP_ACCEPTED = _journal_vector("journal-cleanup-delete-accepted")
+CLEANUP_RECOVERY = _journal_vector("journal-cleanup-recovery-required")
+CLEANUP_REPAIRED = _journal_vector("journal-cleanup-repaired")
+RESTORE_UID = CLEANUP_INTENT["restore"]["uid"]
+REPAIR_REQUEST = {
+    key: value for key, value in CLEANUP_REPAIRED["cleanup"]["repair"].items() if key != "acknowledged_at"
+}
+ABSENT = StrictReadOutcome.object_absent("object_not_found")
+
+
+def _live(uid=RESTORE_UID, rv="2002", generation=4, **spec):
+    restore = CLEANUP_INTENT["restore"]
+    body = {
+        "metadata": {
+            "name": restore["name"],
+            "namespace": restore["namespace"],
+            "uid": uid,
+            "resourceVersion": rv,
+            "generation": generation,
+        },
+        "spec": dict(restore["backup_fields"], cleanupBeforeRestore="CleanupRestored"),
+    }
+    body["spec"].update(spec)
+    return StrictReadOutcome.from_resource(body, resource_version=rv)
+
+
+def _accepted(rv="2002"):
+    return {"accepted": True, "reason": "ok", "uid": RESTORE_UID, "resource_version": rv}
+
+
+CONFLICT = {"accepted": False, "conflict": True, "reason": "precondition_failed"}
+
+
+def _cleanup_state(tmp_path, journal):
+    from lib.utils import StateManager
+
+    state = StateManager(str(tmp_path / "state.json"))
+    if journal is not None:
+        state.state["config"]["migration_backups"] = copy.deepcopy(journal)
+    state.flush_state()
+    return state
+
+
+def _stored(tmp_path):
+    return json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))["config"].get("migration_backups")
+
+
+def _cleanup_fin(state, secondary, **kwargs):
+    with patch("modules.finalization.BackupScheduleManager"):
+        return Finalization(secondary_client=secondary, state_manager=state, acm_version="2.14.0", **kwargs)
+
+
+@pytest.fixture
+def cleanup_secondary():
+    secondary = Mock(name="secondary")
+    secondary.dry_run = False
+    return secondary
+
+
+@pytest.fixture
+def barrier():
+    with patch("modules.finalization.SecondaryActivation.revalidate_completion_evidence") as proof:
+        yield proof
+
+
+@pytest.fixture(autouse=False)
+def no_sleep():
+    with patch("modules.finalization.time.sleep") as sleep:
+        yield sleep
+
+
+@pytest.mark.unit
+class TestRestoreCleanupTransaction:
+    """Items 1-14 and the repair contract of plan Task 10, Python form factor."""
+
+    def test_no_journal_blocks_before_any_read_or_delete(self, tmp_path, cleanup_secondary, barrier):
+        fin = _cleanup_fin(_cleanup_state(tmp_path, None), cleanup_secondary)
+
+        with pytest.raises(FatalError, match="journal_required"):
+            fin._run_restore_cleanup_transaction()
+
+        barrier.assert_not_called()
+        cleanup_secondary.get_custom_resource_strict.assert_not_called()
+        cleanup_secondary.delete_restore_guarded.assert_not_called()
+
+    def test_invalid_journal_blocks_finalization_before_the_old_hub_and_backups(
+        self, tmp_path, cleanup_secondary, barrier
+    ):
+        state = _cleanup_state(tmp_path, dict(CLEANUP_INTENT, waiver=False))
+        fin = _cleanup_fin(state, cleanup_secondary, primary_client=Mock(), primary_has_observability=True)
+
+        with (
+            patch.object(fin, "_disable_observability_on_old_hub") as mco_teardown,
+            patch.object(fin, "_enable_backup_schedule") as enable,
+        ):
+            assert fin.finalize() is False
+
+        mco_teardown.assert_not_called()
+        enable.assert_not_called()
+        cleanup_secondary.delete_restore_guarded.assert_not_called()
+
+    def test_fresh_run_revalidates_records_intent_then_deletes_and_completes(
+        self, tmp_path, cleanup_secondary, barrier, no_sleep
+    ):
+        state = _cleanup_state(tmp_path, CLEANUP_POST)
+        seen = []
+
+        def _delete(name, **kwargs):
+            seen.append(_stored(tmp_path)["cleanup"]["state"])
+            return _accepted()
+
+        cleanup_secondary.get_custom_resource_strict.side_effect = [_live(), _live(), ABSENT, ABSENT]
+        cleanup_secondary.delete_restore_guarded.side_effect = _delete
+        fin = _cleanup_fin(state, cleanup_secondary)
+
+        journal = fin._run_restore_cleanup_transaction()
+
+        barrier.assert_called_once()
+        assert barrier.call_args.args[0] == CLEANUP_POST
+        # Intent was durable before the DELETE was sent.
+        assert seen == ["intent_persisted"]
+        cleanup_secondary.delete_restore_guarded.assert_called_once_with(
+            "acm-restore",
+            namespace="open-cluster-management-backup",
+            uid=RESTORE_UID,
+            resource_version="2002",
+            timeout_seconds=30,
+        )
+        cleanup_secondary.delete_custom_resource.assert_not_called()
+        stored = _stored(tmp_path)
+        assert stored == journal
+        cleanup = stored["cleanup"]
+        assert cleanup["state"] == "completed"
+        assert stored["restore"]["teardown_revalidated_at"] is not None
+        assert cleanup["final_get_resource_version"] == "2002"
+        assert cleanup["absence_verified_at"] == cleanup["completed_at"]
+        assert {key: cleanup[key] for key in ("uid", "generation", "spec_fingerprint", "backup_fields")} == {
+            key: stored["restore"][key] for key in ("uid", "generation", "spec_fingerprint", "backup_fields")
+        }
+
+    def test_a_failed_barrier_records_nothing_and_sends_no_delete(self, tmp_path, cleanup_secondary, barrier):
+        barrier.side_effect = FatalError("Journaled credentials child was replaced or changed")
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_POST), cleanup_secondary)
+
+        with pytest.raises(FatalError, match="replaced or changed"):
+            fin._run_restore_cleanup_transaction()
+
+        assert _stored(tmp_path) == CLEANUP_POST
+        cleanup_secondary.delete_restore_guarded.assert_not_called()
+
+    def test_an_existing_revalidation_timestamp_is_never_fresh_success(self, tmp_path, cleanup_secondary, barrier):
+        barrier.side_effect = FatalError("generation drift")
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_REVALIDATED), cleanup_secondary)
+
+        with pytest.raises(FatalError, match="generation drift"):
+            fin._run_restore_cleanup_transaction()
+
+        barrier.assert_called_once()
+        assert _stored(tmp_path) == CLEANUP_REVALIDATED
+        cleanup_secondary.delete_restore_guarded.assert_not_called()
+
+    def test_the_live_barrier_fails_closed_on_an_absent_restore(self, tmp_path, cleanup_secondary):
+        """The real completion proof, not a stub: an absent not_started Restore never recovers."""
+        cleanup_secondary.get_custom_resource_strict.return_value = ABSENT
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_POST), cleanup_secondary)
+
+        with pytest.raises(FatalError, match="recorded by the migration journal is absent"):
+            fin._run_restore_cleanup_transaction()
+
+        assert _stored(tmp_path) == CLEANUP_POST
+        cleanup_secondary.delete_restore_guarded.assert_not_called()
+
+    def test_a_failed_intent_write_sends_no_delete(self, tmp_path, cleanup_secondary, barrier):
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_REVALIDATED), cleanup_secondary)
+
+        with patch("lib.run_record.RunRecord.record_migration_backups", side_effect=OSError("disk full")):
+            with pytest.raises(FatalError, match="could not be recorded durably"):
+                fin._run_restore_cleanup_transaction()
+
+        cleanup_secondary.get_custom_resource_strict.assert_not_called()
+        cleanup_secondary.delete_restore_guarded.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "live",
+        [
+            _live(generation=5),
+            _live(veleroResourcesBackupName="acm-resources-schedule-other"),
+            _live(veleroCredentialsBackupName="latest"),
+            _live(cleanupBeforeRestore="None"),
+        ],
+        ids=["generation", "backup-field", "latest-alias", "cleanup-policy"],
+    )
+    def test_final_get_drift_blocks_with_no_delete_and_no_state_change(self, tmp_path, cleanup_secondary, live):
+        cleanup_secondary.get_custom_resource_strict.return_value = live
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_INTENT), cleanup_secondary)
+
+        with pytest.raises(FatalError, match="restore_spec_drift"):
+            fin._run_restore_cleanup_transaction()
+
+        cleanup_secondary.delete_restore_guarded.assert_not_called()
+        assert _stored(tmp_path) == CLEANUP_INTENT
+
+    def test_a_status_only_conflict_retries_the_full_validation(self, tmp_path, cleanup_secondary, no_sleep):
+        cleanup_secondary.get_custom_resource_strict.side_effect = [_live(), _live(rv="2009"), ABSENT, ABSENT]
+        cleanup_secondary.delete_restore_guarded.side_effect = [CONFLICT, _accepted("2009")]
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_INTENT), cleanup_secondary)
+
+        fin._run_restore_cleanup_transaction()
+
+        revisions = [
+            call.kwargs["resource_version"] for call in cleanup_secondary.delete_restore_guarded.call_args_list
+        ]
+        assert revisions == ["2002", "2009"]
+        stored = _stored(tmp_path)["cleanup"]
+        assert (stored["state"], stored["final_get_resource_version"]) == ("completed", "2009")
+
+    def test_conflict_retry_exhaustion_blocks_and_stays_resumable(self, tmp_path, cleanup_secondary):
+        cleanup_secondary.get_custom_resource_strict.return_value = _live()
+        cleanup_secondary.delete_restore_guarded.return_value = CONFLICT
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_INTENT), cleanup_secondary)
+
+        with pytest.raises(FatalError, match="cleanup_conflict_retries_exhausted"):
+            fin._run_restore_cleanup_transaction()
+
+        assert cleanup_secondary.delete_restore_guarded.call_count == 4
+        assert cleanup_secondary.get_custom_resource_strict.call_count == 4
+        cleanup_secondary.delete_custom_resource.assert_not_called()
+        assert _stored(tmp_path) == CLEANUP_INTENT
+
+    def test_an_unverifiable_delete_is_not_accepted(self, tmp_path, cleanup_secondary):
+        cleanup_secondary.get_custom_resource_strict.return_value = _live()
+        cleanup_secondary.delete_restore_guarded.return_value = {"accepted": False, "reason": "unverifiable"}
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_INTENT), cleanup_secondary)
+
+        with pytest.raises(FatalError, match="delete_not_accepted"):
+            fin._run_restore_cleanup_transaction()
+
+        assert _stored(tmp_path) == CLEANUP_INTENT
+
+    def test_polling_follows_the_exact_uid_until_the_final_read_proves_absence(
+        self, tmp_path, cleanup_secondary, no_sleep
+    ):
+        cleanup_secondary.get_custom_resource_strict.side_effect = [_live(), _live(), _live(), ABSENT, ABSENT]
+        cleanup_secondary.delete_restore_guarded.return_value = _accepted()
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_INTENT), cleanup_secondary)
+
+        fin._run_restore_cleanup_transaction()
+
+        assert cleanup_secondary.get_custom_resource_strict.call_count == 5
+        # The first poll reads at once; each later poll waits the shared interval.
+        assert [call.args[0] for call in no_sleep.call_args_list] == [5, 5]
+        assert _stored(tmp_path)["cleanup"]["state"] == "completed"
+
+    def test_a_replacement_at_the_final_read_recovers_and_never_completes(self, tmp_path, cleanup_secondary, no_sleep):
+        cleanup_secondary.get_custom_resource_strict.side_effect = [_live(), ABSENT, _live(uid="uid-new", rv="3003")]
+        cleanup_secondary.delete_restore_guarded.return_value = _accepted()
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_INTENT), cleanup_secondary)
+
+        with pytest.raises(FatalError, match="replacement_during_poll, observed UID uid-new"):
+            fin._run_restore_cleanup_transaction()
+
+        cleanup = _stored(tmp_path)["cleanup"]
+        assert cleanup["state"] == "recovery_required"
+        assert cleanup["recovery"]["observed_resource_version"] == "3003"
+        assert cleanup["delete_accepted_at"] is not None and cleanup["completed_at"] is None
+        assert cleanup_secondary.delete_restore_guarded.call_count == 1
+
+    def test_a_replacement_during_polling_recovers(self, tmp_path, cleanup_secondary, no_sleep):
+        cleanup_secondary.get_custom_resource_strict.side_effect = [_live(), _live(uid="uid-new", rv="3003")]
+        cleanup_secondary.delete_restore_guarded.return_value = _accepted()
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_INTENT), cleanup_secondary)
+
+        with pytest.raises(FatalError, match="replacement_during_poll"):
+            fin._run_restore_cleanup_transaction()
+
+        assert _stored(tmp_path)["cleanup"]["recovery"]["reason_code"] == "replacement_during_poll"
+
+    def test_a_replacement_before_the_delete_is_kept_and_recovers(self, tmp_path, cleanup_secondary):
+        cleanup_secondary.get_custom_resource_strict.return_value = _live(uid="uid-new", rv="3003")
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_INTENT), cleanup_secondary)
+
+        with pytest.raises(FatalError, match="replacement_uid") as excinfo:
+            fin._run_restore_cleanup_transaction()
+
+        cleanup_secondary.delete_restore_guarded.assert_not_called()
+        cleanup_secondary.delete_custom_resource.assert_not_called()
+        cleanup = _stored(tmp_path)["cleanup"]
+        assert (cleanup["state"], cleanup["recovery"]["observed_uid"]) == ("recovery_required", "uid-new")
+        assert CLEANUP_INTENT["run_id"] in str(excinfo.value)
+        assert CLEANUP_INTENT["cleanup"]["operation_id"] in str(excinfo.value)
+
+    @pytest.mark.parametrize("journal", [CLEANUP_INTENT, CLEANUP_ACCEPTED], ids=["intent", "delete-accepted"])
+    def test_absence_on_resume_without_completion_recovers_never_succeeds(self, tmp_path, cleanup_secondary, journal):
+        cleanup_secondary.get_custom_resource_strict.return_value = ABSENT
+        fin = _cleanup_fin(_cleanup_state(tmp_path, journal), cleanup_secondary)
+
+        with pytest.raises(FatalError, match="absent_without_completion"):
+            fin._run_restore_cleanup_transaction()
+
+        cleanup = _stored(tmp_path)["cleanup"]
+        assert cleanup["state"] == "recovery_required"
+        assert (cleanup["recovery"]["observed_uid"], cleanup["completed_at"]) == (None, None)
+        assert cleanup["delete_accepted_at"] == journal["cleanup"]["delete_accepted_at"]
+        cleanup_secondary.delete_restore_guarded.assert_not_called()
+
+    def test_resume_after_an_accepted_delete_needs_a_new_accepted_delete(self, tmp_path, cleanup_secondary, no_sleep):
+        cleanup_secondary.get_custom_resource_strict.side_effect = [_live(rv="2007"), ABSENT, ABSENT]
+        cleanup_secondary.delete_restore_guarded.return_value = _accepted("2007")
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_ACCEPTED), cleanup_secondary)
+
+        fin._run_restore_cleanup_transaction()
+
+        cleanup = _stored(tmp_path)["cleanup"]
+        assert (cleanup["state"], cleanup["final_get_resource_version"]) == ("completed", "2007")
+        assert cleanup["delete_accepted_at"] != CLEANUP_ACCEPTED["cleanup"]["delete_accepted_at"]
+        assert cleanup["operation_id"] == CLEANUP_ACCEPTED["cleanup"]["operation_id"]
+
+    @pytest.mark.parametrize(
+        "outcome",
+        [StrictReadOutcome.error("read_failed"), StrictReadOutcome.crd_absent("kind_not_served")],
+        ids=["read-failed", "kind-not-served"],
+    )
+    def test_an_unreadable_locator_is_never_absence(self, tmp_path, cleanup_secondary, outcome):
+        cleanup_secondary.get_custom_resource_strict.return_value = outcome
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_ACCEPTED), cleanup_secondary)
+
+        with pytest.raises(FatalError, match="unreadable is never absent"):
+            fin._run_restore_cleanup_transaction()
+
+        assert _stored(tmp_path) == CLEANUP_ACCEPTED
+        cleanup_secondary.delete_restore_guarded.assert_not_called()
+
+    def test_a_poll_timeout_writes_no_completion_and_stays_resumable(self, tmp_path, cleanup_secondary, no_sleep):
+        cleanup_secondary.get_custom_resource_strict.return_value = _live()
+        cleanup_secondary.delete_restore_guarded.return_value = _accepted()
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_INTENT), cleanup_secondary)
+
+        with pytest.raises(FatalError, match="Timeout waiting for the journaled Restore"):
+            fin._run_restore_cleanup_transaction()
+
+        assert _stored(tmp_path)["cleanup"]["state"] == "delete_accepted"
+        assert cleanup_secondary.get_custom_resource_strict.call_count == 62
+
+    @pytest.mark.parametrize("journal", [CLEANUP_DONE, CLEANUP_REPAIRED], ids=["completed", "repaired"])
+    def test_terminal_cleanup_touches_nothing(self, tmp_path, cleanup_secondary, barrier, journal):
+        fin = _cleanup_fin(_cleanup_state(tmp_path, journal), cleanup_secondary)
+
+        assert fin._run_restore_cleanup_transaction() == journal
+
+        barrier.assert_not_called()
+        cleanup_secondary.get_custom_resource_strict.assert_not_called()
+        cleanup_secondary.delete_restore_guarded.assert_not_called()
+
+    def test_recovery_required_blocks_with_repair_guidance(self, tmp_path, cleanup_secondary):
+        state = _cleanup_state(tmp_path, CLEANUP_RECOVERY)
+        fin = _cleanup_fin(state, cleanup_secondary, primary_client=Mock(), primary_has_observability=True)
+
+        with (
+            patch.object(fin, "_disable_observability_on_old_hub") as mco_teardown,
+            patch.object(fin, "_enable_backup_schedule") as enable,
+        ):
+            assert fin.finalize() is False
+
+        mco_teardown.assert_not_called()
+        enable.assert_not_called()
+        cleanup_secondary.get_custom_resource_strict.assert_not_called()
+        assert "cleanup_recovery_required" in state.state["errors"][-1]["error"]
+
+    def test_an_operator_repair_is_one_audited_write_after_fresh_absence(self, tmp_path, cleanup_secondary):
+        cleanup_secondary.get_custom_resource_strict.return_value = ABSENT
+        fin = _cleanup_fin(
+            _cleanup_state(tmp_path, CLEANUP_RECOVERY), cleanup_secondary, migration_cleanup_repair=REPAIR_REQUEST
+        )
+
+        original = RunRecord.record_migration_backups
+        with patch.object(RunRecord, "record_migration_backups", autospec=True, side_effect=original) as record:
+            fin._run_restore_cleanup_transaction()
+
+        assert record.call_count == 1
+        candidate = record.call_args.args[1]
+        assert candidate["cleanup"]["state"] == "repaired"
+        assert {key: value for key, value in candidate["cleanup"]["repair"].items() if key != "acknowledged_at"} == (
+            REPAIR_REQUEST
+        )
+        assert candidate["cleanup"]["recovery"] == CLEANUP_RECOVERY["cleanup"]["recovery"]
+        for field in ("delete_accepted_at", "absence_verified_at", "completed_at"):
+            assert candidate["cleanup"][field] is None
+        cleanup_secondary.delete_restore_guarded.assert_not_called()
+
+    def test_a_repair_is_persisted_and_terminal(self, tmp_path, cleanup_secondary):
+        cleanup_secondary.get_custom_resource_strict.return_value = ABSENT
+        fin = _cleanup_fin(
+            _cleanup_state(tmp_path, CLEANUP_RECOVERY), cleanup_secondary, migration_cleanup_repair=REPAIR_REQUEST
+        )
+
+        journal = fin._run_restore_cleanup_transaction()
+
+        assert _stored(tmp_path) == journal
+        assert journal["cleanup"]["state"] == "repaired"
+
+    def test_a_repair_with_an_occupied_locator_is_refused_and_touches_nothing(self, tmp_path, cleanup_secondary):
+        cleanup_secondary.get_custom_resource_strict.return_value = _live(uid="uid-new", rv="3003")
+        fin = _cleanup_fin(
+            _cleanup_state(tmp_path, CLEANUP_RECOVERY), cleanup_secondary, migration_cleanup_repair=REPAIR_REQUEST
+        )
+
+        with pytest.raises(FatalError, match="repair_locator_occupied"):
+            fin._run_restore_cleanup_transaction()
+
+        assert _stored(tmp_path) == CLEANUP_RECOVERY
+        cleanup_secondary.delete_restore_guarded.assert_not_called()
+
+    def test_a_repair_request_for_another_operation_is_refused(self, tmp_path, cleanup_secondary):
+        cleanup_secondary.get_custom_resource_strict.return_value = ABSENT
+        request = dict(REPAIR_REQUEST, operation_id="00000000-0000-4000-8000-000000000001")
+        fin = _cleanup_fin(
+            _cleanup_state(tmp_path, CLEANUP_RECOVERY), cleanup_secondary, migration_cleanup_repair=request
+        )
+
+        with pytest.raises(FatalError, match="repair_identity_mismatch"):
+            fin._run_restore_cleanup_transaction()
+
+        assert _stored(tmp_path) == CLEANUP_RECOVERY
+
+    def test_a_repair_request_without_recovery_is_refused(self, tmp_path, cleanup_secondary):
+        fin = _cleanup_fin(
+            _cleanup_state(tmp_path, CLEANUP_DONE), cleanup_secondary, migration_cleanup_repair=REPAIR_REQUEST
+        )
+
+        with pytest.raises(FatalError, match="repair_not_permitted"):
+            fin._run_restore_cleanup_transaction()
+
+        assert _stored(tmp_path) == CLEANUP_DONE
+
+    def test_a_dry_run_reads_and_writes_nothing(self, tmp_path, cleanup_secondary, barrier, caplog):
+        cleanup_secondary.dry_run = True
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_INTENT), cleanup_secondary, dry_run=True)
+
+        with caplog.at_level(logging.INFO):
+            assert fin._run_restore_cleanup_transaction() == CLEANUP_INTENT
+
+        assert "cleanup step: delete" in caplog.text
+        barrier.assert_not_called()
+        cleanup_secondary.get_custom_resource_strict.assert_not_called()
+        cleanup_secondary.delete_restore_guarded.assert_not_called()
+        assert _stored(tmp_path) == CLEANUP_INTENT
+
+    def test_enablement_requires_a_fresh_absent_locator(self, tmp_path, cleanup_secondary):
+        cleanup_secondary.list_custom_resources_strict.return_value = StrictReadOutcome.from_items([])
+        cleanup_secondary.get_custom_resource_strict.return_value = _live(uid="uid-new", rv="3003")
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_DONE), cleanup_secondary)
+
+        with pytest.raises(FatalError, match="locator_occupied"):
+            fin._enable_backup_schedule(CLEANUP_DONE)
+
+        fin.backup_manager.ensure_enabled.assert_not_called()
+
+    @pytest.mark.parametrize("journal", [CLEANUP_DONE, CLEANUP_REPAIRED], ids=["completed", "repaired"])
+    def test_enablement_after_terminal_cleanup_and_proven_absence(self, tmp_path, cleanup_secondary, journal):
+        cleanup_secondary.list_custom_resources_strict.return_value = StrictReadOutcome.from_items([])
+        cleanup_secondary.get_custom_resource_strict.return_value = ABSENT
+        fin = _cleanup_fin(_cleanup_state(tmp_path, journal), cleanup_secondary)
+
+        fin._enable_backup_schedule(journal)
+
+        fin.backup_manager.ensure_enabled.assert_called_once_with("2.14.0")
+        cleanup_secondary.get_custom_resource_strict.assert_called_once()
+
+    @pytest.mark.parametrize("journal", [CLEANUP_ACCEPTED, CLEANUP_RECOVERY], ids=["delete-accepted", "recovery"])
+    def test_enablement_refuses_a_non_terminal_cleanup(self, tmp_path, cleanup_secondary, journal):
+        cleanup_secondary.list_custom_resources_strict.return_value = StrictReadOutcome.from_items([])
+        fin = _cleanup_fin(_cleanup_state(tmp_path, journal), cleanup_secondary)
+
+        with pytest.raises(FatalError, match="cleanup_not_terminal"):
+            fin._enable_backup_schedule(journal)
+
+        fin.backup_manager.ensure_enabled.assert_not_called()
+
+    def test_generic_cleanup_never_routes_the_journaled_locator(self, tmp_path, cleanup_secondary):
+        cleanup_secondary.list_custom_resources_strict.return_value = StrictReadOutcome.from_items(
+            [_live(uid="uid-new", rv="3003").resource, {"metadata": {"name": "restore-acm-passive-sync"}}]
+        )
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_DONE), cleanup_secondary)
+
+        with pytest.raises(FatalError, match="locator_occupied"):
+            fin._enable_backup_schedule(CLEANUP_DONE)
+
+        cleanup_secondary.delete_custom_resource.assert_not_called()
+        fin.backup_manager.ensure_enabled.assert_not_called()
+
+    def test_generic_cleanup_deletes_other_switchover_restores_after_the_terminal_locator(
+        self, tmp_path, cleanup_secondary
+    ):
+        other = {"metadata": {"name": "restore-acm-passive-sync"}, "spec": {"syncRestoreWithNewBackups": True}}
+        cleanup_secondary.list_custom_resources_strict.return_value = StrictReadOutcome.from_items([other])
+        cleanup_secondary.get_custom_resource_strict.return_value = ABSENT
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_DONE), cleanup_secondary)
+
+        fin._enable_backup_schedule(CLEANUP_DONE)
+
+        assert cleanup_secondary.delete_custom_resource.call_args.kwargs["name"] == "restore-acm-passive-sync"
+        fin.backup_manager.ensure_enabled.assert_called_once()
+
+    def test_an_incomplete_restore_inventory_blocks_generic_cleanup(self, tmp_path, cleanup_secondary):
+        cleanup_secondary.list_custom_resources_strict.return_value = StrictReadOutcome.error("inventory_incomplete")
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_DONE), cleanup_secondary)
+
+        with pytest.raises(SwitchoverError, match="Restore inventory read failed"):
+            fin._enable_backup_schedule(CLEANUP_DONE)
+
+        cleanup_secondary.delete_custom_resource.assert_not_called()
+        fin.backup_manager.ensure_enabled.assert_not_called()
+
+    def test_the_transaction_runs_before_the_old_hub_mco_teardown(self, tmp_path, cleanup_secondary):
+        order = []
+        fin = _cleanup_fin(
+            _cleanup_state(tmp_path, CLEANUP_DONE),
+            cleanup_secondary,
+            primary_client=Mock(),
+            primary_has_observability=True,
+        )
+        with (
+            patch.object(fin, "_run_restore_cleanup_transaction", side_effect=lambda: order.append("cleanup")),
+            patch.object(fin, "_disable_observability_on_old_hub", side_effect=lambda: order.append("mco")),
+            patch.object(fin, "_enable_backup_schedule", side_effect=lambda journal: order.append("enable")),
+            patch.object(fin, "_verify_backup_schedule_enabled"),
+            patch.object(fin, "_fix_backup_schedule_collision"),
+            patch.object(fin, "_get_backup_verify_timeout", return_value=1),
+            patch.object(fin, "_verify_new_backups"),
+            patch.object(fin, "_verify_backup_integrity"),
+            patch.object(fin, "_verify_multiclusterhub_health"),
+            patch.object(fin, "_run_reset_auto_import_strategy_step"),
+            patch.object(fin, "_handle_old_hub"),
+            patch.object(fin, "_verify_old_hub_state"),
+        ):
+            assert fin.finalize() is True
+
+        assert order == ["cleanup", "mco", "enable"]

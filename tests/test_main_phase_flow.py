@@ -1092,6 +1092,39 @@ class TestObservabilityAcknowledgementCliPlumbing:
 
         assert finalization_class.call_args.kwargs["acknowledge_observability_not_migrated"] is True
 
+    def test_finalization_receives_the_validated_cleanup_repair_request(self):
+        """--repair-migration-cleanup reaches the Restore-cleanup transaction as the validated request."""
+        from argparse import Namespace
+
+        request = {
+            "actor": "operator@example.com",
+            "reason": "the Restore was removed out of band",
+            "inspected_evidence": ["audit-log:restore-delete"],
+            "run_id": "5b7c9a1e-3f2d-4c8b-9e6a-0d1f2a3b4c5d",
+            "operation_id": "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a",
+        }
+        args = Namespace(
+            method="full",
+            dry_run=False,
+            old_hub_action="secondary",
+            restore_only=False,
+            min_managed_clusters=1,
+            repair_migration_cleanup=True,
+            cleanup_repair_actor=request["actor"],
+            cleanup_repair_reason=request["reason"],
+            cleanup_repair_evidence=request["inspected_evidence"],
+            cleanup_repair_run_id=request["run_id"],
+            cleanup_repair_operation_id=request["operation_id"],
+        )
+        state = Mock()
+        state._get_config = Mock(side_effect=lambda key, default=None: default)
+
+        with patch("acm_switchover.Finalization") as finalization_class:
+            finalization_class.return_value.finalize.return_value = True
+            _run_phase_finalization(args, state, None, Mock(), Mock())
+
+        assert finalization_class.call_args.kwargs["migration_cleanup_repair"] == request
+
     def test_a_missing_attribute_falls_back_to_not_acknowledged(self):
         """The fallback for a destructive acknowledgement must be the safe direction."""
         from argparse import Namespace
