@@ -11,7 +11,6 @@ from collections.abc import Mapping
 from copy import deepcopy
 from datetime import datetime, timezone
 
-from ansible.module_utils.parsing.convert_bool import boolean
 from ansible.plugins.action import ActionBase
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
@@ -33,6 +32,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint i
     checkpoint_facts,
     checkpoint_structure_error,
     clear_argocd_repause_required,
+    coerce_bool,
     has_migration_backups,
     is_unsafe_legacy_checkpoint,
     normalize_operation_identity,
@@ -143,10 +143,7 @@ class ActionModule(ActionBase):
         execution = task_vars.get("acm_switchover_execution") or {}
         execution_mode = execution.get("mode", "dry_run") if isinstance(execution, Mapping) else "dry_run"
         # Templated booleans reach an action as strings on older ansible-core releases.
-        try:
-            argocd_repause = boolean(args.get("argocd_repause", False), strict=True)
-        except TypeError:
-            argocd_repause = None
+        argocd_repause = coerce_bool(args.get("argocd_repause", False))
         if argocd_repause is None or (argocd_repause and (status != "fail" or phase not in JOURNAL_RESCUE_PHASES)):
             return {
                 "failed": True,

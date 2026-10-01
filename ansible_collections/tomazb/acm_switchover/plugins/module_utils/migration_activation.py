@@ -123,13 +123,6 @@ class ActivationRefused(Exception):
     """The activation transaction refuses to continue. Fail with this message."""
 
 
-def mutation_kind(method: str, activation_method: str) -> str:
-    """The R4-04 mutation kind of an operator's activation choice."""
-    if method == "passive":
-        return "passive_restore" if activation_method == "restore" else "passive_patch"
-    return "full_restore"
-
-
 def _evidence(function: Callable, *args, **kwargs):
     """Call a pure evidence helper, turning its fail-closed refusal into ActivationRefused."""
     try:

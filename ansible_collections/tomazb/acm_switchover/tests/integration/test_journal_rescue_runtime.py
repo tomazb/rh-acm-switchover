@@ -91,7 +91,10 @@ def _first_index(requests, predicate):
 
 
 def _restore_read(request):
-    return request["path"].startswith("/apis/cluster.open-cluster-management.io")
+    """A read of the activation phase: its MultiClusterHub or Restore discovery and reads."""
+    return request["path"].startswith(
+        ("/apis/cluster.open-cluster-management.io", "/apis/operator.open-cluster-management.io")
+    )
 
 
 def test_an_activation_failure_under_a_journal_records_the_marker_then_resumes(run_distinct_hub_playbook):
@@ -142,7 +145,7 @@ def test_a_retry_repauses_both_hubs_before_any_phase_work_and_clears_the_marker(
         assert annotations["acm-switchover.argoproj.io/paused-by"] == RUN_ID
         # The rest of primary preparation (the BackupSchedule pause) is never replayed.
         assert not [request for request in requests if "backupschedules" in request["path"]]
-    # The re-pause precedes the activation phase's first Restore read.
+    # The re-pause precedes the activation phase's first read.
     requests = run.secondary_requests
     assert _first_index(requests, lambda r: r["method"] == "PATCH") < _first_index(requests, _restore_read)
 

@@ -172,7 +172,7 @@ _BOOL_TRUE_STRINGS = frozenset({"true", "yes", "on", "1"})
 _BOOL_FALSE_STRINGS = frozenset({"false", "no", "off", "0"})
 
 
-def _coerce_bool(value):
+def coerce_bool(value):
     """Return a real bool for bools and Ansible-stringified bools, else None."""
     if isinstance(value, bool):
         return value
@@ -225,14 +225,14 @@ def checkpoint_facts(checkpoint) -> dict:
         # hand-edited "banana" — degrades to False, never truthy: this flag
         # feeds finalization's legacy discharge branch, which deletes the
         # auto-import ConfigMap. The string forms exist because the ansible-core
-        # floor stringifies folded scalars (see _coerce_bool).
-        KEY_AUTO_IMPORT_STRATEGY_CHANGED: _coerce_bool(data.get(KEY_AUTO_IMPORT_STRATEGY_CHANGED, False)) is True,
+        # floor stringifies folded scalars (see coerce_bool).
+        KEY_AUTO_IMPORT_STRATEGY_CHANGED: coerce_bool(data.get(KEY_AUTO_IMPORT_STRATEGY_CHANGED, False)) is True,
         # None means never recorded; wrong-typed values degrade to None so the
         # roles' `is not none` guards treat them as never recorded.
         KEY_EXPECTED_MANAGED_CLUSTER_NAMES: names if isinstance(names, list) else None,
         KEY_EXPECTED_MANAGED_CLUSTER_COUNT: _coerce_count(count),
-        KEY_PRIMARY_HAS_OBSERVABILITY: _coerce_bool(primary_obs),
-        KEY_SECONDARY_HAS_OBSERVABILITY: _coerce_bool(secondary_obs),
+        KEY_PRIMARY_HAS_OBSERVABILITY: coerce_bool(primary_obs),
+        KEY_SECONDARY_HAS_OBSERVABILITY: coerce_bool(secondary_obs),
         KEY_SAVED_BACKUP_SCHEDULE: (saved_schedule if isinstance(saved_schedule, dict) else None),
         KEY_BACKUP_SCHEDULE_ENABLED_AT: data.get(KEY_BACKUP_SCHEDULE_ENABLED_AT) or "",
         KEY_RESUME_START_PHASE: resume_summary.get(KEY_RESUME_START_PHASE) or "",
