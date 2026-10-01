@@ -62,7 +62,7 @@ class Run:
 
 @pytest.fixture
 def run_post_activation(tmp_path):
-    def _run(hub, *, journal=COMPLETED, names=("cluster-a",), check=False, waiver=None, extra=None):
+    def _run(hub, *, journal=COMPLETED, names=("cluster-a",), check=False, waiver=None, extra=None, mode="execute"):
         checkpoint_path = tmp_path / "checkpoint.json"
         data = {"expected_managed_cluster_names": list(names), "expected_managed_cluster_count": len(names)}
         if journal is not None:
@@ -107,7 +107,7 @@ def run_post_activation(tmp_path):
             },
             "acm_switchover_operation": operation,
             "acm_switchover_execution": {
-                "mode": "execute",
+                "mode": mode,
                 "report_dir": str(tmp_path / "artifacts"),
                 "checkpoint": {"enabled": True, "backend": "file", "path": str(checkpoint_path)},
             },
@@ -257,3 +257,12 @@ def test_a_later_cleanup_failure_leaves_completion_absent(run_post_activation, h
     post = run.journal["post_activation"]
     assert post["names_verified_at"] and post["completed_at"] is None
     assert (run.checkpoint["phase"], run.checkpoint["phase_status"]) == ("post_activation", "fail")
+
+
+def test_a_direct_validate_entry_writes_nothing(run_post_activation, hub):
+    """Task 8 round-2 finding 1: validate previews like a dry run; the stale annotation stays."""
+    hub.annotated_clusters.add("cluster-a")
+    run = run_post_activation(hub, mode="validate")
+    assert run.completed.returncode == 0, run.output
+    assert hub.writes == []
+    assert run.after == run.before
