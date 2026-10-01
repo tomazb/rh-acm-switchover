@@ -4832,6 +4832,14 @@ def pncase(case_id, doc, readiness, waiver_record, expect):
 
 pncase("names-evidence-recorded", PA_DONE, READY, None, ok({"candidate": PA_NAMED, "write": True}))
 pncase("names-evidence-kept-on-resume", PA_POST, READY, None, ok({"candidate": PA_POST, "write": False}))
+case(
+    "names-evidence-kept-at-a-later-time",
+    ALL,
+    PN,
+    fn,
+    {"journal": PA_NAMED, "readiness": READY, "waiver": None, "now": T_REVALIDATED},
+    ok({"candidate": PA_NAMED, "write": False}),
+)
 pncase(
     "names-evidence-waiver-journaled",
     PA_DONE,
@@ -4882,6 +4890,14 @@ def pccase(case_id, doc, expect):
 
 pccase("completion-after-name-check", PA_NAMED, ok({"candidate": PA_NAMED_DONE, "write": True}))
 pccase("completion-kept-on-resume", PA_POST, ok({"candidate": PA_POST, "write": False}))
+case(
+    "completion-kept-at-a-later-time",
+    ALL,
+    PC,
+    fn,
+    {"journal": PA_POST, "now": T_REVALIDATED},
+    ok({"candidate": PA_POST, "write": False}),
+)
 pccase(
     "completion-under-post-activation-waiver",
     PA_WAIVED,

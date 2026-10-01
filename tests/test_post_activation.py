@@ -3039,7 +3039,8 @@ class TestPostActivationMigrationEvidence:
 
         assert _evidence_verifier(state, _strict_secondary("cluster-a", "cluster-c")).verify() is False
 
-        assert "expected_names_missing" in state.state["errors"][-1]["error"]
+        error = state.state["errors"][-1]["error"]
+        assert error.startswith("ManagedCluster readiness is not proven (expected_names_missing)")
         assert _stored_journal(tmp_path) == recorded
 
     def test_a_journal_write_failure_fails_the_phase(self, tmp_path):
