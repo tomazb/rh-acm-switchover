@@ -59,10 +59,12 @@
       operation). Refusing to skip managed-cluster verification: set
       acm_switchover_operation.min_managed_clusters explicitly, or re-run preflight to record the
       expectation.
+  # As preflight's skipped-checkpoint check: a preview performs no ManagedCluster check.
   when:
     - _acm_role_entry_phase in ['activation', 'post_activation']
     - acm_switchover_expected_managed_cluster_names is not defined
     - (acm_switchover_operation.min_managed_clusters | default(none)) is none
+    - acm_switchover_execution.mode | default('execute') == 'execute'
 
 - name: Refuse a ManagedCluster expectation waiver with no expected name to waive
   ansible.builtin.assert:
