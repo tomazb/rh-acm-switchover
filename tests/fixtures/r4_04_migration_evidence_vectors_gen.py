@@ -4927,6 +4927,543 @@ pccase("completion-pre-completion-blocks", PA_PRE, "restore_not_completed")
 pccase("completion-no-journal-blocks", None, "journal_required")
 
 
+# --- Restore-cleanup transaction (plan Task 10) -----------------------------------------------
+# J §1 cleanup invariants, §4a barrier, state machine, final pre-delete boundary, resume and
+# repair; A §6 projection; C §3.1 passive `latest` projection. Inputs are journals plus the
+# one strict live read (None for a proven 404) each step consumes.
+CL_POST = journal("full_restore", LEG, "post")
+CL_REVAL = journal("full_restore", LEG, "revalidated")
+CL_INTENT = journal("full_restore", LEG, "revalidated", "intent_persisted")
+CL_ACCEPTED = journal("full_restore", LEG, "revalidated", "delete_accepted")
+CL_DONE = journal("full_restore", LEG, "revalidated", "completed")
+CL_RECOVERY = journal("full_restore", LEG, "revalidated", "recovery_required")
+CL_RECOVERY_ACCEPTED = journal("full_restore", LEG, "revalidated", "recovery_required", accepted=True)
+CL_REPAIRED = journal("full_restore", LEG, "revalidated", "repaired")
+CL_PA_DONE = journal("full_restore", LEG, "completed")
+CL_REQUEST = {key: value for key, value in REPAIR.items() if key != "acknowledged_at"}
+CL_REPLACEMENT = "uid-replacement"
+CL_SPOTS = {
+    "barrier": "J:621-653",
+    "machine": "J:655-683",
+    "boundary": "J:685-731",
+    "resume": "J:733-765",
+    "repair": "J:766-791",
+    "states": "J:198-229",
+}
+
+
+def cl_tag(kind, contract):
+    return f"{kind.replace('_', '-')}-{'legacy' if contract == LEG else '2.17'}"
+
+
+def cl_refs(*spots):
+    return drefs(ALL, *(CL_SPOTS[spot] for spot in spots))
+
+
+def live_restore(kind, contract, uid=RUID, rv="2002", generation=4, spec=None, metadata=None):
+    """A strict live ACM Restore holding exactly the journaled owned projection."""
+    restore = journal(kind, contract, "post")["restore"]
+    if kind == "passive_patch":
+        owned = {MC_F: "latest", CREDS_F: "latest", RES_F: "latest", "syncRestoreWithNewBackups": True}
+    elif kind == "passive_restore":
+        owned = {MC_F: "latest", CREDS_F: "skip", RES_F: "skip"}
+    else:
+        owned = dict(restore["backup_fields"])
+    owned["cleanupBeforeRestore"] = "CleanupRestored"
+    owned.update(spec or {})
+    meta = {"name": R, "namespace": NS, "uid": uid, "resourceVersion": rv, "generation": generation}
+    meta.update(metadata or {})
+    return {"apiVersion": ACM_API, "kind": "Restore", "metadata": meta, "spec": owned}
+
+
+LIVE_FULL = live_restore("full_restore", LEG)
+LIVE_REPLACEMENT = live_restore("full_restore", LEG, uid=CL_REPLACEMENT, rv="3003")
+
+
+def recovered(doc, reason, now, observed=None):
+    out = mut(doc, cleanup__state="recovery_required")
+    out["cleanup"]["recovery"] = {
+        "required_at": now,
+        "reason_code": reason,
+        "observed_uid": observed[0] if observed else None,
+        "observed_resource_version": observed[1] if observed else None,
+    }
+    return out
+
+
+fn = "cleanup_schedule"
+case(
+    "cleanup-schedule-shared-bounds",
+    ALL,
+    cl_refs("boundary"),
+    fn,
+    {},
+    ok({"attempts": 4, "poll_delays": [0] + [5] * 60, "request_timeout": 30}),
+)
+
+fn = "cleanup_step"
+
+
+def stok(case_id, doc, step, repair_requested=False, spots=("resume",)):
+    inp = {"journal": doc, "repair_requested": repair_requested}
+    case(case_id, ALL, cl_refs(*spots), fn, inp, ok({"step": step}))
+
+
+def sterr(case_id, doc, code, repair_requested=False, spots=("resume",)):
+    inp = {"journal": doc, "repair_requested": repair_requested}
+    case(case_id, ALL, cl_refs(*spots), fn, inp, err(code))
+
+
+stok("cleanup-step-not-started-revalidates", CL_POST, "revalidate", spots=("barrier", "resume"))
+stok("cleanup-step-revalidated-timestamp-is-not-fresh-success", CL_REVAL, "revalidate", spots=("barrier", "resume"))
+stok("cleanup-step-intent-deletes", CL_INTENT, "delete")
+stok("cleanup-step-delete-accepted-retries-the-delete", CL_ACCEPTED, "delete")
+stok("cleanup-step-completed-is-terminal", CL_DONE, "terminal")
+stok("cleanup-step-repaired-is-terminal", CL_REPAIRED, "terminal")
+stok("cleanup-step-recovery-with-repair-request", CL_RECOVERY, "repair", True, ("repair",))
+sterr("cleanup-step-recovery-blocks", CL_RECOVERY, "cleanup_recovery_required")
+sterr("cleanup-step-recovery-after-accepted-delete-blocks", CL_RECOVERY_ACCEPTED, "cleanup_recovery_required")
+sterr("cleanup-step-repair-request-on-completed-refused", CL_DONE, "repair_not_permitted", True, ("repair",))
+sterr("cleanup-step-repair-request-on-repaired-refused", CL_REPAIRED, "repair_not_permitted", True, ("repair",))
+sterr("cleanup-step-repair-request-on-not-started-refused", CL_POST, "repair_not_permitted", True, ("repair",))
+sterr("cleanup-step-repair-request-on-intent-refused", CL_INTENT, "repair_not_permitted", True, ("repair",))
+sterr("cleanup-step-no-journal-blocks", None, "journal_required")
+sterr("cleanup-step-pre-completion-blocks", PA_PRE, "restore_not_completed")
+sterr("cleanup-step-post-activation-incomplete-blocks", CL_PA_DONE, "post_activation_not_completed")
+sterr("cleanup-step-invalid-journal-blocks", mut(CL_INTENT, cleanup__intent_at=None), "invalid_cleanup_state")
+sterr("cleanup-step-repair-flag-malformed", CL_RECOVERY, "malformed_cleanup_input", "yes")
+
+fn = "teardown_revalidated"
+TR = cl_refs("barrier")
+case(
+    "teardown-revalidated-recorded-once",
+    ALL,
+    TR,
+    fn,
+    {"journal": CL_POST, "now": T_REVALIDATED},
+    ok({"candidate": CL_REVAL, "write": True}),
+)
+case(
+    "teardown-revalidated-kept-on-a-later-pass",
+    ALL,
+    TR,
+    fn,
+    {"journal": CL_REVAL, "now": T_INTENT},
+    ok({"candidate": CL_REVAL, "write": False}),
+)
+case(
+    "teardown-revalidated-after-intent-refused",
+    ALL,
+    TR,
+    fn,
+    {"journal": CL_INTENT, "now": T_REVALIDATED},
+    err("cleanup_state_mismatch"),
+)
+case(
+    "teardown-revalidated-before-post-activation-blocks",
+    ALL,
+    TR,
+    fn,
+    {"journal": CL_PA_DONE, "now": T_REVALIDATED},
+    err("post_activation_not_completed"),
+)
+
+fn = "cleanup_intent"
+CI = cl_refs("machine", "states")
+for kind, contract in KINDS:
+    case(
+        f"cleanup-intent-copies-the-restore-{cl_tag(kind, contract)}",
+        JLANES[contract],
+        drefs(JLANES[contract], CL_SPOTS["machine"], CL_SPOTS["states"]),
+        fn,
+        {"journal": journal(kind, contract, "revalidated"), "operation_id": JOP, "now": T_INTENT},
+        ok({"candidate": journal(kind, contract, "revalidated", "intent_persisted")}),
+    )
+case(
+    "cleanup-intent-without-teardown-revalidation-blocks",
+    ALL,
+    CI,
+    fn,
+    {"journal": CL_POST, "operation_id": JOP, "now": T_INTENT},
+    err("teardown_not_revalidated"),
+)
+case(
+    "cleanup-intent-never-minted-twice",
+    ALL,
+    CI,
+    fn,
+    {"journal": CL_INTENT, "operation_id": OTHER_UUID, "now": T_INTENT},
+    err("cleanup_state_mismatch"),
+)
+case(
+    "cleanup-intent-operation-id-not-a-uuid",
+    ALL,
+    CI,
+    fn,
+    {"journal": CL_REVAL, "operation_id": "op-1", "now": T_INTENT},
+    err("malformed_cleanup"),
+)
+case(
+    "cleanup-intent-malformed-time",
+    ALL,
+    CI,
+    fn,
+    {"journal": CL_REVAL, "operation_id": JOP, "now": "soon"},
+    err("malformed_cleanup"),
+)
+
+fn = "pre_delete"
+PD = cl_refs("boundary", "resume")
+
+
+def pdcase(case_id, doc, live, expect, lanes=ALL):
+    inp = {"journal": doc, "live": live, "now": T_RECOVERY}
+    case(case_id, lanes, drefs(lanes, CL_SPOTS["boundary"], CL_SPOTS["resume"]), fn, inp, expect)
+
+
+DELETE_DECISION = ok({"action": "delete", "uid": RUID, "resource_version": "2002"})
+for kind, contract in KINDS:
+    pdcase(
+        f"pre-delete-binds-the-journaled-restore-{cl_tag(kind, contract)}",
+        journal(kind, contract, "revalidated", "intent_persisted"),
+        live_restore(kind, contract),
+        DELETE_DECISION,
+        JLANES[contract],
+    )
+pdcase("pre-delete-retries-from-delete-accepted", CL_ACCEPTED, LIVE_FULL, DELETE_DECISION)
+pdcase(
+    "pre-delete-status-only-change-binds-the-new-resource-version",
+    CL_INTENT,
+    live_restore("full_restore", LEG, rv="2009"),
+    ok({"action": "delete", "uid": RUID, "resource_version": "2009"}),
+)
+pdcase(
+    "pre-delete-absent-without-completion-recovers",
+    CL_INTENT,
+    None,
+    ok({"action": "recover", "candidate": recovered(CL_INTENT, "absent_without_completion", T_RECOVERY)}),
+)
+pdcase(
+    "pre-delete-absent-after-accepted-delete-recovers",
+    CL_ACCEPTED,
+    None,
+    ok({"action": "recover", "candidate": recovered(CL_ACCEPTED, "absent_without_completion", T_RECOVERY)}),
+)
+pdcase(
+    "pre-delete-replacement-recovers-and-is-kept",
+    CL_INTENT,
+    LIVE_REPLACEMENT,
+    ok(
+        {
+            "action": "recover",
+            "candidate": recovered(CL_INTENT, "replacement_uid", T_RECOVERY, (CL_REPLACEMENT, "3003")),
+        }
+    ),
+)
+pdcase(
+    "pre-delete-replacement-after-accepted-delete-recovers",
+    CL_ACCEPTED,
+    LIVE_REPLACEMENT,
+    ok(
+        {
+            "action": "recover",
+            "candidate": recovered(CL_ACCEPTED, "replacement_uid", T_RECOVERY, (CL_REPLACEMENT, "3003")),
+        }
+    ),
+)
+pdcase(
+    "pre-delete-replacement-without-resource-version-blocks",
+    CL_INTENT,
+    mut(LIVE_REPLACEMENT, metadata__resourceVersion=DELETE),
+    err("malformed_restore_read"),
+)
+pdcase("pre-delete-missing-uid-blocks", CL_INTENT, mut(LIVE_FULL, metadata__uid=""), err("malformed_restore_read"))
+pdcase(
+    "pre-delete-metadata-not-an-object-blocks", CL_INTENT, mut(LIVE_FULL, metadata=[]), err("malformed_restore_read")
+)
+pdcase("pre-delete-spec-not-an-object-blocks", CL_INTENT, mut(LIVE_FULL, spec=None), err("malformed_restore_read"))
+pdcase("pre-delete-live-not-an-object-blocks", CL_INTENT, ["restore"], err("malformed_restore_read"))
+pdcase(
+    "pre-delete-locator-mismatch-blocks",
+    CL_INTENT,
+    mut(LIVE_FULL, metadata__namespace="default"),
+    err("restore_locator_mismatch"),
+)
+pdcase(
+    "pre-delete-generation-drift-blocks",
+    CL_INTENT,
+    live_restore("full_restore", LEG, generation=5),
+    err("restore_spec_drift"),
+)
+pdcase(
+    "pre-delete-boolean-generation-blocks",
+    CL_INTENT,
+    mut(LIVE_FULL, metadata__generation=True),
+    err("restore_spec_drift"),
+)
+pdcase(
+    "pre-delete-backup-field-drift-blocks",
+    CL_INTENT,
+    live_restore("full_restore", LEG, spec={RES_F: RES_B + "-other"}),
+    err("restore_spec_drift"),
+)
+pdcase(
+    "pre-delete-latest-alias-on-a-concrete-field-blocks",
+    CL_INTENT,
+    live_restore("full_restore", LEG, spec={CREDS_F: "latest"}),
+    err("restore_spec_drift"),
+)
+pdcase(
+    "pre-delete-cleanup-policy-drift-blocks",
+    CL_INTENT,
+    live_restore("full_restore", LEG, spec={"cleanupBeforeRestore": "None"}),
+    err("restore_spec_drift"),
+)
+pdcase(
+    "pre-delete-passive-patch-uppercase-latest-blocks",
+    journal("passive_patch", LEG, "revalidated", "intent_persisted"),
+    live_restore("passive_patch", LEG, spec={MC_F: "Latest"}),
+    err("restore_spec_drift"),
+    LEGACY,
+)
+pdcase(
+    "pre-delete-passive-restore-skip-field-touched-blocks",
+    journal("passive_restore", LEG, "revalidated", "intent_persisted"),
+    live_restore("passive_restore", LEG, spec={CREDS_F: "latest"}),
+    err("restore_spec_drift"),
+    LEGACY,
+)
+pdcase(
+    "pre-delete-passive-restore-skip-field-dropped-blocks",
+    journal("passive_restore", LEG, "revalidated", "intent_persisted"),
+    mut(live_restore("passive_restore", LEG), spec__veleroResourcesBackupName=DELETE),
+    err("restore_spec_drift"),
+    LEGACY,
+)
+pdcase("pre-delete-before-intent-refused", CL_REVAL, LIVE_FULL, err("cleanup_state_mismatch"))
+pdcase("pre-delete-after-completion-refused", CL_DONE, LIVE_FULL, err("cleanup_state_mismatch"))
+pdcase("pre-delete-under-recovery-refused", CL_RECOVERY, None, err("cleanup_state_mismatch"))
+
+fn = "delete_outcome"
+ACCEPTED_RESULT = {"accepted": True, "reason": "ok", "uid": RUID, "resource_version": "2002"}
+
+
+def docase(case_id, doc, result, expect, attempt=1, resource_version="2002", now=T_ACCEPTED):
+    inp = {"journal": doc, "result": result, "resource_version": resource_version, "attempt": attempt, "now": now}
+    case(case_id, ALL, cl_refs("machine", "boundary"), fn, inp, expect)
+
+
+docase(
+    "delete-accepted-records-the-audit-pair",
+    CL_INTENT,
+    ACCEPTED_RESULT,
+    ok({"outcome": "accepted", "candidate": CL_ACCEPTED}),
+)
+docase(
+    "delete-accepted-again-rewrites-only-the-audit-pair",
+    CL_ACCEPTED,
+    dict(ACCEPTED_RESULT, resource_version="2005"),
+    ok(
+        {
+            "outcome": "accepted",
+            "candidate": mut(
+                CL_ACCEPTED, cleanup__final_get_resource_version="2005", cleanup__delete_accepted_at=T_ABSENT
+            ),
+        }
+    ),
+    resource_version="2005",
+    now=T_ABSENT,
+)
+docase(
+    "delete-conflict-retries-the-full-validation",
+    CL_INTENT,
+    {"accepted": False, "reason": "precondition_failed"},
+    ok({"outcome": "retry"}),
+)
+docase(
+    "delete-conflict-on-the-last-retry-retries",
+    CL_INTENT,
+    {"accepted": False, "reason": "precondition_failed"},
+    ok({"outcome": "retry"}),
+    attempt=3,
+)
+docase(
+    "delete-conflict-retries-exhausted-blocks",
+    CL_INTENT,
+    {"accepted": False, "reason": "precondition_failed"},
+    err("cleanup_conflict_retries_exhausted"),
+    attempt=4,
+)
+docase(
+    "delete-not-found-rereads-the-locator",
+    CL_ACCEPTED,
+    {"accepted": False, "reason": "not_found"},
+    ok({"outcome": "retry"}),
+)
+docase(
+    "delete-unverifiable-is-not-accepted",
+    CL_INTENT,
+    {"accepted": False, "reason": "unverifiable"},
+    err("delete_not_accepted"),
+)
+docase(
+    "delete-http-accepted-but-unverified-is-not-accepted",
+    CL_INTENT,
+    {"accepted": False, "http_accepted": True, "reason": "malformed_response"},
+    err("delete_not_accepted"),
+)
+docase(
+    "delete-accepted-flag-without-ok-reason-is-not-accepted",
+    CL_INTENT,
+    {"accepted": True, "reason": "predicted"},
+    err("delete_not_accepted"),
+)
+docase("delete-result-not-an-object", CL_INTENT, "ok", err("delete_not_accepted"))
+docase(
+    "delete-accepted-for-another-uid-blocks",
+    CL_INTENT,
+    dict(ACCEPTED_RESULT, uid=CL_REPLACEMENT),
+    err("malformed_delete_result"),
+)
+docase(
+    "delete-accepted-for-another-resource-version-blocks",
+    CL_INTENT,
+    dict(ACCEPTED_RESULT, resource_version="2001"),
+    err("malformed_delete_result"),
+)
+docase("delete-attempt-zero-malformed", CL_INTENT, ACCEPTED_RESULT, err("malformed_cleanup_input"), attempt=0)
+docase("delete-attempt-boolean-malformed", CL_INTENT, ACCEPTED_RESULT, err("malformed_cleanup_input"), attempt=True)
+docase("delete-after-completion-refused", CL_DONE, ACCEPTED_RESULT, err("cleanup_state_mismatch"))
+
+fn = "absence_poll"
+
+
+def apcase(case_id, doc, live, expect):
+    case(case_id, ALL, cl_refs("boundary"), fn, {"journal": doc, "live": live, "now": T_RECOVERY}, expect)
+
+
+apcase("absence-poll-same-uid-pending", CL_ACCEPTED, LIVE_FULL, ok({"state": "pending"}))
+apcase("absence-poll-first-absence", CL_ACCEPTED, None, ok({"state": "absent"}))
+apcase(
+    "absence-poll-replacement-recovers",
+    CL_ACCEPTED,
+    LIVE_REPLACEMENT,
+    ok(
+        {
+            "state": "recover",
+            "candidate": recovered(CL_ACCEPTED, "replacement_during_poll", T_RECOVERY, (CL_REPLACEMENT, "3003")),
+        }
+    ),
+)
+apcase(
+    "absence-poll-malformed-read-blocks", CL_ACCEPTED, mut(LIVE_FULL, metadata__uid=None), err("malformed_restore_read")
+)
+apcase("absence-poll-before-accepted-delete-refused", CL_INTENT, None, err("cleanup_state_mismatch"))
+
+fn = "final_absence"
+
+
+def facase(case_id, doc, live, expect):
+    case(case_id, ALL, cl_refs("boundary", "machine"), fn, {"journal": doc, "live": live, "now": T_ABSENT}, expect)
+
+
+facase("final-absence-completes-the-cleanup", CL_ACCEPTED, None, ok({"state": "completed", "candidate": CL_DONE}))
+facase(
+    "final-absence-replacement-recovers",
+    CL_ACCEPTED,
+    LIVE_REPLACEMENT,
+    ok(
+        {
+            "state": "recover",
+            "candidate": recovered(CL_ACCEPTED, "replacement_during_poll", T_ABSENT, (CL_REPLACEMENT, "3003")),
+        }
+    ),
+)
+facase("final-absence-same-uid-not-confirmed", CL_ACCEPTED, LIVE_FULL, err("absence_not_confirmed"))
+facase(
+    "final-absence-malformed-read-blocks", CL_ACCEPTED, mut(LIVE_FULL, metadata__uid=7), err("malformed_restore_read")
+)
+facase("final-absence-before-accepted-delete-refused", CL_INTENT, None, err("cleanup_state_mismatch"))
+facase("final-absence-after-completion-refused", CL_DONE, None, err("cleanup_state_mismatch"))
+
+fn = "repair_cleanup"
+
+
+def rpcase(case_id, doc, request, live, expect):
+    inp = {"journal": doc, "request": request, "live": live, "now": T_REPAIR}
+    case(case_id, ALL, cl_refs("repair"), fn, inp, expect)
+
+
+rpcase("repair-acknowledges-the-recovery", CL_RECOVERY, CL_REQUEST, None, ok({"candidate": CL_REPAIRED}))
+rpcase(
+    "repair-keeps-the-accepted-delete-evidence",
+    CL_RECOVERY_ACCEPTED,
+    CL_REQUEST,
+    None,
+    ok({"candidate": journal("full_restore", LEG, "revalidated", "repaired", accepted=True)}),
+)
+rpcase("repair-live-locator-refused", CL_RECOVERY, CL_REQUEST, LIVE_REPLACEMENT, err("repair_locator_occupied"))
+rpcase("repair-live-journaled-restore-refused", CL_RECOVERY, CL_REQUEST, LIVE_FULL, err("repair_locator_occupied"))
+rpcase(
+    "repair-other-run-refused", CL_RECOVERY, dict(CL_REQUEST, run_id=OTHER_UUID), None, err("repair_identity_mismatch")
+)
+rpcase(
+    "repair-other-operation-refused",
+    CL_RECOVERY,
+    dict(CL_REQUEST, operation_id=OTHER_UUID),
+    None,
+    err("repair_identity_mismatch"),
+)
+rpcase("repair-empty-actor-refused", CL_RECOVERY, dict(CL_REQUEST, actor=""), None, err("malformed_repair"))
+rpcase(
+    "repair-no-evidence-refused", CL_RECOVERY, dict(CL_REQUEST, inspected_evidence=[]), None, err("malformed_repair")
+)
+rpcase("repair-request-carrying-a-time-refused", CL_RECOVERY, REPAIR, None, err("malformed_repair"))
+rpcase("repair-on-completed-refused", CL_DONE, CL_REQUEST, None, err("repair_not_permitted"))
+rpcase("repair-on-intent-refused", CL_INTENT, CL_REQUEST, None, err("repair_not_permitted"))
+rpcase("repair-malformed-live-read-refused", CL_RECOVERY, CL_REQUEST, ["restore"], err("malformed_restore_read"))
+
+fn = "require_locator_absent"
+
+
+def lacase(case_id, doc, live, expect):
+    case(case_id, ALL, cl_refs("resume", "repair"), fn, {"journal": doc, "live": live}, expect)
+
+
+lacase("locator-absent-after-completion", CL_DONE, None, ok({}))
+lacase("locator-absent-after-repair", CL_REPAIRED, None, ok({}))
+lacase("locator-replacement-after-completion-blocks", CL_DONE, LIVE_REPLACEMENT, err("locator_occupied"))
+lacase("locator-replacement-after-repair-blocks", CL_REPAIRED, LIVE_REPLACEMENT, err("locator_occupied"))
+lacase("locator-malformed-read-blocks", CL_DONE, ["restore"], err("malformed_restore_read"))
+lacase("locator-gate-under-recovery-blocks", CL_RECOVERY, None, err("cleanup_not_terminal"))
+lacase("locator-gate-before-completion-blocks", CL_ACCEPTED, None, err("cleanup_not_terminal"))
+lacase("locator-gate-before-intent-blocks", CL_REVAL, None, err("cleanup_not_terminal"))
+lacase("locator-gate-without-journal-blocks", None, None, err("journal_required"))
+
+fn = "generic_cleanup_restores"
+OTHER_RESTORES = [
+    {"metadata": {"name": "restore-acm-passive-sync", "namespace": NS}, "spec": {"syncRestoreWithNewBackups": True}},
+    {"metadata": {"name": "restore-acm-full", "namespace": NS}, "spec": {}},
+]
+
+
+def gccase(case_id, doc, restores, expect):
+    case(case_id, ALL, cl_refs("boundary"), fn, {"journal": doc, "restores": restores}, expect)
+
+
+gccase("generic-cleanup-after-completion-keeps-the-others", CL_DONE, OTHER_RESTORES, ok({"restores": OTHER_RESTORES}))
+gccase("generic-cleanup-after-repair-keeps-the-others", CL_REPAIRED, [], ok({"restores": []}))
+gccase(
+    "generic-cleanup-never-routes-the-journaled-locator",
+    CL_DONE,
+    OTHER_RESTORES + [LIVE_REPLACEMENT],
+    err("locator_occupied"),
+)
+gccase("generic-cleanup-before-terminal-blocks", CL_ACCEPTED, OTHER_RESTORES, err("cleanup_not_terminal"))
+gccase("generic-cleanup-unnamed-restore-blocks", CL_DONE, [{"metadata": {}}], err("malformed_inventory"))
+gccase("generic-cleanup-inventory-not-a-list", CL_DONE, {"items": []}, err("malformed_inventory"))
+
+
 def build():
     """Return the fixture text: a readable header, then one compact case per line."""
     for c in cases:

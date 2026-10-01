@@ -27,6 +27,19 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_ch
     require_no_credential_variant_children,
     validate_velero_child,
 )
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_cleanup import (
+    absence_poll,
+    cleanup_intent,
+    cleanup_schedule,
+    cleanup_step,
+    delete_outcome,
+    final_absence,
+    generic_cleanup_restores,
+    pre_delete,
+    repair_cleanup,
+    require_locator_absent,
+    teardown_revalidated,
+)
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_evidence import (
     ACM_MINOR_CONTRACTS,
     SCHEDULE_TOKENS,
@@ -108,6 +121,17 @@ FUNCTIONS: Dict[str, Callable[..., Any]] = {
     "post_activation_waiver": post_activation_waiver,
     "require_completed_restore": require_completed_restore,
     "require_post_activation_completed": require_post_activation_completed,
+    "absence_poll": absence_poll,
+    "cleanup_intent": cleanup_intent,
+    "cleanup_schedule": cleanup_schedule,
+    "cleanup_step": cleanup_step,
+    "delete_outcome": delete_outcome,
+    "final_absence": final_absence,
+    "generic_cleanup_restores": generic_cleanup_restores,
+    "pre_delete": pre_delete,
+    "repair_cleanup": repair_cleanup,
+    "require_locator_absent": require_locator_absent,
+    "teardown_revalidated": teardown_revalidated,
 }
 NS = "open-cluster-management-backup"
 

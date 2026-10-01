@@ -1,7 +1,8 @@
-"""Parity contract: R4-04 migration-evidence pure model (plan Tasks 2 and 9).
+"""Parity contract: R4-04 migration-evidence pure model (plan Tasks 2, 9 and 10).
 
 lib/migration_evidence.py, lib/migration_child_evidence.py,
-lib/migration_journal.py and lib/migration_post_activation.py share no runtime
+lib/migration_journal.py, lib/migration_post_activation.py and
+lib/migration_cleanup.py share no runtime
 code with their collection mirrors in module_utils, so equality is proven here,
 executably: every shared vector is fed to both form factors and must produce the
 same result or the same error code.
@@ -14,10 +15,12 @@ from pathlib import Path
 import pytest
 
 import lib.migration_child_evidence as py_child
+import lib.migration_cleanup as py_cleanup
 import lib.migration_evidence as py_evidence
 import lib.migration_journal as py_journal
 import lib.migration_post_activation as py_post
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils import migration_child_evidence as col_child
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils import migration_cleanup as col_cleanup
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils import migration_evidence as col_evidence
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils import migration_journal as col_journal
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils import migration_post_activation as col_post
@@ -26,8 +29,8 @@ FIXTURE_PATH = Path(__file__).parent / "fixtures" / "r4_04_migration_evidence_ve
 GENERATOR_PATH = Path(__file__).parent / "fixtures" / "r4_04_migration_evidence_vectors_gen.py"
 FIXTURE = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 CASES = FIXTURE["cases"]
-PYTHON = (py_evidence, py_child, py_journal, py_post)
-COLLECTION = (col_evidence, col_child, col_journal, col_post)
+PYTHON = (py_evidence, py_child, py_journal, py_post, py_cleanup)
+COLLECTION = (col_evidence, col_child, col_journal, col_post, col_cleanup)
 
 
 def _public_functions(module):
@@ -91,6 +94,8 @@ def test_child_and_journal_modules_raise_the_base_error_class():
     assert col_journal.MigrationEvidenceError is col_evidence.MigrationEvidenceError
     assert py_post.MigrationEvidenceError is py_evidence.MigrationEvidenceError
     assert col_post.MigrationEvidenceError is col_evidence.MigrationEvidenceError
+    assert py_cleanup.MigrationEvidenceError is py_evidence.MigrationEvidenceError
+    assert col_cleanup.MigrationEvidenceError is col_evidence.MigrationEvidenceError
 
 
 @pytest.mark.parametrize("form_factor", [PYTHON, COLLECTION], ids=["python", "collection"])

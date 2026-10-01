@@ -134,6 +134,12 @@ GATE_REASON_SOURCE_UNVERIFIABLE = "source_observability_unverifiable"
 GATE_REASON_SOURCE_AMBIGUOUS = "source_observability_ambiguous"
 GATE_REASON_ACK_NOT_APPLICABLE = "acknowledgement_not_applicable"
 
+# R4-04 Restore-cleanup transaction (July design section 4a); mirrors lib/constants.py.
+RESTORE_CLEANUP_CONFLICT_RETRY_LIMIT = 3
+RESTORE_CLEANUP_POLL_TIMEOUT = 300
+RESTORE_CLEANUP_POLL_INTERVAL = 5
+RESTORE_CLEANUP_REQUEST_TIMEOUT = 30
+
 # R4-03 strict-read bounds
 STRICT_READ_PAGE_LIMIT = 500
 STRICT_READ_MAX_PAGES = 100
