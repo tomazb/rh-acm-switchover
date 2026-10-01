@@ -434,3 +434,11 @@ def test_a_non_candidate_operation_register_is_refused(tmp_path):
     path = tmp_path / "tasks.yml"
     path.write_text(_ALLOWED_WRITER.replace("operation: freeze", "operation: acm_minor"), encoding="utf-8")
     assert yaml_journal_key_offenders([path])
+
+
+def test_a_registration_inside_play_vars_alone_is_not_a_candidate(tmp_path):
+    """Review finding 5: the forged value comes from outside the file; only the register is in data."""
+    path = tmp_path / "play.yml"
+    path.write_text(_FORGED_IN_PLAY_VARS.replace("    forged:\n      candidate: {}\n", ""), encoding="utf-8")
+    assert "forged:\n      candidate" not in path.read_text(encoding="utf-8")
+    assert yaml_journal_key_offenders([path])

@@ -280,3 +280,29 @@ def test_a_visible_marker_whose_write_was_not_acknowledged_resumes_nothing(run_d
     assert run.checkpoint["operational_data"]["argocd_repause_required"]["failed_phase"] == "activation"
     assert run.primary_patches == [] and run.secondary_patches == []
     assert "Argo CD resume-on-failure refused" in output
+
+
+def test_a_journal_free_restore_only_identity_failure_never_resumes_applications(run_distinct_hub_playbook):
+    """Review finding 2 without a journal: only the playbook structure keeps the journal-free
+    resume (and its ignore_errors) away from a hub whose identity failed."""
+    checkpoint = _checkpoint()
+    checkpoint["operation_identity"].update(
+        primary_context="",
+        primary_cluster_uid="",
+        secondary_cluster_uid="RECORDED-SECONDARY",
+        method="full",
+        restore_only=True,
+        old_hub_action="none",
+    )
+    checkpoint["completed_phases"] = ["preflight"]
+    run = run_distinct_hub_playbook(
+        restore_only=True,
+        secondary_applications=[_paused("secondary-owned")],
+        checkpoint_record=checkpoint,
+        variables=_variables(),
+    )
+    output = _output(run)
+
+    assert run.completed.returncode != 0
+    assert "Checkpoint operation identity does not match the current execution" in output
+    assert run.secondary_patches == [] and _writes(run.secondary_requests) == []
