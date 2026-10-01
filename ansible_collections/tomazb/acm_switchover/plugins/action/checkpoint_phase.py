@@ -51,8 +51,19 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation i
     validate_report_artifact_path,
 )
 
-# The PID-keyed fact that fences an applied reset_from for the rest of the invocation.
+# The fact that fences an applied reset_from for the rest of the invocation.
 REWIND_FENCE_FACT = "_acm_switchover_rewind_consumed"
+
+
+def invocation_id() -> str:
+    """The ansible-playbook process this action runs under.
+
+    Action plugins execute in a task worker forked from the playbook process for every
+    task, so the worker's own PID changes between tasks while its parent's stays fixed
+    for the whole invocation. A stale fact from a persistent fact cache names another
+    process and fences nothing.
+    """
+    return str(os.getppid())
 
 
 def build_phase_transition(checkpoint: dict, phase: str, status: str) -> dict:
@@ -751,7 +762,7 @@ class ActionModule(ActionBase):
         # the run, but it is applied once per invocation. After the first enter carrying it
         # has been applied and persisted, later enters of the same process treat it as
         # absent, so a phase this run completed is never pruned again.
-        rewind_fence = f"{os.getpid()}:{reset_from}" if reset_from else None
+        rewind_fence = f"{invocation_id()}:{path}:{reset_from}" if reset_from else None
         if status == "enter" and rewind_fence and task_vars.get(REWIND_FENCE_FACT) == rewind_fence:
             reset_from = None
             rewind_fence = None

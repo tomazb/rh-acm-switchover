@@ -378,3 +378,29 @@ def test_enter_publishes_the_strict_journal_outcome_and_only_a_valid_journal(tmp
     facts = _enter_action(path).run(task_vars=_task_vars_with_operation_identity())["facts"]
     assert facts["migration_journal_outcome"] == outcome
     assert facts["migration_journal"] == (_first_journal() if journal == "valid" else None)
+
+
+def test_the_fence_survives_a_new_task_worker_for_every_task(tmp_path, monkeypatch):
+    """Review finding 4: each task runs in a fresh worker; only the playbook process is stable."""
+    import itertools
+
+    from ansible_collections.tomazb.acm_switchover.plugins.action import checkpoint_phase
+
+    pids = itertools.count(5000)
+    monkeypatch.setattr(checkpoint_phase.os, "getpid", lambda: next(pids))
+    monkeypatch.setattr(checkpoint_phase.os, "getppid", lambda: 4242)
+    path = _write_phase_checkpoint(
+        tmp_path, phase="activation", completed=("preflight", "primary_prep", "activation"), data={}
+    )
+    results, task_vars = _run_invocation(
+        path,
+        [
+            ("preflight", "enter", {}),
+            ("primary_prep", "enter", {}),
+            ("primary_prep", "pass", {}),
+            ("activation", "enter", {}),
+        ],
+    )
+    assert all(result.get("failed") is not True for result in results), results[-1]
+    assert task_vars[REWIND_FENCE_FACT] == f"4242:{path}:primary_prep"
+    assert _stored(path)["completed_phases"] == ["preflight", "primary_prep"]

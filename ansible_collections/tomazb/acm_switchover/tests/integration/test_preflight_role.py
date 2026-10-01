@@ -692,3 +692,27 @@ def test_argocd_discovery_success_preserves_facts_without_changed_reporting(
     assert completed.returncode == 0, output
     assert "DISCOVERY_STATUS=ok COUNT=1" in output
     assert "changed=0" in output
+
+
+def test_preflight_requires_the_sync_flag_even_with_the_conventional_fallback(
+    run_preflight_fixture,
+    fixture_kubernetes_api_server,
+):
+    """Review finding 6: activation discovers only syncRestoreWithNewBackups: true Restores,
+    as the Python preflight requires, so preflight refuses a conventionally named one."""
+    completed, report = run_preflight_fixture(
+        "passive_success.yml",
+        overrides={
+            "acm_switchover_test_overrides": {"fixture_kubeconfig_server": fixture_kubernetes_api_server},
+            "acm_switchover_operation": {"allow_conventional_passive_restore_fallback": True},
+            "acm_secondary_restore_info": {
+                "resources": [
+                    {"metadata": {"name": "restore-acm-passive-sync"}, "spec": {}, "status": {"phase": "Enabled"}}
+                ]
+            },
+        },
+    )
+    assert completed.returncode != 0
+    (result,) = [item for item in report["results"] if item["id"] == "preflight-passive-restore-secondary"]
+    assert result["status"] == "fail"
+    assert result["message"] == "secondary hub has no sync-enabled passive restore"
