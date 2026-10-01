@@ -1,33 +1,40 @@
 ---
-# One poll of the post-activation ManagedCluster readiness wait. Included in a bounded loop;
-# a failed strict read refuses at once, a not-ready decision keeps polling.
+# One poll of the post-activation ManagedCluster readiness wait, included in a bounded loop.
+# Ansible decides an include loop's `when` for every item before any included task runs, so
+# each poll guards itself at execution time: once a decision is ready the remaining polls do
+# nothing. The accepted decision and its strict read live in facts a skipped poll never
+# overwrites. A failed strict read refuses at once; a not-ready decision keeps polling.
 
-- name: Wait before re-reading the ManagedClusters
-  ansible.builtin.pause:
-    seconds: "{{ _acm_poll_delay }}"
-  when: _acm_poll_delay | int > 0
+- name: Poll the ManagedCluster readiness until it is proven
+  when: _acm_mc_readiness_state != 'ready'
+  block:
+    - name: Wait before re-reading the ManagedClusters
+      ansible.builtin.pause:
+        seconds: "{{ _acm_poll_delay }}"
+      when: _acm_poll_delay | int > 0
 
-- name: Read the ManagedCluster inventory strictly
-  ansible.builtin.include_tasks: "{{ role_path }}/../activation/tasks/strict_read.yml"
-  vars:
-    _acm_read:
-      key: managedclusters
-      read_mode: list
-      api_version: cluster.open-cluster-management.io/v1
-      kind: ManagedCluster
-      resource_name: managedclusters
-    _acm_read_fact: _acm_mc_readiness_read
+    - name: Read the ManagedCluster inventory strictly
+      ansible.builtin.include_tasks: "{{ role_path }}/../activation/tasks/strict_read.yml"
+      vars:
+        _acm_read:
+          key: managedclusters
+          read_mode: list
+          api_version: cluster.open-cluster-management.io/v1
+          kind: ManagedCluster
+          resource_name: managedclusters
+        _acm_read_fact: _acm_mc_readiness_read
 
-- name: Decide the ManagedCluster readiness
-  tomazb.acm_switchover.acm_migration_evidence:
-    operation: managed_cluster_readiness
-    inputs:
-      mc_read: "{{ _acm_mc_readiness_read }}"
-      expected_names: "{{ _acm_post_activation_expected_managed_cluster_names | default([]) }}"
-      min_managed_clusters: "{{ _acm_post_activation_min_managed_clusters | int }}"
-      names_waived: "{{ _acm_names_waived | default(false) | bool }}"
-  register: _acm_mc_readiness
+    - name: Decide the ManagedCluster readiness
+      tomazb.acm_switchover.acm_migration_evidence:
+        operation: managed_cluster_readiness
+        inputs:
+          mc_read: "{{ _acm_mc_readiness_read }}"
+          expected_names: "{{ _acm_post_activation_expected_managed_cluster_names | default([]) }}"
+          min_managed_clusters: "{{ _acm_post_activation_min_managed_clusters | int }}"
+          names_waived: "{{ _acm_names_waived | default(false) | bool }}"
+      register: _acm_mc_readiness_poll
 
-- name: Record the ManagedCluster readiness poll
-  ansible.builtin.set_fact:
-    _acm_mc_readiness_state: "{{ 'ready' if _acm_mc_readiness.ready else 'pending' }}"
+    - name: Record the ManagedCluster readiness poll
+      ansible.builtin.set_fact:
+        _acm_mc_readiness: "{{ _acm_mc_readiness_poll }}"
+        _acm_mc_readiness_state: "{{ 'ready' if _acm_mc_readiness_poll.ready else 'pending' }}"

@@ -94,3 +94,36 @@ def test_both_evidence_writes_run_under_the_phase_failure_rescue():
     assert [task[WRITER]["status"] for task in writers] == ["update", "update"]
     (fail,) = [task for task in _flat(phase["rescue"]) if WRITER in task]
     assert fail[WRITER]["status"] == "fail" and "argocd_repause" in fail[WRITER]
+
+
+def test_w1_each_poll_guards_itself_at_execution_time_and_keeps_the_accepted_decision():
+    (poll,) = _load("poll_managed_cluster_readiness.yml")
+    assert poll["when"] == "_acm_mc_readiness_state != 'ready'"
+    decide = next(task for task in poll["block"] if EVIDENCE in task)
+    record = poll["block"][-1]["ansible.builtin.set_fact"]
+    assert decide["register"] != "_acm_mc_readiness"
+    assert record["_acm_mc_readiness"] == "{{ %s }}" % decide["register"]
+
+
+def test_b3_klusterlet_verification_sees_the_accepted_poll_inventory():
+    tasks = _load("verify_managed_clusters.yml")
+    names = [task.get("name") for task in tasks]
+    publish = names.index("Publish the accepted ManagedCluster inventory for klusterlet verification")
+    assert names.index("Wait for managed clusters to become available and joined") < publish
+    assert tasks[publish]["ansible.builtin.set_fact"] == {
+        "acm_secondary_managed_clusters_info": "{{ _acm_mc_readiness_read }}"
+    }
+    block = [task.get("name") for task in _phase_block()["block"]]
+    assert block.index("Verify managed clusters") < block.index("Verify klusterlet status")
+
+
+def test_b2_a_completed_marker_is_honoured_only_with_its_evidence():
+    tasks = _load("main.yml")
+    names = [task.get("name") for task in tasks]
+    require = tasks[names.index("Require the evidence a completed post_activation marker claims")]
+    assert require[EVIDENCE]["operation"] == "require_post_activation_completed"
+    assert "(_checkpoint_enter | default({})).skipped_phase | default(false)" in require["when"]
+    assert "not ansible_check_mode" in require["when"]
+    assert names.index("Require the evidence a completed post_activation marker claims") < names.index(
+        "Run post_activation phase"
+    )

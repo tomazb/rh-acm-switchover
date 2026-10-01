@@ -58,6 +58,22 @@ def require_completed_restore(journal: Any) -> Dict[str, Any]:
     return journal
 
 
+def require_post_activation_completed(journal: Any) -> Dict[str, Any]:
+    """Return the validated journal a resume past post-activation relies on, or raise.
+
+    A recorded post-activation phase marker is honoured only with the evidence it
+    claims: restore.completed_at and post_activation.completed_at. A marker without
+    them never stands in for that evidence.
+    """
+    journal = require_completed_restore(journal)
+    if journal["post_activation"]["completed_at"] is None:
+        raise MigrationEvidenceError(
+            "post_activation_not_completed",
+            "the post-activation phase is recorded without post_activation.completed_at",
+        )
+    return journal
+
+
 def post_activation_waiver(
     *, journal: Any, requested: Any, expected_names: Any, flag: Any, journaled_at: Any
 ) -> Dict[str, Any]:

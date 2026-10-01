@@ -50,6 +50,12 @@
     - not (acm_switchover_managed_cluster_wait_soft_fail | default(false) | bool)
     - _acm_mc_readiness_state != 'ready'
 
+# Klusterlet verification probes the clusters of the accepted readiness inventory, not the
+# earlier discovery read, which may predate a cluster the poll then saw.
+- name: Publish the accepted ManagedCluster inventory for klusterlet verification
+  ansible.builtin.set_fact:
+    acm_secondary_managed_clusters_info: "{{ _acm_mc_readiness_read }}"
+
 - name: Summarize managed cluster conditions
   tomazb.acm_switchover.acm_managedcluster_status:
     clusters: >-

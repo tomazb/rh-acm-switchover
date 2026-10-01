@@ -66,10 +66,12 @@ class LaterWorkFailed(Exception):
 
 
 class Scenario:
-    def __init__(self, tmp_path, journal, outcome, expected=NAMES, minimum=2, requested=None, failing=None):
+    def __init__(self, tmp_path, journal, outcome, expected=NAMES, minimum=2, requested=None, failing=None, polls=1):
         self.tmp_path = tmp_path
         self.journal = journal
-        self.outcome = outcome
+        # One outcome, or the successive outcomes of the strict reads (the last one repeats).
+        self.outcomes = list(outcome) if isinstance(outcome, list) else [outcome]
+        self.polls = polls
         self.expected = list(expected)
         self.minimum = minimum
         self.requested = requested
@@ -84,7 +86,10 @@ class Scenario:
         state.flush_state()
         writes = []
         secondary = Mock(name="secondary")
-        secondary.list_managed_clusters_strict.return_value = self.outcome
+        outcomes = list(self.outcomes)
+        secondary.list_managed_clusters_strict.side_effect = lambda: (
+            outcomes.pop(0) if len(outcomes) > 1 else outcomes[0]
+        )
         verifier = post_activation_module.PostActivationVerification(
             secondary_client=secondary,
             state_manager=state,
@@ -113,7 +118,8 @@ class Scenario:
         ), patch.object(verifier, "_verify_klusterlet_connections", side_effect=klusterlet), patch.object(
             verifier, "_verify_disable_auto_import_cleared", side_effect=later
         ), patch(
-            "modules.post_activation.wait_for_condition", side_effect=lambda _d, condition, **_k: condition().done
+            "modules.post_activation.wait_for_condition",
+            side_effect=lambda _d, condition, **_k: any(condition().done for _ in range(self.polls)),
         ):
             passed = verifier.verify()
         code = None
@@ -137,10 +143,13 @@ class Scenario:
                 col_checkpoint.record_migration_backups(store, decision["candidate"])
             return decision["candidate"]
 
+        outcomes = list(self.outcomes)
+
         def read():
-            if not self.outcome.is_success:
+            outcome = outcomes.pop(0) if len(outcomes) > 1 else outcomes[0]
+            if not outcome.is_success:
                 raise col_activation.ActivationRefused("ManagedCluster inventory read failed (error)")
-            return self.outcome.items
+            return outcome.items
 
         try:
             journal = col.require_completed_restore(col_checkpoint.migration_backups(store))
@@ -151,12 +160,15 @@ class Scenario:
                 flag=col_activation.WAIVER_FLAG,
                 journaled_at=NOW,
             )["waiver"]
-            readiness = col.managed_cluster_readiness(
-                items=read(),
-                expected_names=self.expected,
-                min_managed_clusters=self.minimum,
-                names_waived=waiver is not None,
-            )
+            for _ in range(self.polls):  # roles/post_activation/tasks/poll_managed_cluster_readiness.yml
+                readiness = col.managed_cluster_readiness(
+                    items=read(),
+                    expected_names=self.expected,
+                    min_managed_clusters=self.minimum,
+                    names_waived=waiver is not None,
+                )
+                if readiness["ready"]:
+                    break
             if self.failing == "connectivity":
                 raise LaterWorkFailed("later_work_failed")
             if readiness["ready"]:
@@ -301,3 +313,10 @@ def test_a_failed_revalidation_keeps_recorded_evidence_identically(tmp_path):
     outcome = StrictReadOutcome.from_items(_inventory("cluster-a", "cluster-c"))
     code, journal, writes = _decide(tmp_path, RECORDED, outcome=outcome)
     assert code == "expected_names_missing" and journal == RECORDED and writes == []
+
+
+def test_w2_a_transient_unreadiness_is_reconciled_by_the_same_bounded_wait(tmp_path):
+    not_ready = StrictReadOutcome.from_items(_inventory(*NAMES, unavailable=("cluster-a",)))
+    ready = StrictReadOutcome.from_items(_inventory(*NAMES))
+    code, journal, _ = _decide(tmp_path, outcome=[not_ready, ready], polls=2)
+    assert code is None and journal["post_activation"]["completed_at"] == NOW

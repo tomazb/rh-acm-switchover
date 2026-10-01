@@ -37,10 +37,13 @@ from lib.constants import (
     WORKFLOW_STATE_FILE_MESSAGE,
 )
 from lib.exceptions import SwitchoverError
+from lib.migration_evidence import MigrationEvidenceError
+from lib.migration_post_activation import require_post_activation_completed
 from lib.run_record import (
     MIGRATION_JOURNAL_IMPLICIT_RESET_REFUSAL,
     MigrationJournalResetRefused,
     RunRecord,
+    StateStructureError,
     migration_journal_present,
 )
 from lib.utils import CANONICAL_PHASE_NAMES, Phase, StateManager
@@ -259,6 +262,26 @@ def run_validate_only_preflight(
         state.restore_runtime_checkpoint(runtime_checkpoint)
 
 
+def _post_activation_marker_refusal(
+    args: argparse.Namespace, state: StateManager, current_phase: Phase
+) -> Optional[str]:
+    """Refuse a resume past post-activation whose journal lacks the evidence that phase records.
+
+    The collection refuses the same journal at its completed post_activation phase marker
+    (R4-04 Task 9). A dry-run predicts and refuses nothing; a journal-free state is left
+    to finalization's own evidence gate.
+    """
+    if current_phase != Phase.FINALIZATION or getattr(args, "dry_run", False):
+        return None
+    try:
+        journal = RunRecord(state).migration_backups()
+        if journal is not None:
+            require_post_activation_completed(journal)
+    except (MigrationEvidenceError, StateStructureError) as exc:
+        return f"Migration evidence refused ({exc})"
+    return None
+
+
 def run_phase_flow(
     args: argparse.Namespace,
     state: StateManager,
@@ -280,6 +303,10 @@ def run_phase_flow(
             WORKFLOW_NON_RUNNABLE_PHASE_MESSAGE % (current_phase.value, flow_name),
             logger,
         )
+
+    refusal = _post_activation_marker_refusal(args, state, current_phase)
+    if refusal is not None:
+        return fail_phase(state, refusal, logger)
 
     resume_start_phase = CANONICAL_PHASE_NAMES.get(current_phase)
     if current_phase != Phase.INIT and resume_start_phase is not None:

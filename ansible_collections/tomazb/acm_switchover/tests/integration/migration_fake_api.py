@@ -167,6 +167,8 @@ class FakeMigrationHub:
         self.unavailable_clusters: set[str] = set()
         # ManagedClusters served with a stale disable-auto-import annotation (the fake never patches them).
         self.annotated_clusters: set[str] = set()
+        # Successive ManagedCluster LISTs serve these name lists first, then managed_clusters.
+        self.managed_cluster_reads: list[list[str]] = []
         self.status_served = status_served
         self.journal_probe = journal_probe or (lambda: None)
         self.controller = controller
@@ -284,6 +286,7 @@ class FakeMigrationHub:
                 "items": [hub],
             }
         if path == "/apis/cluster.open-cluster-management.io/v1/managedclusters":
+            names = self.managed_cluster_reads.pop(0) if self.managed_cluster_reads else self.managed_clusters
             items = [
                 {
                     "apiVersion": "cluster.open-cluster-management.io/v1",
@@ -307,7 +310,7 @@ class FakeMigrationHub:
                         ]
                     },
                 }
-                for name in self.managed_clusters + ["local-cluster"]
+                for name in names + ["local-cluster"]
             ]
             return {
                 "kind": "ManagedClusterList",

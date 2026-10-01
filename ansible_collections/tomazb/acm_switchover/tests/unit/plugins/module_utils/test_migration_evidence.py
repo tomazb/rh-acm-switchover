@@ -59,6 +59,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_po
     post_activation_names_evidence,
     post_activation_waiver,
     require_completed_restore,
+    require_post_activation_completed,
 )
 
 # The shared vectors live in the repository's root test fixtures; outside a
@@ -106,6 +107,7 @@ FUNCTIONS: Dict[str, Callable[..., Any]] = {
     "post_activation_names_evidence": post_activation_names_evidence,
     "post_activation_waiver": post_activation_waiver,
     "require_completed_restore": require_completed_restore,
+    "require_post_activation_completed": require_post_activation_completed,
 }
 NS = "open-cluster-management-backup"
 

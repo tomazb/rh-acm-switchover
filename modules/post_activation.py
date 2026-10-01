@@ -11,6 +11,7 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
+from contextlib import AbstractContextManager, nullcontext
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
@@ -107,6 +108,16 @@ class PostActivationVerification:
         self._kubeconfig_paths: List[str] = []
         self._kubeconfig_mtime: Dict[str, float] = {}
 
+    def _step(self, step_name: str) -> AbstractContextManager:
+        """Guard one step; a dry-run consults completion markers but never records one.
+
+        A dry-run skips the step's work, so a marker it recorded would let a later
+        executing run skip work that never ran.
+        """
+        if self.dry_run:
+            return nullcontext(not self.state.is_step_completed(step_name))
+        return self.state.step(step_name, logger)
+
     def _get_managed_clusters(self, force_refresh: bool = False) -> List[Dict]:
         """Get managed clusters with caching.
 
@@ -184,7 +195,7 @@ class PostActivationVerification:
         """
         klusterlet_step_checked = False
 
-        with self.state.step("verify_clusters_connected", logger) as should_run:
+        with self._step("verify_clusters_connected") as should_run:
             if should_run:
                 try:
                     # Initial brief wait - clusters may connect automatically
@@ -199,7 +210,7 @@ class PostActivationVerification:
                         e,
                     )
                     logger.info("Checking if klusterlets need to be fixed (may be pointing to old hub)...")
-                    with self.state.step("verify_klusterlet_connections", logger) as should_run_fix:
+                    with self._step("verify_klusterlet_connections") as should_run_fix:
                         klusterlet_step_checked = True
                         if should_run_fix:
                             self._verify_klusterlet_connections()
@@ -211,13 +222,13 @@ class PostActivationVerification:
         # Optional: Verify klusterlet connections (non-blocking)
         # This may have already been done above if clusters didn't connect initially
         if not klusterlet_step_checked:
-            with self.state.step("verify_klusterlet_connections", logger) as should_run:
+            with self._step("verify_klusterlet_connections") as should_run:
                 if should_run:
                     self._verify_klusterlet_connections()
 
     def _verify_auto_import_cleanup_step(self) -> None:
         """Verify disable-auto-import annotations are cleared from ManagedClusters."""
-        with self.state.step("verify_auto_import_cleanup", logger) as should_run:
+        with self._step("verify_auto_import_cleanup") as should_run:
             if should_run:
                 self._verify_disable_auto_import_cleared()
 
@@ -228,25 +239,28 @@ class PostActivationVerification:
         Includes scaling up components, restarting API, verifying pods,
         and checking metrics collection.
         """
-        with self.state.step("scale_up_observability_components", logger) as should_run:
+        with self._step("scale_up_observability_components") as should_run:
             if should_run:
                 self._scale_up_observability_components()
 
-        with self.state.step("restart_observatorium_api", logger) as should_run:
+        with self._step("restart_observatorium_api") as should_run:
             if should_run:
                 self._restart_observatorium_api()
 
-        with self.state.step("verify_observability_pods", logger) as should_run:
+        with self._step("verify_observability_pods") as should_run:
             if should_run:
                 self._verify_observability_pods()
 
-        with self.state.step("verify_metrics_collection", logger) as should_run:
+        with self._step("verify_metrics_collection") as should_run:
             if should_run:
                 self._verify_metrics_collection()
 
     @dry_run_skip(message="Skipping wait for ManagedCluster connections")
-    def _verify_managed_clusters_connected(self, timeout: int = CLUSTER_VERIFY_TIMEOUT):
-        """Wait until the strict ManagedCluster inventory proves readiness (Available and Joined)."""
+    def _verify_managed_clusters_connected(self, timeout: int = CLUSTER_VERIFY_TIMEOUT) -> Optional[Dict]:
+        """Wait until the strict ManagedCluster inventory proves readiness (Available and Joined).
+
+        Returns the accepted readiness decision (None in a dry-run).
+        """
 
         latest: Dict = {}
 
@@ -274,6 +288,7 @@ class PostActivationVerification:
                 )
             detail = self._readiness_detail(latest) if latest else "no readiness decision"
             raise SwitchoverError(f"Timeout waiting for ManagedClusters to connect ({latest.get('code')}): {detail}")
+        return dict(latest)
 
     def _effective_expected_names(self) -> List[str]:
         return list(self.expected_managed_cluster_names) if self.enforce_expected_managed_cluster_names else []
@@ -344,19 +359,16 @@ class PostActivationVerification:
         return waiver
 
     def _record_names_evidence(self, journal: Optional[Dict], waiver: Optional[Dict]) -> Optional[Dict]:
-        """Prove readiness from a fresh strict read, then record the name check or the waiver once.
+        """Prove readiness with the bounded strict wait, then record the name check or the waiver once.
 
-        Runs on every attempt, completed step markers notwithstanding; recorded evidence
-        is kept, and a failed proof fails the attempt without clearing it.
+        Runs on every attempt, completed step markers notwithstanding, with the same
+        bounded wait the collection polls; recorded evidence is kept, and a failed
+        proof fails the attempt without clearing it.
         """
         if self.dry_run:
             logger.info("[DRY-RUN] Would verify and record the post-activation ManagedCluster name evidence")
             return journal
-        readiness = self._managed_cluster_readiness()
-        if not readiness["ready"]:
-            raise SwitchoverError(
-                f"ManagedCluster readiness is not proven ({readiness['code']}): {self._readiness_detail(readiness)}"
-            )
+        readiness = self._verify_managed_clusters_connected()
         decision = self._evidence(
             post_activation_names_evidence, journal=journal, readiness=readiness, waiver=waiver, now=_now_iso()
         )

@@ -34,6 +34,7 @@ def _vector(case_id: str) -> dict:
 
 COMPLETED = _vector("post-activation-journal-completed")["input"]["journal"]
 RECORDED = _vector("completion-kept-on-resume")["input"]["journal"]
+PRE_COMPLETION = _vector("post-activation-journal-pre-completion-blocks")["input"]["journal"]
 
 
 class Run:
@@ -62,7 +63,17 @@ class Run:
 
 @pytest.fixture
 def run_post_activation(tmp_path):
-    def _run(hub, *, journal=COMPLETED, names=("cluster-a",), check=False, waiver=None, extra=None, mode="execute"):
+    def _run(
+        hub,
+        *,
+        journal=COMPLETED,
+        names=("cluster-a",),
+        check=False,
+        waiver=None,
+        extra=None,
+        mode="execute",
+        post_activation_done=False,
+    ):
         checkpoint_path = tmp_path / "checkpoint.json"
         data = {"expected_managed_cluster_names": list(names), "expected_managed_cluster_count": len(names)}
         if journal is not None:
@@ -71,9 +82,10 @@ def run_post_activation(tmp_path):
             json.dumps(
                 {
                     "schema_version": "2.0",
-                    "phase": "activation",
+                    "phase": "post_activation" if post_activation_done else "activation",
                     "phase_status": "pass",
-                    "completed_phases": ["preflight", "primary_prep", "activation"],
+                    "completed_phases": ["preflight", "primary_prep", "activation"]
+                    + (["post_activation"] if post_activation_done else []),
                     "operational_data": data,
                     "operation_identity": {
                         "primary_context": "primary-hub",
@@ -127,6 +139,13 @@ def run_post_activation(tmp_path):
                             {
                                 "name": "Run post_activation",
                                 "ansible.builtin.include_role": {"name": "tomazb.acm_switchover.post_activation"},
+                            },
+                            {
+                                "name": "Report the discovered inventory",
+                                "ansible.builtin.debug": {
+                                    "msg": "MC_INFO={{ (acm_secondary_managed_clusters_info | default({}))"
+                                    ".get('resources', []) | map(attribute='metadata.name') | sort | join(',') }}"
+                                },
                             },
                             {"name": "Report the phase", "ansible.builtin.debug": {"msg": "POST_ACTIVATION=ok"}},
                         ],
@@ -266,3 +285,38 @@ def test_a_direct_validate_entry_writes_nothing(run_post_activation, hub):
     assert run.completed.returncode == 0, run.output
     assert hub.writes == []
     assert run.after == run.before
+
+
+# -- Task 9 review findings B2, B3 and W1 --------------------------------------------------------
+
+
+@pytest.mark.parametrize("journal", [COMPLETED, PRE_COMPLETION], ids=["post-evidence-null", "restore-not-completed"])
+def test_b2_a_completed_phase_marker_without_its_evidence_is_refused(run_post_activation, hub, journal):
+    run = run_post_activation(hub, journal=journal, post_activation_done=True)
+    assert run.completed.returncode != 0
+    code = "post_activation_not_completed" if journal is COMPLETED else "restore_not_completed"
+    assert f"Migration evidence refused ({code}:" in run.output
+    assert run.mc_reads == 0
+    assert run.journal == journal
+
+
+def test_b2_a_completed_phase_marker_with_its_evidence_is_honoured(run_post_activation, hub):
+    run = run_post_activation(hub, journal=RECORDED, post_activation_done=True)
+    assert run.completed.returncode == 0, run.output
+    assert run.mc_reads == 0
+    assert run.after == run.before
+
+
+def test_b3_klusterlet_candidates_come_from_the_accepted_poll_inventory(run_post_activation, hub):
+    # Discovery sees only local-cluster; the readiness poll then sees cluster-a.
+    hub.managed_cluster_reads.append([])
+    run = run_post_activation(hub)
+    assert run.completed.returncode == 0, run.output
+    assert '"msg": "MC_INFO=cluster-a,local-cluster"' in run.output
+
+
+def test_w1_the_readiness_wait_stops_at_the_first_ready_poll(run_post_activation, hub):
+    run = run_post_activation(hub, extra={"_acm_mc_readiness_poll_delays": [0, 0, 0, 0]})
+    assert run.completed.returncode == 0, run.output
+    # Discovery, one readiness poll, and the cleanup read before and after.
+    assert run.mc_reads == 4

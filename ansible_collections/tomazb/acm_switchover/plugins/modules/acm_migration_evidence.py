@@ -48,6 +48,7 @@ options:
       - pre_patch
       - reconcile
       - require_completed_restore
+      - require_post_activation_completed
       - revalidate_completed
       - status_subresource
       - verify_managed_clusters
@@ -159,6 +160,9 @@ _OPERATIONS: Dict[str, Callable[[dict], dict]] = {
     "revalidate_completed": lambda inputs: transaction.revalidate_completed(**inputs),
     "require_completed_restore": lambda inputs: {
         "journal": post_activation.require_completed_restore(inputs.get("journal"))
+    },
+    "require_post_activation_completed": lambda inputs: {
+        "journal": post_activation.require_post_activation_completed(inputs.get("journal"))
     },
     "post_activation_waiver": lambda inputs: post_activation.post_activation_waiver(
         flag=transaction.WAIVER_FLAG, **_with_time(_with_default(inputs, "requested"), "journaled_at")

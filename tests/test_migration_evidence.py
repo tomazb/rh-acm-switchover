@@ -59,6 +59,7 @@ from lib.migration_post_activation import (
     post_activation_names_evidence,
     post_activation_waiver,
     require_completed_restore,
+    require_post_activation_completed,
 )
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "r4_04_migration_evidence_vectors.json"
@@ -104,6 +105,7 @@ FUNCTIONS = {
     "post_activation_names_evidence": post_activation_names_evidence,
     "post_activation_waiver": post_activation_waiver,
     "require_completed_restore": require_completed_restore,
+    "require_post_activation_completed": require_post_activation_completed,
 }
 NS = "open-cluster-management-backup"
 

@@ -4617,6 +4617,19 @@ case(
     err("malformed_journal"),
 )
 
+fn = "require_post_activation_completed"
+case("post-activation-marker-with-evidence", ALL, PJ, fn, {"journal": PA_POST}, ok(PA_POST))
+case(
+    "post-activation-marker-without-completion-blocks",
+    ALL,
+    PJ,
+    fn,
+    {"journal": PA_NAMED},
+    err("post_activation_not_completed"),
+)
+case("post-activation-marker-pre-completion-blocks", ALL, PJ, fn, {"journal": PA_PRE}, err("restore_not_completed"))
+case("post-activation-marker-no-journal-blocks", ALL, PJ, fn, {"journal": None}, err("journal_required"))
+
 fn = "post_activation_waiver"
 PW = drefs(ALL, "J:446-470", "J:543-552")
 

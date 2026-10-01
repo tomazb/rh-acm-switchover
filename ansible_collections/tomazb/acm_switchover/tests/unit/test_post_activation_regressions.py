@@ -49,8 +49,8 @@ class TestVerifyManagedClustersPolling:
         self.expectation_content = (COMMON_TASKS / "resolve_managed_cluster_expectation.yml").read_text()
 
     def _poll(self):
-        tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "poll_managed_cluster_readiness.yml").read_text())
-        return next(task for task in tasks if "tomazb.acm_switchover.acm_migration_evidence" in task)
+        (poll,) = yaml.safe_load((POST_ACTIVATION_TASKS / "poll_managed_cluster_readiness.yml").read_text())
+        return next(task for task in poll["block"] if "tomazb.acm_switchover.acm_migration_evidence" in task)
 
     def test_readiness_is_the_mirrored_available_and_joined_decision(self):
         """R4-04 Task 9: each poll decides through the module shared with the Python CLI by parity vectors."""

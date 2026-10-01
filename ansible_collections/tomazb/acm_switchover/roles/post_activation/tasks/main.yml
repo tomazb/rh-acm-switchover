@@ -15,6 +15,34 @@
     tasks_from: repause_recovery
   when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
 
+# R4-04 Task 9: a completed phase marker is honoured only with the evidence it claims. An
+# executing resume past a post_activation recorded without restore.completed_at and
+# post_activation.completed_at refuses; Python refuses the same journal on resuming at
+# finalization. A journal-free resume is left to finalization's own evidence gate.
+- name: Refuse a completed post_activation marker over an invalid migration journal
+  ansible.builtin.fail:
+    msg: >-
+      The recorded migration journal is invalid and blocks post-activation. Repair the checkpoint, or
+      start a new migration with the full checkpoint reset (checkpoint.reset).
+  when:
+    - (_checkpoint_enter | default({})).skipped_phase | default(false)
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
+    - not ansible_check_mode
+    - >-
+      (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal_outcome', 'absent'))
+      not in ['absent', 'valid']
+
+- name: Require the evidence a completed post_activation marker claims
+  tomazb.acm_switchover.acm_migration_evidence:
+    operation: require_post_activation_completed
+    inputs:
+      journal: "{{ _checkpoint_enter.facts.migration_journal }}"
+  when:
+    - (_checkpoint_enter | default({})).skipped_phase | default(false)
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
+    - not ansible_check_mode
+    - (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal_outcome', 'absent')) == 'valid'
+
 - name: Run post_activation phase
   when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
   block:

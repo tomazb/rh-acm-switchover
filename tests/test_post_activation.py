@@ -14,6 +14,7 @@ import time
 from concurrent.futures import Future
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -171,7 +172,7 @@ class TestPostActivationVerification:
         self, mock_wait, post_verify_with_obs, mock_secondary_client, mock_state_manager
     ):
         """Test successful verification with observability."""
-        mock_wait.return_value = True
+        mock_wait.side_effect = _poll_until_done
         mock_secondary_client.wait_for_pods_ready.return_value = True
 
         # Mock clusters
@@ -246,7 +247,7 @@ class TestPostActivationVerification:
         self, mock_wait, post_verify_no_obs, mock_secondary_client, mock_state_manager
     ):
         """Test successful verification without observability."""
-        mock_wait.return_value = True
+        mock_wait.side_effect = _poll_until_done
 
         mock_secondary_client.list_custom_resources.return_value = [
             {
@@ -420,8 +421,8 @@ class TestPostActivationVerification:
                 # First call (brief wait) - timeout
                 return False
             else:
-                # Subsequent calls - success
-                return True
+                # Subsequent calls - the clusters reconnected
+                return args[1]().done
 
         mock_wait.side_effect = wait_side_effect
 
@@ -750,7 +751,7 @@ class TestPostActivationVerification:
         self, mock_wait, mock_secondary_client, mock_state_manager, has_obs
     ):
         """Test that observability verification is conditional."""
-        mock_wait.return_value = True
+        mock_wait.side_effect = _poll_until_done
 
         verify = PostActivationVerification(
             secondary_client=mock_secondary_client,
@@ -1238,7 +1239,7 @@ class TestPostActivationVerificationIntegration:
         """Test complete verification workflow with real StateManager."""
         from lib.utils import Phase, StateManager
 
-        mock_wait.return_value = True
+        mock_wait.side_effect = _poll_until_done
 
         state = StateManager(str(tmp_path / "state.json"))
         state.set_phase(Phase.POST_ACTIVATION)
@@ -3037,10 +3038,11 @@ class TestPostActivationMigrationEvidence:
         steps = ("verify_clusters_connected", "verify_klusterlet_connections", "verify_auto_import_cleanup")
         state = _evidence_state(tmp_path, recorded, steps)
 
-        assert _evidence_verifier(state, _strict_secondary("cluster-a", "cluster-c")).verify() is False
+        with patch("modules.post_activation.wait_for_condition", side_effect=_poll_once):
+            assert _evidence_verifier(state, _strict_secondary("cluster-a", "cluster-c")).verify() is False
 
         error = state.state["errors"][-1]["error"]
-        assert error.startswith("ManagedCluster readiness is not proven (expected_names_missing)")
+        assert error.startswith("Missing expected ManagedCluster(s) after activation (expected_names_missing)")
         assert _stored_journal(tmp_path) == recorded
 
     def test_a_journal_write_failure_fails_the_phase(self, tmp_path):
@@ -3054,3 +3056,109 @@ class TestPostActivationMigrationEvidence:
 
         assert "could not be recorded durably" in state.state["errors"][-1]["error"]
         assert _stored_journal(tmp_path) == COMPLETED_JOURNAL
+
+
+_POST_ACTIVATION_STEPS = (
+    "verify_clusters_connected",
+    "verify_klusterlet_connections",
+    "verify_auto_import_cleanup",
+    "scale_up_observability_components",
+    "restart_observatorium_api",
+    "verify_observability_pods",
+    "verify_metrics_collection",
+)
+
+
+def _poll_until_done(_description, condition, **_kwargs):
+    """A bounded wait that polls until done, at most three times."""
+    return any(condition().done for _ in range(3))
+
+
+@pytest.mark.unit
+class TestPostActivationEvidenceReviewFindings:
+    """Task 9 review findings B1, B2 and W2."""
+
+    def test_b1_a_dry_run_records_no_step_marker_so_execute_still_does_the_work(self, tmp_path):
+        state = _evidence_state(tmp_path)
+        dry = _evidence_verifier(state, _strict_secondary(*EVIDENCE_NAMES), dry_run=True)
+        assert dry.verify() is True
+        assert not [step for step in state.state["completed_steps"] if step["name"] in _POST_ACTIVATION_STEPS]
+
+        live = _evidence_verifier(state, _strict_secondary(*EVIDENCE_NAMES))
+        with patch.object(live, "_verify_klusterlet_connections") as klusterlet, patch.object(
+            live, "_verify_disable_auto_import_cleared"
+        ) as cleanup:
+            assert live.verify() is True
+        klusterlet.assert_called_once_with()
+        cleanup.assert_called_once_with()
+
+    @pytest.mark.parametrize("dry_run", [False, True], ids=["execute", "dry-run"])
+    def test_b2_a_resume_past_post_activation_needs_its_completion_evidence(self, tmp_path, dry_run):
+        from lib.utils import Phase
+        from lib.workflow import run_phase_flow
+
+        state = _evidence_state(tmp_path)  # restore completed, post-activation evidence null
+        state.set_phase(Phase.FINALIZATION)
+        finalization = Mock(return_value=True)
+        failed = []
+
+        def fail_phase(_state, message, _logger):
+            failed.append(message)
+            return False
+
+        result = run_phase_flow(
+            SimpleNamespace(dry_run=dry_run),
+            state,
+            None,
+            Mock(),
+            logging.getLogger("test"),
+            ((finalization, (Phase.POST_ACTIVATION, Phase.FINALIZATION), Phase.FINALIZATION),),
+            "switchover",
+            fail_phase,
+            Mock(),
+            Mock(),
+        )
+
+        if dry_run:
+            assert result is True and finalization.called
+        else:
+            assert result is False
+            finalization.assert_not_called()
+            assert "post_activation_not_completed" in failed[-1]
+
+    def test_b2_a_resume_past_recorded_post_activation_evidence_continues(self, tmp_path):
+        from lib.utils import Phase
+        from lib.workflow import run_phase_flow
+
+        state = _evidence_state(tmp_path, _VECTOR_CASES["completion-kept-on-resume"]["input"]["journal"])
+        state.set_phase(Phase.FINALIZATION)
+        finalization = Mock(return_value=True)
+        assert run_phase_flow(
+            SimpleNamespace(dry_run=False),
+            state,
+            None,
+            Mock(),
+            logging.getLogger("test"),
+            ((finalization, (Phase.POST_ACTIVATION, Phase.FINALIZATION), Phase.FINALIZATION),),
+            "switchover",
+            Mock(return_value=False),
+            Mock(),
+            Mock(),
+        )
+        finalization.assert_called_once()
+
+    def test_w2_resume_reconciles_readiness_with_the_bounded_wait(self, tmp_path):
+        steps = ("verify_clusters_connected", "verify_klusterlet_connections", "verify_auto_import_cleanup")
+        state = _evidence_state(tmp_path, steps=steps)
+        secondary = Mock(name="secondary")
+        not_ready = [_ready_mc(LOCAL_CLUSTER_NAME), _ready_mc("cluster-a", "False"), _ready_mc("cluster-b")]
+        ready = [_ready_mc(LOCAL_CLUSTER_NAME), _ready_mc("cluster-a"), _ready_mc("cluster-b")]
+        secondary.list_managed_clusters_strict.side_effect = [
+            StrictReadOutcome.from_items(not_ready),
+            StrictReadOutcome.from_items(ready),
+        ]
+
+        with patch("modules.post_activation.wait_for_condition", side_effect=_poll_until_done):
+            assert _evidence_verifier(state, secondary).verify() is True
+
+        assert _stored_journal(tmp_path)["post_activation"]["completed_at"] is not None
