@@ -94,9 +94,11 @@
         - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
         - not acm_switchover_cluster_verify_result.passed
   rescue:
+    # Only an acknowledged write proves the marker durable; a visible one may not be.
     - name: Record the original post_activation failure
       ansible.builtin.set_fact:
         _acm_phase_failure: "{{ ansible_failed_result.msg | default('unknown failure') }}"
+        _acm_repause_marker_durable: false
 
     # Amendment 2.2 rule 2: under a migration journal the re-pause marker is durable in
     # this same fail transition, before the play rescue may resume Argo CD. A failed
@@ -115,6 +117,11 @@
                 (acm_switchover_features.argocd.manage | default(false) | bool)
                 and (acm_switchover_features.argocd.resume_on_failure | default(false) | bool)
               }}
+          register: _acm_fail_transition
+
+        - name: Acknowledge the durable Argo CD re-pause marker
+          ansible.builtin.set_fact:
+            _acm_repause_marker_durable: "{{ _acm_fail_transition.argocd_repause_recorded | default(false) }}"
       rescue:
         - name: Report the failure the checkpoint could not record
           ansible.builtin.fail:

@@ -255,7 +255,8 @@ def test_restore_only_validates_rehydrated_discovery_namespace_lists():
 
 def test_restore_only_rehydrate_is_guarded_by_checkpoint_enablement():
     """Restore-only rehydrate must skip cleanly when checkpointing is disabled."""
-    tasks = _load_playbook("restore_only.yml")[0]["tasks"][0]["block"]
+    outer = _load_playbook("restore_only.yml")[0]["tasks"][0]["block"]
+    tasks = [task for task in outer if "rescue" in task][0]["block"]
     rehydrate_task = next(
         task for task in tasks if task.get("name") == "Rehydrate Argo CD run_id from checkpoint before pause"
     )

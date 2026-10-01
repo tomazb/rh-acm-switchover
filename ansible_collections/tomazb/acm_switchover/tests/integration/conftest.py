@@ -196,6 +196,11 @@ def run_preflight_fixture(tmp_path):
     return _run
 
 
+# A sitecustomize that fails the checkpoint directory fsync once the Argo CD re-pause marker
+# is in the replaced file: the write is visible but its durability unacknowledged.
+_FSYNC_FAULT_PATH = Path(__file__).resolve().parent / "fsync_fault"
+
+
 @pytest.fixture
 def run_distinct_hub_playbook(tmp_path):
     def _run(
@@ -220,6 +225,8 @@ def run_distinct_hub_playbook(tmp_path):
         native_check: bool = False,
         secondary_patch_failure_status: int | None = None,
         checkpoint_dir_read_only: bool = False,
+        restore_only: bool = False,
+        fail_directory_fsync_after_marker: bool = False,
     ) -> DistinctHubPlaybookRun:
         repo_root = _find_repo_root()
         primary = FakeArgoCDHub(
@@ -263,15 +270,24 @@ def run_distinct_hub_playbook(tmp_path):
             )
             vars_payload = yaml.safe_load(fixture_path.read_text(encoding="utf-8")) or {}
             vars_payload["acm_switchover_hubs"] = {
-                "primary": {
-                    "context": primary_context,
-                    "kubeconfig": str(primary_kubeconfig),
-                },
+                "primary": (
+                    {"context": "", "kubeconfig": ""}
+                    if restore_only
+                    else {"context": primary_context, "kubeconfig": str(primary_kubeconfig)}
+                ),
                 "secondary": {
                     "context": secondary_context,
                     "kubeconfig": str(secondary_kubeconfig),
                 },
             }
+            if restore_only:
+                # Extra vars outrank the playbook's pinned flags, so the run supplies them itself.
+                vars_payload["acm_switchover_operation"] = {
+                    "restore_only": True,
+                    "method": "full",
+                    "old_hub_action": "none",
+                    "activation_method": "patch",
+                }
             report_dir = tmp_path / "identity-barrier-artifacts"
             checkpoint_store = tmp_path / "checkpoint-store" if checkpoint_dir_read_only else tmp_path
             checkpoint_store.mkdir(exist_ok=True)
@@ -316,9 +332,10 @@ def run_distinct_hub_playbook(tmp_path):
                 yaml.safe_dump(vars_payload, sort_keys=False),
                 encoding="utf-8",
             )
+            playbook_name = "restore_only.yml" if restore_only else "switchover.yml"
             command = [
                 "ansible-playbook",
-                "ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml",
+                f"ansible_collections/tomazb/acm_switchover/playbooks/{playbook_name}",
                 "-i",
                 "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
                 "-e",
@@ -330,13 +347,18 @@ def run_distinct_hub_playbook(tmp_path):
                 # Every checkpoint write fails; reads still succeed.
                 checkpoint_store.chmod(0o555)
             try:
+                env = _ansible_env(repo_root, tmp_path)
+                if fail_directory_fsync_after_marker:
+                    # First on the path: it chains to the compatibility sitecustomize it shadows.
+                    env["PYTHONPATH"] = f"{_FSYNC_FAULT_PATH}:{env['PYTHONPATH']}"
+                    env["ACM_TEST_FAIL_DIRECTORY_FSYNC_AFTER_MARKER"] = str(checkpoint_path)
                 completed = subprocess.run(
                     command,
                     cwd=repo_root,
                     capture_output=True,
                     text=True,
                     check=False,
-                    env=_ansible_env(repo_root, tmp_path),
+                    env=env,
                     timeout=300,
                 )
             except subprocess.TimeoutExpired as exc:
@@ -345,7 +367,7 @@ def run_distinct_hub_playbook(tmp_path):
                 if checkpoint_dir_read_only:
                     checkpoint_store.chmod(0o755)
 
-            report_path = report_dir / "switchover-report.json"
+            report_path = report_dir / ("restore-only-report.json" if restore_only else "switchover-report.json")
             report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else {}
             preflight_report_path = report_dir / "preflight-report.json"
             preflight_report = (

@@ -44,9 +44,14 @@ def _switchover_rescue():
     return outer, nested["rescue"]
 
 
-def _restore_only_block():
+def _restore_only_outer():
     tasks = _load(PLAYBOOKS / "restore_only.yml")[0]["tasks"]
     return next(task for task in tasks if "block" in task)
+
+
+def _restore_only_block():
+    """The post-identity block that carries the resume-enabled rescue."""
+    return next(task for task in _restore_only_outer()["block"] if "rescue" in task)
 
 
 def _named(tasks, name):
@@ -91,6 +96,8 @@ def test_the_journal_rescue_resumes_only_with_a_durable_marker():
     assert "!= 'execute' or ansible_check_mode" in _when(
         _named(tasks, "Report the Argo CD rescue a preview would perform")
     )
+    resolve = _named(execute["block"], "Resolve the durable re-pause marker")["ansible.builtin.set_fact"]
+    assert "if (_acm_repause_marker_durable | default(false) | bool)" in resolve["_argocd_rescue_phase"]
     resume = _named(execute["block"], "Resume the paused Applications")
     assert _when(resume) == "_argocd_rescue_phase | length > 0"
     assert _when(_named(execute["block"], "Refuse the resume without a durable re-pause marker")) == (
@@ -133,15 +140,20 @@ def test_both_playbooks_repause_after_the_identity_barrier_and_before_phase_work
         "Re-pause Argo CD recorded by a failure rescue",
         "Run post-barrier switchover phases",
     ]
-    restore_only = [task.get("name") for task in _restore_only_block()["block"]]
-    assert restore_only[:3] == [
+    # Review finding 2: the identity barrier is outside the resume-enabled rescue, as in switchover.
+    restore_outer = _restore_only_outer()
+    assert "rescue" not in restore_outer
+    assert [task.get("name") for task in restore_outer["block"]] == [
         "Establish trusted identity and checkpoint barrier",
         "Re-pause Argo CD recorded by a failure rescue",
-        "Run preflight validation",
+        "Run post-barrier restore-only phases",
     ]
-    block = _restore_only_block()["block"]
+    block = restore_outer["block"]
     assert block[0][INCLUDE_ROLE] == {"name": "tomazb.acm_switchover.preflight", "tasks_from": "identity_barrier"}
-    assert block[2][INCLUDE_ROLE] == {"name": "tomazb.acm_switchover.preflight", "tasks_from": "post_identity"}
+    assert _restore_only_block()["block"][0][INCLUDE_ROLE] == {
+        "name": "tomazb.acm_switchover.preflight",
+        "tasks_from": "post_identity",
+    }
     for task in (outer["block"][1], block[1]):
         assert task[INCLUDE_ROLE] == {"name": "tomazb.acm_switchover.argocd_manage", "tasks_from": "repause_recovery"}
 
@@ -177,8 +189,14 @@ def test_each_fail_transition_carries_the_marker_request_and_keeps_the_original_
         "Mark checkpoint failure",
         "Re-raise failure",
     ]
+    assert rescue[0]["ansible.builtin.set_fact"]["_acm_repause_marker_durable"] is False
     mark = rescue[1]
-    (transition,) = mark["block"]
+    transition, acknowledge = mark["block"]
+    # Review finding 1: durability is acknowledged only after the fail transition succeeded.
+    assert transition["register"] == "_acm_fail_transition"
+    assert acknowledge["ansible.builtin.set_fact"]["_acm_repause_marker_durable"] == (
+        "{{ _acm_fail_transition.argocd_repause_recorded | default(false) }}"
+    )
     args = transition[CHECKPOINT]
     assert args["status"] == "fail" and args["phase"] == role
     assert args["error"] == "{{ _acm_phase_failure }}"
@@ -197,6 +215,14 @@ def test_the_entry_guard_validates_inputs_waiver_names_and_the_activation_checkp
     waiver = _named(tasks, "Refuse a ManagedCluster expectation waiver with no expected name to waive")
     assert "waiver_expected_names_empty" in waiver["ansible.builtin.assert"]["fail_msg"]
     assert "expected_managed_cluster_names" in waiver["vars"]["_acm_recorded_names"]
+    # Review finding 3: a direct entry restores the recorded expectation, never defaults it away.
+    restore = _named(tasks, "Restore the recorded ManagedCluster expectation at a direct role entry")
+    assert "acm_switchover_expected_managed_cluster_names is not defined" in _when(restore)
+    refuse = _named(tasks, "Refuse a direct role entry without a recorded ManagedCluster expectation")
+    assert "['activation', 'post_activation']" in _when(refuse)
+    assert "min_managed_clusters" in _when(refuse)
+    names = [task.get("name") for task in tasks]
+    assert names.index(restore["name"]) < names.index(refuse["name"]) < names.index(waiver["name"])
     checkpoint = _named(tasks, "Require the checkpoint that stores the migration journal")
     assert "_acm_role_entry_phase == 'activation'" in _when(checkpoint)
     assert "not ansible_check_mode" in _when(checkpoint)

@@ -61,10 +61,14 @@ def _run_role(tmp_path, role, *, restore_only=False, waiver_scope=None, recorded
                     "phase": phases[-1],
                     "phase_status": "pass",
                     "completed_phases": phases,
-                    "operational_data": {
-                        "expected_managed_cluster_names": list(recorded_names),
-                        "expected_managed_cluster_count": len(recorded_names),
-                    },
+                    "operational_data": (
+                        {}
+                        if recorded_names is None
+                        else {
+                            "expected_managed_cluster_names": list(recorded_names),
+                            "expected_managed_cluster_count": len(recorded_names),
+                        }
+                    ),
                     "operation_identity": _identity(restore_only),
                     "errors": [],
                     "report_refs": [],
@@ -186,3 +190,13 @@ def test_a_valid_direct_activation_entry_passes_its_guard(tmp_path, kwargs):
     # Past the guard, activation reaches its first read of the destination hub.
     assert "Discover secondary hub resources" in output
     assert requests
+
+
+@pytest.mark.parametrize("role", ["activation", "post_activation"])
+def test_a_direct_entry_without_a_recorded_expectation_is_refused(tmp_path, role):
+    """Review finding 3: nothing recorded and no explicit minimum, so the check is never skipped."""
+    completed, requests = _run_role(tmp_path, role, recorded_names=None)
+    output = _output(completed)
+    assert completed.returncode != 0, output
+    assert "No managed-cluster expectation is recorded in the checkpoint" in output
+    assert requests == []

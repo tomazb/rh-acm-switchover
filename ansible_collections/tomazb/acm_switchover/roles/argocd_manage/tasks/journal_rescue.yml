@@ -2,11 +2,13 @@
 # PR C decisions amendment section 2.2: the play rescue after a phase failure that left
 # a migration journal (valid or invalid). There is no rewind to a pre-freeze phase and
 # no checkpoint reset: the retry stays at the failed phase. Applications are resumed
-# only when the failed role's fail transition recorded the re-pause marker durably;
-# the retry re-pauses them before any further phase work (repause_recovery.yml).
+# only when the failed role's fail transition acknowledged the durable re-pause marker
+# and a reread finds it; the retry re-pauses them before any further phase work
+# (repause_recovery.yml).
 #
-# Inputs: _argocd_rescue_hubs (hub roles, in resume order) and _argocd_rescue_checkpoint
-# (the checkpoint_phase read_facts result). Publishes _argocd_rescue_outcome, which the
+# Inputs: _argocd_rescue_hubs (hub roles, in resume order), _argocd_rescue_checkpoint
+# (the checkpoint_phase read_facts result) and _acm_repause_marker_durable (set by the
+# failed role's rescue). Publishes _argocd_rescue_outcome, which the
 # playbook reports together with the original failure; nothing here is ignored.
 
 - name: Report the Argo CD rescue a preview would perform
@@ -22,17 +24,24 @@
     - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
     - not ansible_check_mode
   block:
+    # Both are required: the failed role's fail transition acknowledged the durable write
+    # (_acm_repause_marker_durable), and the reread finds the marker. A marker that is only
+    # visible, after a failed or indeterminate write, is not proof (amendment 2.2 rule 2).
     - name: Resolve the durable re-pause marker
       ansible.builtin.set_fact:
         _argocd_rescue_phase: >-
-          {{ ((_argocd_rescue_checkpoint | default({})).get('facts') or {}).get('argocd_repause_required') or '' }}
+          {{
+            (((_argocd_rescue_checkpoint | default({})).get('facts') or {}).get('argocd_repause_required') or '')
+            if (_acm_repause_marker_durable | default(false) | bool)
+            else ''
+          }}
 
     - name: Refuse the resume without a durable re-pause marker
       ansible.builtin.set_fact:
         _argocd_rescue_outcome: >-
-          Argo CD resume-on-failure refused: a migration journal exists but no re-pause marker is
-          recorded durably. No Application was resumed; they stay paused. Resume them manually with
-          playbooks/argocd_resume.yml after review.
+          Argo CD resume-on-failure refused: a migration journal exists but the failed phase did not
+          acknowledge a durable re-pause marker. No Application was resumed; they stay paused. Resume
+          them manually with playbooks/argocd_resume.yml after review.
       when: _argocd_rescue_phase | length == 0
 
     - name: Resume the paused Applications

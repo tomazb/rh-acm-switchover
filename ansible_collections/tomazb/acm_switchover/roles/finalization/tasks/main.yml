@@ -126,9 +126,11 @@
       tags:
         - finalization
   rescue:
+    # Only an acknowledged write proves the marker durable; a visible one may not be.
     - name: Record the original finalization failure
       ansible.builtin.set_fact:
         _acm_phase_failure: "{{ ansible_failed_result.msg | default('unknown failure') }}"
+        _acm_repause_marker_durable: false
 
     # Amendment 2.2 rule 2: under a migration journal the re-pause marker is durable in
     # this same fail transition, before the play rescue may resume Argo CD. A failed
@@ -150,6 +152,11 @@
             operational_data:
               backup_schedule_enabled_at: "{{ acm_switchover_backup_schedule_enabled_at | default('') }}"
               saved_backup_schedule: "{{ acm_switchover_saved_backup_schedule | default('') }}"
+          register: _acm_fail_transition
+
+        - name: Acknowledge the durable Argo CD re-pause marker
+          ansible.builtin.set_fact:
+            _acm_repause_marker_durable: "{{ _acm_fail_transition.argocd_repause_recorded | default(false) }}"
       rescue:
         - name: Report the failure the checkpoint could not record
           ansible.builtin.fail:

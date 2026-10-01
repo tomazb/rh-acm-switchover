@@ -14,12 +14,17 @@ def _load_playbook(name: str) -> list[dict]:
 
 
 def _get_task_block(playbook: list[dict]) -> dict:
-    """Return the first tasks-level block/rescue/always structure."""
+    """Return the block that carries the rescue: the post-identity block nested in the
+    reporting block, which is never entered by an identity-barrier failure."""
     for play in playbook:
         for task in play.get("tasks", []):
             if "block" in task:
-                return task
-    raise AssertionError("No block found in playbook")
+                if "rescue" in task:
+                    return task
+                nested = [child for child in task["block"] if "rescue" in child]
+                if nested:
+                    return nested[0]
+    raise AssertionError("No rescue block found in playbook")
 
 
 def _get_switchover_recovery_blocks(playbook: list[dict]) -> tuple[dict, dict]:

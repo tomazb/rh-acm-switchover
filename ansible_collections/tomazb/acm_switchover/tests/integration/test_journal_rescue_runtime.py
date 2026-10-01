@@ -233,3 +233,50 @@ def test_an_invalid_journal_still_takes_the_journal_rescue(run_distinct_hub_play
     assert run.checkpoint["operational_data"]["argocd_repause_required"]["failed_phase"] == "activation"
     assert run.checkpoint["operational_data"]["migration_backups"] == invalid
     assert run.checkpoint["completed_phases"] == ["preflight", "primary_prep"]
+
+
+def test_a_restore_only_identity_failure_never_resumes_applications(run_distinct_hub_playbook):
+    """Review finding 2: the secondary context now resolves to another cluster. With a journal
+    and a recorded marker, the identity refusal must not reach the resume-enabled rescue."""
+    checkpoint = _checkpoint(migration_backups=_journal(), argocd_repause_required=_marker())
+    checkpoint["operation_identity"].update(
+        primary_context="",
+        primary_cluster_uid="",
+        secondary_cluster_uid="RECORDED-SECONDARY",
+        method="full",
+        restore_only=True,
+        old_hub_action="none",
+    )
+    checkpoint["completed_phases"] = ["preflight"]
+    run = run_distinct_hub_playbook(
+        restore_only=True,
+        secondary_applications=[_paused("secondary-owned")],
+        checkpoint_record=checkpoint,
+        variables=_variables(),
+    )
+    output = _output(run)
+
+    assert run.completed.returncode != 0
+    assert "Checkpoint operation identity does not match the current execution" in output
+    assert run.secondary_patches == [] and _writes(run.secondary_requests) == []
+    assert run.checkpoint_after == run.checkpoint_before
+
+
+def test_a_visible_marker_whose_write_was_not_acknowledged_resumes_nothing(run_distinct_hub_playbook):
+    """Review finding 1: the fail transition's replace lands, its directory fsync fails. The
+    marker is visible on a reread but not proven durable, so no Application is resumed."""
+    run = run_distinct_hub_playbook(
+        primary_applications=[_paused("primary-owned")],
+        secondary_applications=[_paused("secondary-owned")],
+        checkpoint_record=_checkpoint(migration_backups=_journal()),
+        variables=_variables(),
+        fail_directory_fsync_after_marker=True,
+    )
+    output = _output(run)
+
+    assert run.completed.returncode != 0
+    assert "directory durability could not be acknowledged" in output
+    # The marker is visible, yet the play rescue resumes nothing.
+    assert run.checkpoint["operational_data"]["argocd_repause_required"]["failed_phase"] == "activation"
+    assert run.primary_patches == [] and run.secondary_patches == []
+    assert "Argo CD resume-on-failure refused" in output

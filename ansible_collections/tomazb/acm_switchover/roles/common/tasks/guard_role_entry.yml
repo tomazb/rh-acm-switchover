@@ -23,6 +23,47 @@
       {{ _acm_role_entry_inputs.results | selectattr('status', 'equalto', 'fail') | map(attribute='message') | join('; ') }}
   when: not (_acm_role_entry_inputs.passed | bool)
 
+# August section 9: the migration journal lives only in the checkpoint, so an executing
+# activation without it would mutate a Restore it could never prove.
+- name: Require the checkpoint that stores the migration journal
+  ansible.builtin.assert:
+    that:
+      - acm_switchover_execution.checkpoint.enabled | default(false) | bool
+    fail_msg: >-
+      Activation records its migration evidence in the checkpoint before any Restore mutation;
+      set acm_switchover_execution.checkpoint.enabled: true to execute it.
+  when:
+    - _acm_role_entry_phase == 'activation'
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - not ansible_check_mode
+
+# Preflight publishes the effective ManagedCluster expectation; a direct entry restores the
+# one the checkpoint recorded for this operation instead of defaulting to none. Like the
+# Python CLI, activation and post-activation refuse to skip the check when nothing is
+# recorded, unless an explicit minimum is set; a recorded empty expectation stays valid.
+- name: Restore the recorded ManagedCluster expectation at a direct role entry
+  ansible.builtin.set_fact:
+    acm_switchover_expected_managed_cluster_names: "{{ _acm_recorded_facts.expected_managed_cluster_names }}"
+    acm_switchover_expected_managed_cluster_count: "{{ _acm_recorded_facts.expected_managed_cluster_count }}"
+  vars:
+    _acm_recorded_facts: "{{ (_checkpoint_enter | default({})).get('facts') or {} }}"
+  when:
+    - acm_switchover_expected_managed_cluster_names is not defined
+    - _acm_recorded_facts.get('expected_managed_cluster_names') is not none
+    - _acm_recorded_facts.get('expected_managed_cluster_count') is not none
+
+- name: Refuse a direct role entry without a recorded ManagedCluster expectation
+  ansible.builtin.fail:
+    msg: >-
+      No managed-cluster expectation is recorded in the checkpoint (preflight has not run for this
+      operation). Refusing to skip managed-cluster verification: set
+      acm_switchover_operation.min_managed_clusters explicitly, or re-run preflight to record the
+      expectation.
+  when:
+    - _acm_role_entry_phase in ['activation', 'post_activation']
+    - acm_switchover_expected_managed_cluster_names is not defined
+    - (acm_switchover_operation.min_managed_clusters | default(none)) is none
+
 - name: Refuse a ManagedCluster expectation waiver with no expected name to waive
   ansible.builtin.assert:
     that:
@@ -62,17 +103,3 @@
           else []
         )
       }}
-
-# August section 9: the migration journal lives only in the checkpoint, so an executing
-# activation without it would mutate a Restore it could never prove.
-- name: Require the checkpoint that stores the migration journal
-  ansible.builtin.assert:
-    that:
-      - acm_switchover_execution.checkpoint.enabled | default(false) | bool
-    fail_msg: >-
-      Activation records its migration evidence in the checkpoint before any Restore mutation;
-      set acm_switchover_execution.checkpoint.enabled: true to execute it.
-  when:
-    - _acm_role_entry_phase == 'activation'
-    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
-    - not ansible_check_mode

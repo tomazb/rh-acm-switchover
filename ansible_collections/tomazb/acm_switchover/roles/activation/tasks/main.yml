@@ -84,9 +84,11 @@
           wait: "{{ acm_switchover_wait_for_restore_result | default({}) }}"
           immediate_import: "{{ acm_switchover_immediate_import_result | default({}) }}"
   rescue:
+    # Only an acknowledged write proves the marker durable; a visible one may not be.
     - name: Record the original activation failure
       ansible.builtin.set_fact:
         _acm_phase_failure: "{{ ansible_failed_result.msg | default('unknown failure') }}"
+        _acm_repause_marker_durable: false
 
     # Amendment 2.2 rule 2: under a migration journal the re-pause marker is durable in
     # this same fail transition, before the play rescue may resume Argo CD. A failed
@@ -120,6 +122,11 @@
                   or
                   ((_checkpoint_enter | default({})) or {}).get('facts', {}).get('auto_import_strategy_changed', false)
                 }}
+          register: _acm_fail_transition
+
+        - name: Acknowledge the durable Argo CD re-pause marker
+          ansible.builtin.set_fact:
+            _acm_repause_marker_durable: "{{ _acm_fail_transition.argocd_repause_recorded | default(false) }}"
       rescue:
         - name: Report the failure the checkpoint could not record
           ansible.builtin.fail:

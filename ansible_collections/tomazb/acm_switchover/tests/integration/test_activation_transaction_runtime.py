@@ -548,3 +548,143 @@ def test_the_whole_activation_role_runs_the_transaction_and_completes_the_phase(
     journal = stored["operational_data"]["migration_backups"]
     assert journal["restore"]["completed_at"] and journal["restore"]["names_verified_at"]
     assert journal["restore"]["mutation_kind"] == kind and journal["restore"]["acm_minor"] == "2.13"
+
+
+def _run_whole_role(tmp_path, kind, *, operational_data, managed_clusters, restore_only=False, operation_extra=None):
+    """The activation role entered directly, with only the checkpoint as recorded state."""
+    fake = FakeMigrationHub(
+        version="2.13.4",
+        restores=[passive_restore()],
+        controller=complete_on_mutation,
+        managed_clusters=managed_clusters,
+    )
+    try:
+        operation = dict(KIND_OPERATION[kind])
+        identity = _identity(operation)
+        if restore_only:
+            operation.update(method="full")
+            identity.update(
+                primary_context="", primary_cluster_uid="", method="full", restore_only=True, old_hub_action="none"
+            )
+        kubeconfig = tmp_path / "secondary.kubeconfig"
+        write_kubeconfig(kubeconfig, context="secondary-hub", server=fake.url, token="fixture-token")
+        primary = tmp_path / "primary.kubeconfig"
+        write_kubeconfig(primary, context="primary-hub", server=fake.url, token="fixture-token")
+        checkpoint_path = tmp_path / "checkpoint.json"
+        checkpoint_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "2.0",
+                    "phase": "preflight" if restore_only else "primary_prep",
+                    "phase_status": "pass",
+                    "completed_phases": ["preflight"] if restore_only else ["preflight", "primary_prep"],
+                    "operational_data": operational_data,
+                    "operation_identity": identity,
+                    "errors": [],
+                    "report_refs": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        variables = {
+            "acm_switchover_hubs": {
+                "primary": (
+                    {"context": "", "kubeconfig": ""}
+                    if restore_only
+                    else {"context": "primary-hub", "kubeconfig": str(primary)}
+                ),
+                "secondary": {"context": "secondary-hub", "kubeconfig": str(kubeconfig)},
+            },
+            "acm_switchover_operation": dict(
+                operation,
+                restore_only=restore_only,
+                old_hub_action="none" if restore_only else "secondary",
+                **(operation_extra or {}),
+            ),
+            "acm_switchover_execution": {
+                "mode": "execute",
+                "report_dir": str(tmp_path / "artifacts"),
+                "checkpoint": {"enabled": True, "backend": "file", "path": str(checkpoint_path)},
+            },
+            "_acm_restore_poll_delays": [0, 0, 0],
+        }
+        playbook = tmp_path / "role.yml"
+        playbook.write_text(
+            yaml.safe_dump(
+                [
+                    {
+                        "hosts": "localhost",
+                        "connection": "local",
+                        "gather_facts": False,
+                        "tasks": [
+                            {
+                                "name": "Enter the activation role directly",
+                                "ansible.builtin.include_role": {"name": "tomazb.acm_switchover.activation"},
+                            }
+                        ],
+                    }
+                ],
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        vars_file = tmp_path / "vars.yml"
+        vars_file.write_text(yaml.safe_dump(variables, sort_keys=False), encoding="utf-8")
+        completed = subprocess.run(
+            ["ansible-playbook", str(playbook), "-i", "localhost,", "-e", f"@{vars_file}"],
+            cwd=_repo_root(),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_ansible_env(_repo_root(), tmp_path),
+            timeout=300,
+        )
+    finally:
+        fake.close()
+    return completed, json.loads(checkpoint_path.read_text(encoding="utf-8")), fake
+
+
+def test_direct_entry_enforces_the_recorded_expectation(tmp_path):
+    """Review finding 3: preflight's public facts are absent; the checkpoint records cluster-a."""
+    completed, stored, _ = _run_whole_role(
+        tmp_path,
+        "passive_patch",
+        operational_data={"expected_managed_cluster_names": ["cluster-a"], "expected_managed_cluster_count": 1},
+        managed_clusters=[],
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode != 0, output
+    assert "Missing expected ManagedCluster(s) after restore: cluster-a" in output
+    assert stored["operational_data"]["migration_backups"]["restore"]["completed_at"] is None
+
+
+def test_direct_entry_without_a_recorded_expectation_is_refused_before_any_mutation(tmp_path):
+    completed, stored, fake = _run_whole_role(tmp_path, "passive_patch", operational_data={}, managed_clusters=[])
+    output = completed.stdout + completed.stderr
+    assert completed.returncode != 0, output
+    assert "No managed-cluster expectation is recorded" in output
+    assert fake.writes == [] and "migration_backups" not in stored["operational_data"]
+
+
+def test_direct_entry_with_an_explicit_minimum_needs_no_recorded_expectation(tmp_path):
+    completed, stored, _ = _run_whole_role(
+        tmp_path,
+        "passive_patch",
+        operational_data={},
+        managed_clusters=["cluster-a"],
+        operation_extra={"min_managed_clusters": 1},
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert stored["operational_data"]["migration_backups"]["restore"]["completed_at"]
+
+
+def test_direct_restore_only_entry_keeps_its_recorded_empty_expectation(tmp_path):
+    completed, stored, _ = _run_whole_role(
+        tmp_path,
+        "full_restore",
+        operational_data={"expected_managed_cluster_names": [], "expected_managed_cluster_count": 0},
+        managed_clusters=["cluster-a"],
+        restore_only=True,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert stored["operational_data"]["migration_backups"]["restore"]["completed_at"]
