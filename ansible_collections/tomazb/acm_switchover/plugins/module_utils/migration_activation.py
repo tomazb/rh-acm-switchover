@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import copy
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
     ACTIVATION_RESTORE_NAME,
@@ -791,7 +791,7 @@ def completion_poll(*, journal: Dict[str, Any], restore_read: Any, velero_read: 
 
 
 def activation_waiver(
-    *, journal: Dict[str, Any], requested: Any, expected_names: List[str], journaled_at: str
+    *, journal: Dict[str, Any], expected_names: List[str], journaled_at: str, requested: Any = None
 ) -> Dict[str, Any]:
     """The waiver covering the activation name check: the journaled one, else a matching request."""
     journaled = journal["waiver"]
@@ -808,6 +808,20 @@ def activation_waiver(
     return {"waiver": _evidence(validate_waiver, record, sorted(expected_names), "activation")}
 
 
+def _check_inputs(min_managed_clusters: Any, enforce: Any) -> Tuple[int, bool]:
+    """The count floor and enforcement flag. The non-native templating of the ansible-core
+    floor stringifies scalars nested in module inputs, so their Ansible spellings are read too."""
+    if isinstance(min_managed_clusters, str) and min_managed_clusters.isdigit():
+        min_managed_clusters = int(min_managed_clusters)
+    if isinstance(enforce, str) and enforce in ("True", "False"):
+        enforce = enforce == "True"
+    if not isinstance(min_managed_clusters, int) or isinstance(min_managed_clusters, bool) or min_managed_clusters < 0:
+        raise ActivationRefused("The ManagedCluster count floor must be a non-negative integer")
+    if not isinstance(enforce, bool):
+        raise ActivationRefused("The ManagedCluster name enforcement flag must be a boolean")
+    return min_managed_clusters, enforce
+
+
 def _managed_cluster_names(mc_read: Any) -> List[str]:
     items = strict_list(mc_read, "ManagedCluster inventory")
     names = []
@@ -822,6 +836,7 @@ def managed_clusters_poll(
     *, mc_read: Any, expected_names: List[str], min_managed_clusters: int, enforce: bool
 ) -> Dict[str, str]:
     """One poll of the full-restore ManagedCluster wait (enforce False is the journaled waiver)."""
+    min_managed_clusters, enforce = _check_inputs(min_managed_clusters, enforce)
     names = _managed_cluster_names(mc_read)
     count = len(names)
     missing = sorted(set(expected_names) - set(names))
@@ -843,6 +858,7 @@ def verify_managed_clusters(
     enforce False is the journaled activation waiver: it lifts only the name check, never
     the count floor.
     """
+    min_managed_clusters, enforce = _check_inputs(min_managed_clusters, enforce)
     names = _managed_cluster_names(mc_read)
     count = len(names)
     missing = sorted(set(expected_names) - set(names))
@@ -880,8 +896,8 @@ def completion_bundle(
     restore_read: Any,
     velero_read: Any,
     backup_reads: Any,
-    waiver: Any,
     now: str,
+    waiver: Any = None,
 ) -> Dict[str, Any]:
     """The July section 1a bundle from a fresh proof, the first of two writes (completed_at follows alone).
 

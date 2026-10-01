@@ -91,3 +91,22 @@ def test_documentation_matches_the_argument_spec_and_operations():
     assert set(documentation["options"]) == {"operation", "inputs"}
     yaml.safe_load(module.EXAMPLES)
     yaml.safe_load(module.RETURN)
+
+
+def _mc_read(*names):
+    return {"read_status": "ok", "resources": [{"metadata": {"name": name}} for name in (*names, "local-cluster")]}
+
+
+@pytest.mark.parametrize("minimum, enforce", [(2, True), ("2", "True")], ids=["native", "stringified"])
+def test_managed_cluster_inputs_survive_the_non_native_templating_floor(monkeypatch, minimum, enforce):
+    """ansible-core 2.16 renders scalars nested in module inputs as text; the decision is the same."""
+    inputs = {"expected_names": ["a"], "min_managed_clusters": minimum, "enforce": enforce}
+    assert _run(monkeypatch, "managed_clusters_poll", {"mc_read": _mc_read("a"), **inputs})["state"] == "pending"
+    refused = _run(monkeypatch, "verify_managed_clusters", {"mc_read": _mc_read("a"), **inputs})
+    assert refused["failed"] is True and "Expected 2 ManagedCluster(s)" in refused["msg"]
+
+
+@pytest.mark.parametrize("minimum, enforce", [("-1", True), ("two", True), (1, "yes"), (True, True)])
+def test_malformed_managed_cluster_inputs_are_refused(monkeypatch, minimum, enforce):
+    inputs = {"expected_names": [], "min_managed_clusters": minimum, "enforce": enforce}
+    assert _run(monkeypatch, "verify_managed_clusters", {"mc_read": _mc_read("a"), **inputs})["failed"] is True

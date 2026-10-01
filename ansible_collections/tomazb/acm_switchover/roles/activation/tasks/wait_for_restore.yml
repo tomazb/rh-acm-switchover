@@ -66,7 +66,7 @@
             {{
               ((_acm_role_entry_inputs.results | default([])
                 | selectattr('id', 'equalto', 'preflight-input-operation') | list | first | default({}))
-                .get('details') or {}).get('managed_cluster_expectation_waiver')
+                .get('details') or {}).get('managed_cluster_expectation_waiver') or omit
             }}
           expected_names: "{{ acm_switchover_resolved_expected_managed_cluster_names | default([]) }}"
       register: _acm_activation_waiver
@@ -134,7 +134,7 @@
           restore_read: "{{ _acm_completion_restore_read }}"
           velero_read: "{{ _acm_completion_velero_read }}"
           backup_reads: "{{ _acm_backup_reads }}"
-          waiver: "{{ _acm_activation_waiver.waiver }}"
+          waiver: "{{ _acm_activation_waiver.waiver or omit }}"
       register: _acm_completion_bundle
 
     - name: Persist the completion evidence bundle
@@ -168,5 +168,5 @@
   ansible.builtin.set_fact:
     acm_switchover_wait_for_restore_result:
       changed: false
-      completed_at: "{{ _acm_journal.restore.completed_at }}"
+      completed_at: "{{ _acm_journal.restore.completed_at or '' }}"
       velero_restores: "{{ _acm_journal.restore.velero_restores }}"

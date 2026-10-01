@@ -129,7 +129,7 @@ def run_activation(tmp_path):
                 "name": f"Run activation {task}",
                 "ansible.builtin.include_role": {"name": "tomazb.acm_switchover.activation", "tasks_from": task},
                 **(
-                    {"when": ["acm_switchover_operation.method == 'passive'", "_acm_journal is none"]}
+                    {"when": ["acm_switchover_operation.method == 'passive'", "not (_acm_has_journal | bool)"]}
                     if task == "verify_passive_sync"
                     else {}
                 ),

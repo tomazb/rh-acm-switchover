@@ -33,8 +33,12 @@
       }}
     _acm_preview: >-
       {{ (acm_switchover_execution.mode | default('dry_run')) != 'execute' or ansible_check_mode }}
+    # A templated null does not survive the non-native templating of the ansible-core
+    # floor, so the journal is a mapping ({} when none) and its presence a boolean.
     _acm_journal: >-
-      {{ (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal')) }}
+      {{ (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal')) or {} }}
+    _acm_has_journal: >-
+      {{ (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal')) is not none }}
 
 - name: Refuse an invalid recorded migration journal
   ansible.builtin.fail:

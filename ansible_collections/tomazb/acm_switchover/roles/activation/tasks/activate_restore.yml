@@ -9,7 +9,7 @@
 # predictions, issues no Restore mutation and writes no journal transition.
 
 - name: Freeze the migration journal when none is recorded
-  when: _acm_journal is none
+  when: not (_acm_has_journal | bool)
   block:
     - name: List the destination ACM Restores for the freeze
       ansible.builtin.include_tasks: strict_read.yml
@@ -104,6 +104,7 @@
     - name: Continue from the frozen migration journal
       ansible.builtin.set_fact:
         _acm_journal: "{{ _acm_freeze.candidate }}"
+        _acm_has_journal: true
 
 - name: Require the migration journal to belong to this run
   tomazb.acm_switchover.acm_migration_evidence:
@@ -202,6 +203,20 @@
       failed_when: false
       no_log: true
 
+    # Only the classification is passed on: the registered result also echoes the arguments.
+    - name: Classify the guarded PATCH outcome
+      ansible.builtin.set_fact:
+        _acm_patch_outcome: >-
+          {{
+            {
+              'accepted': _acm_patch_result.accepted | default(false),
+              'reason': _acm_patch_result.reason | default('unverifiable'),
+              'uid': _acm_patch_result.uid | default(none),
+              'generation': _acm_patch_result.generation | default(none),
+              'generation_reported': _acm_patch_result.generation_reported | default(false),
+            }
+          }}
+
     - name: Bind the accepted PATCH to the journal
       when: not (_acm_preview | bool)
       block:
@@ -223,7 +238,7 @@
             operation: post_patch
             inputs:
               journal: "{{ _acm_journal }}"
-              result: "{{ _acm_patch_result }}"
+              result: "{{ _acm_patch_outcome }}"
               post_read: "{{ _acm_patch_post_read }}"
           register: _acm_post_patch
 
@@ -328,12 +343,17 @@
             - _acm_pre_delete.action == 'delete'
             - not (_acm_preview | bool)
           block:
+            - name: Classify the guarded DELETE outcome
+              ansible.builtin.set_fact:
+                _acm_delete_outcome:
+                  reason: "{{ _acm_delete_result.reason | default('unverifiable') }}"
+
             - name: Require the guarded DELETE to be accepted
               tomazb.acm_switchover.acm_migration_evidence:
                 operation: post_delete
                 inputs:
                   name: "{{ _acm_pre_delete.name }}"
-                  result: "{{ _acm_delete_result }}"
+                  result: "{{ _acm_delete_outcome }}"
 
             - name: Start the deletion wait
               ansible.builtin.set_fact:
@@ -379,6 +399,19 @@
       failed_when: false
       no_log: true
 
+    - name: Classify the guarded create outcome
+      ansible.builtin.set_fact:
+        _acm_create_outcome: >-
+          {{
+            {
+              'accepted': _acm_create_result.accepted | default(false),
+              'reason': _acm_create_result.reason | default('unverifiable'),
+              'uid': _acm_create_result.uid | default(none),
+              'generation': _acm_create_result.generation | default(none),
+              'generation_reported': _acm_create_result.generation_reported | default(false),
+            }
+          }}
+
     - name: Bind the accepted create to the journal
       when: not (_acm_preview | bool)
       block:
@@ -400,10 +433,10 @@
             operation: post_create
             inputs:
               journal: "{{ _acm_journal }}"
-              result: "{{ _acm_create_result }}"
+              result: "{{ _acm_create_outcome }}"
               post_read: "{{ _acm_create_post_read }}"
               deleted_passive: >-
-                {{ _acm_pre_delete.name if (_acm_pre_create.passive is not none and _acm_pre_delete.action == 'delete') else none }}
+                {{ _acm_pre_delete.name if (_acm_pre_create.passive is not none and _acm_pre_delete.action == 'delete') else omit }}
           register: _acm_post_create
 
         - name: Persist the accepted create evidence
@@ -461,11 +494,15 @@
             )
           )
         }}
-      restore:
-        name: "{{ _acm_journal.restore.name }}"
-        namespace: "{{ _acm_journal.restore.namespace }}"
-        uid: "{{ _acm_journal.restore.uid }}"
-        generation: "{{ _acm_journal.restore.generation }}"
+      restore: >-
+        {{
+          {
+            'name': _acm_journal.restore.name,
+            'namespace': _acm_journal.restore.namespace,
+            'uid': _acm_journal.restore.uid,
+            'generation': _acm_journal.restore.generation,
+          }
+        }}
       operation:
         mutation_kind: "{{ _acm_mutation_kind }}"
         run_id: "{{ _acm_journal.run_id }}"

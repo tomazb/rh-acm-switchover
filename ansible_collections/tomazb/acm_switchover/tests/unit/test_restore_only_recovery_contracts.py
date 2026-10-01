@@ -75,7 +75,7 @@ def test_verify_passive_sync_runs_only_before_the_migration_freeze():
     main_tasks = yaml.safe_load((ACTIVATION_TASKS / "main.yml").read_text())
     block = next(task["block"] for task in main_tasks if "block" in task)
     (verify,) = [task for task in block if task.get("ansible.builtin.include_tasks") == "verify_passive_sync.yml"]
-    assert verify["when"] == ["acm_switchover_operation.method == 'passive'", "_acm_journal is none"]
+    assert verify["when"] == ["acm_switchover_operation.method == 'passive'", "not (_acm_has_journal | bool)"]
     text = (ACTIVATION_TASKS / "verify_passive_sync.yml").read_text()
     assert "operation: verify_passive_sync" in text
     assert "allow_conventional_passive_restore_fallback" not in text

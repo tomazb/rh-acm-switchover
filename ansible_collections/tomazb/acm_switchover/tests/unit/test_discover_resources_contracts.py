@@ -41,11 +41,13 @@ class TestActivationDiscoverResources:
 
     def test_the_override_seam_is_non_live_only(self):
         """An executing run always reads the live hub; pre-seeded reads serve dry_run/validate fixtures."""
-        resolve = self.strict_read[0]["ansible.builtin.set_fact"]["_acm_read_override"]
+        resolve = self.strict_read[0]["ansible.builtin.set_fact"]["_acm_read_overridden"]
         assert "migration_reads" in resolve
         assert "in ['dry_run', 'validate']" in resolve
         (read,) = [t for t in self.strict_read if "tomazb.acm_switchover.acm_k8s_read_outcome" in t]
-        assert _when_text(read) == "_acm_read_override is none"
+        assert _when_text(read) == "not (_acm_read_overridden | bool)"
+        published = self.strict_read[-1]["ansible.builtin.set_fact"]["{{ _acm_read_fact }}"]
+        assert "if (_acm_read_overridden | bool)" in published and "'read_status'" in published
 
     def test_an_invalid_journal_refuses_before_any_restore_read(self):
         names = [t.get("name") for t in self.tasks]

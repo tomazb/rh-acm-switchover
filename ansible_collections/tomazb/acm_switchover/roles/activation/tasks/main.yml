@@ -52,7 +52,7 @@
       ansible.builtin.include_tasks: verify_passive_sync.yml
       when:
         - acm_switchover_operation.method == 'passive'
-        - _acm_journal is none
+        - not (_acm_has_journal | bool)
 
     - name: Resolve auto-import support for ACM 2.14+
       ansible.builtin.include_tasks: resolve_auto_import_support.yml
