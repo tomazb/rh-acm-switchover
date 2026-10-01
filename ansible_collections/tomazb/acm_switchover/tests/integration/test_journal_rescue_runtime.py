@@ -306,3 +306,29 @@ def test_a_journal_free_restore_only_identity_failure_never_resumes_applications
     assert run.completed.returncode != 0
     assert "Checkpoint operation identity does not match the current execution" in output
     assert run.secondary_patches == [] and _writes(run.secondary_requests) == []
+
+
+def test_a_finalization_cleanup_failure_under_a_journal_records_the_marker(run_distinct_hub_playbook):
+    """R4-04 Task 10: the journaled Restore cleanup's own refusal takes the same journal rescue."""
+    cases = json.loads(_VECTORS.read_text(encoding="utf-8"))["cases"]
+    journal = next(case for case in cases if case["id"] == "journal-cleanup-recovery-required")["input"]["candidate"]
+    checkpoint = _checkpoint(migration_backups=journal)
+    checkpoint.update(
+        phase="post_activation", completed_phases=["preflight", "primary_prep", "activation", "post_activation"]
+    )
+
+    run = run_distinct_hub_playbook(
+        primary_applications=[_paused("primary-owned")],
+        secondary_applications=[_paused("secondary-owned")],
+        checkpoint_record=checkpoint,
+        variables=_variables(),
+    )
+    output = _output(run)
+
+    assert run.completed.returncode != 0, output
+    assert "cleanup_recovery_required" in output
+    data = run.checkpoint["operational_data"]
+    assert data["argocd_repause_required"]["failed_phase"] == "finalization"
+    assert data["migration_backups"] == journal
+    assert run.checkpoint["errors"][-1]["phase"] == "finalization"
+    assert [patch["name"] for patch in run.primary_patches] == ["primary-owned"]
