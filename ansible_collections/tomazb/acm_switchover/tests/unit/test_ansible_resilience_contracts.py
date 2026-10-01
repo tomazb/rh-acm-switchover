@@ -39,33 +39,31 @@ def test_activate_restore_verifies_patch_application_after_patch():
     assert "http_accepted" not in tasks, "acceptance is decided from accepted/reason, never http_accepted"
 
 
+def _all_tasks(tasks):
+    for task in tasks:
+        yield task
+        for section in ("block", "rescue", "always"):
+            yield from _all_tasks(task.get(section) or [])
+
+
 def test_full_restore_waits_for_managed_cluster_presence_after_acm_restore():
-    """Full restore must wait for ManagedCluster resources after the ACM Restore is terminal."""
-    tasks = _load_yaml(ACTIVATION_TASKS / "wait_for_restore.yml")
-    text = (ACTIVATION_TASKS / "wait_for_restore.yml").read_text()
+    """R4-04: after the Restore completion proof, ManagedClusters are checked by strict reads;
+    a full restore polls them first, and the fresh completion proof is taken only after that."""
+    tasks = list(_all_tasks(_load_yaml(ACTIVATION_TASKS / "wait_for_restore.yml")))
+    names = [task.get("name") for task in tasks]
     expectation_text = (COMMON_TASKS / "resolve_managed_cluster_expectation.yml").read_text()
 
-    managed_cluster_waits = [
-        task
-        for task in tasks
-        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster" and "until" in task
-    ]
-
-    assert managed_cluster_waits, "wait_for_restore.yml must poll ManagedClusters for full Restore activation"
-    wait_task = managed_cluster_waits[0]
-    until = str(wait_task["until"])
-    when = str(wait_task.get("when", ""))
-
-    assert "managed_cluster_presence_required" in when
-    assert "metadata.name', 'ne', 'local-cluster'" in until
-    assert "_acm_activation_min_managed_clusters" in until
-    assert ">= (_acm_activation_min_managed_clusters | int)" in until
-    assert "_acm_activation_expected_managed_cluster_names" in until
-    assert "difference(" in until
-    assert "resolve_managed_cluster_expectation.yml" in text
+    poll = tasks[names.index("Poll the journaled Restore until its completion proof holds")]
+    mc_wait = tasks[names.index("Wait for full-restore ManagedCluster resources")]
+    verify = tasks[names.index("Verify the ManagedCluster resources were restored")]
+    bundle = tasks[names.index("Prove completion afresh and build the evidence bundle")]
+    assert names.index(poll["name"]) < names.index(mc_wait["name"]) < names.index(verify["name"])
+    assert names.index(verify["name"]) < names.index(bundle["name"])
+    assert mc_wait["ansible.builtin.include_tasks"] == "poll_managed_clusters.yml"
+    assert "acm_switchover_operation.method == 'full'" in str(mc_wait["when"])
+    assert verify["tomazb.acm_switchover.acm_migration_evidence"]["operation"] == "verify_managed_clusters"
     assert "acm_switchover_operation.min_managed_clusters is defined" in expectation_text
     assert "acm_switchover_expected_managed_cluster_count" in expectation_text
-    assert "acm_switchover_operation.restore_only | default(false) | bool" in expectation_text
     assert "1\n          if (acm_switchover_operation.restore_only | default(false) | bool)" in expectation_text
 
 
@@ -729,11 +727,13 @@ def test_activation_requires_passive_restore_ready_before_mutation_tasks():
     assert includes.index("verify_passive_sync.yml") < includes.index("activate_restore.yml")
 
 
-def test_restore_wait_accepts_only_benign_finished_with_errors():
-    """FinishedWithErrors is successful only for consecutive-switchover already-available messages."""
+def test_restore_wait_has_no_benign_error_allow_list():
+    """August section 5: the migration-evidence completion accepts no FinishedWithErrors allow-list;
+    the method-specific phase rule lives in acm_migration_evidence."""
     text = (ACTIVATION_TASKS / "wait_for_restore.yml").read_text()
-    assert "FinishedWithErrors" in text
-    assert "already available" in text
+    poll = (ACTIVATION_TASKS / "poll_restore_completion.yml").read_text()
+    assert "already available" not in text + poll
+    assert "operation: completion_poll" in poll
 
 
 def test_collection_mutation_tasks_default_missing_execution_mode_to_dry_run():

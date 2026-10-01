@@ -93,26 +93,13 @@ def test_activation_checkpoint_defaults_checkpoint_enter_before_discovery_namesp
     assert "((_checkpoint_enter | default({})) or {}).get('facts', {})" in text
 
 
-def test_activation_wait_rejects_stale_velero_restore_signal():
-    """Activation wait must require a new managed-clusters Velero restore name when one existed before activation."""
-    tasks = yaml.safe_load((ACTIVATION_TASKS / "wait_for_restore.yml").read_text())
-    wait_task = next(t for t in tasks if t.get("name") == "Wait for managed-clusters Velero restore to be created")
-    stale_asserts = [t for t in tasks if t.get("name") == "Fail when managed-clusters Velero restore signal is stale"]
-
-    assert "previous_velero_restore_name" in wait_task["until"], (
-        "wait_for_restore.yml must keep polling while the Restore still reports the "
-        "pre-activation managed-clusters Velero restore signal"
-    )
-    assert "!=" in wait_task["until"]
-    assert stale_asserts == []
-
-
-def test_restore_wait_uses_exact_benign_finished_with_errors_matching():
-    """FinishedWithErrors compatibility must not use loose substring matching."""
-    text = (ACTIVATION_TASKS / "wait_for_restore.yml").read_text()
-
-    assert "match', '^ManagedCluster [^ ]+ already available$'" in text
-    assert "reject('search', 'already available')" not in text
+def test_activation_wait_proves_completion_from_the_journal():
+    """The completion proof binds the journaled Restore and its children, so a pre-activation
+    Velero restore signal can never stand in for this transaction's (August section 4 step 8)."""
+    poll = (ACTIVATION_TASKS / "poll_restore_completion.yml").read_text()
+    assert "_acm_journal.restore.name" in poll
+    assert "key: velero_restores" in poll
+    assert "previous_velero_restore_name" not in (ACTIVATION_TASKS / "wait_for_restore.yml").read_text()
 
 
 def test_preflight_skipped_checkpoint_requires_expected_managedcluster_metadata():

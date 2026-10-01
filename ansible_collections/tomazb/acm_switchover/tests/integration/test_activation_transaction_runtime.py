@@ -26,8 +26,8 @@ from ansible_collections.tomazb.acm_switchover.tests.integration.migration_fake_
     PASSIVE,
     RES_B,
     FakeMigrationHub,
+    complete,
     passive_restore,
-    velero_child,
 )
 
 KIND_OPERATION = {
@@ -35,7 +35,7 @@ KIND_OPERATION = {
     "passive_restore": {"method": "passive", "activation_method": "restore"},
     "full_restore": {"method": "full", "activation_method": "patch"},
 }
-TASKS = ("discover_resources", "verify_passive_sync", "activate_restore")
+TASKS = ("discover_resources", "verify_passive_sync", "activate_restore", "wait_for_restore")
 
 
 def _repo_root() -> Path:
@@ -57,17 +57,11 @@ def _identity(operation: dict) -> dict:
 
 
 def complete_on_mutation(hub: FakeMigrationHub, kind: str, name: str) -> None:
-    """The controller's visible result of an accepted Restore mutation: a published, Completed child."""
+    """The controller's visible result of an accepted Restore mutation: the lane's Completed cohort."""
     if kind == "delete" or name not in hub.acm:
         return
-    restore = hub.acm[name]
-    child = f"{name}-{MC_B}"
-    restore["status"] = dict(
-        restore.get("status") or {},
-        phase="Enabled" if kind == "patch" else "Finished",
-        veleroManagedClustersRestoreName=child,
-    )
-    hub.velero[child] = velero_child(child, MC_B, name, restore["metadata"]["uid"])
+    mutation_kind = {"restore-acm-activate": "passive_restore", "restore-acm-full": "full_restore"}
+    complete(hub, name, kind="passive_patch" if kind == "patch" else mutation_kind[name])
 
 
 class Run:
@@ -346,3 +340,211 @@ def test_a_patch_conflict_records_no_generation_and_the_retry_repatches(run_acti
     retry = run_activation("passive_patch", hub)
     assert retry.completed.returncode == 0, retry.output
     assert retry.journal["restore"]["generation"] == 4
+
+
+# --- completion evidence (8c) -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("version", ["2.14.3", "2.17.1"])
+@pytest.mark.parametrize("kind", ["passive_patch", "passive_restore", "full_restore"])
+def test_completion_evidence_is_recorded_with_completed_at(run_activation, kind, version):
+    fake = FakeMigrationHub(version=version, restores=[passive_restore()], controller=complete_on_mutation)
+    try:
+        run = run_activation(kind, fake)
+    finally:
+        fake.close()
+    assert run.completed.returncode == 0, run.output
+    restore = run.journal["restore"]
+    assert restore["completed_at"] and restore["spec_fingerprint"]
+    assert restore["backup_names_verified_at"] and restore["names_verified_at"]
+    assert restore["velero_restores"]["managed_clusters"][0]["backup_name"] == MC_B
+
+
+def _failing_controller(**overrides):
+    def controller(hub, kind, name):
+        if kind != "delete" and name in hub.acm:
+            mutation_kind = {"restore-acm-activate": "passive_restore", "restore-acm-full": "full_restore"}
+            complete(hub, name, kind="passive_patch" if kind == "patch" else mutation_kind[name], **overrides)
+
+    return controller
+
+
+@pytest.mark.parametrize(
+    "kind, overrides, message",
+    [
+        ("passive_patch", {"child_phase": "Failed"}, "completion evidence refused"),
+        ("passive_restore", {"phase": "FinishedWithErrors"}, "reached phase 'FinishedWithErrors'"),
+        ("full_restore", {"child_phase": "PartiallyFailed"}, "completion evidence refused"),
+    ],
+)
+def test_a_failed_completion_records_no_evidence(run_activation, kind, overrides, message):
+    fake = FakeMigrationHub(restores=[passive_restore()], controller=_failing_controller(**overrides))
+    try:
+        run = run_activation(kind, fake)
+    finally:
+        fake.close()
+    assert run.completed.returncode != 0
+    assert message in run.output
+    restore = run.journal["restore"]
+    assert restore["generation"] is not None
+    assert (restore["completed_at"], restore["spec_fingerprint"], restore["names_verified_at"]) == (None, None, None)
+
+
+def test_a_controller_that_never_publishes_times_out_with_no_evidence(run_activation):
+    fake = FakeMigrationHub(restores=[passive_restore()])
+    try:
+        run = run_activation("passive_patch", fake)
+    finally:
+        fake.close()
+    assert run.completed.returncode != 0
+    assert "Timeout waiting for restore to complete after 0s" in run.output
+    assert run.journal["restore"]["completed_at"] is None
+
+
+def test_an_interrupted_bundle_is_reconciled_and_completed_last(run_activation, hub, tmp_path):
+    first = run_activation("passive_patch", hub)
+    assert first.completed.returncode == 0, first.output
+    # The process stopped between the bundle write and the completed_at write.
+    checkpoint_path = tmp_path / "checkpoint.json"
+    stored = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    stored["operational_data"]["migration_backups"]["restore"]["completed_at"] = None
+    checkpoint_path.write_text(json.dumps(stored), encoding="utf-8")
+
+    second = run_activation("passive_patch", hub)
+    assert second.completed.returncode == 0, second.output
+    before, after = first.journal["restore"], second.journal["restore"]
+    assert after["completed_at"]
+    for field in ("velero_restores", "spec_fingerprint", "backup_names_verified_at", "names_verified_at"):
+        assert after[field] == before[field], field
+    assert [request["method"] for request in hub.writes] == ["PATCH"]
+
+
+def test_completed_evidence_is_revalidated_on_resume_and_drift_blocks(run_activation, hub):
+    first = run_activation("passive_patch", hub)
+    assert first.completed.returncode == 0, first.output
+    second = run_activation("passive_patch", hub)
+    assert second.completed.returncode == 0, second.output
+    assert second.journal == first.journal
+    child = first.journal["restore"]["velero_restores"]["managed_clusters"][0]["name"]
+    hub.velero[child]["metadata"]["uid"] = "uid-replacement"
+    third = run_activation("passive_patch", hub)
+    assert third.completed.returncode != 0
+    assert third.journal == first.journal
+
+
+def test_a_missing_expected_name_blocks_before_any_evidence(run_activation, hub):
+    run = run_activation("passive_patch", hub, extra={"acm_switchover_expected_managed_cluster_names": ["cluster-x"]})
+    assert run.completed.returncode != 0
+    assert "Missing expected ManagedCluster(s) after restore: cluster-x" in run.output
+    assert run.journal["restore"]["completed_at"] is None
+
+
+def test_an_activation_waiver_is_journaled_and_never_verifies_names(run_activation, hub):
+    waiver = {"scope": "activation", "actor": "operator@example.com", "reason": "stale inventory", "request_id": None}
+    run = run_activation(
+        "passive_patch",
+        hub,
+        extra={
+            "acm_switchover_expected_managed_cluster_names": ["cluster-x"],
+            "_acm_role_entry_inputs": {
+                "results": [
+                    {"id": "preflight-input-operation", "details": {"managed_cluster_expectation_waiver": waiver}}
+                ]
+            },
+        },
+    )
+    assert run.completed.returncode == 0, run.output
+    journaled = run.journal["waiver"]
+    assert {key: journaled[key] for key in waiver} == waiver
+    assert (journaled["outcome"], journaled["flag"]) == (
+        "waived",
+        "acm_switchover_operation.skip_managed_cluster_expectations",
+    )
+    assert run.journal["restore"]["names_verified_at"] is None
+    assert run.journal["restore"]["completed_at"]
+
+
+@pytest.mark.parametrize("kind", ["passive_patch", "full_restore"])
+def test_the_whole_activation_role_runs_the_transaction_and_completes_the_phase(tmp_path, kind):
+    """Direct role entry (docs/variable-reference.md): guard, transaction, completion and pass."""
+    fake = FakeMigrationHub(version="2.13.4", restores=[passive_restore()], controller=complete_on_mutation)
+    try:
+        operation = KIND_OPERATION[kind]
+        kubeconfig = tmp_path / "secondary.kubeconfig"
+        write_kubeconfig(kubeconfig, context="secondary-hub", server=fake.url, token="fixture-token")
+        primary = tmp_path / "primary.kubeconfig"
+        write_kubeconfig(primary, context="primary-hub", server=fake.url, token="fixture-token")
+        checkpoint_path = tmp_path / "checkpoint.json"
+        checkpoint_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "2.0",
+                    "phase": "primary_prep",
+                    "phase_status": "pass",
+                    "completed_phases": ["preflight", "primary_prep"],
+                    "operational_data": {
+                        "expected_managed_cluster_names": ["cluster-a"],
+                        "expected_managed_cluster_count": 1,
+                    },
+                    "operation_identity": _identity(operation),
+                    "errors": [],
+                    "report_refs": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        variables = {
+            "acm_switchover_hubs": {
+                "primary": {"context": "primary-hub", "kubeconfig": str(primary)},
+                "secondary": {"context": "secondary-hub", "kubeconfig": str(kubeconfig)},
+            },
+            "acm_switchover_operation": dict(operation, restore_only=False, old_hub_action="secondary"),
+            "acm_switchover_execution": {
+                "mode": "execute",
+                "report_dir": str(tmp_path / "artifacts"),
+                "checkpoint": {"enabled": True, "backend": "file", "path": str(checkpoint_path)},
+            },
+            "acm_switchover_expected_managed_cluster_names": ["cluster-a"],
+            "acm_switchover_expected_managed_cluster_count": 1,
+            "_acm_restore_poll_delays": [0, 0, 0],
+        }
+        playbook = tmp_path / "role.yml"
+        playbook.write_text(
+            yaml.safe_dump(
+                [
+                    {
+                        "hosts": "localhost",
+                        "connection": "local",
+                        "gather_facts": False,
+                        "tasks": [
+                            {
+                                "name": "Enter the activation role directly",
+                                "ansible.builtin.include_role": {"name": "tomazb.acm_switchover.activation"},
+                            }
+                        ],
+                    }
+                ],
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        vars_file = tmp_path / "vars.yml"
+        vars_file.write_text(yaml.safe_dump(variables, sort_keys=False), encoding="utf-8")
+        completed = subprocess.run(
+            ["ansible-playbook", str(playbook), "-i", "localhost,", "-e", f"@{vars_file}"],
+            cwd=_repo_root(),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_ansible_env(_repo_root(), tmp_path),
+            timeout=300,
+        )
+    finally:
+        fake.close()
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    stored = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert stored["completed_phases"] == ["preflight", "primary_prep", "activation"]
+    journal = stored["operational_data"]["migration_backups"]
+    assert journal["restore"]["completed_at"] and journal["restore"]["names_verified_at"]
+    assert journal["restore"]["mutation_kind"] == kind and journal["restore"]["acm_minor"] == "2.13"

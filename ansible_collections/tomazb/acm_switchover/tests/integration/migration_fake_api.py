@@ -92,6 +92,51 @@ def velero_child(name: str, backup_name: str, owner: str, owner_uid: str, phase:
     }
 
 
+def child_name(owner: str, backup_name: str, active: bool = False) -> str:
+    return f"{owner}-{backup_name}"[:252] + ("-active" if active else "")
+
+
+def complete(hub: "FakeMigrationHub", name: str, *, kind: str, phase=None, child_phase="Completed") -> dict:
+    """Play the controller: publish the lane's children and status for the journaled Restore.
+
+    The same cohort tests/test_activation_evidence.complete publishes for the Python CLI.
+    """
+    restore = hub.acm[name]
+    owner_uid = restore["metadata"]["uid"]
+    legacy = not hub.version.startswith("2.17")
+    children = {}
+    status = {}
+    if kind == "passive_patch":
+        children["mc"] = (child_name(name, MC_B), MC_B)
+        children["cred_active"] = (child_name(name, CRED_B, True), CRED_B)
+        children["gen_active"] = (child_name(name, GEN_B, True), GEN_B)
+        children["cred_shared"] = (child_name(name, CRED_B), CRED_B)
+        status["veleroManagedClustersRestoreName"] = children["mc"][0]
+        if legacy:
+            status["veleroCredentialsRestoreName"] = children["cred_active"][0]
+            status["veleroGenericResourcesRestoreName"] = children["gen_active"][0]
+        phase = phase or "Enabled"
+    else:
+        children["mc"] = (child_name(name, MC_B), MC_B)
+        status["veleroManagedClustersRestoreName"] = children["mc"][0]
+        if kind == "full_restore" or legacy:
+            children["cred"] = (child_name(name, CRED_B), CRED_B)
+            children["gen"] = (child_name(name, GEN_B), GEN_B)
+            status["veleroCredentialsRestoreName"] = children["cred"][0]
+            status["veleroGenericResourcesRestoreName"] = children["gen"][0]
+        if kind == "full_restore":
+            children["res"] = (child_name(name, RES_B), RES_B)
+            status["veleroResourcesRestoreName"] = children["res"][0]
+            if not legacy:
+                children["cred_active"] = (child_name(name, CRED_B, True), CRED_B)
+                children["gen_active"] = (child_name(name, GEN_B, True), GEN_B)
+        phase = phase or "Finished"
+    for child, backup_name in children.values():
+        hub.velero[child] = velero_child(child, backup_name, name, owner_uid, phase=child_phase)
+    restore.setdefault("status", {}).update(status, phase=phase)
+    return children
+
+
 def _resource(name: str, kind: str, namespaced: bool = True, verbs=("get", "list")) -> dict:
     return {"name": name, "singularName": "", "namespaced": namespaced, "kind": kind, "verbs": list(verbs)}
 

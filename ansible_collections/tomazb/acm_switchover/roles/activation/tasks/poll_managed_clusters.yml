@@ -1,0 +1,33 @@
+---
+# One poll of the full-restore ManagedCluster wait. Included in a bounded loop; the
+# ManagedCluster verification after the loop owns the refusal.
+
+- name: Wait before re-reading the ManagedClusters
+  ansible.builtin.pause:
+    seconds: "{{ _acm_poll_delay }}"
+  when: _acm_poll_delay | int > 0
+
+- name: Read the ManagedCluster inventory strictly
+  ansible.builtin.include_tasks: strict_read.yml
+  vars:
+    _acm_read:
+      key: managedclusters
+      read_mode: list
+      api_version: cluster.open-cluster-management.io/v1
+      kind: ManagedCluster
+      resource_name: managedclusters
+    _acm_read_fact: _acm_mc_poll_read
+
+- name: Decide whether the ManagedClusters are restored
+  tomazb.acm_switchover.acm_migration_evidence:
+    operation: managed_clusters_poll
+    inputs:
+      mc_read: "{{ _acm_mc_poll_read }}"
+      expected_names: "{{ _acm_mc_check.expected_names }}"
+      min_managed_clusters: "{{ _acm_mc_check.min_managed_clusters | int }}"
+      enforce: "{{ _acm_mc_check.enforce | bool }}"
+  register: _acm_mc_poll
+
+- name: Record the ManagedCluster poll
+  ansible.builtin.set_fact:
+    _acm_mc_state: "{{ _acm_mc_poll.state }}"

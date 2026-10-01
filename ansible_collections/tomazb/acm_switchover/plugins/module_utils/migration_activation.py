@@ -26,14 +26,20 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
     BENIGN_ALREADY_AVAILABLE_MESSAGE_PATTERN,
     CLEANUP_BEFORE_RESTORE_VALUE,
     FULL_RESTORE_NAME,
+    LOCAL_CLUSTER_NAME,
     VELERO_BACKUP_LATEST,
     VELERO_BACKUP_SKIP,
 )
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_child_evidence import (
     STATUS_NAME_FIELDS,
     VELERO_RESTORE_LISTS,
+    acm_phase_accepts,
     freeze_one_shot_backups,
     freeze_passive_patch_backups,
+    is_owned_by,
+    one_shot_completion,
+    passive_patch_cohort,
+    passive_patch_completion,
     predict_one_shot_child_names,
     predict_passive_patch_child_names,
     predict_passive_patch_credential_variants,
@@ -48,7 +54,9 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_ev
     select_latest_evidence,
 )
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_journal import (
+    restore_spec_fingerprint,
     validate_journal_transition,
+    validate_waiver,
 )
 
 RESTORE_API_VERSION = "cluster.open-cluster-management.io/v1beta1"
@@ -72,6 +80,24 @@ _BENIGN_MESSAGE = re.compile(BENIGN_ALREADY_AVAILABLE_MESSAGE_PATTERN)
 # Python parse_acm_version (lib/utils.py _ACM_VERSION_RE).
 _ACM_VERSION = re.compile(r"^\s*(\d+)\.(\d+)(?:\.(\d+))?(?:[-+][A-Za-z0-9][A-Za-z0-9.+-]*)?\s*$")
 MUTATION_KINDS = ("passive_patch", "passive_restore", "full_restore")
+# ACM Restore phases that precede completion, and Velero Restore phases that are not
+# terminal yet: both keep the completion wait polling (August section 5).
+_ACM_PENDING_PHASES = (None, "", "New", "Started", "Running")
+_VELERO_PENDING_PHASES = (
+    "",
+    "New",
+    "InProgress",
+    "WaitingForPluginOperations",
+    "WaitingForPluginOperationsPartiallyFailed",
+    "Finalizing",
+    "FinalizingPartiallyFailed",
+)
+# Completion refusals that mean "the controller has not produced this yet".
+_PENDING_CHILD_CODES = frozenset(
+    {"required_status_name_missing", "required_child_missing", "active_child_missing", "velero_restore_phase_missing"}
+)
+# The collection variable that requests the waiver; the Python CLI journals its own flag.
+WAIVER_FLAG = "acm_switchover_operation.skip_managed_cluster_expectations"
 _CLEANUP_NOT_STARTED = {
     "operation_id": None,
     "state": "not_started",
@@ -688,3 +714,225 @@ def _positive_int(value: Any) -> bool:
 
 def _non_empty_str(value: Any) -> bool:
     return isinstance(value, str) and bool(value)
+
+
+# -- completion evidence (SecondaryActivation._wait_for_restore_completion) --------------------
+
+
+def require_completion_journal(journal: Any) -> Dict[str, Any]:
+    if not isinstance(journal, dict) or journal["restore"]["generation"] is None:
+        raise ActivationRefused("No journaled Restore mutation to wait for; completion evidence cannot be established")
+    return journal
+
+
+def _completion_inputs(journal: Dict[str, Any], restore_read: Any, velero_read: Any):
+    """Strict reads a completion proof needs: the journaled Restore's status and the Velero Restores."""
+    restore = journal["restore"]
+    live = require_journaled_restore(journal, restore_read)
+    require_owned_spec(live, journal)
+    status = live.get("status", {})
+    if not isinstance(status, dict):
+        raise ActivationRefused(f"{restore['name']} status is malformed")
+    names = {field: status.get(field, "") for field in STATUS_NAME_FIELDS}
+    if not all(isinstance(value, str) for value in names.values()):
+        raise ActivationRefused(f"{restore['name']} status Restore names are malformed")
+    return status, names, strict_list(velero_read, "Velero Restore list")
+
+
+def _completion_lists(journal: Dict[str, Any], names: Dict[str, str], children: List[Dict[str, Any]], phase: Any):
+    restore = journal["restore"]
+    common = {
+        "acm_restore_name": restore["name"],
+        "acm_restore_uid": restore["uid"],
+        "namespace": restore["namespace"],
+        "frozen_backups": journal["backups"],
+        "status_names": names,
+        "namespace_restores": children,
+        "acm_phase": phase,
+    }
+    if restore["mutation_kind"] == "passive_patch":
+        return passive_patch_completion(
+            restore["controller_contract"],
+            precondition_status_names=restore["passive_patch_precondition"]["status_restore_names"],
+            **common,
+        )
+    return one_shot_completion(restore["mutation_kind"], restore["controller_contract"], **common)
+
+
+def _children_in_progress(journal: Dict[str, Any], children: List[Dict[str, Any]], names: Dict[str, str]) -> bool:
+    """True while a child the completion proof aggregates is still running (or has no phase yet)."""
+    restore = journal["restore"]
+    owned = [child for child in children if _evidence(is_owned_by, child, restore["name"], restore["uid"])]
+    if restore["mutation_kind"] == "passive_patch":
+        owned = _evidence(passive_patch_cohort, restore["controller_contract"], owned, names)
+    for child in owned:
+        status = child.get("status", {})
+        phase = status.get("phase") if isinstance(status, dict) else None
+        if phase is None or phase in _VELERO_PENDING_PHASES:
+            return True
+    return False
+
+
+def completion_poll(*, journal: Dict[str, Any], restore_read: Any, velero_read: Any) -> Dict[str, str]:
+    """One poll of the completion wait: pending while the controller works, complete, or refused.
+
+    A non-terminal ACM or child phase, or a child the controller has not created yet, keeps
+    the wait pending; anything else refuses with no evidence written.
+    """
+    restore = require_completion_journal(journal)["restore"]
+    status, names, children = _completion_inputs(journal, restore_read, velero_read)
+    phase = status.get("phase")
+    if not _evidence(acm_phase_accepts, restore["mutation_kind"], restore["controller_contract"], phase):
+        if phase in _ACM_PENDING_PHASES:
+            return {"state": "pending", "detail": f"phase={phase}"}
+        raise ActivationRefused(f"Restore {restore['name']} reached phase {phase!r}: {status.get('lastMessage', '')}")
+    if _children_in_progress(journal, children, names):
+        return {"state": "pending", "detail": "Velero restores in progress"}
+    try:
+        _completion_lists(journal, names, children, phase)
+    except MigrationEvidenceError as exc:
+        if exc.code in _PENDING_CHILD_CODES:
+            return {"state": "pending", "detail": exc.code}
+        raise ActivationRefused(f"Restore {restore['name']} completion evidence refused ({exc})") from exc
+    return {"state": "complete", "detail": f"phase={phase}"}
+
+
+def activation_waiver(
+    *, journal: Dict[str, Any], requested: Any, expected_names: List[str], journaled_at: str
+) -> Dict[str, Any]:
+    """The waiver covering the activation name check: the journaled one, else a matching request."""
+    journaled = journal["waiver"]
+    if journaled is not None:
+        if requested is not None and any(requested[key] != journaled[key] for key in requested):
+            raise ActivationRefused(
+                "A different expected-ManagedCluster waiver is already journaled for this migration; "
+                "resume with the journaled waiver"
+            )
+        return {"waiver": journaled if journaled["scope"] in ("activation", "both") else None}
+    if requested is None or requested["scope"] not in ("activation", "both"):
+        return {"waiver": None}
+    record = dict(requested, flag=WAIVER_FLAG, journaled_at=journaled_at, outcome="waived")
+    return {"waiver": _evidence(validate_waiver, record, sorted(expected_names), "activation")}
+
+
+def _managed_cluster_names(mc_read: Any) -> List[str]:
+    items = strict_list(mc_read, "ManagedCluster inventory")
+    names = []
+    for item in items:
+        name = (item.get("metadata") or {}).get("name") if isinstance(item, dict) else None
+        if name and name != LOCAL_CLUSTER_NAME:
+            names.append(name)
+    return names
+
+
+def managed_clusters_poll(
+    *, mc_read: Any, expected_names: List[str], min_managed_clusters: int, enforce: bool
+) -> Dict[str, str]:
+    """One poll of the full-restore ManagedCluster wait (enforce False is the journaled waiver)."""
+    names = _managed_cluster_names(mc_read)
+    count = len(names)
+    missing = sorted(set(expected_names) - set(names))
+    if enforce and missing:
+        return {
+            "state": "pending",
+            "detail": f"found {count}/{min_managed_clusters} ManagedCluster(s); missing expected: {missing}",
+        }
+    if count >= min_managed_clusters:
+        return {"state": "complete", "detail": f"found {count} ManagedCluster(s): {', '.join(names)}"}
+    return {"state": "pending", "detail": f"found {count}/{min_managed_clusters} ManagedCluster(s): {names}"}
+
+
+def verify_managed_clusters(
+    *, mc_read: Any, expected_names: List[str], min_managed_clusters: int, enforce: bool
+) -> Dict[str, str]:
+    """ManagedCluster resources were actually restored (SecondaryActivation._verify_managed_clusters_restored).
+
+    enforce False is the journaled activation waiver: it lifts only the name check, never
+    the count floor.
+    """
+    names = _managed_cluster_names(mc_read)
+    count = len(names)
+    missing = sorted(set(expected_names) - set(names))
+    if enforce and missing:
+        raise ActivationRefused(
+            f"Missing expected ManagedCluster(s) after restore: {', '.join(missing)}. Found {count}: {names}"
+        )
+    if enforce and count < min_managed_clusters:
+        raise ActivationRefused(
+            f"Expected {min_managed_clusters} ManagedCluster(s) from primary preflight after restore, "
+            f"but found only {count}: {names}"
+        )
+    if min_managed_clusters == 0 or count >= min_managed_clusters:
+        return {"detail": f"Found {count} ManagedCluster(s) on secondary hub: {', '.join(names)}"}
+    raise ActivationRefused(
+        f"Expected at least {min_managed_clusters} ManagedCluster(s) after restore, but found only {count}: {names}"
+    )
+
+
+def _prove_completion(journal: Dict[str, Any], restore_read: Any, velero_read: Any, backup_reads: Any):
+    """One fresh, non-waiting completion proof: every rule of the method-specific validator, or refused."""
+    restore = journal["restore"]
+    status, names, children = _completion_inputs(journal, restore_read, velero_read)
+    phase = status.get("phase")
+    if not _evidence(acm_phase_accepts, restore["mutation_kind"], restore["controller_contract"], phase):
+        raise ActivationRefused(f"Restore {restore['name']} reached phase {phase!r}: {status.get('lastMessage', '')}")
+    lists = _evidence(_completion_lists, journal, names, children, phase)
+    revalidate_frozen_backups(journal, backup_reads)
+    return lists
+
+
+def completion_bundle(
+    *,
+    journal: Dict[str, Any],
+    restore_read: Any,
+    velero_read: Any,
+    backup_reads: Any,
+    waiver: Any,
+    now: str,
+) -> Dict[str, Any]:
+    """The July section 1a bundle from a fresh proof, the first of two writes (completed_at follows alone).
+
+    A partial bundle from an interrupted attempt is reconciled, never rewritten: every
+    persisted child entry and the persisted fingerprint must equal what the fresh validation
+    produced, and set-once timestamps keep their values.
+    """
+    restore = require_completion_journal(journal)["restore"]
+    children = _prove_completion(journal, restore_read, velero_read, backup_reads)
+    fingerprint = _evidence(restore_spec_fingerprint, journal)
+    if restore["spec_fingerprint"] not in (None, fingerprint):
+        raise ActivationRefused(f"{restore['name']} journaled fingerprint disagrees with the validated spec")
+    for key, entries in restore["velero_restores"].items():
+        fresh = {entry["name"]: entry for entry in children[key]}
+        if any(fresh.get(entry["name"]) != entry for entry in entries):
+            raise ActivationRefused(f"Journaled {key} child evidence disagrees with the live Velero Restores")
+    bundle = _with_restore(
+        journal,
+        velero_restores=children,
+        spec_fingerprint=fingerprint,
+        backup_names_verified_at=restore["backup_names_verified_at"] or now,
+        names_verified_at=None if waiver is not None else (restore["names_verified_at"] or now),
+    )
+    if waiver is not None:
+        bundle["waiver"] = waiver
+    return {"candidate": bundle}
+
+
+def complete(*, journal: Dict[str, Any], now: str) -> Dict[str, Any]:
+    """restore.completed_at, the strictly last activation evidence write."""
+    return {"candidate": _with_restore(journal, completed_at=now)}
+
+
+def revalidate_completed(
+    *, journal: Dict[str, Any], restore_read: Any, velero_read: Any, backup_reads: Any
+) -> Dict[str, Any]:
+    """Resume over completed evidence: re-run the completion contract live, never rewrite it."""
+    restore = journal["restore"]
+    fresh = _prove_completion(journal, restore_read, velero_read, backup_reads)
+    if _evidence(restore_spec_fingerprint, journal) != restore["spec_fingerprint"]:
+        raise ActivationRefused(f"{restore['name']} journaled fingerprint disagrees with the journaled spec")
+    for key, entries in restore["velero_restores"].items():
+        observed = {entry["name"]: entry for entry in fresh[key]}
+        for entry in entries:
+            if observed.get(entry["name"]) != entry:
+                raise ActivationRefused(f"Journaled {key} child {entry['name']} was replaced or changed")
+    return {"name": restore["name"]}

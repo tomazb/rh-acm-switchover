@@ -24,11 +24,16 @@ options:
     required: true
     choices:
       - acm_minor
+      - activation_waiver
+      - complete
+      - completion_bundle
+      - completion_poll
       - create_body
       - deletion_poll
       - freeze
       - frozen_backups
       - journal_matches
+      - managed_clusters_poll
       - passive_restore
       - post_create
       - post_delete
@@ -37,14 +42,17 @@ options:
       - pre_delete
       - pre_patch
       - reconcile
+      - revalidate_completed
       - status_subresource
+      - verify_managed_clusters
       - verify_passive_sync
   inputs:
     description:
       - The step's keyword inputs, as the matching C(migration_activation) function takes
         them. Read results are C(acm_k8s_read_outcome) results; C(journal) is the validated
         journal published by C(checkpoint_phase) or the last persisted C(candidate).
-      - C(freeze) generates its C(run_id) and C(resolved_at) unless they are supplied.
+      - C(freeze) generates its C(run_id) and C(resolved_at), and C(activation_waiver),
+        C(completion_bundle) and C(complete) their timestamp, unless they are supplied.
     type: dict
     default: {}
 author:
@@ -79,7 +87,7 @@ changed:
   type: bool
 candidate:
   description: The complete validated journal transition to persist.
-  returned: for freeze, post_patch and post_create
+  returned: for freeze, post_patch, post_create, completion_bundle and complete
   type: dict
 """
 
@@ -119,7 +127,21 @@ _OPERATIONS: Dict[str, Callable[[dict], dict]] = {
     "create_body": lambda inputs: transaction.create_body(**inputs),
     "post_create": lambda inputs: transaction.post_create(**inputs),
     "reconcile": lambda inputs: transaction.reconcile(**inputs),
+    "completion_poll": lambda inputs: transaction.completion_poll(**inputs),
+    "activation_waiver": lambda inputs: transaction.activation_waiver(**_with_time(inputs, "journaled_at")),
+    "managed_clusters_poll": lambda inputs: transaction.managed_clusters_poll(**inputs),
+    "verify_managed_clusters": lambda inputs: transaction.verify_managed_clusters(**inputs),
+    "completion_bundle": lambda inputs: transaction.completion_bundle(**_with_time(inputs, "now")),
+    "complete": lambda inputs: transaction.complete(**_with_time(inputs, "now")),
+    "revalidate_completed": lambda inputs: transaction.revalidate_completed(**inputs),
 }
+
+
+def _with_time(inputs: dict, field: str) -> dict:
+    """The decision instant, taken now unless supplied, as the Python CLI timestamps its writes."""
+    resolved = dict(inputs)
+    resolved.setdefault(field, datetime.now(timezone.utc).isoformat())
+    return resolved
 
 
 def _with_identity(inputs: dict) -> dict:

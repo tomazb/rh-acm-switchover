@@ -159,6 +159,64 @@ class CollectionActivation:
             self._persist(candidate, preview)
 
 
+def _proof_reads(activation: "CollectionActivation", journal: dict) -> dict:
+    return {
+        "restore_read": activation._get("restores", journal["restore"]["name"]),
+        "velero_read": activation._list("restores", _VELERO),
+        "backup_reads": activation._backup_reads(journal),
+    }
+
+
+def _collection_wait(activation, kind, *, expected=(), minimum=0, requested=None):
+    """The completion step, mirroring roles/activation/tasks/wait_for_restore.yml."""
+    journal = col.require_completion_journal(col_checkpoint.migration_backups(activation.store))
+    if journal["restore"]["completed_at"] is not None:
+        col.revalidate_completed(journal=journal, **_proof_reads(activation, journal))
+        return
+    for _ in range(_POLLS):
+        poll = col.completion_poll(
+            journal=journal,
+            restore_read=activation._get("restores", journal["restore"]["name"]),
+            velero_read=activation._list("restores", _VELERO),
+        )
+        if poll["state"] == "complete":
+            break
+    else:
+        raise col.ActivationRefused("Timeout waiting for restore to complete")
+    waiver = col.activation_waiver(
+        journal=journal, requested=requested, expected_names=list(expected), journaled_at=RESOLVED_AT
+    )["waiver"]
+    check = {
+        "expected_names": list(expected),
+        "min_managed_clusters": minimum,
+        "enforce": bool(expected) and waiver is None,
+    }
+    state = "pending"
+    if kind == "full_restore" and (minimum > 0 or check["enforce"]):
+        for _ in range(_POLLS):
+            state = col.managed_clusters_poll(mc_read=_read(activation.hub.list_managed_clusters_strict()), **check)[
+                "state"
+            ]
+            if state == "complete":
+                break
+    if state != "complete":
+        col.verify_managed_clusters(mc_read=_read(activation.hub.list_managed_clusters_strict()), **check)
+    bundle = col.completion_bundle(
+        journal=journal, **_proof_reads(activation, journal), waiver=waiver, now=RESOLVED_AT
+    )["candidate"]
+    activation._persist(bundle, False)
+    activation._persist(col.complete(journal=bundle, now=RESOLVED_AT)["candidate"], False)
+
+
+def _comparable(journal):
+    """The Python CLI journals its --skip-managed-cluster-expectations flag, the collection its variable."""
+    if journal is None or journal.get("waiver") is None:
+        return journal
+    flags = {"--skip-managed-cluster-expectations", col.WAIVER_FLAG}
+    assert journal["waiver"]["flag"] in flags
+    return dict(journal, waiver=dict(journal["waiver"], flag="<flag>"))
+
+
 class Forms:
     """The two form factors, each over its own identical fake hub."""
 
@@ -188,6 +246,44 @@ class Forms:
                 activation._verify_passive_sync()
             activation._apply_migration_mutation()
 
+    def wait(self, kind, *, expected=(), minimum=0, requested=None):
+        """The completion step of both form factors, after a run(kind) accepted the mutation."""
+        method, activation_method = {
+            "passive_patch": ("passive", "patch"),
+            "passive_restore": ("passive", "restore"),
+            "full_restore": ("full", "patch"),
+        }[kind]
+        python = activation_module.SecondaryActivation(
+            self.py_hub,
+            self.state,
+            method=method,
+            activation_method=activation_method,
+            min_managed_clusters=minimum,
+            expected_managed_cluster_names=list(expected),
+            enforce_expected_managed_cluster_names=bool(expected),
+            managed_cluster_expectation_waiver=requested,
+        )
+        outcomes = []
+        for call in (
+            lambda: python._wait_for_restore_completion(),
+            lambda: _collection_wait(
+                CollectionActivation(self.col_hub, self.store),
+                kind,
+                expected=expected,
+                minimum=minimum,
+                requested=requested,
+            ),
+        ):
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(activation_module, "_now_iso", return_value=RESOLVED_AT))
+                stack.enter_context(ev._no_wait())
+                try:
+                    call()
+                    outcomes.append(None)
+                except (FatalError, col.ActivationRefused) as exc:
+                    outcomes.append(str(exc))
+        return outcomes
+
     def run(self, kind, *, preview=False):
         outcomes = []
         for form, call in (("python", lambda: self._python(kind, preview)), ("collection", None)):
@@ -206,7 +302,9 @@ class Forms:
         assert (python is None) == (collection is None), outcomes
         if compare_message:
             assert python == collection
-        assert RunRecord(self.state).migration_backups() == col_checkpoint.migration_backups(self.store)
+        assert _comparable(RunRecord(self.state).migration_backups()) == _comparable(
+            col_checkpoint.migration_backups(self.store)
+        )
         assert self.py_hub.mutations == self.col_hub.mutations
         assert self.py_hub.acm == self.col_hub.acm
 
@@ -521,3 +619,172 @@ def test_a_passive_patch_name_collision_issues_zero_patch_identically(tmp_path):
     outcomes = forms.run("passive_patch")
     forms.assert_same(outcomes)
     assert outcomes[0] is not None and forms.col_hub.mutations == []
+
+
+# --- completion evidence (Task 8c) ----------------------------------------------------------
+
+
+def _accepted(tmp_path, kind, version="2.14.3", **complete_kwargs):
+    """Both form factors after an accepted mutation, with the controller's cohort published."""
+    forms = Forms(tmp_path, version=version)
+    forms.assert_same(forms.run(kind))
+    forms.clear_mutations()
+    if complete_kwargs.get("publish", True):
+        complete_kwargs.pop("publish", None)
+        forms.both(lambda hub: ev.complete(hub, ev.RESTORE_NAMES[kind], version=version, kind=kind, **complete_kwargs))
+    return forms
+
+
+@pytest.mark.parametrize("version", LANES)
+@pytest.mark.parametrize("kind", KINDS)
+def test_completion_evidence_is_recorded_identically(tmp_path, kind, version):
+    forms = _accepted(tmp_path, kind, version)
+    outcomes = forms.wait(kind, expected=("cluster-a",), minimum=1)
+    forms.assert_same(outcomes)
+    assert outcomes == [None, None]
+    journal = col_checkpoint.migration_backups(forms.store)
+    assert journal["restore"]["completed_at"] == RESOLVED_AT
+    # A rerun revalidates the completed evidence and rewrites nothing.
+    forms.assert_same(forms.wait(kind, expected=("cluster-a",), minimum=1))
+    assert col_checkpoint.migration_backups(forms.store) == journal
+
+
+@pytest.mark.parametrize("kind", KINDS)
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        pytest.param({"child_phase": "Failed"}, id="child-failed"),
+        pytest.param({"child_phase": "PartiallyFailed"}, id="child-partially-failed"),
+        pytest.param({"phase": "FinishedWithErrors"}, id="finished-with-errors"),
+        pytest.param({"phase": "EnabledWithErrors"}, id="enabled-with-errors"),
+        pytest.param({"child_phase": "InProgress"}, id="child-running"),
+        pytest.param({"publish": False}, id="never-published"),
+    ],
+)
+def test_a_completion_failure_records_no_evidence_identically(tmp_path, kind, outcome):
+    forms = _accepted(tmp_path, kind, **outcome)
+    outcomes = forms.wait(kind, expected=("cluster-a",), minimum=1)
+    # The timeout wording carries the wait duration only in the Python CLI.
+    both_timed_out = all(outcome and outcome.startswith("Timeout") for outcome in outcomes)
+    forms.assert_same(outcomes, compare_message=not both_timed_out)
+    assert outcomes[0] is not None
+    assert col_checkpoint.migration_backups(forms.store)["restore"]["completed_at"] is None
+
+
+def _consume_newer_managed_clusters_backup(hub):
+    """The alias race: the controller's published ManagedClusters child restored a newer Backup."""
+    newer = "acm-managed-clusters-schedule-20240103120000"
+    hub.velero["newer"] = ev.velero_child("newer", newer, RESTORE_PASSIVE_SYNC_NAME, "uid-passive")
+    hub.acm[RESTORE_PASSIVE_SYNC_NAME]["status"]["veleroManagedClustersRestoreName"] = "newer"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        pytest.param(
+            lambda hub: hub.velero.__setitem__(
+                "hive",
+                ev.velero_child(
+                    "hive",
+                    f"acm-credentials-hive-schedule-{ev.STAMP}",
+                    RESTORE_PASSIVE_SYNC_NAME,
+                    "uid-passive",
+                    phase="Failed",
+                ),
+            ),
+            id="historical-hive-child",
+        ),
+        pytest.param(lambda hub: _consume_newer_managed_clusters_backup(hub), id="consumed-newer-backup"),
+        pytest.param(lambda hub: hub.backups[ev.MC_B]["status"].update(warnings=3), id="frozen-backup-drift"),
+        pytest.param(lambda hub: setattr(hub, "managed_clusters", []), id="no-managed-clusters"),
+    ],
+)
+def test_completion_refusals_agree_for_a_passive_patch(tmp_path, change):
+    forms = _accepted(tmp_path, "passive_patch")
+    forms.both(change)
+    outcomes = forms.wait("passive_patch", expected=("cluster-a",), minimum=1)
+    forms.assert_same(outcomes)
+    assert outcomes[0] is not None
+
+
+@pytest.mark.parametrize("kind", ["passive_restore", "full_restore"])
+def test_an_owner_child_of_an_unfrozen_backup_blocks_one_shot_completion_identically(tmp_path, kind):
+    forms = _accepted(tmp_path, kind)
+    name = ev.RESTORE_NAMES[kind]
+    forms.both(
+        lambda hub: hub.velero.__setitem__(
+            "stray", ev.velero_child("stray", "acm-resources-schedule-x", name, hub.acm[name]["metadata"]["uid"])
+        )
+    )
+    outcomes = forms.wait(kind)
+    forms.assert_same(outcomes)
+    assert outcomes[0] is not None
+
+
+WAIVER = {"scope": "activation", "actor": "operator@example.com", "reason": "stale inventory", "request_id": "CHG-1"}
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_a_missing_expected_name_and_its_waiver_decide_identically(tmp_path, kind):
+    forms = _accepted(tmp_path, kind)
+    outcomes = forms.wait(kind, expected=("cluster-x",), minimum=1)
+    forms.assert_same(outcomes)
+    assert outcomes[0] is not None
+    outcomes = forms.wait(kind, expected=("cluster-x",), minimum=1, requested=WAIVER)
+    forms.assert_same(outcomes)
+    assert outcomes == [None, None]
+    journal = col_checkpoint.migration_backups(forms.store)
+    assert journal["waiver"]["outcome"] == "waived" and journal["restore"]["names_verified_at"] is None
+    # A different waiver on resume is refused; the journaled one is never replaced.
+    forms.assert_same(forms.wait(kind, expected=("cluster-x",), minimum=1, requested=dict(WAIVER, actor="other")))
+
+
+@pytest.mark.parametrize("scope", ["post_activation"])
+def test_a_waiver_outside_activation_does_not_lift_the_name_check_identically(tmp_path, scope):
+    forms = _accepted(tmp_path, "passive_patch")
+    outcomes = forms.wait("passive_patch", expected=("cluster-x",), minimum=1, requested=dict(WAIVER, scope=scope))
+    forms.assert_same(outcomes)
+    assert outcomes[0] is not None
+
+
+def test_a_waiver_never_lifts_the_count_floor_identically(tmp_path):
+    forms = _accepted(tmp_path, "full_restore")
+    outcomes = forms.wait("full_restore", expected=("cluster-x",), minimum=3, requested=WAIVER)
+    forms.assert_same(outcomes)
+    assert outcomes[0] is not None
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_an_interrupted_bundle_is_reconciled_identically(tmp_path, kind):
+    forms = _accepted(tmp_path, kind)
+    forms.assert_same(forms.wait(kind))
+    # Both stopped between the bundle and completed_at.
+    python_journal = RunRecord(forms.state).migration_backups()
+    interrupted = dict(python_journal, restore=dict(python_journal["restore"], completed_at=None))
+    forms.state._set_config("migration_backups", interrupted)  # the on-disk state after the failed second write
+    forms.state.flush_state()
+    forms.store["operational_data"]["migration_backups"] = copy.deepcopy(interrupted)
+    outcomes = forms.wait(kind)
+    forms.assert_same(outcomes)
+    assert outcomes == [None, None]
+
+
+@pytest.mark.parametrize("kind", ["passive_restore", "full_restore"])
+def test_a_backup_drifting_during_the_passive_delete_blocks_the_create_identically(tmp_path, kind):
+    forms = Forms(tmp_path)
+
+    def drift_after_delete(hub):
+        original = hub.delete_restore_guarded
+
+        def delete_then_drift(name, **kwargs):
+            result = original(name, **kwargs)
+            hub.backups[ev.MC_B]["metadata"]["uid"] = "uid-replacement"
+            return result
+
+        hub.delete_restore_guarded = delete_then_drift
+
+    forms.both(drift_after_delete)
+    outcomes = forms.run(kind)
+    forms.assert_same(outcomes)
+    assert outcomes[0] is not None
+    assert [mutation for mutation, _, _ in forms.col_hub.mutations] == ["delete"]
