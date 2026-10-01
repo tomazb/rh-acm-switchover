@@ -735,8 +735,19 @@ def test_a_missing_expected_name_and_its_waiver_decide_identically(tmp_path, kin
     assert outcomes == [None, None]
     journal = col_checkpoint.migration_backups(forms.store)
     assert journal["waiver"]["outcome"] == "waived" and journal["restore"]["names_verified_at"] is None
-    # A different waiver on resume is refused; the journaled one is never replaced.
+    # Over completed evidence the resume only revalidates.
     forms.assert_same(forms.wait(kind, expected=("cluster-x",), minimum=1, requested=dict(WAIVER, actor="other")))
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_a_different_waiver_on_an_interrupted_bundle_is_refused_identically(tmp_path, kind):
+    forms = _accepted(tmp_path, kind)
+    forms.assert_same(forms.wait(kind, expected=("cluster-x",), minimum=1, requested=WAIVER))
+    _interrupt_before_completed_at(forms)
+    outcomes = forms.wait(kind, expected=("cluster-x",), minimum=1, requested=dict(WAIVER, actor="other"))
+    forms.assert_same(outcomes)
+    assert outcomes[0] is not None and "different expected-ManagedCluster waiver" in outcomes[0]
+    assert col_checkpoint.migration_backups(forms.store)["restore"]["completed_at"] is None
 
 
 @pytest.mark.parametrize("scope", ["post_activation"])
@@ -754,16 +765,23 @@ def test_a_waiver_never_lifts_the_count_floor_identically(tmp_path):
     assert outcomes[0] is not None
 
 
-@pytest.mark.parametrize("kind", KINDS)
-def test_an_interrupted_bundle_is_reconciled_identically(tmp_path, kind):
-    forms = _accepted(tmp_path, kind)
-    forms.assert_same(forms.wait(kind))
-    # Both stopped between the bundle and completed_at.
+def _interrupt_before_completed_at(forms):
+    """Both form factors stopped between the bundle write and the completed_at write."""
     python_journal = RunRecord(forms.state).migration_backups()
     interrupted = dict(python_journal, restore=dict(python_journal["restore"], completed_at=None))
     forms.state._set_config("migration_backups", interrupted)  # the on-disk state after the failed second write
     forms.state.flush_state()
-    forms.store["operational_data"]["migration_backups"] = copy.deepcopy(interrupted)
+    collection_journal = col_checkpoint.migration_backups(forms.store)
+    forms.store["operational_data"]["migration_backups"] = dict(
+        collection_journal, restore=dict(collection_journal["restore"], completed_at=None)
+    )
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_an_interrupted_bundle_is_reconciled_identically(tmp_path, kind):
+    forms = _accepted(tmp_path, kind)
+    forms.assert_same(forms.wait(kind))
+    _interrupt_before_completed_at(forms)
     outcomes = forms.wait(kind)
     forms.assert_same(outcomes)
     assert outcomes == [None, None]

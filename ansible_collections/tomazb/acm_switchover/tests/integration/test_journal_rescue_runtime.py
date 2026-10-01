@@ -7,6 +7,7 @@ the fake API's missing Restore API, which fails the activation phase after its e
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -119,6 +120,11 @@ def test_an_activation_failure_under_a_journal_records_the_marker_then_resumes(r
     assert [patch["name"] for patch in run.primary_patches] == ["primary-owned"]
     assert "Argo CD resume-on-failure resumed the paused Applications" in output
     assert "re-pauses them before activation continues" in output
+    # Nothing on the journal path is attempted and hidden: no checkpoint reset is even tried.
+    assert re.search(
+        r"TASK \[Reset primary prep checkpoint after Argo CD resume on failure\] \*+\nskipping", output
+    ), output
+    assert "ignored=0" in output
 
 
 def test_a_retry_repauses_both_hubs_before_any_phase_work_and_clears_the_marker(run_distinct_hub_playbook):
