@@ -1,0 +1,69 @@
+---
+# R4-04 post-activation evidence inputs, the collection mirror of
+# PostActivationVerification._load_post_activation_journal and _post_activation_waiver.
+# The journal comes only from the checkpoint enter. An executing run requires one whose
+# activation completed: switchover, restore-only and full restore all journal at
+# activation, so without one post-activation can prove no migration and records no
+# completion. The waiver is resolved before any work. A preview (check mode) may run
+# without a journal and records nothing.
+
+- name: Publish the post-activation migration journal facts
+  ansible.builtin.set_fact:
+    _acm_preview: >-
+      {{ (acm_switchover_execution.mode | default('dry_run')) != 'execute' or ansible_check_mode }}
+    # A templated null does not survive the non-native templating of the ansible-core
+    # floor, so the journal is a mapping ({} when none) and its presence a boolean.
+    _acm_journal: >-
+      {{ (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal')) or {} }}
+    _acm_has_journal: >-
+      {{ (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal')) is not none }}
+
+- name: Refuse an invalid recorded migration journal
+  ansible.builtin.fail:
+    msg: >-
+      The recorded migration journal is invalid and blocks post-activation. Repair the checkpoint, or
+      start a new migration with the full checkpoint reset (checkpoint.reset).
+  when: >-
+    (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal_outcome', 'absent'))
+    not in ['absent', 'valid']
+
+- name: Require the completed migration journal of an executing run
+  tomazb.acm_switchover.acm_migration_evidence:
+    operation: require_completed_restore
+    inputs:
+      journal: "{{ _acm_journal if (_acm_has_journal | bool) else omit }}"
+  when: not (_acm_preview | bool)
+
+- name: Resolve the post-activation managed-cluster expectation
+  ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/resolve_managed_cluster_expectation.yml"
+  vars:
+    acm_switchover_managed_cluster_expectation_mode: post_activation_verify
+
+- name: Resolve the waiver covering the post-activation name check
+  tomazb.acm_switchover.acm_migration_evidence:
+    operation: post_activation_waiver
+    inputs:
+      journal: "{{ _acm_journal }}"
+      requested: >-
+        {{
+          ((_acm_role_entry_inputs.results | default([])
+            | selectattr('id', 'equalto', 'preflight-input-operation') | list | first | default({}))
+            .get('details') or {}).get('managed_cluster_expectation_waiver') or omit
+        }}
+      expected_names: "{{ acm_switchover_resolved_expected_managed_cluster_names | default([]) }}"
+  register: _acm_post_activation_waiver
+  when: not (_acm_preview | bool)
+
+- name: Report the journaled post-activation waiver
+  ansible.builtin.debug:
+    msg: >-
+      Expected ManagedCluster name check waived for post-activation by {{ _acm_post_activation_waiver.waiver.actor }}
+      ({{ _acm_post_activation_waiver.waiver.reason }}); the count floor and readiness still apply
+  when:
+    - not (_acm_preview | bool)
+    - _acm_post_activation_waiver.waiver is not none
+
+- name: Publish whether a waiver covers the post-activation name check
+  ansible.builtin.set_fact:
+    _acm_names_waived: >-
+      {{ not (_acm_preview | bool) and (_acm_post_activation_waiver.waiver | default(none)) is not none }}

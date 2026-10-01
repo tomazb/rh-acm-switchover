@@ -190,27 +190,19 @@ class TestPostActivationDiscoverResources:
     def test_file_exists(self):
         assert POST_ACTIVATION_DISCOVER.exists(), "post_activation/tasks/discover_resources.yml must exist"
 
-    def test_managed_clusters_uses_is_not_defined_guard(self):
-        """ManagedCluster discovery must use 'is not defined' guard to allow test pre-seeding."""
-        k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        mc_reads = [t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"]
-        assert mc_reads, "post_activation/discover_resources.yml must read ManagedCluster resources"
-        for task in mc_reads:
-            when = _when_text(task)
-            assert "acm_secondary_managed_clusters_info is not defined" in when, (
-                "ManagedCluster read must use 'when: acm_secondary_managed_clusters_info is not defined' "
-                "so unit tests can inject fixture data without needing a live cluster"
-            )
+    def test_managed_clusters_are_read_strictly_without_a_pre_seed_guard(self):
+        """R4-04 Task 9: every execution reads the live inventory strictly; a pre-seed never stands in."""
+        includes = [t.get("ansible.builtin.include_tasks") for t in self.tasks]
+        assert includes == ["read_managed_clusters.yml"]
+        assert self.tasks[0]["vars"] == {"_acm_mc_fact": "acm_secondary_managed_clusters_info"}
+        assert "is not defined" not in POST_ACTIVATION_DISCOVER.read_text()
 
     def test_managed_clusters_uses_secondary_hub(self):
         """ManagedCluster reads must target the secondary hub (new hub after switchover)."""
-        k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        mc_reads = [t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"]
-        assert mc_reads
-        for task in mc_reads:
-            params = task["kubernetes.core.k8s_info"]
-            assert "secondary" in str(params.get("kubeconfig", "")), (
-                "ManagedCluster reads must use secondary hub kubeconfig — "
-                "post_activation checks that clusters connected to the new hub"
-            )
-            assert "secondary" in str(params.get("context", "")), "ManagedCluster reads must use secondary hub context"
+        seam = yaml.safe_load(
+            (POST_ACTIVATION_DISCOVER.parents[2] / "activation" / "tasks" / "strict_read.yml").read_text()
+        )
+        (read,) = [t for t in seam if "tomazb.acm_switchover.acm_k8s_read_outcome" in t]
+        params = read["tomazb.acm_switchover.acm_k8s_read_outcome"]
+        assert params["kubeconfig"] == "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+        assert params["context"] == "{{ acm_switchover_hubs.secondary.context }}"

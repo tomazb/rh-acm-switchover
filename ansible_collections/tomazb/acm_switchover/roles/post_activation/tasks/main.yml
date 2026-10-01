@@ -37,6 +37,11 @@
             pending: []
       when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
 
+    # R4-04: the journal and the waiver are proven before any work mutates anything.
+    - name: Resolve the post-activation migration evidence inputs
+      ansible.builtin.include_tasks: resolve_migration_evidence.yml
+      when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
     - name: Discover secondary hub resources
       ansible.builtin.include_tasks: discover_resources.yml
       when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
@@ -56,6 +61,36 @@
       when:
         - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
         - _klusterlet_remediation_attempted | default(false)
+
+    # post_activation.names_verified_at, or the journaled waiver, from the ready decision
+    # that ends the connectivity work; recorded evidence is kept, never rewritten.
+    - name: Record the post-activation ManagedCluster name evidence
+      when:
+        - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+        - not (_acm_preview | bool)
+        - _acm_mc_readiness.ready | bool
+      block:
+        - name: Build the name evidence from the ready decision
+          tomazb.acm_switchover.acm_migration_evidence:
+            operation: post_activation_names_evidence
+            inputs:
+              journal: "{{ _acm_journal }}"
+              readiness: "{{ _acm_mc_readiness }}"
+              waiver: "{{ _acm_post_activation_waiver.waiver or omit }}"
+          register: _acm_names_evidence
+
+        - name: Persist the post-activation name evidence
+          tomazb.acm_switchover.checkpoint_phase:
+            phase: post_activation
+            checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+            status: update
+            operational_data:
+              migration_backups: "{{ _acm_names_evidence.candidate }}"
+          when: _acm_names_evidence.write | bool
+
+        - name: Continue from the recorded name evidence
+          ansible.builtin.set_fact:
+            _acm_journal: "{{ _acm_names_evidence.candidate }}"
 
     - name: Clean stale disable-auto-import annotations
       ansible.builtin.include_tasks: cleanup_auto_import_annotations.yml
@@ -93,6 +128,36 @@
       when:
         - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
         - not acm_switchover_cluster_verify_result.passed
+
+    # post_activation.completed_at, the last post-activation evidence transition: every
+    # required operation above succeeded. A preview reports it and journals nothing.
+    - name: Report the post-activation evidence a preview would record
+      ansible.builtin.debug:
+        msg: "[DRY-RUN] Would record post-activation name and completion evidence in the migration journal"
+      when:
+        - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+        - _acm_preview | bool
+
+    - name: Record post-activation completion last
+      when:
+        - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+        - not (_acm_preview | bool)
+      block:
+        - name: Build the post-activation completion evidence
+          tomazb.acm_switchover.acm_migration_evidence:
+            operation: post_activation_completion
+            inputs:
+              journal: "{{ _acm_journal }}"
+          register: _acm_post_activation_completion
+
+        - name: Persist the post-activation completion evidence
+          tomazb.acm_switchover.checkpoint_phase:
+            phase: post_activation
+            checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+            status: update
+            operational_data:
+              migration_backups: "{{ _acm_post_activation_completion.candidate }}"
+          when: _acm_post_activation_completion.write | bool
   rescue:
     # Only an acknowledged write proves the marker durable; a visible one may not be.
     - name: Record the original post_activation failure

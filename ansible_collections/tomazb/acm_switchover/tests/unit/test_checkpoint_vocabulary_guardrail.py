@@ -129,7 +129,17 @@ _CANDIDATE_REFERENCE = re.compile(r"^\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\.candidate\
 
 
 # The acm_migration_evidence operations that return a journal candidate.
-CANDIDATE_OPERATIONS = frozenset({"freeze", "post_patch", "post_create", "completion_bundle", "complete"})
+CANDIDATE_OPERATIONS = frozenset(
+    {
+        "freeze",
+        "post_patch",
+        "post_create",
+        "completion_bundle",
+        "complete",
+        "post_activation_names_evidence",
+        "post_activation_completion",
+    }
+)
 _PLAY_TASK_LISTS = ("pre_tasks", "tasks", "post_tasks", "handlers")
 _SET_FACT_MODULES = ("ansible.builtin.set_fact", "set_fact")
 

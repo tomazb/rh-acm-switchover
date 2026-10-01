@@ -1,18 +1,19 @@
 # SPDX-License-Identifier: MIT
-"""Decide one step of the R4-04 activation migration-evidence transaction."""
+"""Decide one step of the R4-04 activation or post-activation migration-evidence transaction."""
 
 from __future__ import annotations
 
 DOCUMENTATION = r"""
 ---
 module: acm_migration_evidence
-short_description: Decide one step of the activation migration-evidence transaction
+short_description: Decide one step of the activation or post-activation migration-evidence transaction
 version_added: "1.8.0"
 description:
-  - A thin adapter over C(module_utils/migration_activation.py), the collection mirror of
-    the Python CLI's activation transaction. It performs no Kubernetes request and no
-    write. The role passes the sanitized results of its strict C(acm_k8s_read_outcome)
-    reads and C(acm_restore_guarded_mutation) requests in C(inputs).
+  - A thin adapter over C(module_utils/migration_activation.py) and
+    C(module_utils/migration_post_activation.py), the collection mirrors of the Python
+    CLI's activation transaction and post-activation evidence. It performs no Kubernetes
+    request and no write. The role passes the sanitized results of its strict
+    C(acm_k8s_read_outcome) reads and C(acm_restore_guarded_mutation) requests in C(inputs).
   - A step that produces a migration journal transition returns the complete validated
     C(candidate); the role persists it only through C(checkpoint_phase) C(status=update).
   - A refusal fails the task with the operator message the Python CLI raises for the same
@@ -33,8 +34,12 @@ options:
       - freeze
       - frozen_backups
       - journal_matches
+      - managed_cluster_readiness
       - managed_clusters_poll
       - passive_restore
+      - post_activation_completion
+      - post_activation_names_evidence
+      - post_activation_waiver
       - post_create
       - post_delete
       - post_patch
@@ -42,17 +47,23 @@ options:
       - pre_delete
       - pre_patch
       - reconcile
+      - require_completed_restore
       - revalidate_completed
       - status_subresource
       - verify_managed_clusters
       - verify_passive_sync
   inputs:
     description:
-      - The step's keyword inputs, as the matching C(migration_activation) function takes
-        them. Read results are C(acm_k8s_read_outcome) results; C(journal) is the validated
-        journal published by C(checkpoint_phase) or the last persisted C(candidate).
+      - The step's keyword inputs, as the matching C(migration_activation) or
+        C(migration_post_activation) function takes them. Read results are
+        C(acm_k8s_read_outcome) results; C(journal) is the validated journal published by
+        C(checkpoint_phase) or the last persisted C(candidate).
       - C(freeze) generates its C(run_id) and C(resolved_at), and C(activation_waiver),
-        C(completion_bundle) and C(complete) their timestamp, unless they are supplied.
+        C(completion_bundle), C(complete), C(post_activation_waiver),
+        C(post_activation_names_evidence) and C(post_activation_completion) their timestamp,
+        unless they are supplied.
+      - C(managed_cluster_readiness) takes C(mc_read) instead of the inventory items, and
+        C(post_activation_waiver) journals the collection's waiver variable as the C(flag).
     type: dict
     default: {}
 author:
@@ -87,8 +98,14 @@ changed:
   type: bool
 candidate:
   description: The complete validated journal transition to persist.
-  returned: for freeze, post_patch, post_create, completion_bundle and complete
+  returned: >-
+    for freeze, post_patch, post_create, completion_bundle, complete,
+    post_activation_names_evidence and post_activation_completion
   type: dict
+write:
+  description: Whether the post-activation C(candidate) differs from the journal it was built from.
+  returned: for post_activation_names_evidence and post_activation_completion
+  type: bool
 """
 
 import uuid  # noqa: E402
@@ -99,6 +116,12 @@ from ansible.module_utils.basic import AnsibleModule  # noqa: E402
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils import (  # noqa: E402
     migration_activation as transaction,
+)
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils import (  # noqa: E402
+    migration_post_activation as post_activation,
+)
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_evidence import (  # noqa: E402
+    MigrationEvidenceError,
 )
 
 
@@ -134,7 +157,41 @@ _OPERATIONS: Dict[str, Callable[[dict], dict]] = {
     "completion_bundle": lambda inputs: transaction.completion_bundle(**_with_time(inputs, "now")),
     "complete": lambda inputs: transaction.complete(**_with_time(inputs, "now")),
     "revalidate_completed": lambda inputs: transaction.revalidate_completed(**inputs),
+    "require_completed_restore": lambda inputs: {
+        "journal": post_activation.require_completed_restore(inputs.get("journal"))
+    },
+    "post_activation_waiver": lambda inputs: post_activation.post_activation_waiver(
+        flag=transaction.WAIVER_FLAG, **_with_time(_with_default(inputs, "requested"), "journaled_at")
+    ),
+    "managed_cluster_readiness": lambda inputs: post_activation.managed_cluster_readiness(
+        items=transaction.strict_list(inputs["mc_read"], "ManagedCluster inventory"),
+        expected_names=inputs["expected_names"],
+        min_managed_clusters=_native(inputs["min_managed_clusters"]),
+        names_waived=_native(inputs["names_waived"]),
+    ),
+    "post_activation_names_evidence": lambda inputs: post_activation.post_activation_names_evidence(
+        **_with_time(_with_default(inputs, "waiver"), "now")
+    ),
+    "post_activation_completion": lambda inputs: post_activation.post_activation_completion(
+        **_with_time(inputs, "now")
+    ),
 }
+
+
+def _with_default(inputs: dict, field: str) -> dict:
+    """An optional input the role omits when it has none."""
+    resolved = dict(inputs)
+    resolved.setdefault(field, None)
+    return resolved
+
+
+def _native(value):
+    """A scalar the non-native templating of the ansible-core floor rendered as text."""
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    if value in ("True", "False"):
+        return value == "True"
+    return value
 
 
 def _with_time(inputs: dict, field: str) -> dict:
@@ -164,6 +221,9 @@ def main() -> None:
         decision = _OPERATIONS[module.params["operation"]](module.params["inputs"])
     except transaction.ActivationRefused as exc:
         module.fail_json(msg=str(exc), changed=False)
+        return
+    except MigrationEvidenceError as exc:
+        module.fail_json(msg=f"Migration evidence refused ({exc})", changed=False)
         return
     except (KeyError, TypeError):
         module.fail_json(msg=f"The {module.params['operation']} step received incomplete inputs.", changed=False)

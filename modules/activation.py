@@ -29,6 +29,7 @@ from lib.constants import (
     LOCAL_CLUSTER_NAME,
     MANAGED_CLUSTER_API_GROUP,
     MANAGED_CLUSTER_API_VERSION,
+    MANAGED_CLUSTER_EXPECTATION_WAIVER_FLAG,
     MANAGED_CLUSTER_PLURAL,
     MANAGED_CLUSTER_RESTORE_NAME,
     MCE_NAMESPACE,
@@ -120,7 +121,6 @@ _VELERO_PENDING_PHASES = (
 _PENDING_CHILD_CODES = frozenset(
     {"required_status_name_missing", "required_child_missing", "active_child_missing", "velero_restore_phase_missing"}
 )
-_WAIVER_FLAG = "--skip-managed-cluster-expectations"
 _CLEANUP_NOT_STARTED = {
     "operation_id": None,
     "state": "not_started",
@@ -1203,7 +1203,9 @@ class SecondaryActivation:
             return journaled if journaled["scope"] in ("activation", "both") else None
         if requested is None or requested["scope"] not in ("activation", "both"):
             return None
-        record = dict(requested, flag=_WAIVER_FLAG, journaled_at=_now_iso(), outcome="waived")
+        record = dict(
+            requested, flag=MANAGED_CLUSTER_EXPECTATION_WAIVER_FLAG, journaled_at=_now_iso(), outcome="waived"
+        )
         return self._evidence(validate_waiver, record, list(self.expected_managed_cluster_names), "activation")
 
     def _record_restore_completion_evidence(

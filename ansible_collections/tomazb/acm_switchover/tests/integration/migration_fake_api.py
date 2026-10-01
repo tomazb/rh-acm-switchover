@@ -163,6 +163,10 @@ class FakeMigrationHub:
         self.backups = {item["metadata"]["name"]: copy.deepcopy(item) for item in (backups or LEGACY_INVENTORY)}
         self.velero = {item["metadata"]["name"]: copy.deepcopy(item) for item in (velero_restores or [])}
         self.managed_clusters = list(managed_clusters if managed_clusters is not None else ["cluster-a"])
+        # ManagedClusters served without the Available condition (all are Available and Joined otherwise).
+        self.unavailable_clusters: set[str] = set()
+        # ManagedClusters served with a stale disable-auto-import annotation (the fake never patches them).
+        self.annotated_clusters: set[str] = set()
         self.status_served = status_served
         self.journal_probe = journal_probe or (lambda: None)
         self.controller = controller
@@ -279,7 +283,24 @@ class FakeMigrationHub:
                 {
                     "apiVersion": "cluster.open-cluster-management.io/v1",
                     "kind": "ManagedCluster",
-                    "metadata": {"name": name, "resourceVersion": "3"},
+                    "metadata": {
+                        "name": name,
+                        "resourceVersion": "3",
+                        **(
+                            {"annotations": {"import.open-cluster-management.io/disable-auto-import": ""}}
+                            if name in self.annotated_clusters
+                            else {}
+                        ),
+                    },
+                    "status": {
+                        "conditions": [
+                            {
+                                "type": "ManagedClusterConditionAvailable",
+                                "status": "False" if name in self.unavailable_clusters else "True",
+                            },
+                            {"type": "ManagedClusterJoined", "status": "True"},
+                        ]
+                    },
                 }
                 for name in self.managed_clusters + ["local-cluster"]
             ]

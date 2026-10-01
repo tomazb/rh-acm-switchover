@@ -4586,6 +4586,318 @@ for label, names, code in [
     case(f"generation-{label}-rejected", ALL, [], fn, {"backup_names": names}, err(code), True)
 
 
+# --- Post-activation completion evidence (plan Task 9) ------------------------------------------
+# J §2 waiver scope, §3 strict inventory, §4 completion strictly last; A §7 additive expectations.
+PA_DONE = journal("full_restore", LEG, "completed")
+PA_POST = journal("full_restore", LEG, "post")
+PA_NAMED = mut(PA_DONE, post_activation__names_verified_at=T_POST_NAMES)
+PA_PRE = journal("full_restore", LEG)
+PA_REQ = {
+    "scope": "post_activation",
+    "actor": "operator@example.com",
+    "reason": "the list is stale",
+    "request_id": None,
+}
+PA_WAIVER = dict(PA_REQ, flag=WAIVED_FLAG, journaled_at=T_POST_NAMES, outcome="waived")
+PA_BOTH = waiver("both")
+PA_ACTIVATION = mut(PA_DONE, restore__names_verified_at=T_NAMES, waiver=waiver("activation"))
+
+fn = "require_completed_restore"
+PJ = drefs(ALL, "J:543-552", "A:777-800")
+case("post-activation-journal-completed", ALL, PJ, fn, {"journal": PA_DONE}, ok(PA_DONE))
+case("post-activation-journal-post-completed", ALL, PJ, fn, {"journal": PA_POST}, ok(PA_POST))
+case("post-activation-journal-absent-blocks", ALL, PJ, fn, {"journal": None}, err("journal_required"))
+case("post-activation-journal-pre-completion-blocks", ALL, PJ, fn, {"journal": PA_PRE}, err("restore_not_completed"))
+case(
+    "post-activation-journal-invalid-blocks",
+    ALL,
+    PJ,
+    fn,
+    {"journal": mut(PA_DONE, waiver=False)},
+    err("malformed_journal"),
+)
+
+fn = "post_activation_waiver"
+PW = drefs(ALL, "J:446-470", "J:543-552")
+
+
+def pwcase(case_id, doc, requested, expect, names=NAMES):
+    inp = {
+        "journal": doc,
+        "requested": requested,
+        "expected_names": names,
+        "flag": WAIVED_FLAG,
+        "journaled_at": T_POST_NAMES,
+    }
+    case(case_id, ALL, PW, fn, inp, expect if isinstance(expect, dict) else err(expect))
+
+
+NO_WAIVER = ok({"waiver": None, "record": False})
+pwcase("post-activation-waiver-none", PA_DONE, None, NO_WAIVER)
+pwcase("post-activation-waiver-request-journaled", PA_DONE, PA_REQ, ok({"waiver": PA_WAIVER, "record": True}))
+pwcase(
+    "post-activation-waiver-request-id-journaled",
+    PA_DONE,
+    dict(PA_REQ, request_id="CHG-7"),
+    ok({"waiver": dict(PA_WAIVER, request_id="CHG-7"), "record": True}),
+)
+# Activation journals activation and both scopes; post-activation journals only its own scope.
+pwcase("post-activation-waiver-both-request-not-journaled", PA_DONE, dict(PA_REQ, scope="both"), NO_WAIVER)
+pwcase("post-activation-waiver-activation-request-ignored", PA_DONE, dict(PA_REQ, scope="activation"), NO_WAIVER)
+pwcase("post-activation-waiver-after-name-check-not-journaled", PA_NAMED, PA_REQ, NO_WAIVER)
+pwcase(
+    "post-activation-waiver-journaled-both-reused",
+    mut(PA_DONE, waiver=PA_BOTH),
+    None,
+    ok({"waiver": PA_BOTH, "record": False}),
+)
+pwcase(
+    "post-activation-waiver-journaled-both-same-request",
+    mut(PA_DONE, waiver=PA_BOTH),
+    {key: PA_BOTH[key] for key in ("scope", "actor", "reason", "request_id")},
+    ok({"waiver": PA_BOTH, "record": False}),
+)
+pwcase(
+    "post-activation-waiver-journaled-post-reused",
+    mut(PA_DONE, waiver=PA_WAIVER),
+    PA_REQ,
+    ok({"waiver": PA_WAIVER, "record": False}),
+)
+pwcase("post-activation-waiver-journaled-activation-does-not-cover", PA_ACTIVATION, None, NO_WAIVER)
+pwcase(
+    "post-activation-waiver-different-actor-blocks",
+    mut(PA_DONE, waiver=PA_BOTH),
+    {"scope": "both", "actor": "other@example.com", "reason": PA_BOTH["reason"], "request_id": None},
+    "waiver_request_mismatch",
+)
+pwcase("post-activation-waiver-different-scope-blocks", PA_ACTIVATION, PA_REQ, "waiver_request_mismatch")
+pwcase("post-activation-waiver-no-names-blocks", PA_DONE, PA_REQ, "waiver_expected_names_empty", names=[])
+pwcase(
+    "post-activation-waiver-both-no-names-blocks",
+    PA_DONE,
+    dict(PA_REQ, scope="both"),
+    "waiver_expected_names_empty",
+    names=[],
+)
+pwcase(
+    "post-activation-waiver-activation-request-no-post-names",
+    PA_DONE,
+    dict(PA_REQ, scope="activation"),
+    NO_WAIVER,
+    names=[],
+)
+pwcase(
+    "post-activation-waiver-journaled-no-names-blocks",
+    mut(PA_DONE, waiver=PA_BOTH),
+    None,
+    "waiver_expected_names_empty",
+    names=[],
+)
+pwcase("post-activation-waiver-malformed-request-blocks", PA_DONE, dict(PA_REQ, actor=""), "malformed_waiver")
+pwcase("post-activation-waiver-unknown-scope-blocks", PA_DONE, dict(PA_REQ, scope="all"), "malformed_waiver")
+pwcase("post-activation-waiver-no-journal-blocks", None, PA_REQ, "journal_required")
+pwcase("post-activation-waiver-pre-completion-blocks", PA_PRE, None, "restore_not_completed")
+
+fn = "managed_cluster_readiness"
+PR = drefs(ALL, "J:446-470", "J:473-490", "A:693-748")
+
+
+def mcl(name, available="True", joined="True", **extra):
+    conditions = []
+    if available is not None:
+        conditions.append({"type": "ManagedClusterConditionAvailable", "status": available})
+    if joined is not None:
+        conditions.append({"type": "ManagedClusterJoined", "status": joined})
+    out = {"metadata": {"name": name}, "status": {"conditions": conditions}}
+    out.update(extra)
+    return out
+
+
+LOCAL = mcl("local-cluster")
+
+
+def ready(names, missing=(), pending=(), code=None, waived=False):
+    return {
+        "ready": code is None,
+        "code": code,
+        "names": sorted(names),
+        "missing": list(missing),
+        "pending": list(pending),
+        "count": len(names),
+        "names_waived": waived,
+    }
+
+
+def prcase(case_id, items, expect, names=NAMES, minimum=2, waived=False):
+    inp = {"items": items, "expected_names": names, "min_managed_clusters": minimum, "names_waived": waived}
+    case(case_id, ALL, PR, fn, inp, ok(expect) if expect.get("names") is not None else expect)
+
+
+AB = [LOCAL, mcl("cluster-b"), mcl("cluster-a")]
+prcase("readiness-all-ready", AB, ready(NAMES))
+prcase("readiness-extra-cluster-ready", AB + [mcl("cluster-c")], ready(NAMES + ["cluster-c"]))
+prcase("readiness-empty-inventory", [], ready([], NAMES, code="inventory_empty"))
+prcase("readiness-empty-inventory-no-expectation", [], ready([], code="inventory_empty"), names=[], minimum=0)
+prcase("readiness-only-local-zero-floor", [LOCAL], ready([]), names=[], minimum=0)
+prcase("readiness-only-local-floor-one", [LOCAL], ready([], code="count_below_minimum"), names=[], minimum=1)
+prcase(
+    "readiness-missing-name",
+    [LOCAL, mcl("cluster-a")],
+    ready(["cluster-a"], ["cluster-b"], code="expected_names_missing"),
+)
+prcase(
+    "readiness-missing-name-zero-floor",
+    [LOCAL, mcl("cluster-a")],
+    ready(["cluster-a"], ["cluster-b"], code="expected_names_missing"),
+    minimum=0,
+)
+prcase(
+    "readiness-missing-name-waived",
+    [LOCAL, mcl("cluster-a"), mcl("cluster-c")],
+    ready(["cluster-a", "cluster-c"], ["cluster-b"], waived=True),
+    waived=True,
+)
+prcase(
+    "readiness-waiver-never-lifts-the-floor",
+    [LOCAL, mcl("cluster-a")],
+    ready(["cluster-a"], ["cluster-b"], code="count_below_minimum", waived=True),
+    waived=True,
+)
+prcase(
+    "readiness-waiver-never-lifts-readiness",
+    [LOCAL, mcl("cluster-a", available="False"), mcl("cluster-c")],
+    ready(["cluster-a", "cluster-c"], ["cluster-b"], ["cluster-a"], code="clusters_not_ready", waived=True),
+    waived=True,
+)
+prcase(
+    "readiness-floor-above-names",
+    AB,
+    ready(NAMES, code="count_below_minimum"),
+    minimum=3,
+)
+prcase(
+    "readiness-not-available",
+    [LOCAL, mcl("cluster-a", available="False"), mcl("cluster-b")],
+    ready(NAMES, pending=["cluster-a"], code="clusters_not_ready"),
+)
+prcase(
+    "readiness-not-joined",
+    [LOCAL, mcl("cluster-a"), mcl("cluster-b", joined=None)],
+    ready(NAMES, pending=["cluster-b"], code="clusters_not_ready"),
+)
+prcase(
+    "readiness-no-status",
+    [LOCAL, mcl("cluster-a"), {"metadata": {"name": "cluster-b"}}],
+    ready(NAMES, pending=["cluster-b"], code="clusters_not_ready"),
+)
+prcase(
+    "readiness-local-cluster-not-required-ready",
+    [mcl("local-cluster", available="False"), mcl("cluster-a"), mcl("cluster-b")],
+    ready(NAMES),
+)
+prcase(
+    "readiness-missing-name-precedes-pending",
+    [LOCAL, mcl("cluster-a", available="Unknown")],
+    ready(["cluster-a"], ["cluster-b"], ["cluster-a"], code="expected_names_missing"),
+)
+prcase("readiness-items-not-a-list-blocks", {"items": []}, err("malformed_inventory"))
+prcase("readiness-nameless-cluster-blocks", [LOCAL, {"metadata": {}}], err("malformed_inventory"))
+prcase("readiness-non-object-cluster-blocks", [LOCAL, "cluster-a"], err("malformed_inventory"))
+prcase("readiness-status-not-object-blocks", [LOCAL, mcl("cluster-a", status=[])], err("malformed_inventory"))
+prcase(
+    "readiness-conditions-not-list-blocks",
+    [LOCAL, mcl("cluster-a", status={"conditions": {}})],
+    err("malformed_inventory"),
+)
+prcase(
+    "readiness-condition-not-object-blocks",
+    [LOCAL, mcl("cluster-a", status={"conditions": ["Available"]})],
+    err("malformed_inventory"),
+)
+prcase("readiness-expected-names-malformed-blocks", AB, err("malformed_expected_names"), names=["cluster-a", ""])
+prcase("readiness-negative-floor-blocks", AB, err("malformed_expectation"), minimum=-1)
+prcase("readiness-boolean-floor-blocks", AB, err("malformed_expectation"), minimum=True)
+prcase("readiness-waiver-flag-malformed-blocks", AB, err("malformed_expectation"), waived="yes")
+
+fn = "post_activation_names_evidence"
+PN = drefs(ALL, "J:446-470", "J:543-552")
+READY = ready(NAMES)
+READY_WAIVED = ready(NAMES + ["cluster-c"], waived=True)
+
+
+def pncase(case_id, doc, readiness, waiver_record, expect):
+    inp = {"journal": doc, "readiness": readiness, "waiver": waiver_record, "now": T_POST_NAMES}
+    case(case_id, ALL, PN, fn, inp, expect if isinstance(expect, dict) else err(expect))
+
+
+pncase("names-evidence-recorded", PA_DONE, READY, None, ok({"candidate": PA_NAMED, "write": True}))
+pncase("names-evidence-kept-on-resume", PA_POST, READY, None, ok({"candidate": PA_POST, "write": False}))
+pncase(
+    "names-evidence-waiver-journaled",
+    PA_DONE,
+    READY_WAIVED,
+    PA_WAIVER,
+    ok({"candidate": mut(PA_DONE, waiver=PA_WAIVER), "write": True}),
+)
+pncase(
+    "names-evidence-journaled-waiver-kept",
+    mut(PA_DONE, waiver=PA_BOTH),
+    READY_WAIVED,
+    PA_BOTH,
+    ok({"candidate": mut(PA_DONE, waiver=PA_BOTH), "write": False}),
+)
+pncase(
+    "names-evidence-not-ready-blocks",
+    PA_DONE,
+    ready(["cluster-a"], ["cluster-b"], code="expected_names_missing"),
+    None,
+    "managed_clusters_not_ready",
+)
+pncase("names-evidence-waived-decision-without-waiver-blocks", PA_DONE, READY_WAIVED, None, "readiness_waiver_mismatch")
+pncase("names-evidence-waiver-with-enforced-decision-blocks", PA_DONE, READY, PA_WAIVER, "readiness_waiver_mismatch")
+pncase("names-evidence-activation-waiver-blocks", PA_DONE, READY_WAIVED, waiver("activation"), "waiver_scope_mismatch")
+pncase(
+    "names-evidence-different-waiver-blocks",
+    mut(PA_DONE, waiver=PA_BOTH),
+    READY_WAIVED,
+    PA_WAIVER,
+    "frozen_field_changed",
+)
+pncase("names-evidence-malformed-waiver-blocks", PA_DONE, READY_WAIVED, dict(PA_WAIVER, actor=""), "malformed_waiver")
+pncase("names-evidence-malformed-readiness-blocks", PA_DONE, {"ready": True}, None, "malformed_readiness")
+pncase("names-evidence-pre-completion-blocks", PA_PRE, READY, None, "restore_not_completed")
+pncase("names-evidence-no-journal-blocks", None, READY, None, "journal_required")
+
+fn = "post_activation_completion"
+PC = drefs(ALL, "J:543-552")
+PA_NAMED_DONE = mut(PA_NAMED, post_activation__completed_at=T_POST_DONE)
+PA_WAIVED = mut(PA_DONE, waiver=PA_WAIVER)
+
+
+def pccase(case_id, doc, expect):
+    case(
+        case_id, ALL, PC, fn, {"journal": doc, "now": T_POST_DONE}, expect if isinstance(expect, dict) else err(expect)
+    )
+
+
+pccase("completion-after-name-check", PA_NAMED, ok({"candidate": PA_NAMED_DONE, "write": True}))
+pccase("completion-kept-on-resume", PA_POST, ok({"candidate": PA_POST, "write": False}))
+pccase(
+    "completion-under-post-activation-waiver",
+    PA_WAIVED,
+    ok({"candidate": mut(PA_WAIVED, post_activation__completed_at=T_POST_DONE), "write": True}),
+)
+pccase(
+    "completion-under-both-waiver",
+    mut(PA_DONE, waiver=PA_BOTH),
+    ok({"candidate": mut(PA_DONE, waiver=PA_BOTH, post_activation__completed_at=T_POST_DONE), "write": True}),
+)
+pccase("completion-without-name-check-blocks", PA_DONE, "post_activation_names_unverified")
+pccase("completion-under-activation-waiver-blocks", PA_ACTIVATION, "post_activation_names_unverified")
+pccase("completion-pre-completion-blocks", PA_PRE, "restore_not_completed")
+pccase("completion-no-journal-blocks", None, "journal_required")
+
+
 def build():
     """Return the fixture text: a readable header, then one compact case per line."""
     for c in cases:

@@ -1,9 +1,7 @@
 ---
-- name: Read secondary hub ManagedClusters when not pre-seeded by tests
-  kubernetes.core.k8s_info:
-    api_version: cluster.open-cluster-management.io/v1
-    kind: ManagedCluster
-    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.secondary.context }}"
-  register: acm_secondary_managed_clusters_info
-  when: acm_secondary_managed_clusters_info is not defined
+# Every execution reads the live inventory strictly: a pre-seeded or non-strict inventory
+# never stands in for discovery.
+- name: Read secondary hub ManagedClusters strictly
+  ansible.builtin.include_tasks: read_managed_clusters.yml
+  vars:
+    _acm_mc_fact: acm_secondary_managed_clusters_info

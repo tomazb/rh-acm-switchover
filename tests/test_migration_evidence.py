@@ -53,6 +53,13 @@ from lib.migration_journal import (
     validate_waiver,
     validate_waiver_request,
 )
+from lib.migration_post_activation import (
+    managed_cluster_readiness,
+    post_activation_completion,
+    post_activation_names_evidence,
+    post_activation_waiver,
+    require_completed_restore,
+)
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "r4_04_migration_evidence_vectors.json"
 CASES = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))["cases"]
@@ -92,6 +99,11 @@ FUNCTIONS = {
     "rfc3339_ns": rfc3339_ns,
     "go_normalize": go_normalize,
     "validate_backup_projection": validate_backup_projection,
+    "managed_cluster_readiness": managed_cluster_readiness,
+    "post_activation_completion": post_activation_completion,
+    "post_activation_names_evidence": post_activation_names_evidence,
+    "post_activation_waiver": post_activation_waiver,
+    "require_completed_restore": require_completed_restore,
 }
 NS = "open-cluster-management-backup"
 

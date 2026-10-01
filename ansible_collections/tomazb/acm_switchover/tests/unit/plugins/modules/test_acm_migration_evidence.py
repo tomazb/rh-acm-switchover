@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from pathlib import Path
 
 import pytest
 import yaml
@@ -110,3 +111,72 @@ def test_managed_cluster_inputs_survive_the_non_native_templating_floor(monkeypa
 def test_malformed_managed_cluster_inputs_are_refused(monkeypatch, minimum, enforce):
     inputs = {"expected_names": [], "min_managed_clusters": minimum, "enforce": enforce}
     assert _run(monkeypatch, "verify_managed_clusters", {"mc_read": _mc_read("a"), **inputs})["failed"] is True
+
+
+# -- R4-04 Task 9: post-activation evidence operations (module_utils/migration_post_activation) --
+
+_VECTORS = {
+    case["id"]: case
+    for case in json.loads(
+        (
+            Path(__file__).resolve().parents[7] / "tests" / "fixtures" / "r4_04_migration_evidence_vectors.json"
+        ).read_text(encoding="utf-8")
+    )["cases"]
+}
+_COMPLETED = _VECTORS["post-activation-journal-completed"]["input"]["journal"]
+_REQUEST = {"scope": "post_activation", "actor": "operator@example.com", "reason": "stale", "request_id": None}
+
+
+def _ready_read(*names):
+    ready = [
+        {"type": "ManagedClusterConditionAvailable", "status": "True"},
+        {"type": "ManagedClusterJoined", "status": "True"},
+    ]
+    return {
+        "read_status": "ok",
+        "resources": [
+            {"metadata": {"name": name}, "status": {"conditions": ready}} for name in (*names, "local-cluster")
+        ],
+    }
+
+
+@pytest.mark.parametrize("minimum, waived", [(2, False), ("2", "False")], ids=["native", "stringified"])
+def test_readiness_inputs_survive_the_non_native_templating_floor(monkeypatch, minimum, waived):
+    inputs = {"expected_names": ["a", "b"], "min_managed_clusters": minimum, "names_waived": waived}
+    result = _run(monkeypatch, "managed_cluster_readiness", {"mc_read": _ready_read("a", "b"), **inputs})
+    assert result["ready"] is True and result["count"] == 2 and result["changed"] is False
+
+
+def test_an_unverified_inventory_is_never_zero_clusters(monkeypatch):
+    inputs = {"expected_names": [], "min_managed_clusters": 0, "names_waived": False}
+    result = _run(
+        monkeypatch, "managed_cluster_readiness", {"mc_read": {"read_status": "error", "resources": []}, **inputs}
+    )
+    assert result == {"failed": True, "changed": False, "msg": "ManagedCluster inventory read failed (error)"}
+
+
+def test_a_post_activation_refusal_fails_with_the_python_message(monkeypatch):
+    result = _run(monkeypatch, "require_completed_restore", {})
+    assert result["failed"] is True and result["changed"] is False
+    assert result["msg"].startswith("Migration evidence refused (journal_required:")
+
+
+def test_the_post_activation_waiver_is_journaled_with_the_collection_flag_and_a_time(monkeypatch):
+    inputs = {"journal": _COMPLETED, "requested": _REQUEST, "expected_names": ["a"]}
+    result = _run(monkeypatch, "post_activation_waiver", inputs)
+    assert result["record"] is True
+    assert result["waiver"]["flag"] == "acm_switchover_operation.skip_managed_cluster_expectations"
+    assert result["waiver"]["outcome"] == "waived" and result["waiver"]["journaled_at"]
+    assert _run(monkeypatch, "post_activation_waiver", {"journal": _COMPLETED, "expected_names": ["a"]}) == {
+        "changed": False,
+        "waiver": None,
+        "record": False,
+    }
+
+
+def test_the_evidence_candidates_are_timestamped_and_returned_for_the_checkpoint(monkeypatch):
+    readiness = {"ready": True, "code": None, "names_waived": False}
+    named = _run(monkeypatch, "post_activation_names_evidence", {"journal": _COMPLETED, "readiness": readiness})
+    assert named["write"] is True and named["candidate"]["post_activation"]["names_verified_at"]
+    done = _run(monkeypatch, "post_activation_completion", {"journal": named["candidate"]})
+    assert done["write"] is True and done["candidate"]["post_activation"]["completed_at"]

@@ -14,6 +14,9 @@ import yaml
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
     NO_MANAGED_CLUSTERS_PENDING_REASON,
 )
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_post_activation import (
+    managed_cluster_readiness,
+)
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (
     ValidationError,
     validate_operation_inputs,
@@ -25,6 +28,9 @@ from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_cluster_verif
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 POST_ACTIVATION_TASKS = ROLES_DIR / "post_activation" / "tasks"
 COMMON_TASKS = ROLES_DIR / "common" / "tasks"
+
+
+_TRUE_AVAILABLE = {"type": "ManagedClusterConditionAvailable", "status": "True"}
 
 
 def _load_yaml(path: pathlib.Path) -> list[dict]:
@@ -42,57 +48,40 @@ class TestVerifyManagedClustersPolling:
         self.content = (POST_ACTIVATION_TASKS / "verify_managed_clusters.yml").read_text()
         self.expectation_content = (COMMON_TASKS / "resolve_managed_cluster_expectation.yml").read_text()
 
-    def test_until_checks_available_condition(self):
-        assert "ManagedClusterConditionAvailable" in self.content
+    def _poll(self):
+        tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "poll_managed_cluster_readiness.yml").read_text())
+        return next(task for task in tasks if "tomazb.acm_switchover.acm_migration_evidence" in task)
 
-    def test_until_checks_joined_condition(self):
-        """Polling must check ManagedClusterJoined, not just Available."""
-        assert "ManagedClusterJoined" in self.content
+    def test_readiness_is_the_mirrored_available_and_joined_decision(self):
+        """R4-04 Task 9: each poll decides through the module shared with the Python CLI by parity vectors."""
+        poll = self._poll()["tomazb.acm_switchover.acm_migration_evidence"]
+        assert poll["operation"] == "managed_cluster_readiness"
+        ready = managed_cluster_readiness(
+            items=[{"metadata": {"name": "a"}, "status": {"conditions": [_TRUE_AVAILABLE]}}],
+            expected_names=[],
+            min_managed_clusters=0,
+            names_waived=False,
+        )
+        assert ready["code"] == "clusters_not_ready" and ready["pending"] == ["a"]
 
-    def test_until_uses_effective_expected_count_and_totality(self):
-        """Polling must wait for the effective expected count, then require all observed clusters ready."""
+    def test_poll_uses_effective_expected_count_and_names(self):
+        """Polling must wait for the effective expected count and every expected name."""
+        inputs = self._poll()["tomazb.acm_switchover.acm_migration_evidence"]["inputs"]
+        assert "_acm_post_activation_min_managed_clusters" in inputs["min_managed_clusters"]
+        assert "_acm_post_activation_expected_managed_cluster_names" in inputs["expected_names"]
         tasks = yaml.safe_load(self.content)
-        poll_task = None
-        for task in tasks:
-            if task.get("retries") and task.get("until"):
-                poll_task = task
-                break
-        assert poll_task is not None, "Must have a polling task with retries + until"
-        until_expr = poll_task["until"]
-        assert "_acm_post_activation_min_managed_clusters" in until_expr
-        assert ">= (_acm_post_activation_min_managed_clusters | int)" in until_expr
-        assert "ManagedClusterConditionAvailable" in until_expr
-        assert "ManagedClusterJoined" in until_expr
+        loop = next(
+            task for task in tasks if task.get("ansible.builtin.include_tasks") == "poll_managed_cluster_readiness.yml"
+        )
+        assert loop["when"] == "_acm_mc_readiness_state != 'ready'"
 
-    def test_until_waits_for_expected_names_before_exiting(self):
-        """Derived expected ManagedCluster names must keep polling until every expected name is visible."""
-        tasks = yaml.safe_load(self.content)
-        poll_task = next(task for task in tasks if task.get("retries") and task.get("until"))
-        until_expr = poll_task["until"]
+    def test_an_empty_inventory_never_exits_the_wait(self):
+        """An empty inventory means the hub reconciler has not caught up; it is never ready.
 
-        assert "_acm_post_activation_expected_managed_cluster_names" in until_expr
-        assert "difference(" in until_expr
-
-    def test_until_requires_non_empty_resources_before_exiting(self):
-        """Polling must NOT exit when resources list is empty.
-
-        An empty resources list means no ManagedClusters found yet — the hub
-        reconciler hasn't caught up.  Exiting early (0 == 0 totality check) would
-        miss the actual wait, replicating the original short-circuit bug.
         Mirrors Python: `if not managed_clusters: return False, 'no ManagedClusters found'`.
         """
-        tasks = yaml.safe_load(self.content)
-        poll_task = None
-        for task in tasks:
-            if task.get("retries") and task.get("until"):
-                poll_task = task
-                break
-        assert poll_task is not None, "Must have a polling task with retries + until"
-        until_expr = poll_task["until"]
-        assert "| length) > 0" in until_expr, (
-            "until clause must guard resources list non-empty before any exit branch — "
-            "prevents 0 == 0 totality from trivially passing on empty resource list"
-        )
+        decision = managed_cluster_readiness(items=[], expected_names=[], min_managed_clusters=0, names_waived=False)
+        assert decision["ready"] is False and decision["code"] == "inventory_empty"
 
     def test_status_summary_receives_only_non_local_clusters(self):
         """local-cluster must not count toward managed cluster readiness verification."""
@@ -103,24 +92,26 @@ class TestVerifyManagedClustersPolling:
         assert "local-cluster" in clusters_arg
         assert "selectattr('metadata.name', 'ne', 'local-cluster')" in clusters_arg
 
-    def test_cluster_verify_uses_derived_expected_count_by_default(self):
-        """Omitted min_managed_clusters should use the preflight-derived expected count."""
+    def test_cluster_verify_result_is_the_readiness_decision(self):
+        """The published result keeps its contract and is derived from the last readiness decision."""
         tasks = yaml.safe_load(self.content)
-        verify_task = next(task for task in tasks if "tomazb.acm_switchover.acm_cluster_verify" in task)
-        module_args = verify_task["tomazb.acm_switchover.acm_cluster_verify"]
-
-        assert "_acm_post_activation_min_managed_clusters" in str(module_args["min_managed_clusters"])
-        assert "_acm_post_activation_expected_managed_cluster_names" in str(module_args["expected_names"])
+        publish = next(
+            task
+            for task in tasks
+            if "acm_switchover_cluster_verify_result" in (task.get("ansible.builtin.set_fact") or {})
+        )
+        expression = publish["ansible.builtin.set_fact"]["acm_switchover_cluster_verify_result"]
+        for key in ("'passed': _acm_mc_readiness.ready", "'total'", "'missing'", "'pending'"):
+            assert key in expression
 
     def test_verification_results_use_prefixed_facts_with_compatibility_aliases(self):
         """Public post_activation verification facts should use acm_switchover_ names."""
         tasks = yaml.safe_load(self.content)
         summary_task = next(task for task in tasks if "tomazb.acm_switchover.acm_managedcluster_status" in task)
-        verify_task = next(task for task in tasks if "tomazb.acm_switchover.acm_cluster_verify" in task)
         alias_tasks = [task for task in tasks if "ansible.builtin.set_fact" in task]
 
         assert summary_task["register"] == "acm_switchover_cluster_status_result"
-        assert verify_task["register"] == "acm_switchover_cluster_verify_result"
+        assert any("acm_switchover_cluster_verify_result" in task["ansible.builtin.set_fact"] for task in alias_tasks)
         assert any(
             task["ansible.builtin.set_fact"].get("cluster_status_result")
             == "{{ acm_switchover_cluster_status_result }}"
@@ -202,9 +193,9 @@ class TestKlusterletReverification:
 
         assert "acm_switchover_managed_cluster_wait_soft_fail" in str(initial_task)
         assert "acm_switchover_managed_cluster_wait_soft_fail" not in str(reverify_task)
-        verify_text = (POST_ACTIVATION_TASKS / "verify_managed_clusters.yml").read_text()
-        assert "failed_when" in verify_text
-        assert "acm_switchover_managed_cluster_wait_soft_fail" in verify_text
+        verify_tasks = _load_yaml(POST_ACTIVATION_TASKS / "verify_managed_clusters.yml")
+        (hard_fail,) = [task for task in verify_tasks if "ansible.builtin.fail" in task]
+        assert "acm_switchover_managed_cluster_wait_soft_fail" in str(hard_fail["when"])
 
     def test_verify_klusterlet_sets_remediation_flag(self):
         """verify_klusterlet.yml must set a remediation-attempted flag."""

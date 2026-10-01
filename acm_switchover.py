@@ -969,6 +969,7 @@ def _run_phase_post_activation(
         min_managed_clusters=min_managed_clusters,
         expected_managed_cluster_names=expected_names,
         enforce_expected_managed_cluster_names=enforce_expected_names,
+        managed_cluster_expectation_waiver=managed_cluster_expectation_waiver_request(args),
     )
 
     if not verification.verify():

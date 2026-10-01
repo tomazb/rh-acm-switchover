@@ -3287,6 +3287,39 @@ class TestPreflightPhase:
         assert kwargs["expected_managed_cluster_names"] == []
         assert kwargs["enforce_expected_managed_cluster_names"] is False
 
+    def test_run_phase_post_activation_passes_the_waiver_request(self, tmp_path):
+        from lib.run_record import HubFacts, RunRecord
+        from lib.utils import StateManager
+
+        args = SimpleNamespace(
+            dry_run=False,
+            min_managed_clusters=None,
+            skip_managed_cluster_expectations=True,
+            managed_cluster_expectation_waiver_scope="post_activation",
+            managed_cluster_expectation_waiver_actor="operator@example.com",
+            managed_cluster_expectation_waiver_reason="stale list",
+            managed_cluster_expectation_waiver_request_id=None,
+        )
+        state = StateManager(str(tmp_path / "state.json"))
+        run_record = RunRecord(state)
+        run_record.record_managed_cluster_expectation(
+            names=["cluster-a"],
+            count=1,
+            mode=MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
+        )
+        run_record.record_hub_facts(HubFacts(secondary_has_observability=False))
+
+        with patch("acm_switchover.PostActivationVerification") as verification_class:
+            verification_class.return_value.verify.return_value = True
+            assert _run_phase_post_activation(args, state, None, Mock(), Mock()) is True
+
+        assert verification_class.call_args.kwargs["managed_cluster_expectation_waiver"] == {
+            "scope": "post_activation",
+            "actor": "operator@example.com",
+            "reason": "stale list",
+            "request_id": None,
+        }
+
     def test_run_phase_preflight_passes_argocd_flags_to_preflight_validator(self):
         args = SimpleNamespace(
             method="passive",

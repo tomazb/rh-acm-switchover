@@ -53,6 +53,13 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_jo
     validate_waiver,
     validate_waiver_request,
 )
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_post_activation import (
+    managed_cluster_readiness,
+    post_activation_completion,
+    post_activation_names_evidence,
+    post_activation_waiver,
+    require_completed_restore,
+)
 
 # The shared vectors live in the repository's root test fixtures; outside a
 # repository checkout only the module-specific cases below run.
@@ -94,6 +101,11 @@ FUNCTIONS: Dict[str, Callable[..., Any]] = {
     "rfc3339_ns": rfc3339_ns,
     "go_normalize": go_normalize,
     "validate_backup_projection": validate_backup_projection,
+    "managed_cluster_readiness": managed_cluster_readiness,
+    "post_activation_completion": post_activation_completion,
+    "post_activation_names_evidence": post_activation_names_evidence,
+    "post_activation_waiver": post_activation_waiver,
+    "require_completed_restore": require_completed_restore,
 }
 NS = "open-cluster-management-backup"
 

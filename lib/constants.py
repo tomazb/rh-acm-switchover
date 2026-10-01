@@ -192,6 +192,8 @@ MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY = "restore_only"
 MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT = "derived_from_preflight"
 MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED = "explicit_empty_allowed"
 MANAGED_CLUSTER_EXPECTATION_EXPLICIT_MINIMUM = "explicit_minimum"
+# The CLI flag a journaled expected-name waiver records as its `flag` (R4-04 July section 2).
+MANAGED_CLUSTER_EXPECTATION_WAIVER_FLAG = "--skip-managed-cluster-expectations"
 PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME = "pre_activation_velero_managed_clusters_restore_name"
 
 # State file naming and location
