@@ -61,8 +61,9 @@ def _process_start(pid: int) -> str:
 
     Linux: the boot id plus the start time in clock ticks since boot (/proc/<pid>/stat
     field 22), so neither PID reuse nor a reboot repeats it. Elsewhere (macOS, the BSDs):
-    the absolute wall-clock start ``ps -o lstart`` reports; a PID is reused only after the
-    PID space wraps, never within the second that resolution distinguishes.
+    the start ``ps -o lstart`` reports, rendered in UTC so that no local-time hour repeats
+    across a daylight-saving change; a PID is reused only after the PID space wraps, never
+    within the second that resolution distinguishes.
     """
     try:
         with open(f"/proc/{pid}/stat", encoding="ascii") as handle:
@@ -79,14 +80,14 @@ def _process_start(pid: int) -> str:
             text=True,
             check=False,
             timeout=10,
-            env={**os.environ, "LC_ALL": "C"},
+            env={**os.environ, "LC_ALL": "C", "TZ": "UTC0"},
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise RuntimeError(f"Cannot read the start time of the ansible-playbook process {pid}: {exc}") from exc
     start = completed.stdout.strip()
     if completed.returncode != 0 or not start:
         raise RuntimeError(f"Cannot read the start time of the ansible-playbook process {pid}.")
-    return start
+    return f"{start} UTC"
 
 
 def invocation_id() -> str:
@@ -797,9 +798,10 @@ class ActionModule(ActionBase):
         # #332: an operator rewind rides along in the checkpoint config of every task of
         # the run, but it is applied once per invocation. After the first enter carrying it
         # has been applied and persisted, later enters of the same process treat it as
-        # absent, so a phase this run completed is never pruned again.
+        # absent, so a phase this run completed is never pruned again. A preview persists
+        # neither the fence nor the resume sentinel, so it never needs the identity.
         try:
-            invocation = invocation_id() if status == "enter" and (reset_from or not is_non_mutating) else None
+            invocation = invocation_id() if status == "enter" and not is_non_mutating else None
         except RuntimeError as exc:
             return {"failed": True, "msg": str(exc)}
         rewind_fence = f"{invocation}:{path}:{reset_from}" if invocation and reset_from else None

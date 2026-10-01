@@ -49,7 +49,7 @@
         msg: >-
           Timeout waiting for restore to complete after
           {{ _acm_restore_poll_delays | default([0] + [10] * 12 + [30] * 56) | sum }}s
-          ({{ _acm_completion_poll.detail | default('no completion proof') }})
+          ({{ (_acm_completion_decision | default({})).detail | default('no completion proof') }})
       when: _acm_completion_state != 'complete'
 
     - name: Resolve the activation managed-cluster expectation

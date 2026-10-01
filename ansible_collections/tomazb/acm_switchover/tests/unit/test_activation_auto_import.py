@@ -258,7 +258,7 @@ def test_apply_immediate_import_fails_closed_before_managed_cluster_work():
     assert "autoImportStrategy_unavailable" not in content
     assert "resources is not defined" not in decision
     assert "failed_when: false" not in str(config_task)
-    assert "reason: dry_run" in content
+    assert "reason: \"{{ acm_switchover_execution.mode | default('dry_run') }}\"" in content
     assert "does not support immediate-import annotations" in content
 
 

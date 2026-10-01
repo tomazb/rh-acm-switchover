@@ -35,9 +35,9 @@
     acm_switchover_repair_backup_schedule_collision_result:
       changed: "{{ (acm_finalization_backup_schedules_info.resources | default([]) | length) > 0 }}"
       status: skipped
-      reason: dry_run
+      reason: "{{ acm_switchover_execution.mode | default('dry_run') }}"
       message: >-
-        [dry_run] Would recreate the BackupSchedule to prevent or repair BackupCollision.
+        [{{ acm_switchover_execution.mode | default('dry_run') }}] Would recreate the BackupSchedule to prevent or repair BackupCollision.
   when:
     - acm_switchover_execution.mode | default('dry_run') != 'execute'
     - acm_switchover_repair_backup_schedule_collision_result is not defined

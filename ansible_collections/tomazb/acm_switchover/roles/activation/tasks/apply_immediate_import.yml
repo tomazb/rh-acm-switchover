@@ -10,7 +10,7 @@
       changed: false
       mode: "{{ acm_switchover_operation.activation_method | default('patch') }}"
       skipped: true
-      reason: dry_run
+      reason: "{{ acm_switchover_execution.mode | default('dry_run') }}"
   when: acm_switchover_execution.mode | default('dry_run') != 'execute'
 
 - name: Publish immediate import skip result for older ACM versions

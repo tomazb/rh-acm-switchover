@@ -722,3 +722,107 @@ def test_a_direct_validate_entry_mutates_nothing(tmp_path):
     assert fake.writes == [], output
     assert fake.mutations == []
     assert "migration_backups" not in stored["operational_data"]
+
+
+# --- Task 8 round 3, item 6: an accepted poll decision ends the loop's work ----------------------
+
+
+def _poll_reads(hub: FakeMigrationHub) -> dict:
+    paths = [request["path"].split("?")[0] for request in hub.requests if request["method"] == "GET"]
+    return {
+        "deleted_restore": sum(path.endswith(f"/restores/{PASSIVE}") for path in paths),
+        "journaled_restore": sum(path.endswith("/restores/restore-acm-full") for path in paths),
+        "velero_restores": sum(path.endswith(f"/apis/velero.io/v1/namespaces/{NS}/restores") for path in paths),
+        "managed_clusters": sum(path.endswith("/managedclusters") for path in paths),
+    }
+
+
+@pytest.mark.parametrize("delays", [[0], [0, 0, 0, 0]], ids=["one-poll", "four-polls"])
+def test_polls_stop_reading_once_their_decision_is_accepted(tmp_path, delays):
+    """Every poll is satisfied at once: a longer poll budget adds no request to any wait."""
+    fake = FakeMigrationHub(restores=[passive_restore()], controller=complete_on_mutation)
+    operation = dict(KIND_OPERATION["full_restore"], restore_only=False, old_hub_action="secondary")
+    try:
+        run = _run_full_restore(tmp_path, fake, delays, operation)
+    finally:
+        fake.close()
+    assert run.completed.returncode == 0, run.output
+    assert run.journal["restore"]["completed_at"]
+    reads = _poll_reads(fake)
+    assert reads == _BASELINE_POLL_READS, reads
+
+
+def _run_full_restore(tmp_path, fake, delays, operation):
+    checkpoint_path = tmp_path / "checkpoint.json"
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "2.0",
+                "phase": "primary_prep",
+                "phase_status": "pass",
+                "completed_phases": ["preflight", "primary_prep"],
+                "operational_data": {},
+                "operation_identity": _identity(operation),
+                "errors": [],
+                "report_refs": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    kubeconfig = tmp_path / "secondary.kubeconfig"
+    write_kubeconfig(kubeconfig, context="secondary-hub", server=fake.url, token="fixture-token")
+    variables = {
+        "acm_switchover_hubs": {
+            "primary": {"context": "primary-hub", "kubeconfig": ""},
+            "secondary": {"context": "secondary-hub", "kubeconfig": str(kubeconfig)},
+        },
+        "acm_switchover_operation": dict(operation, min_managed_clusters=1),
+        "acm_switchover_execution": {
+            "mode": "execute",
+            "report_dir": str(tmp_path / "artifacts"),
+            "checkpoint": {"enabled": True, "backend": "file", "path": str(checkpoint_path)},
+        },
+        "_acm_restore_poll_delays": delays,
+    }
+    tasks = [
+        {
+            "name": "Enter the activation checkpoint",
+            "tomazb.acm_switchover.checkpoint_phase": {
+                "phase": "activation",
+                "checkpoint": "{{ acm_switchover_execution.checkpoint }}",
+                "status": "enter",
+            },
+            "register": "_checkpoint_enter",
+        },
+        *(
+            {
+                "name": f"Run activation {task}",
+                "ansible.builtin.include_role": {"name": "tomazb.acm_switchover.activation", "tasks_from": task},
+            }
+            for task in ("discover_resources", "activate_restore", "wait_for_restore")
+        ),
+    ]
+    playbook = tmp_path / "activation.yml"
+    playbook.write_text(
+        yaml.safe_dump(
+            [{"hosts": "localhost", "connection": "local", "gather_facts": False, "tasks": tasks}], sort_keys=False
+        ),
+        encoding="utf-8",
+    )
+    vars_file = tmp_path / "vars.yml"
+    vars_file.write_text(yaml.safe_dump(variables, sort_keys=False), encoding="utf-8")
+    completed = subprocess.run(
+        ["ansible-playbook", str(playbook), "-i", "localhost,", "-e", f"@{vars_file}"],
+        cwd=_repo_root(),
+        capture_output=True,
+        text=True,
+        check=False,
+        env=_ansible_env(_repo_root(), tmp_path),
+        timeout=300,
+    )
+    return Run(completed, fake, b"", checkpoint_path.read_bytes())
+
+
+# The reads of a run with a one-poll budget, whose every poll is satisfied by its first read
+# (the accepted ManagedCluster decision also skips the post-loop re-read).
+_BASELINE_POLL_READS = {"deleted_restore": 2, "journaled_restore": 5, "velero_restores": 2, "managed_clusters": 1}

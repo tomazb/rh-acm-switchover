@@ -498,7 +498,7 @@ def test_the_ps_fallback_used_off_linux_reads_an_absolute_start(monkeypatch):
 
     monkeypatch.setattr(builtins, "open", no_proc)
     start = checkpoint_phase._process_start(os.getpid())
-    assert len(start.split()) == 5  # e.g. "Thu Oct  1 07:32:09 2026"
+    assert len(start.split()) == 6 and start.endswith(" UTC")  # e.g. "Thu Oct  1 05:32:09 2026 UTC"
     assert start == checkpoint_phase._process_start(os.getpid())
 
 
@@ -516,4 +516,59 @@ def test_an_unreadable_invocation_identity_fails_the_enter_closed(tmp_path, monk
     results, _ = _run_invocation(path, [("preflight", "enter", {})])
     assert results[-1]["failed"] is True
     assert "Cannot read the start time" in results[-1]["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+# --- round-3 findings 2 and 4 -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("zones", [("Europe/Ljubljana", "America/New_York"), ("UTC", "Asia/Tokyo")])
+def test_the_ps_start_does_not_depend_on_the_controller_time_zone(monkeypatch, zones):
+    """Finding 2: a local-time start repeats across a DST fall-back (02:30+02:00 and 02:30+01:00
+    print alike), so a recycled PID could match; the fallback reports an absolute UTC start."""
+    import builtins
+    import os
+    import shutil
+
+    from ansible_collections.tomazb.acm_switchover.plugins.action import checkpoint_phase
+
+    if shutil.which("ps") is None:
+        pytest.skip("no ps on this controller")
+    real_open = builtins.open
+
+    def no_proc(file, *args, **kwargs):
+        if str(file).startswith("/proc/"):
+            raise FileNotFoundError(file)
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", no_proc)
+    starts = []
+    for zone in zones:
+        monkeypatch.setenv("TZ", zone)
+        starts.append(checkpoint_phase._process_start(os.getpid()))
+    assert starts[0] == starts[1]
+
+
+@pytest.mark.parametrize(
+    "mode, check_mode",
+    [("dry_run", False), ("validate", False), ("execute", True)],
+    ids=["dry-run", "validate", "check"],
+)
+def test_a_preview_enter_with_a_rewind_needs_no_invocation_identity(tmp_path, monkeypatch, mode, check_mode):
+    """Finding 4: a preview persists no fence, so unreadable process metadata cannot fail it."""
+    from ansible_collections.tomazb.acm_switchover.plugins.action import checkpoint_phase
+
+    def unreadable(pid):
+        raise RuntimeError(f"Cannot read the start time of the ansible-playbook process {pid}.")
+
+    monkeypatch.setattr(checkpoint_phase, "_process_start", unreadable)
+    path = _write_phase_checkpoint(
+        tmp_path, phase="activation", completed=("preflight", "primary_prep", "activation"), data={}
+    )
+    before = _dir_snapshot(tmp_path)
+    action = _enter_action(path, phase="preflight", reset_from="primary_prep")
+    action._play_context.check_mode = check_mode
+    result = action.run(task_vars=_task_vars_with_operation_identity(mode=mode))
+    assert result.get("failed") is not True, result
+    assert REWIND_FENCE_FACT not in (result.get("ansible_facts") or {})
     assert _dir_snapshot(tmp_path) == before

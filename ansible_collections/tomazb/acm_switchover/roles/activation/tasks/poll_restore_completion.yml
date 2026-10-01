@@ -1,46 +1,53 @@
 ---
 # One poll of the completion wait: pending while the controller works, complete, or
 # refused with no evidence written. Included in a bounded loop over _acm_poll_delay values.
+# Ansible decides an include loop's `when` for every item before any included task runs, so
+# each poll guards itself at execution time: once the decision is accepted the remaining polls
+# do nothing, and the accepted decision lives in a fact a skipped poll never overwrites.
 
-- name: Wait before re-reading the journaled Restore
-  ansible.builtin.pause:
-    seconds: "{{ _acm_poll_delay }}"
-  when: _acm_poll_delay | int > 0
+- name: Poll the journaled Restore until its completion proof holds
+  when: _acm_completion_state != 'complete'
+  block:
+    - name: Wait before re-reading the journaled Restore
+      ansible.builtin.pause:
+        seconds: "{{ _acm_poll_delay }}"
+      when: _acm_poll_delay | int > 0
 
-- name: Read the journaled Restore strictly
-  ansible.builtin.include_tasks: strict_read.yml
-  vars:
-    _acm_read:
-      key: "restore/{{ _acm_journal.restore.name }}"
-      read_mode: get
-      api_version: cluster.open-cluster-management.io/v1beta1
-      kind: Restore
-      resource_name: restores
-      namespace: open-cluster-management-backup
-      name: "{{ _acm_journal.restore.name }}"
-    _acm_read_fact: _acm_poll_restore_read
+    - name: Read the journaled Restore strictly
+      ansible.builtin.include_tasks: strict_read.yml
+      vars:
+        _acm_read:
+          key: "restore/{{ _acm_journal.restore.name }}"
+          read_mode: get
+          api_version: cluster.open-cluster-management.io/v1beta1
+          kind: Restore
+          resource_name: restores
+          namespace: open-cluster-management-backup
+          name: "{{ _acm_journal.restore.name }}"
+        _acm_read_fact: _acm_poll_restore_read
 
-- name: List the Velero Restores strictly
-  ansible.builtin.include_tasks: strict_read.yml
-  vars:
-    _acm_read:
-      key: velero_restores
-      read_mode: list
-      api_version: velero.io/v1
-      kind: Restore
-      resource_name: restores
-      namespace: open-cluster-management-backup
-    _acm_read_fact: _acm_poll_velero_read
+    - name: List the Velero Restores strictly
+      ansible.builtin.include_tasks: strict_read.yml
+      vars:
+        _acm_read:
+          key: velero_restores
+          read_mode: list
+          api_version: velero.io/v1
+          kind: Restore
+          resource_name: restores
+          namespace: open-cluster-management-backup
+        _acm_read_fact: _acm_poll_velero_read
 
-- name: Decide whether the completion proof holds
-  tomazb.acm_switchover.acm_migration_evidence:
-    operation: completion_poll
-    inputs:
-      journal: "{{ _acm_journal }}"
-      restore_read: "{{ _acm_poll_restore_read }}"
-      velero_read: "{{ _acm_poll_velero_read }}"
-  register: _acm_completion_poll
+    - name: Decide whether the completion proof holds
+      tomazb.acm_switchover.acm_migration_evidence:
+        operation: completion_poll
+        inputs:
+          journal: "{{ _acm_journal }}"
+          restore_read: "{{ _acm_poll_restore_read }}"
+          velero_read: "{{ _acm_poll_velero_read }}"
+      register: _acm_completion_poll
 
-- name: Record the completion poll
-  ansible.builtin.set_fact:
-    _acm_completion_state: "{{ _acm_completion_poll.state }}"
+    - name: Record the completion poll
+      ansible.builtin.set_fact:
+        _acm_completion_decision: "{{ _acm_completion_poll }}"
+        _acm_completion_state: "{{ _acm_completion_poll.state }}"

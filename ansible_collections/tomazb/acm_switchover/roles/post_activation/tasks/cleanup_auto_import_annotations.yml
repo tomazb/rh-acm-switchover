@@ -4,7 +4,7 @@
     acm_switchover_cleanup_auto_import_result:
       changed: false
       status: skipped
-      reason: dry_run
+      reason: "{{ acm_switchover_execution.mode | default('dry_run') }}"
   when: acm_switchover_execution.mode | default('dry_run') != 'execute'
 
 - name: Read secondary hub ManagedClusters before auto-import cleanup

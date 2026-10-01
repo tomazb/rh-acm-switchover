@@ -141,7 +141,7 @@ CANDIDATE_OPERATIONS = frozenset(
     }
 )
 _PLAY_TASK_LISTS = ("pre_tasks", "tasks", "post_tasks", "handlers")
-_SET_FACT_MODULES = ("ansible.builtin.set_fact", "set_fact")
+_SET_FACT_MODULES = ("ansible.builtin.set_fact", "ansible.legacy.set_fact", "set_fact")
 # Round-2 finding 2: a task file, role or vars file a task pulls in can reassign any name,
 # and this file-local check cannot see into it, so none may run between producer and writer.
 _INCLUDE_MODULES = frozenset(
@@ -149,6 +149,17 @@ _INCLUDE_MODULES = frozenset(
     for prefix in ("", "ansible.builtin.", "ansible.legacy.")
     for name in ("include", "include_tasks", "import_tasks", "include_role", "import_role", "include_vars")
 )
+# Round-3 finding 1: a handler flush runs notified handlers, whose files this check cannot see
+# either. Ansible also flushes handlers (and runs a play's roles) between a play's task lists,
+# so _executable_tasks puts this marker at every such boundary.
+_META_MODULES = frozenset(f"{prefix}meta" for prefix in ("", "ansible.builtin.", "ansible.legacy."))
+_SECTION_BOUNDARY = {"ansible.builtin.meta": "flush_handlers"}
+
+
+def _is_reassignment_barrier(task: dict) -> bool:
+    if _INCLUDE_MODULES.intersection(task):
+        return True
+    return any(task.get(module) == "flush_handlers" for module in _META_MODULES)
 
 
 def _executable_tasks(document) -> list:
@@ -156,7 +167,8 @@ def _executable_tasks(document) -> list:
 
     A playbook's task lists, or a role task file's top-level list, and their blocks,
     rescues and always sections. Mappings anywhere else (play or task `vars`, module
-    arguments) are data, never tasks.
+    arguments) are data, never tasks. A synthetic handler flush separates a playbook's
+    task lists.
     """
     if not isinstance(document, list):
         return []
@@ -177,6 +189,8 @@ def _executable_tasks(document) -> list:
                 walk(task.get(section))
 
     for items in lists:
+        if tasks:
+            tasks.append(_SECTION_BOUNDARY)
         walk(items)
     return tasks
 
@@ -232,7 +246,7 @@ def _is_allowed_journal_write(task: dict, registers: dict, tasks: list) -> bool:
         return False
     producer = registers[match.group(1)]
     writer = next(position for position, item in enumerate(tasks) if item is task)
-    return producer < writer and not any(_INCLUDE_MODULES.intersection(item) for item in tasks[producer + 1 : writer])
+    return producer < writer and not any(_is_reassignment_barrier(item) for item in tasks[producer + 1 : writer])
 
 
 def journal_key_offenders(node, registers: dict, where: str = "", executable=None) -> list:
@@ -440,8 +454,9 @@ def test_a_registration_inside_data_is_not_a_candidate(tmp_path, suffix):
         "- name: Overwrite it\n  ansible.builtin.set_fact:\n    _candidate_result: {}\n",
         "- name: Overwrite it\n  ansible.builtin.debug:\n    msg: x\n  register: _candidate_result\n",
         "- name: Overwrite it\n  ansible.builtin.include_tasks: x.yml\n  vars:\n    _candidate_result: {}\n",
+        "- name: Overwrite it\n  ansible.legacy.set_fact:\n    _candidate_result: {}\n",
     ],
-    ids=["set-fact", "second-register", "vars"],
+    ids=["set-fact", "second-register", "vars", "legacy-set-fact"],
 )
 @pytest.mark.parametrize("suffix", [".yml", ".yaml"])
 def test_an_overwritten_candidate_register_is_refused(tmp_path, suffix, overwrite):
@@ -496,4 +511,42 @@ def test_a_writer_before_its_producer_is_refused(tmp_path):
     path = tmp_path / "tasks.yml"
     head, writer = _ALLOWED_WRITER.split("- name: Persist the candidate")
     path.write_text("- name: Persist the candidate" + writer + head, encoding="utf-8")
+    assert yaml_journal_key_offenders([path])
+
+
+# Round-3 finding 1: a notified handler runs at a handler flush and can include a file that
+# reassigns the candidate; this file-local check cannot see a handler file.
+_NOTIFYING_WRITER = _ALLOWED_WRITER.replace(
+    "  register: _candidate_result\n", "  register: _candidate_result\n  changed_when: true\n  notify: overwrite\n"
+)
+
+
+@pytest.mark.parametrize("meta", ["ansible.builtin.meta", "meta", "ansible.legacy.meta"])
+def test_a_handler_flush_between_producer_and_writer_is_refused(tmp_path, meta):
+    path = tmp_path / "tasks.yml"
+    head, writer = _NOTIFYING_WRITER.split("- name: Persist the candidate")
+    flush = f"- name: Run the notified handlers\n  {meta}: flush_handlers\n"
+    path.write_text(head + flush + "- name: Persist the candidate" + writer, encoding="utf-8")
+    assert yaml_journal_key_offenders([path])
+
+
+def test_a_handler_flush_outside_the_producer_writer_span_is_admitted(tmp_path):
+    path = tmp_path / "tasks.yml"
+    flush = "- name: Run the notified handlers\n  ansible.builtin.meta: flush_handlers\n"
+    path.write_text(flush + _NOTIFYING_WRITER.lstrip("\n") + flush, encoding="utf-8")
+    assert yaml_journal_key_offenders([path]) == []
+
+
+def test_a_play_section_boundary_between_producer_and_writer_is_refused(tmp_path):
+    """Handlers flush, and a play's roles run, between pre_tasks and tasks."""
+    head, writer = _NOTIFYING_WRITER.split("- name: Persist the candidate")
+    indent = lambda text: "".join(f"    {line}\n" if line else "\n" for line in text.strip("\n").splitlines())
+    path = tmp_path / "play.yml"
+    path.write_text(
+        "- hosts: localhost\n  roles:\n    - overwrite\n  pre_tasks:\n"
+        + indent(head)
+        + "  tasks:\n"
+        + indent("- name: Persist the candidate" + writer),
+        encoding="utf-8",
+    )
     assert yaml_journal_key_offenders([path])

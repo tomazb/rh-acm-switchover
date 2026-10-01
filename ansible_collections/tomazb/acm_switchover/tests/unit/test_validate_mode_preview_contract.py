@@ -9,32 +9,44 @@ gate is not enough, because validate passes it.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
 import yaml
 
 ROLES_DIR = Path(__file__).resolve().parents[2] / "roles"
+COLLECTION_ROLE_PREFIX = "tomazb.acm_switchover."
+_PREFIXES = ("", "ansible.builtin.", "ansible.legacy.")
 
-# Modules and role entries that can write to a cluster.
+# Modules that can write to a cluster, by every name a task can use for them.
 MUTATING_MODULES = frozenset(
-    {
-        "kubernetes.core.k8s",
-        "kubernetes.core.k8s_json_patch",
-        "kubernetes.core.k8s_scale",
-        "tomazb.acm_switchover.acm_restore_guarded_mutation",
-        "tomazb.acm_switchover.acm_klusterlet_remediate",
-    }
+    f"{prefix}{name}"
+    for prefix, names in (
+        ("kubernetes.core.", ("k8s", "k8s_json_patch", "k8s_scale")),
+        ("", ("k8s", "k8s_json_patch", "k8s_scale")),
+        (COLLECTION_ROLE_PREFIX, ("acm_restore_guarded_mutation", "acm_klusterlet_remediate")),
+        ("", ("acm_restore_guarded_mutation", "acm_klusterlet_remediate")),
+    )
+    for name in names
 )
-MUTATING_ROLES = frozenset({"tomazb.acm_switchover.decommission", "tomazb.acm_switchover.argocd_manage"})
+_TASK_INCLUDES = frozenset(
+    f"{prefix}{name}" for prefix in _PREFIXES for name in ("include", "include_tasks", "import_tasks")
+)
+_ROLE_INCLUDES = frozenset(f"{prefix}{name}" for prefix in _PREFIXES for name in ("include_role", "import_role"))
 
 # The old hub observability teardown refuses validate outright before any delete
 # (test_mco_teardown_runtime pins the refusal); its shared teardown is not walked.
 REFUSES_VALIDATE = frozenset({"finalization/tasks/disable_old_hub_observability.yml"})
 
-_EXECUTE_GATE = re.compile(r"\.mode \| default\('[a-z_]+'\)\)? == 'execute'|\.get\('mode', '[a-z_]+'\) == 'execute'")
-_PREVIEW_GATE = "not (_acm_preview | bool)"
+# A condition proves the gate only as a whole `when` item (items are ANDed), never as a
+# fragment of a larger expression such as `... == 'execute' or true` or `not (...)`.
+_GATES = frozenset(
+    {
+        "acm_switchover_execution.mode | default('dry_run') == 'execute'",
+        "(acm_switchover_execution.mode | default('dry_run')) == 'execute'",
+        "not (_acm_preview | bool)",
+    }
+)
 _PREVIEW_CHECK_MODE = "{{ _acm_preview | bool }}"
 
 
@@ -44,21 +56,24 @@ def _as_list(value):
     return value if isinstance(value, list) else [value]
 
 
-def _resolve(role: str, target: str) -> Path:
-    return (ROLES_DIR / role / "tasks" / target.replace("{{ role_path }}", str(ROLES_DIR / role))).resolve()
-
-
 def _gated(conditions, check_mode) -> bool:
     if check_mode == _PREVIEW_CHECK_MODE:
         return True
-    return any(_EXECUTE_GATE.search(str(c)) or _PREVIEW_GATE in str(c) for c in conditions)
+    return any(" ".join(str(condition).split()) in _GATES for condition in conditions)
 
 
 def _ungated_mutations(role: str, path: Path, conditions: list, seen: set) -> list[str]:
+    """Writes reachable from `path`, run by `role`, that no enclosing condition gates.
+
+    A file's verdict depends only on whether its call context is already gated, so each
+    (file, gated) context is walked once. An include or role call the walk cannot resolve
+    to a collection file is refused rather than skipped.
+    """
     where = path.relative_to(ROLES_DIR).as_posix()
-    if where in REFUSES_VALIDATE or (where, len(conditions)) in seen:
+    context = (where, _gated(conditions, None))
+    if where in REFUSES_VALIDATE or context in seen:
         return []
-    seen.add((where, len(conditions)))
+    seen.add(context)
     offenders = []
 
     def walk(tasks, inherited):
@@ -69,20 +84,25 @@ def _ungated_mutations(role: str, path: Path, conditions: list, seen: set) -> li
             for section in ("block", "rescue", "always"):
                 if section in task:
                     walk(task[section], conds)
-            for key in ("ansible.builtin.include_tasks", "ansible.builtin.import_tasks"):
-                if key in task:
-                    target = task[key] if isinstance(task[key], str) else task[key]["file"]
-                    owner = target.split("/../")[1].split("/")[0] if "/../" in target else role
-                    offenders.extend(_ungated_mutations(owner, _resolve(role, target), conds, seen))
+            for key in _TASK_INCLUDES.intersection(task):
+                target = task[key] if isinstance(task[key], str) else (task[key] or {}).get("file", "")
+                target = target.replace("{{ role_path }}", str(ROLES_DIR / role))
+                if "{{" in target:
+                    offenders.append(f"{where}: {task.get('name')} (computed include {task[key]!r})")
+                    continue
+                offenders.extend(_ungated_mutations(role, (path.parent / target).resolve(), conds, seen))
+            for key in _ROLE_INCLUDES.intersection(task):
+                call = task[key] or {}
+                name, tasks_from = call.get("name", ""), str(call.get("tasks_from", "main"))
+                short = name[len(COLLECTION_ROLE_PREFIX) :] if name.startswith(COLLECTION_ROLE_PREFIX) else ""
+                entry = (
+                    ROLES_DIR / short / "tasks" / (tasks_from if tasks_from.endswith(".yml") else f"{tasks_from}.yml")
+                )
+                if not short or "{{" in tasks_from or not entry.is_file():
+                    offenders.append(f"{where}: {task.get('name')} (unresolvable role {name!r})")
+                    continue
+                offenders.extend(_ungated_mutations(short, entry, conds, seen))
             module = next((key for key in task if key in MUTATING_MODULES), None)
-            role_call = task.get("ansible.builtin.include_role") or task.get("ansible.builtin.import_role")
-            if role_call and role_call.get("name") in MUTATING_ROLES:
-                if role_call.get("tasks_from"):
-                    owner = role_call["name"].rsplit(".", 1)[1]
-                    entry = ROLES_DIR / owner / "tasks" / f"{role_call['tasks_from']}.yml"
-                    offenders.extend(_ungated_mutations(owner, entry, conds, seen))
-                else:
-                    module = f"role {role_call['name']}"
             if module and not _gated(conds, task.get("check_mode")):
                 offenders.append(f"{where}: {task.get('name')} ({module})")
 
@@ -125,3 +145,93 @@ def test_a_not_dry_run_gate_does_not_count_as_execute():
     assert _gated(["acm_switchover_execution.mode | default('dry_run') == 'execute'"], None)
     assert _gated(["(acm_switchover_execution.mode | default('dry_run')) == 'execute'"], None)
     assert _gated([], _PREVIEW_CHECK_MODE)
+
+
+_PREVIEW_BRANCH = "acm_switchover_execution.mode | default('dry_run') != 'execute'"
+_MODE_LABEL = "{{ acm_switchover_execution.mode | default('dry_run') }}"
+
+
+def _preview_reasons(node):
+    """The `reason` values a preview-branch set_fact publishes (dry_run and validate alike)."""
+    if isinstance(node, list):
+        for item in node:
+            yield from _preview_reasons(item)
+    elif isinstance(node, dict):
+        if _PREVIEW_BRANCH in _as_list(node.get("when")) and isinstance(node.get("ansible.builtin.set_fact"), dict):
+            for value in node["ansible.builtin.set_fact"].values():
+                if isinstance(value, dict) and "reason" in value:
+                    yield value["reason"], value.get("message", "")
+        for value in node.values():
+            if isinstance(value, (list, dict)):
+                yield from _preview_reasons(value)
+
+
+@pytest.mark.parametrize("role", ["activation", "post_activation", "finalization"])
+def test_a_preview_result_reports_the_actual_preview_mode(role):
+    """Round-3 nit: a validate run must not report reason dry_run."""
+    found = []
+    for path in sorted((ROLES_DIR / role / "tasks").glob("*.yml")):
+        for reason, message in _preview_reasons(yaml.safe_load(path.read_text(encoding="utf-8"))):
+            found.append(path.name)
+            assert reason == _MODE_LABEL, f"{path.name}: reason {reason!r}"
+            assert "[dry_run]" not in message, f"{path.name}: {message!r}"
+    assert found, "the walk must see the preview results it checks"
+
+
+# --- round-3 finding 3: the scanner judges semantics, call contexts and every include --------
+
+_GATE = "acm_switchover_execution.mode | default('dry_run') == 'execute'"
+_WRITE = "- name: Write\n  kubernetes.core.k8s:\n    state: present\n"
+
+
+def _tree(tmp_path, monkeypatch, files: dict) -> list[str]:
+    for relative, text in files.items():
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    monkeypatch.setitem(globals(), "ROLES_DIR", tmp_path)
+    return _ungated_mutations("probe", tmp_path / "probe" / "tasks" / "main.yml", [], set())
+
+
+_SCANNER_CASES = {
+    "or-true": {"probe/tasks/main.yml": _WRITE + f'  when: "{_GATE} or true"\n'},
+    "negated": {"probe/tasks/main.yml": _WRITE + f'  when: "not ({_GATE})"\n'},
+    "second-context": {
+        "probe/tasks/main.yml": (
+            f'- ansible.builtin.include_tasks: write.yml\n  when: "{_GATE}"\n'
+            "- ansible.builtin.include_tasks: write.yml\n  when: other | bool\n"
+        ),
+        "probe/tasks/write.yml": _WRITE,
+    },
+    "short-include": {"probe/tasks/main.yml": "- include_tasks: write.yml\n", "probe/tasks/write.yml": _WRITE},
+    "legacy-import": {
+        "probe/tasks/main.yml": "- ansible.legacy.import_tasks: write.yml\n",
+        "probe/tasks/write.yml": _WRITE,
+    },
+    "unlisted-role": {
+        "probe/tasks/main.yml": "- ansible.builtin.include_role:\n    name: tomazb.acm_switchover.other\n",
+        "other/tasks/main.yml": _WRITE,
+    },
+    "foreign-role": {"probe/tasks/main.yml": "- ansible.builtin.import_role:\n    name: example.other.writer\n"},
+    "computed-file": {"probe/tasks/main.yml": '- ansible.builtin.include_tasks: "{{ step }}.yml"\n'},
+}
+
+
+@pytest.mark.parametrize("files", list(_SCANNER_CASES.values()), ids=list(_SCANNER_CASES))
+def test_the_scanner_refuses_what_it_cannot_prove_gated(tmp_path, monkeypatch, files):
+    assert _tree(tmp_path, monkeypatch, files)
+
+
+def test_the_scanner_admits_a_gated_write_in_every_call_context(tmp_path, monkeypatch):
+    files = {
+        "probe/tasks/main.yml": (
+            f'- ansible.builtin.include_tasks: write.yml\n  when: "{_GATE}"\n'
+            f"- include_tasks: write.yml\n  when:\n    - other | bool\n    - {_GATE}\n"
+            "- ansible.builtin.include_role:\n    name: tomazb.acm_switchover.other\n"
+            "    tasks_from: write\n"
+            f'  when: "{_GATE}"\n'
+        ),
+        "probe/tasks/write.yml": _WRITE,
+        "other/tasks/write.yml": _WRITE,
+    }
+    assert _tree(tmp_path, monkeypatch, files) == []

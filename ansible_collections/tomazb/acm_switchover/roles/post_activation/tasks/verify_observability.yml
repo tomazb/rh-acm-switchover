@@ -4,7 +4,7 @@
     acm_switchover_observability_check_result:
       changed: false
       status: skipped
-      reason: dry_run
+      reason: "{{ acm_switchover_execution.mode | default('dry_run') }}"
   when: acm_switchover_execution.mode | default('dry_run') != 'execute'
 
 - name: Publish legacy dry-run observability result alias
