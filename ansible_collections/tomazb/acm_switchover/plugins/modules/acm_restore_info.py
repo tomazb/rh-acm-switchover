@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import re
-from copy import deepcopy
 
 DOCUMENTATION = r"""
 ---
 module: acm_restore_info
-short_description: Select and prepare restore activation data
+short_description: Analyze the passive sync restore for preflight
 description:
-  - Selects the best restore resource from a list and builds the activation patch
-    required to trigger managed cluster import on the new hub. No API calls are made.
+  - Selects the passive sync restore from a list and reports whether it is
+    activation-ready. No API calls are made.
+  - Activation does not plan from this analysis: the R4-04 activation transaction
+    discovers, mutates and proves Restores through C(acm_migration_evidence).
 author:
   - ACM Switchover Contributors (@tomazb)
 options:
@@ -20,26 +21,6 @@ options:
     type: list
     elements: dict
     default: []
-  method:
-    description:
-      - Switchover method.
-      - C(passive) activates an existing passive-sync restore or creates an activation restore.
-      - C(full) creates a one-time full restore.
-    type: str
-    choices: [passive, full]
-    default: passive
-  activation_method:
-    description:
-      - Passive activation mode.
-      - C(patch) patches the passive-sync restore in-place.
-      - C(restore) deletes the passive-sync restore and creates C(restore-acm-activate).
-    type: str
-    choices: [patch, restore]
-    default: patch
-  backup_name:
-    description: Backup name to embed in the activation patch. Use C(latest) to pick the newest backup.
-    type: str
-    default: latest
   allow_conventional_name_fallback:
     description:
       - Allow selecting C(restore-acm-passive-sync) when C(syncRestoreWithNewBackups) is omitted.
@@ -49,31 +30,18 @@ options:
 """
 
 EXAMPLES = r"""
-- name: Build activation patch plan
+- name: Analyze passive sync restores on the secondary hub
   tomazb.acm_switchover.acm_restore_info:
-    method: passive
-    activation_method: patch
-    restores: "{{ acm_secondary_restores_info.resources | default([]) }}"
-    backup_name: latest
-  register: restore_plan
-
-- name: Debug restore patch
-  ansible.builtin.debug:
-    msg: "{{ restore_plan.patch }}"
+    restores: "{{ acm_secondary_restore_info.resources | default([]) }}"
+  register: passive_restore_analysis
 """
 
 from ansible.module_utils.basic import AnsibleModule  # noqa: E402
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (  # noqa: E402
-    ACTIVATION_RESTORE_NAME,
-    BACKUP_NAMESPACE,
     BENIGN_ALREADY_AVAILABLE_MESSAGE_PATTERN,
-    CLEANUP_BEFORE_RESTORE_VALUE,
-    FULL_RESTORE_NAME,
     PASSIVE_RESTORE_CONVENTIONAL_NAME_FALLBACK_REASON,
     PASSIVE_SYNC_RESTORE_NAME,
-    VELERO_BACKUP_LATEST,
-    VELERO_BACKUP_SKIP,
     WAIT_FAILURE_PHASES,
 )
 
@@ -171,226 +139,18 @@ def passive_restore_ready_reason(restore: dict | None) -> str:
     return f"Passive Restore phase {phase} is not activation-ready."
 
 
-def build_activation_patch(backup_name: str, resource_version: str | None = None) -> dict:
-    patch = {"spec": {"veleroManagedClustersBackupName": backup_name}}
-    if resource_version:
-        patch["metadata"] = {"resourceVersion": resource_version}
-    return patch
-
-
-def select_restore_by_name(restores: list[dict], name: str) -> dict | None:
-    for restore in restores:
-        if restore.get("metadata", {}).get("name") == name:
-            return restore
-    return None
-
-
-def build_restore_snapshot(restore: dict) -> dict:
-    metadata = restore.get("metadata", {})
-    snapshot_metadata = {
-        "name": metadata.get("name", PASSIVE_SYNC_RESTORE_NAME),
-        "namespace": metadata.get("namespace", BACKUP_NAMESPACE),
-    }
-    labels = metadata.get("labels")
-    annotations = metadata.get("annotations")
-    if labels:
-        snapshot_metadata["labels"] = deepcopy(labels)
-    if annotations:
-        snapshot_metadata["annotations"] = deepcopy(annotations)
-
-    return {
-        "apiVersion": "cluster.open-cluster-management.io/v1beta1",
-        "kind": "Restore",
-        "metadata": snapshot_metadata,
-        "spec": deepcopy(restore.get("spec", {})),
-    }
-
-
-def build_wait_target(
-    name: str,
-    success_phases: list[str],
-    namespace: str = BACKUP_NAMESPACE,
-    **extra: object,
-) -> dict:
-    target: dict[str, object] = {
-        "name": name,
-        "namespace": namespace,
-        "success_phases": success_phases,
-        "failure_phases": WAIT_FAILURE_PHASES,
-    }
-    target.update(extra)
-    return target
-
-
-def previous_managed_clusters_velero_restore_name(restore: dict | None) -> str:
-    if restore is None:
-        return ""
-    return restore.get("status", {}).get("veleroManagedClustersRestoreName", "") or ""
-
-
-def build_activation_restore_body(backup_name: str) -> dict:
-    return {
-        "apiVersion": "cluster.open-cluster-management.io/v1beta1",
-        "kind": "Restore",
-        "metadata": {
-            "name": ACTIVATION_RESTORE_NAME,
-            "namespace": BACKUP_NAMESPACE,
-        },
-        "spec": {
-            "cleanupBeforeRestore": CLEANUP_BEFORE_RESTORE_VALUE,
-            "veleroManagedClustersBackupName": backup_name,
-            "veleroCredentialsBackupName": VELERO_BACKUP_SKIP,
-            "veleroResourcesBackupName": VELERO_BACKUP_SKIP,
-        },
-    }
-
-
-def build_full_restore_body(backup_name: str) -> dict:
-    return {
-        "apiVersion": "cluster.open-cluster-management.io/v1beta1",
-        "kind": "Restore",
-        "metadata": {
-            "name": FULL_RESTORE_NAME,
-            "namespace": BACKUP_NAMESPACE,
-        },
-        "spec": {
-            "cleanupBeforeRestore": CLEANUP_BEFORE_RESTORE_VALUE,
-            "veleroManagedClustersBackupName": backup_name,
-            "veleroCredentialsBackupName": backup_name,
-            "veleroResourcesBackupName": backup_name,
-        },
-    }
-
-
-def build_restore_activation_plan(
-    method: str,
-    activation_method: str,
-    restores: list[dict],
-    backup_name: str | None,
-    allow_conventional_name_fallback: bool = False,
-) -> dict:
-    backup_name = backup_name or VELERO_BACKUP_LATEST
+def analyze_passive_restores(restores: list[dict], allow_conventional_name_fallback: bool = False) -> dict:
+    """The selected passive sync restore and its activation readiness."""
     passive_restore, diagnostics = select_passive_sync_restore(
         restores,
         allow_conventional_name_fallback=allow_conventional_name_fallback,
     )
-    activation_restore = select_restore_by_name(restores, ACTIVATION_RESTORE_NAME)
-    full_restore = select_restore_by_name(restores, FULL_RESTORE_NAME)
-
-    patch_resource_version = None
-    if method == "passive" and activation_method == "patch" and passive_restore:
-        patch_resource_version = passive_restore.get("metadata", {}).get("resourceVersion")
-    patch = build_activation_patch(backup_name, resource_version=patch_resource_version)
-    operation: dict = {"action": "none"}
-    wait_target = None
-    restore = passive_restore
-
-    if method == "passive":
-        if activation_method == "restore":
-            wait_target = build_wait_target(
-                ACTIVATION_RESTORE_NAME,
-                ["Finished", "Completed"],
-                velero_restore_required=True,
-                velero_restore_status_field="veleroManagedClustersRestoreName",
-                velero_success_phases=["Completed"],
-                velero_failure_phases=["Failed", "PartiallyFailed"],
-            )
-            restore = activation_restore or passive_restore
-            if activation_restore is None:
-                create_restore = build_activation_restore_body(backup_name)
-                if passive_restore is not None:
-                    operation = {
-                        "action": "delete_and_create",
-                        "delete_restore": {
-                            "name": passive_restore.get("metadata", {}).get("name", PASSIVE_SYNC_RESTORE_NAME),
-                            "namespace": passive_restore.get("metadata", {}).get("namespace", BACKUP_NAMESPACE),
-                        },
-                        "create_restore": create_restore,
-                        "rollback_restore": build_restore_snapshot(passive_restore),
-                    }
-                else:
-                    operation = {
-                        "action": "create",
-                        "create_restore": create_restore,
-                    }
-            elif passive_restore is not None:
-                operation = {
-                    "action": "delete",
-                    "delete_restore": {
-                        "name": passive_restore.get("metadata", {}).get("name", PASSIVE_SYNC_RESTORE_NAME),
-                        "namespace": passive_restore.get("metadata", {}).get("namespace", BACKUP_NAMESPACE),
-                    },
-                }
-        else:
-            if passive_restore is not None:
-                current_backup = passive_restore.get("spec", {}).get("veleroManagedClustersBackupName")
-                wait_target_extra = {}
-                if current_backup != backup_name:
-                    wait_target_extra["previous_velero_restore_name"] = previous_managed_clusters_velero_restore_name(
-                        passive_restore
-                    )
-                wait_target = build_wait_target(
-                    passive_restore.get("metadata", {}).get("name", PASSIVE_SYNC_RESTORE_NAME),
-                    ["Enabled", "Finished", "Completed"],
-                    passive_restore.get("metadata", {}).get("namespace", BACKUP_NAMESPACE),
-                    velero_restore_required=True,
-                    velero_restore_status_field="veleroManagedClustersRestoreName",
-                    velero_success_phases=["Completed"],
-                    velero_failure_phases=["Failed", "PartiallyFailed"],
-                    **wait_target_extra,
-                )
-                if current_backup != backup_name:
-                    operation = {
-                        "action": "patch",
-                        "patch": patch,
-                        "patch_target": {
-                            "name": passive_restore.get("metadata", {}).get("name", PASSIVE_SYNC_RESTORE_NAME),
-                            "namespace": passive_restore.get("metadata", {}).get("namespace", BACKUP_NAMESPACE),
-                        },
-                    }
-    else:
-        wait_target = build_wait_target(
-            FULL_RESTORE_NAME,
-            ["Finished", "Completed"],
-            velero_restore_required=False,
-            managed_cluster_presence_required=True,
-        )
-        restore = full_restore or passive_restore
-        if full_restore is None:
-            create_restore = build_full_restore_body(backup_name)
-            if passive_restore is not None:
-                operation = {
-                    "action": "delete_and_create",
-                    "delete_restore": {
-                        "name": passive_restore.get("metadata", {}).get("name", PASSIVE_SYNC_RESTORE_NAME),
-                        "namespace": passive_restore.get("metadata", {}).get("namespace", BACKUP_NAMESPACE),
-                    },
-                    "create_restore": create_restore,
-                    "rollback_restore": build_restore_snapshot(passive_restore),
-                }
-            else:
-                operation = {
-                    "action": "create",
-                    "create_restore": create_restore,
-                }
-        elif passive_restore is not None:
-            operation = {
-                "action": "delete",
-                "delete_restore": {
-                    "name": passive_restore.get("metadata", {}).get("name", PASSIVE_SYNC_RESTORE_NAME),
-                    "namespace": passive_restore.get("metadata", {}).get("namespace", BACKUP_NAMESPACE),
-                },
-            }
-
     return {
-        "changed": operation["action"] != "none",
-        "restore": restore,
+        "changed": False,
+        "restore": passive_restore,
         "restore_phase": passive_restore_phase(passive_restore),
         "restore_ready": passive_restore_ready_for_preflight(passive_restore),
         "restore_ready_reason": passive_restore_ready_reason(passive_restore),
-        "patch": (patch if method == "passive" and activation_method == "patch" else None),
-        "operation": operation,
-        "wait_target": wait_target,
         "restore_count": diagnostics["restore_count"],
         "sync_enabled_count": diagnostics["sync_enabled_count"],
         "reason": diagnostics.get("reason"),
@@ -401,33 +161,16 @@ def main() -> None:
     module = AnsibleModule(
         argument_spec={
             "restores": {"type": "list", "elements": "dict", "default": []},
-            "method": {
-                "type": "str",
-                "choices": ["passive", "full"],
-                "default": "passive",
-            },
-            "activation_method": {
-                "type": "str",
-                "choices": ["patch", "restore"],
-                "default": "patch",
-            },
-            "backup_name": {
-                "type": "str",
-                "required": False,
-                "default": VELERO_BACKUP_LATEST,
-            },
             "allow_conventional_name_fallback": {"type": "bool", "default": False},
         },
         supports_check_mode=True,
     )
-    plan = build_restore_activation_plan(
-        method=module.params["method"],
-        activation_method=module.params["activation_method"],
-        restores=module.params["restores"],
-        backup_name=module.params["backup_name"],
-        allow_conventional_name_fallback=module.params["allow_conventional_name_fallback"],
+    module.exit_json(
+        **analyze_passive_restores(
+            module.params["restores"],
+            allow_conventional_name_fallback=module.params["allow_conventional_name_fallback"],
+        )
     )
-    module.exit_json(**plan)
 
 
 if __name__ == "__main__":

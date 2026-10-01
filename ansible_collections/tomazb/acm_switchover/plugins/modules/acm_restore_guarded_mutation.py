@@ -1,14 +1,14 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 # SPDX-License-Identifier: MIT
-"""Apply one server-guarded PATCH or DELETE to an ACM Restore."""
+"""Apply one server-guarded PATCH, DELETE or CREATE to an ACM Restore."""
 
 from __future__ import annotations
 
 DOCUMENTATION = r"""
 ---
 module: acm_restore_guarded_mutation
-short_description: Apply one server-guarded PATCH or DELETE to an ACM Restore
+short_description: Apply one server-guarded PATCH, DELETE or CREATE to an ACM Restore
 version_added: "1.8.0"
 description:
   - Submits exactly one request to a single ACM Restore, guarded so the API server applies
@@ -19,6 +19,12 @@ description:
     C(latest). Nothing else is mutated.
   - C(action=delete) sends a DELETE whose preconditions carry both the expected UID and
     the expected resourceVersion. It does not wait for the Restore to disappear.
+  - C(action=create) sends exactly one POST of C(body). A 409 is C(reason=already_exists)
+    with C(conflict=true) and is never reconciled by reading the existing object; a
+    timeout or any other failure is C(unverifiable). The create is accepted only when the
+    response names the requested Restore with a non-empty C(metadata.uid) and
+    C(metadata.resourceVersion); its C(generation) is published only from that response.
+    Callers still owe a strict post-create read.
   - A failed JSON Patch test or a precondition conflict (HTTP 409, 412 or, for a patch,
     422) fails with C(conflict=true); the request mutated nothing and is never retried or
     replaced by an unguarded request. A retry must start again from a fresh read.
@@ -45,7 +51,7 @@ options:
     description: The single guarded request to submit.
     type: str
     required: true
-    choices: [patch, delete]
+    choices: [patch, delete, create]
   api_version:
     description: API version of the Restore.
     type: str
@@ -65,13 +71,24 @@ options:
     type: str
     required: true
   expected_uid:
-    description: The C(metadata.uid) the caller proved. May not be empty.
+    description:
+      - The C(metadata.uid) the caller proved. May not be empty. Required for, and only
+        accepted with, C(action=patch) and C(action=delete).
     type: str
-    required: true
+    required: false
   expected_resource_version:
-    description: The C(metadata.resourceVersion) the caller proved. May not be empty.
+    description:
+      - The C(metadata.resourceVersion) the caller proved. May not be empty. Required for,
+        and only accepted with, C(action=patch) and C(action=delete).
     type: str
-    required: true
+    required: false
+  body:
+    description:
+      - The complete Restore to create. Its C(apiVersion), C(kind) and C(metadata.name) and
+        C(metadata.namespace) must equal the other options. Required for, and only accepted
+        with, C(action=create).
+    type: dict
+    required: false
   expected_managed_clusters_backup_name:
     description:
       - The exact raw C(spec.veleroManagedClustersBackupName) the caller proved, compared
@@ -150,32 +167,33 @@ reason:
   description:
     - Closed classification of the outcome.
     - C(ok), C(predicted) (check mode), C(precondition_failed), C(not_found),
-      C(unverifiable), C(invalid_input) or C(malformed_response) (a successful PATCH whose
-      response lacks the proved UID or a resourceVersion; the module fails).
+      C(already_exists) (a create whose name is taken), C(unverifiable), C(invalid_input)
+      or C(malformed_response) (a successful PATCH or CREATE whose response lacks the proved
+      or requested identity or a resourceVersion; the module fails).
   returned: always
   type: str
   sample: ok
 uid:
   description:
-    - For an accepted patch, the response's C(metadata.uid); for an accepted delete, the
-      UID its precondition bound. Otherwise null.
+    - For an accepted patch or create, the response's C(metadata.uid); for an accepted
+      delete, the UID its precondition bound. Otherwise null.
   returned: always
   type: str
 resource_version:
   description:
-    - For an accepted patch, the response's C(metadata.resourceVersion); for an accepted
-      delete, the resourceVersion its precondition bound. Otherwise null.
+    - For an accepted patch or create, the response's C(metadata.resourceVersion); for an
+      accepted delete, the resourceVersion its precondition bound. Otherwise null.
   returned: always
   type: str
 generation:
   description:
-    - The integer C(metadata.generation) of an accepted PATCH response; null when the
-      response omits it. Never inferred.
-  returned: when action is patch
+    - The integer C(metadata.generation) of an accepted PATCH or CREATE response; null when
+      the response omits it. Never inferred.
+  returned: when action is patch or create
   type: int
 generation_reported:
-  description: Whether an accepted PATCH response carried an integer generation.
-  returned: when action is patch
+  description: Whether an accepted PATCH or CREATE response carried an integer generation.
+  returned: when action is patch or create
   type: bool
 """
 
@@ -212,6 +230,8 @@ REASON_PRECONDITION_FAILED = "precondition_failed"
 REASON_NOT_FOUND = "not_found"
 REASON_UNVERIFIABLE = "unverifiable"
 REASON_INVALID_INPUT = "invalid_input"
+REASON_ALREADY_EXISTS = "already_exists"
+_GUARDED_IDENTITY_OPTIONS = ("expected_uid", "expected_resource_version")
 REASON_MALFORMED_RESPONSE = "malformed_response"
 
 
@@ -219,13 +239,14 @@ def _argument_spec() -> dict:
     return {
         "kubeconfig": {"type": "str", "required": True},
         "context": {"type": "str", "required": True},
-        "action": {"type": "str", "required": True, "choices": ["patch", "delete"]},
+        "action": {"type": "str", "required": True, "choices": ["patch", "delete", "create"]},
         "api_version": {"type": "str", "required": True, "choices": [RESTORE_API_VERSION]},
         "kind": {"type": "str", "required": True, "choices": [RESTORE_KIND]},
         "namespace": {"type": "str", "required": True},
         "name": {"type": "str", "required": True},
-        "expected_uid": {"type": "str", "required": True},
-        "expected_resource_version": {"type": "str", "required": True},
+        "expected_uid": {"type": "str", "required": False},
+        "expected_resource_version": {"type": "str", "required": False},
+        "body": {"type": "dict", "required": False},
         "expected_managed_clusters_backup_name": {"type": "str", "required": False},
         "replacement_managed_clusters_backup_name": {
             "type": "str",
@@ -290,7 +311,7 @@ def _base_result(action: str) -> dict:
         "uid": None,
         "resource_version": None,
     }
-    if action == "patch":
+    if action in ("patch", "create"):
         result.update(generation=None, generation_reported=False)
     return result
 
@@ -331,6 +352,38 @@ def _require_unpadded_identity(uid: str, resource_version: str) -> None:
             raise ValueError(f"{option} may not carry surrounding whitespace.")
 
 
+def _require_create_body(params: dict) -> None:
+    """The create body must describe exactly the Restore the options name."""
+    body = params.get("body")
+    metadata = body.get("metadata") if isinstance(body, dict) else None
+    if (
+        not isinstance(metadata, dict)
+        or body.get("apiVersion") != params["api_version"]
+        or body.get("kind") != params["kind"]
+        or metadata.get("name") != params["name"]
+        or metadata.get("namespace") != params["namespace"]
+    ):
+        raise ValueError("body must be the Restore named by api_version, kind, namespace and name.")
+
+
+def _record_create_response(result: dict, body, name: str) -> None:
+    """Accept a create only when its response names the requested Restore (create_restore_guarded).
+
+    A missing generation under a valid identity is reported, never inferred.
+    """
+    result.update(http_accepted=True, reason=REASON_MALFORMED_RESPONSE)
+    metadata = body.get("metadata") if body is not None else None
+    if not isinstance(metadata, dict) or metadata.get("name") != name:
+        return
+    uid, revision = metadata.get("uid"), metadata.get("resourceVersion")
+    if not isinstance(uid, str) or not uid or not isinstance(revision, str) or not revision:
+        return
+    result.update(accepted=True, changed=True, reason=REASON_OK, uid=uid, resource_version=revision)
+    generation = metadata.get("generation")
+    if isinstance(generation, int) and not isinstance(generation, bool):
+        result.update(generation=generation, generation_reported=True)
+
+
 def _resolve_restore_resource(kubeconfig: str, context: str, request_timeout):
     """The explicitly routed client, resolved to the Restore resource by live discovery."""
     client = build_dynamic_client(kubeconfig, context, request_timeout)
@@ -340,11 +393,22 @@ def _resolve_restore_resource(kubeconfig: str, context: str, request_timeout):
 def _validated_request(params: dict):
     """(request_timeout, patch_ops, would_change), or ValueError for inputs that do not fit the action."""
     action = params["action"]
-    if action == "delete" and any(params.get(option) is not None for option in _PATCH_ONLY_OPTIONS):
+    if action != "patch" and any(params.get(option) is not None for option in _PATCH_ONLY_OPTIONS):
         raise ValueError(
             "expected_managed_clusters_backup_name and replacement_managed_clusters_backup_name "
             "are accepted only with action=patch."
         )
+    if action == "create":
+        if any(params.get(option) is not None for option in _GUARDED_IDENTITY_OPTIONS):
+            raise ValueError("expected_uid and expected_resource_version are not accepted with action=create.")
+        for option in ("namespace", "name"):
+            if not params[option]:
+                raise ValueError(f"{option} may not be empty.")
+        _require_create_body(params)
+        request_timeout = normalize_timeout(params.get("request_timeout"), "request_timeout", DEFAULT_REQUEST_TIMEOUT)
+        return request_timeout, None, True
+    if params.get("body") is not None:
+        raise ValueError("body is accepted only with action=create.")
     for option in ("namespace", "name", "expected_uid", "expected_resource_version"):
         if not params[option]:
             raise ValueError(f"{option} may not be empty.")
@@ -369,6 +433,9 @@ def _submit(resource, params: dict, patch_ops):
     caller's failure boundary: a failure reading it leaves the outcome unknown and is never
     taken for acceptance. Decoding is left to the caller, as in the Python helper.
     """
+    if params["action"] == "create":
+        raw = resource.create(body=params["body"], namespace=params["namespace"], serialize=False)
+        return raw.data
     if params["action"] == "patch":
         raw = resource.patch(
             name=params["name"],
@@ -394,6 +461,10 @@ def _submit(resource, params: dict, patch_ops):
 
 
 def _failure_message(action: str, name: str, conflict: bool, reason: str) -> str:
+    if action == "create":
+        if conflict:
+            return f"The create of {name} was refused: the name is already taken. It is never adopted."
+        return f"The create of {name} did not complete verifiably; it is not accepted."
     if conflict:
         return (
             f"Refusing to {action} {name}: the live Restore is no longer the proved object, "
@@ -443,12 +514,28 @@ def run_module(module: AnsibleModule) -> None:
     try:
         response = _submit(resource, params, patch_ops)
     except Exception as exc:  # noqa: BLE001 -- classified immediately, never propagated raw
-        conflict_statuses = GUARDED_PATCH_CONFLICT_STATUSES if action == "patch" else GUARDED_DELETE_CONFLICT_STATUSES
-        conflict, reason = classify_failure(exc, conflict_statuses)
+        if action == "create":
+            # One request, never reconciled: a taken name is not this create's object, and
+            # every other failure, a timeout included, leaves the outcome unknown.
+            conflict = api_status(exc) == 409
+            reason = REASON_ALREADY_EXISTS if conflict else REASON_UNVERIFIABLE
+        else:
+            conflict_statuses = (
+                GUARDED_PATCH_CONFLICT_STATUSES if action == "patch" else GUARDED_DELETE_CONFLICT_STATUSES
+            )
+            conflict, reason = classify_failure(exc, conflict_statuses)
         fail(_failure_message(action, params["name"], conflict, reason), conflict=conflict, reason=reason)
         return
 
-    if action == "patch":
+    if action == "create":
+        _record_create_response(result, _decode_response(response), params["name"])
+        if not result["accepted"]:
+            fail(
+                f"The response to the create of {params['name']} does not identify the created Restore, "
+                "so the create is not verified and no generation evidence is published."
+            )
+            return
+    elif action == "patch":
         _record_patch_response(result, _decode_response(response), params["expected_uid"], would_change)
         if not result["accepted"]:
             fail(
@@ -471,7 +558,11 @@ def run_module(module: AnsibleModule) -> None:
 def main() -> None:
     module = AnsibleModule(
         argument_spec=_argument_spec(),
-        required_if=[("action", "patch", _PATCH_ONLY_OPTIONS)],
+        required_if=[
+            ("action", "patch", _PATCH_ONLY_OPTIONS + _GUARDED_IDENTITY_OPTIONS),
+            ("action", "delete", _GUARDED_IDENTITY_OPTIONS),
+            ("action", "create", ("body",)),
+        ],
         supports_check_mode=True,
     )
     try:

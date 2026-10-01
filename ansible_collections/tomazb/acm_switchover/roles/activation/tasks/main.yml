@@ -46,9 +46,13 @@
     - name: Discover secondary hub resources
       ansible.builtin.include_tasks: discover_resources.yml
 
+    # Before the freeze only: once a journal exists the transaction re-proves the
+    # passive Restore itself, and a one-shot activation may already have deleted it.
     - name: Verify passive sync when method is passive
       ansible.builtin.include_tasks: verify_passive_sync.yml
-      when: acm_switchover_operation.method == 'passive'
+      when:
+        - acm_switchover_operation.method == 'passive'
+        - _acm_journal is none
 
     - name: Resolve auto-import support for ACM 2.14+
       ansible.builtin.include_tasks: resolve_auto_import_support.yml

@@ -69,65 +69,16 @@ def test_switchover_identity_refusal_cannot_use_restore_recovery_shape():
     assert "rescue" in outer["block"][2]
 
 
-def test_verify_passive_sync_passes_activation_method_to_restore_selector():
-    """Passive activation resume must let acm_restore_info see activation_method=restore."""
-    tasks = yaml.safe_load((ACTIVATION_TASKS / "verify_passive_sync.yml").read_text())
-    selector_tasks = [t for t in tasks if "tomazb.acm_switchover.acm_restore_info" in t]
-    assert selector_tasks, "verify_passive_sync.yml must call acm_restore_info"
-
-    selector = selector_tasks[0]["tomazb.acm_switchover.acm_restore_info"]
-    assert "activation_method" in selector, (
-        "verify_passive_sync.yml must pass activation_method through to acm_restore_info "
-        "so reruns can recognize restore-acm-activate"
-    )
-
-
-def test_verify_passive_sync_requires_passive_restore_candidate():
-    """Passive activation precheck requires sync-enabled restore for patch mode and initial option-B runs."""
+def test_verify_passive_sync_runs_only_before_the_migration_freeze():
+    """Once a journal exists the transaction re-proves the passive Restore itself, and a one-shot
+    activation may already have deleted it, so the pre-freeze verification is not repeated."""
+    main_tasks = yaml.safe_load((ACTIVATION_TASKS / "main.yml").read_text())
+    block = next(task["block"] for task in main_tasks if "block" in task)
+    (verify,) = [task for task in block if task.get("ansible.builtin.include_tasks") == "verify_passive_sync.yml"]
+    assert verify["when"] == ["acm_switchover_operation.method == 'passive'", "_acm_journal is none"]
     text = (ACTIVATION_TASKS / "verify_passive_sync.yml").read_text()
-    assert "sync_enabled_count" in text, (
-        "verify_passive_sync.yml must check sync_enabled_count so that patch-mode runs "
-        "and initial option-B runs (before activation restore is created) require a passive sync restore"
-    )
-    assert "allow_conventional_passive_restore_fallback" in text, (
-        "verify_passive_sync.yml must put conventional-name passive restore compatibility "
-        "behind an explicit opt-in variable"
-    )
-
-
-def test_verify_passive_sync_skips_assert_for_option_b_resume_state():
-    """verify_passive_sync.yml must not fail when activation_method=restore and only restore-acm-activate exists."""
-    tasks = yaml.safe_load((ACTIVATION_TASKS / "verify_passive_sync.yml").read_text())
-
-    assert_tasks = [t for t in tasks if "ansible.builtin.assert" in t]
-    assert assert_tasks, "verify_passive_sync.yml must contain a passive restore assert"
-
-    assert_task = assert_tasks[0]
-    when_clause = str(assert_task.get("when", ""))
-    assert "_acm_activation_restore_resume" in when_clause, (
-        "The passive restore assert must be guarded by the _acm_activation_restore_resume flag "
-        "so that option-B resume (only restore-acm-activate present) is not rejected"
-    )
-    assert (
-        "not" in when_clause
-    ), "The passive restore assert must be skipped (not asserted) when in the option-B resume state"
-    assert "not (_acm_activation_restore_resume | bool)" in when_clause, (
-        "The passive restore assert must boolean-cast _acm_activation_restore_resume; "
-        "without | bool, a string-valued Ansible fact can take the wrong truthiness path"
-    )
-
-
-def test_verify_passive_sync_publishes_activation_restore_in_resume_state():
-    """verify_passive_sync.yml must publish restore-acm-activate as selection for option-B resume."""
-    text = (ACTIVATION_TASKS / "verify_passive_sync.yml").read_text()
-    assert "restore-acm-activate" in text, (
-        "verify_passive_sync.yml must reference restore-acm-activate to handle the resume state "
-        "where only the activation Restore is present"
-    )
-    assert "_acm_activation_restore_resume" in text, (
-        "verify_passive_sync.yml must set a resume-state flag to guard the passive-sync assert "
-        "and choose the correct publish task"
-    )
+    assert "operation: verify_passive_sync" in text
+    assert "allow_conventional_passive_restore_fallback" not in text
 
 
 def test_activation_checkpoint_persists_argocd_run_id():

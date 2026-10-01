@@ -1234,7 +1234,7 @@ def test_return_documentation_declares_the_resource_version_output():
 
 def test_resource_name_is_required_and_module_reports_no_namespace_probing_mode():
     spec = acm_k8s_read_outcome._argument_spec()
-    assert spec["read_mode"]["choices"] == ["get", "list"]
+    assert spec["read_mode"]["choices"] == ["get", "list", "discover"]
     assert spec["resource_name"]["required"] is True
 
 
@@ -1510,3 +1510,52 @@ def test_a_custom_named_404_reads_discovery_exactly_once(monkeypatch):
     result = _run_module(monkeypatch, params=_mc_params("get"), client=client)
     assert result["read_status"] == "not_found"
     assert len(dynamic.request_calls) == 1
+
+
+# --- R4-04 PR C Task 8: discovery-only reads (the Restore status subresource) ---------
+
+_RESTORES_DISCOVERY_PARAMS = {
+    "read_mode": "discover",
+    "api_version": "cluster.open-cluster-management.io/v1beta1",
+    "kind": "Restore",
+    "resource_name": "restores/status",
+}
+
+
+def _restores_document(resources):
+    return {
+        "kind": "APIResourceList",
+        "groupVersion": "cluster.open-cluster-management.io/v1beta1",
+        "resources": resources,
+    }
+
+
+@pytest.mark.parametrize(
+    "resources, expected",
+    [
+        ([{"name": "restores", "kind": "Restore"}, {"name": "restores/status", "kind": "Restore"}], "ok"),
+        ([{"name": "restores", "kind": "Restore"}], "kind_not_served"),
+    ],
+    ids=["served", "omitted"],
+)
+def test_discover_mode_answers_from_one_discovery_document_without_an_object_request(monkeypatch, resources, expected):
+    dynamic = _FakeDynamicClient(discovery=_restores_document(resources))
+    client = _FakeClient(dynamic=dynamic)
+    result = _run_module(monkeypatch, params=_RESTORES_DISCOVERY_PARAMS, client=client)
+    assert result == {"changed": False, "read_status": expected, "resources": [], "resource_version": None}
+    assert [call["path"] for call in dynamic.request_calls] == ["/apis/cluster.open-cluster-management.io/v1beta1"]
+    assert (client.resource_calls, client.get_calls) == (0, 0)
+
+
+@pytest.mark.parametrize(
+    "dynamic",
+    [
+        _FakeDynamicClient(discovery_error=_api_error(ServiceUnavailableError, 503)),
+        _FakeDynamicClient(discovery_error=TimeoutError("deadline exceeded")),
+        _FakeDynamicClient(discovery={"kind": "APIResourceList", "groupVersion": "other/v1", "resources": []}),
+        _FakeDynamicClient(discovery=_restores_document([{"name": 7}])),
+    ],
+)
+def test_unverifiable_discover_mode_is_error(monkeypatch, dynamic):
+    result = _run_module(monkeypatch, params=_RESTORES_DISCOVERY_PARAMS, client=_FakeClient(dynamic=dynamic))
+    assert result["read_status"] == "error"

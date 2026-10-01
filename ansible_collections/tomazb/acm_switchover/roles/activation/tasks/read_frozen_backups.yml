@@ -1,0 +1,47 @@
+---
+# Strict GET of every frozen Backup of _acm_journal, published as _acm_backup_reads in the
+# revalidation order acm_migration_evidence expects. The non-live seam of strict_read.yml
+# applies per Backup under the key backup/<name>.
+
+- name: List the frozen Backups to re-read
+  tomazb.acm_switchover.acm_migration_evidence:
+    operation: frozen_backups
+    inputs:
+      journal: "{{ _acm_journal }}"
+  register: _acm_frozen_backups
+
+- name: Resolve the pre-seeded non-live Backup reads
+  ansible.builtin.set_fact:
+    _acm_backup_read_overrides: >-
+      {{
+        ((acm_switchover_test_overrides | default({})).get('migration_reads') or {})
+        if (acm_switchover_execution.mode | default('dry_run')) in ['dry_run', 'validate']
+        else {}
+      }}
+
+- name: Re-read each frozen Backup strictly
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: get
+    api_version: velero.io/v1
+    kind: Backup
+    resource_name: backups
+    namespace: open-cluster-management-backup
+    name: "{{ item.name }}"
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  loop: "{{ _acm_frozen_backups.backups }}"
+  loop_control:
+    label: "{{ item.category }}"
+  register: _acm_backup_live_reads
+  no_log: true
+  when: ('backup/' ~ item.name) not in _acm_backup_read_overrides
+
+- name: Publish the frozen Backup reads in revalidation order
+  ansible.builtin.set_fact:
+    _acm_backup_reads: >-
+      {%- set ns = namespace(reads=[]) -%}
+      {%- for result in _acm_backup_live_reads.results -%}
+      {%- set key = 'backup/' ~ result.item.name -%}
+      {%- set ns.reads = ns.reads + [_acm_backup_read_overrides[key] if key in _acm_backup_read_overrides else result] -%}
+      {%- endfor -%}
+      {{ ns.reads }}

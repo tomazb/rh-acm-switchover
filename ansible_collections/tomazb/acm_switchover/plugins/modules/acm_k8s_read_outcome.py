@@ -15,14 +15,19 @@ description:
   - Distinguishes successful empty results, named NotFound, and unverifiable
     errors without returning raw exception or response body content.
   - Read-only; always reports C(changed=false). Owns no retry or phase policy.
+  - C(read_mode=discover) sends no object request at all; it reports whether one live
+    discovery document of C(api_version) lists C(resource_name), such as a
+    C(<plural>/status) subresource.
 author:
   - ACM Switchover Contributors (@tomazb)
 options:
   read_mode:
-    description: Named object get versus collection list.
+    description:
+      - Named object get, collection list, or C(discover) for a discovery-only check of
+        C(resource_name).
     type: str
     required: true
-    choices: [get, list]
+    choices: [get, list, discover]
   api_version:
     description: Kubernetes API version for the resource.
     type: str
@@ -107,6 +112,9 @@ read_status:
     - C(kind_not_served) when the API group/version was read successfully and
       positively does not serve this kind.
     - C(error) for every other unverifiable outcome.
+    - For C(read_mode=discover), C(ok) when the readable discovery document of the
+      requested group/version lists C(resource_name), C(kind_not_served) when it omits it,
+      and C(error) when discovery cannot be verified.
   type: str
   returned: always
   choices: [ok, not_found, kind_not_served, error]
@@ -148,7 +156,7 @@ def _argument_spec() -> dict[str, Any]:
     spec = deepcopy(AUTH_ARG_SPEC)
     spec.update(
         {
-            "read_mode": {"type": "str", "required": True, "choices": ["get", "list"]},
+            "read_mode": {"type": "str", "required": True, "choices": ["get", "list", "discover"]},
             "api_version": {"type": "str", "required": True},
             "kind": {"type": "str", "required": True},
             "namespace": {"type": "str", "required": False},
@@ -195,6 +203,11 @@ def run_module(module: AnsibleModule) -> None:
         api_client = get_api_client(**module.params)
     except Exception:
         _exit_outcome(module, "error")
+        return
+
+    if read_mode == "discover":
+        served = _discovery_serves(api_client, module.params["api_version"], resource_name)
+        _exit_outcome(module, {True: "ok", False: "kind_not_served"}.get(served, "error"))
         return
 
     read_status, resources, revision = strict_read(

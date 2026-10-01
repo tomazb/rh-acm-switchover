@@ -239,9 +239,11 @@ def checkpoint_facts(checkpoint) -> dict:
         # Teardown records are mutation authority. Unlike the reporting values above,
         # malformed state must fail closed through the shared record validator.
         FACT_TEARDOWN_RECORDS: validated_teardown_records,
-        # R4-04: slot presence (an invalid journal is present too) and the Argo CD
-        # re-pause obligation, which fails closed like the teardown records.
+        # R4-04: slot presence (an invalid journal is present too), the strict journal
+        # outcome with the validated journal roles consume, and the Argo CD re-pause
+        # obligation, which fails closed like the teardown records.
         FACT_MIGRATION_JOURNAL_PRESENT: has_migration_backups(checkpoint),
+        **_migration_journal_facts(checkpoint),
         KEY_ARGOCD_REPAUSE_REQUIRED: (
             argocd_repause_required(checkpoint)
             if isinstance(checkpoint, dict) and isinstance(checkpoint.get("operational_data", {}), dict)
@@ -906,6 +908,26 @@ FACT_MIGRATION_JOURNAL_PRESENT = "migration_journal_present"
 # The phases a journal can exist in when they fail.
 JOURNAL_RESCUE_PHASES = ("activation", "post_activation", "finalization")
 _REPAUSE_FIELDS = frozenset({"failed_phase", "recorded_at"})
+
+
+FACT_MIGRATION_JOURNAL = "migration_journal"
+FACT_MIGRATION_JOURNAL_OUTCOME = "migration_journal_outcome"
+
+
+def _migration_journal_facts(checkpoint) -> dict:
+    """The journal outcome and, only when valid, the validated journal.
+
+    An invalid journal publishes no value: its consumers refuse on the outcome. A
+    journal-free or unreadable operational_data is reported absent here; the checkpoint
+    transitions refuse an unreadable one on their own path.
+    """
+    if not has_migration_backups(checkpoint):
+        return {FACT_MIGRATION_JOURNAL_OUTCOME: MIGRATION_JOURNAL_ABSENT, FACT_MIGRATION_JOURNAL: None}
+    outcome, value = classify_migration_backups(checkpoint)
+    return {
+        FACT_MIGRATION_JOURNAL_OUTCOME: outcome,
+        FACT_MIGRATION_JOURNAL: value if outcome == MIGRATION_JOURNAL_VALID else None,
+    }
 
 
 def argocd_repause_required(checkpoint):

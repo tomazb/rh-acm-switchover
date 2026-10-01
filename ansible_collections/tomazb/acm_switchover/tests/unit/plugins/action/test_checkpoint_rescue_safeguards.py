@@ -366,3 +366,15 @@ def test_a_journal_free_missing_pre_freeze_phase_still_runs(tmp_path):
     result = _enter_action(path, phase="primary_prep").run(task_vars=_task_vars_with_operation_identity())
     assert result.get("failed") is not True
     assert result["skipped_phase"] is False
+
+
+# --- the validated journal facts activation consumes ------------------------------------------
+
+
+@pytest.mark.parametrize("journal, outcome", [("valid", "valid"), ("invalid", "invalid"), (None, "absent")])
+def test_enter_publishes_the_strict_journal_outcome_and_only_a_valid_journal(tmp_path, journal, outcome):
+    data = {} if journal is None else {"migration_backups": _JOURNALS[journal]()}
+    path = _write_phase_checkpoint(tmp_path, completed=("preflight", "primary_prep"), data=data)
+    facts = _enter_action(path).run(task_vars=_task_vars_with_operation_identity())["facts"]
+    assert facts["migration_journal_outcome"] == outcome
+    assert facts["migration_journal"] == (_first_journal() if journal == "valid" else None)

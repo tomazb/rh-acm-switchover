@@ -256,6 +256,7 @@ def _seed_fixture_defaults(vars_payload: dict) -> None:
     vars_payload.setdefault("acm_secondary_dpa_info", reconciled_dpa)
     vars_payload.setdefault("acm_primary_managed_clusters_info", {"resources": []})
     _seed_phase_local_facts(vars_payload)
+    _seed_migration_reads(vars_payload, execution_mode)
 
     for backup in vars_payload.get("acm_primary_backups_info", {}).get("resources", []):
         status = backup.get("status")
@@ -267,6 +268,48 @@ def _seed_fixture_defaults(vars_payload: dict) -> None:
         schedule.setdefault("spec", {}).setdefault("useManagedServiceAccount", True)
     for cluster_deployment in vars_payload.get("acm_primary_cluster_deployments_info", {}).get("resources", []):
         cluster_deployment.setdefault("spec", {}).setdefault("preserveOnDelete", True)
+
+
+def _ok(resources: list[dict]) -> dict:
+    return {"read_status": "ok", "resources": resources, "resource_version": "1"}
+
+
+def _seed_migration_reads(vars_payload: dict, execution_mode: str) -> None:
+    """Pre-seed the R4-04 activation strict reads of a non-live dry-run fixture.
+
+    The activation transaction strictly re-reads the destination hub even in a preview, so a
+    fixture without a live hub supplies those reads through
+    acm_switchover_test_overrides.migration_reads, which roles honour only in dry_run and
+    validate. Each fixture Restore is overlaid on a canonical passive sync Restore, so a
+    fixture that sets a phase or spec field keeps it; the Backups are one legacy schedule
+    run. A fixture that seeds migration_reads itself is left alone.
+    """
+    from ansible_collections.tomazb.acm_switchover.tests.integration.migration_fake_api import (
+        LEGACY_INVENTORY,
+        passive_restore,
+    )
+
+    test_overrides = vars_payload["acm_switchover_test_overrides"]
+    if execution_mode not in {"validate", "dry_run"} or "migration_reads" in test_overrides:
+        return
+    restores = []
+    for raw in (vars_payload.get("acm_activation_restores_info") or {}).get("resources", []):
+        restore = passive_restore(name=raw["metadata"]["name"])
+        for section in ("metadata", "spec", "status"):
+            restore[section].update(raw.get(section) or {})
+        restores.append(restore)
+    mch = (vars_payload.get("acm_activation_mch_info") or {}).get("resources", [])
+    reads = {
+        "multiclusterhubs": _ok(mch),
+        "restores": _ok(restores),
+        "backups": _ok(LEGACY_INVENTORY),
+        "restores_status": {"read_status": "ok", "resources": [], "resource_version": None},
+        "restore/restore-acm-activate": {"read_status": "not_found", "resources": [], "resource_version": None},
+        "restore/restore-acm-full": {"read_status": "not_found", "resources": [], "resource_version": None},
+    }
+    reads.update({f"restore/{restore['metadata']['name']}": _ok([restore]) for restore in restores})
+    reads.update({f"backup/{backup['metadata']['name']}": _ok([backup]) for backup in LEGACY_INVENTORY})
+    test_overrides["migration_reads"] = reads
 
 
 def _seed_phase_local_facts(vars_payload: dict) -> None:

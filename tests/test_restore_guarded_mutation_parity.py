@@ -148,6 +148,10 @@ class _Resource:
         self.calls.append(("delete", kwargs))
         return _collection_answer(self.outcome)
 
+    def create(self, **kwargs):
+        self.calls.append(("create", kwargs))
+        return _collection_answer(self.outcome)
+
 
 @pytest.fixture
 def python_client():
@@ -184,6 +188,8 @@ def _run_collection(monkeypatch, args, resource, *, check_mode=False):
         "expected_resource_version": RESOURCE_VERSION,
         **args,
     }
+    for option in [key for key, value in args.items() if value is None]:
+        del module_args[option]
     if check_mode:
         module_args["_ansible_check_mode"] = True
     monkeypatch.setattr(collection_form, "AnsibleModule", CapturingAnsibleModule)
@@ -383,3 +389,83 @@ def test_the_runtime_implementations_do_not_import_each_other():
     collection_imports = _imported_modules(Path(collection_form.__file__))
     assert not any(name.startswith("ansible_collections") for name in python_imports)
     assert not any(name == "lib" or name.startswith(("lib.", "modules")) for name in collection_imports)
+
+
+# --- the single-request guarded CREATE (R4-04 PR C Task 8) -----------------------------
+
+CREATE_NAME = "restore-acm-full"
+CREATE_BODY = {
+    "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+    "kind": "Restore",
+    "metadata": {"name": CREATE_NAME, "namespace": NAMESPACE},
+    "spec": {"veleroManagedClustersBackupName": "acm-managed-clusters-schedule-20240101120000"},
+}
+CREATE_ARGS = {
+    "action": "create",
+    "name": CREATE_NAME,
+    "body": CREATE_BODY,
+    "expected_uid": None,
+    "expected_resource_version": None,
+}
+
+
+def _created(metadata):
+    return {"apiVersion": CREATE_BODY["apiVersion"], "kind": "Restore", "metadata": metadata, "spec": {}}
+
+
+# (vector id, how the one request ends). A 2xx body is the decoded object for Python and its
+# JSON for the collection's raw response.
+CREATE_VECTORS = [
+    ("accepted", ("created", {"name": CREATE_NAME, "uid": "u-1", "resourceVersion": "10", "generation": 1})),
+    ("accepted_without_generation", ("created", {"name": CREATE_NAME, "uid": "u-1", "resourceVersion": "10"})),
+    (
+        "accepted_bool_generation",
+        ("created", {"name": CREATE_NAME, "uid": "u-1", "resourceVersion": "10", "generation": True}),
+    ),
+    ("malformed_missing_uid", ("created", {"name": CREATE_NAME, "resourceVersion": "10"})),
+    ("malformed_empty_uid", ("created", {"name": CREATE_NAME, "uid": "", "resourceVersion": "10"})),
+    ("malformed_missing_rv", ("created", {"name": CREATE_NAME, "uid": "u-1"})),
+    ("malformed_other_name", ("created", {"name": "other", "uid": "u-1", "resourceVersion": "10"})),
+    ("malformed_metadata", ("created", "not-a-mapping")),
+    ("already_exists_409", ("status", 409)),
+    ("not_found_404", ("status", 404)),
+    ("server_error_500", ("status", 500)),
+    ("gateway_timeout_504", ("status", 504)),
+    ("timeout", ("raise", lambda: ReadTimeoutError(None, "/restores", "read timed out"))),
+    ("transport", ("raise", lambda: ProtocolError("connection reset"))),
+]
+
+
+@pytest.mark.parametrize(("vector_id", "outcome"), CREATE_VECTORS, ids=[vector[0] for vector in CREATE_VECTORS])
+def test_create_outcomes_are_classified_identically(python_client, monkeypatch, vector_id, outcome):
+    kind, value = outcome
+    create = python_client.custom_api.create_namespaced_custom_object
+    if kind == "created":
+        create.return_value = _created(value)
+        collection_outcome = ("body", json.dumps(_created(value)).encode())
+    else:
+        create.side_effect = _python_answer(outcome)["side_effect"]
+        collection_outcome = outcome
+    python_result = python_client.create_restore_guarded(CREATE_BODY, namespace=NAMESPACE)
+
+    resource = _Resource(collection_outcome)
+    collection_result = _run_collection(monkeypatch, CREATE_ARGS, resource)
+
+    assert _compared(python_result) == _compared(collection_result), vector_id
+    assert collection_result.get("failed", False) is (not python_result["accepted"]), vector_id
+    assert create.call_count == 1 and len(resource.calls) == 1
+    assert create.call_args.kwargs["body"] == resource.calls[0][1]["body"] == CREATE_BODY
+
+
+def test_create_dry_run_and_check_mode_predict_identically_without_a_request(python_client, monkeypatch):
+    python_client.dry_run = True
+    create = python_client.custom_api.create_namespaced_custom_object
+    python_result = python_client.create_restore_guarded(CREATE_BODY, namespace=NAMESPACE)
+
+    resource = _Resource(("raise", lambda: AssertionError("no request in check mode")))
+    collection_result = _run_collection(monkeypatch, CREATE_ARGS, resource, check_mode=True)
+
+    assert _compared(python_result) == _compared(collection_result)
+    assert (python_result["reason"], python_result["would_change"]) == ("predicted", True)
+    create.assert_not_called()
+    assert resource.calls == []
