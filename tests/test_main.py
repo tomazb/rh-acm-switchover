@@ -3146,7 +3146,7 @@ class TestPreflightPhase:
         "handler, patched, phase_at_resume, restore_only",
         [
             (_run_phase_primary_prep, "acm_switchover.PrimaryPreparation", Phase.PREFLIGHT, False),
-            (_run_restore_only_argocd_pause, "acm_switchover.argocd_lib", Phase.PREFLIGHT, True),
+            (_run_restore_only_argocd_pause, "acm_switchover.ArgocdPauseRegister", Phase.PREFLIGHT, True),
             (_run_phase_finalization, "acm_switchover.Finalization", Phase.POST_ACTIVATION, False),
             (_run_phase_finalization, "acm_switchover.Finalization", Phase.POST_ACTIVATION, True),
         ],

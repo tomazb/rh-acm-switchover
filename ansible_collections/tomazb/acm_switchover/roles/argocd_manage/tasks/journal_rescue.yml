@@ -1,0 +1,62 @@
+---
+# PR C decisions amendment section 2.2: the play rescue after a phase failure that left
+# a migration journal (valid or invalid). There is no rewind to a pre-freeze phase and
+# no checkpoint reset: the retry stays at the failed phase. Applications are resumed
+# only when the failed role's fail transition recorded the re-pause marker durably;
+# the retry re-pauses them before any further phase work (repause_recovery.yml).
+#
+# Inputs: _argocd_rescue_hubs (hub roles, in resume order) and _argocd_rescue_checkpoint
+# (the checkpoint_phase read_facts result). Publishes _argocd_rescue_outcome, which the
+# playbook reports together with the original failure; nothing here is ignored.
+
+- name: Report the Argo CD rescue a preview would perform
+  ansible.builtin.set_fact:
+    _argocd_rescue_outcome: >-
+      [DRY-RUN] Would record the Argo CD re-pause marker, resume the paused Applications on the
+      {{ _argocd_rescue_hubs | join(', ') }} hub(s), and re-pause them before the failed phase
+      continues on retry.
+  when: (acm_switchover_execution.mode | default('dry_run')) != 'execute' or ansible_check_mode
+
+- name: Resume Argo CD under the migration journal
+  when:
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - not ansible_check_mode
+  block:
+    - name: Resolve the durable re-pause marker
+      ansible.builtin.set_fact:
+        _argocd_rescue_phase: >-
+          {{ ((_argocd_rescue_checkpoint | default({})).get('facts') or {}).get('argocd_repause_required') or '' }}
+
+    - name: Refuse the resume without a durable re-pause marker
+      ansible.builtin.set_fact:
+        _argocd_rescue_outcome: >-
+          Argo CD resume-on-failure refused: a migration journal exists but no re-pause marker is
+          recorded durably. No Application was resumed; they stay paused. Resume them manually with
+          playbooks/argocd_resume.yml after review.
+      when: _argocd_rescue_phase | length == 0
+
+    - name: Resume the paused Applications
+      when: _argocd_rescue_phase | length > 0
+      block:
+        - name: Resume Argo CD auto-sync on each paused hub
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.argocd_manage
+          vars:
+            acm_switchover_argocd_mode_override: resume
+            _argocd_discover_hub: "{{ _argocd_rescue_hub }}"
+          loop: "{{ _argocd_rescue_hubs }}"
+          loop_control:
+            loop_var: _argocd_rescue_hub
+
+        - name: Record the completed Argo CD resume
+          ansible.builtin.set_fact:
+            _argocd_rescue_outcome: >-
+              Argo CD resume-on-failure resumed the paused Applications; the migration journal is kept
+              and the retry re-pauses them before {{ _argocd_rescue_phase }} continues.
+      rescue:
+        - name: Record the failed Argo CD resume
+          ansible.builtin.set_fact:
+            _argocd_rescue_outcome: >-
+              Argo CD resume-on-failure failed: {{ ansible_failed_result.msg | default('unknown failure') }}.
+              The retry re-pauses Argo CD before {{ _argocd_rescue_phase }} continues; resume manually
+              with playbooks/argocd_resume.yml after review.

@@ -1,0 +1,77 @@
+---
+# PR C decisions amendment section 2.2 rule 3: a retry that finds the re-pause marker a
+# failure rescue recorded re-pauses Argo CD with the same pause semantics and register
+# as primary preparation (both hubs for a switchover, the secondary hub for restore-only),
+# whatever acm_switchover_features.argocd.manage says now. It runs after the trusted
+# identity and checkpoint load and before any further phase work, never replays the rest
+# of primary preparation, and clears the marker only after every re-pause succeeded. A
+# failure keeps the marker, so the retry stays at the recorded phase and re-pauses again.
+#
+# Input: _checkpoint_enter, the checkpoint_phase enter result of the caller.
+
+- name: Resolve the recorded Argo CD re-pause obligation
+  ansible.builtin.set_fact:
+    _argocd_repause_phase: >-
+      {{ ((_checkpoint_enter | default({})).get('facts') or {}).get('argocd_repause_required') or '' }}
+    _argocd_repause_hubs: >-
+      {{ ['secondary'] if (acm_switchover_operation.restore_only | default(false) | bool) else ['primary', 'secondary'] }}
+
+- name: Report the Argo CD re-pause a preview would perform
+  ansible.builtin.debug:
+    msg: >-
+      [DRY-RUN] Would re-pause Argo CD auto-sync on the {{ _argocd_repause_hubs | join(', ') }} hub(s)
+      before {{ _argocd_repause_phase }}, then clear the re-pause marker.
+  when:
+    - _argocd_repause_phase | length > 0
+    - (acm_switchover_execution.mode | default('dry_run')) != 'execute' or ansible_check_mode
+
+- name: Re-pause Argo CD before the recorded phase continues
+  when:
+    - _argocd_repause_phase | length > 0
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - not ansible_check_mode
+  block:
+    - name: Rehydrate the Argo CD pause register from the checkpoint
+      ansible.builtin.set_fact:
+        acm_switchover_argocd: >-
+          {{
+            acm_switchover_argocd | default({})
+            | combine({'run_id': (_checkpoint_enter.facts.argocd_run_id | default(''))})
+            if (_checkpoint_enter.facts.argocd_run_id | default('')) | length > 0
+            else acm_switchover_argocd | default({})
+          }}
+        acm_switchover_argocd_discovery_namespaces: >-
+          {{
+            _checkpoint_enter.facts.argocd_discovery_namespaces
+            if (_checkpoint_enter.facts.argocd_discovery_namespaces | default({})) is mapping
+            and (_checkpoint_enter.facts.argocd_discovery_namespaces | default({}) | length) > 0
+            else acm_switchover_argocd_discovery_namespaces | default({})
+          }}
+
+    - name: Re-pause Argo CD auto-sync on each recorded hub
+      ansible.builtin.include_role:
+        name: tomazb.acm_switchover.argocd_manage
+      vars:
+        acm_switchover_argocd_mode_override: pause
+        _argocd_discover_hub: "{{ _argocd_repause_hub }}"
+      loop: "{{ _argocd_repause_hubs }}"
+      loop_control:
+        loop_var: _argocd_repause_hub
+
+    - name: Clear the Argo CD re-pause marker after the re-pause
+      tomazb.acm_switchover.checkpoint_phase:
+        clear_argocd_repause: true
+        checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+  rescue:
+    # A play rescue must not resume Applications this failed re-pause left paused.
+    - name: Record the failed Argo CD re-pause
+      ansible.builtin.set_fact:
+        _argocd_repause_failed: true
+
+    - name: Fail the retry while the re-pause obligation remains
+      ansible.builtin.fail:
+        msg: >-
+          Argo CD re-pause before {{ _argocd_repause_phase }} failed:
+          {{ ansible_failed_result.msg | default('unknown failure') }}. The re-pause marker is kept;
+          the retry stays at {{ _argocd_repause_phase }} and re-pauses again. Pause the owning
+          ApplicationSets or the Applications first if a pause was blocked.

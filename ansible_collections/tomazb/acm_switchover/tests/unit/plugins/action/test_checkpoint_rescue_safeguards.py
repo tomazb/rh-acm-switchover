@@ -1,0 +1,368 @@
+# SPDX-License-Identifier: MIT
+"""R4-04 PR C Task 8a checkpoint safeguards.
+
+The Argo CD re-pause marker (PR C decisions amendment section 2.2) and the #332
+reset_from fence and pre-freeze entry refusal, at the checkpoint_phase boundary.
+"""
+
+import json
+
+import pytest
+
+from ansible_collections.tomazb.acm_switchover.tests.unit.plugins.action.test_checkpoint_phase_runtime import (
+    _dir_snapshot,
+    _enter_action,
+    _fail_action,
+    _first_journal,
+    _make_checkpoint_action,
+    _stored,
+    _task_vars_with_operation_identity,
+    _write_phase_checkpoint,
+)
+
+# The PID-keyed fact checkpoint_phase returns once a rewind was applied (#332).
+REWIND_FENCE_FACT = "_acm_switchover_rewind_consumed"
+_JOURNALS = {"valid": _first_journal, "invalid": lambda: {"schema_version": 9}}
+
+
+def _repause_fail(path, phase, *, check_mode=False, **extra):
+    action = _fail_action(path, phase, check_mode=check_mode)
+    action._task.args["argocd_repause"] = True
+    action._task.args.update(extra)
+    return action
+
+
+def _clear_action(path, *, enabled=True, check_mode=False, **extra):
+    args = {"clear_argocd_repause": True, "checkpoint": {"enabled": enabled, "backend": "file", "path": str(path)}}
+    args.update(extra)
+    action = _make_checkpoint_action(args)
+    action._play_context.check_mode = check_mode
+    return action
+
+
+def _marker(phase="activation"):
+    return {"failed_phase": phase, "recorded_at": "2026-10-01T00:00:00+00:00"}
+
+
+# --- the fail transition records the marker in the same durable write -------------------------
+
+
+@pytest.mark.parametrize("journal", ["valid", "invalid"])
+@pytest.mark.parametrize("phase", ["activation", "post_activation", "finalization"])
+def test_a_fail_under_a_journal_records_the_repause_marker_with_the_failure(tmp_path, journal, phase):
+    stored = _JOURNALS[journal]()
+    path = _write_phase_checkpoint(
+        tmp_path, phase=phase, completed=("preflight", "primary_prep", "activation"), data={"migration_backups": stored}
+    )
+    result = _repause_fail(path, phase).run(task_vars=_task_vars_with_operation_identity())
+
+    assert result.get("failed") is not True, result
+    assert result["argocd_repause_recorded"] is True
+    after = _stored(path)
+    assert after["operational_data"]["argocd_repause_required"]["failed_phase"] == phase
+    assert after["operational_data"]["argocd_repause_required"]["recorded_at"]
+    assert after["operational_data"]["migration_backups"] == stored
+    assert after["errors"][-1] == {"phase": phase, "error": "boom"}
+    assert after["phase_status"] == "fail"
+    assert phase not in after["completed_phases"]
+
+
+@pytest.mark.parametrize("value", ["True", "yes"])
+def test_a_templated_repause_request_is_a_boolean(tmp_path, value):
+    path = _write_phase_checkpoint(tmp_path, data={"migration_backups": _first_journal()})
+    result = _repause_fail(path, "activation", argocd_repause=value).run(task_vars=_task_vars_with_operation_identity())
+    assert result["argocd_repause_recorded"] is True
+
+
+def test_a_false_repause_request_records_nothing(tmp_path):
+    path = _write_phase_checkpoint(tmp_path, data={"migration_backups": _first_journal()})
+    result = _repause_fail(path, "activation", argocd_repause="False").run(
+        task_vars=_task_vars_with_operation_identity()
+    )
+    assert result.get("failed") is not True
+    assert "argocd_repause_required" not in _stored(path)["operational_data"]
+
+
+def test_a_journal_free_fail_records_no_marker_and_is_unchanged(tmp_path):
+    marked_dir, plain_dir = tmp_path / "marked", tmp_path / "plain"
+    marked_dir.mkdir()
+    plain_dir.mkdir()
+    marked, plain = _write_phase_checkpoint(marked_dir), _write_phase_checkpoint(plain_dir)
+
+    result = _repause_fail(marked, "activation").run(task_vars=_task_vars_with_operation_identity())
+    _fail_action(plain, "activation").run(task_vars=_task_vars_with_operation_identity())
+
+    assert result["argocd_repause_recorded"] is False
+    after, reference = _stored(marked), _stored(plain)
+    assert "argocd_repause_required" not in after["operational_data"]
+    for key in ("phase", "phase_status", "completed_phases", "operational_data", "errors"):
+        assert after[key] == reference[key], key
+
+
+@pytest.mark.parametrize("mode, check_mode", [("dry_run", False), ("execute", True)])
+def test_a_non_mutating_fail_records_nothing(tmp_path, mode, check_mode):
+    path = _write_phase_checkpoint(tmp_path, data={"migration_backups": _first_journal()})
+    before = _dir_snapshot(tmp_path)
+    result = _repause_fail(path, "activation", check_mode=check_mode).run(
+        task_vars=_task_vars_with_operation_identity(mode=mode)
+    )
+    assert result.get("failed") is not True
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize(
+    "phase, status, value",
+    [("primary_prep", "fail", True), ("activation", "pass", True), ("activation", "fail", "banana")],
+)
+def test_the_repause_request_is_refused_outside_a_post_freeze_fail(tmp_path, phase, status, value):
+    path = _write_phase_checkpoint(tmp_path, data={"migration_backups": _first_journal()})
+    before = _dir_snapshot(tmp_path)
+    action = _make_checkpoint_action(
+        {
+            "phase": phase,
+            "checkpoint": {"enabled": True, "backend": "file", "path": str(path)},
+            "status": status,
+            "argocd_repause": value,
+        }
+    )
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert "argocd_repause" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+# --- facts publish the obligation and the journal slot -----------------------------------------
+
+
+@pytest.mark.parametrize("journal", ["valid", "invalid"])
+def test_enter_publishes_the_marker_and_journal_presence(tmp_path, journal):
+    path = _write_phase_checkpoint(
+        tmp_path,
+        completed=("preflight", "primary_prep"),
+        data={"migration_backups": _JOURNALS[journal](), "argocd_repause_required": _marker()},
+    )
+    result = _enter_action(path).run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True, result
+    assert result["facts"]["argocd_repause_required"] == "activation"
+    assert result["facts"]["migration_journal_present"] is True
+
+
+def test_journal_free_facts_carry_no_obligation(tmp_path):
+    path = _write_phase_checkpoint(tmp_path, completed=("preflight", "primary_prep"))
+    result = _enter_action(path).run(task_vars=_task_vars_with_operation_identity())
+    assert result["facts"]["argocd_repause_required"] is None
+    assert result["facts"]["migration_journal_present"] is False
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [None, "activation", {}, {"failed_phase": "primary_prep", "recorded_at": "x"}, {"failed_phase": "activation"}],
+)
+def test_a_malformed_marker_is_never_read_as_discharged(tmp_path, marker):
+    path = _write_phase_checkpoint(
+        tmp_path,
+        completed=("preflight", "primary_prep"),
+        data={"migration_backups": _first_journal(), "argocd_repause_required": marker},
+    )
+    entered = _enter_action(path).run(task_vars=_task_vars_with_operation_identity())
+    read = _make_checkpoint_action(
+        {"read_facts": True, "checkpoint": {"enabled": True, "backend": "file", "path": str(path)}}
+    ).run(task_vars=_task_vars_with_operation_identity())
+    for result in (entered, read):
+        assert result["failed"] is True
+        assert "malformed" in result["msg"]
+
+
+# --- the explicit clear keeps the journal and the retry position -------------------------------
+
+
+@pytest.mark.parametrize("journal", ["valid", "invalid"])
+def test_clear_removes_only_the_marker(tmp_path, journal):
+    stored = _JOURNALS[journal]()
+    path = _write_phase_checkpoint(
+        tmp_path,
+        phase="post_activation",
+        completed=("preflight", "primary_prep", "activation"),
+        data={"migration_backups": stored, "argocd_repause_required": _marker("post_activation"), "argocd_run_id": "r"},
+    )
+    before = _stored(path)
+    result = _clear_action(path).run(task_vars=_task_vars_with_operation_identity())
+
+    assert result.get("failed") is not True, result
+    assert result["changed"] is True
+    after = _stored(path)
+    assert after["operational_data"] == {"migration_backups": stored, "argocd_run_id": "r"}
+    for key in ("phase", "phase_status", "completed_phases", "errors", "report_refs", "operation_identity"):
+        assert after[key] == before[key], key
+
+
+def test_clearing_an_absent_marker_writes_nothing(tmp_path):
+    path = _write_phase_checkpoint(tmp_path, data={"migration_backups": _first_journal()})
+    before = _dir_snapshot(tmp_path)
+    result = _clear_action(path).run(task_vars=_task_vars_with_operation_identity())
+    assert result == {"changed": False, "checkpoint": json.loads(before["checkpoint.json"])}
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("mode, check_mode", [("dry_run", False), ("validate", False), ("execute", True)])
+def test_a_non_mutating_clear_writes_nothing(tmp_path, mode, check_mode):
+    path = _write_phase_checkpoint(
+        tmp_path, data={"migration_backups": _first_journal(), "argocd_repause_required": _marker()}
+    )
+    before = _dir_snapshot(tmp_path)
+    result = _clear_action(path, check_mode=check_mode).run(task_vars=_task_vars_with_operation_identity(mode=mode))
+    assert result.get("failed") is not True
+    assert result["changed"] is False
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize(
+    "extra, enabled",
+    [({}, False), ({"phase": "activation"}, True), ({"status": "pass"}, True), ({"clear_argocd_repause": "yes"}, True)],
+)
+def test_the_clear_is_refused_when_misused(tmp_path, extra, enabled):
+    path = _write_phase_checkpoint(
+        tmp_path, data={"migration_backups": _first_journal(), "argocd_repause_required": _marker()}
+    )
+    before = _dir_snapshot(tmp_path)
+    result = _clear_action(path, enabled=enabled, **extra).run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_a_failed_clear_write_keeps_the_marker(tmp_path, monkeypatch):
+    path = _write_phase_checkpoint(
+        tmp_path, data={"migration_backups": _first_journal(), "argocd_repause_required": _marker()}
+    )
+    action = _clear_action(path)
+    monkeypatch.setattr(action, "_save_checkpoint", lambda *_: {"failed": True, "msg": "disk full"})
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+    assert result["failed"] is True
+    assert _stored(path)["operational_data"]["argocd_repause_required"] == _marker()
+
+
+# --- #332: an applied rewind is consumed once per invocation -----------------------------------
+
+
+def _run_invocation(path, steps, *, pid_facts=None, reset_from="primary_prep"):
+    """Drive transitions like one ansible-playbook process: returned facts persist."""
+    task_vars = _task_vars_with_operation_identity()
+    task_vars.update(pid_facts or {})
+    results = []
+    for phase, status, extra in steps:
+        action = _make_checkpoint_action(
+            {
+                "phase": phase,
+                "checkpoint": {"enabled": True, "backend": "file", "path": str(path), "reset_from": reset_from},
+                "status": status,
+                **extra,
+            }
+        )
+        result = action.run(task_vars=dict(task_vars))
+        results.append(result)
+        if result.get("failed"):
+            break
+        task_vars.update(result.get("ansible_facts") or {})
+    return results, task_vars
+
+
+def test_a_rewind_is_applied_once_and_later_enters_continue_after_it(tmp_path):
+    path = _write_phase_checkpoint(
+        tmp_path,
+        phase="finalization",
+        completed=("preflight", "primary_prep", "activation", "post_activation"),
+        data={},
+    )
+    results, task_vars = _run_invocation(
+        path,
+        [
+            ("preflight", "enter", {}),
+            ("primary_prep", "enter", {}),
+            ("primary_prep", "pass", {}),
+            ("activation", "enter", {}),
+            ("activation", "update", {"operational_data": {"migration_backups": _first_journal()}}),
+            ("activation", "pass", {}),
+            ("post_activation", "enter", {}),
+            ("post_activation", "pass", {}),
+        ],
+    )
+    assert all(result.get("failed") is not True for result in results), results[-1]
+    assert task_vars[REWIND_FENCE_FACT].endswith(":primary_prep")
+    after = _stored(path)
+    # The activation enter did not prune the primary_prep this run just completed.
+    assert after["completed_phases"] == ["preflight", "primary_prep", "activation", "post_activation"]
+    assert after["operational_data"]["migration_backups"] == _first_journal()
+
+
+def test_a_later_invocation_processes_the_rewind_again(tmp_path):
+    path = _write_phase_checkpoint(
+        tmp_path, phase="activation", completed=("preflight", "primary_prep", "activation"), data={}
+    )
+    _run_invocation(path, [("preflight", "enter", {})])
+    assert _stored(path)["completed_phases"] == ["preflight"]
+    _run_invocation(path, [("primary_prep", "enter", {}), ("primary_prep", "pass", {})])
+    # A stale fence from another process does not suppress the new invocation's rewind.
+    _run_invocation(path, [("preflight", "enter", {})], pid_facts={REWIND_FENCE_FACT: "1:primary_prep"})
+    assert _stored(path)["completed_phases"] == ["preflight"]
+
+
+def test_a_later_invocation_rewind_over_the_journal_is_still_refused(tmp_path):
+    path = _write_phase_checkpoint(
+        tmp_path,
+        phase="post_activation",
+        completed=("preflight", "primary_prep", "activation"),
+        data={"migration_backups": _first_journal()},
+    )
+    before = _dir_snapshot(tmp_path)
+    results, _ = _run_invocation(path, [("preflight", "enter", {})])
+    assert results[-1]["failed"] is True
+    assert "full checkpoint reset" in results[-1]["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("mode, check_mode", [("dry_run", False), ("execute", True)])
+def test_a_preview_never_fences_the_rewind(tmp_path, mode, check_mode):
+    path = _write_phase_checkpoint(
+        tmp_path, phase="activation", completed=("preflight", "primary_prep", "activation"), data={}
+    )
+    action = _enter_action(path, phase="preflight", reset_from="primary_prep")
+    action._play_context.check_mode = check_mode
+    result = action.run(task_vars=_task_vars_with_operation_identity(mode=mode))
+    assert REWIND_FENCE_FACT not in (result.get("ansible_facts") or {})
+
+
+# --- #332: missing pre-freeze work never runs over a journal ------------------------------------
+
+
+@pytest.mark.parametrize("journal", ["valid", "invalid"])
+@pytest.mark.parametrize("mode, check_mode", [("execute", False), ("dry_run", False), ("execute", True)])
+def test_a_missing_pre_freeze_phase_is_refused_over_a_journal(tmp_path, journal, mode, check_mode):
+    path = _write_phase_checkpoint(
+        tmp_path,
+        phase="activation",
+        completed=("preflight", "activation"),
+        data={"migration_backups": _JOURNALS[journal]()},
+    )
+    before = _dir_snapshot(tmp_path)
+    action = _enter_action(path, phase="primary_prep")
+    action._play_context.check_mode = check_mode
+    result = action.run(task_vars=_task_vars_with_operation_identity(mode=mode))
+    assert result["failed"] is True
+    assert "primary_prep" in result["msg"]
+    assert _dir_snapshot(tmp_path) == before
+
+
+def test_a_completed_pre_freeze_phase_is_skipped_over_a_journal(tmp_path):
+    path = _write_phase_checkpoint(
+        tmp_path, completed=("preflight", "primary_prep"), data={"migration_backups": _first_journal()}
+    )
+    result = _enter_action(path, phase="primary_prep").run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    assert result["skipped_phase"] is True
+
+
+def test_a_journal_free_missing_pre_freeze_phase_still_runs(tmp_path):
+    path = _write_phase_checkpoint(tmp_path, completed=("preflight",), data={})
+    result = _enter_action(path, phase="primary_prep").run(task_vars=_task_vars_with_operation_identity())
+    assert result.get("failed") is not True
+    assert result["skipped_phase"] is False

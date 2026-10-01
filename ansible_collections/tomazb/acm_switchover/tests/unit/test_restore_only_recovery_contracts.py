@@ -62,8 +62,11 @@ def test_switchover_identity_refusal_cannot_use_restore_recovery_shape():
 
     assert "rescue" not in outer
     assert outer["block"][0]["name"] == "Establish trusted identity and checkpoint barrier"
-    assert outer["block"][1]["name"] == "Run post-barrier switchover phases"
-    assert "rescue" in outer["block"][1]
+    # The Argo CD re-pause recovery runs after the barrier and outside the phase rescue.
+    assert outer["block"][1]["name"] == "Re-pause Argo CD recorded by a failure rescue"
+    assert "rescue" not in outer["block"][1]
+    assert outer["block"][2]["name"] == "Run post-barrier switchover phases"
+    assert "rescue" in outer["block"][2]
 
 
 def test_verify_passive_sync_passes_activation_method_to_restore_selector():

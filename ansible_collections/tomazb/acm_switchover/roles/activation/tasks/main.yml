@@ -25,9 +25,24 @@
     - (acm_switchover_argocd.run_id | default('')) | length == 0
     - ((((_checkpoint_enter | default({})) or {}).get('facts', {}) or {}).get('argocd_run_id', '') | length) > 0
 
+# PR C decisions amendment 2.2 rule 3: the Argo CD re-pause a failure rescue left runs
+# before any activation work, outside the phase rescue (a failed re-pause resumes nothing).
+- name: Re-pause Argo CD recorded by a failure rescue
+  ansible.builtin.include_role:
+    name: tomazb.acm_switchover.argocd_manage
+    tasks_from: repause_recovery
+  when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
+
 - name: Run activation phase
   when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
   block:
+    # The direct role entry (docs/variable-reference.md) proves its operator inputs
+    # before any mutation.
+    - name: Guard the activation role entry
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/guard_role_entry.yml"
+      vars:
+        _acm_role_entry_phase: activation
+
     - name: Discover secondary hub resources
       ansible.builtin.include_tasks: discover_resources.yml
 
@@ -65,32 +80,53 @@
           wait: "{{ acm_switchover_wait_for_restore_result | default({}) }}"
           immediate_import: "{{ acm_switchover_immediate_import_result | default({}) }}"
   rescue:
+    - name: Record the original activation failure
+      ansible.builtin.set_fact:
+        _acm_phase_failure: "{{ ansible_failed_result.msg | default('unknown failure') }}"
+
+    # Amendment 2.2 rule 2: under a migration journal the re-pause marker is durable in
+    # this same fail transition, before the play rescue may resume Argo CD. A failed
+    # write is reported with the original failure, never instead of it.
     - name: Mark checkpoint failure
-      tomazb.acm_switchover.checkpoint_phase:
-        phase: activation
-        checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
-        status: fail
-        error: "{{ ansible_failed_result.msg | default('unknown failure') }}"
-        operational_data:
-          argocd_run_id: "{{ acm_switchover_argocd.run_id | default('') }}"
-          argocd_discovery_namespaces: >-
-            {{
-              acm_switchover_argocd_discovery_namespaces | default({})
-              if (acm_switchover_argocd_discovery_namespaces | default({}) | length) > 0
-              else
-              ((_checkpoint_enter | default({})) or {}).get('facts', {}).get('argocd_discovery_namespaces', {})
-            }}
-          auto_import_strategy_changed: >-
-            {{
-              (_auto_import_strategy_changed | default(false))
-              or
-              ((_checkpoint_enter | default({})) or {}).get('facts', {}).get('auto_import_strategy_changed', false)
-            }}
       when: acm_switchover_execution.checkpoint.enabled | default(false)
+      block:
+        - name: Record the failed phase and any Argo CD re-pause obligation
+          tomazb.acm_switchover.checkpoint_phase:
+            phase: activation
+            checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+            status: fail
+            error: "{{ _acm_phase_failure }}"
+            argocd_repause: >-
+              {{
+                (acm_switchover_features.argocd.manage | default(false) | bool)
+                and (acm_switchover_features.argocd.resume_on_failure | default(false) | bool)
+              }}
+            operational_data:
+              argocd_run_id: "{{ acm_switchover_argocd.run_id | default('') }}"
+              argocd_discovery_namespaces: >-
+                {{
+                  acm_switchover_argocd_discovery_namespaces | default({})
+                  if (acm_switchover_argocd_discovery_namespaces | default({}) | length) > 0
+                  else
+                  ((_checkpoint_enter | default({})) or {}).get('facts', {}).get('argocd_discovery_namespaces', {})
+                }}
+              auto_import_strategy_changed: >-
+                {{
+                  (_auto_import_strategy_changed | default(false))
+                  or
+                  ((_checkpoint_enter | default({})) or {}).get('facts', {}).get('auto_import_strategy_changed', false)
+                }}
+      rescue:
+        - name: Report the failure the checkpoint could not record
+          ansible.builtin.fail:
+            msg: >-
+              {{ _acm_phase_failure }} The checkpoint could not record this failure:
+              {{ ansible_failed_result.msg | default('unknown failure') }}. No Argo CD re-pause
+              marker is durable, so no Argo CD Application may be resumed.
 
     - name: Re-raise failure
       ansible.builtin.fail:
-        msg: "{{ ansible_failed_result.msg | default('Phase activation failed') }}"
+        msg: "{{ _acm_phase_failure }}"
 
 - name: Mark checkpoint phase completion
   # No file artifact for activation; report_ref not applicable

@@ -218,6 +218,8 @@ def run_distinct_hub_playbook(tmp_path):
         checkpoint_record: dict | None = None,
         variables: dict | None = None,
         native_check: bool = False,
+        secondary_patch_failure_status: int | None = None,
+        checkpoint_dir_read_only: bool = False,
     ) -> DistinctHubPlaybookRun:
         repo_root = _find_repo_root()
         primary = FakeArgoCDHub(
@@ -231,6 +233,7 @@ def run_distinct_hub_playbook(tmp_path):
             applications=list(secondary_applications or []),
             kube_system_status=secondary_identity_status,
             kube_system_body=secondary_identity_body,
+            patch_failure_status=secondary_patch_failure_status,
         )
         try:
             primary_kubeconfig = tmp_path / primary_kubeconfig_name
@@ -270,7 +273,9 @@ def run_distinct_hub_playbook(tmp_path):
                 },
             }
             report_dir = tmp_path / "identity-barrier-artifacts"
-            checkpoint_path = tmp_path / "identity-barrier-checkpoint.json"
+            checkpoint_store = tmp_path / "checkpoint-store" if checkpoint_dir_read_only else tmp_path
+            checkpoint_store.mkdir(exist_ok=True)
+            checkpoint_path = checkpoint_store / "identity-barrier-checkpoint.json"
             vars_payload["acm_switchover_execution"] = {
                 "run_id": "identity-barrier-run",
                 "report_dir": str(report_dir),
@@ -321,6 +326,9 @@ def run_distinct_hub_playbook(tmp_path):
             ]
             if native_check:
                 command.append("--check")
+            if checkpoint_dir_read_only:
+                # Every checkpoint write fails; reads still succeed.
+                checkpoint_store.chmod(0o555)
             try:
                 completed = subprocess.run(
                     command,
@@ -333,6 +341,9 @@ def run_distinct_hub_playbook(tmp_path):
                 )
             except subprocess.TimeoutExpired as exc:
                 _fail_ansible_playbook_timeout(exc, 300)
+            finally:
+                if checkpoint_dir_read_only:
+                    checkpoint_store.chmod(0o755)
 
             report_path = report_dir / "switchover-report.json"
             report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else {}

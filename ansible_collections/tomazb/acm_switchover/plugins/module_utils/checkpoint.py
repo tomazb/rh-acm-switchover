@@ -239,6 +239,14 @@ def checkpoint_facts(checkpoint) -> dict:
         # Teardown records are mutation authority. Unlike the reporting values above,
         # malformed state must fail closed through the shared record validator.
         FACT_TEARDOWN_RECORDS: validated_teardown_records,
+        # R4-04: slot presence (an invalid journal is present too) and the Argo CD
+        # re-pause obligation, which fails closed like the teardown records.
+        FACT_MIGRATION_JOURNAL_PRESENT: has_migration_backups(checkpoint),
+        KEY_ARGOCD_REPAUSE_REQUIRED: (
+            argocd_repause_required(checkpoint)
+            if isinstance(checkpoint, dict) and isinstance(checkpoint.get("operational_data", {}), dict)
+            else None
+        ),
     }
 
 
@@ -869,3 +877,83 @@ def _refuse_pre_freeze_transition(status: str, phase: str) -> NoReturn:
         f"Refusing status: {status} of phase '{phase}': the checkpoint records a migration transaction frozen "
         "after that phase. Start a new migration with the full checkpoint reset (checkpoint.reset)."
     )
+
+
+def check_pre_freeze_entry(checkpoint, phase: str) -> None:
+    """Refuse entering a pre-freeze phase that would run again over a migration journal.
+
+    Independent of any reset option (#332): once a journal slot exists, valid or not, a
+    missing preflight or primary_prep marker is never re-executed, since that work
+    precedes the Backup freeze. A completed one is skipped and stays allowed.
+    """
+    if phase in PRE_FREEZE_PHASES and has_migration_backups(checkpoint):
+        if phase not in checkpoint.get("completed_phases", []):
+            raise MigrationRewindRefused(
+                f"Refusing to run phase '{phase}' again: the checkpoint records a migration transaction frozen "
+                "after that phase. Resume at the recorded phase, or start a new migration with the full "
+                "checkpoint reset (checkpoint.reset)."
+            )
+
+
+# -- Argo CD re-pause obligation (PR C decisions amendment section 2.2) ----------
+#
+# A phase failure under a migration journal records this marker in the failed phase's
+# fail transition, before the play rescue resumes any Argo CD Application; the retry
+# re-pauses before any phase work and only then clears it. It lives outside the journal.
+
+KEY_ARGOCD_REPAUSE_REQUIRED = "argocd_repause_required"
+FACT_MIGRATION_JOURNAL_PRESENT = "migration_journal_present"
+# The phases a journal can exist in when they fail.
+JOURNAL_RESCUE_PHASES = ("activation", "post_activation", "finalization")
+_REPAUSE_FIELDS = frozenset({"failed_phase", "recorded_at"})
+
+
+def argocd_repause_required(checkpoint):
+    """The failed phase a retry must re-pause Argo CD before, or None when no marker is recorded.
+
+    A present marker of any other shape raises ValueError: the obligation is never
+    read as discharged.
+    """
+    data = _migration_data(checkpoint)
+    if KEY_ARGOCD_REPAUSE_REQUIRED not in data:
+        return None
+    marker = data[KEY_ARGOCD_REPAUSE_REQUIRED]
+    if (
+        not isinstance(marker, dict)
+        or set(marker) != _REPAUSE_FIELDS
+        or marker["failed_phase"] not in JOURNAL_RESCUE_PHASES
+        or not _non_empty_str(marker["recorded_at"])
+    ):
+        raise ValueError(f"The recorded {KEY_ARGOCD_REPAUSE_REQUIRED} marker is malformed; it is never discharged.")
+    return marker["failed_phase"]
+
+
+def record_argocd_repause_required(checkpoint, failed_phase: str, recorded_at: str) -> bool:
+    """Record the marker when the checkpoint carries a journal slot, valid or not.
+
+    Returns whether it was recorded. A journal-free checkpoint is left unchanged: the
+    journal-free rescue keeps its pre-R4-04 behavior.
+    """
+    if failed_phase not in JOURNAL_RESCUE_PHASES:
+        raise ValueError(f"A re-pause marker names a post-freeze phase, not '{failed_phase}'.")
+    if not has_migration_backups(checkpoint):
+        return False
+    checkpoint["operational_data"][KEY_ARGOCD_REPAUSE_REQUIRED] = {
+        "failed_phase": failed_phase,
+        "recorded_at": recorded_at,
+    }
+    return True
+
+
+def clear_argocd_repause_required(checkpoint) -> bool:
+    """Remove the marker; returns whether one was present.
+
+    An explicit operation because the generic operational_data merge drops None. It
+    never reads or validates the journal, so a rescue over an invalid journal clears too,
+    and it touches nothing else in the checkpoint.
+    """
+    data = _migration_data(checkpoint)
+    if KEY_ARGOCD_REPAUSE_REQUIRED not in data:
+        return False
+    del data[KEY_ARGOCD_REPAUSE_REQUIRED]
+    return True

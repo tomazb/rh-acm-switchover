@@ -7,9 +7,24 @@
   register: _checkpoint_enter
   when: acm_switchover_execution.checkpoint.enabled | default(false)
 
+# PR C decisions amendment 2.2 rule 3: the Argo CD re-pause a failure rescue left runs
+# before any finalization work, outside the phase rescue (a failed re-pause resumes nothing).
+- name: Re-pause Argo CD recorded by a failure rescue
+  ansible.builtin.include_role:
+    name: tomazb.acm_switchover.argocd_manage
+    tasks_from: repause_recovery
+  when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
+
 - name: Run finalization phase
   when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
   block:
+    # The direct role entry (docs/variable-reference.md) proves its operator inputs
+    # before any mutation.
+    - name: Guard the finalization role entry
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/guard_role_entry.yml"
+      vars:
+        _acm_role_entry_phase: finalization
+
     - name: Restore backup verification baseline from checkpoint
       ansible.builtin.set_fact:
         acm_switchover_backup_schedule_enabled_at: >-
@@ -111,20 +126,41 @@
       tags:
         - finalization
   rescue:
+    - name: Record the original finalization failure
+      ansible.builtin.set_fact:
+        _acm_phase_failure: "{{ ansible_failed_result.msg | default('unknown failure') }}"
+
+    # Amendment 2.2 rule 2: under a migration journal the re-pause marker is durable in
+    # this same fail transition, before the play rescue may resume Argo CD. A failed
+    # write is reported with the original failure, never instead of it.
     - name: Mark checkpoint failure
-      tomazb.acm_switchover.checkpoint_phase:
-        phase: finalization
-        checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
-        status: fail
-        error: "{{ ansible_failed_result.msg | default('unknown failure') }}"
-        operational_data:
-          backup_schedule_enabled_at: "{{ acm_switchover_backup_schedule_enabled_at | default('') }}"
-          saved_backup_schedule: "{{ acm_switchover_saved_backup_schedule | default('') }}"
       when: acm_switchover_execution.checkpoint.enabled | default(false)
+      block:
+        - name: Record the failed phase and any Argo CD re-pause obligation
+          tomazb.acm_switchover.checkpoint_phase:
+            phase: finalization
+            checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+            status: fail
+            error: "{{ _acm_phase_failure }}"
+            argocd_repause: >-
+              {{
+                (acm_switchover_features.argocd.manage | default(false) | bool)
+                and (acm_switchover_features.argocd.resume_on_failure | default(false) | bool)
+              }}
+            operational_data:
+              backup_schedule_enabled_at: "{{ acm_switchover_backup_schedule_enabled_at | default('') }}"
+              saved_backup_schedule: "{{ acm_switchover_saved_backup_schedule | default('') }}"
+      rescue:
+        - name: Report the failure the checkpoint could not record
+          ansible.builtin.fail:
+            msg: >-
+              {{ _acm_phase_failure }} The checkpoint could not record this failure:
+              {{ ansible_failed_result.msg | default('unknown failure') }}. No Argo CD re-pause
+              marker is durable, so no Argo CD Application may be resumed.
 
     - name: Re-raise failure
       ansible.builtin.fail:
-        msg: "{{ ansible_failed_result.msg | default('Phase finalization failed') }}"
+        msg: "{{ _acm_phase_failure }}"
 
 - name: Mark checkpoint phase completion
   # No file artifact for finalization; report_ref not applicable

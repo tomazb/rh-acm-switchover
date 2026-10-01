@@ -7,9 +7,24 @@
   register: _checkpoint_enter
   when: acm_switchover_execution.checkpoint.enabled | default(false)
 
+# PR C decisions amendment 2.2 rule 3: the Argo CD re-pause a failure rescue left runs
+# before any post_activation work, outside the phase rescue (a failed re-pause resumes nothing).
+- name: Re-pause Argo CD recorded by a failure rescue
+  ansible.builtin.include_role:
+    name: tomazb.acm_switchover.argocd_manage
+    tasks_from: repause_recovery
+  when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
+
 - name: Run post_activation phase
   when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
   block:
+    # The direct role entry (docs/variable-reference.md) proves its operator inputs
+    # before any mutation.
+    - name: Guard the post_activation role entry
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/guard_role_entry.yml"
+      vars:
+        _acm_role_entry_phase: post_activation
+
     - name: Publish dry-run post activation result
       ansible.builtin.set_fact:
         acm_switchover_post_activation_result:
@@ -79,17 +94,38 @@
         - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
         - not acm_switchover_cluster_verify_result.passed
   rescue:
+    - name: Record the original post_activation failure
+      ansible.builtin.set_fact:
+        _acm_phase_failure: "{{ ansible_failed_result.msg | default('unknown failure') }}"
+
+    # Amendment 2.2 rule 2: under a migration journal the re-pause marker is durable in
+    # this same fail transition, before the play rescue may resume Argo CD. A failed
+    # write is reported with the original failure, never instead of it.
     - name: Mark checkpoint failure
-      tomazb.acm_switchover.checkpoint_phase:
-        phase: post_activation
-        checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
-        status: fail
-        error: "{{ ansible_failed_result.msg | default('unknown failure') }}"
       when: acm_switchover_execution.checkpoint.enabled | default(false)
+      block:
+        - name: Record the failed phase and any Argo CD re-pause obligation
+          tomazb.acm_switchover.checkpoint_phase:
+            phase: post_activation
+            checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+            status: fail
+            error: "{{ _acm_phase_failure }}"
+            argocd_repause: >-
+              {{
+                (acm_switchover_features.argocd.manage | default(false) | bool)
+                and (acm_switchover_features.argocd.resume_on_failure | default(false) | bool)
+              }}
+      rescue:
+        - name: Report the failure the checkpoint could not record
+          ansible.builtin.fail:
+            msg: >-
+              {{ _acm_phase_failure }} The checkpoint could not record this failure:
+              {{ ansible_failed_result.msg | default('unknown failure') }}. No Argo CD re-pause
+              marker is durable, so no Argo CD Application may be resumed.
 
     - name: Re-raise failure
       ansible.builtin.fail:
-        msg: "{{ ansible_failed_result.msg | default('Phase post_activation failed') }}"
+        msg: "{{ _acm_phase_failure }}"
 
 - name: Mark checkpoint phase completion
   # No file artifact for post_activation; report_ref not applicable

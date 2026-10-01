@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from datetime import datetime, timezone
 
+from ansible.module_utils.parsing.convert_bool import boolean
 from ansible.plugins.action import ActionBase
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
@@ -18,6 +19,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint i
     CHECKPOINT_DEFAULT_PATH,
     CHECKPOINT_REPORT_KIND_JSON,
     CHECKPOINT_VALID_STATUSES,
+    JOURNAL_RESCUE_PHASES,
     KEY_MIGRATION_BACKUPS,
     KNOWN_PHASES,
     SCHEMA_VERSION,
@@ -27,11 +29,14 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint i
     check_migration_fail,
     check_migration_reset,
     check_migration_rewind,
+    check_pre_freeze_entry,
     checkpoint_facts,
     checkpoint_structure_error,
+    clear_argocd_repause_required,
     has_migration_backups,
     is_unsafe_legacy_checkpoint,
     normalize_operation_identity,
+    record_argocd_repause_required,
     record_migration_backups,
     record_resume_start_phase,
     record_teardown_phase,
@@ -45,6 +50,9 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation i
     validate_context_name,
     validate_report_artifact_path,
 )
+
+# The PID-keyed fact that fences an applied reset_from for the rest of the invocation.
+REWIND_FENCE_FACT = "_acm_switchover_rewind_consumed"
 
 
 def build_phase_transition(checkpoint: dict, phase: str, status: str) -> dict:
@@ -93,6 +101,8 @@ class ActionModule(ActionBase):
         task_vars = task_vars or {}
 
         args = self._task.args
+        if "clear_argocd_repause" in args:
+            return self._run_clear_argocd_repause(task_vars=task_vars)
         if args.get("read_facts") is True or "teardown_record" in args:
             return self._run_teardown_record_data(task_vars=task_vars)
 
@@ -132,6 +142,19 @@ class ActionModule(ActionBase):
 
         execution = task_vars.get("acm_switchover_execution") or {}
         execution_mode = execution.get("mode", "dry_run") if isinstance(execution, Mapping) else "dry_run"
+        # Templated booleans reach an action as strings on older ansible-core releases.
+        try:
+            argocd_repause = boolean(args.get("argocd_repause", False), strict=True)
+        except TypeError:
+            argocd_repause = None
+        if argocd_repause is None or (argocd_repause and (status != "fail" or phase not in JOURNAL_RESCUE_PHASES)):
+            return {
+                "failed": True,
+                "msg": (
+                    "argocd_repause must be a boolean and is true only with status: fail of "
+                    f"{', '.join(JOURNAL_RESCUE_PHASES)}."
+                ),
+            }
         return self._run_checkpoint_transition(
             phase=phase,
             checkpoint_config=self._task.args.get("checkpoint", {}),
@@ -144,7 +167,62 @@ class ActionModule(ActionBase):
             task_vars=task_vars,
             expected_operation_identity=None,
             hub_identities=None,
+            argocd_repause=argocd_repause,
         )
+
+    def _run_clear_argocd_repause(self, *, task_vars: dict) -> dict:
+        """Discharge the Argo CD re-pause marker after the retry re-paused (amendment 2.2 rule 3).
+
+        Owns no phase transition: only the marker and updated_at change. The journal is
+        never read or validated, so the marker clears over an invalid journal too.
+        Non-mutating modes write nothing.
+        """
+        args = self._task.args
+        if args.get("clear_argocd_repause") is not True or any(
+            name in args for name in ("phase", "status", "operational_data", "read_facts", "teardown_record")
+        ):
+            return {
+                "failed": True,
+                "msg": "clear_argocd_repause must be true and accepts only the checkpoint configuration.",
+            }
+        checkpoint_config = args.get("checkpoint")
+        if not isinstance(checkpoint_config, Mapping) or not bool(checkpoint_config.get("enabled", False)):
+            return {
+                "failed": True,
+                "msg": "Refusing clear_argocd_repause because checkpointing is disabled; the marker lives there.",
+            }
+        backend = checkpoint_config.get("backend", CHECKPOINT_BACKEND_FILE)
+        path = checkpoint_config.get("path", CHECKPOINT_DEFAULT_PATH)
+        if backend != CHECKPOINT_BACKEND_FILE:
+            return {"failed": True, "msg": f"Invalid checkpoint backend '{backend}'. Expected: file."}
+        try:
+            validate_report_artifact_path(path)
+        except ValidationError as exc:
+            return {"failed": True, "msg": str(exc)}
+        execution = task_vars.get("acm_switchover_execution") or {}
+        execution_mode = execution.get("mode", "dry_run") if isinstance(execution, Mapping) else "dry_run"
+        is_non_mutating = getattr(self._play_context, "check_mode", False) is True or execution_mode in {
+            "dry_run",
+            "validate",
+        }
+
+        checkpoint_data = self._load_checkpoint(path, preserve_corrupt=not is_non_mutating)
+        if checkpoint_data.get("failed"):
+            return checkpoint_data
+        if is_non_mutating:
+            return {"changed": False, "checkpoint": checkpoint_data}
+        if not checkpoint_data.get("operation_identity"):
+            return self._missing_operation_identity_failure()
+        try:
+            changed = clear_argocd_repause_required(checkpoint_data)
+        except ValueError as exc:
+            return {"failed": True, "msg": str(exc)}
+        if changed:
+            checkpoint_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+            save_result = self._save_checkpoint(path, checkpoint_data)
+            if save_result is not None and save_result.get("failed"):
+                return save_result
+        return {"changed": changed, "checkpoint": checkpoint_data}
 
     def _run_teardown_record_data(self, *, task_vars: dict) -> dict:
         """Read checkpoint facts or persist one validated teardown record.
@@ -663,6 +741,7 @@ class ActionModule(ActionBase):
         task_vars: dict,
         expected_operation_identity,
         hub_identities,
+        argocd_repause: bool = False,
     ) -> dict:
         if not isinstance(checkpoint_config, Mapping):
             checkpoint_config = {}
@@ -671,6 +750,14 @@ class ActionModule(ActionBase):
         backend = checkpoint_config.get("backend", CHECKPOINT_BACKEND_FILE)
         path = checkpoint_config.get("path", CHECKPOINT_DEFAULT_PATH)
         reset_from = checkpoint_config.get("reset_from")
+        # #332: an operator rewind rides along in the checkpoint config of every task of
+        # the run, but it is applied once per invocation. After the first enter carrying it
+        # has been applied and persisted, later enters of the same process treat it as
+        # absent, so a phase this run completed is never pruned again.
+        rewind_fence = f"{os.getpid()}:{reset_from}" if reset_from else None
+        if status == "enter" and rewind_fence and task_vars.get(REWIND_FENCE_FACT) == rewind_fence:
+            reset_from = None
+            rewind_fence = None
 
         if status not in CHECKPOINT_VALID_STATUSES:
             return {
@@ -806,11 +893,15 @@ class ActionModule(ActionBase):
                 already_done = (
                     False if execution_mode == "validate" else not should_resume_phase(checkpoint_data, phase)
                 )
+                try:
+                    facts = checkpoint_facts(checkpoint_data)
+                except ValueError as exc:
+                    return {"failed": True, "msg": str(exc)}
                 result = {
                     "changed": False,
                     "checkpoint": checkpoint_data,
                     "skipped_phase": already_done,
-                    "facts": checkpoint_facts(checkpoint_data),
+                    "facts": facts,
                 }
                 if hub_identities is not None:
                     result["hub_identities"] = hub_identities
@@ -875,26 +966,39 @@ class ActionModule(ActionBase):
                 # ansible-playbook invocation).
                 record_resume_start_phase(checkpoint_data, phase)
                 resume_summary_changed = True
+            # A phase that will run is the checkpoint's current phase from its enter on:
+            # a mid-phase status: update requires the persisted phase to be the entered one.
+            entered_phase_changed = phase_changed and not already_done
             if (
-                (operation_identity_changed or reset_from or resume_summary_changed)
+                (operation_identity_changed or reset_from or resume_summary_changed or entered_phase_changed)
                 and backend == CHECKPOINT_BACKEND_FILE
                 and not is_non_mutating
             ):
-                if operation_identity_changed or resume_summary_changed:
+                if operation_identity_changed or resume_summary_changed or entered_phase_changed:
                     checkpoint_data["updated_at"] = datetime.now(timezone.utc).isoformat()
                 save_result = self._save_checkpoint(path, checkpoint_data)
                 if save_result is not None and save_result.get("failed"):
                     return save_result
+            # A malformed obligation among the published facts fails closed, never as an exception.
+            try:
+                facts = checkpoint_facts(checkpoint_data)
+            except ValueError as exc:
+                return {"failed": True, "msg": str(exc)}
             result = {
                 "changed": False,
                 "checkpoint": checkpoint_data,
                 "skipped_phase": already_done,
-                "facts": checkpoint_facts(checkpoint_data),
+                "facts": facts,
             }
             if hub_identities is not None:
                 result["hub_identities"] = hub_identities
+            ansible_facts = {}
             if resume_summary_changed:
-                result["ansible_facts"] = {"_acm_switchover_resume_recorded": str(os.getpid())}
+                ansible_facts["_acm_switchover_resume_recorded"] = str(os.getpid())
+            if rewind_fence and not is_non_mutating:
+                ansible_facts[REWIND_FENCE_FACT] = rewind_fence
+            if ansible_facts:
+                result["ansible_facts"] = ansible_facts
             return result
 
         if is_non_mutating:
@@ -926,6 +1030,14 @@ class ActionModule(ActionBase):
         if error and status == "fail":
             checkpoint_data.setdefault("errors", []).append({"phase": phase, "error": error})
             changed = True
+        # Amendment 2.2 rule 2: the marker is durable in this same write, before the play
+        # rescue resumes any Argo CD Application; a journal-free checkpoint records none.
+        repause_recorded = False
+        if argocd_repause and status == "fail":
+            repause_recorded = record_argocd_repause_required(
+                checkpoint_data, phase, datetime.now(timezone.utc).isoformat()
+            )
+            changed = changed or repause_recorded
         if report_ref:
             report_refs = checkpoint_data.setdefault("report_refs", [])
             new_report_ref = {
@@ -945,7 +1057,10 @@ class ActionModule(ActionBase):
             if save_result is not None and save_result.get("failed"):
                 return save_result
 
-        return {"changed": changed, "checkpoint": checkpoint_data}
+        result = {"changed": changed, "checkpoint": checkpoint_data}
+        if argocd_repause:
+            result["argocd_repause_recorded"] = repause_recorded
+        return result
 
     @staticmethod
     def _update_argument_failure(*, checkpoint_config, path: str, error, report_ref, operational_data) -> dict | None:
@@ -1060,6 +1175,8 @@ class ActionModule(ActionBase):
         phase), then any reset_from a reset carries.
         """
         try:
+            if status == "enter":
+                check_pre_freeze_entry(checkpoint_data, phase)
             if status == "reset":
                 check_migration_reset(checkpoint_data, phase)
             if status == "fail":

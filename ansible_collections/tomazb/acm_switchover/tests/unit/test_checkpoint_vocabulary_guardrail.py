@@ -16,6 +16,9 @@ way to consume that data and are excluded from the playbook scan below.
 import pathlib
 import re
 
+import pytest
+import yaml
+
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
     KEY_DECOMMISSION_TEARDOWN_RECORDS,
     KEY_MIGRATION_BACKUPS,
@@ -116,21 +119,159 @@ def _yaml_files():
             yield from sorted(directory.rglob(pattern))
 
 
-def test_migration_journal_key_is_never_named_in_role_or_playbook_yaml():
-    """No YAML reads or writes the journal key; the facade is checkpoint_phase status: update.
+# #332: the one YAML shape that may name the journal key. It is the sole operational_data
+# key of a checkpoint_phase `status: update` task, and its value is exactly the complete
+# candidate a validating acm_migration_evidence task of the same file registered. The
+# allowance is structural (parsed YAML), per task, never per file.
+JOURNAL_WRITER_MODULE = "tomazb.acm_switchover.checkpoint_phase"
+JOURNAL_CANDIDATE_MODULE = "tomazb.acm_switchover.acm_migration_evidence"
+_CANDIDATE_REFERENCE = re.compile(r"^\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\.candidate\s*\}\}$")
 
-    A future journal writer is a checkpoint_phase `status: update` task and needs an
-    explicit, narrow allowance here rather than a silent exemption.
-    """
-    offenders = [
-        str(path.relative_to(COLLECTION_ROOT))
-        for path in _yaml_files()
-        if KEY_MIGRATION_BACKUPS in path.read_text(encoding="utf-8")
-    ]
+
+def _candidate_registers(node) -> set:
+    """Every `register` of an acm_migration_evidence task anywhere in the document."""
+    found = set()
+    if isinstance(node, dict):
+        if JOURNAL_CANDIDATE_MODULE in node and isinstance(node.get("register"), str):
+            found.add(node["register"])
+        for value in node.values():
+            found |= _candidate_registers(value)
+    elif isinstance(node, list):
+        for item in node:
+            found |= _candidate_registers(item)
+    return found
+
+
+def _is_allowed_journal_write(task: dict, registers: set) -> bool:
+    args = task.get(JOURNAL_WRITER_MODULE)
+    if not isinstance(args, dict) or args.get("status") != "update":
+        return False
+    data = args.get("operational_data")
+    if not isinstance(data, dict) or list(data) != [KEY_MIGRATION_BACKUPS]:
+        return False
+    value = data[KEY_MIGRATION_BACKUPS]
+    match = _CANDIDATE_REFERENCE.match(value.strip()) if isinstance(value, str) else None
+    return match is not None and match.group(1) in registers
+
+
+def journal_key_offenders(node, registers: set, where: str = "") -> list:
+    """Locations naming the journal key outside the allowed writer shape."""
+    offenders = []
+    if isinstance(node, dict):
+        allowed = _is_allowed_journal_write(node, registers)
+        for key, value in node.items():
+            location = f"{where}/{key}"
+            if isinstance(key, str) and KEY_MIGRATION_BACKUPS in key:
+                offenders.append(location)
+            if allowed and key == JOURNAL_WRITER_MODULE:
+                value = {name: item for name, item in value.items() if name != "operational_data"}
+            offenders.extend(journal_key_offenders(value, registers, location))
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            offenders.extend(journal_key_offenders(item, registers, f"{where}[{index}]"))
+    elif isinstance(node, str) and KEY_MIGRATION_BACKUPS in node:
+        offenders.append(where)
+    return offenders
+
+
+class _TaskLoader(yaml.SafeLoader):
+    """Safe loading that keeps Ansible's custom tags (e.g. !unsafe) as their plain values."""
+
+
+_TaskLoader.add_multi_constructor("!", lambda loader, _tag, node: loader.construct_scalar(node))
+
+
+def yaml_journal_key_offenders(paths) -> list:
+    offenders: list = []
+    for path in paths:
+        for document in yaml.load_all(path.read_text(encoding="utf-8"), Loader=_TaskLoader):
+            registers = _candidate_registers(document)
+            offenders.extend(f"{path.name}:{location}" for location in journal_key_offenders(document, registers))
+    return offenders
+
+
+def test_migration_journal_key_is_named_in_yaml_only_by_validated_update_writes():
+    """No YAML reads the journal key; it writes it only through checkpoint_phase status: update."""
+    offenders = yaml_journal_key_offenders(_yaml_files())
     assert not offenders, (
-        f"The '{KEY_MIGRATION_BACKUPS}' operational_data key is owned by module_utils/checkpoint.py "
-        f"and must not be named in YAML. Offenders: {offenders}"
+        f"The '{KEY_MIGRATION_BACKUPS}' operational_data key is owned by module_utils/checkpoint.py; YAML may "
+        "name it only as the sole operational_data key of a checkpoint_phase status: update task whose value "
+        f"is a registered acm_migration_evidence candidate. Offenders: {offenders}"
     )
+
+
+_ALLOWED_WRITER = f"""
+- name: Build the candidate
+  {JOURNAL_CANDIDATE_MODULE}:
+    operation: freeze
+  register: _candidate_result
+- name: Persist the candidate
+  {JOURNAL_WRITER_MODULE}:
+    phase: activation
+    checkpoint: "{{{{ acm_switchover_execution.checkpoint }}}}"
+    status: update
+    operational_data:
+      {KEY_MIGRATION_BACKUPS}: "{{{{ _candidate_result.candidate }}}}"
+"""
+
+
+@pytest.mark.parametrize("suffix", [".yml", ".yaml"])
+def test_the_allowance_admits_the_validated_update_writer(tmp_path, suffix):
+    path = tmp_path / f"tasks{suffix}"
+    path.write_text(_ALLOWED_WRITER, encoding="utf-8")
+    assert yaml_journal_key_offenders([path]) == []
+
+
+@pytest.mark.parametrize("suffix", [".yml", ".yaml"])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        ("status: update", "status: pass"),
+        ("status: update", "status: fail"),
+        (f"      {KEY_MIGRATION_BACKUPS}:", f"      argocd_run_id: x\n      {KEY_MIGRATION_BACKUPS}:"),
+        ("_candidate_result.candidate }}", "_candidate_result.candidate | combine({}) }}"),
+        ("_candidate_result.candidate }}", "_candidate_result }}"),
+        ("  register: _candidate_result", "  register: _other_result"),
+        (f"  {JOURNAL_CANDIDATE_MODULE}:", "  ansible.builtin.set_fact:"),
+        (f"  {JOURNAL_WRITER_MODULE}:", "  tomazb.acm_switchover.acm_checkpoint:"),
+        ("  register: _candidate_result", "  register: _candidate_result\n  when: facts." + KEY_MIGRATION_BACKUPS),
+    ],
+    ids=[
+        "status-pass",
+        "status-fail",
+        "extra-key",
+        "filtered-value",
+        "whole-result",
+        "unregistered",
+        "not-a-candidate-module",
+        "other-action",
+        "raw-read-in-when",
+    ],
+)
+def test_the_allowance_rejects_every_other_shape(tmp_path, suffix, mutation):
+    old, new = mutation
+    assert old in _ALLOWED_WRITER
+    path = tmp_path / f"tasks{suffix}"
+    path.write_text(_ALLOWED_WRITER.replace(old, new, 1), encoding="utf-8")
+    assert yaml_journal_key_offenders([path])
+
+
+def test_the_allowance_finds_raw_uses_nested_in_blocks_and_values(tmp_path):
+    path = tmp_path / "play.yml"
+    path.write_text(
+        f"""
+- hosts: localhost
+  tasks:
+    - block:
+        - ansible.builtin.set_fact:
+            journal: "{{{{ _checkpoint_enter.facts['{KEY_MIGRATION_BACKUPS}'] }}}}"
+      rescue:
+        - ansible.builtin.debug:
+            msg: {KEY_MIGRATION_BACKUPS}
+""",
+        encoding="utf-8",
+    )
+    assert len(yaml_journal_key_offenders([path])) == 2
 
 
 def test_migration_journal_key_literal_lives_only_in_its_owner():

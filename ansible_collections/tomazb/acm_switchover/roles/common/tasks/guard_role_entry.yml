@@ -1,0 +1,78 @@
+---
+# R4-04 direct role entry (docs/variable-reference.md): activation, post_activation and
+# finalization may be included without the playbook's preflight, so each role proves at
+# its own entry, before any mutation, what preflight would have: valid operator inputs,
+# including the ManagedCluster expectation waiver, and a waiver scope that has an
+# expected name to waive. The Python CLI checks the same at every resumed phase entry.
+#
+# Input: _acm_role_entry_phase, the entering phase.
+
+- name: Validate the operator inputs at the role entry
+  tomazb.acm_switchover.acm_input_validate:
+    hubs: "{{ acm_switchover_hubs }}"
+    operation: "{{ acm_switchover_operation }}"
+    execution: "{{ acm_switchover_execution }}"
+    features: "{{ acm_switchover_features }}"
+    decommission: "{{ acm_switchover_decommission | default({}) }}"
+  register: _acm_role_entry_inputs
+
+- name: Refuse invalid operator inputs before any role work
+  ansible.builtin.fail:
+    msg: >-
+      The {{ _acm_role_entry_phase }} role refused its operator inputs before any mutation:
+      {{ _acm_role_entry_inputs.results | selectattr('status', 'equalto', 'fail') | map(attribute='message') | join('; ') }}
+  when: not (_acm_role_entry_inputs.passed | bool)
+
+- name: Refuse a ManagedCluster expectation waiver with no expected name to waive
+  ansible.builtin.assert:
+    that:
+      - >-
+        not ((acm_switchover_operation.skip_managed_cluster_expectations | default(false)) is sameas true)
+        or (
+          (
+            _acm_waiver_scope not in ['activation', 'both']
+            or (_acm_waiver_activation_names | length) > 0
+          )
+          and (
+            _acm_waiver_scope not in ['post_activation', 'both']
+            or (_acm_waiver_post_activation_names | length) > 0
+          )
+        )
+    fail_msg: >-
+      waiver_expected_names_empty: skip_managed_cluster_expectations was requested with scope
+      {{ _acm_waiver_scope }}, but that scope has no expected ManagedCluster name to waive.
+  vars:
+    _acm_waiver_scope: >-
+      {{ (acm_switchover_operation.managed_cluster_expectation_waiver | default({}, true)).get('scope') }}
+    # Preflight's derived names, else the names the checkpoint recorded for this run.
+    _acm_recorded_names: >-
+      {{
+        acm_switchover_expected_managed_cluster_names
+        if (acm_switchover_expected_managed_cluster_names | default([], true) | length) > 0
+        else (((_checkpoint_enter | default({})).get('facts') or {}).get('expected_managed_cluster_names') or [])
+      }}
+    _acm_waiver_activation_names: >-
+      {{ [] if (acm_switchover_operation.restore_only | default(false) | bool) else _acm_recorded_names }}
+    _acm_waiver_post_activation_names: >-
+      {{
+        _acm_recorded_names
+        or (
+          (acm_switchover_managed_clusters | default({}, true) | list)
+          if (acm_switchover_operation.restore_only | default(false) | bool)
+          else []
+        )
+      }}
+
+# August section 9: the migration journal lives only in the checkpoint, so an executing
+# activation without it would mutate a Restore it could never prove.
+- name: Require the checkpoint that stores the migration journal
+  ansible.builtin.assert:
+    that:
+      - acm_switchover_execution.checkpoint.enabled | default(false) | bool
+    fail_msg: >-
+      Activation records its migration evidence in the checkpoint before any Restore mutation;
+      set acm_switchover_execution.checkpoint.enabled: true to execute it.
+  when:
+    - _acm_role_entry_phase == 'activation'
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - not ansible_check_mode
