@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import modules.decommission as decommission_module
 import modules.finalization as finalization_module
-from lib.constants import BACKUP_SCHEDULE_DEFAULT_NAME
+from lib.constants import BACKUP_SCHEDULE_DEFAULT_NAME, BACKUP_SCHEDULE_PLURAL
 from lib.decommission_outcome import DecommissionResult, SubstepExecution, SubstepOutcome
 from lib.exceptions import FatalError, SwitchoverError
 from lib.run_record import RunRecord
@@ -68,6 +68,29 @@ def mock_secondary_client():
         resource_version="dest-ns-1",
     )
     return secondary
+
+
+def _serve_schedules(secondary, reads=None):
+    """Serve strict BackupSchedule LISTs in order (verification, then the collision check and later).
+
+    Every other strict LIST keeps the fixture's migrated-destination default.
+    """
+    default = secondary.list_custom_resources_strict.return_value
+    reads = list(
+        reads
+        or [
+            [{"metadata": {"name": "schedule"}, "spec": {"paused": False}}],
+            [{"metadata": {"name": "schedule"}, "spec": {}, "status": {"phase": "Enabled"}}],
+        ]
+    )
+
+    def _list(**kwargs):
+        if kwargs.get("plural") == BACKUP_SCHEDULE_PLURAL:
+            # The last schedule state persists once the collision check has run.
+            return StrictReadOutcome.from_items(reads.pop(0) if len(reads) > 1 else reads[0])
+        return default
+
+    secondary.list_custom_resources_strict.side_effect = _list
 
 
 @pytest.fixture
@@ -206,24 +229,16 @@ class TestFinalization:
         mock_time.time.side_effect = [0, 1, 2, 3]
         backup_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-        # Mock list responses: schedule verification, collision check, initial backups, loop 1, loop 2
+        # Strict BackupSchedule reads (verification, collision check); then initial backups, loop 1
+        _serve_schedules(mock_secondary_client)
         mock_secondary_client.list_custom_resources.side_effect = [
-            [{"metadata": {"name": "schedule"}, "spec": {"paused": False}}],  # verify_backup_schedule_enabled
-            [
-                {
-                    "metadata": {"name": "schedule"},
-                    "spec": {},
-                    "status": {"phase": "Enabled"},
-                }
-            ],  # fix_backup_collision
             [],  # Initial backups
-            [],  # Loop iteration 1
             [
                 {
                     "metadata": {"name": "backup-1", "labels": ACM_BACKUP_LABEL},
                     "status": {"phase": "InProgress"},
                 }
-            ],  # Loop iteration 2 - new ACM backup
+            ],  # Loop iteration 1 - new ACM backup
         ]
 
         mch_response = {"metadata": {"name": "multiclusterhub"}, "status": {"phase": "Running"}}
@@ -640,7 +655,7 @@ class TestFinalization:
             restore_only=True,
         )
         fin._cached_schedules = []
-        mock_secondary_client.list_custom_resources.return_value = []
+        mock_secondary_client.list_custom_resources_strict.return_value = StrictReadOutcome.from_items([])
 
         with patch.object(finalization_module, "logger") as logger:
             fin._fix_backup_schedule_collision()
@@ -1222,13 +1237,15 @@ class TestFinalization:
     ):
         """If schedule UID changes after delete, fail the step so resume does not mark it complete."""
         mock_sleep.return_value = None
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "schedule", "uid": "uid-old"},
-                "spec": {"veleroSchedule": "*/15 * * * *"},
-                "status": {"phase": "Enabled"},
-            }
-        ]
+        mock_secondary_client.list_custom_resources_strict.return_value = StrictReadOutcome.from_items(
+            [
+                {
+                    "metadata": {"name": "schedule", "uid": "uid-old"},
+                    "spec": {"veleroSchedule": "*/15 * * * *"},
+                    "status": {"phase": "Enabled"},
+                }
+            ]
+        )
         mock_secondary_client.get_custom_resource.side_effect = [
             {
                 "metadata": {"name": "schedule", "uid": "uid-old"},
@@ -1252,13 +1269,15 @@ class TestFinalization:
         self, mock_sleep, mock_wait, finalization, mock_secondary_client
     ):
         """Collision repair should poll for absence instead of using a fixed delete sleep."""
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "schedule", "uid": "uid-old"},
-                "spec": {"veleroSchedule": "*/15 * * * *"},
-                "status": {"phase": "Enabled"},
-            }
-        ]
+        mock_secondary_client.list_custom_resources_strict.return_value = StrictReadOutcome.from_items(
+            [
+                {
+                    "metadata": {"name": "schedule", "uid": "uid-old"},
+                    "spec": {"veleroSchedule": "*/15 * * * *"},
+                    "status": {"phase": "Enabled"},
+                }
+            ]
+        )
         mock_secondary_client.get_custom_resource.return_value = {
             "metadata": {"name": "schedule", "uid": "uid-old"},
             "spec": {"veleroSchedule": "*/15 * * * *"},
@@ -1358,13 +1377,15 @@ class TestFinalization:
     ):
         """A 409 create conflict should be acceptable when schedule exists in a non-collision phase."""
         mock_sleep.return_value = None
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "schedule", "uid": "uid-old"},
-                "spec": {"veleroSchedule": "*/15 * * * *"},
-                "status": {"phase": "Enabled"},
-            }
-        ]
+        mock_secondary_client.list_custom_resources_strict.return_value = StrictReadOutcome.from_items(
+            [
+                {
+                    "metadata": {"name": "schedule", "uid": "uid-old"},
+                    "spec": {"veleroSchedule": "*/15 * * * *"},
+                    "status": {"phase": "Enabled"},
+                }
+            ]
+        )
         mock_secondary_client.get_custom_resource.side_effect = [
             {
                 "metadata": {"name": "schedule", "uid": "uid-old"},
@@ -1391,13 +1412,15 @@ class TestFinalization:
     ):
         """A 409 create conflict must fail when the original schedule object still exists."""
         mock_sleep.return_value = None
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "schedule", "uid": "uid-old"},
-                "spec": {"veleroSchedule": "*/15 * * * *"},
-                "status": {"phase": "Enabled"},
-            }
-        ]
+        mock_secondary_client.list_custom_resources_strict.return_value = StrictReadOutcome.from_items(
+            [
+                {
+                    "metadata": {"name": "schedule", "uid": "uid-old"},
+                    "spec": {"veleroSchedule": "*/15 * * * *"},
+                    "status": {"phase": "Enabled"},
+                }
+            ]
+        )
         mock_secondary_client.get_custom_resource.side_effect = [
             {
                 "metadata": {"name": "schedule", "uid": "uid-old"},
@@ -1422,13 +1445,15 @@ class TestFinalization:
     ):
         """A 409 create conflict with BackupCollision phase must fail closed."""
         mock_sleep.return_value = None
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "schedule", "uid": "uid-old"},
-                "spec": {"veleroSchedule": "*/15 * * * *"},
-                "status": {"phase": "Enabled"},
-            }
-        ]
+        mock_secondary_client.list_custom_resources_strict.return_value = StrictReadOutcome.from_items(
+            [
+                {
+                    "metadata": {"name": "schedule", "uid": "uid-old"},
+                    "spec": {"veleroSchedule": "*/15 * * * *"},
+                    "status": {"phase": "Enabled"},
+                }
+            ]
+        )
         mock_secondary_client.get_custom_resource.side_effect = [
             {
                 "metadata": {"name": "schedule", "uid": "uid-old"},
@@ -1684,16 +1709,18 @@ class TestFinalization:
 
     def test_verify_backup_schedule_enabled_failure(self, finalization, mock_secondary_client):
         """Backup schedule verification should fail when paused."""
-        mock_secondary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "schedule"}, "spec": {"paused": True}}
-        ]
+        mock_secondary_client.list_custom_resources_strict.return_value = StrictReadOutcome.from_items(
+            [{"metadata": {"name": "schedule"}, "spec": {"paused": True}}]
+        )
 
         with pytest.raises(SwitchoverError):
             finalization._verify_backup_schedule_enabled()
 
     def test_verify_backup_schedule_enabled_uses_default_name_in_error(self, finalization, mock_secondary_client):
         """Fallback error text should use the canonical BackupSchedule default name."""
-        mock_secondary_client.list_custom_resources.return_value = [{"metadata": {}, "spec": {"paused": True}}]
+        mock_secondary_client.list_custom_resources_strict.return_value = StrictReadOutcome.from_items(
+            [{"metadata": {}, "spec": {"paused": True}}]
+        )
 
         with pytest.raises(SwitchoverError, match=BACKUP_SCHEDULE_DEFAULT_NAME):
             finalization._verify_backup_schedule_enabled()
@@ -1850,23 +1877,15 @@ class TestFinalization:
         )
 
         # Mock all required responses with side_effect for sequential calls
+        _serve_schedules(mock_secondary_client)
         mock_secondary_client.list_custom_resources.side_effect = [
-            [{"metadata": {"name": "schedule"}, "spec": {"paused": False}}],  # verify_backup_schedule_enabled
-            [
-                {
-                    "metadata": {"name": "schedule"},
-                    "spec": {},
-                    "status": {"phase": "Enabled"},
-                }
-            ],  # fix_backup_collision
             [],  # Initial backups
-            [],  # Loop iteration 1
             [
                 {
                     "metadata": {"name": "backup-1", "labels": ACM_BACKUP_LABEL},
                     "status": {"phase": "InProgress"},
                 }
-            ],  # Loop iteration 2 - new ACM backup
+            ],  # Loop iteration 1 - new ACM backup
         ]
         mock_secondary_client.get_custom_resource.side_effect = [
             {"metadata": {"name": "schedule", "uid": "uid-1"}, "spec": {}},  # before deletion
@@ -1930,24 +1949,18 @@ class TestFinalization:
         )
 
         # Mock all required responses with side_effect for sequential calls
-        # Order: verify_backup_schedule_enabled, fix_backup_collision,
-        # _get_backup_verify_timeout, verify_new_backups (2x). verify_backup_integrity re-reads the
+        # Order (the strict BackupSchedule reads, including _get_backup_verify_timeout's, are
+        # served separately): verify_new_backups (2x). verify_backup_integrity re-reads the
         # recorded backup by name via get_custom_resource, so it consumes no list response.
+        _serve_schedules(
+            mock_secondary_client,
+            [
+                [{"metadata": {"name": "schedule"}, "spec": {"paused": False}}],
+                [{"metadata": {"name": "schedule"}, "spec": {}, "status": {"phase": "Enabled"}}],
+                [{"metadata": {"name": "schedule"}, "spec": {"veleroSchedule": "*/15 * * * *"}}],
+            ],
+        )
         mock_secondary_client.list_custom_resources.side_effect = [
-            [{"metadata": {"name": "schedule"}, "spec": {"paused": False}}],  # verify_backup_schedule_enabled
-            [
-                {
-                    "metadata": {"name": "schedule"},
-                    "spec": {},
-                    "status": {"phase": "Enabled"},
-                }
-            ],  # fix_backup_collision
-            [
-                {
-                    "metadata": {"name": "schedule"},
-                    "spec": {"veleroSchedule": "*/15 * * * *"},
-                }
-            ],  # _get_backup_verify_timeout
             [],  # Initial backups
             [
                 {
@@ -3030,3 +3043,73 @@ class TestRestoreCleanupTransaction:
             assert fin.finalize() is True
 
         assert order == ["cleanup", "mco", "enable"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "outcome", [StrictReadOutcome.error("inventory_incomplete"), StrictReadOutcome.error("read_failed")]
+)
+def test_an_unproven_finalization_schedule_inventory_fails_closed(finalization, mock_secondary_client, outcome):
+    """R4-04 Task 10 (Task 0 carry-forward): no bounded, advisory BackupSchedule read feeds a decision."""
+    mock_secondary_client.list_custom_resources_strict.return_value = outcome
+    mock_secondary_client.list_custom_resources.return_value = []
+
+    with pytest.raises(SwitchoverError, match="BackupSchedule inventory"):
+        finalization._get_backup_schedules()
+
+
+@pytest.mark.unit
+def test_a_dry_run_records_no_finalization_step_marker(tmp_path, cleanup_secondary):
+    """Task 9 B1 for finalization: a dry-run skips each step's work, so a marker it recorded
+    would let a later executing run skip work that never ran."""
+    state = _cleanup_state(tmp_path, CLEANUP_INTENT)
+    cleanup_secondary.dry_run = True
+    fin = _cleanup_fin(state, cleanup_secondary, dry_run=True, primary_client=Mock(), primary_has_observability=True)
+    steps = {
+        "_disable_observability_on_old_hub": (),
+        "_enable_backup_schedule": ("journal",),
+        "_verify_backup_schedule_enabled": (),
+        "_fix_backup_schedule_collision": (),
+        "_verify_new_backups": ("timeout",),
+        "_verify_backup_integrity": (),
+        "_verify_multiclusterhub_health": (),
+        "_handle_old_hub": (),
+        "_verify_old_hub_state": (),
+    }
+    with (
+        patch.object(fin, "_get_backup_verify_timeout", return_value=1),
+        patch.object(fin, "_run_reset_auto_import_strategy_step"),
+    ):
+        mocks = {}
+        for name in steps:
+            mocks[name] = patch.object(fin, name).start()
+        try:
+            assert fin.finalize() is True
+        finally:
+            patch.stopall()
+
+    assert all(mock.called for mock in mocks.values())
+    assert state.state["completed_steps"] == []
+    assert json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))["completed_steps"] == []
+
+
+@pytest.mark.unit
+def test_a_dry_run_still_honours_markers_an_executing_run_recorded(tmp_path, cleanup_secondary):
+    state = _cleanup_state(tmp_path, CLEANUP_INTENT)
+    state.mark_step_completed("enable_backup_schedule")
+    cleanup_secondary.dry_run = True
+    fin = _cleanup_fin(state, cleanup_secondary, dry_run=True)
+    with (
+        patch.object(fin, "_enable_backup_schedule") as enable,
+        patch.object(fin, "_verify_backup_schedule_enabled"),
+        patch.object(fin, "_fix_backup_schedule_collision"),
+        patch.object(fin, "_get_backup_verify_timeout", return_value=1),
+        patch.object(fin, "_verify_new_backups"),
+        patch.object(fin, "_verify_backup_integrity"),
+        patch.object(fin, "_verify_multiclusterhub_health"),
+        patch.object(fin, "_run_reset_auto_import_strategy_step"),
+        patch.object(fin, "_handle_old_hub"),
+    ):
+        assert fin.finalize() is True
+
+    enable.assert_not_called()

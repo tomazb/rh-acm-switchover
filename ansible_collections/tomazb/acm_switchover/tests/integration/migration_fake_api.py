@@ -162,6 +162,8 @@ class FakeMigrationHub:
         self.acm = {item["metadata"]["name"]: copy.deepcopy(item) for item in (restores or [])}
         self.backups = {item["metadata"]["name"]: copy.deepcopy(item) for item in (backups or LEGACY_INVENTORY)}
         self.velero = {item["metadata"]["name"]: copy.deepcopy(item) for item in (velero_restores or [])}
+        # BackupSchedules served for finalization's strict enablement discovery.
+        self.schedules: dict[str, dict] = {}
         self.managed_clusters = list(managed_clusters if managed_clusters is not None else ["cluster-a"])
         # ManagedClusters served without the Available condition (all are Available and Joined otherwise).
         self.unavailable_clusters: set[str] = set()
@@ -234,7 +236,11 @@ class FakeMigrationHub:
                     group("operator.open-cluster-management.io", ["v1"]),
                 ],
             },
-            f"/apis/{ACM_GV}": {"kind": "APIResourceList", "groupVersion": ACM_GV, "resources": restores},
+            f"/apis/{ACM_GV}": {
+                "kind": "APIResourceList",
+                "groupVersion": ACM_GV,
+                "resources": restores + [_resource("backupschedules", "BackupSchedule")],
+            },
             "/apis/cluster.open-cluster-management.io/v1": {
                 "kind": "APIResourceList",
                 "groupVersion": "cluster.open-cluster-management.io/v1",
@@ -264,6 +270,11 @@ class FakeMigrationHub:
             ("cluster.open-cluster-management.io", "v1beta1", "restores"): (self.acm, "RestoreList", ACM_GV),
             ("velero.io", "v1", "backups"): (self.backups, "BackupList", "velero.io/v1"),
             ("velero.io", "v1", "restores"): (self.velero, "RestoreList", "velero.io/v1"),
+            ("cluster.open-cluster-management.io", "v1beta1", "backupschedules"): (
+                self.schedules,
+                "BackupScheduleList",
+                ACM_GV,
+            ),
         }
         if len(parts) in (6, 7) and parts[0] == "apis" and parts[3] == "namespaces" and parts[4] == NS:
             table = tables.get((parts[1], parts[2], parts[5]))

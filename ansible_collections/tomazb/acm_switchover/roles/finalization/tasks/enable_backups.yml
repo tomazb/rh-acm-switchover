@@ -74,24 +74,11 @@
     - acm_enable_backup_schedule_operation.operation.action == 'create'
     - acm_switchover_execution.mode | default('dry_run') == 'execute'
 
-- name: Refresh BackupSchedule facts after enable or recreation
-  kubernetes.core.k8s_info:
-    api_version: cluster.open-cluster-management.io/v1beta1
-    kind: BackupSchedule
-    namespace: open-cluster-management-backup
-    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.secondary.context }}"
-  register: _acm_finalization_backup_schedules_refresh_info
+- name: Refresh BackupSchedule facts strictly after enable or recreation
+  ansible.builtin.include_tasks: read_backup_schedules.yml
   when:
     - acm_enable_backup_schedule_operation.operation.action in ['patch', 'create']
     - acm_switchover_execution.mode | default('dry_run') == 'execute'
-
-- name: Publish refreshed BackupSchedule facts after enable or recreation
-  ansible.builtin.set_fact:
-    acm_finalization_backup_schedules_info: "{{ _acm_finalization_backup_schedules_refresh_info }}"
-  when:
-    - _acm_finalization_backup_schedules_refresh_info is defined
-    - not (_acm_finalization_backup_schedules_refresh_info.skipped | default(false))
 
 - name: Record backup verification baseline timestamp
   ansible.builtin.set_fact:

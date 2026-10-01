@@ -1,0 +1,28 @@
+---
+# One strictly complete read of the destination BackupSchedules, published as
+# acm_finalization_backup_schedules_info ({resources: [...]}). An unproven inventory is never
+# "no BackupSchedule": it fails before any BackupSchedule decision.
+
+- name: List the destination BackupSchedules strictly
+  ansible.builtin.include_tasks: "{{ role_path }}/../activation/tasks/strict_read.yml"
+  vars:
+    _acm_read:
+      key: backup_schedules
+      read_mode: list
+      api_version: cluster.open-cluster-management.io/v1beta1
+      kind: BackupSchedule
+      resource_name: backupschedules
+      namespace: open-cluster-management-backup
+    _acm_read_fact: _acm_backup_schedules_read
+
+- name: Refuse an unproven BackupSchedule inventory
+  ansible.builtin.fail:
+    msg: >-
+      BackupSchedule inventory on the secondary hub could not be read
+      ({{ _acm_backup_schedules_read.read_status | default('error') }}); refusing to change BackupSchedules
+  when: (_acm_backup_schedules_read.read_status | default('error')) != 'ok'
+
+- name: Publish the strict BackupSchedule inventory
+  ansible.builtin.set_fact:
+    acm_finalization_backup_schedules_info:
+      resources: "{{ _acm_backup_schedules_read.resources }}"

@@ -122,13 +122,19 @@ class BackupScheduleManager:
             )
 
     def _list_schedules(self) -> List[Dict[str, Any]]:
-        return self.client.list_custom_resources(
+        """The strictly complete BackupSchedule inventory; an unproven read is never "none"."""
+        outcome = self.client.list_custom_resources_strict(
             group=CLUSTER_BACKUP_API_GROUP,
             version=CLUSTER_BACKUP_API_VERSION,
             plural=BACKUP_SCHEDULE_PLURAL,
             namespace=BACKUP_NAMESPACE,
-            max_items=2,
         )
+        if not outcome.is_success:
+            raise SwitchoverError(
+                f"BackupSchedule inventory on {self.hub_label} could not be read ({outcome.status.value}: "
+                f"{outcome.reason}); refusing to change BackupSchedules"
+            )
+        return outcome.items
 
     def _restore_saved_schedule(self) -> None:
         saved_bs = self.run_record.saved_backup_schedule()

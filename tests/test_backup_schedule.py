@@ -15,8 +15,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import modules.backup_schedule as backup_module
 from lib.constants import BACKUP_NAMESPACE
 from lib.exceptions import SwitchoverError
+from lib.strict_read import StrictReadOutcome
 
 BackupScheduleManager = backup_module.BackupScheduleManager
+
+
+def _strict(items):
+    """A strictly complete BackupSchedule inventory."""
+    return StrictReadOutcome.from_items(items)
 
 
 @pytest.fixture
@@ -49,9 +55,9 @@ class TestBackupScheduleManager:
 
     def test_schedule_already_enabled(self, schedule_manager, mock_kube_client):
         """Test when backup schedule is already enabled."""
-        mock_kube_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
-        ]
+        mock_kube_client.list_custom_resources_strict.return_value = _strict(
+            [{"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}]
+        )
 
         schedule_manager.ensure_enabled("2.12.0")
 
@@ -60,9 +66,9 @@ class TestBackupScheduleManager:
 
     def test_schedule_not_paused_field_missing(self, schedule_manager, mock_kube_client):
         """Test when paused field is missing (implicitly enabled)."""
-        mock_kube_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "schedule-rhacm"}, "spec": {}}  # No paused field
-        ]
+        mock_kube_client.list_custom_resources_strict.return_value = _strict(
+            [{"metadata": {"name": "schedule-rhacm"}, "spec": {}}]  # No paused field
+        )
 
         schedule_manager.ensure_enabled("2.12.0")
 
@@ -71,9 +77,9 @@ class TestBackupScheduleManager:
 
     def test_explicit_null_paused_field_is_treated_as_enabled(self, schedule_manager, mock_kube_client):
         """Treat spec.paused=null the same as the collection: enabled unless literally true."""
-        mock_kube_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": None}}
-        ]
+        mock_kube_client.list_custom_resources_strict.return_value = _strict(
+            [{"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": None}}]
+        )
 
         schedule_manager.ensure_enabled("2.12.0")
 
@@ -81,9 +87,9 @@ class TestBackupScheduleManager:
 
     def test_unpause_schedule_acm_212_and_above(self, schedule_manager, mock_kube_client):
         """Test unpausing schedule for ACM 2.12.0+."""
-        mock_kube_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}
-        ]
+        mock_kube_client.list_custom_resources_strict.return_value = _strict(
+            [{"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}]
+        )
 
         schedule_manager.ensure_enabled("2.12.0")
 
@@ -99,10 +105,12 @@ class TestBackupScheduleManager:
 
     def test_multiple_schedules_fail_fast(self, schedule_manager, mock_kube_client):
         """Finalization must not choose an arbitrary BackupSchedule when multiple exist."""
-        mock_kube_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "schedule-a"}, "spec": {"paused": False}},
-            {"metadata": {"name": "schedule-b"}, "spec": {"paused": True}},
-        ]
+        mock_kube_client.list_custom_resources_strict.return_value = _strict(
+            [
+                {"metadata": {"name": "schedule-a"}, "spec": {"paused": False}},
+                {"metadata": {"name": "schedule-b"}, "spec": {"paused": True}},
+            ]
+        )
 
         with pytest.raises(SwitchoverError, match="Multiple BackupSchedules"):
             schedule_manager.ensure_enabled("2.12.0")
@@ -112,9 +120,9 @@ class TestBackupScheduleManager:
 
     def test_unpause_schedule_acm_211(self, schedule_manager, mock_kube_client):
         """Test handling paused schedule for ACM < 2.12.0."""
-        mock_kube_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}
-        ]
+        mock_kube_client.list_custom_resources_strict.return_value = _strict(
+            [{"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}]
+        )
 
         schedule_manager.ensure_enabled("2.11.0")
 
@@ -123,7 +131,7 @@ class TestBackupScheduleManager:
 
     def test_restore_saved_schedule_when_missing(self, schedule_manager, mock_kube_client, mock_state_manager):
         """Test restoring saved schedule when none exists."""
-        mock_kube_client.list_custom_resources.return_value = []  # No schedules
+        mock_kube_client.list_custom_resources_strict.return_value = _strict([])  # No schedules
 
         saved_schedule = {
             "metadata": {"name": "saved-schedule"},
@@ -138,7 +146,7 @@ class TestBackupScheduleManager:
 
     def test_no_schedule_and_none_saved(self, schedule_manager, mock_kube_client, mock_state_manager):
         """Test warning when no schedule exists and none saved."""
-        mock_kube_client.list_custom_resources.return_value = []
+        mock_kube_client.list_custom_resources_strict.return_value = _strict([])
         mock_state_manager._get_config.return_value = None
 
         # Should handle gracefully (log warning)
@@ -160,9 +168,9 @@ class TestBackupScheduleManager:
     )
     def test_version_based_pause_handling(self, schedule_manager, mock_kube_client, acm_version, should_patch):
         """Test pause handling for different ACM versions."""
-        mock_kube_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}
-        ]
+        mock_kube_client.list_custom_resources_strict.return_value = _strict(
+            [{"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}]
+        )
 
         schedule_manager.ensure_enabled(acm_version)
 
@@ -176,9 +184,9 @@ class TestBackupScheduleManager:
         self, schedule_manager, mock_kube_client, acm_version
     ):
         """Unparseable ACM versions must fail before planning BackupSchedule changes."""
-        mock_kube_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}
-        ]
+        mock_kube_client.list_custom_resources_strict.return_value = _strict(
+            [{"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}]
+        )
 
         with pytest.raises(SwitchoverError, match="Invalid ACM version"):
             schedule_manager.ensure_enabled(acm_version)
@@ -187,10 +195,12 @@ class TestBackupScheduleManager:
 
     def test_multiple_schedules_fail_without_patching(self, schedule_manager, mock_kube_client):
         """Multiple schedules are ambiguous and must fail without patching either one."""
-        mock_kube_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "schedule-1"}, "spec": {"paused": True}},
-            {"metadata": {"name": "schedule-2"}, "spec": {"paused": False}},
-        ]
+        mock_kube_client.list_custom_resources_strict.return_value = _strict(
+            [
+                {"metadata": {"name": "schedule-1"}, "spec": {"paused": True}},
+                {"metadata": {"name": "schedule-2"}, "spec": {"paused": False}},
+            ]
+        )
 
         with pytest.raises(SwitchoverError, match="Multiple BackupSchedules"):
             schedule_manager.ensure_enabled("2.12.0")
@@ -215,7 +225,32 @@ class TestBackupScheduleManagerIntegration:
         manager = BackupScheduleManager(kube_client=mock_kube_client, state_manager=state, hub_label="secondary")
 
         # Test restore from saved config
-        mock_kube_client.list_custom_resources.return_value = []
+        mock_kube_client.list_custom_resources_strict.return_value = _strict([])
         manager.ensure_enabled("2.12.0")
 
         mock_kube_client.create_custom_resource.assert_called_once()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "inventory_incomplete",
+        "read_failed",
+        "kind_not_served",
+    ],
+)
+def test_an_unproven_schedule_inventory_fails_closed_before_any_write(schedule_manager, mock_kube_client, outcome):
+    """R4-04 Task 10: enablement acts only on a strictly complete BackupSchedule inventory."""
+    from lib.strict_read import StrictReadOutcome
+
+    mock_kube_client.list_custom_resources_strict.return_value = (
+        StrictReadOutcome.crd_absent(outcome) if outcome == "kind_not_served" else StrictReadOutcome.error(outcome)
+    )
+    mock_kube_client.list_custom_resources.return_value = []
+
+    with pytest.raises(SwitchoverError, match="BackupSchedule inventory"):
+        schedule_manager.ensure_enabled("2.12.0")
+
+    mock_kube_client.patch_custom_resource.assert_not_called()
+    mock_kube_client.create_custom_resource.assert_not_called()

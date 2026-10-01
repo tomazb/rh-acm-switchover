@@ -551,6 +551,7 @@ def run_checkpoint_fixture(tmp_path):
         vars_overrides: dict | None = None,
         checkpoint_name: str = "checkpoint.json",
         checkpoint_schema_version: str = "1.0",
+        operational_data: dict | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = _REPO_ROOT
         fixture_path = (
@@ -573,7 +574,7 @@ def run_checkpoint_fixture(tmp_path):
                     "schema_version": checkpoint_schema_version,
                     "phase": pre_completed_phases[-1],
                     "completed_phases": pre_completed_phases,
-                    "operational_data": {},
+                    "operational_data": dict(operational_data or {}),
                     "errors": [],
                     "report_refs": [],
                     "created_at": "2026-01-01T00:00:00+00:00",

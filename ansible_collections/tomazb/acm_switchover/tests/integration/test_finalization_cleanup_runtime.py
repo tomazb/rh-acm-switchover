@@ -42,6 +42,7 @@ REPAIR = {
     "inspected_evidence": ["audit-log:restore-delete"],
 }
 FINALIZATION_TASKS = ("cleanup_journaled_restore",)
+_NO_SCHEDULES = {"acm_finalization_backup_schedules_info": {"resources": []}}
 
 
 def _repo_root() -> Path:
@@ -76,7 +77,18 @@ def completed_journal(run_activation, kind, hub):  # noqa: F811
 
 @pytest.fixture
 def run_finalization(tmp_path):
-    def _run(kind, hub, journal, *, mode="execute", check=False, tasks=FINALIZATION_TASKS, repair=None, extra=None):
+    def _run(
+        kind,
+        hub,
+        journal,
+        *,
+        mode="execute",
+        check=False,
+        tasks=FINALIZATION_TASKS,
+        repair=None,
+        extra=None,
+        published=None,
+    ):
         operation = KIND_OPERATION[kind]
         path = tmp_path / "finalization-checkpoint.json"
         if journal is not None or not path.exists():
@@ -116,7 +128,6 @@ def run_finalization(tmp_path):
             },
             "_acm_cleanup_poll_delays": [0, 0, 0],
             "acm_finalization_mch_info": {"resources": [{"status": {"currentVersion": hub.version}}]},
-            "acm_finalization_backup_schedules_info": {"resources": []},
             "acm_finalization_restores_info": {"resources": []},
             "acm_switchover_saved_backup_schedule": {},
             **(extra or {}),
@@ -161,7 +172,25 @@ def run_finalization(tmp_path):
                                 "register": "_checkpoint_enter",
                             },
                             prelude,
+                            *(
+                                [
+                                    {
+                                        "name": "Publish facts an earlier phase left behind",
+                                        "ansible.builtin.set_fact": published,
+                                    }
+                                ]
+                                if published
+                                else []
+                            ),
                             *include,
+                            {
+                                "name": "Report the published BackupSchedules",
+                                "ansible.builtin.debug": {
+                                    "msg": "SCHEDULES={{ acm_finalization_backup_schedules_info.resources"
+                                    " | map(attribute='metadata.name') | join(',') }}"
+                                },
+                                "when": "_acm_report_schedules | default(false)",
+                            },
                             {"name": "Report the cleanup", "ansible.builtin.debug": {"msg": "FINALIZATION_CLEANUP=ok"}},
                         ],
                     }
@@ -314,7 +343,12 @@ def test_recovery_blocks_until_an_audited_repair_with_a_proven_absence(
     request = dict(REPAIR, run_id=journal["run_id"], operation_id=recovered.journal["cleanup"]["operation_id"])
     writes = len(hub.writes)
     repaired = run_finalization(
-        "full_restore", hub, None, repair=request, tasks=("cleanup_journaled_restore", "enable_backups")
+        "full_restore",
+        hub,
+        None,
+        repair=request,
+        tasks=("cleanup_journaled_restore", "enable_backups"),
+        published=_NO_SCHEDULES,
     )
 
     assert repaired.completed.returncode == 0, repaired.output
@@ -354,7 +388,9 @@ def test_enablement_refuses_a_replacement_at_the_completed_locator(run_activatio
     occupant["metadata"]["uid"] = "uid-replacement"
     hub.acm[name] = occupant
 
-    run = run_finalization("full_restore", hub, None, tasks=("cleanup_journaled_restore", "enable_backups"))
+    run = run_finalization(
+        "full_restore", hub, None, tasks=("cleanup_journaled_restore", "enable_backups"), published=_NO_SCHEDULES
+    )
 
     assert run.completed.returncode != 0
     assert "locator_occupied" in run.output
@@ -428,3 +464,49 @@ def test_an_unverifiable_delete_fails_at_once_and_stays_resumable(run_activation
     assert run.completed.returncode != 0
     assert len([r for r in hub.requests if r["method"] == "DELETE"]) - before == 1
     assert run.journal["cleanup"]["state"] == "intent_persisted"
+
+
+_SCHEDULES = (
+    "/apis/cluster.open-cluster-management.io/v1beta1/namespaces/open-cluster-management-backup/backupschedules"
+)
+_DISCOVERY_EXTRA = {"_old_hub_existing_restore_info": {"resources": []}}
+# An inventory an earlier phase published that an executing run must never trust.
+_STALE = {"acm_finalization_backup_schedules_info": {"resources": [{"metadata": {"name": "stale-preseeded"}}]}}
+
+
+def _published_schedules(run):
+    line = next(line for line in run.output.splitlines() if "SCHEDULES=" in line)
+    return line.split("SCHEDULES=", 1)[1].strip().strip('"').strip()
+
+
+def test_an_executing_discovery_reads_backup_schedules_strictly_and_fresh(run_finalization, hub):
+    hub.schedules["schedule-rhacm"] = {
+        "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+        "kind": "BackupSchedule",
+        "metadata": {"name": "schedule-rhacm", "namespace": "open-cluster-management-backup", "uid": "uid-bs"},
+        "spec": {"paused": True},
+    }
+
+    run = run_finalization(
+        "full_restore",
+        hub,
+        None,
+        tasks=("discover_resources",),
+        extra={**_DISCOVERY_EXTRA, "_acm_report_schedules": True},
+        published=_STALE,
+    )
+
+    assert run.completed.returncode == 0, run.output
+    assert any(request["path"] == _SCHEDULES for request in hub.requests)
+    assert _published_schedules(run) == "schedule-rhacm"
+
+
+def test_an_unproven_backup_schedule_inventory_blocks_the_executing_discovery(run_finalization, hub):
+    hub.failures[("GET", _SCHEDULES)] = 403
+
+    run = run_finalization(
+        "full_restore", hub, None, tasks=("discover_resources",), extra=_DISCOVERY_EXTRA, published=_STALE
+    )
+
+    assert run.completed.returncode != 0
+    assert "BackupSchedule inventory" in run.output

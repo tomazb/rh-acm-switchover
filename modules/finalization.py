@@ -5,6 +5,7 @@
 import logging
 import time
 import uuid
+from contextlib import AbstractContextManager, nullcontext
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -133,6 +134,16 @@ class Finalization:
         self._cached_schedules: Optional[List[Dict]] = None  # Cache for backup schedules
         self.run_record = RunRecord(self.state)
 
+    def _step(self, step_name: str) -> AbstractContextManager:
+        """Guard one step; a dry-run consults completion markers but never records one.
+
+        A dry-run skips the step's work, so a marker it recorded would let a later
+        executing run skip work that never ran.
+        """
+        if self.dry_run:
+            return nullcontext(not self.state.is_step_completed(step_name))
+        return self.state.step(step_name, logger)
+
     @staticmethod
     def _get_acm_backup_ownership_signal(backup: Dict) -> Optional[str]:
         """Return the ownership signal proving a Velero backup is ACM-owned.
@@ -240,34 +251,34 @@ class Finalization:
 
             # When the old hub remains as a secondary, the runbook requires MCO deletion.
             if self.primary and self.old_hub_action == "secondary" and self.primary_has_observability:
-                with self.state.step("disable_observability_on_secondary", logger) as should_run:
+                with self._step("disable_observability_on_secondary") as should_run:
                     if should_run:
                         self._disable_observability_on_old_hub()
 
             # Step 11: Enable BackupSchedule on new hub
-            with self.state.step("enable_backup_schedule", logger) as should_run:
+            with self._step("enable_backup_schedule") as should_run:
                 if should_run:
                     self._enable_backup_schedule(journal)
 
-            with self.state.step("verify_backup_schedule_enabled", logger) as should_run:
+            with self._step("verify_backup_schedule_enabled") as should_run:
                 if should_run:
                     self._verify_backup_schedule_enabled()
 
             # Fix BackupSchedule collision if detected
-            with self.state.step("fix_backup_collision", logger) as should_run:
+            with self._step("fix_backup_collision") as should_run:
                 if should_run:
                     self._fix_backup_schedule_collision()
 
             # Verify new backups are being created
-            with self.state.step("verify_new_backups", logger) as should_run:
+            with self._step("verify_new_backups") as should_run:
                 if should_run:
                     self._verify_new_backups(timeout=self._get_backup_verify_timeout())
 
-            with self.state.step("verify_backup_integrity", logger) as should_run:
+            with self._step("verify_backup_integrity") as should_run:
                 if should_run:
                     self._verify_backup_integrity()
 
-            with self.state.step("verify_mch_health", logger) as should_run:
+            with self._step("verify_mch_health") as should_run:
                 if should_run:
                     self._verify_multiclusterhub_health()
 
@@ -275,12 +286,12 @@ class Finalization:
             self._run_reset_auto_import_strategy_step()
 
             # Handle old primary hub based on --old-hub-action
-            with self.state.step("handle_old_hub", logger) as should_run:
+            with self._step("handle_old_hub") as should_run:
                 if should_run:
                     self._handle_old_hub()
 
             if self.primary and self.old_hub_action not in ("decommission", "none"):
-                with self.state.step("verify_old_hub_state", logger) as should_run:
+                with self._step("verify_old_hub_state") as should_run:
                     if should_run:
                         self._verify_old_hub_state()
 
@@ -1151,13 +1162,18 @@ class Finalization:
             List of backup schedule resources
         """
         if self._cached_schedules is None or force_refresh:
-            self._cached_schedules = self.secondary.list_custom_resources(
+            outcome = self.secondary.list_custom_resources_strict(
                 group=CLUSTER_BACKUP_API_GROUP,
                 version=CLUSTER_BACKUP_API_VERSION,
                 plural=BACKUP_SCHEDULE_PLURAL,
                 namespace=BACKUP_NAMESPACE,
-                max_items=2,
             )
+            if not outcome.is_success:
+                raise SwitchoverError(
+                    f"BackupSchedule inventory on the secondary hub could not be read ({outcome.status.value}: "
+                    f"{outcome.reason})"
+                )
+            self._cached_schedules = outcome.items
         fail_on_multiple_backup_schedules(self._cached_schedules, "secondary hub")
         return self._cached_schedules
 

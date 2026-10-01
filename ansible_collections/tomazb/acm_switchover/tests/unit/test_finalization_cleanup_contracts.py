@@ -88,3 +88,24 @@ def test_generic_cleanup_classifies_only_the_reserved_inventory_in_execute_mode(
     select = next(task for task in tasks if task.get("name") == "Select the Restores generic cleanup classifies")
     source = select["ansible.builtin.set_fact"]["_acm_secondary_restores_to_cleanup"]["resources"]
     assert "_acm_generic_restores.restores\n  if not (_acm_preview | bool)" in source
+
+
+def test_executing_backup_schedule_decisions_use_a_fresh_strict_inventory():
+    """Strict-read correction: discovery and the post-enable refresh read through one strict file."""
+    execute = "acm_switchover_execution.mode | default('dry_run') == 'execute'"
+    discover = next(
+        task for task in _load("discover_resources.yml") if task.get(_INCLUDE) == "read_backup_schedules.yml"
+    )
+    assert discover["when"] == execute
+    refresh = next(task for task in _load("enable_backups.yml") if task.get(_INCLUDE) == "read_backup_schedules.yml")
+    assert execute in refresh["when"]
+    preseeded = next(
+        task
+        for task in _load("discover_resources.yml")
+        if (task.get("kubernetes.core.k8s_info") or {}).get("kind") == "BackupSchedule"
+    )
+    assert "acm_switchover_execution.mode | default('dry_run') != 'execute'" in preseeded["when"]
+    reads = _load("read_backup_schedules.yml")
+    assert reads[0][_INCLUDE].endswith("/activation/tasks/strict_read.yml")
+    assert reads[0]["vars"]["_acm_read"]["read_mode"] == "list"
+    assert "ansible.builtin.fail" in reads[1] and "!= 'ok'" in reads[1]["when"]
