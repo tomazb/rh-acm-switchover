@@ -177,5 +177,9 @@
   ansible.builtin.set_fact:
     acm_switchover_journaled_restore_cleanup_result:
       changed: "{{ (_acm_cleanup_accepted | default(false)) | bool }}"
-      step: "{{ (_acm_cleanup_step | default(_acm_cleanup_preview | default({}))).get('step') }}"
+      step: >-
+        {{
+          ((_acm_cleanup_preview | default({})) if (_acm_preview | bool) else (_acm_cleanup_step | default({})))
+          .get('step')
+        }}
       state: "{{ _acm_journal.cleanup.state if (_acm_has_journal | bool) else none }}"

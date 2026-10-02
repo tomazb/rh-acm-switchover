@@ -109,3 +109,16 @@ def test_executing_backup_schedule_decisions_use_a_fresh_strict_inventory():
     assert reads[0][_INCLUDE].endswith("/activation/tasks/strict_read.yml")
     assert reads[0]["vars"]["_acm_read"]["read_mode"] == "list"
     assert "ansible.builtin.fail" in reads[1] and "!= 'ok'" in reads[1]["when"]
+
+
+def test_the_phase_result_reports_the_journaled_cleanup():
+    """An accepted DELETE of the journaled Restore is a change the finalization result reports."""
+    run = next(task for task in _load("main.yml") if task.get("name") == "Run finalization phase")
+    publish = next(task for task in run["block"] if task.get("name") == "Publish finalization result")
+    result = publish["ansible.builtin.set_fact"]["acm_switchover_finalization_result"]
+    assert "acm_switchover_journaled_restore_cleanup_result.changed" in result["changed"]
+    assert "acm_switchover_journaled_restore_cleanup_result" in result["journaled_restore_cleanup"]
+    cleanup = _load("cleanup_journaled_restore.yml")[-1]["ansible.builtin.set_fact"]
+    step = cleanup["acm_switchover_journaled_restore_cleanup_result"]["step"]
+    # A preview's skipped register is still defined, so the step is chosen by the preview flag.
+    assert "_acm_preview" in step

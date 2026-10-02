@@ -360,10 +360,7 @@ class Finalization:
         return journal
 
     def _preview_restore_cleanup(self) -> Optional[Dict]:
-        try:
-            journal = self.run_record.migration_backups()
-        except (MigrationEvidenceError, StateStructureError) as exc:
-            raise FatalError(f"The recorded migration journal is invalid and blocks finalization: {exc}") from exc
+        journal = self._load_cleanup_journal()
         if journal is None:
             logger.info("[DRY-RUN] Would revalidate and delete the journaled Restore under its UID and resourceVersion")
             return None
