@@ -550,6 +550,8 @@ def test_collision_recreation_requires_a_fresh_absent_locator(run_activation, ru
         "spec": {"veleroSchedule": "0 */1 * * *"},
         "status": {"phase": "Enabled"},
     }
+    # Served live too, so a delete of the schedule would reach the API and be recorded.
+    hub.schedules["schedule-rhacm"] = schedule
 
     run = run_finalization(
         "full_restore",

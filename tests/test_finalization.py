@@ -3190,3 +3190,34 @@ def test_the_poll_deadline_covers_slow_reads_and_writes_no_completion(tmp_path, 
 
     assert _stored(tmp_path)["cleanup"]["state"] == "delete_accepted"
     assert clock["now"] <= 300 + 30
+
+
+@pytest.mark.unit
+def test_a_final_read_ending_past_the_deadline_never_completes(tmp_path, cleanup_secondary, no_sleep):
+    """Finding 4: absence seen just before the deadline, then a slow final read ending after it."""
+    clock = {"now": 0.0}
+    reads = {"count": 0}
+
+    def _read(**kwargs):
+        reads["count"] += 1
+        if reads["count"] == 1:  # the pre-delete read
+            clock["now"] += 1
+            return _live()
+        if clock["now"] < 290:
+            clock["now"] += 1
+            return _live()
+        clock["now"] += 1 if reads.setdefault("absent", 0) == 0 else 10
+        reads["absent"] += 1
+        return ABSENT
+
+    no_sleep.side_effect = lambda seconds: clock.__setitem__("now", clock["now"] + seconds)
+    cleanup_secondary.get_custom_resource_strict.side_effect = _read
+    cleanup_secondary.delete_restore_guarded.return_value = _accepted()
+    fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_INTENT), cleanup_secondary)
+
+    with patch("modules.finalization.time.monotonic", side_effect=lambda: clock["now"]):
+        with pytest.raises(FatalError, match="Timeout waiting for the journaled Restore"):
+            fin._run_restore_cleanup_transaction()
+
+    assert reads["absent"] == 2  # the first absence and the late final read
+    assert _stored(tmp_path)["cleanup"]["state"] == "delete_accepted"
