@@ -184,8 +184,9 @@ def _collection(journal, reads, deletes, repair=None, live_version="2.14.3"):
         return writes, "recovery_required"
     except ColMigrationEvidenceError as exc:
         return writes, exc.code
-    except col_activation.ActivationRefused:
-        return writes, "refused"
+    except col_activation.ActivationRefused as exc:
+        match = _CODE.search(str(exc))
+        return writes, match.group(1) if match else "refused"
     return writes, "ok"
 
 
@@ -245,8 +246,8 @@ EXPECTED = {
     "repair-without-recovery": "repair_not_permitted",
     "terminal-touches-nothing": "ok",
     "no-journal": "journal_required",
-    "changed-lane-before-the-barrier": "refused",
-    "changed-lane-before-a-resumed-delete": "refused",
+    "changed-lane-before-the-barrier": "controller_lane_changed",
+    "changed-lane-before-a-resumed-delete": "controller_lane_changed",
     "truncated-poll-response": "malformed_restore_read",
 }
 

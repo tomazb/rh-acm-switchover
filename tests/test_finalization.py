@@ -3157,9 +3157,10 @@ def test_a_changed_controller_lane_refuses_before_the_barrier_or_a_resumed_delet
     cleanup_secondary.get_custom_resource_strict.return_value = _live()
     fin = _cleanup_fin(_cleanup_state(tmp_path, journal), cleanup_secondary)
 
-    with pytest.raises(FatalError, match="frozen on ACM 2.14, but the destination hub now runs ACM 2.17"):
+    with pytest.raises(FatalError, match="frozen on ACM 2.14, but the destination hub now runs ACM 2.17") as refused:
         fin._run_restore_cleanup_transaction()
 
+    assert "(controller_lane_changed)" in str(refused.value)
     barrier.assert_not_called()
     cleanup_secondary.delete_restore_guarded.assert_not_called()
     assert _stored(tmp_path) == journal

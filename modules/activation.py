@@ -798,7 +798,7 @@ class SecondaryActivation:
         if restore["acm_minor"] != minor:
             raise FatalError(
                 f"The migration journal was frozen on ACM {restore['acm_minor']}, but the destination hub now runs "
-                f"ACM {minor}; the controller contract cannot change mid-transaction"
+                f"ACM {minor}; the controller contract cannot change mid-transaction (controller_lane_changed)"
             )
 
     def _require_uid(self, live: Dict, uid: Optional[str], name: str) -> None:

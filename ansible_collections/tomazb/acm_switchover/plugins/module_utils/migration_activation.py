@@ -303,7 +303,7 @@ def require_journal_matches_run(journal: Dict[str, Any], kind: str, minor: str) 
     if restore["acm_minor"] != minor:
         raise ActivationRefused(
             f"The migration journal was frozen on ACM {restore['acm_minor']}, but the destination hub now runs "
-            f"ACM {minor}; the controller contract cannot change mid-transaction"
+            f"ACM {minor}; the controller contract cannot change mid-transaction (controller_lane_changed)"
         )
 
 

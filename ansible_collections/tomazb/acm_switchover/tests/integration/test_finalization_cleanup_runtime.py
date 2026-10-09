@@ -531,6 +531,7 @@ def test_a_changed_controller_lane_refuses(run_activation, run_finalization, hub
 
     assert run.completed.returncode != 0
     assert "frozen on ACM 2.14, but the destination hub now runs ACM 2.17" in run.output
+    assert "(controller_lane_changed)" in run.output
     assert run.journal == journal
     assert _deletes(hub)[before:] == []
 
