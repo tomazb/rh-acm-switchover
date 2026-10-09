@@ -21,12 +21,15 @@ Each scenario records:
 - method: passive
 - old hub action: secondary
 - expected phases: all pass
-- expected artifacts: report present, checkpoint optional
+- expected artifacts: report present; in execute mode the collection checkpoint (and the
+  Python state file) carries the completed migration journal: frozen Backups, the activated
+  Restore's completion evidence, `post_activation.completed_at`, and a `completed` cleanup
 
 ### SCENARIO-002 Full restore switchover happy path
 
 - method: full
 - expected phases: all pass
+- expected mutated resources: `restore-acm-full` created with the journaled concrete Backup names
 - expected artifacts: report present
 
 ### SCENARIO-003 Preflight version mismatch
@@ -81,6 +84,10 @@ Each scenario records:
   Applications are unchanged, and unrelated Applications are never patched
 - standalone expectation: checkpoint identity is validated before either hub
   role runs; the result reports exact per-hub and total changed-patch counts
+- migration-journal expectation: once a journal exists, a failure in activation,
+  post-activation, or finalization (switchover and restore-only) records the Argo CD re-pause marker
+  before any resume, never rewinds to `primary_prep`, keeps the journal, and the retry
+  re-pauses before any further phase work; a journal-free failure keeps the rewind
 
 ### SCENARIO-009 RBAC bootstrap and validation
 

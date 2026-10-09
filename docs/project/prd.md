@@ -301,7 +301,7 @@ The PRD should limit future work to areas not already delivered in the repo.
 
 The Ansible Collection (`tomazb.acm_switchover`) has been implemented and is a production-ready second form factor. Remaining work relates to broader operational validation and AAP execution-environment packaging rather than core feature delivery. Key architectural differences from the Python CLI:
 
-- Ansible-native idempotency by default, with optional persistent checkpoints for long-running or interrupted switchovers
+- Ansible-native idempotency plus persistent file checkpoints, which execute mode requires because the migration-evidence journal lives in the checkpoint
 - Collection-first architecture with roles, playbooks, and thin custom plugins instead of a monolithic Python CLI
 - Grouped variable model (`acm_switchover_hubs`, `acm_switchover_operation`, etc.) replacing flat CLI flags
 - Shared report schema with collection report artifact modules and Python `--report-dir`

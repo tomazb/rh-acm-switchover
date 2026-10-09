@@ -168,9 +168,9 @@ New criteria:
     not required.
 41. With a journal, a phase-failure rescue (activation, post-activation, finalization) never rewinds to a pre-freeze phase; both form
     factors durably record an Argo CD re-pause marker outside the journal before any resume
-    mutation, the retry re-pauses before
-    any further activation step and clears the marker only on success, and every failure on the
-    path is visible. Without a journal, behavior is unchanged.
+    mutation (no resume mutation when that write fails), the retry re-pauses before
+    any further ACM Restore mutation, evidence step, or phase work and clears the marker only on
+    success, and every failure on the path is visible. Without a journal, behavior is unchanged.
 42. Tests cover, per legacy lane and in both form factors: the shortcut with no dedicated
     Backups (permitted); an exact and a fallback hive candidate (block); an ambiguous or
     unreadable prediction (blocks); a later dedicated child after an absent decision (blocks

@@ -16,7 +16,7 @@ This document owns the commands.
 
 | # | Surface | Nature | What it does not prove |
 | --- | --- | --- | --- |
-| 1 | Root Python and Bash tests | Local, fake-backed | Nothing about live clusters. Of the collection it proves only the four parity contracts — shared constants (`tests/test_constants_parity.py`), Argo CD `ACM_KINDS`/`ACM_NAMESPACES` (`tests/test_argocd_constants_parity.py`), cross-phase state key names (`tests/test_checkpoint_state_parity.py`), and RBAC expansion (`tests/test_rbac_collection_parity.py`). Those compare declared values across the two runtimes; no collection role, playbook, or module is executed |
+| 1 | Root Python and Bash tests | Local, fake-backed | Nothing about live clusters. Of the collection it proves only the root parity contracts (`tests/test_*parity*.py`). Some compare declared values across the two runtimes — shared constants (`tests/test_constants_parity.py`), Argo CD `ACM_KINDS`/`ACM_NAMESPACES` (`tests/test_argocd_constants_parity.py`), cross-phase state key names (`tests/test_checkpoint_state_parity.py`), and RBAC expansion (`tests/test_rbac_collection_parity.py`). Others call collection `module_utils` and module functions in-process over shared vectors or identical fake hubs — for example the R4-04 migration-evidence model and transactions (`tests/test_migration_evidence_parity.py`, `tests/test_activation_transaction_parity.py`, `tests/test_post_activation_transaction_parity.py`, `tests/test_restore_cleanup_transaction_parity.py`, `tests/test_restore_guarded_mutation_parity.py`) — or render one role task file's expressions with Ansible's templar (`tests/test_managed_cluster_expectation_parity.py`). No collection role or playbook is executed |
 | 2 | Release-framework helpers | Local and fake-backed **only when no release profile is supplied** | Not certification evidence. Non-live only while neither `--release-profile` (including one injected through `PYTEST_ADDOPTS`) nor `ACM_RELEASE_PROFILE` resolves a profile |
 | 3 | Collection unit tests | Local, static and fake-backed | Nothing about live cluster behaviour. Playbook and cross-role wiring is checked statically against the YAML, not by executing it |
 | 4 | Collection integration tests | Local, fake-backed | Nothing about real cluster responses |
@@ -692,6 +692,22 @@ def setUp(self):
         "status": {"currentVersion": "2.12.0"}
     }
 ```
+
+### Collection test-only variables (not operator inputs)
+
+The collection R4-04 integration and scenario tests shorten waits and pre-seed reads through
+the variables below. They are test seams, not part of the operator variable surface in
+[`variable-reference.md`](../../ansible_collections/tomazb/acm_switchover/docs/variable-reference.md):
+do not set them in an operator run.
+
+| Variable | Used by | Default when unset |
+| --- | --- | --- |
+| `_acm_restore_poll_delays` | `roles/activation/tasks/wait_for_restore.yml`, `activate_restore.yml` (completion and deletion polls) | `[0] + [10] * 12 + [30] * 56` |
+| `_acm_mc_reconcile_pause_seconds` | `roles/post_activation/tasks/verify_managed_clusters.yml` (pause before readiness reconciliation) | `30` |
+| `_acm_mc_readiness_poll_delays` | `roles/post_activation/tasks/verify_managed_clusters.yml` (bounded readiness wait) | `[0] + [30] * 20` |
+| `_acm_cleanup_poll_delays` | `roles/finalization/tasks/cleanup_journaled_restore.yml` (absence poll waits) | the shared `cleanup_schedule` poll delays |
+| `_acm_cleanup_poll_timeout` | `roles/finalization/tasks/cleanup_journaled_restore.yml` (elapsed absence-poll deadline) | the shared `cleanup_schedule` poll timeout (300 seconds) |
+| `acm_switchover_test_overrides.migration_reads` | `roles/activation/tasks/strict_read.yml` and `read_frozen_backups.yml` (pre-seeded strict-read results keyed by read) | none; honoured only in `dry_run` and `validate`, so an executing run always reads the live hub |
 
 ## Manual Integration Testing
 

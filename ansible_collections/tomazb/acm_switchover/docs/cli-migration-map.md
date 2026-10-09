@@ -67,6 +67,14 @@ expected name. A cleanup repair is accepted only as the complete set and is an
 acknowledgement request, not evidence of a delete. Neither input changes the
 recorded expectation.
 
+An executing collection run records the migration journal in the checkpoint, so it needs
+`acm_switchover_execution.checkpoint.enabled: true`; the Python CLI always has its state
+file. `--reset-state` and `checkpoint.reset: true` are the only resets that discard a
+journal. Where the Python CLI recovers a resume refused for missing post-activation or
+restore-completion evidence by setting `current_phase` in its state file, the collection
+uses `checkpoint.reset_from: post_activation` (or `activation`), which keeps the journal.
+This is a pre-existing difference in rewind tooling, not a behavior divergence.
+
 The `old_hub_action: secondary` finalization adapter
 (`roles/finalization/tasks/disable_old_hub_observability.yml`) gates its MultiClusterObservability delete on
 fresh destination-observability proof the same way `decommission` does, but with no

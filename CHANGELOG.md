@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **R4-04 migration evidence workflow (Python + Collection, PR C).** Activation durably journals the
+  Backups the restore controller will use (`migration_backups`, schema 2) before any Restore mutation,
+  mutates the Restore only through UID/resourceVersion-guarded requests, and records completion only
+  from the method-specific ACM phase plus the lane-specific Velero child proof. `passive_patch` and the
+  one-shot `passive_restore` keep ManagedClusters `latest`; `full_restore` (and restore-only) writes the
+  concrete Backup names; every accepted Backup and child is concrete and journaled, and a resume reuses
+  the journal without refreezing. Post-activation records the name check (or a journaled waiver) and
+  `post_activation.completed_at` last. Finalization runs a durable Restore-cleanup transaction
+  (teardown revalidation, intent, guarded DELETE, bounded absence poll; `recovery_required` with
+  `absent_without_completion`, `replacement_uid` or `replacement_during_poll`) before BackupSchedule
+  enablement and every old-hub action, and gates every integrated old-hub action on the complete
+  evidence (`cleanup_not_terminal`, `activation_names_unverified`, `locator_occupied`). Each form
+  factor keeps its own journal; there is no cross-form-factor resume. See `docs/operations/usage.md`
+  (Migration Evidence). Coverage is fake-backed, fixture-backed and static only; it is not live
+  certification evidence.
+- R4-04 operator inputs: `--skip-managed-cluster-expectations` with
+  `--managed-cluster-expectation-waiver-scope|-actor|-reason|-request-id` (collection
+  `skip_managed_cluster_expectations` and `managed_cluster_expectation_waiver`), an audited waiver of
+  the expected-ManagedCluster name check only; and `--repair-migration-cleanup` with
+  `--cleanup-repair-actor|-reason|-evidence|-run-id|-operation-id` (collection
+  `migration_cleanup_repair`), an audited acknowledgement of a cleanup in `recovery_required`.
+- Collection module `acm_migration_evidence`, the I/O-free mirror of the Python activation,
+  post-activation and Restore-cleanup decisions; `acm_restore_guarded_mutation` `action: create`;
+  `acm_k8s_read_outcome` `read_mode: discover` and `request_timeout`.
+- Explicit Argo CD recovery after a phase failure under a migration journal (PR C decisions amendment
+  section 2.2, both form factors): resume-on-failure durably records a re-pause marker outside the
+  journal before resuming, never rewinds to primary preparation, and the retry re-pauses Argo CD
+  before any further phase work (secondary hub only for restore-only).
+
 - R4-04 PR B migration-evidence model, dormant (Python + Collection, mirrored, pure): pinned
   cluster-backup-operator Backup selection for ACM 2.12–2.17 (direct `latest` and exact-first
   correlated generic selection, seven-field Backup projection), Velero child evidence (owner,
@@ -63,6 +92,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validators require these on standalone and integrated decommission.
 
 ### Fixed
+
+- The Python refusal of a resume at finalization whose migration journal lacks
+  `restore.completed_at` or `post_activation.completed_at` now says the journal is unchanged, that a
+  plain re-run refuses again, and which `current_phase` to set in the state file to re-record the
+  evidence (or, for an invalid journal, to repair it); it names `--reset-state` as the discarding
+  alternative.
+- The activation count-floor refusal no longer says the floor came "from primary preflight", which
+  was wrong for an explicit `--min-managed-clusters N`; both form factors now report
+  `Expected at least N ManagedCluster(s) after restore, but found only M: [...]`.
 
 - A corrupt collection checkpoint now keeps blocking (R4-04 PR B, aligned with Python). A
   checkpoint that is not valid JSON (including invalid UTF-8) or whose top level is not a JSON object is copied to
@@ -231,6 +269,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- The collection operator variable `acm_switchover_operation.allow_conventional_passive_restore_fallback`
+  is no longer read anywhere: preflight and activation require a sync-enabled passive Restore, as
+  the Python CLI does. The `acm_restore_info` module option `allow_conventional_name_fallback` is
+  unchanged.
+
 - Removed the deprecated `scripts/argocd-manage.sh` and its `.state/argocd-pause-state.json`
   register (with `tests/test_argocd_manage_script.py`). Use `acm_switchover.py --argocd-resume-only`
   or the `argocd_manage` collection role; each form factor keeps exactly one pause register
@@ -277,6 +320,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   self-consistent with the calls that teardown makes.
 
 ### Changed
+
+- **Explicit `--min-managed-clusters` / `min_managed_clusters` is now an additional floor (R4-04).**
+  It no longer replaces the expected names derived by preflight, and explicit `0` permits an empty
+  destination only when no name is expected. Use the audited waiver to lift the name check.
+- **ACM Restore completion is stricter (R4-04).** The activation completion proof accepts only
+  `Finished` (a patched passive sync Restore also `Enabled`, with the full child proof) and requires
+  every required Velero child Restore to be `Completed`; `Completed` and benign `FinishedWithErrors`
+  are no longer accepted for the activated Restore. The benign `FinishedWithErrors` rule remains for
+  the pre-activation passive sync readiness check only. On ACM 2.12–2.16, a `passive_patch` whose
+  passive sync Restore has an owner child bound to a dedicated hive or cluster credential Backup,
+  including a historical one, cannot complete.
+- Activation no longer recreates the passive sync Restore after a failed `restore-acm-activate`
+  create: the error says whether the passive Restore was deleted and the re-run re-proves the hub
+  from the journal. A Restore at the target name that the journal does not record is never adopted,
+  and a recorded mutation or wait step without its journal evidence refuses (with `--reset-state`
+  guidance where only a fresh run can recover).
+- A migration journal blocks the implicit resets (`--force` on a stale completed or unresumable
+  failed state, context mismatches); `--reset-state` / `checkpoint.reset: true` remain the explicit
+  fresh-run boundary. A resume at finalization whose journal lacks `restore.completed_at` or
+  `post_activation.completed_at` refuses on both sides.
+- **Collection execute mode requires the checkpoint (R4-04).** An executing `activation` refuses
+  without `acm_switchover_execution.checkpoint.enabled: true`, because the journal lives there.
+  Direct `activation`, `post_activation` and `finalization` role entries validate their operator
+  inputs, restore the recorded ManagedCluster expectation, and (activation and post-activation, in
+  execute mode, without an explicit minimum) refuse when none is recorded; a direct `validate` entry
+  mutates nothing.
+- Finalization order (both form factors): the journaled Restore cleanup runs first, then the
+  conditional old-hub observability teardown, then the generic cleanup of other-name switchover
+  Restores (only once the journaled cleanup is terminal) and a fresh locator-absence gate before
+  BackupSchedule enablement, then the old-hub disposition. BackupSchedule inventory reads are
+  strict: an unreadable inventory refuses to change BackupSchedules.
+- **Breaking (collection module interface):** `acm_restore_info` is now preflight passive-restore
+  analysis only. The `method`, `activation_method` and `backup_name` options and the `patch`,
+  `operation` and `wait_target` outputs are removed, and it always reports `changed: false`;
+  activation plans through `acm_migration_evidence`.
 
 - The root test lane (`run_tests.sh` and CI) and the collection unit and integration lanes
   (`ansible-collection-foundation.yml`) now run under `pytest-xdist` with

@@ -281,7 +281,9 @@ python acm_switchover.py --restore-only \
 | `--secondary-context` | Kubernetes context for secondary hub (required for switchover) |
 | `--method` | Switchover method: `passive` or `full` (required) |
 | `--activation-method` | Activation option for passive method: `patch` (default) or `restore` |
-| `--min-managed-clusters` | Minimum restored non-local `ManagedCluster` count to enforce after activation; omitted derives the expected names/count from primary preflight, restore-only omitted defaults to `1`, and explicit `0` allows an empty hub |
+| `--min-managed-clusters` | Minimum restored non-local `ManagedCluster` count to enforce after activation; omitted derives the expected names/count from primary preflight, and restore-only omitted defaults to `1`. An explicit value is an additional floor: the derived names stay enforced, so explicit `0` allows an empty hub only when no name is expected |
+| `--skip-managed-cluster-expectations` | Request an audited waiver of the expected `ManagedCluster` name check only (never the count floor); requires `--managed-cluster-expectation-waiver-scope {activation,post_activation,both}`, `-actor` and `-reason`, with an optional `-request-id` |
+| `--repair-migration-cleanup` | Acknowledge a journaled Restore cleanup in `recovery_required` after inspection; requires `--cleanup-repair-actor`, `--cleanup-repair-reason`, one or more `--cleanup-repair-evidence`, and the `--cleanup-repair-run-id` and `--cleanup-repair-operation-id` the error names |
 | `--old-hub-action` | Action for old hub: `secondary` (**recommended** - enables reverse switchover), `decommission`, or `none` (required) |
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing |
@@ -316,22 +318,24 @@ python acm_switchover.py --restore-only \
 
 3. **Secondary Hub Activation**
    - Verify latest passive restore (Method 1) or create full restore (Method 2)
-   - Activate managed clusters on secondary hub (patch or create `restore-acm-activate`)
+   - Durably journal the Backups the restore controller will use (the migration journal) before any Restore mutation
+   - Activate managed clusters on secondary hub (guarded patch, or create `restore-acm-activate`; Method 2 creates `restore-acm-full` with concrete Backup names)
    - Apply `immediate-import` annotations when `autoImportStrategy=ImportOnly` (ACM 2.14+)
-   - Poll until restore completes
+   - Poll until the restore and its Velero child Restores complete, then journal the completion evidence
 
 4. **Post-Activation Verification**
-   - Monitor ManagedCluster connection status (5-10 minutes)
+   - Monitor ManagedCluster connection status (5-10 minutes) and journal the name check (or audited waiver) and, last, post-activation completion
    - Restart observatorium-api deployment (if Observability detected; failures block unless `--skip-observability-checks` is set)
    - Verify Observability pod health (blocking by default)
    - Check metrics collection
 
 5. **Finalization**
-   - Enable BackupSchedule on new hub
+   - Delete the journaled Restore through the durable Restore-cleanup transaction (recoverable; see [usage](docs/operations/usage.md#migration-evidence))
+   - Enable BackupSchedule on new hub, after a fresh read proves the journaled Restore gone
    - Fix BackupSchedule collision if detected
    - Verify new backups are created
    - Verify backup integrity (status, age, and Velero logs)
-   - Handle old hub based on `--old-hub-action`:
+   - Handle old hub based on `--old-hub-action`, only after the old-hub migration-evidence gate passes:
      - `secondary`: Set up passive sync restore (**recommended** - enables reverse switchover)
      - `decommission`: Remove ACM components automatically
      - `none`: Leave unchanged for manual handling
@@ -361,7 +365,7 @@ flowchart LR
 1. **Preflight** — validates target hub only (ACM version, BSL credentials, namespaces)
 2. **Optional Argo CD pause** — with `--argocd-manage`, pauses ACM-touching Applications on the target hub before activation
 3. **Activation** — creates a one-time full Restore from the latest S3 backup
-4. **Post-Activation** — waits for ManagedClusters to connect, verifies klusterlet agents, and requires at least one restored non-local ManagedCluster unless `--min-managed-clusters 0` is explicitly set
+4. **Post-Activation** — waits for ManagedClusters to connect, verifies klusterlet agents, and requires at least one restored non-local ManagedCluster unless `--min-managed-clusters 0` is explicitly set (restore-only has no expected names)
 5. **Finalization** — enables BackupSchedule on the new hub
 
 ### State Management
@@ -372,6 +376,7 @@ The script maintains a JSON state file tracking:
 - Current phase
 - Timestamp of each operation
 - Detected configuration (ACM version, Observability presence)
+- The migration journal: the frozen Backups, the activated Restore's identity and completion evidence, and the Restore-cleanup transaction (only `--reset-state` discards it)
 - Errors encountered
 
 **Optimized State Persistence:**
@@ -396,6 +401,7 @@ This enables:
   this two-hub guard.
 - **ClusterDeployment Protection**: Mandatory check for `preserveOnDelete=true` prevents accidental cluster destruction
 - **Backup State Verification**: Ensures no backups in progress during switchover
+- **Migration evidence**: Restores bind to journaled Backups, Restore cleanup is a durable recoverable transaction, and old-hub actions require the complete evidence (see [usage](docs/operations/usage.md#migration-evidence))
 - **Progressive Validation**: Validates at each step before proceeding
 - **Dry-run Mode**: Preview all actions before execution
 - **Reverse Switchover**: Return to original hub by swapping contexts (when using `--old-hub-action secondary`)
@@ -417,7 +423,7 @@ Check Velero restore logs: `oc logs -n open-cluster-management-backup deployment
 
 ### Resume from Specific Step
 
-Edit state file manually or use `--reset-state` to start fresh (use with caution).
+Edit state file manually or use `--reset-state` to start fresh (use with caution). Once a migration journal is recorded, `--reset-state` also discards it; see [Migration journal on resume](docs/operations/usage.md#migration-journal-on-resume) for the journal-preserving recovery.
 
 ## Testing
 

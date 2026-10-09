@@ -27,8 +27,13 @@ Source: `lib/`, `modules/`, `scripts/`
 | `lib/kube_client.py` legacy readers | stock `kubernetes.core` usage plus later helper code | 2-3 |
 | `lib/strict_read.py` + `lib/kube_client.py` strict producers (`list_custom_resources_strict`, `get_custom_resource_strict`, `get_namespace_strict`, `list_pods_strict`, `get_deployment_strict`, `get_replicaset_strict`) | `plugins/module_utils/k8s_read.py`, with `plugins/modules/acm_k8s_read_outcome.py` as the thin module wrapper over those helpers. A named 404 is `not_found` only after live discovery confirms the requested group/version, the requested kind, and the route that was read; a built-in 404 that live discovery does not confirm is `error` or `kind_not_served` where Python reports absence (approved divergence, #317). A custom-resource read whose live discovery has a missing, empty, non-string, or non-matching `groupVersion` is `error` / `ERROR` on both form factors (collection since #317, Python since #321). Separately, a custom-resource named GET that returns 404 on a stale cached route (a non-canonical resolved plural, or live discovery showing a different kind or scope) is `error` in the collection where Python, which reads the caller's fixed route, can read the object or report `OBJECT_ABSENT` or `CRD_ABSENT` (approved after implementation, #317; LIST routing is #320); custom-resource reads against conformant discovery and a cached route that still matches it stay aligned. Before any request, the collection refuses a resolved route that is not the requested group/version, canonical plural and scope, so a stale cached scope never reads a namespaced LIST cluster-wide (#320, collection-internal, fail-closed); and it reads a custom resource (any group/version other than `v1` and `apps/v1`) only after live discovery proves it served, as Python does (#322). See [coexistence](../../ansible_collections/tomazb/acm_switchover/docs/coexistence.md) | 3 |
 | `lib/kube_client.py` `delete_custom_resource_preconditioned` (UID-preconditioned guarded delete used by the shared teardown phase machine for MultiClusterObservability, ManagedCluster and MultiClusterHub) | `plugins/modules/acm_uid_guarded_delete.py`, `plugins/module_utils/uid_guarded_delete.py` | 6 |
-| `lib/kube_client.py` `json_patch_custom_resource_guarded` / `delete_restore_guarded` (R4-04 guarded ACM Restore JSON Patch with `test` operations on UID, resourceVersion and the raw ManagedClusters field, and the UID- and resourceVersion-preconditioned Restore delete; dormant, no caller yet) | `plugins/modules/acm_restore_guarded_mutation.py`; `tests/test_restore_guarded_mutation_parity.py` holds the two form factors to the same patch document, classification and check-mode/dry-run result | 3 |
-| `lib/migration_evidence.py`, `lib/migration_child_evidence.py`, `lib/migration_journal.py` (R4-04 pure migration-evidence model: Backup selection, Velero child evidence, journal validation; dormant) | `plugins/module_utils/migration_evidence.py`, `migration_child_evidence.py`, `migration_journal.py`; `tests/fixtures/r4_04_migration_evidence_vectors.json` feeds both through `tests/test_migration_evidence_parity.py` | 3 |
+| `lib/kube_client.py` `json_patch_custom_resource_guarded` / `delete_restore_guarded` and `create_restore_guarded` (R4-04 guarded ACM Restore JSON Patch with `test` operations on UID, resourceVersion and the raw ManagedClusters field, the UID- and resourceVersion-preconditioned Restore delete, and the single never-reconciled create; called by activation and the finalization Restore cleanup) | `plugins/modules/acm_restore_guarded_mutation.py` (`action: patch`, `delete`, `create`); `tests/test_restore_guarded_mutation_parity.py` holds the two form factors to the same patch document, classification and check-mode/dry-run result | 3 |
+| `lib/migration_evidence.py`, `lib/migration_child_evidence.py`, `lib/migration_journal.py` (R4-04 pure migration-evidence model: Backup selection, Velero child evidence, journal validation) | `plugins/module_utils/migration_evidence.py`, `migration_child_evidence.py`, `migration_journal.py`; `tests/fixtures/r4_04_migration_evidence_vectors.json` feeds both through `tests/test_migration_evidence_parity.py` | 3 |
+| `modules/activation.py` R4-04 activation transaction (freeze, guarded mutation, completion evidence) | `plugins/module_utils/migration_activation.py` behind `plugins/modules/acm_migration_evidence.py`, driven by `roles/activation/tasks/activate_restore.yml` and `wait_for_restore.yml`; the role persists each candidate through `checkpoint_phase` `status: update`; `tests/test_activation_transaction_parity.py` | 3 |
+| `lib/migration_post_activation.py` (post-activation evidence) | `plugins/module_utils/migration_post_activation.py` behind `acm_migration_evidence`, driven by `roles/post_activation/tasks/main.yml` and `verify_managed_clusters.yml`; `tests/test_post_activation_transaction_parity.py` | 3 |
+| `lib/migration_cleanup.py` and `Finalization._run_restore_cleanup_transaction` / `_require_old_hub_evidence` (Restore-cleanup transaction, locator-absence and old-hub evidence gates) | `plugins/module_utils/migration_cleanup.py` behind `acm_migration_evidence`, driven by `roles/finalization/tasks/cleanup_journaled_restore.yml`, `cleanup_journaled_restore_attempt.yml`, `poll_journaled_restore_absent.yml`, `require_journaled_locator_absent.yml` and `require_old_hub_evidence.yml`; `tests/test_restore_cleanup_transaction_parity.py` | 3 |
+| `lib/argocd_resume.py` resume-on-failure under a migration journal and `repause_argocd_after_rescue` | `roles/argocd_manage/tasks/journal_rescue.yml` (play rescue of `switchover.yml` and `restore_only.yml`) and `roles/argocd_manage/tasks/repause_recovery.yml` (retry entry); the re-pause marker is `checkpoint_phase` state outside the journal | 5 |
+| `acm_switchover.py` resumed-phase input checks (`_resolve_managed_cluster_expectation`, `_require_waivable_recorded_expectation`) | `roles/common/tasks/guard_role_entry.yml`, included at the entry of `activation`, `post_activation` and `finalization` | 3 |
 | `modules/decommission_identity.py` (`capture_operator_identity`, `classify_pods`) | `plugins/modules/acm_pod_owner_classify.py` (`capture_identity` and `classify` operations), `plugins/module_utils/pod_owner_classify.py` | 6 |
 | `lib/utils.py` checkpoint semantics | `plugins/action/checkpoint_phase.py`, `plugins/module_utils/checkpoint.py`. A corrupt checkpoint (invalid JSON, including bytes that are not valid UTF-8, or a non-object top level) is preserved in place with a forensic copy and blocks later runs, as `StateManager` does for a corrupt state file (R4-04 PR B) | 4 |
 
@@ -97,30 +102,22 @@ held by shared identity vectors in `tests/test_mch_identity_parity.py`.
 | `lib/argocd.py` | `roles/argocd_manage/`, preflight read-only advisory discovery, and deferred playbook | 5 |
 | `lib/gitops_detector.py` | preflight detection and warnings, including non-blocking Argo CD ACM-touching Application advisory output | 5 |
 | `modules/preflight/reporter.py` and Python-only `lib/report_artifacts.py` | `plugins/modules/acm_preflight_report.py`, `plugins/modules/acm_report_artifact.py`, playbook report contracts | 2-6 |
-| `modules/preflight/backup_validators.py` restore analysis | `plugins/modules/acm_restore_info.py`, `roles/preflight/tasks/validate_backups.yml`, `roles/activation/tasks/wait_for_restore.yml` | 2-3 |
+| `modules/preflight/backup_validators.py` restore analysis | `plugins/modules/acm_restore_info.py` (preflight passive-restore analysis only; activation plans through `acm_migration_evidence`), `roles/preflight/tasks/validate_backups.yml` | 2 |
 | `check_rbac.py` / `scripts/setup-rbac.sh` | `playbooks/rbac_bootstrap.yml`, `roles/rbac_bootstrap/`, `plugins/modules/acm_rbac_bootstrap.py` | 6 |
 | `lib/waiter.py` (`WaitConditionResult`, `wait_for_condition`) | no direct equivalent — collection roles use Ansible's native `until`/`retries` loop construct; architectural difference, not a gap to close | coexistence |
 | `scripts/discover-hub.sh` | supported migration bridge, not rewritten in the collection | coexistence |
 
 ## Activation Wait Contract (collection)
 
-Collection activation parity with `modules/activation.py` was tightened in
-`[Unreleased]`. Two cases that previously caused false failures or wrong waits
-are now explicit:
-
-- **Passive activation, stale pre-activation Velero signal (Step 5).** When the
-  ACM controller has not yet published the new restore name, a leftover
-  pre-activation Velero managed-clusters restore signal is treated as a
-  *retryable pending* state, not a terminal failure. Activation re-reads the
-  live Restore and continues polling within the configured budget instead of
-  failing before the controller publishes the new restore.
-- **Full-restore activation wait (F6).** After the ACM `Restore` resource
-  reaches a terminal phase, activation switches to ManagedCluster presence
-  checks. It does **not** wait for a Velero `managed-clusters` Restore — that
-  intermediate object can arrive out of order or be coalesced by Velero, so
-  blocking on it produces false-negative timeouts. The contract is: ACM
-  Restore terminal phase ⇒ verify expected ManagedClusters appear within the
-  remaining timeout budget.
+The R4-04 activation transaction (above) owns the activation wait in both form factors and
+supersedes the earlier collection-only wait rules (the retryable stale pre-activation Velero
+signal and the full-restore wait that skipped Velero children). Strict reads of the journaled
+Restore and of the complete Velero Restore list are polled until the method-specific proof holds:
+the ACM Restore phase is `Finished` (a patched passive sync Restore may also be `Enabled`, only
+with the complete child proof), and every required Velero child Restore is owned by the journaled
+Restore, bound to a frozen Backup, and `Completed`. The ManagedCluster name and count check follows;
+a fresh proof taken after it is journaled, with `restore.completed_at` written last. A resume over
+recorded completion re-runs the proof and never rewrites it.
 
 ## ACM Version Gates to Preserve
 

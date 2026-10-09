@@ -101,6 +101,87 @@ match the checkpoint. After both role invocations, it publishes
 `restored_by_hub.secondary`, their once-derived `restored` total, and a Boolean
 `changed` value.
 
+## R4-04 migration evidence transaction
+
+Activation, post-activation, and finalization share one migration-evidence transaction,
+implemented independently on each side with no new parity divergence:
+
+| Concern | Python CLI | Collection |
+| --- | --- | --- |
+| Pure decisions | `lib/migration_evidence.py`, `migration_child_evidence.py`, `migration_journal.py`, `migration_post_activation.py`, `migration_cleanup.py` | the same-named `plugins/module_utils/` mirrors behind `acm_migration_evidence` |
+| Journal store | state file `config.migration_backups` through `RunRecord` | checkpoint `operational_data.migration_backups` through `checkpoint_phase` `status: update` |
+| Guarded Restore mutations | `KubeClient.json_patch_custom_resource_guarded`, `delete_restore_guarded`, `create_restore_guarded` | `acm_restore_guarded_mutation` (`patch`, `delete`, `create`) |
+| Expected-name waiver | `--skip-managed-cluster-expectations` and `--managed-cluster-expectation-waiver-*` | `skip_managed_cluster_expectations` and `managed_cluster_expectation_waiver` |
+| Cleanup repair | `--repair-migration-cleanup` and `--cleanup-repair-*` | `migration_cleanup_repair` |
+
+Shared behavior:
+
+- **Freeze and no refreeze.** Activation journals the controller's predicted Backups before any
+  Restore mutation. `passive_patch` writes ManagedClusters `latest` and the one-shot
+  `passive_restore` writes ManagedClusters `latest` with credentials and resources `skip`;
+  `full_restore` writes the concrete owned Backup names. Every accepted Backup and Velero child
+  is concrete and journaled. A resume reuses the journal, refuses a different mutation kind or ACM
+  minor, and never adopts a Restore the journal does not record.
+- **Legacy `passive_patch` hive/cluster rule.** On ACM 2.12–2.16 the `CredentialsHive` and
+  `CredentialsCluster` requests are predicted before the PATCH (frozen-credentials reuse or a
+  proven "no candidate" only), and any owner child bound to a dedicated hive or cluster credential
+  Backup blocks completion — including a historical child, which restricts installations whose
+  sync Restore history includes the legacy three-Backup format.
+- **Completion.** The ACM Restore must be `Finished` (`passive_patch` also `Enabled` with the full
+  child proof); required Velero children must be `Completed`. `restore.completed_at` and
+  `post_activation.completed_at` are each written last in their phase.
+- **Count and name additivity.** An explicit minimum is an additional floor; recorded names stay
+  enforced. The waiver lifts only the name check and is journaled once; a different later
+  request is refused.
+- **Finalization order.** Journaled Restore cleanup first; then the old-hub observability
+  teardown where it applies (behind the old-hub evidence gate); then other-name switchover
+  Restores through the generic cleanup, which runs only once the journaled cleanup is terminal;
+  then a fresh locator-absence gate before BackupSchedule enablement; then the old-hub
+  disposition behind the old-hub evidence gate. BackupSchedule inventory reads are strict in
+  execute mode. The gate sits inside each old-hub adapter (Python
+  `_disable_observability_on_old_hub` and `_handle_old_hub`; collection
+  `disable_old_hub_observability.yml` and `handle_old_hub.yml`), so a direct collection
+  `tasks_from` entry is gated too: without the validated journal and Restore-cleanup result of
+  the current finalization pass it refuses before any request ("Refusing the old-hub action: no
+  validated migration journal and Restore-cleanup result from this finalization pass is
+  available").
+- **Cleanup recovery and repair.** The same states, transitions, reason codes
+  (`absent_without_completion`, `replacement_uid`, `replacement_during_poll`), conflict retry
+  bound (three retries), and 300-second elapsed poll bound. Each absence-poll read is bounded by
+  the remaining deadline, floored to whole seconds and capped at the 30-second request timeout,
+  and no read is sent with less than one second left (Python `poll_read_timeout`, collection
+  `acm_migration_evidence` `cleanup_poll_read_timeout` feeding `acm_k8s_read_outcome`
+  `request_timeout`); the deadline is re-checked immediately before a poll decision is
+  persisted. Recovery messages name the journal
+  run ID and the cleanup operation ID, and the repair confirmation names the operation ID; a
+  repair request on a cleanup that is not `recovery_required` is refused (`repair_not_permitted`).
+- **Argo CD rescue.** With a journal, no form factor rewinds to `primary_prep`; each durably
+  records a re-pause marker outside the journal before resuming, and the retry re-pauses before
+  further phase work (PR C decisions amendment section 2.2).
+- **Previews.** Dry-run, `validate`, and native check mode read and predict but write no journal
+  transition and send no Restore mutation.
+
+Independent stores: each form factor reads and writes only its own journal. There is no
+dual-write, handoff, or cross-form-factor resume of a migration.
+
+**Rewind tooling (pre-existing form-factor difference, not a divergence).** The collection can
+re-run a phase with `checkpoint.reset_from` (`activation`, `post_activation` or `finalization`
+keep and revalidate the journal; `preflight` and `primary_prep` are refused while one exists).
+Python has no phase-rewind option: a refused resume at finalization whose journal lacks
+`restore.completed_at` or `post_activation.completed_at` names the `current_phase` value the
+operator sets in the state file to re-run that phase against the kept journal, where the
+collection operator uses `reset_from: post_activation` (or `activation`). The refusal itself is
+the same on both sides.
+
+**Collection execute mode requires the checkpoint.** The collection journal exists only in the
+checkpoint, so an executing `activation` refuses without `checkpoint.enabled: true`. Python state
+is always on.
+
+**Stale cached route and cleanup liveness (#317).** The collection's named Restore reads in the
+cleanup transaction follow the #317 stale-route rule above: a 404 through a stale cached route is
+`error`, never absence. In the cleanup that can only block an attempt (an unreadable read changes
+no cleanup state); it can never record absence or completion.
+
 ## Auto-import reset obligation (issue #214, audit C3/C4)
 
 **The cluster is the collection's register** for the auto-import reset

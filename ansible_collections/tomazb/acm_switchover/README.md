@@ -36,6 +36,22 @@ Pods by owner chain without mutating anything. `mode: dry_run` and native check 
 this path. [`docs/coexistence.md`](docs/coexistence.md) states the contract shared with the Python
 tool; the operator-facing walkthrough is in the repository's `docs/operations/usage.md`.
 
+## Migration evidence
+
+The `activation`, `post_activation`, and `finalization` roles carry the R4-04
+migration-evidence transaction: activation journals the Backups the restore
+controller will use before any Restore mutation, Restore mutations are UID- and
+resourceVersion-guarded through `acm_restore_guarded_mutation`, completion
+needs the Velero child proof, and finalization deletes the journaled Restore
+through a durable, recoverable cleanup transaction before BackupSchedule
+enablement and any old-hub action. The journal lives in checkpoint
+`operational_data`, so execute mode requires
+`acm_switchover_execution.checkpoint.enabled: true`. The decisions are made by
+`acm_migration_evidence`, which mirrors the Python CLI and performs no I/O;
+`acm_restore_info` is now preflight passive-restore analysis only. The waiver
+and cleanup-repair variables are in [`docs/variable-reference.md`](docs/variable-reference.md),
+and the shared contract is in [`docs/coexistence.md`](docs/coexistence.md).
+
 ## Distinct physical-hub guard
 
 For a normal two-hub switchover, preflight rejects identical context names and
