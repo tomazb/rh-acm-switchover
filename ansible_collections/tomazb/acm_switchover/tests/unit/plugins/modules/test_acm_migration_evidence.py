@@ -184,15 +184,11 @@ def test_the_evidence_candidates_are_timestamped_and_returned_for_the_checkpoint
 
 # -- R4-04 Task 10: the Restore-cleanup steps ------------------------------------------------------
 
-_VECTORS = Path(__file__).resolve().parents[7] / "tests" / "fixtures" / "r4_04_migration_evidence_vectors.json"
-
 
 def _journal(case_id):
-    cases = json.loads(_VECTORS.read_text(encoding="utf-8"))["cases"]
-    return next(case for case in cases if case["id"] == case_id)["input"]["candidate"]
+    return _VECTORS[case_id]["input"]["candidate"]
 
 
-@pytest.mark.skipif(not _VECTORS.is_file(), reason="the shared vectors live in the repository checkout")
 @pytest.mark.parametrize(
     ("read", "expected"),
     [
@@ -234,7 +230,6 @@ def test_a_cleanup_step_reads_the_locator_strictly(monkeypatch, read, expected):
         assert result["failed"] is True and expected in result["msg"]
 
 
-@pytest.mark.skipif(not _VECTORS.is_file(), reason="the shared vectors live in the repository checkout")
 def test_cleanup_intent_mints_one_operation_id_unless_supplied(monkeypatch):
     journal = _journal("journal-teardown-revalidated")
     minted = _run(monkeypatch, "cleanup_intent", {"journal": journal})["candidate"]["cleanup"]
@@ -244,7 +239,6 @@ def test_cleanup_intent_mints_one_operation_id_unless_supplied(monkeypatch):
     assert pinned["candidate"]["cleanup"]["operation_id"] == supplied
 
 
-@pytest.mark.skipif(not _VECTORS.is_file(), reason="the shared vectors live in the repository checkout")
 def test_the_delete_attempt_survives_the_text_rendering_of_the_core_floor(monkeypatch):
     result = _run(
         monkeypatch,
@@ -260,7 +254,6 @@ def test_the_delete_attempt_survives_the_text_rendering_of_the_core_floor(monkey
     assert result["msg"].startswith("Migration evidence refused (cleanup_conflict_retries_exhausted:")
 
 
-@pytest.mark.skipif(not _VECTORS.is_file(), reason="the shared vectors live in the repository checkout")
 def test_the_repair_flag_survives_the_text_rendering_of_the_core_floor(monkeypatch):
     result = _run(
         monkeypatch,

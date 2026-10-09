@@ -42,7 +42,7 @@ REPAIR = {
     "inspected_evidence": ["audit-log:restore-delete"],
 }
 FINALIZATION_TASKS = ("cleanup_journaled_restore",)
-_NO_SCHEDULES = {"acm_finalization_backup_schedules_info": {"resources": []}}
+_NO_SCHEDULES: dict = {"acm_finalization_backup_schedules_info": {"resources": []}}
 
 
 def _repo_root() -> Path:
@@ -469,7 +469,7 @@ def test_an_unverifiable_delete_fails_at_once_and_stays_resumable(run_activation
 _SCHEDULES = (
     "/apis/cluster.open-cluster-management.io/v1beta1/namespaces/open-cluster-management-backup/backupschedules"
 )
-_DISCOVERY_EXTRA = {"_old_hub_existing_restore_info": {"resources": []}}
+_DISCOVERY_EXTRA: dict = {"_old_hub_existing_restore_info": {"resources": []}}
 # An inventory an earlier phase published that an executing run must never trust.
 _STALE = {"acm_finalization_backup_schedules_info": {"resources": [{"metadata": {"name": "stale-preseeded"}}]}}
 
