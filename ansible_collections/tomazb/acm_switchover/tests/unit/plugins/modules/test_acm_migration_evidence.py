@@ -230,6 +230,29 @@ def test_a_cleanup_step_reads_the_locator_strictly(monkeypatch, read, expected):
         assert result["failed"] is True and expected in result["msg"]
 
 
+@pytest.mark.parametrize(
+    "inputs, expected",
+    [
+        ({"live_read": {"read_status": "not_found", "resources": []}}, {"changed": False}),
+        (
+            {"live_read": {"read_status": "ok", "resources": [{"metadata": {"uid": "u", "resourceVersion": "9"}}]}},
+            "malformed_restore_read",
+        ),
+        ({"live_read": {"read_status": "error", "resources": []}}, "Restore acm-restore could not be read (error)"),
+        ({"journal": None, "live_read": {"read_status": "not_found", "resources": []}}, "journal_required"),
+    ],
+    ids=["proven-absent", "truncated", "unreadable", "no-journal"],
+)
+def test_the_old_hub_gate_reads_the_locator_strictly(monkeypatch, inputs, expected):
+    """Plan Task 11: the gate consumes one strict locator read; unreadable is never absent."""
+    journal = {} if inputs.get("journal", True) is None else {"journal": _journal("journal-cleanup-completed")}
+    result = _run(monkeypatch, "old_hub_evidence", {**journal, "live_read": inputs["live_read"]})
+    if isinstance(expected, dict):
+        assert result == expected
+    else:
+        assert result["failed"] is True and expected in result["msg"]
+
+
 def test_cleanup_intent_mints_one_operation_id_unless_supplied(monkeypatch):
     journal = _journal("journal-teardown-revalidated")
     minted = _run(monkeypatch, "cleanup_intent", {"journal": journal})["candidate"]["cleanup"]

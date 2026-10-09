@@ -1,0 +1,28 @@
+---
+# R4-04 (plan Task 11, July design section 4): immediately before an integrated old-hub action
+# (the observability teardown, the passive Restore and the integrated decommission), the
+# migration journal must carry the complete evidence bundle with a completed or repaired
+# cleanup, and a fresh strict read must prove the journaled locator empty. The waiver covers
+# only the expected-name checks. The collection mirror of Finalization._require_old_hub_evidence;
+# callers include this only outside a preview.
+
+- name: Read the journaled Restore locator before an old-hub action
+  ansible.builtin.include_tasks: "{{ role_path }}/../activation/tasks/strict_read.yml"
+  vars:
+    _acm_read:
+      key: "restore/{{ _acm_journal.restore.name }}"
+      read_mode: get
+      api_version: cluster.open-cluster-management.io/v1beta1
+      kind: Restore
+      resource_name: restores
+      namespace: "{{ _acm_journal.restore.namespace }}"
+      name: "{{ _acm_journal.restore.name }}"
+    _acm_read_fact: _acm_old_hub_locator_read
+  when: _acm_has_journal | bool
+
+- name: Require the migration evidence before an old-hub action
+  tomazb.acm_switchover.acm_migration_evidence:
+    operation: old_hub_evidence
+    inputs:
+      journal: "{{ _acm_journal if (_acm_has_journal | bool) else omit }}"
+      live_read: "{{ _acm_old_hub_locator_read | default({'read_status': 'not_found', 'resources': []}) }}"

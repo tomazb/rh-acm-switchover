@@ -47,6 +47,7 @@ options:
       - journal_matches
       - managed_cluster_readiness
       - managed_clusters_poll
+      - old_hub_evidence
       - passive_restore
       - post_activation_completion
       - post_activation_names_evidence
@@ -77,8 +78,9 @@ options:
         unless they are supplied.
       - C(managed_cluster_readiness) takes C(mc_read) instead of the inventory items, and
         C(post_activation_waiver) journals the collection's waiver variable as the C(flag).
-      - The cleanup steps take the strict read of the journaled Restore locator as C(live_read)
-        instead of the object, C(cleanup_generic_restores) the strict Restore list as
+      - The cleanup steps and the old-hub evidence gate C(old_hub_evidence) take the strict read of
+        the journaled Restore locator as C(live_read) instead of the object, C(cleanup_generic_restores)
+        the strict Restore list as
         C(restores_read); C(cleanup_intent) generates its C(operation_id), and
         C(teardown_revalidated), C(cleanup_intent) and the cleanup steps that can record a
         transition their timestamp, unless supplied.
@@ -214,6 +216,9 @@ _OPERATIONS: Dict[str, Callable[[dict], dict]] = {
     "cleanup_final_absence": lambda inputs: cleanup.final_absence(**_with_time(_with_locator(inputs), "now")),
     "cleanup_repair": lambda inputs: cleanup.repair_cleanup(**_with_time(_with_locator(inputs), "now")),
     "cleanup_locator_absent": lambda inputs: cleanup.require_locator_absent(**_with_locator(inputs)),
+    "old_hub_evidence": lambda inputs: cleanup.require_old_hub_evidence(
+        **_with_default(_with_locator(inputs), "journal")
+    ),
     "cleanup_generic_restores": lambda inputs: cleanup.generic_cleanup_restores(
         journal=inputs.get("journal"),
         restores=transaction.strict_list(inputs["restores_read"], "Restore inventory"),

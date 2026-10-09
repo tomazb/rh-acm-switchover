@@ -38,6 +38,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_cl
     pre_delete,
     repair_cleanup,
     require_locator_absent,
+    require_old_hub_evidence,
     teardown_revalidated,
 )
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_evidence import (
@@ -131,6 +132,7 @@ FUNCTIONS: Dict[str, Callable[..., Any]] = {
     "pre_delete": pre_delete,
     "repair_cleanup": repair_cleanup,
     "require_locator_absent": require_locator_absent,
+    "require_old_hub_evidence": require_old_hub_evidence,
     "teardown_revalidated": teardown_revalidated,
 }
 NS = "open-cluster-management-backup"

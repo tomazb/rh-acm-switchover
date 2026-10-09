@@ -1,13 +1,14 @@
-"""R4-04 migration evidence: the pure Restore-cleanup transaction decisions (plan Task 10).
+"""R4-04 migration evidence: the pure Restore-cleanup transaction decisions (plan Tasks 10 and 11).
 
 This module decides every step of the durable cleanup of the journaled ACM
 Restore: which step a finalization pass owes, the teardown-revalidation and
 cleanup-intent writes, the final pre-delete boundary, the guarded DELETE
 outcome, the bounded absence poll and its final read, recovery, operator
 repair, the terminal locator-absence gate before BackupSchedule enablement,
-and the reservation of the journaled locator from generic Restore cleanup.
-Normative sources: docs/plans/2026-07-29-migration-evidence-design.md sections
-1 and 4a, the August amendment
+the evidence gate before integrated old-hub actions, and the reservation of
+the journaled locator from generic Restore cleanup. Normative sources:
+docs/plans/2026-07-29-migration-evidence-design.md sections 1, 2, 4 and 4a,
+the August amendment
 (docs/plans/2026-08-27-r4-04-current-base-design-amendment.md section 6) and the
 controller child-evidence amendment
 (docs/plans/2026-09-30-r4-04-controller-child-evidence-amendment.md section 3.1).
@@ -242,6 +243,35 @@ def require_locator_absent(*, journal: Any, live: Any) -> Dict[str, Any]:
         _identity(journal, live)
         raise MigrationEvidenceError(
             "locator_occupied", f"Restore {journal['restore']['name']} occupies the journaled locator"
+        )
+    return {}
+
+
+def require_old_hub_evidence(*, journal: Any, live: Any) -> Dict[str, Any]:
+    """The gate before every integrated old-hub action: the complete migration evidence and a fresh absent locator.
+
+    The validated journal already proves the complete Restore identity, provenance
+    and completion bundle, post_activation.completed_at with its name check or
+    waiver, and, for any cleanup past not_started, restore.teardown_revalidated_at
+    and the cleanup copy bound to the same run, operation, Restore, spec and
+    backup fields. On top of that the gate requires a completed or repaired
+    cleanup, the activation name check or a waiver covering it, and no object at
+    the journaled locator in the caller's fresh strict read. A waiver satisfies
+    only the name checks. Every missing check is listed; the first one is the code.
+    """
+    journal = require_post_activation_completed(journal)
+    restore, waiver = journal["restore"], journal["waiver"]
+    missing = []
+    if journal["cleanup"]["state"] not in _TERMINAL:
+        missing.append("cleanup_not_terminal")
+    if restore["names_verified_at"] is None and (waiver is None or waiver["scope"] not in ("activation", "both")):
+        missing.append("activation_names_unverified")
+    if live is not None:
+        _identity(journal, live)
+        missing.append("locator_occupied")
+    if missing:
+        raise MigrationEvidenceError(
+            missing[0], f"integrated old-hub actions lack migration evidence: {', '.join(missing)}"
         )
     return {}
 

@@ -576,3 +576,54 @@ def test_the_poll_deadline_writes_no_completion(run_activation, run_finalization
     assert run.completed.returncode != 0
     assert "Timeout waiting for the journaled Restore" in run.output
     assert run.journal["cleanup"]["state"] == "delete_accepted"
+
+
+# -- Plan Task 11: the evidence gate before every integrated old-hub action ----------------------
+
+_GATED = ("cleanup_journaled_restore", "require_old_hub_evidence")
+
+
+@pytest.mark.parametrize("kind", ["passive_patch", "passive_restore", "full_restore"])
+def test_the_old_hub_gate_opens_after_this_pass_completes_the_cleanup(
+    run_activation, run_finalization, hub, kind  # noqa: F811
+):
+    journal = completed_journal(run_activation, kind, hub)
+    name = journal["restore"]["name"]
+
+    run = run_finalization(kind, hub, journal, tasks=_GATED)
+
+    assert run.completed.returncode == 0, run.output
+    assert run.journal["cleanup"]["state"] == "completed"
+    # The gate's own fresh strict read of the locator is the last request.
+    assert hub.requests[-1] == {"method": "GET", "path": _RESTORES + name}
+
+
+def test_the_old_hub_gate_refuses_a_replacement_after_completion(run_activation, run_finalization, hub):  # noqa: F811
+    journal = completed_journal(run_activation, "full_restore", hub)
+    first = run_finalization("full_restore", hub, journal)
+    assert first.journal["cleanup"]["state"] == "completed"
+    name = journal["restore"]["name"]
+    occupant = passive_restore(name=name)
+    occupant["metadata"]["uid"] = "uid-replacement"
+    hub.acm[name] = occupant
+    writes = len(hub.writes)
+
+    run = run_finalization("full_restore", hub, None, tasks=_GATED)
+
+    assert run.completed.returncode != 0
+    assert "locator_occupied" in run.output
+    assert run.journal == first.journal
+    assert len(hub.writes) == writes
+    assert hub.acm[name]["metadata"]["uid"] == "uid-replacement"
+
+
+def test_the_old_hub_gate_refuses_unverified_activation_names(run_activation, run_finalization, hub):  # noqa: F811
+    journal = completed_journal(run_activation, "full_restore", hub)
+    journal["restore"]["names_verified_at"] = None
+
+    run = run_finalization("full_restore", hub, journal, tasks=_GATED)
+
+    assert run.completed.returncode != 0
+    assert "activation_names_unverified" in run.output
+    # The cleanup itself completed; only the old-hub actions stay blocked.
+    assert run.journal["cleanup"]["state"] == "completed"

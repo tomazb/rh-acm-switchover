@@ -37,6 +37,7 @@ from lib.migration_cleanup import (
     pre_delete,
     repair_cleanup,
     require_locator_absent,
+    require_old_hub_evidence,
     teardown_revalidated,
 )
 from lib.migration_evidence import (
@@ -129,6 +130,7 @@ FUNCTIONS = {
     "pre_delete": pre_delete,
     "repair_cleanup": repair_cleanup,
     "require_locator_absent": require_locator_absent,
+    "require_old_hub_evidence": require_old_hub_evidence,
     "teardown_revalidated": teardown_revalidated,
 }
 NS = "open-cluster-management-backup"
@@ -151,6 +153,15 @@ def test_vector(case):
     else:
         result = function(**case["input"])
         assert (list(result) if isinstance(result, tuple) else result) == case["expect"]["result"]
+
+
+def test_the_old_hub_gate_lists_every_missing_check():
+    """J section 4: a refusal names every check lacking evidence, the first one as its code."""
+    case = next(case for case in CASES if case["id"] == "old-hub-gate-missing-evidence-reports-the-first-gap")
+    with pytest.raises(MigrationEvidenceError) as excinfo:
+        require_old_hub_evidence(**case["input"])
+    assert excinfo.value.code == "cleanup_not_terminal"
+    assert str(excinfo.value).endswith(": cleanup_not_terminal, activation_names_unverified, locator_occupied")
 
 
 def test_every_public_function_has_vectors():

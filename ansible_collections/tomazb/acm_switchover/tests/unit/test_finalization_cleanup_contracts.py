@@ -140,3 +140,53 @@ def test_the_phase_result_reports_the_journaled_cleanup():
     step = cleanup["acm_switchover_journaled_restore_cleanup_result"]["step"]
     # A preview's skipped register is still defined, so the step is chosen by the preview flag.
     assert "_acm_preview" in step
+
+
+# -- Plan Task 11: the evidence gate before every integrated old-hub action --------------------
+
+_OLD_HUB_GATE = "require_old_hub_evidence.yml"
+_PREVIEW_GATE = "not (_acm_preview | bool)"
+
+
+def test_the_evidence_gate_immediately_precedes_every_old_hub_action():
+    """The observability teardown is the first old-hub action; the disposition re-proves the evidence."""
+    run = next(task for task in _load("main.yml") if task.get("name") == "Run finalization phase")
+    tasks = run["block"]
+    includes = [task.get(_INCLUDE) for task in tasks]
+    assert includes.index("cleanup_journaled_restore.yml") < includes.index(_OLD_HUB_GATE)
+    gates = {}
+    for action in ("disable_old_hub_observability.yml", "handle_old_hub.yml"):
+        gate = tasks[includes.index(action) - 1]
+        assert gate[_INCLUDE] == _OLD_HUB_GATE, action
+        assert _PREVIEW_GATE in gate["when"], action
+        gates[action] = [condition for condition in gate["when"] if condition != _PREVIEW_GATE]
+    # The gates cover exactly the runs whose action can mutate the old hub.
+    assert (
+        gates["disable_old_hub_observability.yml"] == tasks[includes.index("disable_old_hub_observability.yml")]["when"]
+    )
+    assert gates["handle_old_hub.yml"] == [
+        "not (acm_switchover_operation.restore_only | default(false))",
+        "(acm_switchover_operation.old_hub_action | default('secondary')) in ['secondary', 'decommission']",
+    ]
+    assert includes.count(_OLD_HUB_GATE) == 2
+
+
+def test_the_evidence_gate_is_one_strict_read_and_one_decision():
+    gate = _load(_OLD_HUB_GATE)
+    assert gate[0][_INCLUDE].endswith("/activation/tasks/strict_read.yml")
+    assert gate[0]["vars"]["_acm_read"]["read_mode"] == "get"
+    assert [
+        task["tomazb.acm_switchover.acm_migration_evidence"]["operation"]
+        for task in _walk(gate)
+        if "tomazb.acm_switchover.acm_migration_evidence" in task
+    ] == ["old_hub_evidence"]
+
+
+def test_standalone_decommission_never_consults_the_migration_journal():
+    """J section 4: standalone decommission keeps its own target safety, outside this transaction."""
+    roles = TASKS.parents[1]
+    sources = [*sorted((roles / "decommission").rglob("*.yml")), TASKS.parents[2] / "playbooks" / "decommission.yml"]
+    for path in sources:
+        text = path.read_text(encoding="utf-8")
+        for name in ("acm_migration_evidence", "migration_journal", _OLD_HUB_GATE):
+            assert name not in text, (path.name, name)

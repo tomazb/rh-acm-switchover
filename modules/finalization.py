@@ -68,6 +68,7 @@ from lib.migration_cleanup import (
     pre_delete,
     repair_cleanup,
     require_locator_absent,
+    require_old_hub_evidence,
     teardown_revalidated,
 )
 from lib.migration_evidence import MigrationEvidenceError
@@ -261,6 +262,7 @@ class Finalization:
             if self.primary and self.old_hub_action == "secondary" and self.primary_has_observability:
                 with self._step("disable_observability_on_secondary") as should_run:
                     if should_run:
+                        self._require_old_hub_evidence()
                         self._disable_observability_on_old_hub()
 
             # Step 11: Enable BackupSchedule on new hub
@@ -495,6 +497,18 @@ class Finalization:
         """Immediately before enablement: terminal cleanup and a fresh strict read proving absence."""
         live = self._strict_get_journaled_restore(journal) if journal is not None else None
         self._evidence(require_locator_absent, journal=journal, live=live)
+
+    def _require_old_hub_evidence(self) -> None:
+        """Immediately before an integrated old-hub action: the complete evidence and a fresh absent locator.
+
+        The cleanup transaction ran first in this pass, so a cleanup it started was
+        preceded by this pass's teardown barrier. A dry-run previews and is never gated.
+        """
+        if self.dry_run:
+            return
+        journal = self._cleanup_journal
+        live = self._strict_get_journaled_restore(journal) if journal is not None else None
+        self._evidence(require_old_hub_evidence, journal=journal, live=live)
 
     def _strict_get_journaled_restore(self, journal: Dict, request_timeout: Optional[int] = None) -> Optional[Dict]:
         """One strict GET of the journaled locator: the object, None for a proven 404, or FatalError."""
@@ -1355,11 +1369,13 @@ class Finalization:
 
         if self.old_hub_action == "secondary":
             logger.info("Setting up old primary hub as new secondary (for failback capability)...")
+            self._require_old_hub_evidence()
             self._setup_old_hub_as_secondary()
             return
 
         if self.old_hub_action == "decommission":
             logger.info("Decommissioning old primary hub...")
+            self._require_old_hub_evidence()
             self._decommission_old_hub()
             return
 

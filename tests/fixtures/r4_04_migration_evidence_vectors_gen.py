@@ -5498,6 +5498,97 @@ gccase("generic-cleanup-before-terminal-blocks", CL_ACCEPTED, OTHER_RESTORES, er
 gccase("generic-cleanup-unnamed-restore-blocks", CL_DONE, [{"metadata": {}}], err("malformed_inventory"))
 gccase("generic-cleanup-inventory-not-a-list", CL_DONE, {"items": []}, err("malformed_inventory"))
 
+# --- Old-hub evidence gate (plan Task 11) -------------------------------------------------------
+# J §4 gate (the complete §1a bundle, post-activation completion, teardown revalidation, terminal
+# cleanup and a fresh locator read) and §2 waiver: the waiver satisfies only the two expected-name
+# predicates. Every "waived-*" vector carries a waiver covering both predicates, so a refusal
+# there proves the waiver bypasses nothing else.
+fn = "require_old_hub_evidence"
+OH_SPOTS = ("J:375-375", "J:543-601", "J:452-471")
+OH_WAIVER = waiver("both")
+OH_WAIVED = mut(CL_DONE, waiver=OH_WAIVER, restore__names_verified_at=None, post_activation__names_verified_at=None)
+
+
+def ohcase(case_id, doc, live, expect):
+    case(case_id, ALL, drefs(ALL, *OH_SPOTS), fn, {"journal": doc, "live": live}, expect)
+
+
+for kind, contract in KINDS:
+    ohcase(
+        f"old-hub-gate-{cl_tag(kind, contract)}-completed-and-absent",
+        journal(kind, contract, "revalidated", "completed"),
+        None,
+        ok({}),
+    )
+ohcase("old-hub-gate-repaired-and-absent", CL_REPAIRED, None, ok({}))
+ohcase("old-hub-gate-waiver-covers-both-name-checks", OH_WAIVED, None, ok({}))
+ohcase(
+    "old-hub-gate-activation-waiver-covers-the-activation-name-check",
+    mut(CL_DONE, waiver=waiver("activation"), restore__names_verified_at=None),
+    None,
+    ok({}),
+)
+ohcase(
+    "old-hub-gate-post-activation-waiver-covers-the-post-activation-name-check",
+    mut(CL_DONE, waiver=waiver("post_activation"), post_activation__names_verified_at=None),
+    None,
+    ok({}),
+)
+ohcase(
+    "old-hub-gate-unverified-activation-names-block",
+    mut(CL_DONE, restore__names_verified_at=None),
+    None,
+    err("activation_names_unverified"),
+)
+ohcase(
+    "old-hub-gate-post-activation-waiver-leaves-activation-names-blocking",
+    mut(CL_DONE, waiver=waiver("post_activation"), restore__names_verified_at=None),
+    None,
+    err("activation_names_unverified"),
+)
+ohcase(
+    "old-hub-gate-activation-waiver-leaves-post-activation-names-blocking",
+    mut(CL_DONE, waiver=waiver("activation"), post_activation__names_verified_at=None),
+    None,
+    err("post_activation_names_unverified"),
+)
+ohcase("old-hub-gate-without-journal-blocks", None, None, err("journal_required"))
+ohcase("old-hub-gate-occupied-locator-blocks", CL_DONE, LIVE_REPLACEMENT, err("locator_occupied"))
+ohcase("old-hub-gate-malformed-read-blocks", CL_DONE, ["restore"], err("malformed_restore_read"))
+ohcase("old-hub-gate-truncated-read-blocks", CL_DONE, TRUNCATED_REPLACEMENT, err("malformed_restore_read"))
+ohcase(
+    "old-hub-gate-missing-evidence-reports-the-first-gap",
+    mut(CL_REVAL, restore__names_verified_at=None),
+    LIVE_FULL,
+    err("cleanup_not_terminal"),
+)
+for case_id, doc, code in (
+    ("identity-uid", mut(OH_WAIVED, restore__uid=None), "incomplete_bundle"),
+    ("identity-generation", mut(OH_WAIVED, restore__generation=None), "incomplete_bundle"),
+    ("identity-locator", mut(OH_WAIVED, cleanup__name="restore-acm-other"), "cleanup_copy_mismatch"),
+    ("fingerprint", mut(OH_WAIVED, restore__spec_fingerprint="0" * 64), "fingerprint_mismatch"),
+    ("provenance-verification", mut(OH_WAIVED, restore__backup_names_verified_at=None), "incomplete_bundle"),
+    ("provenance-children", mut(OH_WAIVED, restore__velero_restores__managed_clusters=[]), "completion_child_count"),
+    ("completion", mut(OH_WAIVED, restore__completed_at=None), "teardown_revalidation_premature"),
+    (
+        "post-activation-completion",
+        mut(OH_WAIVED, post_activation__completed_at=None),
+        "teardown_revalidation_premature",
+    ),
+    ("teardown-revalidation", mut(OH_WAIVED, restore__teardown_revalidated_at=None), "cleanup_prerequisite_missing"),
+    ("cleanup-not-started", mut(CL_REVAL, waiver=OH_WAIVER), "cleanup_not_terminal"),
+    ("cleanup-intent", mut(CL_INTENT, waiver=OH_WAIVER), "cleanup_not_terminal"),
+    ("cleanup-delete-accepted", mut(CL_ACCEPTED, waiver=OH_WAIVER), "cleanup_not_terminal"),
+    ("cleanup-recovery", mut(CL_RECOVERY, waiver=OH_WAIVER), "cleanup_not_terminal"),
+    (
+        "repair-identity",
+        mut(CL_REPAIRED, waiver=OH_WAIVER, cleanup__repair__run_id=OTHER_UUID),
+        "repair_identity_mismatch",
+    ),
+):
+    ohcase(f"old-hub-gate-waived-{case_id}-blocks", doc, None, err(code))
+ohcase("old-hub-gate-waived-occupied-locator-blocks", OH_WAIVED, LIVE_REPLACEMENT, err("locator_occupied"))
+
 
 def build():
     """Return the fixture text: a readable header, then one compact case per line."""

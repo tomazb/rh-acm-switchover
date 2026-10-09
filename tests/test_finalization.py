@@ -177,10 +177,12 @@ CLEANUP_DONE = _journal_vector("journal-cleanup-completed")
 
 @pytest.fixture
 def terminal_cleanup():
-    """The journaled Restore cleanup is already terminal: the test covers other finalization work."""
+    """The journaled Restore cleanup is already terminal and its evidence complete: the test covers other
+    finalization work."""
     with (
         patch.object(Finalization, "_run_restore_cleanup_transaction", return_value=CLEANUP_DONE),
         patch.object(Finalization, "_require_journaled_locator_absent"),
+        patch.object(Finalization, "_require_old_hub_evidence"),
         patch.object(Finalization, "_cleanup_restore_resources") as generic,
     ):
         yield generic
@@ -3034,6 +3036,7 @@ class TestRestoreCleanupTransaction:
         )
         with (
             patch.object(fin, "_run_restore_cleanup_transaction", side_effect=lambda: order.append("cleanup")),
+            patch.object(fin, "_require_old_hub_evidence", side_effect=lambda: order.append("gate")),
             patch.object(fin, "_disable_observability_on_old_hub", side_effect=lambda: order.append("mco")),
             patch.object(fin, "_enable_backup_schedule", side_effect=lambda journal: order.append("enable")),
             patch.object(fin, "_verify_backup_schedule_enabled"),
@@ -3048,7 +3051,7 @@ class TestRestoreCleanupTransaction:
         ):
             assert fin.finalize() is True
 
-        assert order == ["cleanup", "mco", "enable"]
+        assert order == ["cleanup", "gate", "mco", "enable"]
 
 
 @pytest.mark.unit
@@ -3221,3 +3224,195 @@ def test_a_final_read_ending_past_the_deadline_never_completes(tmp_path, cleanup
 
     assert reads["absent"] == 2  # the first absence and the late final read
     assert _stored(tmp_path)["cleanup"]["state"] == "delete_accepted"
+
+
+# -- R4-04 Task 11: the evidence gate before integrated old-hub actions (July design section 4) --
+
+_LATER_STEPS = (
+    "_verify_backup_schedule_enabled",
+    "_fix_backup_schedule_collision",
+    "_verify_new_backups",
+    "_verify_backup_integrity",
+    "_verify_multiclusterhub_health",
+    "_run_reset_auto_import_strategy_step",
+    "_verify_old_hub_state",
+)
+
+
+def _mutated(journal, **changes):
+    """A deep copy with each "__"-separated path set."""
+    out = copy.deepcopy(journal)
+    for path, value in changes.items():
+        *parents, last = path.split("__")
+        target = out
+        for part in parents:
+            target = target[part]
+        target[last] = value
+    return out
+
+
+def _old_hub_fin(tmp_path, secondary, journal, *, old_hub_action="secondary", dry_run=False):
+    return _cleanup_fin(
+        _cleanup_state(tmp_path, journal),
+        secondary,
+        primary_client=Mock(name="primary"),
+        primary_has_observability=True,
+        old_hub_action=old_hub_action,
+        dry_run=dry_run,
+    )
+
+
+@contextmanager
+def _old_hub_actions(fin, order):
+    """Record the old-hub actions; every other finalization step after the cleanup is inert."""
+    with (
+        patch.object(fin, "_get_backup_verify_timeout", return_value=1),
+        patch.object(fin, "_enable_backup_schedule", side_effect=lambda journal: order.append("enable")),
+        patch.object(fin, "_disable_observability_on_old_hub", side_effect=lambda: order.append("mco")),
+        patch.object(fin, "_setup_old_hub_as_secondary", side_effect=lambda: order.append("secondary")),
+        patch.object(fin, "_decommission_old_hub", side_effect=lambda: order.append("decommission")),
+    ):
+        for name in _LATER_STEPS:
+            patch.object(fin, name).start()
+        try:
+            yield
+        finally:
+            patch.stopall()
+
+
+@pytest.mark.unit
+class TestOldHubEvidenceGate:
+    """Plan Task 11, Python form factor: the gate precedes every integrated old-hub mutation."""
+
+    @pytest.mark.parametrize("journal", [CLEANUP_DONE, CLEANUP_REPAIRED], ids=["completed", "repaired"])
+    def test_a_terminal_cleanup_and_a_fresh_absent_locator_open_every_old_hub_action(
+        self, tmp_path, cleanup_secondary, journal
+    ):
+        cleanup_secondary.get_custom_resource_strict.return_value = ABSENT
+        fin = _old_hub_fin(tmp_path, cleanup_secondary, journal)
+        order = []
+
+        with _old_hub_actions(fin, order):
+            assert fin.finalize() is True
+
+        assert order == ["mco", "enable", "secondary"]
+        # One fresh strict locator read before the MCO teardown and one before the passive Restore.
+        assert cleanup_secondary.get_custom_resource_strict.call_count == 2
+        cleanup_secondary.delete_restore_guarded.assert_not_called()
+
+    def test_the_teardown_barrier_of_this_pass_precedes_the_gate_and_the_mco_teardown(
+        self, tmp_path, cleanup_secondary, barrier, no_sleep
+    ):
+        """A pass that starts the cleanup proves the barrier by control flow before any old-hub action."""
+        order = []
+        barrier.side_effect = lambda journal: order.append("barrier")
+        cleanup_secondary.get_custom_resource_strict.side_effect = [_live(), ABSENT, ABSENT, ABSENT, ABSENT]
+        cleanup_secondary.delete_restore_guarded.return_value = _accepted()
+        fin = _old_hub_fin(tmp_path, cleanup_secondary, CLEANUP_POST)
+
+        with _old_hub_actions(fin, order):
+            assert fin.finalize() is True
+
+        assert order == ["barrier", "mco", "enable", "secondary"]
+        stored = _stored(tmp_path)
+        assert stored["cleanup"]["state"] == "completed"
+        assert stored["restore"]["teardown_revalidated_at"] is not None
+
+    def test_a_failed_teardown_barrier_reaches_no_old_hub_action(self, tmp_path, cleanup_secondary, barrier):
+        barrier.side_effect = FatalError("Journaled credentials child was replaced or changed")
+        fin = _old_hub_fin(tmp_path, cleanup_secondary, CLEANUP_POST)
+        order = []
+
+        with _old_hub_actions(fin, order):
+            assert fin.finalize() is False
+
+        assert order == []
+
+    @pytest.mark.parametrize(
+        "journal, read, code",
+        [
+            (CLEANUP_DONE, _live(uid="uid-new", rv="3003"), "locator_occupied"),
+            (_mutated(CLEANUP_DONE, restore__names_verified_at=None), ABSENT, "activation_names_unverified"),
+        ],
+        ids=["occupied-locator", "unverified-activation-names"],
+    )
+    def test_missing_evidence_refuses_before_the_mco_teardown(self, tmp_path, cleanup_secondary, journal, read, code):
+        cleanup_secondary.get_custom_resource_strict.return_value = read
+        fin = _old_hub_fin(tmp_path, cleanup_secondary, journal)
+        order = []
+
+        with _old_hub_actions(fin, order):
+            assert fin.finalize() is False
+
+        assert order == []
+        assert code in fin.state.state["errors"][-1]["error"]
+        assert _stored(tmp_path) == journal
+
+    def test_the_gate_is_re_evaluated_freshly_before_the_passive_restore(self, tmp_path, cleanup_secondary):
+        """A replacement that appears after the MCO teardown gate still blocks the later disposition."""
+        cleanup_secondary.get_custom_resource_strict.side_effect = [ABSENT, _live(uid="uid-new", rv="3003")]
+        fin = _old_hub_fin(tmp_path, cleanup_secondary, CLEANUP_DONE)
+        order = []
+
+        with _old_hub_actions(fin, order):
+            assert fin.finalize() is False
+
+        assert order == ["mco", "enable"]
+        assert "locator_occupied" in fin.state.state["errors"][-1]["error"]
+
+    def test_integrated_decommission_requires_the_evidence(self, tmp_path, cleanup_secondary):
+        cleanup_secondary.get_custom_resource_strict.return_value = ABSENT
+        fin = _old_hub_fin(
+            tmp_path,
+            cleanup_secondary,
+            _mutated(CLEANUP_DONE, restore__names_verified_at=None),
+            old_hub_action="decommission",
+        )
+        order = []
+
+        with _old_hub_actions(fin, order):
+            assert fin.finalize() is False
+
+        assert order == ["enable"]
+        assert "activation_names_unverified" in fin.state.state["errors"][-1]["error"]
+
+    def test_an_unreadable_locator_is_never_absence(self, tmp_path, cleanup_secondary):
+        cleanup_secondary.get_custom_resource_strict.return_value = StrictReadOutcome.error("read_failed")
+        fin = _old_hub_fin(tmp_path, cleanup_secondary, CLEANUP_DONE)
+        order = []
+
+        with _old_hub_actions(fin, order):
+            assert fin.finalize() is False
+
+        assert order == []
+
+    def test_old_hub_action_none_reads_nothing(self, tmp_path, cleanup_secondary):
+        fin = _old_hub_fin(tmp_path, cleanup_secondary, CLEANUP_DONE, old_hub_action="none")
+        order = []
+
+        with _old_hub_actions(fin, order):
+            assert fin.finalize() is True
+
+        assert order == ["enable"]
+        cleanup_secondary.get_custom_resource_strict.assert_not_called()
+
+    def test_a_dry_run_previews_the_old_hub_actions_without_the_gate(self, tmp_path, cleanup_secondary):
+        """A preview keeps the journal non-terminal; it reads nothing and is never gated."""
+        cleanup_secondary.dry_run = True
+        fin = _old_hub_fin(tmp_path, cleanup_secondary, CLEANUP_INTENT, dry_run=True)
+        order = []
+
+        with _old_hub_actions(fin, order):
+            assert fin.finalize() is True
+
+        assert order == ["mco", "enable", "secondary"]
+        cleanup_secondary.get_custom_resource_strict.assert_not_called()
+        assert _stored(tmp_path) == CLEANUP_INTENT
+
+    def test_standalone_decommission_never_consults_the_migration_journal(self):
+        """J section 4: standalone decommission keeps its own target safety, outside this transaction."""
+        import acm_switchover
+
+        source = inspect.getsource(acm_switchover.run_decommission) + inspect.getsource(decommission_module)
+        for name in ("migration_backups", "migration_cleanup", "require_old_hub_evidence"):
+            assert name not in source
