@@ -1341,12 +1341,6 @@ class SecondaryActivation:
                 f"{', '.join(missing_expected)}. Found {count}: {non_local_clusters}"
             )
 
-        if enforce and count < self.min_managed_clusters:
-            raise FatalError(
-                f"Expected {self.min_managed_clusters} ManagedCluster(s) from primary preflight after restore, "
-                f"but found only {count}: {non_local_clusters}"
-            )
-
         if self.min_managed_clusters == 0:
             if count == 0:
                 logger.warning(

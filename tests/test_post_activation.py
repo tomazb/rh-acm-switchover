@@ -3147,6 +3147,86 @@ class TestPostActivationEvidenceReviewFindings:
         )
         finalization.assert_called_once()
 
+    @staticmethod
+    def _finalization_resume_refusal(state):
+        from lib.utils import Phase
+        from lib.workflow import run_phase_flow
+
+        state.set_phase(Phase.FINALIZATION)
+        finalization = Mock(return_value=True)
+        failed = []
+
+        def fail_phase(_state, message, _logger):
+            failed.append(message)
+            return False
+
+        result = run_phase_flow(
+            SimpleNamespace(dry_run=False),
+            state,
+            None,
+            Mock(),
+            logging.getLogger("test"),
+            ((finalization, (Phase.POST_ACTIVATION, Phase.FINALIZATION), Phase.FINALIZATION),),
+            "switchover",
+            fail_phase,
+            Mock(),
+            Mock(),
+        )
+        return result, finalization, failed
+
+    @pytest.mark.parametrize(
+        ("journal", "code", "phase"),
+        [
+            (COMPLETED_JOURNAL, "post_activation_not_completed", "post_activation_verification"),
+            (PRE_COMPLETION_JOURNAL, "restore_not_completed", "activation"),
+        ],
+        ids=["post-activation", "restore"],
+    )
+    def test_b2_the_refusal_names_the_rerun_that_keeps_the_journal(self, tmp_path, journal, code, phase):
+        state = _evidence_state(tmp_path, journal)
+
+        result, finalization, failed = self._finalization_resume_refusal(state)
+
+        assert result is False
+        finalization.assert_not_called()
+        message = failed[-1]
+        assert message.startswith(f"Migration evidence refused ({code}:")
+        assert "migration journal is unchanged" in message
+        assert f"set current_phase to '{phase}' in the state file {state.state_file}" in message
+        assert "--reset-state starts a new migration and discards the journal" in message
+        assert _stored_journal(tmp_path) == journal
+
+    def test_b2_an_invalid_journal_refusal_names_repair_or_an_explicit_reset(self, tmp_path):
+        journal = _VECTOR_CASES["journal-run-id-not-uuid"]["input"]["candidate"]
+        state = _evidence_state(tmp_path, journal)
+
+        result, _finalization, failed = self._finalization_resume_refusal(state)
+
+        assert result is False
+        assert "current_phase" not in failed[-1]
+        assert f"repair it in the state file {state.state_file}" in failed[-1]
+        assert "--reset-state starts a new migration and discards the journal" in failed[-1]
+
+    def test_b2_following_the_refusal_guidance_records_the_evidence_and_resumes(self, tmp_path):
+        """The named rerun re-proves post-activation over the kept journal, its step markers notwithstanding."""
+        from lib.utils import Phase
+
+        state = _evidence_state(tmp_path, steps=_POST_ACTIVATION_STEPS[:3])
+        assert self._finalization_resume_refusal(state)[0] is False
+
+        state_file = tmp_path / "state.json"
+        raw = json.loads(state_file.read_text(encoding="utf-8"))
+        raw["current_phase"] = Phase.POST_ACTIVATION.value
+        state_file.write_text(json.dumps(raw), encoding="utf-8")
+        edited = StateManager(str(state_file))
+        with patch("modules.post_activation.wait_for_condition", side_effect=_poll_until_done):
+            assert _evidence_verifier(edited, _strict_secondary(*EVIDENCE_NAMES)).verify() is True
+
+        assert _stored_journal(tmp_path)["post_activation"]["completed_at"] is not None
+        result, finalization, failed = self._finalization_resume_refusal(edited)
+        assert result is True and not failed
+        finalization.assert_called_once()
+
     def test_w2_resume_reconciles_readiness_with_the_bounded_wait(self, tmp_path):
         steps = ("verify_clusters_connected", "verify_klusterlet_connections", "verify_auto_import_cleanup")
         state = _evidence_state(tmp_path, steps=steps)

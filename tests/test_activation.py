@@ -487,6 +487,25 @@ class TestMinManagedClusters:
         with pytest.raises(FatalError, match="Missing expected ManagedCluster"):
             act._verify_managed_clusters_restored()
 
+    def test_an_explicit_floor_above_the_present_names_reports_the_floor(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """An explicit --min-managed-clusters N is not a preflight count, so the refusal names only the floor."""
+        mock_secondary_client.list_custom_resources.return_value = [{"metadata": {"name": "cluster-a"}}]
+        act = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            min_managed_clusters=3,
+            expected_managed_cluster_names=["cluster-a"],
+            enforce_expected_managed_cluster_names=True,
+        )
+
+        with pytest.raises(FatalError) as refused:
+            act._verify_managed_clusters_restored()
+        assert (
+            str(refused.value) == "Expected at least 3 ManagedCluster(s) after restore, but found only 1: ['cluster-a']"
+        )
+
     def test_unenforced_names_with_zero_floor_allow_an_empty_hub(self, mock_secondary_client, mock_state_manager):
         """With a zero floor and no enforced names an empty hub is informational only."""
         mock_secondary_client.list_custom_resources.return_value = []

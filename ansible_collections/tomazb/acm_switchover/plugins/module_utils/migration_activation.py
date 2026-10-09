@@ -866,11 +866,6 @@ def verify_managed_clusters(
         raise ActivationRefused(
             f"Missing expected ManagedCluster(s) after restore: {', '.join(missing)}. Found {count}: {names}"
         )
-    if enforce and count < min_managed_clusters:
-        raise ActivationRefused(
-            f"Expected {min_managed_clusters} ManagedCluster(s) from primary preflight after restore, "
-            f"but found only {count}: {names}"
-        )
     if min_managed_clusters == 0 or count >= min_managed_clusters:
         return {"detail": f"Found {count} ManagedCluster(s) on secondary hub: {', '.join(names)}"}
     raise ActivationRefused(

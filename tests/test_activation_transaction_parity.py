@@ -765,6 +765,15 @@ def test_a_waiver_never_lifts_the_count_floor_identically(tmp_path):
     assert outcomes[0] is not None
 
 
+@pytest.mark.parametrize("kind", KINDS)
+def test_an_explicit_floor_above_the_restored_count_refuses_identically(tmp_path, kind):
+    """--min-managed-clusters N with the derived names present: the floor, not preflight, is unmet."""
+    forms = _accepted(tmp_path, kind)
+    outcomes = forms.wait(kind, expected=("cluster-a",), minimum=3)
+    forms.assert_same(outcomes)
+    assert outcomes[0] == "Expected at least 3 ManagedCluster(s) after restore, but found only 1: ['cluster-a']"
+
+
 def _interrupt_before_completed_at(forms):
     """Both form factors stopped between the bundle write and the completed_at write."""
     python_journal = RunRecord(forms.state).migration_backups()

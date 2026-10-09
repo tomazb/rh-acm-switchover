@@ -105,7 +105,7 @@ def test_managed_cluster_inputs_survive_the_non_native_templating_floor(monkeypa
     inputs = {"expected_names": ["a"], "min_managed_clusters": minimum, "enforce": enforce}
     assert _run(monkeypatch, "managed_clusters_poll", {"mc_read": _mc_read("a"), **inputs})["state"] == "pending"
     refused = _run(monkeypatch, "verify_managed_clusters", {"mc_read": _mc_read("a"), **inputs})
-    assert refused["failed"] is True and "Expected 2 ManagedCluster(s)" in refused["msg"]
+    assert refused["failed"] is True and "Expected at least 2 ManagedCluster(s)" in refused["msg"]
 
 
 @pytest.mark.parametrize("minimum, enforce", [("-1", True), ("two", True), (1, "yes"), (True, True)])
