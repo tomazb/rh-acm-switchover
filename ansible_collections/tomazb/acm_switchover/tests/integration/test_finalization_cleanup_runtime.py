@@ -89,6 +89,7 @@ def run_finalization(tmp_path):
         extra=None,
         published=None,
         tz=None,
+        entry=None,
     ):
         operation = KIND_OPERATION[kind]
         path = tmp_path / "finalization-checkpoint.json"
@@ -116,12 +117,22 @@ def run_finalization(tmp_path):
         hub.journal_probe = probe
         kubeconfig = tmp_path / "secondary.kubeconfig"
         write_kubeconfig(kubeconfig, context="secondary-hub", server=hub.url, token="fixture-token")
+        primary_kubeconfig = ""
+        if entry == "main":
+            # The role entry guard validates the hub inputs as preflight would.
+            primary_kubeconfig = str(tmp_path / "primary.kubeconfig")
+            write_kubeconfig(Path(primary_kubeconfig), context="primary-hub", server=hub.url, token="fixture-token")
         variables = {
             "acm_switchover_hubs": {
-                "primary": {"context": "primary-hub", "kubeconfig": ""},
+                "primary": {"context": "primary-hub", "kubeconfig": primary_kubeconfig},
                 "secondary": {"context": "secondary-hub", "kubeconfig": str(kubeconfig)},
             },
-            "acm_switchover_operation": dict(operation, restore_only=False, old_hub_action="secondary"),
+            "acm_switchover_operation": dict(
+                operation,
+                restore_only=False,
+                old_hub_action="secondary",
+                **({"migration_cleanup_repair": repair} if entry == "main" and repair else {}),
+            ),
             "acm_switchover_execution": {
                 "mode": mode,
                 "report_dir": str(tmp_path / "artifacts"),
@@ -154,6 +165,15 @@ def run_finalization(tmp_path):
             }
             for task in tasks
         ]
+        # entry="main" runs the role's main.yml: its own checkpoint enter, role entry guard
+        # and fact publication, with the repair request as the operator supplies it.
+        if entry == "main":
+            include = [
+                {
+                    "name": "Run the finalization role",
+                    "ansible.builtin.include_role": {"name": "tomazb.acm_switchover.finalization"},
+                }
+            ]
         playbook = tmp_path / "finalization.yml"
         playbook.write_text(
             yaml.safe_dump(
@@ -163,16 +183,22 @@ def run_finalization(tmp_path):
                         "connection": "local",
                         "gather_facts": False,
                         "tasks": [
-                            {
-                                "name": "Enter the finalization checkpoint",
-                                "tomazb.acm_switchover.checkpoint_phase": {
-                                    "phase": "finalization",
-                                    "checkpoint": "{{ acm_switchover_execution.checkpoint }}",
-                                    "status": "enter",
-                                },
-                                "register": "_checkpoint_enter",
-                            },
-                            prelude,
+                            *(
+                                []
+                                if entry == "main"
+                                else [
+                                    {
+                                        "name": "Enter the finalization checkpoint",
+                                        "tomazb.acm_switchover.checkpoint_phase": {
+                                            "phase": "finalization",
+                                            "checkpoint": "{{ acm_switchover_execution.checkpoint }}",
+                                            "status": "enter",
+                                        },
+                                        "register": "_checkpoint_enter",
+                                    },
+                                    prelude,
+                                ]
+                            ),
                             *(
                                 [
                                     {
@@ -378,6 +404,30 @@ def test_a_repair_with_an_occupied_locator_is_refused(run_activation, run_finali
     assert "repair_locator_occupied" in run.output
     assert run.journal == recovered.journal
     assert hub.acm[name]["metadata"]["uid"] == "uid-replacement"
+
+
+def test_the_role_entry_derives_the_repair_request_from_the_operator_input(
+    run_activation, run_finalization, hub  # noqa: F811
+):
+    """Task 10 carry-forward: main.yml takes the request from the role entry guard's validated inputs."""
+    journal = completed_journal(run_activation, "full_restore", hub)
+    run_finalization("full_restore", hub, journal, extra={"_acm_cleanup_poll_delays": []})
+    recovered = run_finalization("full_restore", hub, None)
+    assert recovered.journal["cleanup"]["state"] == "recovery_required"
+
+    blocked = run_finalization("full_restore", hub, None, entry="main")
+    assert blocked.completed.returncode != 0
+    assert "cleanup_recovery_required" in blocked.output
+    assert blocked.journal == recovered.journal
+
+    request = dict(REPAIR, run_id=journal["run_id"], operation_id=recovered.journal["cleanup"]["operation_id"])
+    # The repair is durable before the old-hub tail, which this fake hub does not serve.
+    repaired = run_finalization("full_restore", hub, None, repair=request, entry="main")
+
+    cleanup = repaired.journal["cleanup"]
+    assert cleanup["state"] == "repaired", repaired.output
+    assert {key: cleanup["repair"][key] for key in request} == request
+    assert cleanup["recovery"] == recovered.journal["cleanup"]["recovery"]
 
 
 def test_enablement_refuses_a_replacement_at_the_completed_locator(run_activation, run_finalization, hub):  # noqa: F811
