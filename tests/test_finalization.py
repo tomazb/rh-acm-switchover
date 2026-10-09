@@ -2543,9 +2543,8 @@ def _live(uid=RESTORE_UID, rv="2002", generation=4, **spec):
             "resourceVersion": rv,
             "generation": generation,
         },
-        "spec": dict(restore["backup_fields"], cleanupBeforeRestore="CleanupRestored"),
+        "spec": {**restore["backup_fields"], "cleanupBeforeRestore": "CleanupRestored", **spec},
     }
-    body["spec"].update(spec)
     return StrictReadOutcome.from_resource(body, resource_version=rv)
 
 
@@ -3041,7 +3040,7 @@ class TestRestoreCleanupTransaction:
         fin.backup_manager.ensure_enabled.assert_not_called()
 
     def test_the_transaction_runs_before_the_old_hub_mco_teardown(self, tmp_path, cleanup_secondary):
-        order = []
+        order: list[str] = []
         fin = _cleanup_fin(
             _cleanup_state(tmp_path, CLEANUP_DONE),
             cleanup_secondary,
@@ -3308,7 +3307,7 @@ class TestOldHubEvidenceGate:
     ):
         cleanup_secondary.get_custom_resource_strict.return_value = ABSENT
         fin = _old_hub_fin(tmp_path, cleanup_secondary, journal)
-        order = []
+        order: list[str] = []
 
         with _old_hub_actions(fin, order):
             assert fin.finalize() is True
@@ -3322,7 +3321,7 @@ class TestOldHubEvidenceGate:
         self, tmp_path, cleanup_secondary, barrier, no_sleep
     ):
         """A pass that starts the cleanup proves the barrier by control flow before any old-hub action."""
-        order = []
+        order: list[str] = []
         barrier.side_effect = lambda journal: order.append("barrier")
         cleanup_secondary.get_custom_resource_strict.side_effect = [_live(), ABSENT, ABSENT, ABSENT, ABSENT]
         cleanup_secondary.delete_restore_guarded.return_value = _accepted()
@@ -3339,7 +3338,7 @@ class TestOldHubEvidenceGate:
     def test_a_failed_teardown_barrier_reaches_no_old_hub_action(self, tmp_path, cleanup_secondary, barrier):
         barrier.side_effect = FatalError("Journaled credentials child was replaced or changed")
         fin = _old_hub_fin(tmp_path, cleanup_secondary, CLEANUP_POST)
-        order = []
+        order: list[str] = []
 
         with _old_hub_actions(fin, order):
             assert fin.finalize() is False
@@ -3357,7 +3356,7 @@ class TestOldHubEvidenceGate:
     def test_missing_evidence_refuses_before_the_mco_teardown(self, tmp_path, cleanup_secondary, journal, read, code):
         cleanup_secondary.get_custom_resource_strict.return_value = read
         fin = _old_hub_fin(tmp_path, cleanup_secondary, journal)
-        order = []
+        order: list[str] = []
 
         with _old_hub_actions(fin, order):
             assert fin.finalize() is False
@@ -3370,7 +3369,7 @@ class TestOldHubEvidenceGate:
         """A replacement that appears after the MCO teardown gate still blocks the later disposition."""
         cleanup_secondary.get_custom_resource_strict.side_effect = [ABSENT, _live(uid="uid-new", rv="3003")]
         fin = _old_hub_fin(tmp_path, cleanup_secondary, CLEANUP_DONE)
-        order = []
+        order: list[str] = []
 
         with _old_hub_actions(fin, order):
             assert fin.finalize() is False
@@ -3386,7 +3385,7 @@ class TestOldHubEvidenceGate:
             _mutated(CLEANUP_DONE, restore__names_verified_at=None),
             old_hub_action="decommission",
         )
-        order = []
+        order: list[str] = []
 
         with _old_hub_actions(fin, order):
             assert fin.finalize() is False
@@ -3397,7 +3396,7 @@ class TestOldHubEvidenceGate:
     def test_an_unreadable_locator_is_never_absence(self, tmp_path, cleanup_secondary):
         cleanup_secondary.get_custom_resource_strict.return_value = StrictReadOutcome.error("read_failed")
         fin = _old_hub_fin(tmp_path, cleanup_secondary, CLEANUP_DONE)
-        order = []
+        order: list[str] = []
 
         with _old_hub_actions(fin, order):
             assert fin.finalize() is False
@@ -3406,7 +3405,7 @@ class TestOldHubEvidenceGate:
 
     def test_old_hub_action_none_reads_nothing(self, tmp_path, cleanup_secondary):
         fin = _old_hub_fin(tmp_path, cleanup_secondary, CLEANUP_DONE, old_hub_action="none")
-        order = []
+        order: list[str] = []
 
         with _old_hub_actions(fin, order):
             assert fin.finalize() is True
@@ -3418,7 +3417,7 @@ class TestOldHubEvidenceGate:
         """A preview keeps the journal non-terminal; it reads nothing and is never gated."""
         cleanup_secondary.dry_run = True
         fin = _old_hub_fin(tmp_path, cleanup_secondary, CLEANUP_INTENT, dry_run=True)
-        order = []
+        order: list[str] = []
 
         with _old_hub_actions(fin, order):
             assert fin.finalize() is True
