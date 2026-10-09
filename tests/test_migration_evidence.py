@@ -34,10 +34,12 @@ from lib.migration_cleanup import (
     delete_outcome,
     final_absence,
     generic_cleanup_restores,
+    poll_read_timeout,
     pre_delete,
     repair_cleanup,
     require_locator_absent,
     require_old_hub_evidence,
+    require_within_deadline,
     teardown_revalidated,
 )
 from lib.migration_evidence import (
@@ -130,6 +132,8 @@ FUNCTIONS = {
     "pre_delete": pre_delete,
     "repair_cleanup": repair_cleanup,
     "require_locator_absent": require_locator_absent,
+    "poll_read_timeout": poll_read_timeout,
+    "require_within_deadline": require_within_deadline,
     "require_old_hub_evidence": require_old_hub_evidence,
     "teardown_revalidated": teardown_revalidated,
 }

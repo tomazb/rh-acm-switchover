@@ -3416,3 +3416,59 @@ class TestOldHubEvidenceGate:
         source = inspect.getsource(acm_switchover.run_decommission) + inspect.getsource(decommission_module)
         for name in ("migration_backups", "migration_cleanup", "require_old_hub_evidence"):
             assert name not in source
+
+
+# -- Task 10 review round 2: the polling deadline holds at classification ---------------------------
+
+
+@pytest.mark.unit
+def test_a_completion_classified_past_the_deadline_is_never_persisted(tmp_path, cleanup_secondary, no_sleep):
+    """Edge 1 (Codex): the read ends at 299.9 s, classification happens at 300.1 s: no completion."""
+    clock = {"now": 0.0, "bump": False}
+    reads = {"count": 0}
+
+    def _monotonic():
+        now = clock["now"]
+        if clock["bump"]:  # the first check after the final read passes; time moves on before persisting
+            clock["bump"] = False
+            clock["now"] += 0.2
+        return now
+
+    def _read(**kwargs):
+        reads["count"] += 1
+        if reads["count"] == 1:
+            return _live()
+        if reads["count"] == 2:
+            return ABSENT
+        clock["now"] = 299.9  # the final read ends just inside the deadline (set at 0 + 300)
+        clock["bump"] = True
+        return ABSENT
+
+    cleanup_secondary.get_custom_resource_strict.side_effect = _read
+    cleanup_secondary.delete_restore_guarded.return_value = _accepted()
+    fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_INTENT), cleanup_secondary)
+
+    with patch("modules.finalization.time.monotonic", side_effect=_monotonic):
+        with pytest.raises(FatalError, match="poll_deadline_passed"):
+            fin._run_restore_cleanup_transaction()
+
+    assert reads["count"] == 3
+    assert _stored(tmp_path)["cleanup"]["state"] == "delete_accepted"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("remaining", "expected"), [(0.2, None), (0.999, None), (1.7, 1), (299.5, 30)])
+def test_a_poll_read_is_capped_to_the_floored_remaining_budget(tmp_path, cleanup_secondary, remaining, expected):
+    """Edge 2 (Codex): with 0.2 s left no 1 s read is allowed; each read is floored and capped."""
+    cleanup_secondary.get_custom_resource_strict.return_value = ABSENT
+    fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_ACCEPTED), cleanup_secondary)
+
+    with patch("modules.finalization.time.monotonic", return_value=1000.0):
+        result = fin._strict_get_before(CLEANUP_ACCEPTED, 1000.0 + remaining)
+
+    if expected is None:
+        assert result is finalization_module._DEADLINE_PASSED
+        cleanup_secondary.get_custom_resource_strict.assert_not_called()
+    else:
+        assert result is None
+        assert cleanup_secondary.get_custom_resource_strict.call_args.kwargs["request_timeout"] == expected

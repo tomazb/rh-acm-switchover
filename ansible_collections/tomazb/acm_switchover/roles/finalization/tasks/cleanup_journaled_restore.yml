@@ -188,12 +188,14 @@
             loop_var: _acm_cleanup_attempt
 
         # The poll timeout is elapsed time: waits, reads and the final verification all count.
+        # Epoch seconds from now() (local, naive), the clock acm_migration_evidence checks with
+        # time.time(); now(utc=true).timestamp() would read a UTC wall time as local.
         - name: Start the absence poll
           ansible.builtin.set_fact:
             _acm_cleanup_done: false
             _acm_cleanup_deadline: >-
               {{
-                now(utc=true).timestamp()
+                now().timestamp()
                 + (_acm_cleanup_poll_timeout | default(_acm_cleanup_schedule.poll_timeout) | float)
               }}
 

@@ -627,3 +627,21 @@ def test_the_old_hub_gate_refuses_unverified_activation_names(run_activation, ru
     assert "activation_names_unverified" in run.output
     # The cleanup itself completed; only the old-hub actions stay blocked.
     assert run.journal["cleanup"]["state"] == "completed"
+
+
+def test_a_sub_second_poll_budget_issues_no_read_and_completes_nothing(
+    run_activation, run_finalization, hub  # noqa: F811
+):
+    """Edge 2 (Codex): under one second of budget left, no read (rounded up to 1 s) is allowed."""
+    journal = completed_journal(run_activation, "full_restore", hub)
+    name = journal["restore"]["name"]
+    path = _RESTORES + name
+
+    run = run_finalization("full_restore", hub, journal, extra={"_acm_cleanup_poll_timeout": 0.9})
+
+    assert run.completed.returncode != 0
+    assert "Timeout waiting for the journaled Restore" in run.output
+    assert run.journal["cleanup"]["state"] == "delete_accepted"
+    methods = [request["method"] for request in hub.requests if request["path"] == path]
+    deleted_at = len(methods) - 1 - methods[::-1].index("DELETE")
+    assert methods[deleted_at + 1 :] == []

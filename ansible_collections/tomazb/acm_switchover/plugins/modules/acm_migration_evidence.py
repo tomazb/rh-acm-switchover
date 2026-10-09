@@ -33,6 +33,7 @@ options:
       - cleanup_generic_restores
       - cleanup_intent
       - cleanup_locator_absent
+      - cleanup_poll_read_timeout
       - cleanup_pre_delete
       - cleanup_repair
       - cleanup_schedule
@@ -84,6 +85,9 @@ options:
         C(restores_read); C(cleanup_intent) generates its C(operation_id), and
         C(teardown_revalidated), C(cleanup_intent) and the cleanup steps that can record a
         transition their timestamp, unless supplied.
+      - C(cleanup_absence_poll) and C(cleanup_final_absence) take the poll C(deadline) in epoch
+        seconds and refuse once it has passed; C(cleanup_poll_read_timeout) returns the whole
+        seconds a poll read may take before that C(deadline), or null when under one second.
     type: dict
     default: {}
 author:
@@ -131,6 +135,7 @@ write:
   type: bool
 """
 
+import time  # noqa: E402
 import uuid  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
 from typing import Callable, Dict  # noqa: E402
@@ -212,8 +217,15 @@ _OPERATIONS: Dict[str, Callable[[dict], dict]] = {
     "cleanup_delete_outcome": lambda inputs: cleanup.delete_outcome(
         **_with_time(dict(inputs, attempt=_native(inputs["attempt"])), "now")
     ),
-    "cleanup_absence_poll": lambda inputs: cleanup.absence_poll(**_with_time(_with_locator(inputs), "now")),
-    "cleanup_final_absence": lambda inputs: cleanup.final_absence(**_with_time(_with_locator(inputs), "now")),
+    "cleanup_absence_poll": lambda inputs: cleanup.absence_poll(
+        **_with_time(_with_locator(_within_deadline(inputs)), "now")
+    ),
+    "cleanup_final_absence": lambda inputs: cleanup.final_absence(
+        **_with_time(_with_locator(_within_deadline(inputs)), "now")
+    ),
+    "cleanup_poll_read_timeout": lambda inputs: {
+        "request_timeout": cleanup.poll_read_timeout(remaining=float(inputs["deadline"]) - time.time())
+    },
     "cleanup_repair": lambda inputs: cleanup.repair_cleanup(**_with_time(_with_locator(inputs), "now")),
     "cleanup_locator_absent": lambda inputs: cleanup.require_locator_absent(**_with_locator(inputs)),
     "old_hub_evidence": lambda inputs: cleanup.require_old_hub_evidence(
@@ -235,6 +247,15 @@ def _with_locator(inputs: dict) -> dict:
     journal = resolved.get("journal")
     label = f"Restore {journal['restore']['name']}" if isinstance(journal, dict) else "The journaled Restore"
     resolved["live"] = transaction.strict_get(resolved.pop("live_read"), label)
+    return resolved
+
+
+def _within_deadline(inputs: dict) -> dict:
+    """A poll decision re-checks the elapsed deadline (epoch seconds) itself, at classification."""
+    resolved = dict(inputs)
+    deadline = resolved.pop("deadline", None)
+    if deadline is not None:
+        cleanup.require_within_deadline(remaining=float(deadline) - time.time())
     return resolved
 
 

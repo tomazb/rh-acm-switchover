@@ -190,3 +190,26 @@ def test_standalone_decommission_never_consults_the_migration_journal():
         text = path.read_text(encoding="utf-8")
         for name in ("acm_migration_evidence", "migration_journal", _OLD_HUB_GATE):
             assert name not in text, (path.name, name)
+
+
+def test_every_poll_persist_rechecks_the_deadline_at_its_own_execution():
+    """Edge 1: a deadline check cached before the decision never authorizes the write."""
+    fresh = "now().timestamp() <= (_acm_cleanup_deadline | float)"
+    tasks = list(_walk(_load("poll_journaled_restore_absent.yml")))
+    persists = [task for task in tasks if "tomazb.acm_switchover.checkpoint_phase" in task]
+    assert len(persists) == 2
+    for task in persists:
+        assert fresh in " ".join(str(item) for item in task["when"]), task["name"]
+        assert isinstance(task.get("register"), str), task["name"]
+    decisions = [
+        task["tomazb.acm_switchover.acm_migration_evidence"]
+        for task in tasks
+        if "tomazb.acm_switchover.acm_migration_evidence" in task
+    ]
+    for decision in decisions:
+        if decision["operation"] in ("cleanup_absence_poll", "cleanup_final_absence"):
+            assert decision["inputs"]["deadline"] == "{{ _acm_cleanup_deadline }}"
+    reads = [task for task in tasks if (task.get("vars") or {}).get("_acm_read")]
+    for task in reads:
+        assert task["vars"]["_acm_read"]["request_timeout"] == "{{ _acm_cleanup_read_timeout.request_timeout }}"
+        assert "_acm_cleanup_read_timeout.request_timeout is not none" in str(task["when"])

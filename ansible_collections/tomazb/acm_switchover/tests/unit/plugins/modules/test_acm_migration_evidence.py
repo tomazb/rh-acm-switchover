@@ -8,6 +8,7 @@ tests/test_activation_transaction_parity.py at the repository root.
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from pathlib import Path
 
@@ -284,3 +285,43 @@ def test_the_repair_flag_survives_the_text_rendering_of_the_core_floor(monkeypat
         {"journal": _journal("journal-cleanup-recovery-required"), "repair_requested": "True"},
     )
     assert result == {"changed": False, "step": "repair"}
+
+
+# -- Task 10 review round 2: the polling deadline holds at classification ---------------------------
+
+
+@pytest.mark.parametrize("operation", ["cleanup_absence_poll", "cleanup_final_absence"])
+def test_a_poll_decision_past_the_deadline_is_refused(monkeypatch, operation):
+    """Edge 1: the decision itself re-checks elapsed time; a cached earlier check never authorizes it."""
+    result = _run(
+        monkeypatch,
+        operation,
+        {
+            "journal": _journal("journal-cleanup-delete-accepted"),
+            "live_read": {"read_status": "not_found", "resources": []},
+            "deadline": str(time.time() - 0.1),
+        },
+    )
+    assert result["failed"] is True
+    assert result["msg"].startswith("Migration evidence refused (poll_deadline_passed:")
+
+
+def test_a_final_decision_within_the_deadline_completes(monkeypatch):
+    result = _run(
+        monkeypatch,
+        "cleanup_final_absence",
+        {
+            "journal": _journal("journal-cleanup-delete-accepted"),
+            "live_read": {"read_status": "not_found", "resources": []},
+            "deadline": str(time.time() + 60),
+        },
+    )
+    assert result["state"] == "completed"
+
+
+@pytest.mark.parametrize(("remaining", "expected"), [(0.2, None), (1.7, 1), (299.5, 30)])
+def test_the_poll_read_timeout_is_the_floored_remaining_budget(monkeypatch, remaining, expected):
+    """Edge 2: under a second left, no read is allowed."""
+    monkeypatch.setattr(module.time, "time", lambda: 1000.0)
+    result = _run(monkeypatch, "cleanup_poll_read_timeout", {"deadline": str(1000.0 + remaining)})
+    assert result == {"changed": False, "request_timeout": expected}

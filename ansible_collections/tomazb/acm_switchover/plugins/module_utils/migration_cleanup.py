@@ -29,6 +29,7 @@ which also re-proves the restore/cleanup copy and the fingerprint.
 from __future__ import annotations
 
 import copy
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
@@ -75,6 +76,33 @@ def cleanup_schedule() -> Dict[str, Any]:
         "poll_timeout": RESTORE_CLEANUP_POLL_TIMEOUT,
         "request_timeout": RESTORE_CLEANUP_REQUEST_TIMEOUT,
     }
+
+
+def poll_read_timeout(*, remaining: Any) -> Optional[int]:
+    """Whole seconds one absence-poll read may take within the remaining budget, or None.
+
+    The budget is floored and capped at the shared request timeout, so a read never
+    outlasts the poll deadline; under one second left there is no read at all.
+    """
+    if not _is_number(remaining):
+        raise MigrationEvidenceError("malformed_cleanup_input", "the remaining poll budget is not a number")
+    seconds = min(math.floor(remaining), RESTORE_CLEANUP_REQUEST_TIMEOUT)
+    return seconds if seconds >= 1 else None
+
+
+def require_within_deadline(*, remaining: Any) -> Dict[str, Any]:
+    """Refuse a poll decision or its write once the elapsed poll deadline has passed.
+
+    Checked again immediately before classifying and persisting, never cached from an
+    earlier read.
+    """
+    if not _is_number(remaining):
+        raise MigrationEvidenceError("malformed_cleanup_input", "the remaining poll budget is not a number")
+    if remaining < 0:
+        raise MigrationEvidenceError(
+            "poll_deadline_passed", "the absence-poll deadline passed; the cleanup stays resumable"
+        )
+    return {}
 
 
 def cleanup_step(*, journal: Any, repair_requested: Any) -> Dict[str, str]:
@@ -386,6 +414,10 @@ def _recovery(journal: Dict[str, Any], reason: str, live: Optional[Dict[str, Any
         },
     )
     return validate_journal_transition(journal, candidate)
+
+
+def _is_number(value: Any) -> bool:
+    return type(value) in (int, float)
 
 
 def _positive_int(value: Any) -> bool:

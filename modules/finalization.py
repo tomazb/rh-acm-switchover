@@ -3,7 +3,6 @@
 # Runbook: Steps 11-12 (finalization) and Step 14 (old hub handling)
 
 import logging
-import math
 import time
 import uuid
 from contextlib import AbstractContextManager, nullcontext
@@ -65,10 +64,12 @@ from lib.migration_cleanup import (
     delete_outcome,
     final_absence,
     generic_cleanup_restores,
+    poll_read_timeout,
     pre_delete,
     repair_cleanup,
     require_locator_absent,
     require_old_hub_evidence,
+    require_within_deadline,
     teardown_revalidated,
 )
 from lib.migration_evidence import MigrationEvidenceError
@@ -451,12 +452,15 @@ class Finalization:
                 break
             poll = self._evidence(absence_poll, journal=journal, live=live, now=_now_iso())
             if poll["state"] == "recover":
+                self._require_within(deadline)
                 self._record_recovery(poll["candidate"])
             if poll["state"] == "absent":
                 live = self._strict_get_before(journal, deadline)
                 if live is _DEADLINE_PASSED:
                     break
                 final = self._evidence(final_absence, journal=journal, live=live, now=_now_iso())
+                # Re-checked at the decision itself, never taken from the read's check.
+                self._require_within(deadline)
                 if final["state"] == "recover":
                     self._record_recovery(final["candidate"])
                 logger.info("Journaled Restore %s deleted and its absence verified", name)
@@ -467,12 +471,16 @@ class Finalization:
         )
 
     def _strict_get_before(self, journal: Dict, deadline: float):
-        """One strict locator GET bounded by the remaining poll budget; _DEADLINE_PASSED once it is spent."""
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        """One strict locator GET within the floored remaining poll budget; _DEADLINE_PASSED once it is spent."""
+        timeout = self._evidence(poll_read_timeout, remaining=deadline - time.monotonic())
+        if timeout is None:
             return _DEADLINE_PASSED
-        live = self._strict_get_journaled_restore(journal, request_timeout=max(1, math.ceil(remaining)))
+        live = self._strict_get_journaled_restore(journal, request_timeout=timeout)
         return _DEADLINE_PASSED if time.monotonic() > deadline else live
+
+    def _require_within(self, deadline: float) -> None:
+        """The poll deadline, checked immediately before a poll decision is persisted."""
+        self._evidence(require_within_deadline, remaining=deadline - time.monotonic())
 
     def _repair_restore_cleanup(self, journal: Dict) -> Dict:
         """Record the operator's audited repair once a fresh strict read proves the locator absent."""

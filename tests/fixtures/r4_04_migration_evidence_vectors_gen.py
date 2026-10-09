@@ -5590,6 +5590,34 @@ for case_id, doc, code in (
 ohcase("old-hub-gate-waived-occupied-locator-blocks", OH_WAIVED, LIVE_REPLACEMENT, err("locator_occupied"))
 
 
+# --- Cleanup polling deadline (Task 10 review round 2) ------------------------------------------
+# J §4a "poll within a fixed timeout": the deadline bounds every read and every classification.
+fn = "poll_read_timeout"
+for case_id, remaining, expect in (
+    ("poll-read-timeout-full-budget-capped", 300, ok(30)),
+    ("poll-read-timeout-floors-the-budget", 29.9, ok(29)),
+    ("poll-read-timeout-one-second", 1.0, ok(1)),
+    ("poll-read-timeout-floors-below-two", 1.7, ok(1)),
+    ("poll-read-timeout-under-a-second-skips-the-read", 0.999, ok(None)),
+    ("poll-read-timeout-fraction-skips-the-read", 0.2, ok(None)),
+    ("poll-read-timeout-spent-budget", 0, ok(None)),
+    ("poll-read-timeout-past-deadline", -5, ok(None)),
+    ("poll-read-timeout-boolean-malformed", True, err("malformed_cleanup_input")),
+    ("poll-read-timeout-text-malformed", "10", err("malformed_cleanup_input")),
+):
+    case(case_id, ALL, cl_refs("boundary"), fn, {"remaining": remaining}, expect)
+
+fn = "require_within_deadline"
+for case_id, remaining, expect in (
+    ("within-deadline-with-budget", 0.1, ok({})),
+    ("within-deadline-at-the-deadline", 0, ok({})),
+    ("within-deadline-just-past-refused", -0.1, err("poll_deadline_passed")),
+    ("within-deadline-boolean-malformed", False, err("malformed_cleanup_input")),
+    ("within-deadline-text-malformed", "0", err("malformed_cleanup_input")),
+):
+    case(case_id, ALL, cl_refs("boundary"), fn, {"remaining": remaining}, expect)
+
+
 def build():
     """Return the fixture text: a readable header, then one compact case per line."""
     for c in cases:
