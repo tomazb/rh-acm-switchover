@@ -145,34 +145,49 @@ def test_the_phase_result_reports_the_journaled_cleanup():
 # -- Plan Task 11: the evidence gate before every integrated old-hub action --------------------
 
 _OLD_HUB_GATE = "require_old_hub_evidence.yml"
-_PREVIEW_GATE = "not (_acm_preview | bool)"
 
 
-def test_the_evidence_gate_immediately_precedes_every_old_hub_action():
-    """The observability teardown is the first old-hub action; the disposition re-proves the evidence."""
-    run = next(task for task in _load("main.yml") if task.get("name") == "Run finalization phase")
-    tasks = run["block"]
-    includes = [task.get(_INCLUDE) for task in tasks]
-    assert includes.index("cleanup_journaled_restore.yml") < includes.index(_OLD_HUB_GATE)
-    gates = {}
-    for action in ("disable_old_hub_observability.yml", "handle_old_hub.yml"):
-        gate = tasks[includes.index(action) - 1]
-        assert gate[_INCLUDE] == _OLD_HUB_GATE, action
-        assert _PREVIEW_GATE in gate["when"], action
-        gates[action] = [condition for condition in gate["when"] if condition != _PREVIEW_GATE]
-    # The gates cover exactly the runs whose action can mutate the old hub.
-    assert (
-        gates["disable_old_hub_observability.yml"] == tasks[includes.index("disable_old_hub_observability.yml")]["when"]
+_EXECUTE_GATE = ["(acm_switchover_execution.mode | default('dry_run')) == 'execute'", "not ansible_check_mode"]
+
+
+def _gate_position(tasks: list, before: str) -> dict:
+    """The old-hub gate include immediately before the named task."""
+    names = [task.get("name") for task in tasks]
+    gate = tasks[names.index(before) - 1]
+    assert gate.get(_INCLUDE) == _OLD_HUB_GATE, before
+    return gate
+
+
+def test_each_old_hub_adapter_gates_itself_before_its_first_old_hub_request():
+    """Codex warning on cb0302ff: a direct `tasks_from` entry is gated too; the phase reads once per action."""
+    assert _OLD_HUB_GATE not in _phase_includes()
+    observability = _load("disable_old_hub_observability.yml")
+    gate = _gate_position(observability, "Initialize the shared teardown's outcome recording")
+    assert gate["when"] == _EXECUTE_GATE
+    names = [task.get("name") for task in observability]
+    assert names.index("Require durable checkpoint state before the old hub observability teardown") < names.index(
+        gate["name"]
     )
-    assert gates["handle_old_hub.yml"] == [
-        "not (acm_switchover_operation.restore_only | default(false))",
-        "(acm_switchover_operation.old_hub_action | default('secondary')) in ['secondary', 'decommission']",
+    handle = _load("handle_old_hub.yml")
+    secondary = next(task for task in handle if task.get("name") == "Set up old hub as secondary")["block"]
+    assert secondary[0].get(_INCLUDE) == _OLD_HUB_GATE
+    assert secondary[0]["when"] == _EXECUTE_GATE
+    decommission = _gate_position(handle, "Build embedded decommission settings")
+    assert decommission["when"] == [
+        "(acm_switchover_operation.old_hub_action | default('secondary')) == 'decommission'",
+        *_EXECUTE_GATE,
     ]
-    assert includes.count(_OLD_HUB_GATE) == 2
+
+
+def test_the_evidence_gate_refuses_without_the_finalization_migration_context():
+    first = _load(_OLD_HUB_GATE)[0]
+    assert "ansible.builtin.fail" in first
+    for fact in ("_acm_journal", "_acm_has_journal", "acm_switchover_journaled_restore_cleanup_result"):
+        assert f"{fact} is not defined" in first["when"], fact
 
 
 def test_the_evidence_gate_is_one_strict_read_and_one_decision():
-    gate = _load(_OLD_HUB_GATE)
+    gate = _load(_OLD_HUB_GATE)[1:]
     assert gate[0][_INCLUDE].endswith("/activation/tasks/strict_read.yml")
     assert gate[0]["vars"]["_acm_read"]["read_mode"] == "get"
     assert [

@@ -87,16 +87,6 @@
     - name: Discover secondary hub resources
       ansible.builtin.include_tasks: discover_resources.yml
 
-    # R4-04 (July design section 4): the observability teardown is the first old-hub action, so the
-    # complete migration evidence and a fresh absent locator are required before it.
-    - name: Require the migration evidence before the old hub observability teardown
-      ansible.builtin.include_tasks: require_old_hub_evidence.yml
-      when:
-        - not (acm_switchover_operation.restore_only | default(false))
-        - not (acm_switchover_features.skip_observability_checks | default(false) | bool)
-        - (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
-        - not (_acm_preview | bool)
-
     - name: Disable observability on the old hub for secondary disposition
       ansible.builtin.include_tasks: disable_old_hub_observability.yml
       when:
@@ -121,14 +111,6 @@
 
     - name: Reset auto-import strategy to default after backup and MCH verification
       ansible.builtin.include_tasks: reset_auto_import.yml
-
-    # Re-proven freshly before the passive Restore or the integrated decommission.
-    - name: Require the migration evidence again before the old hub disposition
-      ansible.builtin.include_tasks: require_old_hub_evidence.yml
-      when:
-        - not (acm_switchover_operation.restore_only | default(false))
-        - (acm_switchover_operation.old_hub_action | default('secondary')) in ['secondary', 'decommission']
-        - not (_acm_preview | bool)
 
     - name: Handle old hub disposition
       ansible.builtin.include_tasks: handle_old_hub.yml

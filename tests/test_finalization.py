@@ -189,6 +189,13 @@ def terminal_cleanup():
 
 
 @pytest.fixture
+def old_hub_evidence_complete():
+    """The migration evidence gate at the old-hub adapter entry passes: the test covers the adapter's own work."""
+    with patch.object(Finalization, "_require_old_hub_evidence") as gate:
+        yield gate
+
+
+@pytest.fixture
 def finalization(mock_secondary_client, mock_state_manager, mock_backup_manager):
     """Create Finalization instance."""
     return Finalization(
@@ -1544,6 +1551,7 @@ class TestFinalization:
         assert not hasattr(finalization_module, "safe_record_gitops_markers")
 
     @patch("modules.decommission.wait_for_condition")
+    @pytest.mark.usefixtures("old_hub_evidence_complete")
     def test_disable_observability_on_old_hub_deletes_mco(
         self, mock_wait, mock_secondary_client, mock_state_manager, mock_backup_manager, mock_mco_primary
     ):
@@ -1605,6 +1613,7 @@ class TestFinalization:
 
     @patch("lib.gitops_detector.record_gitops_markers")
     @patch("modules.decommission.wait_for_condition")
+    @pytest.mark.usefixtures("old_hub_evidence_complete")
     def test_disable_observability_on_old_hub_warns_for_gitops_managed_mco(
         self,
         mock_wait,
@@ -1643,6 +1652,7 @@ class TestFinalization:
 
     @patch("lib.gitops_detector.record_gitops_markers")
     @patch("modules.decommission.wait_for_condition")
+    @pytest.mark.usefixtures("old_hub_evidence_complete")
     def test_disable_observability_on_old_hub_no_gitops_warning_without_markers(
         self,
         mock_wait,
@@ -1673,6 +1683,7 @@ class TestFinalization:
 
     @patch("lib.gitops_detector.record_gitops_markers")
     @patch("modules.decommission.wait_for_condition")
+    @pytest.mark.usefixtures("old_hub_evidence_complete")
     def test_disable_observability_on_old_hub_continues_when_marker_recording_fails(
         self,
         mock_wait,
@@ -1788,6 +1799,7 @@ class TestFinalization:
         primary.get_pods.assert_not_called()
 
     @patch("modules.decommission.OBSERVABILITY_TERMINATE_TIMEOUT", 0)
+    @pytest.mark.usefixtures("old_hub_evidence_complete")
     def test_disable_observability_on_old_hub_blocks_when_pods_remain_after_mco_deletion(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager, mock_mco_primary, caplog
     ):
@@ -2449,6 +2461,7 @@ class TestIntegratedDestinationGateWiring:
         assert kwargs["secondary_client"] is mock_secondary_client
         assert kwargs["acknowledge_observability_not_migrated"] is True
 
+    @pytest.mark.usefixtures("old_hub_evidence_complete")
     def test_disable_observability_on_old_hub_passes_the_destination_client_and_the_acknowledgement(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager
     ):
@@ -2477,6 +2490,7 @@ class TestIntegratedDestinationGateWiring:
         )
         assert fin.acknowledge_observability_not_migrated is False
 
+    @pytest.mark.usefixtures("old_hub_evidence_complete")
     def test_a_blocked_destination_gate_fails_the_secondary_action_teardown(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager, mock_mco_primary
     ):
@@ -3036,7 +3050,6 @@ class TestRestoreCleanupTransaction:
         )
         with (
             patch.object(fin, "_run_restore_cleanup_transaction", side_effect=lambda: order.append("cleanup")),
-            patch.object(fin, "_require_old_hub_evidence", side_effect=lambda: order.append("gate")),
             patch.object(fin, "_disable_observability_on_old_hub", side_effect=lambda: order.append("mco")),
             patch.object(fin, "_enable_backup_schedule", side_effect=lambda journal: order.append("enable")),
             patch.object(fin, "_verify_backup_schedule_enabled"),
@@ -3051,7 +3064,7 @@ class TestRestoreCleanupTransaction:
         ):
             assert fin.finalize() is True
 
-        assert order == ["cleanup", "gate", "mco", "enable"]
+        assert order == ["cleanup", "mco", "enable"]
 
 
 @pytest.mark.unit
@@ -3264,14 +3277,19 @@ def _old_hub_fin(tmp_path, secondary, journal, *, old_hub_action="secondary", dr
 
 @contextmanager
 def _old_hub_actions(fin, order):
-    """Record the old-hub actions; every other finalization step after the cleanup is inert."""
+    """Record the old-hub actions (the MCO adapter runs, up to its shared teardown); every other
+    finalization step after the cleanup is inert."""
     with (
         patch.object(fin, "_get_backup_verify_timeout", return_value=1),
         patch.object(fin, "_enable_backup_schedule", side_effect=lambda journal: order.append("enable")),
-        patch.object(fin, "_disable_observability_on_old_hub", side_effect=lambda: order.append("mco")),
+        patch("modules.finalization.Decommission") as decommission_class,
         patch.object(fin, "_setup_old_hub_as_secondary", side_effect=lambda: order.append("secondary")),
         patch.object(fin, "_decommission_old_hub", side_effect=lambda: order.append("decommission")),
     ):
+        teardown = decommission_class.return_value.teardown_observability
+        teardown.side_effect = lambda **kwargs: order.append("mco") or SubstepExecution(
+            SubstepOutcome.COMPLETED, changed=True
+        )
         for name in _LATER_STEPS:
             patch.object(fin, name).start()
         try:
@@ -3472,3 +3490,40 @@ def test_a_poll_read_is_capped_to_the_floored_remaining_budget(tmp_path, cleanup
     else:
         assert result is None
         assert cleanup_secondary.get_custom_resource_strict.call_args.kwargs["request_timeout"] == expected
+
+
+@pytest.mark.unit
+class TestOldHubAdapterEntryGates:
+    """Codex warning on cb0302ff: each old-hub adapter gates itself, not only through finalize()."""
+
+    def test_the_mco_adapter_refuses_without_the_journal_context(self, tmp_path, cleanup_secondary):
+        fin = _old_hub_fin(tmp_path, cleanup_secondary, None)
+
+        with patch("modules.finalization.Decommission") as decommission_class:
+            with pytest.raises(FatalError, match="journal_required"):
+                fin._disable_observability_on_old_hub()
+
+        decommission_class.assert_not_called()
+
+    def test_the_mco_adapter_refuses_an_occupied_locator(self, tmp_path, cleanup_secondary):
+        cleanup_secondary.get_custom_resource_strict.return_value = _live(uid="uid-new", rv="3003")
+        fin = _old_hub_fin(tmp_path, cleanup_secondary, CLEANUP_DONE)
+        fin._cleanup_journal = CLEANUP_DONE
+
+        with patch("modules.finalization.Decommission") as decommission_class:
+            with pytest.raises(FatalError, match="locator_occupied"):
+                fin._disable_observability_on_old_hub()
+
+        decommission_class.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "action, adapter", [("secondary", "_setup_old_hub_as_secondary"), ("decommission", "_decommission_old_hub")]
+    )
+    def test_the_disposition_refuses_without_the_journal_context(self, tmp_path, cleanup_secondary, action, adapter):
+        fin = _old_hub_fin(tmp_path, cleanup_secondary, None, old_hub_action=action)
+
+        with patch.object(fin, adapter) as mutation:
+            with pytest.raises(FatalError, match="journal_required"):
+                fin._handle_old_hub()
+
+        mutation.assert_not_called()

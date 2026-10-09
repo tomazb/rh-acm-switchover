@@ -88,6 +88,7 @@ def run_finalization(tmp_path):
         repair=None,
         extra=None,
         published=None,
+        tz=None,
     ):
         operation = KIND_OPERATION[kind]
         path = tmp_path / "finalization-checkpoint.json"
@@ -210,7 +211,7 @@ def run_finalization(tmp_path):
             capture_output=True,
             text=True,
             check=False,
-            env=_ansible_env(_repo_root(), tmp_path),
+            env=dict(_ansible_env(_repo_root(), tmp_path), **({"TZ": tz} if tz else {})),
             timeout=300,
         )
         return Run(completed, hub, path)
@@ -645,3 +646,100 @@ def test_a_sub_second_poll_budget_issues_no_read_and_completes_nothing(
     methods = [request["method"] for request in hub.requests if request["path"] == path]
     deleted_at = len(methods) - 1 - methods[::-1].index("DELETE")
     assert methods[deleted_at + 1 :] == []
+
+
+@pytest.fixture
+def old_hub(tmp_path):
+    """A primary (old) hub the secondary disposition creates its passive Restore on."""
+    fake = FakeMigrationHub(restores=[])
+    kubeconfig = tmp_path / "primary.kubeconfig"
+    write_kubeconfig(kubeconfig, context="primary-hub", server=fake.url, token="fixture-token")
+    yield fake, {"context": "primary-hub", "kubeconfig": str(kubeconfig)}
+    fake.close()
+
+
+def _hubs(hub, tmp_path, primary):
+    secondary = tmp_path / "secondary.kubeconfig"
+    write_kubeconfig(secondary, context="secondary-hub", server=hub.url, token="fixture-token")
+    return {
+        "acm_switchover_hubs": {
+            "primary": primary,
+            "secondary": {"context": "secondary-hub", "kubeconfig": str(secondary)},
+        }
+    }
+
+
+def test_handle_old_hub_entered_directly_without_a_journal_creates_no_passive_restore(
+    run_finalization, hub, old_hub, tmp_path
+):
+    """Codex warning on cb0302ff: the direct `tasks_from: handle_old_hub` entry gates itself."""
+    primary, primary_hub = old_hub
+
+    run = run_finalization(
+        "full_restore", hub, None, tasks=("handle_old_hub",), extra=_hubs(hub, tmp_path, primary_hub)
+    )
+
+    assert run.completed.returncode != 0
+    assert "no validated migration journal" in run.output
+    assert primary.requests == []
+    assert "restore-acm-passive-sync" not in primary.acm
+
+
+def test_handle_old_hub_creates_the_passive_restore_after_the_evidence_gate(
+    run_activation, run_finalization, hub, old_hub, tmp_path  # noqa: F811
+):
+    primary, primary_hub = old_hub
+    journal = completed_journal(run_activation, "full_restore", hub)
+    name = journal["restore"]["name"]
+
+    run = run_finalization(
+        "full_restore",
+        hub,
+        journal,
+        tasks=("cleanup_journaled_restore", "handle_old_hub"),
+        extra=_hubs(hub, tmp_path, primary_hub),
+    )
+
+    assert run.completed.returncode == 0, run.output
+    assert hub.requests[-1] == {"method": "GET", "path": _RESTORES + name}
+    assert primary.acm["restore-acm-passive-sync"]["spec"]["veleroManagedClustersBackupName"] == "skip"
+
+
+def test_handle_old_hub_refuses_a_replacement_at_the_journaled_locator(
+    run_activation, run_finalization, hub, old_hub, tmp_path  # noqa: F811
+):
+    primary, primary_hub = old_hub
+    journal = completed_journal(run_activation, "full_restore", hub)
+    first = run_finalization("full_restore", hub, journal)
+    assert first.journal["cleanup"]["state"] == "completed"
+    name = journal["restore"]["name"]
+    occupant = passive_restore(name=name)
+    occupant["metadata"]["uid"] = "uid-replacement"
+    hub.acm[name] = occupant
+
+    run = run_finalization(
+        "full_restore",
+        hub,
+        None,
+        tasks=("cleanup_journaled_restore", "handle_old_hub"),
+        extra=_hubs(hub, tmp_path, primary_hub),
+    )
+
+    assert run.completed.returncode != 0
+    assert "locator_occupied" in run.output
+    assert primary.requests == []
+
+
+@pytest.mark.parametrize("tz", ["Etc/GMT-14", "Etc/GMT+12"], ids=["utc-plus-14", "utc-minus-12"])
+def test_the_poll_deadline_is_one_wall_clock_on_a_non_utc_controller(
+    run_activation, run_finalization, hub, tz  # noqa: F811
+):
+    """Clock sweep: the YAML deadline and the module's time.time() share one epoch whatever the
+    controller's zone. A UTC wall time read as local (now(utc=true).timestamp()) puts the deadline
+    14 hours in the past on a UTC+14 controller, so the cleanup would time out without a poll."""
+    journal = completed_journal(run_activation, "full_restore", hub)
+
+    run = run_finalization("full_restore", hub, journal, tz=tz)
+
+    assert run.completed.returncode == 0, run.output
+    assert run.journal["cleanup"]["state"] == "completed"

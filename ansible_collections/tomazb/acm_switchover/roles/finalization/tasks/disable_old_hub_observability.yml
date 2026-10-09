@@ -67,6 +67,15 @@
     - not ansible_check_mode
     - (acm_switchover_execution.mode | default('dry_run')) in ['execute', 'validate']
 
+# R4-04 (July design section 4): the observability teardown is the first old-hub action, so
+# the complete migration evidence and a fresh absent journaled locator are required here,
+# at this adapter's own entry. Previews are not gated.
+- name: Require the migration evidence before the old hub observability teardown
+  ansible.builtin.include_tasks: require_old_hub_evidence.yml
+  when:
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - not ansible_check_mode
+
 # Exactly what decommission/tasks/main.yml seeds for the same task, and nothing more:
 # the shared teardown reads `_acm_decommission_records_outcomes` and combines into
 # `acm_switchover_decommission_outcomes`. A preview records no outcome at all.

@@ -850,3 +850,47 @@ def test_no_record_clean_absence_is_a_precondition_noop():
     assert summary["substeps"]["observability"] == "precondition_noop"
     assert summary["would_change"] is False
     assert _mco_deletes(result) == []
+
+
+# --------------------------------------------------------------------------------
+# R4-04 plan Task 11 (Codex warning on cb0302ff): each old-hub adapter gates itself on the
+# migration evidence, so a direct `tasks_from` entry cannot reach an old-hub mutation.
+# --------------------------------------------------------------------------------
+
+_JOURNALED_LOCATOR = (
+    "/apis/cluster.open-cluster-management.io/v1beta1/namespaces/open-cluster-management-backup/restores/"
+)
+
+
+def _locator_reads(result: dict) -> list:
+    return [
+        request
+        for request in result["destination_requests"]
+        if request["method"] == "GET" and request["path"].startswith(_JOURNALED_LOCATOR)
+    ]
+
+
+def test_the_observability_adapter_entered_without_the_migration_context_refuses_before_any_old_hub_request():
+    result = _adapter(old_hub_evidence=False)
+
+    assert result["returncode"] != 0
+    assert result["requests"] == []
+    assert _mco_deletes(result) == []
+    assert result["checkpoint"]["operational_data"] == result["checkpoint"]["before_operational_data"]
+
+
+def test_the_observability_adapter_reads_the_journaled_locator_before_the_teardown():
+    result = _adapter()
+
+    assert result["returncode"] == 0
+    assert len(_locator_reads(result)) == 1
+    assert len(_mco_deletes(result)) == 1
+
+
+def test_handle_old_hub_entered_without_the_migration_context_refuses_before_any_old_hub_request():
+    result = run_decommission_role(integrated_finalization=True, old_hub_evidence=False)
+
+    assert result["returncode"] != 0
+    assert result["requests"] == []
+    assert result["delete_calls"] == []
+    assert result["checkpoint"]["operational_data"] == result["checkpoint"]["before_operational_data"]

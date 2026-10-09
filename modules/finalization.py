@@ -263,7 +263,6 @@ class Finalization:
             if self.primary and self.old_hub_action == "secondary" and self.primary_has_observability:
                 with self._step("disable_observability_on_secondary") as should_run:
                     if should_run:
-                        self._require_old_hub_evidence()
                         self._disable_observability_on_old_hub()
 
             # Step 11: Enable BackupSchedule on new hub
@@ -1320,8 +1319,8 @@ class Finalization:
 
         GLM-H6: this method owns **no** MCO deletion logic. It keeps only the
         caller-specific concerns amendment section 11 item 2 assigns to Finalization --
-        the gating below, the GitOps marker opt-in, and finalization-specific failure
-        text -- and delegates the algorithm to ``Decommission.teardown_observability``.
+        the gating below (with the R4-04 migration-evidence gate at this entry), the
+        GitOps marker opt-in, and finalization-specific failure text -- and delegates the algorithm to ``Decommission.teardown_observability``.
 
         Expected failures arrive on the return channel, so this never catches an
         exception from the teardown; it inspects the outcome and raises its own
@@ -1338,6 +1337,7 @@ class Finalization:
             )
             return
 
+        self._require_old_hub_evidence()
         logger.info("Disabling observability on old hub by deleting MultiClusterObservability...")
 
         decommission = Decommission(

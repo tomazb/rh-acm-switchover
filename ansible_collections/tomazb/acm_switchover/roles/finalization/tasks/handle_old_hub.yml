@@ -9,6 +9,13 @@
 - name: Set up old hub as secondary
   when: (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
   block:
+    # R4-04 (July design section 4): re-proven freshly before the passive Restore.
+    - name: Require the migration evidence before the old hub passive Restore
+      ansible.builtin.include_tasks: require_old_hub_evidence.yml
+      when:
+        - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+        - not ansible_check_mode
+
     - name: Detect whether existing restore is present on old hub
       ansible.builtin.set_fact:
         _old_hub_restore_exists: >-
@@ -67,6 +74,14 @@
             veleroResourcesBackupName: latest
       register: _old_hub_restore_applied
       when: acm_switchover_execution.mode | default('dry_run') == 'execute'
+
+# R4-04 (July design section 4): re-proven freshly before the integrated decommission.
+- name: Require the migration evidence before the integrated old hub decommission
+  ansible.builtin.include_tasks: require_old_hub_evidence.yml
+  when:
+    - (acm_switchover_operation.old_hub_action | default('secondary')) == 'decommission'
+    - (acm_switchover_execution.mode | default('dry_run')) == 'execute'
+    - not ansible_check_mode
 
 - name: Build embedded decommission settings
   ansible.builtin.set_fact:
