@@ -1,30 +1,8 @@
 ---
-# R4-04: immediately before any enablement, the journaled Restore cleanup must be terminal
-# and a fresh strict read must prove its locator empty; a same-name object inherits no
-# evidence and blocks. A preview reads and enables nothing.
+# R4-04: a preview reads and enables nothing.
 - name: Prove the journaled Restore locator empty before enablement
+  ansible.builtin.include_tasks: require_journaled_locator_absent.yml
   when: not (_acm_preview | bool)
-  block:
-    - name: Read the journaled Restore locator before enablement
-      ansible.builtin.include_tasks: "{{ role_path }}/../activation/tasks/strict_read.yml"
-      vars:
-        _acm_read:
-          key: "restore/{{ _acm_journal.restore.name }}"
-          read_mode: get
-          api_version: cluster.open-cluster-management.io/v1beta1
-          kind: Restore
-          resource_name: restores
-          namespace: "{{ _acm_journal.restore.namespace }}"
-          name: "{{ _acm_journal.restore.name }}"
-        _acm_read_fact: _acm_enable_locator_read
-      when: _acm_has_journal | bool
-
-    - name: Require terminal cleanup and the proven-empty locator
-      tomazb.acm_switchover.acm_migration_evidence:
-        operation: cleanup_locator_absent
-        inputs:
-          journal: "{{ _acm_journal if (_acm_has_journal | bool) else omit }}"
-          live_read: "{{ _acm_enable_locator_read | default({'read_status': 'not_found', 'resources': []}) }}"
 
 - name: Derive secondary ACM version safely
   ansible.builtin.set_fact:

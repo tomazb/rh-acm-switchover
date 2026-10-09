@@ -55,6 +55,12 @@ options:
         name, so a wrong name makes that 404 C(error) or C(kind_not_served).
     type: str
     required: true
+  request_timeout:
+    description:
+      - Seconds that bound a named get instead of the default strict-read request timeout,
+        for a caller holding a shorter remaining deadline.
+    type: float
+    required: false
 extends_documentation_fragment:
   - kubernetes.core.k8s_auth_options
 """
@@ -168,6 +174,7 @@ def _argument_spec() -> dict[str, Any]:
                 "default": [],
             },
             "resource_name": {"type": "str", "required": True},
+            "request_timeout": {"type": "float", "required": False},
         }
     )
     return spec
@@ -219,6 +226,7 @@ def run_module(module: AnsibleModule) -> None:
         namespace=module.params.get("namespace"),
         name=name,
         label_selectors=module.params.get("label_selectors") or [],
+        request_timeout=module.params.get("request_timeout"),
     )
     _exit_outcome(module, read_status, resources, revision)
 

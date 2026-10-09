@@ -1239,6 +1239,10 @@ class SecondaryActivation:
         self._persist_journal(_with_restore(bundle, completed_at=_now_iso()))
         logger.info("Recorded completion evidence for %s", restore["name"])
 
+    def require_journaled_controller_contract(self, journal: Dict) -> None:
+        """The destination still runs the journaled ACM minor; a changed controller lane refuses (A section 10)."""
+        self._require_journal_matches_run(journal, journal["restore"]["mutation_kind"], self._live_acm_minor())
+
     def revalidate_completion_evidence(self, journal: Dict) -> None:
         """Re-run the recorded completion proof live; finalization's teardown barrier (July section 4a)."""
         self._revalidate_completed_evidence(journal)

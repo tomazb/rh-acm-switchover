@@ -200,13 +200,29 @@ def _journal(case_id):
         (
             {
                 "read_status": "ok",
-                "resources": [{"metadata": {"name": "acm-restore", "uid": "u", "resourceVersion": "9"}}],
+                "resources": [
+                    {
+                        "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+                        "kind": "Restore",
+                        "metadata": {
+                            "name": "acm-restore",
+                            "namespace": "open-cluster-management-backup",
+                            "uid": "u",
+                            "resourceVersion": "9",
+                        },
+                        "spec": {},
+                    }
+                ],
             },
             "locator_occupied",
         ),
+        (
+            {"read_status": "ok", "resources": [{"metadata": {"uid": "u", "resourceVersion": "9"}}]},
+            "malformed_restore_read",
+        ),
         ({"read_status": "error", "resources": []}, "Restore acm-restore could not be read (error)"),
     ],
-    ids=["proven-absent", "occupied", "unreadable"],
+    ids=["proven-absent", "occupied", "truncated", "unreadable"],
 )
 def test_a_cleanup_step_reads_the_locator_strictly(monkeypatch, read, expected):
     result = _run(

@@ -1233,7 +1233,7 @@ class TestFinalization:
 
     @patch("modules.finalization.time.sleep")
     def test_fix_backup_schedule_collision_skips_create_on_uid_change_after_delete(
-        self, mock_sleep, finalization, mock_secondary_client
+        self, mock_sleep, terminal_cleanup, finalization, mock_secondary_client
     ):
         """If schedule UID changes after delete, fail the step so resume does not mark it complete."""
         mock_sleep.return_value = None
@@ -1266,7 +1266,7 @@ class TestFinalization:
     @patch("modules.finalization.wait_for_condition", return_value=True)
     @patch("modules.finalization.time.sleep")
     def test_fix_backup_schedule_collision_polls_for_delete_before_create(
-        self, mock_sleep, mock_wait, finalization, mock_secondary_client
+        self, mock_sleep, mock_wait, terminal_cleanup, finalization, mock_secondary_client
     ):
         """Collision repair should poll for absence instead of using a fixed delete sleep."""
         mock_secondary_client.list_custom_resources_strict.return_value = StrictReadOutcome.from_items(
@@ -1373,7 +1373,7 @@ class TestFinalization:
 
     @patch("modules.finalization.time.sleep")
     def test_fix_backup_schedule_collision_treats_409_with_healthy_schedule_as_success(
-        self, mock_sleep, finalization, mock_secondary_client
+        self, mock_sleep, terminal_cleanup, finalization, mock_secondary_client
     ):
         """A 409 create conflict should be acceptable when schedule exists in a non-collision phase."""
         mock_sleep.return_value = None
@@ -1408,7 +1408,7 @@ class TestFinalization:
 
     @patch("modules.finalization.time.sleep")
     def test_fix_backup_schedule_collision_raises_when_409_reuses_original_uid(
-        self, mock_sleep, finalization, mock_secondary_client
+        self, mock_sleep, terminal_cleanup, finalization, mock_secondary_client
     ):
         """A 409 create conflict must fail when the original schedule object still exists."""
         mock_sleep.return_value = None
@@ -1441,7 +1441,7 @@ class TestFinalization:
 
     @patch("modules.finalization.time.sleep")
     def test_fix_backup_schedule_collision_raises_when_409_schedule_is_in_collision(
-        self, mock_sleep, finalization, mock_secondary_client, caplog
+        self, mock_sleep, terminal_cleanup, finalization, mock_secondary_client, caplog
     ):
         """A 409 create conflict with BackupCollision phase must fail closed."""
         mock_sleep.return_value = None
@@ -2518,6 +2518,8 @@ ABSENT = StrictReadOutcome.object_absent("object_not_found")
 def _live(uid=RESTORE_UID, rv="2002", generation=4, **spec):
     restore = CLEANUP_INTENT["restore"]
     body = {
+        "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+        "kind": "Restore",
         "metadata": {
             "name": restore["name"],
             "namespace": restore["namespace"],
@@ -2561,6 +2563,10 @@ def _cleanup_fin(state, secondary, **kwargs):
 def cleanup_secondary():
     secondary = Mock(name="secondary")
     secondary.dry_run = False
+    # The live destination lane: the journals below were frozen on ACM 2.14.
+    secondary.list_custom_resources_strict.return_value = StrictReadOutcome.from_items(
+        [{"metadata": {"name": "multiclusterhub"}, "status": {"currentVersion": "2.14.3"}}]
+    )
     return secondary
 
 
@@ -3113,3 +3119,74 @@ def test_a_dry_run_still_honours_markers_an_executing_run_recorded(tmp_path, cle
         assert fin.finalize() is True
 
     enable.assert_not_called()
+
+
+# -- Task 10 review findings (Codex, b0a5fae0..a0e41fac) -------------------------------------------
+
+
+def _mch(version):
+    return StrictReadOutcome.from_items(
+        [{"metadata": {"name": "multiclusterhub"}, "status": {"currentVersion": version}}]
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "journal", [CLEANUP_POST, CLEANUP_INTENT, CLEANUP_ACCEPTED], ids=["barrier", "intent", "accepted"]
+)
+def test_a_changed_controller_lane_refuses_before_the_barrier_or_a_resumed_delete(
+    tmp_path, cleanup_secondary, barrier, journal
+):
+    """Finding 3: an ACM 2.14 journal on a destination upgraded to 2.17 never changes contract (A section 10)."""
+    cleanup_secondary.list_custom_resources_strict.return_value = _mch("2.17.1")
+    cleanup_secondary.get_custom_resource_strict.return_value = _live()
+    fin = _cleanup_fin(_cleanup_state(tmp_path, journal), cleanup_secondary)
+
+    with pytest.raises(FatalError, match="frozen on ACM 2.14, but the destination hub now runs ACM 2.17"):
+        fin._run_restore_cleanup_transaction()
+
+    barrier.assert_not_called()
+    cleanup_secondary.delete_restore_guarded.assert_not_called()
+    assert _stored(tmp_path) == journal
+
+
+@pytest.mark.unit
+def test_collision_recreation_requires_a_fresh_absent_locator(tmp_path, cleanup_secondary):
+    """Finding 1: with the enablement marker complete, collision repair alone may still recreate the schedule."""
+    cleanup_secondary.list_custom_resources_strict.return_value = StrictReadOutcome.from_items(
+        [{"metadata": {"name": "schedule", "uid": "uid-1"}, "spec": {}, "status": {"phase": "Enabled"}}]
+    )
+    cleanup_secondary.get_custom_resource_strict.return_value = _live(uid="uid-new", rv="3003")
+    state = _cleanup_state(tmp_path, CLEANUP_DONE)
+    state.mark_step_completed("enable_backup_schedule")
+    fin = _cleanup_fin(state, cleanup_secondary)
+    fin._cleanup_journal = CLEANUP_DONE
+
+    with pytest.raises(FatalError, match="locator_occupied"):
+        fin._fix_backup_schedule_collision()
+
+    cleanup_secondary.delete_custom_resource.assert_not_called()
+    cleanup_secondary.delete_custom_resource_preconditioned.assert_not_called()
+    cleanup_secondary.create_custom_resource.assert_not_called()
+
+
+@pytest.mark.unit
+def test_the_poll_deadline_covers_slow_reads_and_writes_no_completion(tmp_path, cleanup_secondary, no_sleep):
+    """Finding 4: two-second reads with absence on the last poll would finish after the 300 s timeout."""
+    clock = {"now": 0.0}
+
+    def _slow_read(**kwargs):
+        clock["now"] += 2.0
+        return _live() if clock["now"] < 400 else ABSENT
+
+    no_sleep.side_effect = lambda seconds: clock.__setitem__("now", clock["now"] + seconds)
+    cleanup_secondary.get_custom_resource_strict.side_effect = _slow_read
+    cleanup_secondary.delete_restore_guarded.return_value = _accepted()
+    fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_INTENT), cleanup_secondary)
+
+    with patch("modules.finalization.time.monotonic", side_effect=lambda: clock["now"]):
+        with pytest.raises(FatalError, match="Timeout waiting for the journaled Restore"):
+            fin._run_restore_cleanup_transaction()
+
+    assert _stored(tmp_path)["cleanup"]["state"] == "delete_accepted"
+    assert clock["now"] <= 300 + 30

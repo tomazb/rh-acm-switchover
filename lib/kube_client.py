@@ -1069,11 +1069,14 @@ class KubeClient:
         plural: str,
         name: str,
         namespace: Optional[str] = None,
+        request_timeout: Optional[int] = None,
     ) -> StrictReadOutcome:
         """Strictly GET one named custom resource, or fail closed.
 
         OBJECT_ABSENT is returned only for a 404 that followed a successful
-        discovery determination that the kind is served.
+        discovery determination that the kind is served. ``request_timeout``
+        bounds the object GET instead of the client default (a caller's
+        remaining deadline).
         """
         self._validate_resource_inputs(namespace, name, "custom resource")
 
@@ -1089,7 +1092,7 @@ class KubeClient:
                     namespace=namespace,
                     plural=plural,
                     name=name,
-                    **self._request_timeout_kwargs(),
+                    **self._request_timeout_kwargs(request_timeout),
                 )
             else:
                 resource = self.custom_api.get_cluster_custom_object(
@@ -1097,7 +1100,7 @@ class KubeClient:
                     version=version,
                     plural=plural,
                     name=name,
-                    **self._request_timeout_kwargs(),
+                    **self._request_timeout_kwargs(request_timeout),
                 )
         except ApiException as exc:
             if exc.status == 404:

@@ -19,6 +19,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 import modules.finalization as finalization_module
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils import migration_activation as col_activation
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils import migration_cleanup as col
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_evidence import (
     MigrationEvidenceError as ColMigrationEvidenceError,
@@ -53,6 +54,8 @@ _CODE = re.compile(r"\(([a-z]+_[a-z_]+)[:)]")
 def _live(uid=UID, rv="2002", generation=4):
     restore = INTENT["restore"]
     return {
+        "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+        "kind": "Restore",
         "metadata": {
             "name": restore["name"],
             "namespace": restore["namespace"],
@@ -78,7 +81,7 @@ class Recovered(Exception):
     """The transaction recorded recovery_required and blocked."""
 
 
-def _python(tmp_path, journal, reads, deletes, repair=None):
+def _python(tmp_path, journal, reads, deletes, repair=None, live_version="2.14.3"):
     """Run Finalization._run_restore_cleanup_transaction; return (writes, outcome)."""
     state = StateManager(str(tmp_path / "state.json"))
     if journal is not None:
@@ -86,6 +89,9 @@ def _python(tmp_path, journal, reads, deletes, repair=None):
     state.flush_state()
     secondary = Mock(name="secondary")
     secondary.dry_run = False
+    secondary.list_custom_resources_strict.return_value = StrictReadOutcome.from_items(
+        [{"metadata": {"name": "multiclusterhub"}, "status": {"currentVersion": live_version}}]
+    )
     secondary.get_custom_resource_strict.side_effect = [
         (
             StrictReadOutcome.object_absent("object_not_found")
@@ -126,7 +132,7 @@ def _python(tmp_path, journal, reads, deletes, repair=None):
     return writes, "ok"
 
 
-def _collection(journal, reads, deletes, repair=None):
+def _collection(journal, reads, deletes, repair=None, live_version="2.14.3"):
     """The collection decisions in cleanup_journaled_restore.yml order; return (writes, outcome)."""
     reads, deletes, writes = iter(reads), iter(deletes), []
     try:
@@ -134,6 +140,9 @@ def _collection(journal, reads, deletes, repair=None):
         if step == "repair":
             writes.append(col.repair_cleanup(journal=journal, request=repair, live=next(reads), now=NOW)["candidate"])
             return writes, "ok"
+        if step in ("revalidate", "delete"):
+            minor = col_activation.acm_minor(_mch_read(live_version))["acm_minor"]
+            col_activation.require_journal_matches_run(journal, journal["restore"]["mutation_kind"], minor)
         if step == "revalidate":
             decision = col.teardown_revalidated(journal=journal, now=NOW)
             if decision["write"]:
@@ -175,7 +184,13 @@ def _collection(journal, reads, deletes, repair=None):
         return writes, "recovery_required"
     except ColMigrationEvidenceError as exc:
         return writes, exc.code
+    except col_activation.ActivationRefused:
+        return writes, "refused"
     return writes, "ok"
+
+
+def _mch_read(version):
+    return {"read_status": "ok", "resources": [{"metadata": {"name": "hub"}, "status": {"currentVersion": version}}]}
 
 
 SCENARIOS = {
@@ -202,6 +217,14 @@ SCENARIOS = {
     "repair-without-recovery": (DONE, [], [], REPAIR),
     "terminal-touches-nothing": (DONE, [], [], None),
     "no-journal": (None, [], [], None),
+    "changed-lane-before-the-barrier": (POST, [], [], None, "2.17.1"),
+    "changed-lane-before-a-resumed-delete": (ACCEPTED, [], [], None, "2.17.1"),
+    "truncated-poll-response": (
+        INTENT,
+        [_live(), {"metadata": {"uid": UID, "resourceVersion": "123"}}],
+        [_accepted()],
+        None,
+    ),
 }
 EXPECTED = {
     "fresh-run-completes": "ok",
@@ -222,14 +245,17 @@ EXPECTED = {
     "repair-without-recovery": "repair_not_permitted",
     "terminal-touches-nothing": "ok",
     "no-journal": "journal_required",
+    "changed-lane-before-the-barrier": "refused",
+    "changed-lane-before-a-resumed-delete": "refused",
+    "truncated-poll-response": "malformed_restore_read",
 }
 
 
 @pytest.mark.parametrize("name", sorted(SCENARIOS))
 def test_both_form_factors_write_and_refuse_the_same(tmp_path, name):
-    journal, reads, deletes, repair = SCENARIOS[name]
-    python_writes, python_outcome = _python(tmp_path, journal, reads, deletes, repair)
-    collection_writes, collection_outcome = _collection(journal, reads, deletes, repair)
+    journal, reads, deletes, repair, *version = SCENARIOS[name]
+    python_writes, python_outcome = _python(tmp_path, journal, reads, deletes, repair, *version)
+    collection_writes, collection_outcome = _collection(journal, reads, deletes, repair, *version)
 
     assert python_outcome == EXPECTED[name]
     assert collection_outcome == python_outcome
@@ -237,10 +263,10 @@ def test_both_form_factors_write_and_refuse_the_same(tmp_path, name):
 
 
 def test_the_scenarios_cover_every_cleanup_state_and_recovery_reason():
-    states = {journal["cleanup"]["state"] for journal, *_ in SCENARIOS.values() if journal is not None}
+    states = {scenario[0]["cleanup"]["state"] for scenario in SCENARIOS.values() if scenario[0] is not None}
     assert states == {"not_started", "intent_persisted", "delete_accepted", "recovery_required", "completed"}
     reasons = set()
-    for name, (journal, reads, deletes, repair) in SCENARIOS.items():
-        writes, _ = _collection(journal, reads, deletes, repair)
+    for name, (journal, reads, deletes, repair, *version) in SCENARIOS.items():
+        writes, _ = _collection(journal, reads, deletes, repair, *version)
         reasons.update(write["cleanup"]["recovery"]["reason_code"] for write in writes if write["cleanup"]["recovery"])
     assert reasons == {"absent_without_completion", "replacement_uid", "replacement_during_poll"}

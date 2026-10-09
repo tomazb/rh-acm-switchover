@@ -4,15 +4,28 @@
 # and the first absence is followed by one final strict read. Only a proven 404 there writes
 # absence_verified_at and completed_at together. Included in a bounded loop over
 # _acm_poll_delay values; each poll guards itself at execution time, so the polls after the
-# accepted decision do nothing.
+# accepted decision, or after the elapsed deadline (_acm_cleanup_deadline), do nothing. Waits and
+# reads are capped to the remaining budget, and a read ending past the deadline is never
+# classified.
+
+- name: Measure the remaining poll budget
+  ansible.builtin.set_fact:
+    _acm_cleanup_budget: "{{ (_acm_cleanup_deadline | float) - now(utc=true).timestamp() }}"
+  when: not (_acm_cleanup_done | bool)
 
 - name: Poll the deleted journaled Restore
-  when: not (_acm_cleanup_done | bool)
+  when:
+    - not (_acm_cleanup_done | bool)
+    - (_acm_cleanup_budget | float) > 0
   block:
     - name: Wait before re-reading the deleted journaled Restore
       ansible.builtin.pause:
-        seconds: "{{ _acm_poll_delay }}"
-      when: _acm_poll_delay | int > 0
+        seconds: "{{ [_acm_poll_delay | int, _acm_cleanup_budget | float | int] | min }}"
+      when: ([_acm_poll_delay | int, _acm_cleanup_budget | float | int] | min) > 0
+
+    - name: Re-measure the poll budget for the read
+      ansible.builtin.set_fact:
+        _acm_cleanup_budget: "{{ (_acm_cleanup_deadline | float) - now(utc=true).timestamp() }}"
 
     - name: Re-read the deleted journaled Restore strictly
       ansible.builtin.include_tasks: "{{ role_path }}/../activation/tasks/strict_read.yml"
@@ -25,9 +38,18 @@
           resource_name: restores
           namespace: "{{ _acm_journal.restore.namespace }}"
           name: "{{ _acm_journal.restore.name }}"
+          request_timeout: "{{ [1, _acm_cleanup_budget | float | round(0, 'ceil') | int] | max }}"
         _acm_read_fact: _acm_cleanup_poll_read
+      when: (_acm_cleanup_budget | float) > 0
+
+    # A read that ended after the deadline is never classified.
+    - name: Require the read within the poll deadline
+      ansible.builtin.set_fact:
+        _acm_cleanup_in_time: >-
+          {{ (_acm_cleanup_budget | float) > 0 and now(utc=true).timestamp() <= (_acm_cleanup_deadline | float) }}
 
     - name: Decide the absence poll by the exact UID
+      when: _acm_cleanup_in_time | bool
       tomazb.acm_switchover.acm_migration_evidence:
         operation: cleanup_absence_poll
         inputs:
@@ -42,7 +64,9 @@
         status: update
         operational_data:
           migration_backups: "{{ _acm_cleanup_poll.candidate }}"
-      when: _acm_cleanup_poll.state == 'recover'
+      when:
+        - _acm_cleanup_in_time | bool
+        - _acm_cleanup_poll.state == 'recover'
 
     - name: Block on the replacement seen while polling
       ansible.builtin.fail:
@@ -52,11 +76,19 @@
           Nothing at the locator was deleted or adopted. Inspect the destination hub, then acknowledge with
           acm_switchover_operation.migration_cleanup_repair, naming run ID {{ _acm_journal.run_id }} and
           operation ID {{ _acm_journal.cleanup.operation_id }}.
-      when: _acm_cleanup_poll.state == 'recover'
+      when:
+        - _acm_cleanup_in_time | bool
+        - _acm_cleanup_poll.state == 'recover'
 
     - name: Prove the first absence with one final strict read
-      when: _acm_cleanup_poll.state == 'absent'
+      when:
+        - _acm_cleanup_in_time | bool
+        - _acm_cleanup_poll.state == 'absent'
       block:
+        - name: Measure the poll budget for the final read
+          ansible.builtin.set_fact:
+            _acm_cleanup_budget: "{{ (_acm_cleanup_deadline | float) - now(utc=true).timestamp() }}"
+
         - name: Read the journaled Restore locator a final time
           ansible.builtin.include_tasks: "{{ role_path }}/../activation/tasks/strict_read.yml"
           vars:
@@ -68,9 +100,17 @@
               resource_name: restores
               namespace: "{{ _acm_journal.restore.namespace }}"
               name: "{{ _acm_journal.restore.name }}"
+              request_timeout: "{{ [1, _acm_cleanup_budget | float | round(0, 'ceil') | int] | max }}"
             _acm_read_fact: _acm_cleanup_absence_read
+          when: (_acm_cleanup_budget | float) > 0
+
+        - name: Require the final read within the poll deadline
+          ansible.builtin.set_fact:
+            _acm_cleanup_final_in_time: >-
+              {{ (_acm_cleanup_budget | float) > 0 and now(utc=true).timestamp() <= (_acm_cleanup_deadline | float) }}
 
         - name: Decide the final absence
+          when: _acm_cleanup_final_in_time | bool
           tomazb.acm_switchover.acm_migration_evidence:
             operation: cleanup_final_absence
             inputs:
@@ -85,11 +125,13 @@
             status: update
             operational_data:
               migration_backups: "{{ _acm_cleanup_final.candidate }}"
+          when: _acm_cleanup_final_in_time | bool
 
         - name: Continue from the final absence decision
           ansible.builtin.set_fact:
             _acm_journal: "{{ _acm_cleanup_final.candidate }}"
             _acm_cleanup_done: true
+          when: _acm_cleanup_final_in_time | bool
 
         - name: Block on the replacement the final read found
           ansible.builtin.fail:
@@ -99,4 +141,6 @@
               Nothing at the locator was deleted or adopted. Inspect the destination hub, then acknowledge with
               acm_switchover_operation.migration_cleanup_repair, naming run ID {{ _acm_journal.run_id }} and
               operation ID {{ _acm_journal.cleanup.operation_id }}.
-          when: _acm_cleanup_final.state == 'recover'
+          when:
+            - _acm_cleanup_final_in_time | bool
+            - _acm_cleanup_final.state == 'recover'

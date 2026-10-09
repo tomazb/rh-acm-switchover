@@ -2125,6 +2125,17 @@ class TestStrictCustomResourceReads:
         assert outcome.resource is resource
         assert outcome.resource_version == "77"
 
+    def test_named_get_takes_a_caller_deadline_as_its_request_timeout(self):
+        """R4-04 Task 10: a poll's strict read is capped to the remaining poll budget."""
+        resource = {"metadata": {"name": "mch", "uid": "u-1", "resourceVersion": "77"}}
+        client = self._client(get_result=resource)
+        client.get_custom_resource_strict("g", "v1", "widgets", "mch", request_timeout=7)
+        assert client.custom_api.get_cluster_custom_object.call_args.kwargs["_request_timeout"] == 7
+        client.get_custom_resource_strict("g", "v1", "widgets", "mch")
+        assert (
+            client.custom_api.get_cluster_custom_object.call_args.kwargs["_request_timeout"] == client.request_timeout
+        )
+
     @pytest.mark.parametrize(
         "metadata",
         [

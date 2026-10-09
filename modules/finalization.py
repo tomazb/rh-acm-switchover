@@ -3,6 +3,7 @@
 # Runbook: Steps 11-12 (finalization) and Step 14 (old hub handling)
 
 import logging
+import math
 import time
 import uuid
 from contextlib import AbstractContextManager, nullcontext
@@ -86,6 +87,10 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# A strict read that would end after the absence-poll deadline: never classified.
+_DEADLINE_PASSED = object()
+
+
 class Finalization:
     """Handles finalization steps on secondary hub."""
 
@@ -132,6 +137,8 @@ class Finalization:
             dry_run=dry_run,
         )
         self._cached_schedules: Optional[List[Dict]] = None  # Cache for backup schedules
+        # The migration journal this pass reconciled; every enabled-BackupSchedule write is gated on it.
+        self._cleanup_journal: Optional[Dict] = None
         self.run_record = RunRecord(self.state)
 
     def _step(self, step_name: str) -> AbstractContextManager:
@@ -248,6 +255,7 @@ class Finalization:
             # R4-04: the journaled Restore cleanup runs on every pass, ahead of every old-hub
             # action and of BackupSchedule enablement; the journal, not a marker, decides it.
             journal = self._run_restore_cleanup_transaction()
+            self._cleanup_journal = journal
 
             # When the old hub remains as a secondary, the runbook requires MCO deletion.
             if self.primary and self.old_hub_action == "secondary" and self.primary_has_observability:
@@ -347,6 +355,9 @@ class Finalization:
         )["step"]
         if step == "repair":
             return self._repair_restore_cleanup(journal)
+        if step in ("revalidate", "delete"):
+            # The journaled controller lane decides the barrier and the guarded delete alike.
+            SecondaryActivation(self.secondary, self.state).require_journaled_controller_contract(journal)
         if step == "revalidate":
             journal = self._revalidate_for_teardown(journal)
             operation_id = str(uuid.uuid4())
@@ -428,26 +439,38 @@ class Finalization:
                 journal = self._persist_decision(outcome)
                 break
             logger.warning("Guarded delete of %s removed nothing (%s); re-validating", name, result.get("reason"))
+        # The poll timeout is elapsed time: waits, reads and the final verification all count.
+        deadline = time.monotonic() + schedule["poll_timeout"]
         for delay in schedule["poll_delays"]:
             if delay:
-                time.sleep(delay)
-            poll = self._evidence(
-                absence_poll, journal=journal, live=self._strict_get_journaled_restore(journal), now=_now_iso()
-            )
+                time.sleep(max(0.0, min(delay, deadline - time.monotonic())))
+            live = self._strict_get_before(journal, deadline)
+            if live is _DEADLINE_PASSED:
+                break
+            poll = self._evidence(absence_poll, journal=journal, live=live, now=_now_iso())
             if poll["state"] == "recover":
                 self._record_recovery(poll["candidate"])
             if poll["state"] == "absent":
-                final = self._evidence(
-                    final_absence, journal=journal, live=self._strict_get_journaled_restore(journal), now=_now_iso()
-                )
+                live = self._strict_get_before(journal, deadline)
+                if live is _DEADLINE_PASSED:
+                    break
+                final = self._evidence(final_absence, journal=journal, live=live, now=_now_iso())
                 if final["state"] == "recover":
                     self._record_recovery(final["candidate"])
                 logger.info("Journaled Restore %s deleted and its absence verified", name)
                 return self._persist_decision(final)
         raise FatalError(
             f"Timeout waiting for the journaled Restore {name} to disappear after "
-            f"{sum(schedule['poll_delays'])}s; the cleanup stays resumable"
+            f"{schedule['poll_timeout']}s; the cleanup stays resumable"
         )
+
+    def _strict_get_before(self, journal: Dict, deadline: float):
+        """One strict locator GET bounded by the remaining poll budget; _DEADLINE_PASSED once it is spent."""
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return _DEADLINE_PASSED
+        live = self._strict_get_journaled_restore(journal, request_timeout=max(1, math.ceil(remaining)))
+        return _DEADLINE_PASSED if time.monotonic() > deadline else live
 
     def _repair_restore_cleanup(self, journal: Dict) -> Dict:
         """Record the operator's audited repair once a fresh strict read proves the locator absent."""
@@ -473,7 +496,7 @@ class Finalization:
         live = self._strict_get_journaled_restore(journal) if journal is not None else None
         self._evidence(require_locator_absent, journal=journal, live=live)
 
-    def _strict_get_journaled_restore(self, journal: Dict) -> Optional[Dict]:
+    def _strict_get_journaled_restore(self, journal: Dict, request_timeout: Optional[int] = None) -> Optional[Dict]:
         """One strict GET of the journaled locator: the object, None for a proven 404, or FatalError."""
         restore = journal["restore"]
         outcome = self.secondary.get_custom_resource_strict(
@@ -482,6 +505,7 @@ class Finalization:
             plural=RESTORE_PLURAL,
             name=restore["name"],
             namespace=restore["namespace"],
+            **({} if request_timeout is None else {"request_timeout": request_timeout}),
         )
         if outcome.status is StrictReadStatus.OBJECT_ABSENT:
             return None
@@ -1510,6 +1534,10 @@ class Finalization:
                 phase or "Unknown",
             )
 
+        # R4-04: an enabled BackupSchedule is recreated only after terminal Restore cleanup and a
+        # fresh strict read proving the journaled locator empty, enablement marker or not.
+        self._require_journaled_locator_absent(self._cleanup_journal)
+
         schedule_uid = schedule.get("metadata", {}).get("uid")
         # Save the spec for recreation
         schedule_spec = schedule.get("spec", {})
@@ -1573,6 +1601,7 @@ class Finalization:
                 "spec": schedule_spec,
             }
 
+            self._require_journaled_locator_absent(self._cleanup_journal)
             self.secondary.create_custom_resource(
                 group=CLUSTER_BACKUP_API_GROUP,
                 version=CLUSTER_BACKUP_API_VERSION,

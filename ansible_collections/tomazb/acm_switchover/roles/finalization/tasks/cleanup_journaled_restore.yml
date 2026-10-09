@@ -42,6 +42,38 @@
           repair_requested: "{{ (_acm_cleanup_repair_request | length) > 0 }}"
       register: _acm_cleanup_step
 
+    # The journaled controller lane decides the barrier and the guarded delete alike: a
+    # destination whose live ACM minor changed refuses (August amendment section 10).
+    - name: Require the journaled controller lane
+      when: _acm_cleanup_step.step in ['revalidate', 'delete']
+      block:
+        - name: Read the destination MultiClusterHub strictly
+          ansible.builtin.include_tasks: "{{ role_path }}/../activation/tasks/strict_read.yml"
+          vars:
+            _acm_read:
+              key: multiclusterhubs
+              read_mode: list
+              api_version: operator.open-cluster-management.io/v1
+              kind: MultiClusterHub
+              resource_name: multiclusterhubs
+              namespace: open-cluster-management
+            _acm_read_fact: _acm_cleanup_mch_read
+
+        - name: Resolve the live ACM minor
+          tomazb.acm_switchover.acm_migration_evidence:
+            operation: acm_minor
+            inputs:
+              mch_read: "{{ _acm_cleanup_mch_read }}"
+          register: _acm_cleanup_minor
+
+        - name: Require the live ACM minor the journal was frozen on
+          tomazb.acm_switchover.acm_migration_evidence:
+            operation: journal_matches
+            inputs:
+              journal: "{{ _acm_journal }}"
+              kind: "{{ _acm_journal.restore.mutation_kind }}"
+              acm_minor: "{{ _acm_cleanup_minor.acm_minor }}"
+
     - name: Record the operator's audited cleanup repair
       when: _acm_cleanup_step.step == 'repair'
       block:
@@ -155,9 +187,15 @@
           loop_control:
             loop_var: _acm_cleanup_attempt
 
+        # The poll timeout is elapsed time: waits, reads and the final verification all count.
         - name: Start the absence poll
           ansible.builtin.set_fact:
             _acm_cleanup_done: false
+            _acm_cleanup_deadline: >-
+              {{
+                now(utc=true).timestamp()
+                + (_acm_cleanup_poll_timeout | default(_acm_cleanup_schedule.poll_timeout) | float)
+              }}
 
         - name: Poll the journaled Restore until its absence is proven
           ansible.builtin.include_tasks: poll_journaled_restore_absent.yml
@@ -169,7 +207,7 @@
           ansible.builtin.fail:
             msg: >-
               Timeout waiting for the journaled Restore {{ _acm_journal.restore.name }} to disappear after
-              {{ _acm_cleanup_poll_delays | default(_acm_cleanup_schedule.poll_delays) | sum }}s; the cleanup
+              {{ _acm_cleanup_poll_timeout | default(_acm_cleanup_schedule.poll_timeout) }}s; the cleanup
               stays resumable
           when: not (_acm_cleanup_done | bool)
 

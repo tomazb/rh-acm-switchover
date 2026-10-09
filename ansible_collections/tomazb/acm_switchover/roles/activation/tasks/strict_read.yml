@@ -23,6 +23,7 @@
     resource_name: "{{ _acm_read.resource_name }}"
     namespace: "{{ _acm_read.namespace | default(omit) }}"
     name: "{{ _acm_read.name | default(omit) }}"
+    request_timeout: "{{ _acm_read.request_timeout | default(omit) }}"
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
   register: _acm_live_read

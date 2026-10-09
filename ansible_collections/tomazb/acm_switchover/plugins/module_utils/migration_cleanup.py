@@ -52,6 +52,7 @@ _MANAGED_CLUSTERS_FIELD = "veleroManagedClustersBackupName"
 _CREDENTIALS_FIELD = "veleroCredentialsBackupName"
 _RESOURCES_FIELD = "veleroResourcesBackupName"
 _CLEANUP_POLICY_FIELD = "cleanupBeforeRestore"
+_RESTORE_API_VERSION = "cluster.open-cluster-management.io/v1beta1"
 _DELETING = ("intent_persisted", "delete_accepted")
 _TERMINAL = ("completed", "repaired")
 # A DELETE that removed nothing: re-read the locator and decide again, within the bound.
@@ -63,12 +64,14 @@ def cleanup_schedule() -> Dict[str, Any]:
 
     attempts counts the guarded DELETEs (the first plus the conflict retries);
     poll_delays are the waits before each strict absence read after an accepted
-    DELETE; request_timeout bounds each DELETE request.
+    DELETE, all within poll_timeout seconds of elapsed time including the reads
+    and the final verification; request_timeout bounds each DELETE request.
     """
     polls = RESTORE_CLEANUP_POLL_TIMEOUT // RESTORE_CLEANUP_POLL_INTERVAL
     return {
         "attempts": RESTORE_CLEANUP_CONFLICT_RETRY_LIMIT + 1,
         "poll_delays": [0] + [RESTORE_CLEANUP_POLL_INTERVAL] * polls,
+        "poll_timeout": RESTORE_CLEANUP_POLL_TIMEOUT,
         "request_timeout": RESTORE_CLEANUP_REQUEST_TIMEOUT,
     }
 
@@ -151,7 +154,7 @@ def pre_delete(*, journal: Any, live: Any, now: Any) -> Dict[str, Any]:
     journal = _require_state(journal, _DELETING)
     if live is None:
         return {"action": "recover", "candidate": _recovery(journal, "absent_without_completion", None, now)}
-    uid, revision = _identity(live)
+    uid, revision = _identity(journal, live)
     if uid != journal["cleanup"]["uid"]:
         return {"action": "recover", "candidate": _recovery(journal, "replacement_uid", live, now)}
     _require_projection(journal, live)
@@ -193,7 +196,7 @@ def absence_poll(*, journal: Any, live: Any, now: Any) -> Dict[str, Any]:
     journal = _require_state(journal, ("delete_accepted",))
     if live is None:
         return {"state": "absent"}
-    uid, _ = _identity(live)
+    uid, _ = _identity(journal, live)
     if uid == journal["cleanup"]["uid"]:
         return {"state": "pending"}
     return {"state": "recover", "candidate": _recovery(journal, "replacement_during_poll", live, now)}
@@ -207,7 +210,7 @@ def final_absence(*, journal: Any, live: Any, now: Any) -> Dict[str, Any]:
     """
     journal = _require_state(journal, ("delete_accepted",))
     if live is not None:
-        uid, _ = _identity(live)
+        uid, _ = _identity(journal, live)
         if uid == journal["cleanup"]["uid"]:
             raise MigrationEvidenceError("absence_not_confirmed", "the final read still finds the deleted Restore")
         return {"state": "recover", "candidate": _recovery(journal, "replacement_during_poll", live, now)}
@@ -228,7 +231,7 @@ def repair_cleanup(*, journal: Any, request: Any, live: Any, now: Any) -> Dict[s
     record = dict(validate_repair_request(request), acknowledged_at=now)
     cleanup = validate_repair(record, journal)
     if live is not None:
-        _identity(live)
+        _identity(journal, live)
         raise MigrationEvidenceError("repair_locator_occupied", "an object occupies the journaled Restore locator")
     candidate = copy.deepcopy(journal)
     candidate["cleanup"] = cleanup
@@ -243,7 +246,7 @@ def require_locator_absent(*, journal: Any, live: Any) -> Dict[str, Any]:
     """
     journal = _require_terminal(journal)
     if live is not None:
-        _identity(live)
+        _identity(journal, live)
         raise MigrationEvidenceError(
             "locator_occupied", f"Restore {journal['restore']['name']} occupies the journaled locator"
         )
@@ -286,25 +289,35 @@ def _require_terminal(journal: Any) -> Dict[str, Any]:
     return journal
 
 
-def _identity(live: Any) -> Tuple[str, str]:
-    """The UID and resourceVersion of one complete safe response; both or the read is malformed."""
+def _identity(journal: Dict[str, Any], live: Any) -> Tuple[str, str]:
+    """The UID and resourceVersion of one complete response for the journaled locator, or raise.
+
+    Only a whole ACM Restore (apiVersion, kind, metadata and spec) at exactly the
+    journaled namespace and name is classified; anything else is malformed or another
+    locator and never pending, absent, a replacement or an occupant.
+    """
     metadata = live.get("metadata") if isinstance(live, dict) else None
-    if not isinstance(metadata, dict):
-        raise MigrationEvidenceError("malformed_restore_read", "the Restore read has no metadata")
+    if (
+        not isinstance(metadata, dict)
+        or live.get("apiVersion") != _RESTORE_API_VERSION
+        or live.get("kind") != "Restore"
+        or not isinstance(live.get("spec"), dict)
+    ):
+        raise MigrationEvidenceError("malformed_restore_read", "the Restore read is not a complete ACM Restore")
     uid, revision = metadata.get("uid"), metadata.get("resourceVersion")
     if not _non_empty_str(uid) or not _non_empty_str(revision):
         raise MigrationEvidenceError("malformed_restore_read", "the Restore read lacks uid or resourceVersion")
+    restore = journal["restore"]
+    if metadata.get("namespace") != restore["namespace"] or metadata.get("name") != restore["name"]:
+        raise MigrationEvidenceError("restore_locator_mismatch", "the read is not the journaled Restore locator")
     return uid, revision
 
 
 def _require_projection(journal: Dict[str, Any], live: Dict[str, Any]) -> None:
-    """The exact locator, generation, cleanup policy and method-scoped owned spec of the journal."""
+    """The generation, cleanup policy and method-scoped owned spec of the journal (shape and
+    locator are already proven by _identity)."""
     restore = journal["restore"]
-    metadata, spec = live["metadata"], live.get("spec")
-    if not isinstance(spec, dict):
-        raise MigrationEvidenceError("malformed_restore_read", "the Restore read has no spec")
-    if metadata.get("namespace") != restore["namespace"] or metadata.get("name") != restore["name"]:
-        raise MigrationEvidenceError("restore_locator_mismatch", "the read is not the journaled Restore locator")
+    metadata, spec = live["metadata"], live["spec"]
     generation = metadata.get("generation")
     if type(generation) is not int or generation != restore["generation"]:
         raise MigrationEvidenceError("restore_spec_drift", f"{restore['name']} generation drifted")
@@ -331,7 +344,7 @@ def _owned_spec(restore: Dict[str, Any]) -> Dict[str, Any]:
 
 def _recovery(journal: Dict[str, Any], reason: str, live: Optional[Dict[str, Any]], now: Any) -> Dict[str, Any]:
     """The recovery_required candidate; the observed pair comes only from one complete safe response."""
-    observed = _identity(live) if live is not None else (None, None)
+    observed = _identity(journal, live) if live is not None else (None, None)
     candidate = copy.deepcopy(journal)
     candidate["cleanup"].update(
         state="recovery_required",

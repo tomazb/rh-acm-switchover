@@ -510,3 +510,67 @@ def test_an_unproven_backup_schedule_inventory_blocks_the_executing_discovery(ru
 
     assert run.completed.returncode != 0
     assert "BackupSchedule inventory" in run.output
+
+
+# -- Task 10 review findings (Codex, b0a5fae0..a0e41fac) -------------------------------------------
+
+
+@pytest.mark.parametrize("resumed", [False, True], ids=["before-the-barrier", "before-a-resumed-delete"])
+def test_a_changed_controller_lane_refuses(run_activation, run_finalization, hub, resumed):  # noqa: F811
+    """Finding 3: a 2.14 journal on a destination upgraded to 2.17 never changes contract (A section 10)."""
+    journal = completed_journal(run_activation, "full_restore", hub)
+    if resumed:
+        first = run_finalization("full_restore", hub, journal, extra={"_acm_cleanup_poll_delays": []})
+        assert first.journal["cleanup"]["state"] == "delete_accepted"
+        journal = first.journal
+    hub.version = "2.17.1"
+    before = len(_deletes(hub))
+
+    run = run_finalization("full_restore", hub, None if resumed else journal)
+
+    assert run.completed.returncode != 0
+    assert "frozen on ACM 2.14, but the destination hub now runs ACM 2.17" in run.output
+    assert run.journal == journal
+    assert _deletes(hub)[before:] == []
+
+
+def test_collision_recreation_requires_a_fresh_absent_locator(run_activation, run_finalization, hub):  # noqa: F811
+    """Finding 1: collision repair recreates an enabled BackupSchedule only over a proven-empty locator."""
+    journal = completed_journal(run_activation, "full_restore", hub)
+    first = run_finalization("full_restore", hub, journal)
+    assert first.journal["cleanup"]["state"] == "completed"
+    name = journal["restore"]["name"]
+    occupant = passive_restore(name=name)
+    occupant["metadata"]["uid"] = "uid-replacement"
+    hub.acm[name] = occupant
+    schedule = {
+        "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+        "kind": "BackupSchedule",
+        "metadata": {"name": "schedule-rhacm", "namespace": "open-cluster-management-backup", "uid": "uid-bs"},
+        "spec": {"veleroSchedule": "0 */1 * * *"},
+        "status": {"phase": "Enabled"},
+    }
+
+    run = run_finalization(
+        "full_restore",
+        hub,
+        None,
+        tasks=("cleanup_journaled_restore", "repair_backup_schedule_collision"),
+        published={"acm_finalization_backup_schedules_info": {"resources": [schedule]}},
+    )
+
+    assert run.completed.returncode != 0
+    assert "locator_occupied" in run.output
+    assert not [r for r in hub.requests if r["method"] in {"DELETE", "POST", "PUT"} and "backupschedules" in r["path"]]
+    assert hub.acm[name]["metadata"]["uid"] == "uid-replacement"
+
+
+def test_the_poll_deadline_writes_no_completion(run_activation, run_finalization, hub):  # noqa: F811
+    """Finding 4: the shared poll timeout is elapsed time; once spent, nothing completes."""
+    journal = completed_journal(run_activation, "full_restore", hub)
+
+    run = run_finalization("full_restore", hub, journal, extra={"_acm_cleanup_poll_timeout": 0})
+
+    assert run.completed.returncode != 0
+    assert "Timeout waiting for the journaled Restore" in run.output
+    assert run.journal["cleanup"]["state"] == "delete_accepted"

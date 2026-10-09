@@ -4978,6 +4978,25 @@ def live_restore(kind, contract, uid=RUID, rv="2002", generation=4, spec=None, m
 
 LIVE_FULL = live_restore("full_restore", LEG)
 LIVE_REPLACEMENT = live_restore("full_restore", LEG, uid=CL_REPLACEMENT, rv="3003")
+# Responses a strict read may never classify: truncated to the identity pair, another
+# locator, or not a Restore of the ACM API.
+TRUNCATED = {"metadata": {"uid": RUID, "resourceVersion": "123"}}
+TRUNCATED_REPLACEMENT = {"metadata": {"uid": CL_REPLACEMENT, "resourceVersion": "123"}}
+WRONG_NAME = mut(LIVE_FULL, metadata__name="other-restore")
+WRONG_API = mut(LIVE_FULL, apiVersion="velero.io/v1")
+NO_KIND = mut(LIVE_FULL, kind=DELETE)
+MALFORMED_READS = [
+    ("truncated", TRUNCATED, "malformed_restore_read"),
+    ("truncated-replacement", TRUNCATED_REPLACEMENT, "malformed_restore_read"),
+    ("wrong-locator", WRONG_NAME, "restore_locator_mismatch"),
+    ("wrong-api", WRONG_API, "malformed_restore_read"),
+    ("no-kind", NO_KIND, "malformed_restore_read"),
+    (
+        "replacement-at-another-locator",
+        mut(LIVE_REPLACEMENT, metadata__namespace="default"),
+        "restore_locator_mismatch",
+    ),
+]
 
 
 def recovered(doc, reason, now, observed=None):
@@ -4998,7 +5017,7 @@ case(
     cl_refs("boundary"),
     fn,
     {},
-    ok({"attempts": 4, "poll_delays": [0] + [5] * 60, "request_timeout": 30}),
+    ok({"attempts": 4, "poll_delays": [0] + [5] * 60, "poll_timeout": 300, "request_timeout": 30}),
 )
 
 fn = "cleanup_step"
@@ -5240,6 +5259,14 @@ pdcase(
     err("restore_spec_drift"),
     LEGACY,
 )
+pdcase(
+    "pre-delete-float-generation-blocks",
+    CL_INTENT,
+    mut(LIVE_FULL, metadata__generation=4.0),
+    err("restore_spec_drift"),
+)
+for name, read, code in MALFORMED_READS:
+    pdcase(f"pre-delete-{name}-response-blocks", CL_INTENT, read, err(code))
 pdcase("pre-delete-before-intent-refused", CL_REVAL, LIVE_FULL, err("cleanup_state_mismatch"))
 pdcase("pre-delete-after-completion-refused", CL_DONE, LIVE_FULL, err("cleanup_state_mismatch"))
 pdcase("pre-delete-under-recovery-refused", CL_RECOVERY, None, err("cleanup_state_mismatch"))
@@ -5359,6 +5386,8 @@ apcase(
     "absence-poll-malformed-read-blocks", CL_ACCEPTED, mut(LIVE_FULL, metadata__uid=None), err("malformed_restore_read")
 )
 apcase("absence-poll-before-accepted-delete-refused", CL_INTENT, None, err("cleanup_state_mismatch"))
+for name, read, code in MALFORMED_READS:
+    apcase(f"absence-poll-{name}-response-blocks", CL_ACCEPTED, read, err(code))
 
 fn = "final_absence"
 
@@ -5385,6 +5414,8 @@ facase(
 )
 facase("final-absence-before-accepted-delete-refused", CL_INTENT, None, err("cleanup_state_mismatch"))
 facase("final-absence-after-completion-refused", CL_DONE, None, err("cleanup_state_mismatch"))
+for name, read, code in MALFORMED_READS:
+    facase(f"final-absence-{name}-response-blocks", CL_ACCEPTED, read, err(code))
 
 fn = "repair_cleanup"
 
@@ -5422,6 +5453,9 @@ rpcase("repair-request-carrying-a-time-refused", CL_RECOVERY, REPAIR, None, err(
 rpcase("repair-on-completed-refused", CL_DONE, CL_REQUEST, None, err("repair_not_permitted"))
 rpcase("repair-on-intent-refused", CL_INTENT, CL_REQUEST, None, err("repair_not_permitted"))
 rpcase("repair-malformed-live-read-refused", CL_RECOVERY, CL_REQUEST, ["restore"], err("malformed_restore_read"))
+rpcase(
+    "repair-truncated-live-read-refused", CL_RECOVERY, CL_REQUEST, TRUNCATED_REPLACEMENT, err("malformed_restore_read")
+)
 
 fn = "require_locator_absent"
 
@@ -5435,6 +5469,7 @@ lacase("locator-absent-after-repair", CL_REPAIRED, None, ok({}))
 lacase("locator-replacement-after-completion-blocks", CL_DONE, LIVE_REPLACEMENT, err("locator_occupied"))
 lacase("locator-replacement-after-repair-blocks", CL_REPAIRED, LIVE_REPLACEMENT, err("locator_occupied"))
 lacase("locator-malformed-read-blocks", CL_DONE, ["restore"], err("malformed_restore_read"))
+lacase("locator-truncated-read-blocks", CL_DONE, TRUNCATED_REPLACEMENT, err("malformed_restore_read"))
 lacase("locator-gate-under-recovery-blocks", CL_RECOVERY, None, err("cleanup_not_terminal"))
 lacase("locator-gate-before-completion-blocks", CL_ACCEPTED, None, err("cleanup_not_terminal"))
 lacase("locator-gate-before-intent-blocks", CL_REVAL, None, err("cleanup_not_terminal"))

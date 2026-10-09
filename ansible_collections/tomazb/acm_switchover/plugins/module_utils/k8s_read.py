@@ -318,8 +318,12 @@ def strict_read(
     namespace: str | None = None,
     name: str | None = None,
     label_selectors: list[str] | None = None,
+    request_timeout: float | None = None,
 ) -> tuple[str, list[dict], str | None]:
     """One strict GET or complete LIST through an already-constructed client.
+
+    ``request_timeout`` bounds a named GET instead of STRICT_READ_REQUEST_TIMEOUT (a
+    caller's remaining deadline).
 
     Returns ``(read_status, resources, resource_version)`` with ``read_status`` one of
     ``ok``, ``not_found`` (named GET 404 while live discovery serves the kind),
@@ -355,7 +359,7 @@ def strict_read(
     # Every strict request is bounded, not just the paginated ones: the Python surface bounds
     # each call with its per-instance request timeout, and the collection has no client instance
     # to carry one (plan section 9.1, per-call timeout).
-    params["_request_timeout"] = STRICT_READ_REQUEST_TIMEOUT
+    params["_request_timeout"] = request_timeout if request_timeout is not None else STRICT_READ_REQUEST_TIMEOUT
 
     try:
         raw = api_client.get(resource, **params)

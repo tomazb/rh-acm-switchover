@@ -59,6 +59,15 @@
     - acm_switchover_repair_backup_schedule_collision_result is not defined
     - (acm_finalization_backup_schedules_info.resources | default([]) | length) == 1
 
+# R4-04: collision repair recreates an enabled BackupSchedule; it starts only over terminal
+# Restore cleanup and a proven-empty journaled locator, whatever enablement already recorded.
+- name: Prove the journaled Restore locator empty before collision repair
+  ansible.builtin.include_tasks: require_journaled_locator_absent.yml
+  when:
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
+    - acm_switchover_repair_backup_schedule_collision_result is not defined
+    - not (_acm_preview | bool)
+
 - name: Recreate BackupSchedule for collision repair
   when:
     - acm_switchover_execution.mode | default('dry_run') == 'execute'
@@ -88,6 +97,10 @@
       delay: 5
       until: (_backup_schedule_collision_delete_wait.resources | default([]) | length) == 0
 
+    - name: Prove the journaled Restore locator empty before the recreate
+      ansible.builtin.include_tasks: require_journaled_locator_absent.yml
+      when: not (_acm_preview | bool)
+
     - name: Recreate BackupSchedule after collision repair delete
       kubernetes.core.k8s:
         api_version: cluster.open-cluster-management.io/v1beta1
@@ -104,6 +117,10 @@
 
     - name: Restore BackupSchedule after failed collision repair
       block:
+        - name: Prove the journaled Restore locator empty before the restoration
+          ansible.builtin.include_tasks: require_journaled_locator_absent.yml
+          when: not (_acm_preview | bool)
+
         - name: Restore BackupSchedule from saved body after failed collision repair
           kubernetes.core.k8s:
             api_version: cluster.open-cluster-management.io/v1beta1

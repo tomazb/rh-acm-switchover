@@ -58,14 +58,32 @@ def test_the_journal_facts_and_the_invalid_journal_refusal_precede_the_transacti
 
 def test_the_enablement_gate_precedes_every_backup_schedule_write():
     tasks = _load("enable_backups.yml")
-    gate = tasks[0]
-    assert gate["when"] == "not (_acm_preview | bool)"
+    assert tasks[0][_INCLUDE] == "require_journaled_locator_absent.yml"
+    assert tasks[0]["when"] == "not (_acm_preview | bool)"
+    gate = _load("require_journaled_locator_absent.yml")
     assert [
         task["tomazb.acm_switchover.acm_migration_evidence"]["operation"]
-        for task in _walk(gate["block"])
+        for task in _walk(gate)
         if "tomazb.acm_switchover.acm_migration_evidence" in task
     ] == ["cleanup_locator_absent"]
-    assert not any(module in task for task in _walk(tasks[:1]) for module in _DELETE_MODULES)
+
+
+def test_every_collision_recreation_is_gated_on_a_proven_empty_locator():
+    """Finding 1: the delete/recreate cycle, the recreate and the rescue restoration each re-prove absence."""
+    tasks = _load("repair_backup_schedule_collision.yml")
+    names = [task.get("name") for task in tasks]
+    assert names.index("Prove the journaled Restore locator empty before collision repair") < names.index(
+        "Recreate BackupSchedule for collision repair"
+    )
+    cycle = tasks[names.index("Recreate BackupSchedule for collision repair")]
+    for section, write in (
+        (cycle["block"], "Recreate BackupSchedule after collision repair delete"),
+        (cycle["rescue"][1]["block"], "Restore BackupSchedule from saved body after failed collision repair"),
+    ):
+        steps = [task.get("name") for task in section]
+        gate = steps.index(write) - 1
+        assert section[gate][_INCLUDE] == "require_journaled_locator_absent.yml"
+        assert section[gate]["when"] == "not (_acm_preview | bool)"
 
 
 def test_the_journaled_locator_is_deleted_only_by_the_guarded_primitive():
