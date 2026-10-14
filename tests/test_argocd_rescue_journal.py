@@ -15,6 +15,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 import acm_switchover
+import lib.utils as utils_module
 from lib import argocd as argocd_lib
 from lib.argocd_register import ArgocdPauseRegister, PauseSummary
 from lib.constants import STEP_PAUSE_ARGOCD_APPS
@@ -316,6 +317,38 @@ class TestRetryRepausesBeforePhaseWork:
         assert order == [("pause", ["primary", "secondary"])]
         stored = _on_disk(path)
         assert stored["config"]["argocd_repause_required"]["failed_phase"] == Phase.ACTIVATION.value
+        assert stored["errors"][-1]["phase"] == Phase.ACTIVATION.value
+
+    def test_a_clear_replaced_on_disk_without_directory_durability_restores_the_marker(self, tmp_path):
+        """A-28/D-42: the cleared file is visible, its directory fsync fails; nothing is silently discharged."""
+        original_clear = RunRecord.clear_argocd_repause_required
+        original_fsync = utils_module._fsync_directory
+        fault = {"armed": False, "seen": None}
+
+        def clear(run_record):
+            fault["armed"] = True
+            original_clear(run_record)
+
+        def fsync_directory(path):
+            if fault["armed"]:
+                fault["armed"] = False
+                # The replacement already landed: the marker is gone from the visible file.
+                fault["seen"] = _marker(tmp_path / "state.json")
+                raise OSError("EIO")
+            original_fsync(path)
+
+        with (
+            patch.object(RunRecord, "clear_argocd_repause_required", autospec=True, side_effect=clear),
+            patch("lib.utils._fsync_directory", side_effect=fsync_directory),
+        ):
+            path, state, result, order, _ = _retry(tmp_path)
+
+        assert fault["seen"] is None
+        assert result is False
+        assert order == [("pause", ["primary", "secondary"])]
+        stored = _on_disk(path)
+        assert stored["config"]["argocd_repause_required"]["failed_phase"] == Phase.ACTIVATION.value
+        assert "marker could not be cleared" in stored["errors"][-1]["error"]
         assert stored["errors"][-1]["phase"] == Phase.ACTIVATION.value
 
     def test_dry_run_retry_reports_and_writes_no_marker_change(self, tmp_path, caplog):
