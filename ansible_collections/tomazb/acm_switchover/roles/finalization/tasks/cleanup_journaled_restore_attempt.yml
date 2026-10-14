@@ -67,11 +67,11 @@
         request_timeout: "{{ _acm_cleanup_schedule.request_timeout }}"
       check_mode: "{{ _acm_preview | bool }}"
       register: _acm_cleanup_delete_result
-      # Only a DELETE that removed nothing (a precondition conflict or a 404) continues, to be
-      # re-read and re-validated in full; every other refusal fails here, never absorbed.
-      failed_when: >-
-        (_acm_cleanup_delete_result.reason | default('unverifiable'))
-        not in ['ok', 'precondition_failed', 'not_found']
+      # Judged below by cleanup_delete_outcome, never here: a failure of this no_log task would
+      # censor its refusal reason. Only a DELETE that removed nothing (a precondition conflict or
+      # a 404) continues, to be re-read and re-validated in full; every other refusal fails the
+      # judgement with its reason (delete_not_accepted), never absorbed.
+      failed_when: false
       no_log: true
 
     # Only the classification is passed on: the registered result also echoes the arguments.

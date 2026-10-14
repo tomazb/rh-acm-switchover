@@ -518,6 +518,11 @@ def test_an_unverifiable_delete_fails_at_once_and_stays_resumable(run_activation
     assert run.completed.returncode != 0
     assert len([r for r in hub.requests if r["method"] == "DELETE"]) - before == 1
     assert run.journal["cleanup"]["state"] == "intent_persisted"
+    # The no_log DELETE never censors the refusal: the phase failure names its reason, and only that.
+    failure = "Migration evidence refused (delete_not_accepted: the guarded DELETE was not accepted (unverifiable))"
+    assert failure in run.output
+    assert "fixture-token" not in run.output
+    assert "secondary.kubeconfig" not in run.output
 
 
 _SCHEDULES = (
