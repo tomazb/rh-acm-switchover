@@ -1906,9 +1906,9 @@ class _RecordingPoolManager:
     """The urllib3 pool manager under a real, installed `ApiClient`: every request is recorded
     and answered with one fixed status and body, so the generated client runs unmocked."""
 
-    def __init__(self, status, body):
-        self._status = status
-        self._body = body
+    def __init__(self, *responses):
+        # One (status, body, content type) per request, in order; the last one repeats.
+        self._responses = list(responses)
         self.calls = []
 
     def request(self, method, url, **kwargs):
@@ -1917,11 +1917,12 @@ class _RecordingPoolManager:
         import urllib3
 
         self.calls.append((method, url))
+        status, body, content_type = self._responses[min(len(self.calls), len(self._responses)) - 1]
         return urllib3.HTTPResponse(
-            body=io.BytesIO(self._body),
-            status=self._status,
+            body=io.BytesIO(body),
+            status=status,
             reason="Fake",
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": content_type},
             preload_content=False,
         )
 
@@ -1963,17 +1964,26 @@ class TestMalformedRestoreCreateResponse:
         secondary.delete_custom_resource = Mock(return_value=True)
         return secondary
 
+    _CREATES = [
+        ("passive", "restore", "_activate_via_restore_resource", "restore-acm-activate"),
+        ("full", "patch", "_create_full_restore", "restore-acm-full"),
+    ]
+
     @pytest.mark.parametrize(
-        ("method", "activation_method", "create", "restore_name"),
+        ("body", "content_type"),
         [
-            ("passive", "restore", "_activate_via_restore_resource", "restore-acm-activate"),
-            ("full", "patch", "_create_full_restore", "restore-acm-full"),
+            (b"null", "application/json"),
+            (b"{not json", "application/json"),
+            (b"\xff\xfe", "application/json"),
+            (b"null", "application/octet-stream"),
         ],
+        ids=["null", "invalid-json", "invalid-utf8", "unsupported-content-type"],
     )
-    def test_a_2xx_create_with_a_null_body_is_unverified_and_never_rolled_back(
-        self, mock_state_manager, method, activation_method, create, restore_name
+    @pytest.mark.parametrize(("method", "activation_method", "create", "restore_name"), _CREATES)
+    def test_a_2xx_create_with_a_malformed_body_is_unverified_and_never_rolled_back(
+        self, mock_state_manager, method, activation_method, create, restore_name, body, content_type
     ):
-        pool_manager = _RecordingPoolManager(201, b"null")
+        pool_manager = _RecordingPoolManager((201, body, content_type))
         activation = SecondaryActivation(
             secondary_client=self._secondary(pool_manager),
             state_manager=mock_state_manager,
@@ -1991,3 +2001,31 @@ class TestMalformedRestoreCreateResponse:
         message = str(excinfo.value)
         assert "unverified" in message and restore_name in message
         assert "Recreated passive sync restore" not in message
+
+    @pytest.mark.parametrize(("method", "activation_method", "create", "restore_name"), _CREATES)
+    def test_an_unverified_rollback_create_is_reported_as_such(
+        self, mock_state_manager, method, activation_method, create, restore_name
+    ):
+        """The activation create is refused, so the passive Restore is recreated; the server
+        accepts that POST but answers with a malformed body. The passive Restore may exist, so
+        the rollback is reported as unverified, not as failed, and nothing more is created."""
+        pool_manager = _RecordingPoolManager(
+            (403, b'{"kind": "Status", "code": 403}', "application/json"),
+            (201, b"null", "application/json"),
+        )
+        activation = SecondaryActivation(
+            secondary_client=self._secondary(pool_manager),
+            state_manager=mock_state_manager,
+            method=method,
+            activation_method=activation_method,
+        )
+
+        with patch.object(activation, "_wait_for_restore_deletion", return_value=None):
+            with pytest.raises(FatalError) as excinfo:
+                getattr(activation, create)()
+
+        assert [verb for verb, _url in pool_manager.calls] == ["POST", "POST"]
+        message = str(excinfo.value)
+        assert "Rollback failed" not in message
+        assert "unverified" in message and RESTORE_PASSIVE_SYNC_NAME in message
+        assert "may exist" in message

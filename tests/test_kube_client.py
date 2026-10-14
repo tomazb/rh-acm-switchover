@@ -799,6 +799,58 @@ class TestCustomObjectResponseShape:
 
 
 @pytest.mark.unit
+class TestUndecodableCustomObjectBodies:
+    """A 2xx custom-object body the installed client cannot decode is a malformed response,
+    whatever error the client raises for it (36.x and 37.x differ); an HTTP error stays an
+    `ApiException` with its status even when its body cannot be decoded."""
+
+    _CALLS = {
+        "route-host": (200, lambda c: c.get_route_host("ns", "r")),
+        "get": (200, lambda c: c.get_custom_resource("g", "v1", "widgets", "w", "ns")),
+        "get-advisory": (200, lambda c: c.get_custom_resource_advisory("g", "v1", "widgets", "w", "ns")),
+        "list": (200, lambda c: c.list_custom_resources("g", "v1", "widgets", "ns")),
+        "patch": (200, lambda c: c.patch_custom_resource("g", "v1", "widgets", "w", {"spec": {}}, namespace="ns")),
+        "create": (
+            201,
+            lambda c: c.create_custom_resource("g", "v1", "widgets", {"metadata": {"name": "w"}}, namespace="ns"),
+        ),
+    }
+
+    @staticmethod
+    def _client(pool_manager):
+        from kubernetes import client as k8s
+
+        kube = KubeClient.__new__(KubeClient)
+        kube.request_timeout = 30
+        kube.dry_run = False
+        kube._api_client = _real_api_client(pool_manager)
+        kube.custom_api = k8s.CustomObjectsApi(kube._api_client)
+        return kube
+
+    @pytest.mark.parametrize(
+        ("body", "content_type"),
+        [(b"{not json", "application/json"), (b"\xff\xfe", "application/json"), (b"null", "application/octet-stream")],
+        ids=["invalid-json", "invalid-utf8", "unsupported-content-type"],
+    )
+    @pytest.mark.parametrize("call", sorted(_CALLS))
+    def test_an_undecodable_2xx_body_is_malformed(self, call, body, content_type):
+        status, invoke = self._CALLS[call]
+        pool_manager = _RecordingPoolManager(status=status, body=body, content_type=content_type)
+
+        with pytest.raises(MalformedResponseError):
+            invoke(self._client(pool_manager))
+        assert len(pool_manager.calls) == 1
+
+    @pytest.mark.parametrize("call", ["patch", "create"])
+    def test_an_http_error_with_an_undecodable_body_stays_an_api_exception(self, call):
+        pool_manager = _RecordingPoolManager(status=409, body=b"\xff\xfe")
+
+        with pytest.raises(ApiException) as excinfo:
+            self._CALLS[call][1](self._client(pool_manager))
+        assert excinfo.value.status == 409
+
+
+@pytest.mark.unit
 class TestKubeClientRequestTimeouts:
     """Kubernetes API calls should pass explicit per-request timeout bounds."""
 
@@ -1734,12 +1786,13 @@ class _RecordingPoolManager:
     non-2xx classification to that client.
     """
 
-    def __init__(self, status=200, payload=None, body=None):
+    def __init__(self, status=200, payload=None, body=None, content_type="application/json"):
         import urllib3
 
         self._urllib3 = urllib3
         self._status = status
         self._body = body if body is not None else json.dumps(payload).encode("utf-8")
+        self._content_type = content_type
         self.calls = []
 
     def request(self, method, url, **kwargs):
@@ -1751,7 +1804,7 @@ class _RecordingPoolManager:
             body=stream,
             status=self._status,
             reason="Fake",
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": self._content_type},
             preload_content=False,
         )
 
