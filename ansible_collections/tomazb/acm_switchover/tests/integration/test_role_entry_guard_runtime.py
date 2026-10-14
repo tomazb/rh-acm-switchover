@@ -40,7 +40,9 @@ def _identity(restore_only: bool) -> dict:
     }
 
 
-def _run_role(tmp_path, role, *, restore_only=False, waiver_scope=None, recorded_names=(), checkpoint=True, check=False):
+def _run_role(
+    tmp_path, role, *, restore_only=False, waiver_scope=None, recorded_names=(), checkpoint=True, check=False
+):
     api = FakeR302API()
     try:
         kubeconfig = tmp_path / "secondary.kubeconfig"

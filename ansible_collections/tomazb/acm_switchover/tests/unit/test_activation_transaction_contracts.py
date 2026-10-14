@@ -112,5 +112,7 @@ def test_the_playbooks_that_reach_activation_require_the_checkpoint_at_the_ident
     assert names.index("Enter checkpointed phase") < guard
     for playbook in ("switchover.yml", "restore_only.yml"):
         tasks = list(_flat(yaml.safe_load((collection / "playbooks" / playbook).read_text())[0]["tasks"]))
-        include = next(task for task in tasks if task.get("name") == "Establish trusted identity and checkpoint barrier")
+        include = next(
+            task for task in tasks if task.get("name") == "Establish trusted identity and checkpoint barrier"
+        )
         assert include["vars"] == {"_acm_identity_barrier_requires_checkpoint": True}, playbook
