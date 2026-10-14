@@ -46,7 +46,8 @@ def mock_k8s_apis():
     ) as mock_core_cls, patch(
         "lib.kube_client.client.AppsV1Api"
     ) as mock_apps_cls:
-        api_client = MagicMock(name="api_client")
+        # The pre-37 client shape: no `param_serialize`, so requests take the legacy `call_api` path.
+        api_client = MagicMock(name="api_client", spec=["call_api", "configuration"])
         api_client.configuration = MagicMock(name="api_client_configuration")
         mock_new_client.return_value = api_client
 
@@ -1659,6 +1660,63 @@ class TestGetPodLogs:
         mock_k8s_apis["core_api"].read_namespaced_pod_log.assert_not_called()
 
 
+class _UnreadableBody:
+    """A response body whose read fails, as a timeout or reset after the headers would."""
+
+    def __init__(self, exc):
+        self._exc = exc
+
+    def read(self, *_args, **_kwargs):
+        raise self._exc
+
+    def close(self):
+        pass
+
+
+class _RecordingPoolManager:
+    """Stands in for the urllib3 pool manager under a real, installed `ApiClient`.
+
+    Everything above the socket is the installed client's own code: request preparation,
+    authentication, path encoding, the REST layer and its HTTP-error handling. Faking here,
+    rather than at `call_api` or the REST layer, binds whichever `call_api`/`param_serialize`
+    signature the resolved kubernetes client exposes (36.x and 37.x differ) and leaves
+    non-2xx classification to that client.
+    """
+
+    def __init__(self, status=200, payload=None, body=None):
+        import urllib3
+
+        self._urllib3 = urllib3
+        self._status = status
+        self._body = body if body is not None else json.dumps(payload).encode("utf-8")
+        self.calls = []
+
+    def request(self, method, url, **kwargs):
+        import io
+
+        self.calls.append({"method": method, "url": url, **kwargs})
+        stream = self._body if isinstance(self._body, _UnreadableBody) else io.BytesIO(self._body)
+        return self._urllib3.HTTPResponse(
+            body=stream,
+            status=self._status,
+            reason="Fake",
+            headers={"Content-Type": "application/json"},
+            preload_content=False,
+        )
+
+
+def _real_api_client(pool_manager):
+    """A real `ApiClient` of the installed version, with a bearer token and a faked socket."""
+    from kubernetes.client import ApiClient, Configuration
+
+    configuration = Configuration()
+    # The key `load_kube_config` populates from a kubeconfig token.
+    configuration.api_key = {"BearerToken": "Bearer binding-test-token"}
+    api_client = ApiClient(configuration=configuration)
+    api_client.rest_client.pool_manager = pool_manager
+    return api_client
+
+
 class TestDiscoveryProver:
     """R4-03: kind absence must come from a successful discovery response."""
 
@@ -1677,7 +1735,8 @@ class TestDiscoveryProver:
         client = KubeClient.__new__(KubeClient)
         client.request_timeout = 30
         client.dry_run = False
-        client._api_client = Mock()
+        # The pre-37 client shape: no `param_serialize`, so requests take the legacy `call_api` path.
+        client._api_client = Mock(spec=["call_api"])
         client._api_client.call_api = call_api
         return client
 
@@ -1790,55 +1849,70 @@ class TestDiscoveryProver:
         )
         assert outcome.status is StrictReadStatus.ITEMS
 
+    _SERVED_PODS = {"kind": "APIResourceList", "groupVersion": "v1", "resources": [{"name": "pods", "kind": "Pod"}]}
+
+    @staticmethod
+    def _real_client(pool_manager):
+        client = KubeClient.__new__(KubeClient)
+        client.request_timeout = 30
+        client.dry_run = False
+        client._api_client = _real_api_client(pool_manager)
+        return client
+
     def test_discovery_call_binds_the_real_api_client_signature(self):
         """The prover must issue a call the installed client actually accepts.
 
         Every other test in this class replaces `call_api` with a `Mock`, which accepts any
-        keyword, so none of them can prove the call is issuable. That matters here because the
-        deserialization keyword was RENAMED inside the supported dependency range
-        (`response_type` on kubernetes 28.x/31.x, `response_types_map` on 36.x), and plan section 9.2
-        requires the discovery mechanism to be version-invariant. This test drives a real
-        `ApiClient` with only its transport patched, so a keyword the resolved client rejects
-        fails here instead of silently degrading every custom-resource strict read to
+        keyword, so none of them can prove the call is issuable. The transport API changed
+        inside the supported dependency range: the deserialization keyword was renamed
+        (`response_type` on 28.x/31.x, `response_types_map` on 36.x), and 37.x split request
+        preparation (`param_serialize`) from a `call_api` that rejects the older keywords.
+        Plan section 9.2 requires the discovery mechanism to be version-invariant. This test
+        drives a real `ApiClient` with only its socket faked, so a call the resolved client
+        rejects fails here instead of silently degrading every custom-resource strict read to
         `discovery_unverifiable` against a live cluster.
         """
-        from kubernetes.client.api_client import ApiClient
+        pool_manager = _RecordingPoolManager(payload=self._SERVED_PODS)
 
-        class _FakeRESTResponse:
-            def __init__(self, payload):
-                self.data = json.dumps(payload).encode("utf-8")
-                self.status = 200
-                self.reason = "OK"
-
-            def getheaders(self):
-                return {}
-
-        seen = {}
-
-        def fake_request(method, url, **kwargs):
-            seen["method"] = method
-            seen["url"] = url
-            return _FakeRESTResponse(
-                {
-                    "kind": "APIResourceList",
-                    "groupVersion": "v1",
-                    "resources": [{"name": "pods", "kind": "Pod"}],
-                }
-            )
-
-        api_client = ApiClient()
-        api_client.request = fake_request
-
-        client = KubeClient.__new__(KubeClient)
-        client.request_timeout = 30
-        client.dry_run = False
-        client._api_client = api_client
-
-        outcome = client._discovery_serves("", "v1", "pods")
+        outcome = self._real_client(pool_manager)._discovery_serves("", "v1", "pods")
 
         assert outcome.status is StrictReadStatus.ITEMS
-        assert seen["method"] == "GET"
-        assert seen["url"].endswith("/api/v1")
+        [call] = pool_manager.calls
+        assert call["method"] == "GET"
+        assert call["url"].endswith("/api/v1")
+        assert {key.lower(): value for key, value in call["headers"].items()}["authorization"] == (
+            "Bearer binding-test-token"
+        )
+        assert call["timeout"].total == 30
+
+    @pytest.mark.parametrize("status", [401, 403, 404, 500, 503])
+    def test_a_real_client_http_error_is_unverifiable_never_absence(self, status):
+        pool_manager = _RecordingPoolManager(status=status, payload=self._SERVED_PODS)
+
+        outcome = self._real_client(pool_manager)._discovery_serves("", "v1", "pods")
+
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE
+        assert len(pool_manager.calls) == 1
+
+    @pytest.mark.parametrize("exc", [ReadTimeoutError(None, "/api/v1", "read timed out"), OSError("reset")])
+    def test_a_real_client_body_read_failure_is_unverifiable(self, exc):
+        pool_manager = _RecordingPoolManager(body=_UnreadableBody(exc))
+
+        outcome = self._real_client(pool_manager)._discovery_serves("", "v1", "pods")
+
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE
+        assert len(pool_manager.calls) == 1
+
+    def test_a_real_client_undecodable_body_is_unverifiable(self):
+        pool_manager = _RecordingPoolManager(body=b"<html>")
+
+        outcome = self._real_client(pool_manager)._discovery_serves("", "v1", "pods")
+
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE
+        assert len(pool_manager.calls) == 1
 
     def test_core_group_uses_the_core_discovery_path(self):
         call = Mock(
@@ -2761,7 +2835,8 @@ class TestDiscoveryGroupVersionProof:
         client = KubeClient.__new__(KubeClient)
         client.request_timeout = 30
         client.dry_run = False
-        client._api_client = Mock()
+        # The pre-37 client shape: no `param_serialize`, so requests take the legacy `call_api` path.
+        client._api_client = Mock(spec=["call_api"])
         client._api_client.call_api = Mock(return_value=document)
         client.custom_api = Mock()
         client.custom_api.get_cluster_custom_object = Mock(side_effect=ApiException(status=404))
@@ -3132,6 +3207,83 @@ class TestGuardedRestoreJsonPatch:
             result = self._patch(kube_client)
         assert self._SECRET not in json.dumps(result)
         assert "abc123" not in caplog.text
+
+    _ACCEPTED_BODY = {
+        "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+        "kind": "Restore",
+        "metadata": {"uid": "3f0c2a4e-uid", "resourceVersion": "48300", "generation": 7},
+    }
+
+    @staticmethod
+    def _real_client(pool_manager):
+        client = KubeClient.__new__(KubeClient)
+        client.request_timeout = 30
+        client.dry_run = False
+        client._api_client = _real_api_client(pool_manager)
+        return client
+
+    def test_the_guarded_patch_binds_the_real_api_client_signature(self):
+        """Every other test here mocks `call_api`, which accepts any keyword. This drives a
+        real, installed `ApiClient` with only its socket faked, so a transport call the
+        resolved kubernetes client rejects (37.x's `call_api` takes none of the older
+        preparation keywords) fails here instead of reporting every guarded PATCH as not
+        accepted before any request is sent."""
+        pool_manager = _RecordingPoolManager(payload=self._ACCEPTED_BODY)
+
+        result = self._real_client(pool_manager).json_patch_custom_resource_guarded(
+            "restore-acm-passive-sync", **self._kwargs(timeout_seconds=11)
+        )
+
+        assert (result["accepted"], result["reason"], result["generation"]) == (True, "ok", 7)
+        [call] = pool_manager.calls
+        assert call["method"] == "PATCH"
+        assert call["url"].endswith(
+            "/apis/cluster.open-cluster-management.io/v1beta1/namespaces/open-cluster-management-backup"
+            "/restores/restore-acm-passive-sync"
+        )
+        # Still a JSON Patch on the wire: the client downgrades a non-list body to a strategic
+        # merge patch, which would drop every `test` operation.
+        assert call["headers"]["Content-Type"] == GUARDED_RESTORE_PATCH_VECTOR["content_type"]
+        assert json.loads(call["body"]) == GUARDED_RESTORE_PATCH_VECTOR["patch"]
+        assert {key.lower(): value for key, value in call["headers"].items()}["authorization"] == (
+            "Bearer binding-test-token"
+        )
+        assert call["timeout"].total == 11
+
+    @pytest.mark.parametrize("status", sorted(GUARDED_RESTORE_PATCH_STATUS_VECTOR))
+    def test_a_real_client_http_error_follows_the_shared_classification(self, status):
+        pool_manager = _RecordingPoolManager(status=status, payload={"kind": "Status", "code": status})
+
+        result = self._real_client(pool_manager).json_patch_custom_resource_guarded(
+            "restore-acm-passive-sync", **self._kwargs()
+        )
+
+        assert (result["conflict"], result["reason"]) == GUARDED_RESTORE_PATCH_STATUS_VECTOR[status]
+        assert (result["accepted"], result["http_accepted"], result["changed"]) == (False, False, False)
+        assert len(pool_manager.calls) == 1
+
+    @pytest.mark.parametrize(
+        "exc", [ReadTimeoutError(None, "/restores", "read timed out"), ProtocolError("reset"), OSError("reset")]
+    )
+    def test_a_real_client_body_read_failure_is_not_acceptance(self, exc):
+        pool_manager = _RecordingPoolManager(body=_UnreadableBody(exc))
+
+        result = self._real_client(pool_manager).json_patch_custom_resource_guarded(
+            "restore-acm-passive-sync", **self._kwargs()
+        )
+
+        assert (result["accepted"], result["http_accepted"], result["reason"]) == (False, False, "unverifiable")
+        assert len(pool_manager.calls) == 1
+
+    def test_a_real_client_undecodable_accepted_body_is_malformed(self):
+        pool_manager = _RecordingPoolManager(body=b"<html>")
+
+        result = self._real_client(pool_manager).json_patch_custom_resource_guarded(
+            "restore-acm-passive-sync", **self._kwargs()
+        )
+
+        assert result == self._MALFORMED_IDENTITY
+        assert len(pool_manager.calls) == 1
 
     def test_the_generic_merge_patch_is_unchanged(self, kube_client):
         kube_client.custom_api.patch_namespaced_custom_object = Mock(return_value={"metadata": {}})
