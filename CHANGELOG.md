@@ -101,6 +101,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The final pre-PATCH hive/cluster credential prediction of a legacy `passive_patch` now requires
+  the latest Credentials Backup to equal the frozen seven-field projection, not just its name; a
+  same-name replacement refuses with `credential_variant_source_mismatch` (both form factors).
+- A guarded Restore PATCH or CREATE response whose `metadata.generation` is present but not a
+  positive integer is `malformed_response` and records no applied evidence; only an omitted
+  generation falls back to the strict re-read (both form factors).
+- A restore-only ManagedCluster expectation waiver is refused in every scope with
+  `waiver_expected_names_empty`; the collection no longer accepted a `post_activation` waiver on
+  the strength of `acm_switchover_managed_clusters`.
+- The collection `switchover` and `restore_only` playbooks refuse execute mode without
+  `checkpoint.enabled: true` at the identity barrier, before `primary_prep` or the Argo CD pause;
+  the shipped `examples/group_vars/all.yml` enables checkpointing.
+- The collection `post_activation` dry run refuses an invalid recorded migration journal, as the
+  Python CLI does, instead of previewing it as skipped.
+- A refused journaled-Restore DELETE in collection finalization now reports
+  `delete_not_accepted` with its reason instead of a censored `no_log` failure.
 - The Python refusal of a resume at finalization whose migration journal lacks
   `restore.completed_at` or `post_activation.completed_at` now says the journal is unchanged, that a
   plain re-run refuses again, and which `current_phase` to set in the state file to re-record the

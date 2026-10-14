@@ -485,8 +485,9 @@ Finalization runs in this order on every pass:
 The **old-hub evidence gate** runs immediately before every integrated old-hub action. It
 requires `post_activation.completed_at`, a `completed` or `repaired` cleanup, the activation
 name check or a waiver covering it, and a fresh strict read proving that nothing occupies the
-journaled Restore name. Missing evidence refuses with the first missing reason code
-(`cleanup_not_terminal`, `activation_names_unverified`, or `locator_occupied`) and lists all
+journaled Restore name. A missing post-activation completion refuses first, with
+`post_activation_not_completed`; otherwise missing evidence refuses with the first missing reason
+code (`cleanup_not_terminal`, `activation_names_unverified`, or `locator_occupied`) and lists all
 of them. A dry-run previews and is not gated. Standalone `--decommission` is outside this
 transaction.
 

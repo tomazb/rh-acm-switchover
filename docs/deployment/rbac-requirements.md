@@ -162,6 +162,8 @@ manifests, and Helm templates must stay aligned when permissions change.
   - Monitor restore status
   - Activate managed clusters on secondary hub
   - Set up passive sync for reverse switchover
+- **Discovery**: activation requires API discovery to list `restores/status`; that read relies on
+  the default `system:discovery` binding, so no additional rule is granted.
 
 ### Velero API Group (velero.io)
 

@@ -364,7 +364,7 @@ flowchart LR
 
 1. **Preflight** — validates target hub only (ACM version, BSL credentials, namespaces)
 2. **Optional Argo CD pause** — with `--argocd-manage`, pauses ACM-touching Applications on the target hub before activation
-3. **Activation** — creates a one-time full Restore from the latest S3 backup
+3. **Activation** — journals the concrete Backups it will restore, then creates a one-time full Restore naming them
 4. **Post-Activation** — waits for ManagedClusters to connect, verifies klusterlet agents, and requires at least one restored non-local ManagedCluster unless `--min-managed-clusters 0` is explicitly set (restore-only has no expected names)
 5. **Finalization** — enables BackupSchedule on the new hub
 
