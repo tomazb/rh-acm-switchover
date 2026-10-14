@@ -452,6 +452,16 @@ _CORRUPTED_MARKERS = [
     pytest.param(lambda phase: {"failed_phase": "completed", "recorded_at": _RECORDED_AT}, id="terminal-phase"),
     pytest.param(lambda phase: {"failed_phase": "bogus", "recorded_at": _RECORDED_AT}, id="unknown-phase"),
     pytest.param(lambda phase: {"failed_phase": phase + " ", "recorded_at": _RECORDED_AT}, id="padded-phase"),
+    # Unhashable phases must be classified, never reach a set membership test as a TypeError.
+    pytest.param(lambda phase: {"failed_phase": [], "recorded_at": _RECORDED_AT}, id="empty-list-phase"),
+    pytest.param(lambda phase: {"failed_phase": [phase], "recorded_at": _RECORDED_AT}, id="list-phase"),
+    pytest.param(lambda phase: {"failed_phase": {}, "recorded_at": _RECORDED_AT}, id="empty-object-phase"),
+    pytest.param(lambda phase: {"failed_phase": {"phase": phase}, "recorded_at": _RECORDED_AT}, id="object-phase"),
+    pytest.param(lambda phase: {"failed_phase": 7, "recorded_at": _RECORDED_AT}, id="numeric-phase"),
+    pytest.param(lambda phase: {"failed_phase": phase, "recorded_at": None}, id="null-recorded-at"),
+    pytest.param(lambda phase: {"failed_phase": phase, "recorded_at": [_RECORDED_AT]}, id="list-recorded-at"),
+    pytest.param(lambda phase: {"failed_phase": phase, "recorded_at": {"at": _RECORDED_AT}}, id="object-recorded-at"),
+    pytest.param(lambda phase: {"failed_phase": phase, "recorded_at": True}, id="boolean-recorded-at"),
 ]
 
 

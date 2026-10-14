@@ -450,6 +450,7 @@ class RunRecord:
         if (
             not isinstance(stored, dict)
             or set(stored) != _REPAUSE_FIELDS
+            or not isinstance(stored["failed_phase"], str)
             or stored["failed_phase"] not in _REPAUSE_PHASES
             or not isinstance(stored["recorded_at"], str)
             or not stored["recorded_at"]
