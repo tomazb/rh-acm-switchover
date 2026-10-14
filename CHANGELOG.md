@@ -162,6 +162,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   object is `malformed_response` (not accepted, no applied evidence, nothing mutated again) on
   every supported `kubernetes` client version, as in the collection; on 37 it was reported as
   `unverifiable`.
+- Post-activation readiness with a zero ManagedCluster floor and no expected name (for example an
+  explicit `min_managed_clusters: 0` / `--min-managed-clusters 0` empty target) now accepts an
+  empty ManagedCluster inventory, as activation already did: a hub with self-management disabled
+  has no `local-cluster`. Any expected name or positive floor keeps the `inventory_empty` wait
+  (both form factors).
 - A guarded Restore DELETE answered 2xx with a body that is not a decodable JSON object is now
   `malformed_response` (not accepted, `http_accepted` true) in both form factors, on every
   supported `kubernetes` client version. Python accepted a `null`, list or string body (and, before

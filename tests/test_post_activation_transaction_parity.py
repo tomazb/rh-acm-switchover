@@ -243,6 +243,22 @@ def test_an_unready_inventory_records_no_evidence_identically(tmp_path, items, c
     assert result[0] == code and result[2] == []
 
 
+def test_an_explicit_zero_floor_without_names_completes_on_an_empty_inventory_identically(tmp_path):
+    """A hub with self-management disabled has no local-cluster: with an explicit minimum of 0
+    and no expected name, an empty inventory completes post-activation in both form factors."""
+    code, _journal, writes = _decide(tmp_path, outcome=StrictReadOutcome.from_items([]), expected=[], minimum=0)
+    assert code is None
+    assert writes == [
+        {"names_verified_at": NOW, "completed_at": None},
+        {"names_verified_at": NOW, "completed_at": NOW},
+    ]
+
+
+def test_an_empty_inventory_with_a_positive_floor_records_no_evidence_identically(tmp_path):
+    result = _decide(tmp_path, outcome=StrictReadOutcome.from_items([]), expected=[], minimum=1)
+    assert result[0] == "inventory_empty" and result[2] == []
+
+
 def test_the_count_floor_is_enforced_alongside_names_identically(tmp_path):
     assert _decide(tmp_path, minimum=3)[0] == "count_below_minimum"
 

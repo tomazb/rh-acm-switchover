@@ -4791,7 +4791,17 @@ AB = [LOCAL, mcl("cluster-b"), mcl("cluster-a")]
 prcase("readiness-all-ready", AB, ready(NAMES))
 prcase("readiness-extra-cluster-ready", AB + [mcl("cluster-c")], ready(NAMES + ["cluster-c"]))
 prcase("readiness-empty-inventory", [], ready([], NAMES, code="inventory_empty"))
-prcase("readiness-empty-inventory-no-expectation", [], ready([], code="inventory_empty"), names=[], minimum=0)
+# An explicit zero floor with no expected name permits an empty destination, local-cluster
+# included (a hub with self-management disabled has none); any expectation keeps the refusal.
+prcase("readiness-empty-inventory-no-expectation", [], ready([]), names=[], minimum=0)
+prcase("readiness-empty-inventory-floor-one", [], ready([], code="inventory_empty"), names=[], minimum=1)
+prcase(
+    "readiness-empty-inventory-zero-floor-names-waived",
+    [],
+    ready([], NAMES, code="inventory_empty", waived=True),
+    minimum=0,
+    waived=True,
+)
 prcase("readiness-only-local-zero-floor", [LOCAL], ready([]), names=[], minimum=0)
 prcase("readiness-only-local-floor-one", [LOCAL], ready([], code="count_below_minimum"), names=[], minimum=1)
 prcase(

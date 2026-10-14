@@ -143,7 +143,10 @@ def managed_cluster_readiness(
             pending.append(name)
     missing = sorted(set(expected_names) - set(names))
     code = None
-    if not items:
+    # An empty inventory means the reconciler has not caught up, unless nothing is expected:
+    # an explicit zero floor with no expected name permits an empty destination (a hub with
+    # self-management disabled has no local-cluster).
+    if not items and (expected_names or min_managed_clusters > 0):
         code = "inventory_empty"
     elif missing and not names_waived:
         code = "expected_names_missing"

@@ -456,7 +456,8 @@ class TestPostActivationVerification:
 
     @patch("modules.post_activation.wait_for_condition")
     def test_verify_no_clusters(self, mock_wait, post_verify_with_obs, mock_secondary_client):
-        """Test when no managed clusters exist - should timeout waiting for clusters."""
+        """Test when no managed clusters exist under a positive floor - should timeout waiting for clusters."""
+        post_verify_with_obs.min_managed_clusters = 1
         mock_secondary_client.list_custom_resources.return_value = []
 
         def capture_wait(*args, **kwargs):

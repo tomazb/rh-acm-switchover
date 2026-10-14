@@ -75,13 +75,24 @@ class TestVerifyManagedClustersPolling:
         )
         assert loop["when"] == "_acm_mc_readiness_state != 'ready'"
 
-    def test_an_empty_inventory_never_exits_the_wait(self):
-        """An empty inventory means the hub reconciler has not caught up; it is never ready.
-
-        Mirrors Python: `if not managed_clusters: return False, 'no ManagedClusters found'`.
-        """
-        decision = managed_cluster_readiness(items=[], expected_names=[], min_managed_clusters=0, names_waived=False)
+    @pytest.mark.parametrize(
+        ("expected_names", "minimum", "waived"),
+        [([], 1, False), (["cluster-a"], 0, False), (["cluster-a"], 0, True), (["cluster-a"], 2, False)],
+    )
+    def test_an_empty_inventory_with_any_expectation_never_exits_the_wait(self, expected_names, minimum, waived):
+        """With any expected name or a positive floor, an empty inventory means the hub
+        reconciler has not caught up; it is never ready, as in Python."""
+        decision = managed_cluster_readiness(
+            items=[], expected_names=expected_names, min_managed_clusters=minimum, names_waived=waived
+        )
         assert decision["ready"] is False and decision["code"] == "inventory_empty"
+
+    def test_an_explicit_zero_floor_without_expected_names_permits_an_empty_inventory(self):
+        """An explicit min_managed_clusters: 0 with no expected name permits an empty
+        destination through post-activation too; a hub with self-management disabled has no
+        local-cluster, so its inventory may be empty."""
+        decision = managed_cluster_readiness(items=[], expected_names=[], min_managed_clusters=0, names_waived=False)
+        assert decision["ready"] is True and decision["code"] is None and decision["count"] == 0
 
     def test_status_summary_receives_only_non_local_clusters(self):
         """local-cluster must not count toward managed cluster readiness verification."""
