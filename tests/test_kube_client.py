@@ -32,6 +32,7 @@ from lib.constants import (
     STRICT_READ_REASON_OBJECT_NOT_FOUND,
     STRICT_READ_REASON_READ_FAILED,
 )
+from lib.exceptions import MalformedResponseError
 from lib.kube_client import KubeClient, api_call, is_retryable_error
 from lib.strict_read import StrictReadOutcome, StrictReadStatus
 
@@ -46,7 +47,8 @@ def mock_k8s_apis():
     ) as mock_core_cls, patch(
         "lib.kube_client.client.AppsV1Api"
     ) as mock_apps_cls:
-        api_client = MagicMock(name="api_client")
+        # The pre-37 client shape: no `param_serialize`, so requests take the legacy `call_api` path.
+        api_client = MagicMock(name="api_client", spec=["call_api", "configuration"])
         api_client.configuration = MagicMock(name="api_client_configuration")
         mock_new_client.return_value = api_client
 
@@ -764,6 +766,124 @@ class TestKubeClient:
 
 
 @pytest.mark.unit
+class TestCustomObjectResponseShape:
+    """Custom-object API methods return the decoded JSON body untyped; a body that is not a
+    JSON object is a malformed response, raised as an error and never read as absence."""
+
+    _CALLS = {
+        "route-host": ("get_namespaced_custom_object", lambda c: c.get_route_host("ns", "r")),
+        "get": ("get_namespaced_custom_object", lambda c: c.get_custom_resource("g", "v1", "widgets", "w", "ns")),
+        "get-advisory": (
+            "get_cluster_custom_object",
+            lambda c: c.get_custom_resource_advisory("g", "v1", "widgets", "w"),
+        ),
+        "list": ("list_namespaced_custom_object", lambda c: c.list_custom_resources("g", "v1", "widgets", "ns")),
+        "patch": (
+            "patch_namespaced_custom_object",
+            lambda c: c.patch_custom_resource("g", "v1", "widgets", "w", {"spec": {}}, namespace="ns"),
+        ),
+        "create": (
+            "create_namespaced_custom_object",
+            lambda c: c.create_custom_resource("g", "v1", "widgets", {"metadata": {"name": "w"}}, namespace="ns"),
+        ),
+    }
+
+    @pytest.mark.parametrize("response", [None, [], "Widget", 7], ids=["null", "list", "string", "number"])
+    @pytest.mark.parametrize("call", sorted(_CALLS))
+    def test_a_non_object_response_raises(self, kube_client, mock_k8s_apis, call, response):
+        method, invoke = self._CALLS[call]
+        getattr(mock_k8s_apis["custom_api"], method).return_value = response
+
+        with pytest.raises(MalformedResponseError, match="expected a JSON object"):
+            invoke(kube_client)
+
+
+@pytest.mark.unit
+class TestUndecodableCustomObjectBodies:
+    """A 2xx custom-object body the installed client cannot decode is a malformed response,
+    whatever error the client raises for it (36.x and 37.x differ); an HTTP error stays an
+    `ApiException` with its status even when its body cannot be decoded."""
+
+    _CALLS = {
+        "route-host": (200, lambda c: c.get_route_host("ns", "r")),
+        "get": (200, lambda c: c.get_custom_resource("g", "v1", "widgets", "w", "ns")),
+        "get-advisory": (200, lambda c: c.get_custom_resource_advisory("g", "v1", "widgets", "w", "ns")),
+        "list": (200, lambda c: c.list_custom_resources("g", "v1", "widgets", "ns")),
+        "patch": (200, lambda c: c.patch_custom_resource("g", "v1", "widgets", "w", {"spec": {}}, namespace="ns")),
+        "create": (
+            201,
+            lambda c: c.create_custom_resource("g", "v1", "widgets", {"metadata": {"name": "w"}}, namespace="ns"),
+        ),
+    }
+
+    @staticmethod
+    def _client(pool_manager):
+        from kubernetes import client as k8s
+
+        kube = KubeClient.__new__(KubeClient)
+        kube.request_timeout = 30
+        kube.dry_run = False
+        kube._api_client = _real_api_client(pool_manager)
+        kube.custom_api = k8s.CustomObjectsApi(kube._api_client)
+        return kube
+
+    @pytest.mark.parametrize(
+        ("body", "content_type"),
+        [(b"{not json", "application/json"), (b"\xff\xfe", "application/json"), (b"null", "application/octet-stream")],
+        ids=["invalid-json", "invalid-utf8", "unsupported-content-type"],
+    )
+    @pytest.mark.parametrize("call", sorted(_CALLS))
+    def test_an_undecodable_2xx_body_is_malformed(self, call, body, content_type):
+        status, invoke = self._CALLS[call]
+        pool_manager = _RecordingPoolManager(status=status, body=body, content_type=content_type)
+
+        with pytest.raises(MalformedResponseError):
+            invoke(self._client(pool_manager))
+        assert len(pool_manager.calls) == 1
+
+    @pytest.mark.parametrize("body", [b"{not json", b"\xff\xfe"], ids=["invalid-json", "invalid-utf8"])
+    def test_an_undecodable_read_inside_a_handled_http_error_is_malformed_not_that_error(self, body):
+        """A read issued while an earlier HTTP error is being handled must not inherit it: a 200
+        whose body cannot be decoded under a handled 404 is malformed, never absence."""
+        pool_manager = _RecordingPoolManager(status=200, body=body)
+        client = self._client(pool_manager)
+
+        try:
+            raise ApiException(status=404, reason="Not Found")
+        except ApiException:
+            with pytest.raises(MalformedResponseError):
+                client.get_custom_resource_advisory("g", "v1", "widgets", "w", "ns")
+        assert len(pool_manager.calls) == 1
+
+    @staticmethod
+    def _rest_layer_decodes_before_its_status_check():
+        """Some clients (29.x) decode every body in the REST layer before checking the status,
+        so an undecodable HTTP error body never becomes an `ApiException` at all."""
+        pool_manager = _RecordingPoolManager(status=409, body=b"\xff\xfe")
+        try:
+            _real_api_client(pool_manager).rest_client.request("GET", "http://fake.invalid/x")
+        except UnicodeDecodeError:
+            return True
+        except ApiException:
+            return False
+        return False
+
+    @pytest.mark.parametrize("call", ["patch", "create"])
+    def test_an_http_error_with_an_undecodable_body_stays_an_api_exception(self, call):
+        pool_manager = _RecordingPoolManager(status=409, body=b"\xff\xfe")
+        client = self._client(pool_manager)
+
+        if self._rest_layer_decodes_before_its_status_check():
+            # The status is lost inside the client, so the outcome is unknown: malformed.
+            with pytest.raises(MalformedResponseError):
+                self._CALLS[call][1](client)
+            return
+        with pytest.raises(ApiException) as excinfo:
+            self._CALLS[call][1](client)
+        assert excinfo.value.status == 409
+
+
+@pytest.mark.unit
 class TestKubeClientRequestTimeouts:
     """Kubernetes API calls should pass explicit per-request timeout bounds."""
 
@@ -1028,6 +1148,23 @@ class TestMutatorIdempotency:
         assert result == {"metadata": {"name": "cm1"}, "data": {"k": "v"}}
         mock_k8s_apis["core_api"].create_namespaced_config_map.assert_called_once()
         mock_k8s_apis["core_api"].patch_namespaced_config_map.assert_not_called()
+
+    def test_create_or_patch_configmap_sends_a_typed_configmap_body(self, kube_client, mock_k8s_apis):
+        """The create body is a V1ConfigMap whose wire form is the plain ConfigMap document."""
+        from kubernetes.client import ApiClient, V1ConfigMap
+
+        mock_k8s_apis["core_api"].create_namespaced_config_map.return_value = MagicMock()
+
+        kube_client.create_or_patch_configmap("ns", "cm1", {"k": "v"})
+
+        body = mock_k8s_apis["core_api"].create_namespaced_config_map.call_args.kwargs["body"]
+        assert isinstance(body, V1ConfigMap)
+        assert ApiClient().sanitize_for_serialization(body) == {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": "cm1", "namespace": "ns"},
+            "data": {"k": "v"},
+        }
 
     def test_create_or_patch_configmap_patches_on_409(self, kube_client, mock_k8s_apis):
         """ConfigMap upsert patches when create returns 409 (concurrent create or timeout-after-create)."""
@@ -1659,6 +1796,65 @@ class TestGetPodLogs:
         mock_k8s_apis["core_api"].read_namespaced_pod_log.assert_not_called()
 
 
+class _UnreadableBody:
+    """A response body whose read fails, as a timeout or reset after the headers would."""
+
+    def __init__(self, exc):
+        self._exc = exc
+
+    def read(self, *_args, **_kwargs):
+        raise self._exc
+
+    def close(self):
+        pass
+
+
+class _RecordingPoolManager:
+    """Stands in for the urllib3 pool manager under a real, installed `ApiClient`.
+
+    Everything above the socket is the installed client's own code: request preparation,
+    authentication, path encoding, the REST layer and its HTTP-error handling. Faking here,
+    rather than at `call_api` or the REST layer, binds whichever `call_api`/`param_serialize`
+    signature the resolved kubernetes client exposes (36.x and 37.x differ) and leaves
+    non-2xx classification to that client.
+    """
+
+    def __init__(self, status=200, payload=None, body=None, content_type="application/json"):
+        import urllib3
+
+        self._urllib3 = urllib3
+        self._status = status
+        self._body = body if body is not None else json.dumps(payload).encode("utf-8")
+        self._content_type = content_type
+        self.calls = []
+
+    def request(self, method, url, **kwargs):
+        import io
+
+        self.calls.append({"method": method, "url": url, **kwargs})
+        stream = self._body if isinstance(self._body, _UnreadableBody) else io.BytesIO(self._body)
+        return self._urllib3.HTTPResponse(
+            body=stream,
+            status=self._status,
+            reason="Fake",
+            headers={"Content-Type": self._content_type},
+            preload_content=False,
+        )
+
+
+def _real_api_client(pool_manager):
+    """A real `ApiClient` of the installed version, with a bearer token and a faked socket."""
+    from kubernetes.client import ApiClient, Configuration
+
+    configuration = Configuration()
+    # The key `load_kube_config` populates from a kubeconfig token: `BearerToken` from 36.x,
+    # `authorization` before it.
+    configuration.api_key = {"BearerToken": "Bearer binding-test-token", "authorization": "Bearer binding-test-token"}
+    api_client = ApiClient(configuration=configuration)
+    api_client.rest_client.pool_manager = pool_manager
+    return api_client
+
+
 class TestDiscoveryProver:
     """R4-03: kind absence must come from a successful discovery response."""
 
@@ -1677,7 +1873,8 @@ class TestDiscoveryProver:
         client = KubeClient.__new__(KubeClient)
         client.request_timeout = 30
         client.dry_run = False
-        client._api_client = Mock()
+        # The pre-37 client shape: no `param_serialize`, so requests take the legacy `call_api` path.
+        client._api_client = Mock(spec=["call_api"])
         client._api_client.call_api = call_api
         return client
 
@@ -1790,55 +1987,70 @@ class TestDiscoveryProver:
         )
         assert outcome.status is StrictReadStatus.ITEMS
 
+    _SERVED_PODS = {"kind": "APIResourceList", "groupVersion": "v1", "resources": [{"name": "pods", "kind": "Pod"}]}
+
+    @staticmethod
+    def _real_client(pool_manager):
+        client = KubeClient.__new__(KubeClient)
+        client.request_timeout = 30
+        client.dry_run = False
+        client._api_client = _real_api_client(pool_manager)
+        return client
+
     def test_discovery_call_binds_the_real_api_client_signature(self):
         """The prover must issue a call the installed client actually accepts.
 
         Every other test in this class replaces `call_api` with a `Mock`, which accepts any
-        keyword, so none of them can prove the call is issuable. That matters here because the
-        deserialization keyword was RENAMED inside the supported dependency range
-        (`response_type` on kubernetes 28.x/31.x, `response_types_map` on 36.x), and plan section 9.2
-        requires the discovery mechanism to be version-invariant. This test drives a real
-        `ApiClient` with only its transport patched, so a keyword the resolved client rejects
-        fails here instead of silently degrading every custom-resource strict read to
+        keyword, so none of them can prove the call is issuable. The transport API changed
+        inside the supported dependency range: the deserialization keyword was renamed
+        (`response_type` on 28.x/31.x, `response_types_map` on 36.x), and 37.x split request
+        preparation (`param_serialize`) from a `call_api` that rejects the older keywords.
+        Plan section 9.2 requires the discovery mechanism to be version-invariant. This test
+        drives a real `ApiClient` with only its socket faked, so a call the resolved client
+        rejects fails here instead of silently degrading every custom-resource strict read to
         `discovery_unverifiable` against a live cluster.
         """
-        from kubernetes.client.api_client import ApiClient
+        pool_manager = _RecordingPoolManager(payload=self._SERVED_PODS)
 
-        class _FakeRESTResponse:
-            def __init__(self, payload):
-                self.data = json.dumps(payload).encode("utf-8")
-                self.status = 200
-                self.reason = "OK"
-
-            def getheaders(self):
-                return {}
-
-        seen = {}
-
-        def fake_request(method, url, **kwargs):
-            seen["method"] = method
-            seen["url"] = url
-            return _FakeRESTResponse(
-                {
-                    "kind": "APIResourceList",
-                    "groupVersion": "v1",
-                    "resources": [{"name": "pods", "kind": "Pod"}],
-                }
-            )
-
-        api_client = ApiClient()
-        api_client.request = fake_request
-
-        client = KubeClient.__new__(KubeClient)
-        client.request_timeout = 30
-        client.dry_run = False
-        client._api_client = api_client
-
-        outcome = client._discovery_serves("", "v1", "pods")
+        outcome = self._real_client(pool_manager)._discovery_serves("", "v1", "pods")
 
         assert outcome.status is StrictReadStatus.ITEMS
-        assert seen["method"] == "GET"
-        assert seen["url"].endswith("/api/v1")
+        [call] = pool_manager.calls
+        assert call["method"] == "GET"
+        assert call["url"].endswith("/api/v1")
+        assert {key.lower(): value for key, value in call["headers"].items()}["authorization"] == (
+            "Bearer binding-test-token"
+        )
+        assert call["timeout"].total == 30
+
+    @pytest.mark.parametrize("status", [401, 403, 404, 500, 503])
+    def test_a_real_client_http_error_is_unverifiable_never_absence(self, status):
+        pool_manager = _RecordingPoolManager(status=status, payload=self._SERVED_PODS)
+
+        outcome = self._real_client(pool_manager)._discovery_serves("", "v1", "pods")
+
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE
+        assert len(pool_manager.calls) == 1
+
+    @pytest.mark.parametrize("exc", [ReadTimeoutError(None, "/api/v1", "read timed out"), OSError("reset")])
+    def test_a_real_client_body_read_failure_is_unverifiable(self, exc):
+        pool_manager = _RecordingPoolManager(body=_UnreadableBody(exc))
+
+        outcome = self._real_client(pool_manager)._discovery_serves("", "v1", "pods")
+
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE
+        assert len(pool_manager.calls) == 1
+
+    def test_a_real_client_undecodable_body_is_unverifiable(self):
+        pool_manager = _RecordingPoolManager(body=b"<html>")
+
+        outcome = self._real_client(pool_manager)._discovery_serves("", "v1", "pods")
+
+        assert outcome.status is StrictReadStatus.ERROR
+        assert outcome.reason == STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE
+        assert len(pool_manager.calls) == 1
 
     def test_core_group_uses_the_core_discovery_path(self):
         call = Mock(
@@ -2761,7 +2973,8 @@ class TestDiscoveryGroupVersionProof:
         client = KubeClient.__new__(KubeClient)
         client.request_timeout = 30
         client.dry_run = False
-        client._api_client = Mock()
+        # The pre-37 client shape: no `param_serialize`, so requests take the legacy `call_api` path.
+        client._api_client = Mock(spec=["call_api"])
         client._api_client.call_api = Mock(return_value=document)
         client.custom_api = Mock()
         client.custom_api.get_cluster_custom_object = Mock(side_effect=ApiException(status=404))
@@ -3132,6 +3345,83 @@ class TestGuardedRestoreJsonPatch:
             result = self._patch(kube_client)
         assert self._SECRET not in json.dumps(result)
         assert "abc123" not in caplog.text
+
+    _ACCEPTED_BODY = {
+        "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+        "kind": "Restore",
+        "metadata": {"uid": "3f0c2a4e-uid", "resourceVersion": "48300", "generation": 7},
+    }
+
+    @staticmethod
+    def _real_client(pool_manager):
+        client = KubeClient.__new__(KubeClient)
+        client.request_timeout = 30
+        client.dry_run = False
+        client._api_client = _real_api_client(pool_manager)
+        return client
+
+    def test_the_guarded_patch_binds_the_real_api_client_signature(self):
+        """Every other test here mocks `call_api`, which accepts any keyword. This drives a
+        real, installed `ApiClient` with only its socket faked, so a transport call the
+        resolved kubernetes client rejects (37.x's `call_api` takes none of the older
+        preparation keywords) fails here instead of reporting every guarded PATCH as not
+        accepted before any request is sent."""
+        pool_manager = _RecordingPoolManager(payload=self._ACCEPTED_BODY)
+
+        result = self._real_client(pool_manager).json_patch_custom_resource_guarded(
+            "restore-acm-passive-sync", **self._kwargs(timeout_seconds=11)
+        )
+
+        assert (result["accepted"], result["reason"], result["generation"]) == (True, "ok", 7)
+        [call] = pool_manager.calls
+        assert call["method"] == "PATCH"
+        assert call["url"].endswith(
+            "/apis/cluster.open-cluster-management.io/v1beta1/namespaces/open-cluster-management-backup"
+            "/restores/restore-acm-passive-sync"
+        )
+        # Still a JSON Patch on the wire: the client downgrades a non-list body to a strategic
+        # merge patch, which would drop every `test` operation.
+        assert call["headers"]["Content-Type"] == GUARDED_RESTORE_PATCH_VECTOR["content_type"]
+        assert json.loads(call["body"]) == GUARDED_RESTORE_PATCH_VECTOR["patch"]
+        assert {key.lower(): value for key, value in call["headers"].items()}["authorization"] == (
+            "Bearer binding-test-token"
+        )
+        assert call["timeout"].total == 11
+
+    @pytest.mark.parametrize("status", sorted(GUARDED_RESTORE_PATCH_STATUS_VECTOR))
+    def test_a_real_client_http_error_follows_the_shared_classification(self, status):
+        pool_manager = _RecordingPoolManager(status=status, payload={"kind": "Status", "code": status})
+
+        result = self._real_client(pool_manager).json_patch_custom_resource_guarded(
+            "restore-acm-passive-sync", **self._kwargs()
+        )
+
+        assert (result["conflict"], result["reason"]) == GUARDED_RESTORE_PATCH_STATUS_VECTOR[status]
+        assert (result["accepted"], result["http_accepted"], result["changed"]) == (False, False, False)
+        assert len(pool_manager.calls) == 1
+
+    @pytest.mark.parametrize(
+        "exc", [ReadTimeoutError(None, "/restores", "read timed out"), ProtocolError("reset"), OSError("reset")]
+    )
+    def test_a_real_client_body_read_failure_is_not_acceptance(self, exc):
+        pool_manager = _RecordingPoolManager(body=_UnreadableBody(exc))
+
+        result = self._real_client(pool_manager).json_patch_custom_resource_guarded(
+            "restore-acm-passive-sync", **self._kwargs()
+        )
+
+        assert (result["accepted"], result["http_accepted"], result["reason"]) == (False, False, "unverifiable")
+        assert len(pool_manager.calls) == 1
+
+    def test_a_real_client_undecodable_accepted_body_is_malformed(self):
+        pool_manager = _RecordingPoolManager(body=b"<html>")
+
+        result = self._real_client(pool_manager).json_patch_custom_resource_guarded(
+            "restore-acm-passive-sync", **self._kwargs()
+        )
+
+        assert result == self._MALFORMED_IDENTITY
+        assert len(pool_manager.calls) == 1
 
     def test_the_generic_merge_patch_is_unchanged(self, kube_client):
         kube_client.custom_api.patch_namespaced_custom_object = Mock(return_value={"metadata": {}})

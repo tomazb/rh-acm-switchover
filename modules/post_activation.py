@@ -6,12 +6,14 @@ Post-activation verification module for ACM switchover.
 
 import base64
 import binascii
+import json
 import logging
 import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
-from typing import Dict, List, Optional, Tuple
+from types import SimpleNamespace
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import yaml
 from kubernetes import client, config
@@ -58,6 +60,22 @@ from lib.utils import Phase, StateManager, dry_run_skip
 from lib.waiter import WaitConditionResult, wait_for_condition
 
 logger = logging.getLogger("acm_switchover")
+
+
+def _secret_create_body(doc: Dict[str, Any]) -> client.V1Secret:
+    """The import manifest's Secret document, whole, as a typed create body.
+
+    The client's own model conversion builds it, so no field is selected by hand. kubernetes
+    37.x models provide `from_dict`, the validation its generated methods apply to a mapping
+    body; older clients only deserialize response-shaped input.
+    """
+    if hasattr(client.V1Secret, "from_dict"):
+        return client.V1Secret.from_dict(doc)
+    api = client.ApiClient()
+    # The pre-37 `deserialize(response, response_type)` signature; 37.x's annotations differ.
+    legacy_deserialize: Callable[..., Any] = api.deserialize
+    # Serialized by the client first: YAML loads an unquoted timestamp as a datetime.
+    return legacy_deserialize(SimpleNamespace(data=json.dumps(api.sanitize_for_serialization(doc))), "V1Secret")
 
 
 class PostActivationVerification:
@@ -1225,7 +1243,7 @@ class PostActivationVerification:
         try:
             v1.create_namespaced_secret(
                 namespace=namespace,
-                body=body,
+                body=_secret_create_body(body),
                 _request_timeout=DELETE_REQUEST_TIMEOUT,
             )
             logger.debug("Created bootstrap-hub-kubeconfig secret on %s", cluster_name)

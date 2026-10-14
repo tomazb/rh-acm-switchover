@@ -1900,3 +1900,166 @@ class TestActivationResumeStalenessGuard:
 
         mock_secondary_client.delete_custom_resource.assert_not_called()
         mock_secondary_client.create_custom_resource.assert_not_called()
+
+
+class _RecordingPoolManager:
+    """The urllib3 pool manager under a real, installed `ApiClient`: every request is recorded
+    and answered with one fixed status and body, so the generated client runs unmocked."""
+
+    def __init__(self, *responses):
+        # One (status, body, content type) per request, in order; the last one repeats.
+        self._responses = list(responses)
+        self.calls = []
+
+    def request(self, method, url, **kwargs):
+        import io
+
+        import urllib3
+
+        self.calls.append((method, url))
+        status, body, content_type = self._responses[min(len(self.calls), len(self._responses)) - 1]
+        return urllib3.HTTPResponse(
+            body=io.BytesIO(body),
+            status=status,
+            reason="Fake",
+            headers={"Content-Type": content_type},
+            preload_content=False,
+        )
+
+
+@pytest.mark.unit
+class TestMalformedRestoreCreateResponse:
+    """A Restore POST the server answered 2xx may have persisted the Restore even when its
+    response body is malformed. Recreating the passive Restore then could leave two Restores,
+    so the outcome is reported as unverified and nothing else is created."""
+
+    _PASSIVE = {
+        "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "namespace": BACKUP_NAMESPACE},
+        "spec": {
+            SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True,
+            SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_SKIP,
+        },
+        "status": {"phase": "Enabled"},
+    }
+
+    @staticmethod
+    def _secondary(pool_manager):
+        from kubernetes import client as k8s
+
+        from lib.kube_client import KubeClient
+
+        api_client = k8s.ApiClient()
+        api_client.rest_client.pool_manager = pool_manager
+        secondary = KubeClient.__new__(KubeClient)
+        secondary.request_timeout = 30
+        secondary.dry_run = False
+        secondary.context = "secondary-hub"
+        secondary._api_client = api_client
+        secondary.custom_api = k8s.CustomObjectsApi(api_client)
+        # Only the Restore create goes through the real client; the reads around it are stubbed.
+        secondary.list_custom_resources = Mock(
+            return_value=[copy.deepcopy(TestMalformedRestoreCreateResponse._PASSIVE)]
+        )
+        secondary.get_custom_resource = Mock(return_value=None)
+        secondary.delete_custom_resource = Mock(return_value=True)
+        return secondary
+
+    _CREATES = [
+        ("passive", "restore", "_activate_via_restore_resource", "restore-acm-activate"),
+        ("full", "patch", "_create_full_restore", "restore-acm-full"),
+    ]
+
+    @pytest.mark.parametrize(
+        ("body", "content_type"),
+        [
+            (b"null", "application/json"),
+            (b"{not json", "application/json"),
+            (b"\xff\xfe", "application/json"),
+            (b"null", "application/octet-stream"),
+        ],
+        ids=["null", "invalid-json", "invalid-utf8", "unsupported-content-type"],
+    )
+    @pytest.mark.parametrize(("method", "activation_method", "create", "restore_name"), _CREATES)
+    def test_a_2xx_create_with_a_malformed_body_is_unverified_and_never_rolled_back(
+        self, mock_state_manager, method, activation_method, create, restore_name, body, content_type
+    ):
+        pool_manager = _RecordingPoolManager((201, body, content_type))
+        activation = SecondaryActivation(
+            secondary_client=self._secondary(pool_manager),
+            state_manager=mock_state_manager,
+            method=method,
+            activation_method=activation_method,
+        )
+
+        with patch.object(activation, "_wait_for_restore_deletion", return_value=None):
+            with pytest.raises(FatalError) as excinfo:
+                getattr(activation, create)()
+
+        posts = [url for verb, url in pool_manager.calls if verb == "POST"]
+        assert len(posts) == 1
+        assert posts[0].endswith(f"/namespaces/{BACKUP_NAMESPACE}/restores")
+        message = str(excinfo.value)
+        assert "unverified" in message and restore_name in message
+        assert "Recreated passive sync restore" not in message
+
+    _UNDECODABLE = [b"null", b"{not json", b"\xff\xfe"]
+    _UNDECODABLE_IDS = ["null", "invalid-json", "invalid-utf8"]
+
+    @pytest.mark.parametrize("rollback_body", _UNDECODABLE, ids=_UNDECODABLE_IDS)
+    @pytest.mark.parametrize(("method", "activation_method", "create", "restore_name"), _CREATES)
+    def test_an_unverified_rollback_create_is_reported_as_such(
+        self, mock_state_manager, method, activation_method, create, restore_name, rollback_body
+    ):
+        """The activation create is refused, so the passive Restore is recreated; that POST's
+        response cannot be decoded. The passive Restore may exist, so the rollback is reported
+        as unverified, not as failed, and nothing more is created. The refused create is the
+        exception being handled while the rollback runs; it must not be mistaken for the
+        rollback's own outcome."""
+        pool_manager = _RecordingPoolManager(
+            (403, b'{"kind": "Status", "code": 403}', "application/json"),
+            (201, rollback_body, "application/json"),
+        )
+        activation = SecondaryActivation(
+            secondary_client=self._secondary(pool_manager),
+            state_manager=mock_state_manager,
+            method=method,
+            activation_method=activation_method,
+        )
+
+        with patch.object(activation, "_wait_for_restore_deletion", return_value=None):
+            with pytest.raises(FatalError) as excinfo:
+                getattr(activation, create)()
+
+        assert [verb for verb, _url in pool_manager.calls] == ["POST", "POST"]
+        message = str(excinfo.value)
+        assert "Rollback failed" not in message
+        assert "unverified" in message and RESTORE_PASSIVE_SYNC_NAME in message
+        assert "may exist" in message
+
+    @pytest.mark.parametrize("reread_body", _UNDECODABLE[1:], ids=_UNDECODABLE_IDS[1:])
+    @pytest.mark.parametrize(("method", "activation_method", "create", "restore_name"), _CREATES)
+    def test_an_undecodable_conflict_reread_is_unverified_and_never_rolled_back(
+        self, mock_state_manager, method, activation_method, create, restore_name, reread_body
+    ):
+        """The create answers 409 and the named re-read that reconciles it answers 200 with a
+        body that cannot be decoded. The 409 being handled is not the re-read's outcome: the
+        Restore may exist, so nothing is rolled back."""
+        pool_manager = _RecordingPoolManager(
+            (409, b'{"kind": "Status", "code": 409}', "application/json"),
+            (200, reread_body, "application/json"),
+        )
+        activation = SecondaryActivation(
+            secondary_client=self._secondary(pool_manager),
+            state_manager=mock_state_manager,
+            method=method,
+            activation_method=activation_method,
+        )
+
+        with patch.object(activation, "_wait_for_restore_deletion", return_value=None):
+            with pytest.raises(FatalError) as excinfo:
+                getattr(activation, create)()
+
+        assert [verb for verb, _url in pool_manager.calls] == ["POST", "GET"]
+        message = str(excinfo.value)
+        assert "unverified" in message and restore_name in message
+        assert "Recreated passive sync restore" not in message

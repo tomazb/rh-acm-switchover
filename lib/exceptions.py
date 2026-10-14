@@ -63,6 +63,15 @@ class TargetDisappeared(FatalError):
     """
 
 
+class MalformedResponseError(Exception):
+    """A Kubernetes API response body is not the shape the API defines.
+
+    This is neither absence nor an API error. It deliberately derives from neither
+    `SwitchoverError` nor `TypeError`, so no handler written for an operational outcome
+    or a parsing problem reads it as one. Callers that report it do so explicitly.
+    """
+
+
 class StateLoadError(FatalError):
     """State file could not be loaded due to corruption or I/O failure.
 

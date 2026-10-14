@@ -185,7 +185,8 @@ def _python_client(*, call_api=None, list_effects=None, get_effects=None, namesp
     client = KubeClient.__new__(KubeClient)
     client.request_timeout = 30
     client.dry_run = False
-    client._api_client = Mock()
+    # The pre-37 client shape: no `param_serialize`, so requests take the legacy `call_api` path.
+    client._api_client = Mock(spec=["call_api"])
     client._api_client.call_api = call_api if call_api is not None else Mock(return_value=_served_discovery())
     client.custom_api = Mock()
     client.core_v1 = Mock()

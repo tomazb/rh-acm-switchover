@@ -154,7 +154,8 @@ def python_client():
     with patch("lib.kube_client.config.new_client_from_config") as new_client, patch(
         "lib.kube_client.client.CustomObjectsApi"
     ), patch("lib.kube_client.client.CoreV1Api"), patch("lib.kube_client.client.AppsV1Api"):
-        api_client = MagicMock(name="api_client")
+        # The pre-37 client shape: no `param_serialize`, so requests take the legacy `call_api` path.
+        api_client = MagicMock(name="api_client", spec=["call_api", "configuration"])
         new_client.return_value = api_client
         yield python_form.KubeClient(context="secondary-hub", dry_run=False)
 
