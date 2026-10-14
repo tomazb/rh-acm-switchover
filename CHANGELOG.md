@@ -119,6 +119,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the shipped `examples/group_vars/all.yml` enables checkpointing.
 - The collection `post_activation` dry run refuses an invalid recorded migration journal, as the
   Python CLI does, instead of previewing it as skipped.
+- A Python `--dry-run` that refuses an invalid recorded migration journal at a completed
+  post-activation phase, or an expectation waiver with no recorded name to waive before primary
+  preparation or finalization, now writes nothing to the state file: the refusal is logged rather
+  than recorded as a run error or a `failed` phase, a dry-run records no resume summary, and the
+  dry-run state rollback skips a rewrite when the file already holds the original state.
 - A refused journaled-Restore DELETE in collection finalization now reports
   `delete_not_accepted` with its reason instead of a censored `no_log` failure.
 - The Python refusal of a resume at finalization whose migration journal lacks
@@ -458,7 +463,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Collection preflight now refreshes MultiClusterHub discovery during execute-mode runs even when tests or callers pre-seed discovery variables, preventing stale cached MCH data from satisfying live mutation validation.
 - Live RBAC certification now derives its positive permission matrix from the Python RBAC validator, supports profile-driven hub scopes, treats explicitly selected live certification as blocking, and records collision-safe SAR request/evidence artifacts.
 - Local `run_tests.sh` now treats CI-equivalent `black`, `isort`, `mypy`, and `bandit` checks as hard failures by default, with `STRICT_QUALITY=0` available only for advisory local runs.
-- Restore-only now requires at least one restored non-local ManagedCluster by default when no explicit minimum is provided; operators must explicitly opt into an empty restore target. This supersedes the `[1.7.10]` description that "restore-only pins the expectation to `0`": as of `[Unreleased]`, omitted `--min-managed-clusters` in restore-only defaults to `1`, and an empty target requires explicit `--min-managed-clusters 0` (Python CLI) or `acm_switchover_operation.allow_zero_managed_clusters: true` (collection).
+- Restore-only now requires at least one restored non-local ManagedCluster by default when no explicit minimum is provided; operators must explicitly opt into an empty restore target. This supersedes the `[1.7.10]` description that "restore-only pins the expectation to `0`": as of `[Unreleased]`, omitted `--min-managed-clusters` in restore-only defaults to `1`, and an empty target requires explicit `--min-managed-clusters 0` (Python CLI) or explicit `acm_switchover_operation.min_managed_clusters: 0` with no expected names (collection), which permits it through both activation and post-activation. The collection's `acm_switchover_operation.allow_zero_managed_clusters: true` is not sufficient on its own: it lowers only the post-activation floor, and only when the minimum is omitted; activation still requires one restored non-local ManagedCluster.
 - Python CLI ArgoCD resume-only now fails closed when the provided contexts do not match the state file's recorded contexts. Operators must use `--force` to override.
 - Collection checkpoint identity validation now requires `operation_identity` in schema 2.0 checkpoints that have completed phases. Clear the checkpoint file or re-run from scratch if upgrading from an older checkpoint format.
 - Collection standalone Argo CD resume now validates checkpoint operation identity against live hub `kube-system` namespace UIDs before resuming Applications, and accepts explicitly swapped two-hub contexts only when both context names and cluster UIDs match the checkpoint.
