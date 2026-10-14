@@ -96,12 +96,4 @@
       }}
     _acm_waiver_activation_names: >-
       {{ [] if (acm_switchover_operation.restore_only | default(false) | bool) else _acm_recorded_names }}
-    _acm_waiver_post_activation_names: >-
-      {{
-        _acm_recorded_names
-        or (
-          (acm_switchover_managed_clusters | default({}, true) | list)
-          if (acm_switchover_operation.restore_only | default(false) | bool)
-          else []
-        )
-      }}
+    _acm_waiver_post_activation_names: "{{ _acm_waiver_activation_names }}"

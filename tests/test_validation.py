@@ -1576,8 +1576,8 @@ class TestManagedClusterExpectationWaiverInputs:
         assert message.startswith("waiver_not_applicable:")
         assert mode in message
 
-    @pytest.mark.parametrize("scope", ["activation", "both"])
-    def test_restore_only_has_no_activation_names_to_waive(self, scope):
+    @pytest.mark.parametrize("scope", ["activation", "post_activation", "both"])
+    def test_restore_only_has_no_names_to_waive(self, scope):
         args = self._args(
             restore_only=True,
             primary_context=None,
@@ -1587,16 +1587,6 @@ class TestManagedClusterExpectationWaiverInputs:
         )
         message = self._reject(args)
         assert message.startswith("waiver_expected_names_empty:")
-
-    def test_restore_only_post_activation_scope_is_left_to_the_recorded_expectation(self):
-        args = self._args(
-            restore_only=True,
-            primary_context=None,
-            method="full",
-            old_hub_action=None,
-            managed_cluster_expectation_waiver_scope="post_activation",
-        )
-        InputValidator.validate_all_cli_args(args)
 
     @pytest.mark.parametrize("value", ["false", "true", 1, None])
     def test_skip_flag_must_be_a_real_boolean(self, value):

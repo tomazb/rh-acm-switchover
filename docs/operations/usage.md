@@ -448,8 +448,8 @@ python acm_switchover.py ... \
 
 - The scope is `activation`, `post_activation`, or `both`; actor and reason must be non-empty.
 - It is rejected with `--validate-only`, `--decommission`, `--setup`, and
-  `--argocd-resume-only`; with `--restore-only` only `post_activation` is accepted; and it is
-  rejected when its scope has no expected name to waive.
+  `--argocd-resume-only`; it is rejected with `--restore-only` in every scope, because restore-only
+  records no expected name; and it is rejected when its scope has no expected name to waive.
 - It never lifts the count floor, Restore identity, Backup provenance, completion,
   post-activation completion, cleanup recovery or repair, final locator absence, or teardown
   revalidation.

@@ -147,6 +147,11 @@ def _output(completed) -> str:
             {"restore_only": True, "waiver_scope": "activation"},
             "waiver_expected_names_empty: restore_only records no expected ManagedCluster name",
         ),
+        (
+            "post_activation",
+            {"restore_only": True, "waiver_scope": "post_activation", "recorded_names": ["a"]},
+            "waiver_expected_names_empty: restore_only records no expected ManagedCluster name",
+        ),
         ("activation", {"waiver_scope": "both"}, "waiver_expected_names_empty: skip_managed_cluster_expectations"),
         ("activation", {"checkpoint": False}, "Activation records its migration evidence in the checkpoint"),
         (
@@ -162,6 +167,7 @@ def _output(completed) -> str:
     ],
     ids=[
         "restore-only-activation-waiver",
+        "restore-only-post-activation-waiver",
         "waiver-without-names",
         "checkpoint-disabled",
         "post-activation",
@@ -178,7 +184,7 @@ def test_a_direct_role_entry_refuses_before_any_cluster_request(tmp_path, role, 
 
 @pytest.mark.parametrize(
     "kwargs",
-    [{"restore_only": True}, {"restore_only": True, "waiver_scope": "post_activation", "recorded_names": ["a"]}],
+    [{"restore_only": True}, {"waiver_scope": "post_activation", "recorded_names": ["a"]}],
     ids=["restore-only-without-waiver", "names-to-waive"],
 )
 def test_a_valid_direct_activation_entry_passes_its_guard(tmp_path, kwargs):

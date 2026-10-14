@@ -62,7 +62,9 @@ def _waiver_accepted(scope, restore_only, names, configured=None) -> bool:
         ("post_activation", False, [], None, False),
         ("both", False, [], None, False),
         ("post_activation", True, [], None, False),
-        ("post_activation", True, [], {"cluster-a": {"kubeconfig": "./a"}}, True),
+        # restore_only records no expected name; configured klusterlet clusters are not one (Python parity).
+        ("post_activation", True, [], {"cluster-a": {"kubeconfig": "./a"}}, False),
+        ("post_activation", True, ["cluster-a"], None, False),
         ("both", True, [], {"cluster-a": {"kubeconfig": "./a"}}, False),
     ],
 )

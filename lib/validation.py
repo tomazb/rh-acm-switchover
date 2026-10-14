@@ -566,10 +566,10 @@ class InputValidator:
                     f"waiver_not_applicable: --skip-managed-cluster-expectations cannot be used with "
                     f"{excluded_mode}: no ManagedCluster expectation is evaluated"
                 )
-            if is_restore_only and waiver["scope"] != "post_activation":
+            if is_restore_only:
                 raise ValidationError(
-                    "waiver_expected_names_empty: --restore-only records no expected ManagedCluster name for "
-                    "activation, so a waiver scoped to activation or both has nothing to waive"
+                    "waiver_expected_names_empty: --restore-only records no expected ManagedCluster name, so a "
+                    "waiver of any scope has nothing to waive"
                 )
         if migration_cleanup_repair_request(args) is not None and excluded_mode:
             raise ValidationError(

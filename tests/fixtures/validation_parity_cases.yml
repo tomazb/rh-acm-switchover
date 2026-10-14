@@ -495,6 +495,26 @@
   expected:
     passed: true
 
+- name: restore only refuses a post-activation waiver
+  kind: operation
+  input:
+    operation:
+      restore_only: true
+      method: full
+      activation_method: patch
+      old_hub_action: null
+      skip_managed_cluster_expectations: true
+      managed_cluster_expectation_waiver:
+        scope: post_activation
+        actor: operator@example.com
+        reason: the primary inventory is stale
+        request_id: null
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "waiver_expected_names_empty:"
+
 - name: waiver without actor is malformed
   kind: operation
   input:
@@ -699,7 +719,7 @@
     passed: false
     contains: "waiver_expected_names_empty:"
 
-- name: restore-only post-activation waiver is left to the recorded expectation
+- name: restore-only post-activation waiver is refused with valid hub contexts
   kind: hub_contexts
   input:
     hub_contexts:
@@ -718,7 +738,8 @@
     execution:
       mode: execute
   expected:
-    passed: true
+    passed: false
+    contains: "waiver_expected_names_empty:"
 
 - name: complete cleanup repair request is accepted
   kind: operation

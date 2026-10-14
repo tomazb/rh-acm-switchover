@@ -198,10 +198,10 @@ def _validate_migration_evidence_inputs(
                 f"waiver_not_applicable: skip_managed_cluster_expectations cannot be used with {excluded_mode}: "
                 "no ManagedCluster expectation is evaluated"
             )
-        if restore_only and waiver["scope"] != "post_activation":
+        if restore_only:
             raise ValidationError(
-                "waiver_expected_names_empty: restore_only records no expected ManagedCluster name for "
-                "activation, so a waiver scoped to activation or both has nothing to waive"
+                "waiver_expected_names_empty: restore_only records no expected ManagedCluster name, so a "
+                "waiver of any scope has nothing to waive"
             )
     repair = _repair_request(operation)
     if repair is not None and excluded_mode:
