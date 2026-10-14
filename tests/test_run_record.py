@@ -143,17 +143,6 @@ class TestArchivedRestores:
         assert state.capture_state_snapshot()["config"]["archived_restores"] == restores
 
 
-class TestPreActivationVeleroRestore:
-    def test_none_by_default(self, record):
-        assert record.pre_activation_velero_restore() is None
-
-    def test_round_trip_and_clear(self, record):
-        record.record_pre_activation_velero_restore("velero-restore-1")
-        assert record.pre_activation_velero_restore() == "velero-restore-1"
-        record.record_pre_activation_velero_restore(None)
-        assert record.pre_activation_velero_restore() is None
-
-
 class TestResumeStartPhase:
     def test_record_writes_resume_summary_shape(self, state, record):
         record.record_resume_start_phase("activation")

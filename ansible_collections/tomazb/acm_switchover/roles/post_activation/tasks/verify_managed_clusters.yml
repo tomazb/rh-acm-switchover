@@ -6,8 +6,6 @@
 
 - name: Publish post-activation managed-cluster expectation aliases
   ansible.builtin.set_fact:
-    _acm_post_activation_configured_managed_cluster_names: "{{ acm_switchover_resolved_configured_managed_cluster_names | default([]) }}"
-    _acm_post_activation_allow_zero_managed_clusters: "{{ acm_switchover_resolved_allow_zero_managed_clusters | bool }}"
     _acm_post_activation_min_managed_clusters: "{{ acm_switchover_resolved_min_managed_clusters | int }}"
     _acm_post_activation_expected_managed_cluster_names: "{{ acm_switchover_resolved_expected_managed_cluster_names | default([]) }}"
 

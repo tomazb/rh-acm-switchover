@@ -19,7 +19,6 @@ from lib.constants import (
     EXPECTED_MANAGED_CLUSTER_COUNT_KEY,
     EXPECTED_MANAGED_CLUSTER_NAMES_KEY,
     MANAGED_CLUSTER_EXPECTATION_KEY,
-    PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME,
     RESUME_START_PHASE_KEY,
     STATE_KEY_RESUME_SUMMARY,
 )
@@ -328,16 +327,6 @@ class RunRecord:
     def record_archived_restores(self, restores: list) -> None:
         """Audit trail of restore resources deleted before enabling backups."""
         self._set(_KEY_ARCHIVED_RESTORES, restores)
-
-    # -- pre-activation velero restore: activation internal --
-
-    def record_pre_activation_velero_restore(self, name: Optional[str]) -> None:
-        """Velero restore name seen before the activation patch; None clears
-        the new-restore-signal requirement."""
-        self._set(PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME, name)
-
-    def pre_activation_velero_restore(self) -> Optional[str]:
-        return self._get(PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME, None)
 
     # -- resume summary: workflow -> test-release tooling / collection --
 
