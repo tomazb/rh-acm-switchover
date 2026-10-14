@@ -72,6 +72,7 @@
       ansible.builtin.fail:
         msg: >-
           Argo CD re-pause before {{ _argocd_repause_phase }} failed:
-          {{ ansible_failed_result.msg | default('unknown failure') }}. The re-pause marker is kept;
-          the retry stays at {{ _argocd_repause_phase }} and re-pauses again. Pause the owning
-          ApplicationSets or the Applications first if a pause was blocked.
+          {{ ansible_failed_result.msg | default('unknown failure') }}. Unless that failure reports the
+          marker indeterminate, the re-pause marker is kept; the retry stays at {{ _argocd_repause_phase }}
+          and re-pauses again. Pause the owning ApplicationSets or the Applications first if a pause was
+          blocked.

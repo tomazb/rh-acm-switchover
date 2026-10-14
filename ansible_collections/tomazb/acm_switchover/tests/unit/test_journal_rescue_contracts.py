@@ -128,6 +128,9 @@ def test_the_retry_repause_clears_the_marker_only_after_every_hub_paused():
         "Record the failed Argo CD re-pause",
         "Fail the retry while the re-pause obligation remains",
     ]
+    # A clear whose marker write-back also failed reports the marker indeterminate, never kept.
+    message = block["rescue"][-1]["ansible.builtin.fail"]["msg"]
+    assert "Unless that failure reports the marker indeterminate, the re-pause marker is kept" in message
     # No rest of primary preparation is replayed: only the pause mode of argocd_manage.
     assert not [t for t in _walk(tasks) if "primary_prep" in str(t.get(INCLUDE_ROLE, ""))]
 
