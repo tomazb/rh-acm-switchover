@@ -1580,7 +1580,7 @@ def test_f7_a_malformed_create_response_through_the_installed_client_is_never_co
     """#337 on the journaled create: a 2xx POST whose body the installed client (36 or 37)
     cannot read may have created the Restore, so it is not accepted and nothing is mutated
     again; no applied evidence is recorded."""
-    from tests.test_kube_client import _RecordingPoolManager, _real_kube_client
+    from tests.test_kube_client import _real_kube_client, _RecordingPoolManager
 
     hub = _hub(state)
     original = hub.create_restore_guarded
