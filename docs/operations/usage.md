@@ -326,7 +326,8 @@ python acm_switchover.py \
 > ManagedCluster names/count from primary preflight and enforces that set after
 > activation. In `--restore-only` mode, omitted `--min-managed-clusters` defaults
 > to at least one restored non-local ManagedCluster because no primary inventory is
-> available. An explicit `--min-managed-clusters N` (`N` non-negative) is an
+> available (the collection likewise never derives restore-only names or a count from its
+> `acm_switchover_managed_clusters` klusterlet map). An explicit `--min-managed-clusters N` (`N` non-negative) is an
 > **additional** count floor: it replaces the derived count, never the derived names,
 > which stay enforced. Explicit `0` therefore permits an empty destination only when
 > no expected name exists (for example in `--restore-only`). To lift the name check

@@ -60,7 +60,8 @@ def test_shared_managed_cluster_expectation_handles_undefined_or_null_inputs():
     text = (COMMON_TASKS / "resolve_managed_cluster_expectation.yml").read_text()
 
     assert "(acm_switchover_managed_cluster_expectation_mode | default('')) in" in text
-    assert "acm_switchover_managed_clusters | default({}, true)" in text
+    # The klusterlet map is never an expectation (restore-only parity with the Python CLI).
+    assert "acm_switchover_managed_clusters |" not in text
 
 
 def test_shared_managed_cluster_expectation_validates_counts_before_int_coercion():

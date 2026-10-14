@@ -17,12 +17,16 @@ from ansible.parsing.dataloader import DataLoader
 from ansible.template import Templar
 
 from acm_switchover import _resolve_managed_cluster_expectation
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_post_activation import (
+    managed_cluster_readiness as col_readiness,
+)
 from lib.constants import (
     MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
     MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED,
     MANAGED_CLUSTER_EXPECTATION_EXPLICIT_MINIMUM,
     MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
 )
+from lib.migration_post_activation import managed_cluster_readiness as py_readiness
 from lib.run_record import RunRecord
 from lib.utils import StateManager
 
@@ -126,11 +130,33 @@ def test_collection_allow_zero_request_still_applies_without_expected_names():
     assert int(facts["acm_switchover_resolved_min_managed_clusters"]) == 0
 
 
-def test_collection_restore_only_configured_names_survive_an_explicit_minimum():
-    operation = {"restore_only": True, "min_managed_clusters": 0}
-    configured = {"cluster-b": {"kubeconfig": "./b"}, "cluster-a": {"kubeconfig": "./a"}}
-    facts = _render_collection(COLLECTION_MODES["post_activation"], operation, [], 0, configured)
+def _cluster(name):
+    conditions = [{"type": t, "status": "True"} for t in ("ManagedClusterConditionAvailable", "ManagedClusterJoined")]
+    return {"metadata": {"name": name}, "status": {"conditions": conditions}}
 
-    assert facts["acm_switchover_resolved_expected_managed_cluster_names"] == NAMES
-    assert facts["acm_switchover_resolved_allow_zero_managed_clusters"] is False
-    assert int(facts["acm_switchover_resolved_min_managed_clusters"]) == 0
+
+INVENTORIES = {
+    "local-cluster-only": [_cluster("local-cluster")],
+    "one-cluster": [_cluster("local-cluster"), _cluster("cluster-x")],
+}
+
+
+@pytest.mark.parametrize("inventory", sorted(INVENTORIES))
+@pytest.mark.parametrize("raw_min", [None, 0, 1, 2], ids=["omitted", "zero", "one", "two"])
+@pytest.mark.parametrize("scope", sorted(COLLECTION_MODES))
+def test_restore_only_configured_clusters_never_become_expected_names(tmp_path, scope, raw_min, inventory):
+    """Python records no restore-only names; the klusterlet map is never an expectation (#332 parity)."""
+    python_min, python_names, _ = _python_resolve(tmp_path, True, raw_min, [])
+    operation = {"restore_only": True, "min_managed_clusters": raw_min}
+    configured = {"cluster-a": {"kubeconfig": "./a"}}
+    facts = _render_collection(COLLECTION_MODES[scope], operation, [], 0, configured)
+    collection_min = int(facts["acm_switchover_resolved_min_managed_clusters"])
+    collection_names = list(facts["acm_switchover_resolved_expected_managed_cluster_names"])
+
+    assert (collection_min, collection_names) == (python_min, python_names)
+    items = INVENTORIES[inventory]
+    python = py_readiness(items=items, expected_names=python_names, min_managed_clusters=python_min, names_waived=False)
+    collection = col_readiness(
+        items=items, expected_names=collection_names, min_managed_clusters=collection_min, names_waived=False
+    )
+    assert (collection["ready"], collection["code"]) == (python["ready"], python["code"])

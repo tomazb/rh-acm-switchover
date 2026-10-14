@@ -122,6 +122,11 @@ Shared behavior:
   `full_restore` writes the concrete owned Backup names. Every accepted Backup and Velero child
   is concrete and journaled. A resume reuses the journal, refuses a different mutation kind or ACM
   minor, and never adopts a Restore the journal does not record.
+- **Restore-only ManagedCluster expectation.** Restore-only records no expected name. Activation
+  and post-activation enforce a floor of one non-local ManagedCluster when the minimum is omitted
+  (the collection's `allow_zero_managed_clusters` lowers the post-activation floor to zero, like an
+  explicit `0`), and exactly the explicit minimum otherwise. The collection's
+  `acm_switchover_managed_clusters` klusterlet map never supplies names or a count.
 - **Legacy `passive_patch` hive/cluster rule.** On ACM 2.12–2.16 the `CredentialsHive` and
   `CredentialsCluster` requests are predicted before the PATCH (frozen-credentials reuse or a
   proven "no candidate" only), and any owner child bound to a dedicated hive or cluster credential

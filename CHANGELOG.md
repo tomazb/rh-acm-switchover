@@ -105,8 +105,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the latest Credentials Backup to equal the frozen seven-field projection, not just its name; a
   same-name replacement refuses with `credential_variant_source_mismatch` (both form factors).
 - A guarded Restore PATCH or CREATE response whose `metadata.generation` is present but not a
-  positive integer is `malformed_response` and records no applied evidence; only an omitted
-  generation falls back to the strict re-read (both form factors).
+  positive integer is `malformed_response` and records no applied evidence. Only an omitted PATCH
+  response generation falls back to the strict re-read; CREATE requires the response generation
+  (both form factors).
+- Collection restore-only no longer derives post-activation expected ManagedCluster names or a
+  count floor from `acm_switchover_managed_clusters`: as in the Python CLI it records no expected
+  name, and the floor is one (or the explicit minimum).
 - A restore-only ManagedCluster expectation waiver is refused in every scope with
   `waiver_expected_names_empty`; the collection no longer accepted a `post_activation` waiver on
   the strength of `acm_switchover_managed_clusters`.

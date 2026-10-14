@@ -56,7 +56,9 @@ Optional mapping of managed-cluster names to direct kubeconfig data used for
 klusterlet probing and remediation. When entries include `kubeconfig`,
 preflight RBAC validation also checks the managed-cluster
 `open-cluster-management-agent` permissions through that kubeconfig before
-post-activation reaches klusterlet operations.
+post-activation reaches klusterlet operations. It is never a ManagedCluster
+expectation: as in the Python CLI, restore-only records no expected name, and
+neither the names nor the count floor is derived from this mapping.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
