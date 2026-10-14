@@ -224,6 +224,7 @@ def test_the_entry_guard_validates_inputs_waiver_names_and_the_activation_checkp
     refuse = _named(tasks, "Refuse a direct role entry without a recorded ManagedCluster expectation")
     assert "['activation', 'post_activation']" in _when(refuse)
     assert "min_managed_clusters" in _when(refuse)
+    assert "not ansible_check_mode" in _when(refuse)  # a preview performs no ManagedCluster check
     names = [task.get("name") for task in tasks]
     assert names.index(restore["name"]) < names.index(refuse["name"]) < names.index(waiver["name"])
     checkpoint = _named(tasks, "Require the checkpoint that stores the migration journal")

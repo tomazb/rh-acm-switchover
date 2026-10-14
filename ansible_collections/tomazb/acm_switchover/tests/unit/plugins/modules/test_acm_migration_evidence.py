@@ -325,3 +325,14 @@ def test_the_poll_read_timeout_is_the_floored_remaining_budget(monkeypatch, rema
     monkeypatch.setattr(module.time, "time", lambda: 1000.0)
     result = _run(monkeypatch, "cleanup_poll_read_timeout", {"deadline": str(1000.0 + remaining)})
     assert result == {"changed": False, "request_timeout": expected}
+
+
+@pytest.mark.parametrize("operation", ["cleanup_poll_read_timeout", "cleanup_absence_poll"])
+def test_a_malformed_deadline_fails_closed_as_incomplete_inputs(monkeypatch, operation):
+    inputs = {"deadline": "soon"}
+    if operation == "cleanup_absence_poll":
+        inputs.update(
+            journal=_journal("journal-cleanup-delete-accepted"), live_read={"read_status": "not_found", "resources": []}
+        )
+    result = _run(monkeypatch, operation, inputs)
+    assert result == {"failed": True, "changed": False, "msg": f"The {operation} step received incomplete inputs."}

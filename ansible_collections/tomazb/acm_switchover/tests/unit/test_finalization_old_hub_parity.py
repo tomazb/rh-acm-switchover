@@ -38,6 +38,8 @@ def test_finalization_main_disables_old_hub_observability_only_when_observabilit
     assert "disable_observability_on_secondary" not in when_text
     assert "skip_observability_checks" in when_text
     assert "(acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'" in when_text
+    # As Finalization gates on primary_has_observability; a direct entry without the fact keeps the teardown.
+    assert "acm_switchover_primary_has_observability | default(true) | bool" in when_text
 
 
 def test_disable_old_hub_observability_delegates_to_the_shared_mco_teardown():

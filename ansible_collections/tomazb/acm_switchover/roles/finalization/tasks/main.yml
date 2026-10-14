@@ -93,6 +93,9 @@
         - not (acm_switchover_operation.restore_only | default(false))
         - not (acm_switchover_features.skip_observability_checks | default(false) | bool)
         - (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
+        # As Finalization: only a primary with Observability is torn down. A direct entry
+        # without the preflight fact keeps the teardown, which discovers the MCO live.
+        - acm_switchover_primary_has_observability | default(true) | bool
 
     - name: Clean up secondary restore resources before enabling backups
       ansible.builtin.include_tasks: cleanup_restores.yml

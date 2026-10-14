@@ -40,7 +40,7 @@ def _identity(restore_only: bool) -> dict:
     }
 
 
-def _run_role(tmp_path, role, *, restore_only=False, waiver_scope=None, recorded_names=(), checkpoint=True):
+def _run_role(tmp_path, role, *, restore_only=False, waiver_scope=None, recorded_names=(), checkpoint=True, check=False):
     api = FakeR302API()
     try:
         kubeconfig = tmp_path / "secondary.kubeconfig"
@@ -122,7 +122,7 @@ def _run_role(tmp_path, role, *, restore_only=False, waiver_scope=None, recorded
             encoding="utf-8",
         )
         completed = subprocess.run(
-            ["ansible-playbook", str(playbook), "-i", "localhost,"],
+            ["ansible-playbook", str(playbook), "-i", "localhost,"] + (["--check"] if check else []),
             cwd=_repo_root(),
             capture_output=True,
             text=True,
@@ -206,3 +206,11 @@ def test_a_direct_entry_without_a_recorded_expectation_is_refused(tmp_path, role
     assert completed.returncode != 0, output
     assert "No managed-cluster expectation is recorded in the checkpoint" in output
     assert requests == []
+
+
+def test_a_check_mode_direct_entry_without_a_recorded_expectation_is_not_refused(tmp_path):
+    """A preview performs no ManagedCluster check, so the missing expectation does not refuse it."""
+    completed, _ = _run_role(tmp_path, "activation", recorded_names=None, check=True)
+    output = _output(completed)
+    assert "Refuse a direct role entry without a recorded ManagedCluster expectation] ***\nskipping" in output
+    assert "No managed-cluster expectation is recorded in the checkpoint" not in output

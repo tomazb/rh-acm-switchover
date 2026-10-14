@@ -313,7 +313,7 @@ def main() -> None:
     except MigrationEvidenceError as exc:
         module.fail_json(msg=f"Migration evidence refused ({exc})", changed=False)
         return
-    except (KeyError, TypeError):
+    except (KeyError, TypeError, ValueError):
         module.fail_json(msg=f"The {module.params['operation']} step received incomplete inputs.", changed=False)
         return
     module.exit_json(changed=False, **decision)

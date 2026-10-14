@@ -65,6 +65,7 @@
     - acm_switchover_expected_managed_cluster_names is not defined
     - (acm_switchover_operation.min_managed_clusters | default(none)) is none
     - acm_switchover_execution.mode | default('execute') == 'execute'
+    - not ansible_check_mode
 
 - name: Refuse a ManagedCluster expectation waiver with no expected name to waive
   ansible.builtin.assert:

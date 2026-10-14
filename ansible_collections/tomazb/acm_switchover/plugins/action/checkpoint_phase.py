@@ -231,7 +231,7 @@ class ActionModule(ActionBase):
                 "msg": "clear_argocd_repause must be true and accepts only the checkpoint configuration.",
             }
         checkpoint_config = args.get("checkpoint")
-        if not isinstance(checkpoint_config, Mapping) or not bool(checkpoint_config.get("enabled", False)):
+        if not isinstance(checkpoint_config, Mapping) or coerce_bool(checkpoint_config.get("enabled")) is not True:
             return {
                 "failed": True,
                 "msg": "Refusing clear_argocd_repause because checkpointing is disabled; the marker lives there.",

@@ -611,3 +611,16 @@ def test_a_preview_enter_with_a_rewind_needs_no_invocation_identity(tmp_path, mo
     assert result.get("failed") is not True, result
     assert REWIND_FENCE_FACT not in (result.get("ansible_facts") or {})
     assert _dir_snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("enabled, refused", [("false", True), ("False", True), ("true", False), (None, True)])
+def test_the_clear_reads_a_templated_enabled_flag_as_a_boolean(tmp_path, enabled, refused):
+    path = _write_phase_checkpoint(
+        tmp_path, data={"migration_backups": _first_journal(), "argocd_repause_required": _marker()}
+    )
+    action = _clear_action(path, enabled=enabled)
+    if enabled is None:
+        del action._task.args["checkpoint"]["enabled"]
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+    assert (result.get("failed") is True) is refused, result
+    assert ("argocd_repause_required" in _stored(path)["operational_data"]) is refused
