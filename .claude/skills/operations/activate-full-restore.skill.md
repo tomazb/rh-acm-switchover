@@ -130,6 +130,10 @@ oc describe restore.cluster.open-cluster-management.io restore-acm-full \
 # Review Events section
 ```
 
+> **Note:** the automation refuses a `restore-acm-full` it did not record creating and records
+> concrete Backup names instead of `latest`; finish a manual full restore manually, or delete
+> the manually created `restore-acm-full` and then start a fresh run with `--reset-state`.
+
 ---
 
 ## Expected Timeline
@@ -165,7 +169,8 @@ oc describe restore.velero.io <velero-restore-name> \
 ```
 
 Common partial failures:
-- Already-existing resources (usually safe to ignore)
+- Already-existing resources (often harmless for a manual restore; the automation's
+  completion proof still refuses any required Velero child that is not `Completed`)
 - Missing CRDs (install required operators first)
 
 ### "No backups found on secondary"

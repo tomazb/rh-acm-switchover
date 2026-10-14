@@ -237,7 +237,8 @@ oc get restore.cluster.open-cluster-management.io restore-acm-activate \
 # If Phase=FinishedWithErrors, the controller may still see the deleted restore as active.
 # Confirm the passive restore is fully gone, then delete/recreate restore-acm-activate.
 # Note: the automation refuses a restore-acm-activate it did not record creating and records
-# concrete Backup names; finish a manual activation manually or start a fresh run with --reset-state.
+# concrete Backup names; finish a manual activation manually, or delete the manually created
+# restore-acm-activate and then start a fresh run with --reset-state.
 ```
 
 ---
