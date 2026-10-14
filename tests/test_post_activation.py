@@ -3138,6 +3138,39 @@ class TestPostActivationEvidenceReviewFindings:
             finalization.assert_not_called()
             assert "post_activation_not_completed" in failed[-1]
 
+    def test_b2_a_dry_run_resume_past_post_activation_refuses_an_invalid_journal(self, tmp_path):
+        """Only missing evidence is a dry-run prediction; an invalid journal refuses in every mode."""
+        from lib.utils import Phase
+        from lib.workflow import run_phase_flow
+
+        journal = _VECTOR_CASES["journal-run-id-not-uuid"]["input"]["candidate"]
+        state = _evidence_state(tmp_path, journal)
+        state.set_phase(Phase.FINALIZATION)
+        finalization = Mock(return_value=True)
+        failed = []
+
+        def fail_phase(_state, message, _logger):
+            failed.append(message)
+            return False
+
+        result = run_phase_flow(
+            SimpleNamespace(dry_run=True),
+            state,
+            None,
+            Mock(),
+            logging.getLogger("test"),
+            ((finalization, (Phase.POST_ACTIVATION, Phase.FINALIZATION), Phase.FINALIZATION),),
+            "switchover",
+            fail_phase,
+            Mock(),
+            Mock(),
+        )
+
+        assert result is False
+        finalization.assert_not_called()
+        assert "The recorded migration journal is invalid" in failed[-1]
+        assert _stored_journal(tmp_path) == journal
+
     def test_b2_a_resume_past_recorded_post_activation_evidence_continues(self, tmp_path):
         from lib.utils import Phase
         from lib.workflow import run_phase_flow

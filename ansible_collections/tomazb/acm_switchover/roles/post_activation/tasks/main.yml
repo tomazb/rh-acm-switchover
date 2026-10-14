@@ -18,7 +18,8 @@
 # R4-04 Task 9: a completed phase marker is honoured only with the evidence it claims. An
 # executing resume past a post_activation recorded without restore.completed_at and
 # post_activation.completed_at refuses; Python refuses the same journal on resuming at
-# finalization. A journal-free resume is left to finalization's own evidence gate.
+# finalization. An invalid journal refuses in every mode, previews included, as in Python.
+# A journal-free resume is left to finalization's own evidence gate.
 - name: Refuse a completed post_activation marker over an invalid migration journal
   ansible.builtin.fail:
     msg: >-
@@ -26,8 +27,6 @@
       start a new migration with the full checkpoint reset (checkpoint.reset).
   when:
     - (_checkpoint_enter | default({})).skipped_phase | default(false)
-    - acm_switchover_execution.mode | default('dry_run') == 'execute'
-    - not ansible_check_mode
     - >-
       (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal_outcome', 'absent'))
       not in ['absent', 'valid']

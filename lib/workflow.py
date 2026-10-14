@@ -285,15 +285,16 @@ def _post_activation_marker_refusal(
     """Refuse a resume past post-activation whose journal lacks the evidence that phase records.
 
     The collection refuses the same journal at its completed post_activation phase marker
-    (R4-04 Task 9). A dry-run predicts and refuses nothing; a journal-free state is left
-    to finalization's own evidence gate. The refusal keeps the journal and names the
-    rerun that establishes the missing evidence, since a plain retry resumes here again.
+    (R4-04 Task 9). A dry-run refuses only an invalid journal, as the collection's preview
+    does, and predicts the missing evidence; a journal-free state is left to finalization's
+    own evidence gate. The refusal keeps the journal and names the rerun that establishes
+    the missing evidence, since a plain retry resumes here again.
     """
-    if current_phase != Phase.FINALIZATION or getattr(args, "dry_run", False):
+    if current_phase != Phase.FINALIZATION:
         return None
     try:
         journal = RunRecord(state).migration_backups()
-        if journal is not None:
+        if journal is not None and not getattr(args, "dry_run", False):
             require_post_activation_completed(journal)
     except (MigrationEvidenceError, StateStructureError) as exc:
         if getattr(exc, "code", "") in _MISSING_EVIDENCE_CODES:

@@ -339,3 +339,19 @@ def test_a_dry_run_with_a_valid_journal_still_previews(run_post_activation, hub)
     assert run.completed.returncode == 0, run.output
     assert hub.writes == []
     assert run.after == run.before
+
+
+@pytest.mark.parametrize("preview", ["dry_run", "check"])
+def test_a_completed_phase_preview_refuses_an_invalid_recorded_journal(run_post_activation, hub, preview):
+    """The skipped completed phase still refuses an invalid journal, as the Python CLI's resume does."""
+    run = run_post_activation(
+        hub,
+        journal={"schema_version": 9},
+        post_activation_done=True,
+        mode="dry_run" if preview == "dry_run" else "execute",
+        check=preview == "check",
+    )
+    assert run.completed.returncode != 0
+    assert "The recorded migration journal is invalid and blocks post-activation" in run.output
+    assert hub.writes == []
+    assert run.after == run.before
