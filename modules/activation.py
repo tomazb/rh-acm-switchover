@@ -62,14 +62,14 @@ AUTO_IMPORT_VERIFY_ERROR = "Unable to verify autoImportStrategy on the destinati
 
 
 def _unverified_restore_create(restore_name: str, error: MalformedResponseError) -> FatalError:
-    """The error for a Restore POST answered 2xx with a malformed body.
+    """The error for a Restore POST whose response could not be decoded or was malformed.
 
-    The server accepted the request, so the Restore may exist. Recreating the passive Restore
+    The outcome of the POST is unknown, so the Restore may exist. Recreating the passive Restore
     as a rollback could leave two Restores, so nothing more is created here.
     """
     return FatalError(
-        f"Creation of Restore {BACKUP_NAMESPACE}/{restore_name} is unverified: the API server accepted "
-        f"the request but returned a malformed response ({error}). The Restore may exist. No rollback "
+        f"Creation of Restore {BACKUP_NAMESPACE}/{restore_name} is unverified: its response could not be "
+        f"decoded or was malformed ({error}), so the outcome is unknown. The Restore may exist. No rollback "
         f"was attempted; reconcile it before retrying: oc -n {BACKUP_NAMESPACE} get "
         f"restore.{CLUSTER_BACKUP_API_GROUP} {restore_name} -o yaml"
     )
@@ -78,15 +78,15 @@ def _unverified_restore_create(restore_name: str, error: MalformedResponseError)
 def _unverified_rollback_create(
     restore_name: str, error: Exception, passive_name: str, rollback_error: MalformedResponseError
 ) -> FatalError:
-    """The error for a rollback recreate of the passive Restore answered 2xx with a malformed body.
+    """The error for a rollback recreate of the passive Restore whose response could not be decoded.
 
-    The server accepted the recreate, so the passive Restore may exist: the rollback is
+    The outcome of the recreate is unknown, so the passive Restore may exist: the rollback is
     unverified, not failed, and nothing more is created here.
     """
     return FatalError(
         f"Failed to create Restore {restore_name}: {error}. The rollback recreate of passive sync Restore "
-        f"{BACKUP_NAMESPACE}/{passive_name} is unverified: the API server accepted the request but returned "
-        f"a malformed response ({rollback_error}). The passive Restore may exist; reconcile it before "
+        f"{BACKUP_NAMESPACE}/{passive_name} is unverified: its response could not be decoded or was "
+        f"malformed ({rollback_error}), so the outcome is unknown. The passive Restore may exist; reconcile it before "
         f"retrying: oc -n {BACKUP_NAMESPACE} get restore.{CLUSTER_BACKUP_API_GROUP} {passive_name} -o yaml"
     )
 

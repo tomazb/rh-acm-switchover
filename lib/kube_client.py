@@ -11,6 +11,7 @@ import functools
 import json
 import logging
 import socket
+import sys
 import time
 from typing import Any, Callable, Dict, Iterator, List, Optional, TypedDict
 
@@ -135,13 +136,22 @@ def _undecodable_body_is_malformed() -> Iterator[None]:
     invalid UTF-8. None of them is an HTTP error, so none may reach a handler written for one.
     Before 37.x the client decodes an HTTP error's body while raising it, so an undecodable
     error body surfaces as `UnicodeDecodeError` too; that one is re-raised as the `ApiException`
-    it interrupted.
+    it interrupted, and only that one: an exception the caller was already handling when the
+    request started (say, the 409 a create is reconciling) is not this response's outcome.
     """
+    inherited = sys.exc_info()[1]
     try:
         yield
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        if isinstance(exc.__context__, ApiException):
-            raise exc.__context__ from None
+        http_error = exc.__context__
+        if (
+            isinstance(http_error, ApiException)
+            and http_error is not inherited
+            and isinstance(http_error.status, int)
+            and http_error.status > 0
+            and not 200 <= http_error.status <= 299
+        ):
+            raise http_error from None
         raise MalformedResponseError(
             f"Malformed Kubernetes API response: undecodable body ({type(exc).__name__})"
         ) from exc
