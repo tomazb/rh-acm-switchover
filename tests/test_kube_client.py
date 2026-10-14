@@ -841,6 +841,20 @@ class TestUndecodableCustomObjectBodies:
             invoke(self._client(pool_manager))
         assert len(pool_manager.calls) == 1
 
+    @pytest.mark.parametrize("body", [b"{not json", b"\xff\xfe"], ids=["invalid-json", "invalid-utf8"])
+    def test_an_undecodable_read_inside_a_handled_http_error_is_malformed_not_that_error(self, body):
+        """A read issued while an earlier HTTP error is being handled must not inherit it: a 200
+        whose body cannot be decoded under a handled 404 is malformed, never absence."""
+        pool_manager = _RecordingPoolManager(status=200, body=body)
+        client = self._client(pool_manager)
+
+        try:
+            raise ApiException(status=404, reason="Not Found")
+        except ApiException:
+            with pytest.raises(MalformedResponseError):
+                client.get_custom_resource_advisory("g", "v1", "widgets", "w", "ns")
+        assert len(pool_manager.calls) == 1
+
     @staticmethod
     def _rest_layer_decodes_before_its_status_check():
         """Some clients (29.x) decode every body in the REST layer before checking the status,

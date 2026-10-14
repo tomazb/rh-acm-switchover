@@ -2002,16 +2002,22 @@ class TestMalformedRestoreCreateResponse:
         assert "unverified" in message and restore_name in message
         assert "Recreated passive sync restore" not in message
 
+    _UNDECODABLE = [b"null", b"{not json", b"\xff\xfe"]
+    _UNDECODABLE_IDS = ["null", "invalid-json", "invalid-utf8"]
+
+    @pytest.mark.parametrize("rollback_body", _UNDECODABLE, ids=_UNDECODABLE_IDS)
     @pytest.mark.parametrize(("method", "activation_method", "create", "restore_name"), _CREATES)
     def test_an_unverified_rollback_create_is_reported_as_such(
-        self, mock_state_manager, method, activation_method, create, restore_name
+        self, mock_state_manager, method, activation_method, create, restore_name, rollback_body
     ):
-        """The activation create is refused, so the passive Restore is recreated; the server
-        accepts that POST but answers with a malformed body. The passive Restore may exist, so
-        the rollback is reported as unverified, not as failed, and nothing more is created."""
+        """The activation create is refused, so the passive Restore is recreated; that POST's
+        response cannot be decoded. The passive Restore may exist, so the rollback is reported
+        as unverified, not as failed, and nothing more is created. The refused create is the
+        exception being handled while the rollback runs; it must not be mistaken for the
+        rollback's own outcome."""
         pool_manager = _RecordingPoolManager(
             (403, b'{"kind": "Status", "code": 403}', "application/json"),
-            (201, b"null", "application/json"),
+            (201, rollback_body, "application/json"),
         )
         activation = SecondaryActivation(
             secondary_client=self._secondary(pool_manager),
@@ -2029,3 +2035,31 @@ class TestMalformedRestoreCreateResponse:
         assert "Rollback failed" not in message
         assert "unverified" in message and RESTORE_PASSIVE_SYNC_NAME in message
         assert "may exist" in message
+
+    @pytest.mark.parametrize("reread_body", _UNDECODABLE[1:], ids=_UNDECODABLE_IDS[1:])
+    @pytest.mark.parametrize(("method", "activation_method", "create", "restore_name"), _CREATES)
+    def test_an_undecodable_conflict_reread_is_unverified_and_never_rolled_back(
+        self, mock_state_manager, method, activation_method, create, restore_name, reread_body
+    ):
+        """The create answers 409 and the named re-read that reconciles it answers 200 with a
+        body that cannot be decoded. The 409 being handled is not the re-read's outcome: the
+        Restore may exist, so nothing is rolled back."""
+        pool_manager = _RecordingPoolManager(
+            (409, b'{"kind": "Status", "code": 409}', "application/json"),
+            (200, reread_body, "application/json"),
+        )
+        activation = SecondaryActivation(
+            secondary_client=self._secondary(pool_manager),
+            state_manager=mock_state_manager,
+            method=method,
+            activation_method=activation_method,
+        )
+
+        with patch.object(activation, "_wait_for_restore_deletion", return_value=None):
+            with pytest.raises(FatalError) as excinfo:
+                getattr(activation, create)()
+
+        assert [verb for verb, _url in pool_manager.calls] == ["POST", "GET"]
+        message = str(excinfo.value)
+        assert "unverified" in message and restore_name in message
+        assert "Recreated passive sync restore" not in message
