@@ -327,15 +327,17 @@ def test_w1_the_readiness_wait_stops_at_the_first_ready_poll(run_post_activation
     assert run.mc_reads == 4
 
 
-@pytest.mark.parametrize("mode", ["dry_run", "execute"])
+@pytest.mark.parametrize("mode", ["dry_run", "check", "execute"])
 def test_an_invalid_recorded_journal_is_refused_in_every_mode(run_post_activation, hub, mode):
     """As the Python CLI's dry run, a preview never reports an invalid journal as skipped."""
-    run = run_post_activation(hub, journal={"schema_version": 9}, mode=mode)
+    run = run_post_activation(
+        hub, journal={"schema_version": 9}, mode="execute" if mode == "check" else mode, check=mode == "check"
+    )
     assert run.completed.returncode != 0
     assert "The recorded migration journal is invalid and blocks post-activation" in run.output
     assert hub.writes == []
     assert run.journal == {"schema_version": 9}
-    if mode == "dry_run":
+    if mode != "execute":
         assert run.after == run.before
         assert run.unwritten  # the preview fail transition writes nothing
 
