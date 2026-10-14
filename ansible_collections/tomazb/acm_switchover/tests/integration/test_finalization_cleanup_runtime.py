@@ -29,6 +29,9 @@ from ansible_collections.tomazb.acm_switchover.tests.integration.test_activation
     complete_on_mutation,
     run_activation,
 )
+from ansible_collections.tomazb.acm_switchover.tests.integration.test_post_activation_evidence_runtime import (  # noqa: F401
+    run_post_activation,
+)
 
 KIND_OPERATION = {
     "passive_patch": {"method": "passive", "activation_method": "patch"},
@@ -794,3 +797,40 @@ def test_the_poll_deadline_is_one_wall_clock_on_a_non_utc_controller(
 
     assert run.completed.returncode == 0, run.output
     assert run.journal["cleanup"]["state"] == "completed"
+
+
+def test_the_composed_lifecycle_reaches_the_old_hub_gate_without_inserted_evidence(
+    run_activation, run_post_activation, run_finalization  # noqa: F811
+):
+    """Activation, post-activation and the journaled cleanup each write their own evidence.
+
+    Each stage's journal is the previous stage's output, carried between the per-stage
+    checkpoint files the harnesses own; nothing is synthesized. The fake hub serves no
+    old-hub observability or passive Restore setup, so the lifecycle stops at the old-hub
+    gate's decision.
+    """
+    hub = FakeMigrationHub(
+        restores=[passive_restore()], controller=complete_on_mutation, managed_clusters=["cluster-a"]
+    )
+    try:
+        activated = run_activation("passive_patch", hub)
+        assert activated.completed.returncode == 0, activated.output
+        assert activated.journal["restore"]["completed_at"]
+        assert activated.journal["post_activation"]["completed_at"] is None
+
+        verified = run_post_activation(hub, journal=activated.journal, names=("cluster-a",))
+        assert verified.completed.returncode == 0, verified.output
+        post = verified.journal["post_activation"]
+        assert post["names_verified_at"] and post["completed_at"]
+        assert verified.journal["restore"] == activated.journal["restore"]
+
+        finalized = run_finalization("passive_patch", hub, verified.journal, tasks=_GATED)
+        assert finalized.completed.returncode == 0, finalized.output
+        assert finalized.journal["cleanup"]["state"] == "completed"
+        assert finalized.journal["post_activation"] == post
+        name = activated.journal["restore"]["name"]
+        assert name not in hub.acm
+        # The gate's own fresh strict read of the locator is the last request.
+        assert hub.requests[-1] == {"method": "GET", "path": _RESTORES + name}
+    finally:
+        hub.close()
