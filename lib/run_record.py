@@ -30,6 +30,7 @@ from lib.teardown_record import (
     validate,
     validate_stored,
 )
+from lib.utils import Phase
 
 _KEY_PRIMARY_VERSION = "primary_version"
 _KEY_PRIMARY_OBS_DETECTED = "primary_observability_detected"
@@ -49,6 +50,9 @@ _KEY_ARCHIVED_RESTORES = "archived_restores"
 _KEY_TEARDOWN_RECORDS = "decommission_teardown_records"
 _KEY_MIGRATION_BACKUPS = "migration_backups"
 _KEY_ARGOCD_REPAUSE_REQUIRED = "argocd_repause_required"
+_REPAUSE_FIELDS = frozenset({"failed_phase", "recorded_at"})
+# The phases a journal rescue records (lib/argocd_resume), as the collection's JOURNAL_RESCUE_PHASES.
+_REPAUSE_PHASES = frozenset(phase.value for phase in (Phase.ACTIVATION, Phase.POST_ACTIVATION, Phase.FINALIZATION))
 
 _UNSET = object()
 # Presence sentinel for strict reads: a stored null must not look like "never written".
@@ -436,16 +440,22 @@ class RunRecord:
     def argocd_repause_required(self) -> Optional[str]:
         """The failed phase a retry must re-pause Argo CD before resuming, or None.
 
-        A present value of any other shape raises: the obligation is never read
-        as discharged.
+        A present value of any other shape raises, as the collection's reader does: exactly
+        the fields `failed_phase` and `recorded_at`, a journal rescue phase, and a non-empty
+        `recorded_at`. The obligation is never read as discharged.
         """
         stored = self._get(_KEY_ARGOCD_REPAUSE_REQUIRED)
         if stored is None:
             return None
-        failed_phase = stored.get("failed_phase") if isinstance(stored, dict) else None
-        if not isinstance(failed_phase, str) or not failed_phase:
+        if (
+            not isinstance(stored, dict)
+            or set(stored) != _REPAUSE_FIELDS
+            or stored["failed_phase"] not in _REPAUSE_PHASES
+            or not isinstance(stored["recorded_at"], str)
+            or not stored["recorded_at"]
+        ):
             raise StateStructureError(f"{_KEY_ARGOCD_REPAUSE_REQUIRED} is malformed")
-        return failed_phase
+        return stored["failed_phase"]
 
     def clear_argocd_repause_required(self) -> None:
         """The retry re-paused Argo CD; discharge the obligation with one staged durable write.

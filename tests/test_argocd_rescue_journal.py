@@ -425,3 +425,79 @@ def test_the_marker_positions_the_retry_when_the_last_error_lost_the_phase(tmp_p
     config = FailedStateConfig(resumable_phases=(Phase.ACTIVATION,), operation_noun="switchover")
     handle_failed_state(SimpleNamespace(force=False, validate_only=False), state, LOGGER, config)
     assert state.get_current_phase() == Phase.ACTIVATION
+
+
+# --- the re-pause marker reader: both form factors refuse the same corrupted markers ---
+
+# Each form factor names the post-activation phase its own way; the marker stores that name.
+_RESCUE_PHASE_NAMES = [
+    (Phase.ACTIVATION.value, "activation"),
+    (Phase.POST_ACTIVATION.value, "post_activation"),
+    (Phase.FINALIZATION.value, "finalization"),
+]
+_RECORDED_AT = "2026-10-14T12:00:00+00:00"
+_CORRUPTED_MARKERS = [
+    pytest.param(lambda phase: "activation", id="not-a-mapping"),
+    pytest.param(lambda phase: [phase, _RECORDED_AT], id="list"),
+    pytest.param(lambda phase: {}, id="empty"),
+    pytest.param(lambda phase: {"failed_phase": phase}, id="no-recorded-at"),
+    pytest.param(lambda phase: {"recorded_at": _RECORDED_AT}, id="no-failed-phase"),
+    pytest.param(lambda phase: {"failed_phase": phase, "recorded_at": ""}, id="empty-recorded-at"),
+    pytest.param(lambda phase: {"failed_phase": phase, "recorded_at": 7}, id="numeric-recorded-at"),
+    pytest.param(lambda phase: {"failed_phase": phase, "recorded_at": _RECORDED_AT, "extra": 1}, id="extra-field"),
+    pytest.param(lambda phase: {"failed_phase": "", "recorded_at": _RECORDED_AT}, id="empty-phase"),
+    pytest.param(lambda phase: {"failed_phase": None, "recorded_at": _RECORDED_AT}, id="null-phase"),
+    pytest.param(lambda phase: {"failed_phase": "preflight", "recorded_at": _RECORDED_AT}, id="pre-freeze-phase"),
+    pytest.param(lambda phase: {"failed_phase": "primary_prep", "recorded_at": _RECORDED_AT}, id="primary-prep"),
+    pytest.param(lambda phase: {"failed_phase": "completed", "recorded_at": _RECORDED_AT}, id="terminal-phase"),
+    pytest.param(lambda phase: {"failed_phase": "bogus", "recorded_at": _RECORDED_AT}, id="unknown-phase"),
+    pytest.param(lambda phase: {"failed_phase": phase + " ", "recorded_at": _RECORDED_AT}, id="padded-phase"),
+]
+
+
+def _python_marker_reader(tmp_path, marker):
+    state = StateManager(str(tmp_path / "state.json"))
+    state.state["config"]["argocd_repause_required"] = marker
+    return RunRecord(state).argocd_repause_required
+
+
+def _collection_marker_reader(marker):
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils import checkpoint as collection_checkpoint
+
+    return lambda: collection_checkpoint.argocd_repause_required(
+        {"operational_data": {"argocd_repause_required": marker}}
+    )
+
+
+@pytest.mark.parametrize(("python_phase", "collection_phase"), _RESCUE_PHASE_NAMES)
+def test_both_form_factors_read_a_valid_repause_marker(tmp_path, python_phase, collection_phase):
+    python_marker = {"failed_phase": python_phase, "recorded_at": _RECORDED_AT}
+    collection_marker = {"failed_phase": collection_phase, "recorded_at": _RECORDED_AT}
+    assert _python_marker_reader(tmp_path, python_marker)() == python_phase
+    assert _collection_marker_reader(collection_marker)() == collection_phase
+
+
+@pytest.mark.parametrize("build", _CORRUPTED_MARKERS)
+@pytest.mark.parametrize(("python_phase", "collection_phase"), _RESCUE_PHASE_NAMES)
+def test_both_form_factors_refuse_the_same_corrupted_repause_marker(tmp_path, build, python_phase, collection_phase):
+    """A corrupted marker is never read as discharged, nor as a phase to resume from: the
+    Python reader raises StateStructureError and the collection reader ValueError."""
+    from lib.run_record import StateStructureError
+
+    with pytest.raises(StateStructureError, match="argocd_repause_required is malformed"):
+        _python_marker_reader(tmp_path, build(python_phase))()
+    with pytest.raises(ValueError, match="marker is malformed"):
+        _collection_marker_reader(build(collection_phase))()
+
+
+@pytest.mark.parametrize(
+    ("python_phase", "collection_phase"),
+    [(Phase.POST_ACTIVATION.value, "post_activation")],
+)
+def test_each_form_factor_refuses_the_other_form_factors_phase_name(tmp_path, python_phase, collection_phase):
+    from lib.run_record import StateStructureError
+
+    with pytest.raises(StateStructureError):
+        _python_marker_reader(tmp_path, {"failed_phase": collection_phase, "recorded_at": _RECORDED_AT})()
+    with pytest.raises(ValueError, match="marker is malformed"):
+        _collection_marker_reader({"failed_phase": python_phase, "recorded_at": _RECORDED_AT})()
