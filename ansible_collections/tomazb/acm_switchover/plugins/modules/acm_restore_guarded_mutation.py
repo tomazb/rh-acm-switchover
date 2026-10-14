@@ -32,7 +32,8 @@ description:
     response. A PATCH is accepted only when its response carries the proved
     C(metadata.uid) and a non-empty C(metadata.resourceVersion); only then is its
     C(generation) published, and when it omits one C(generation_reported) is false. A
-    response with any other identity fails with C(reason=malformed_response).
+    response with any other identity, or with a C(generation) that is present but not a
+    positive integer, fails with C(reason=malformed_response); this holds for a create too.
   - Owns no read, polling or phase policy. Check mode makes no API call and reports the
     prediction in C(would_change).
 options:
@@ -187,8 +188,8 @@ resource_version:
   type: str
 generation:
   description:
-    - The integer C(metadata.generation) of an accepted PATCH or CREATE response; null when
-      the response omits it. Never inferred.
+    - The positive integer C(metadata.generation) of an accepted PATCH or CREATE response;
+      null when the response omits it. Never inferred.
   returned: when action is patch or create
   type: int
 generation_reported:
@@ -325,12 +326,18 @@ def _decode_response(body):
     return response if isinstance(response, dict) else None
 
 
+def _is_generation(value) -> bool:
+    """A Kubernetes metadata.generation: a positive integer, never a boolean."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
 def _record_patch_response(result: dict, body, expected_uid: str, would_change: bool) -> None:
     """Verify the accepted response's identity, and only then publish it and its generation.
 
     A missing or different UID, or a missing resourceVersion, is not verified acceptance:
-    the result stays `malformed_response` with no identity or generation evidence. A
-    missing generation under a valid identity is reported, never inferred.
+    the result stays `malformed_response` with no identity or generation evidence, as does a
+    present generation that is not a positive integer. An omitted generation under a valid
+    identity is reported, never inferred.
     """
     result.update(http_accepted=True, reason=REASON_MALFORMED_RESPONSE)
     metadata = body.get("metadata") if body is not None else None
@@ -339,10 +346,13 @@ def _record_patch_response(result: dict, body, expected_uid: str, would_change: 
     revision = metadata.get("resourceVersion")
     if metadata.get("uid") != expected_uid or not isinstance(revision, str) or not revision:
         return
+    # Only an omitted generation falls back to the strict re-read (C section 5.1); a present
+    # invalid one is a malformed response (J section 1b).
+    if "generation" in metadata and not _is_generation(metadata["generation"]):
+        return
     result.update(accepted=True, changed=would_change, reason=REASON_OK, uid=expected_uid, resource_version=revision)
-    generation = metadata.get("generation")
-    if isinstance(generation, int) and not isinstance(generation, bool):
-        result.update(generation=generation, generation_reported=True)
+    if "generation" in metadata:
+        result.update(generation=metadata["generation"], generation_reported=True)
 
 
 def _require_unpadded_identity(uid: str, resource_version: str) -> None:
@@ -369,7 +379,8 @@ def _require_create_body(params: dict) -> None:
 def _record_create_response(result: dict, body, name: str) -> None:
     """Accept a create only when its response names the requested Restore (create_restore_guarded).
 
-    A missing generation under a valid identity is reported, never inferred.
+    An omitted generation under a valid identity is reported, never inferred; a present
+    generation that is not a positive integer is a malformed response.
     """
     result.update(http_accepted=True, reason=REASON_MALFORMED_RESPONSE)
     metadata = body.get("metadata") if body is not None else None
@@ -378,10 +389,11 @@ def _record_create_response(result: dict, body, name: str) -> None:
     uid, revision = metadata.get("uid"), metadata.get("resourceVersion")
     if not isinstance(uid, str) or not uid or not isinstance(revision, str) or not revision:
         return
+    if "generation" in metadata and not _is_generation(metadata["generation"]):
+        return
     result.update(accepted=True, changed=True, reason=REASON_OK, uid=uid, resource_version=revision)
-    generation = metadata.get("generation")
-    if isinstance(generation, int) and not isinstance(generation, bool):
-        result.update(generation=generation, generation_reported=True)
+    if "generation" in metadata:
+        result.update(generation=metadata["generation"], generation_reported=True)
 
 
 def _resolve_restore_resource(kubeconfig: str, context: str, request_timeout):

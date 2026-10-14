@@ -310,15 +310,34 @@ def test_the_patch_response_is_read_raw_and_decoded_by_the_module(monkeypatch):
     assert (result["reason"], result["generation"]) == ("ok", 3)
 
 
-@pytest.mark.parametrize("generation", [None, "7", True, 7.0])
-def test_a_missing_or_non_integer_generation_is_reported_never_invented(monkeypatch, generation):
+def test_an_omitted_generation_is_reported_never_invented(monkeypatch):
     metadata = {"uid": "3f0c2a4e-uid", "resourceVersion": "48300"}
-    if generation is not None:
-        metadata["generation"] = generation
     result = _run(monkeypatch, _patch_args(), resource=FakeResource(patch_result=_accepted_restore(metadata)))
     assert result["accepted"] is True
     assert result["generation"] is None
     assert result["generation_reported"] is False
+
+
+@pytest.mark.parametrize("generation", [None, "7", "2", True, False, 7.0, 0, -1, [7], {"value": 7}])
+def test_a_present_but_invalid_generation_is_a_malformed_response(monkeypatch, generation):
+    """C section 5.1 recovers only an omitted generation; a present invalid one is malformed (J section 1b)."""
+    metadata = {"uid": "3f0c2a4e-uid", "resourceVersion": "48300", "generation": generation}
+    result = _run(monkeypatch, _patch_args(), resource=FakeResource(patch_result=_accepted_restore(metadata)))
+    result.pop("_resolved")
+    result.pop("msg")
+    assert result == {
+        "failed": True,
+        "accepted": False,
+        "http_accepted": True,
+        "changed": False,
+        "would_change": False,
+        "conflict": False,
+        "reason": "malformed_response",
+        "uid": None,
+        "resource_version": None,
+        "generation": None,
+        "generation_reported": False,
+    }
 
 
 @pytest.mark.parametrize(
@@ -739,6 +758,15 @@ def test_a_create_without_a_generation_is_accepted_but_never_inferred(monkeypatc
     resource = FakeResource(create_result=_created(uid="u-1", resourceVersion="10"))
     result = _run(monkeypatch, _create_args(), resource=resource)
     assert result["accepted"] is True
+    assert (result["generation"], result["generation_reported"]) == (None, False)
+
+
+@pytest.mark.parametrize("generation", [None, "7", "2", True, False, 7.0, 0, -1, [7], {"value": 7}])
+def test_a_create_with_a_present_but_invalid_generation_is_a_malformed_response(monkeypatch, generation):
+    resource = FakeResource(create_result=_created(uid="u-1", resourceVersion="10", generation=generation))
+    result = _run(monkeypatch, _create_args(), resource=resource)
+    assert (result["failed"], result["accepted"], result["http_accepted"]) == (True, False, True)
+    assert (result["reason"], result["uid"], result["resource_version"]) == ("malformed_response", None, None)
     assert (result["generation"], result["generation_reported"]) == (None, False)
 
 

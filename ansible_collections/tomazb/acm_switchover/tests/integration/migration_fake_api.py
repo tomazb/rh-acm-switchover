@@ -178,6 +178,8 @@ class FakeMigrationHub:
         self.failures: dict[tuple[str, str], int] = {}
         # Served by the Velero Backup LIST instead of the store, while a GET still reads the store.
         self.backup_list_items: list[dict] | None = None
+        # Merged into the metadata of an accepted PATCH response after the object is patched.
+        self.patch_response_metadata: dict | None = None
         self.mutations: list[tuple[str, str, Any]] = []
         self._requests: list[dict] = []
         self._rv = 2000
@@ -458,7 +460,9 @@ class FakeMigrationHub:
                     current["metadata"]["generation"] += 1
                     current["metadata"]["resourceVersion"] = hub.next_rv()
                     hub._mutated("patch", name)
-                    self._json(copy.deepcopy(hub.acm.get(name, current)))
+                    response = copy.deepcopy(hub.acm.get(name, current))
+                    response["metadata"].update(hub.patch_response_metadata or {})
+                    self._json(response)
 
             def do_DELETE(self):
                 path = self._start("DELETE")

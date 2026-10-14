@@ -214,6 +214,11 @@ def _require_unpadded_identity(uid: str, resource_version: str, action: str) -> 
             raise ValidationError(f"The {field} for a guarded Restore {action} carries surrounding whitespace.")
 
 
+def _is_generation(value: Any) -> bool:
+    """A Kubernetes metadata.generation: a positive integer, never a boolean."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
 # Standard retry decorator for API calls
 retry_api_call = retry(
     retry=retry_if_exception(_should_retry),
@@ -1383,10 +1388,11 @@ class KubeClient:
         A timeout is not acceptance, whether it strikes the request or the later read of the
         response body. Acceptance is verified only when the decoded response carries the
         proved `metadata.uid` and a non-empty `metadata.resourceVersion`; only then is its
-        integer `generation` published, and a missing generation is reported as None with
-        `generation_reported` False, never inferred. A 2xx whose identity is malformed is
-        `malformed_response` with `accepted` False, `changed` False and no identity or
-        generation evidence; `http_accepted` records that the server answered 2xx.
+        positive integer `generation` published, and an omitted generation is reported as None
+        with `generation_reported` False, never inferred. A 2xx whose identity is malformed, or
+        whose generation is present but not a positive integer, is `malformed_response` with
+        `accepted` False, `changed` False and no identity or generation evidence;
+        `http_accepted` records that the server answered 2xx.
 
         In dry-run no request is made; `would_change` carries the prediction and `changed`
         stays False.
@@ -1476,10 +1482,13 @@ class KubeClient:
         # Identity first: a generation is evidence only for the proved object (C §5.1).
         if metadata.get("uid") != uid or not isinstance(response_revision, str) or not response_revision:
             return result
+        # Only an omitted generation falls back to the strict re-read (C §5.1); a present
+        # invalid one is a malformed response (J §1b).
+        if "generation" in metadata and not _is_generation(metadata["generation"]):
+            return result
         result.update(accepted=True, changed=would_change, reason="ok", uid=uid, resource_version=response_revision)
-        generation = metadata.get("generation")
-        if isinstance(generation, int) and not isinstance(generation, bool):
-            result.update(generation=generation, generation_reported=True)
+        if "generation" in metadata:
+            result.update(generation=metadata["generation"], generation_reported=True)
         return result
 
     def _guarded_restore_result(self) -> Dict[str, Any]:
@@ -1580,8 +1589,9 @@ class KubeClient:
         re-reading the object: the create is accepted only when the 2xx response names the
         requested object with a non-empty `metadata.uid` and `metadata.resourceVersion`. A
         409 is `already_exists` with `conflict` True; a timeout or any other failure is
-        `unverifiable`. The integer `generation` is published only from an accepted
-        response, with `generation_reported` False when it is missing. Callers still owe a
+        `unverifiable`. The positive integer `generation` is published only from an accepted
+        response, with `generation_reported` False when it is omitted; a present invalid one
+        is `malformed_response`. Callers still owe a
         strict post-create read. In dry-run no request is made and the result is a
         prediction. Returns the guarded-mutation result shape of
         `json_patch_custom_resource_guarded`; no body or exception text is included.
@@ -1632,10 +1642,11 @@ class KubeClient:
         revision = created_metadata.get("resourceVersion")
         if not isinstance(uid, str) or not uid or not isinstance(revision, str) or not revision:
             return result
+        if "generation" in created_metadata and not _is_generation(created_metadata["generation"]):
+            return result
         result.update(accepted=True, changed=True, reason="ok", uid=uid, resource_version=revision)
-        generation = created_metadata.get("generation")
-        if isinstance(generation, int) and not isinstance(generation, bool):
-            result.update(generation=generation, generation_reported=True)
+        if "generation" in created_metadata:
+            result.update(generation=created_metadata["generation"], generation_reported=True)
         return result
 
     def api_resource_served(self, group: str, version: str, resource_name: str) -> StrictReadOutcome:

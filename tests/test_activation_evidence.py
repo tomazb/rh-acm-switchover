@@ -8,7 +8,7 @@ checked against the state file at the instant of each mutation.
 import copy
 import json
 import logging
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -24,6 +24,7 @@ from lib.constants import (
     RESTORE_PASSIVE_SYNC_NAME,
 )
 from lib.exceptions import FatalError
+from lib.kube_client import KubeClient
 from lib.run_record import RunRecord
 from lib.strict_read import StrictReadOutcome
 from lib.utils import Phase, StateManager
@@ -614,6 +615,43 @@ class TestPassivePatchAcceptance:
             return dict(result, generation=None, generation_reported=False)
 
         hub.json_patch_custom_resource_guarded = patch_without_generation
+        _activation(hub, state, "passive_patch")._apply_migration_mutation()
+        assert RunRecord(state).migration_backups()["restore"]["generation"] == 4
+
+    @staticmethod
+    def _through_the_kube_client(hub, response_metadata):
+        """Serve the fake's accepted PATCH response through the real KubeClient response parsing."""
+        original = hub.json_patch_custom_resource_guarded
+
+        def patch_through_kube_client(name, **kwargs):
+            result = original(name, **kwargs)
+            if not result["accepted"]:
+                return result
+            metadata = {k: v for k, v in hub.acm[name]["metadata"].items() if k != "generation"}
+            body = {"kind": "Restore", "metadata": dict(metadata, **response_metadata)}
+            with ExitStack() as stack:
+                for target in ("config.new_client_from_config", "config.load_kube_config", "client.CustomObjectsApi"):
+                    stack.enter_context(patch(f"lib.kube_client.{target}"))
+                client = KubeClient(context="secondary-hub", dry_run=False)
+            client._api_client.call_api = Mock(return_value=Mock(data=json.dumps(body).encode("utf-8")))
+            return client.json_patch_custom_resource_guarded(name, **kwargs)
+
+        hub.json_patch_custom_resource_guarded = patch_through_kube_client
+
+    @pytest.mark.parametrize("generation", [True, "2"], ids=["boolean", "string"])
+    def test_a_malformed_response_generation_records_no_applied_evidence(self, state, generation):
+        """Codex pre-PR finding 3: a present invalid generation is never the omitted-generation fallback."""
+        hub = _hub(state)
+        self._through_the_kube_client(hub, {"generation": generation})
+        with pytest.raises(FatalError, match=r"not accepted \(malformed_response\)"):
+            _activation(hub, state, "passive_patch")._apply_migration_mutation()
+        assert RunRecord(state).migration_backups()["restore"]["generation"] is None
+        assert _journal_on_disk(state)["restore"]["generation"] is None
+
+    @pytest.mark.parametrize("response_metadata", [{}, {"generation": 4}], ids=["omitted", "integer"])
+    def test_an_omitted_or_integer_response_generation_binds_through_the_kube_client(self, state, response_metadata):
+        hub = _hub(state)
+        self._through_the_kube_client(hub, response_metadata)
         _activation(hub, state, "passive_patch")._apply_migration_mutation()
         assert RunRecord(state).migration_backups()["restore"]["generation"] == 4
 

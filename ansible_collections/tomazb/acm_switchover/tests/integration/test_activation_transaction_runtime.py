@@ -362,6 +362,18 @@ def test_a_credentials_backup_replaced_before_the_final_list_issues_zero_patch(r
     assert retry.journal == frozen.journal
 
 
+@pytest.mark.parametrize("generation", [True, "2"], ids=["boolean", "string"])
+def test_a_malformed_response_generation_records_no_applied_evidence(run_activation, hub, generation):
+    """Codex pre-PR finding 3: a present invalid generation is never the omitted-generation fallback."""
+    hub.patch_response_metadata = {"generation": generation}
+    run = run_activation("passive_patch", hub)
+    assert run.completed.returncode != 0
+    assert "The guarded patch of restore-acm-passive-sync was not accepted (malformed_response)" in run.output
+    assert "ACTIVATION_TRANSACTION=ok" not in run.output
+    assert [request["method"] for request in hub.writes] == ["PATCH"]
+    assert run.journal is not None and run.journal["restore"]["generation"] is None
+
+
 # --- completion evidence (8c) -------------------------------------------------------------------
 
 

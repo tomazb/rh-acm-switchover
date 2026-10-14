@@ -2960,16 +2960,18 @@ class TestGuardedRestoreJsonPatch:
             "generation_reported": True,
         }
 
-    @pytest.mark.parametrize("generation", [None, "7", True, 7.0])
-    def test_a_missing_or_non_integer_generation_is_reported_never_invented(self, kube_client, generation):
-        metadata = {"uid": "3f0c2a4e-uid", "resourceVersion": "48300"}
-        if generation is not None:
-            metadata["generation"] = generation
-        self._accepted(kube_client, metadata)
+    def test_an_omitted_generation_is_reported_never_invented(self, kube_client):
+        self._accepted(kube_client, {"uid": "3f0c2a4e-uid", "resourceVersion": "48300"})
         result = self._patch(kube_client)
         assert result["accepted"] is True
         assert result["generation"] is None
         assert result["generation_reported"] is False
+
+    @pytest.mark.parametrize("generation", [None, "7", "2", True, False, 7.0, 0, -1, [7], {"value": 7}])
+    def test_a_present_but_invalid_generation_is_a_malformed_response(self, kube_client, generation):
+        """C section 5.1 recovers only an omitted generation; a present invalid one is malformed (J section 1b)."""
+        self._accepted(kube_client, {"uid": "3f0c2a4e-uid", "resourceVersion": "48300", "generation": generation})
+        assert self._patch(kube_client) == self._MALFORMED_IDENTITY
 
     _MALFORMED_IDENTITY = {
         "accepted": False,
@@ -3309,6 +3311,16 @@ class TestGuardedRestoreCreate:
         result = self._create(kube_client)
         assert result["accepted"] is True
         assert result["generation"] is None and result["generation_reported"] is False
+
+    @pytest.mark.parametrize("generation", [None, "7", "2", True, False, 7.0, 0, -1, [7], {"value": 7}])
+    def test_a_present_but_invalid_generation_is_a_malformed_response(self, kube_client, generation):
+        kube_client.custom_api.create_namespaced_custom_object = Mock(
+            return_value=self._created(uid="u-1", resourceVersion="10", generation=generation)
+        )
+        result = self._create(kube_client)
+        assert (result["accepted"], result["http_accepted"], result["changed"]) == (False, True, False)
+        assert (result["reason"], result["uid"], result["resource_version"]) == ("malformed_response", None, None)
+        assert (result["generation"], result["generation_reported"]) == (None, False)
 
     @pytest.mark.parametrize(
         "metadata",
