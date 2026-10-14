@@ -2880,11 +2880,12 @@ class TestPostActivationMigrationEvidence:
         assert code in state.state["errors"][-1]["error"]
         assert _stored_journal(tmp_path) == journal
 
-    def test_an_invalid_journal_refuses_before_any_work(self, tmp_path):
+    @pytest.mark.parametrize("dry_run", [False, True], ids=["execute", "dry-run"])
+    def test_an_invalid_journal_refuses_before_any_work(self, tmp_path, dry_run):
         state = _evidence_state(tmp_path, dict(COMPLETED_JOURNAL, waiver=False))
         secondary = _strict_secondary(*EVIDENCE_NAMES)
 
-        assert _evidence_verifier(state, secondary).verify() is False
+        assert _evidence_verifier(state, secondary, dry_run=dry_run).verify() is False
 
         secondary.list_managed_clusters_strict.assert_not_called()
         assert "invalid" in state.state["errors"][-1]["error"]

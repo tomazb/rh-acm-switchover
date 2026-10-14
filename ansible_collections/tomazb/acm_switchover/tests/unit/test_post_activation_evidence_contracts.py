@@ -127,3 +127,12 @@ def test_b2_a_completed_marker_is_honoured_only_with_its_evidence():
     assert names.index("Require the evidence a completed post_activation marker claims") < names.index(
         "Run post_activation phase"
     )
+
+
+def test_an_invalid_journal_is_refused_in_every_mode_before_the_dry_run_result():
+    block = _phase_block()["block"]
+    names = [task.get("name") for task in block]
+    refusal = names.index("Refuse an invalid recorded migration journal")
+    assert names.index("Guard the post_activation role entry") < refusal
+    assert refusal < names.index("Publish dry-run post activation result")
+    assert "mode" not in str(block[refusal]["when"])

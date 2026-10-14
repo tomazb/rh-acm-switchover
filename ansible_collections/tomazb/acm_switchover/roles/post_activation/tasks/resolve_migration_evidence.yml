@@ -18,15 +18,6 @@
     _acm_has_journal: >-
       {{ (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal')) is not none }}
 
-- name: Refuse an invalid recorded migration journal
-  ansible.builtin.fail:
-    msg: >-
-      The recorded migration journal is invalid and blocks post-activation. Repair the checkpoint, or
-      start a new migration with the full checkpoint reset (checkpoint.reset).
-  when: >-
-    (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal_outcome', 'absent'))
-    not in ['absent', 'valid']
-
 - name: Require the completed migration journal of an executing run
   tomazb.acm_switchover.acm_migration_evidence:
     operation: require_completed_restore

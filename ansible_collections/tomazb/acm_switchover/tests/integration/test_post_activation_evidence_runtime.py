@@ -320,3 +320,22 @@ def test_w1_the_readiness_wait_stops_at_the_first_ready_poll(run_post_activation
     assert run.completed.returncode == 0, run.output
     # Discovery, one readiness poll, and the cleanup read before and after.
     assert run.mc_reads == 4
+
+
+@pytest.mark.parametrize("mode", ["dry_run", "execute"])
+def test_an_invalid_recorded_journal_is_refused_in_every_mode(run_post_activation, hub, mode):
+    """As the Python CLI's dry run, a preview never reports an invalid journal as skipped."""
+    run = run_post_activation(hub, journal={"schema_version": 9}, mode=mode)
+    assert run.completed.returncode != 0
+    assert "The recorded migration journal is invalid and blocks post-activation" in run.output
+    assert hub.writes == []
+    assert run.journal == {"schema_version": 9}
+    if mode == "dry_run":
+        assert run.after == run.before
+
+
+def test_a_dry_run_with_a_valid_journal_still_previews(run_post_activation, hub):
+    run = run_post_activation(hub, mode="dry_run")
+    assert run.completed.returncode == 0, run.output
+    assert hub.writes == []
+    assert run.after == run.before

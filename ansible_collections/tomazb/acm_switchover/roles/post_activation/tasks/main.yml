@@ -53,6 +53,16 @@
       vars:
         _acm_role_entry_phase: post_activation
 
+    # As the Python CLI, in every mode: a preview never reports an invalid journal as skipped.
+    - name: Refuse an invalid recorded migration journal
+      ansible.builtin.fail:
+        msg: >-
+          The recorded migration journal is invalid and blocks post-activation. Repair the checkpoint, or
+          start a new migration with the full checkpoint reset (checkpoint.reset).
+      when: >-
+        (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal_outcome', 'absent'))
+        not in ['absent', 'valid']
+
     - name: Publish dry-run post activation result
       ansible.builtin.set_fact:
         acm_switchover_post_activation_result:
