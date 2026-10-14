@@ -80,9 +80,11 @@ oc scale deployment observability-observatorium-api \
 > activation fail closed if no sync-enabled passive Restore exists, even one
 > named `restore-acm-passive-sync`.
 >
-> **Benign `FinishedWithErrors`:** activation only tolerates this phase when
-> the message matches `ManagedCluster <name> already available`. Any other
-> message is treated as a failure.
+> **Benign `FinishedWithErrors`:** only the pre-activation readiness check
+> tolerates this phase, and only when every message matches
+> `ManagedCluster <name> already available`. Activation completion requires
+> `Finished` (or `Enabled` for the patched passive Restore) with every
+> required Velero child Restore `Completed`.
 
 ### Check passive sync status
 
@@ -234,6 +236,8 @@ oc get restore.cluster.open-cluster-management.io restore-acm-activate \
 
 # If Phase=FinishedWithErrors, the controller may still see the deleted restore as active.
 # Confirm the passive restore is fully gone, then delete/recreate restore-acm-activate.
+# Note: the automation refuses a restore-acm-activate it did not record creating and records
+# concrete Backup names; finish a manual activation manually or start a fresh run with --reset-state.
 ```
 
 ---
