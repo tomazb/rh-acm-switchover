@@ -266,6 +266,31 @@ def test_validate_all_does_not_swallow_unexpected_rbac_errors():
 
 
 @pytest.mark.unit
+def test_validate_all_malformed_argocd_crd_read_becomes_validation_failure():
+    """A malformed Applications CRD read is neither absence nor a crash: it is a structured,
+    critical RBAC validation failure."""
+    from lib.kube_client import _json_object
+
+    validator = _build_validator(argocd_manage=False)
+    # What KubeClient.get_custom_resource raises for a JSON `null` body.
+    validator.primary.get_custom_resource.side_effect = lambda **_kwargs: _json_object(None)
+
+    with patch("modules.preflight_coordinator.validate_rbac_permissions") as validate_rbac, patch(
+        "modules.preflight_coordinator.AutoImportStrategyValidator"
+    ) as auto_import_validator:
+        auto_import_validator.return_value.run = Mock()
+        passed, _config = validator.validate_all()
+
+    assert passed is False
+    validate_rbac.assert_not_called()
+    rbac_results = [r for r in validator.reporter.results if r["check"] == "RBAC Permissions"]
+    assert len(rbac_results) == 1
+    assert rbac_results[0]["passed"] is False
+    assert rbac_results[0]["critical"] is True
+    assert "malformed" in rbac_results[0]["message"]
+
+
+@pytest.mark.unit
 def test_validate_all_api_error_in_namespace_exists_becomes_validation_failure():
     """API errors from namespace_exists() should become structured RBAC failures, not uncaught exceptions (F6)."""
     validator = _build_validator(argocd_manage=False)

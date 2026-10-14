@@ -1253,6 +1253,79 @@ class TestManagedClusterBackupValidator:
         assert warning_results[0]["critical"] is True  # Critical failure - clusters will be lost
         assert "cluster-after" in warning_results[0]["message"]
 
+    def test_a_malformed_cluster_read_is_a_critical_failure_not_a_pass(self, reporter, mock_kube_client):
+        """A ManagedCluster GET whose body is not a JSON object is a malformed response. It must
+        reach the critical-failure handler: treating it as a timestamp problem would abandon
+        the remaining clusters and report coverage as passed while a later cluster is lost."""
+        from lib.kube_client import _json_object
+
+        validator = ManagedClusterBackupValidator(reporter)
+        joined = {"status": {"conditions": [{"type": "ManagedClusterJoined", "status": "True"}]}}
+        mock_kube_client.list_custom_resources.side_effect = [
+            [
+                {"metadata": {"name": "cluster-malformed"}, **joined},
+                {"metadata": {"name": "cluster-after"}, **joined},
+            ],
+            [
+                {
+                    "metadata": {
+                        "name": "acm-managed-clusters-schedule-20251210100000",
+                        "creationTimestamp": "2025-12-10T10:00:00Z",
+                        "labels": {"cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"},
+                    },
+                    "status": {"phase": "Completed", "completionTimestamp": "2025-12-10T10:05:00Z"},
+                },
+            ],
+        ]
+
+        def get_cluster(group, version, plural, name):
+            if name == "cluster-malformed":
+                # What KubeClient.get_custom_resource raises for a JSON `null` body.
+                return _json_object(None)
+            return {"metadata": {"name": "cluster-after", "creationTimestamp": "2025-12-15T10:00:00Z"}}
+
+        mock_kube_client.get_custom_resource.side_effect = get_cluster
+
+        validator.run(mock_kube_client)
+
+        assert not any(result["passed"] for result in reporter.results)
+        assert any(result["critical"] and not result["passed"] for result in reporter.results)
+
+    def test_an_unparseable_cluster_timestamp_does_not_skip_later_clusters(self, reporter, mock_kube_client):
+        """A timestamp that cannot be parsed is skipped for that cluster only; the remaining
+        clusters are still compared against the backup."""
+        validator = ManagedClusterBackupValidator(reporter)
+        joined = {"status": {"conditions": [{"type": "ManagedClusterJoined", "status": "True"}]}}
+        mock_kube_client.list_custom_resources.side_effect = [
+            [
+                {"metadata": {"name": "cluster-bad-time"}, **joined},
+                {"metadata": {"name": "cluster-after"}, **joined},
+            ],
+            [
+                {
+                    "metadata": {
+                        "name": "acm-managed-clusters-schedule-20251210100000",
+                        "creationTimestamp": "2025-12-10T10:00:00Z",
+                        "labels": {"cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"},
+                    },
+                    "status": {"phase": "Completed", "completionTimestamp": "2025-12-10T10:05:00Z"},
+                },
+            ],
+        ]
+
+        def get_cluster(group, version, plural, name):
+            if name == "cluster-bad-time":
+                return {"metadata": {"name": name, "creationTimestamp": "not-a-timestamp"}}
+            return {"metadata": {"name": name, "creationTimestamp": "2025-12-15T10:00:00Z"}}
+
+        mock_kube_client.get_custom_resource.side_effect = get_cluster
+
+        validator.run(mock_kube_client)
+
+        after = [r for r in reporter.results if r["check"] == "Clusters imported after backup"]
+        assert len(after) == 1 and after[0]["passed"] is False and after[0]["critical"] is True
+        assert "cluster-after" in after[0]["message"]
+
     def test_no_warning_when_all_clusters_before_backup(self, reporter, mock_kube_client):
         """Test that no warning is issued when all clusters existed before the backup."""
         validator = ManagedClusterBackupValidator(reporter)

@@ -11,7 +11,7 @@ import logging
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -630,8 +630,11 @@ class TestPassivePatchAcceptance:
             metadata = {k: v for k, v in hub.acm[name]["metadata"].items() if k != "generation"}
             body = {"kind": "Restore", "metadata": dict(metadata, **response_metadata)}
             with ExitStack() as stack:
-                for target in ("config.new_client_from_config", "config.load_kube_config", "client.CustomObjectsApi"):
+                for target in ("config.load_kube_config", "client.CustomObjectsApi"):
                     stack.enter_context(patch(f"lib.kube_client.{target}"))
+                # The pre-37 client shape: no `param_serialize`, so requests take the legacy `call_api` path.
+                api_client = MagicMock(name="api_client", spec=["call_api", "configuration"])
+                stack.enter_context(patch("lib.kube_client.config.new_client_from_config", return_value=api_client))
                 client = KubeClient(context="secondary-hub", dry_run=False)
             client._api_client.call_api = Mock(return_value=Mock(data=json.dumps(body).encode("utf-8")))
             return client.json_patch_custom_resource_guarded(name, **kwargs)

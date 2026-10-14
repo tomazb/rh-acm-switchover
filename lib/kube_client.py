@@ -5,13 +5,15 @@ This module includes comprehensive input validation for Kubernetes resource
 names, namespaces, and other parameters to improve security and reliability.
 """
 
+import contextlib
 import errno
 import functools
 import json
 import logging
 import socket
+import sys
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional, TypedDict
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
@@ -44,11 +46,22 @@ from lib.constants import (
     STRICT_READ_REASON_OBJECT_NOT_FOUND,
     STRICT_READ_REASON_READ_FAILED,
 )
-from lib.exceptions import FatalError, PreconditionConflict, TargetDisappeared
+from lib.exceptions import (
+    FatalError,
+    MalformedResponseError,
+    PreconditionConflict,
+    TargetDisappeared,
+)
 from lib.strict_read import StrictReadOutcome, StrictReadStatus
 from lib.validation import InputValidator, ValidationError
 
 logger = logging.getLogger("acm_switchover")
+
+
+class RequestTimeoutKwargs(TypedDict):
+    """The per-request timeout keyword accepted by every generated Kubernetes API method."""
+
+    _request_timeout: int
 
 
 def is_retryable_error(exception: BaseException) -> bool:
@@ -95,6 +108,57 @@ def _should_retry(exception: BaseException) -> bool:
     if not isinstance(exception, Exception):
         return False
     return is_retryable_error(exception)
+
+
+def _json_object(response: object) -> Dict[str, Any]:
+    """Narrow a custom-object API response to the JSON object it must be.
+
+    The generated custom-object methods return the decoded JSON body as-is. Anything but an
+    object is a malformed response: it is raised as an error, never read as absence.
+    """
+    if not isinstance(response, dict):
+        raise MalformedResponseError(
+            f"Malformed Kubernetes API response: expected a JSON object, got {type(response).__name__}"
+        )
+    return response
+
+
+_UNSUPPORTED_CONTENT_TYPE_REASON = "Unsupported content type"
+
+
+@contextlib.contextmanager
+def _undecodable_body_is_malformed() -> Iterator[None]:
+    """Report a 2xx body the installed client cannot decode as a malformed response.
+
+    What the generated custom-object methods raise for such a body differs by client version:
+    37.x raises `JSONDecodeError` for invalid JSON and a status-0 `ApiException` for a content
+    type it does not deserialize, and every supported version raises `UnicodeDecodeError` for
+    invalid UTF-8. None of them is an HTTP error, so none may reach a handler written for one.
+    Before 37.x the client decodes an HTTP error's body while raising it, so an undecodable
+    error body surfaces as `UnicodeDecodeError` too; that one is re-raised as the `ApiException`
+    it interrupted, and only that one: an exception the caller was already handling when the
+    request started (say, the 409 a create is reconciling) is not this response's outcome.
+    """
+    inherited = sys.exc_info()[1]
+    try:
+        yield
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        http_error = exc.__context__
+        if (
+            isinstance(http_error, ApiException)
+            and http_error is not inherited
+            and isinstance(http_error.status, int)
+            and http_error.status > 0
+            and not 200 <= http_error.status <= 299
+        ):
+            raise http_error from None
+        raise MalformedResponseError(
+            f"Malformed Kubernetes API response: undecodable body ({type(exc).__name__})"
+        ) from exc
+    except ApiException as exc:
+        if exc.status == 0 and str(exc.reason).startswith(_UNSUPPORTED_CONTENT_TYPE_REASON):
+            raise MalformedResponseError(f"Malformed Kubernetes API response: {exc.reason}") from exc
+        raise
 
 
 def _sanitize_created_resource_for_compare(resource: Any) -> Any:
@@ -359,9 +423,62 @@ class KubeClient:
             request_timeout,
         )
 
-    def _request_timeout_kwargs(self, request_timeout: Optional[int] = None) -> Dict[str, int]:
+    def _request_timeout_kwargs(self, request_timeout: Optional[int] = None) -> RequestTimeoutKwargs:
         """Return Kubernetes client kwargs with an explicit per-request timeout."""
         return {"_request_timeout": (request_timeout if request_timeout is not None else self.request_timeout)}
+
+    def _request_bytes(
+        self,
+        method: str,
+        path: str,
+        *,
+        timeout: int,
+        path_params: Optional[Dict[str, str]] = None,
+        header_params: Optional[Dict[str, str]] = None,
+        body: Any = None,
+    ) -> bytes:
+        """Send one authenticated request through `self._api_client` and return the raw body.
+
+        The body is returned undecoded so callers validate it themselves. A non-2xx response
+        raises the client's own `ApiException`; a timeout or a failure reading the body
+        raises too, so nothing here is ever mistaken for an answer.
+
+        The transport API changed inside the supported dependency range. kubernetes 37.x
+        prepares the request with `param_serialize` and its `call_api` only sends it, without
+        raising on HTTP errors; older clients take everything in one `call_api` whose
+        deserialization keyword was itself renamed (`response_type` on 28.x/31.x,
+        `response_types_map` on 36.x), so it is bypassed with `_preload_content=False`. The
+        generation is detected by feature, never by version string.
+        """
+        if hasattr(self._api_client, "param_serialize"):
+            prepared = self._api_client.param_serialize(
+                method,
+                path,
+                path_params=path_params,
+                header_params=dict(header_params or {}),
+                body=body,
+                auth_settings=["BearerToken"],
+            )
+            raw = self._api_client.call_api(*prepared, _request_timeout=timeout)
+            data = raw.read()
+            if not 200 <= raw.status <= 299:
+                # Raises the status-specific ApiException, as the generated API methods do.
+                self._api_client.response_deserialize(raw, response_types_map={})
+            return data
+        # The pre-37 `call_api` signature; 37.x's type annotations do not describe it.
+        legacy_call_api: Callable[..., Any] = self._api_client.call_api
+        raw = legacy_call_api(
+            path,
+            method,
+            path_params=path_params,
+            header_params=dict(header_params or {}),
+            body=body,
+            auth_settings=["BearerToken"],
+            _preload_content=False,
+            _return_http_data_only=True,
+            _request_timeout=timeout,
+        )
+        return raw.data
 
     def _discovery_serves(self, group: str, version: str, resource_name: str) -> StrictReadOutcome:
         """Positively determine whether one kind is served, or fail closed.
@@ -378,20 +495,11 @@ class KubeClient:
         """
         path = f"/apis/{group}/{version}" if group else f"/api/{version}"
         try:
-            # The raw body is decoded here rather than by the client. `call_api`'s
-            # deserialization keyword was renamed inside the supported dependency range
-            # (`response_type` on kubernetes 28.x/31.x, `response_types_map` on 36.x), so asking
-            # the client to deserialize would make this prover version-dependent — the exact
-            # failure mode it exists to avoid. These four keywords bind on the whole range.
-            raw = self._api_client.call_api(
-                path,
-                "GET",
-                auth_settings=["BearerToken"],
-                _preload_content=False,
-                _return_http_data_only=True,
-                _request_timeout=self.request_timeout,
-            )
-            response = json.loads(raw.data.decode("utf-8"))
+            # The raw body is decoded here rather than by the client: client-side
+            # deserialization differs across the supported dependency range, which would make
+            # this prover version-dependent — the exact failure mode it exists to avoid.
+            data = self._request_bytes("GET", path, timeout=self.request_timeout)
+            response = json.loads(data.decode("utf-8"))
         except Exception:
             # Every failure mode is unverifiable discovery: an API error, a timeout, a TLS or
             # transport failure, and an undecodable body are all indistinguishable from an
@@ -637,12 +745,12 @@ class KubeClient:
             )
             return {"metadata": {"name": name, "namespace": namespace}, "data": data}
 
-        create_body = {
-            "apiVersion": "v1",
-            "kind": "ConfigMap",
-            "metadata": {"name": name, "namespace": namespace},
-            "data": data,
-        }
+        create_body = client.V1ConfigMap(
+            api_version="v1",
+            kind="ConfigMap",
+            metadata=client.V1ObjectMeta(name=name, namespace=namespace),
+            data=data,
+        )
         try:
             result = self.core_v1.create_namespaced_config_map(
                 namespace=namespace,
@@ -733,15 +841,16 @@ class KubeClient:
         """
         self._validate_resource_inputs(namespace, name, "Route")
 
-        route = self.custom_api.get_namespaced_custom_object(
-            group="route.openshift.io",
-            version="v1",
-            namespace=namespace,
-            plural="routes",
-            name=name,
-            **self._request_timeout_kwargs(),
-        )
-        return route.get("spec", {}).get("host")
+        with _undecodable_body_is_malformed():
+            route = self.custom_api.get_namespaced_custom_object(
+                group="route.openshift.io",
+                version="v1",
+                namespace=namespace,
+                plural="routes",
+                name=name,
+                **self._request_timeout_kwargs(),
+            )
+        return _json_object(route).get("spec", {}).get("host")
 
     @api_call(not_found_value=None, log_on_error=False)
     def get_custom_resource(
@@ -770,24 +879,25 @@ class KubeClient:
         """
         self._validate_resource_inputs(namespace, name, "custom resource")
 
-        if namespace:
-            resource = self.custom_api.get_namespaced_custom_object(
-                group=group,
-                version=version,
-                namespace=namespace,
-                plural=plural,
-                name=name,
-                **self._request_timeout_kwargs(),
-            )
-        else:
-            resource = self.custom_api.get_cluster_custom_object(
-                group=group,
-                version=version,
-                plural=plural,
-                name=name,
-                **self._request_timeout_kwargs(),
-            )
-        return resource
+        with _undecodable_body_is_malformed():
+            if namespace:
+                resource = self.custom_api.get_namespaced_custom_object(
+                    group=group,
+                    version=version,
+                    namespace=namespace,
+                    plural=plural,
+                    name=name,
+                    **self._request_timeout_kwargs(),
+                )
+            else:
+                resource = self.custom_api.get_cluster_custom_object(
+                    group=group,
+                    version=version,
+                    plural=plural,
+                    name=name,
+                    **self._request_timeout_kwargs(),
+                )
+        return _json_object(resource)
 
     def _get_custom_resource_raw(
         self,
@@ -801,26 +911,29 @@ class KubeClient:
         self._validate_resource_inputs(namespace, name, "custom resource")
 
         try:
-            if namespace:
-                return self.custom_api.get_namespaced_custom_object(
-                    group=group,
-                    version=version,
-                    namespace=namespace,
-                    plural=plural,
-                    name=name,
-                    **self._request_timeout_kwargs(),
-                )
-            return self.custom_api.get_cluster_custom_object(
-                group=group,
-                version=version,
-                plural=plural,
-                name=name,
-                **self._request_timeout_kwargs(),
-            )
+            with _undecodable_body_is_malformed():
+                if namespace:
+                    resource = self.custom_api.get_namespaced_custom_object(
+                        group=group,
+                        version=version,
+                        namespace=namespace,
+                        plural=plural,
+                        name=name,
+                        **self._request_timeout_kwargs(),
+                    )
+                else:
+                    resource = self.custom_api.get_cluster_custom_object(
+                        group=group,
+                        version=version,
+                        plural=plural,
+                        name=name,
+                        **self._request_timeout_kwargs(),
+                    )
         except ApiException as e:
             if e.status == 404:
                 return None
             raise
+        return _json_object(resource)
 
     @retry_api_call_advisory
     def get_custom_resource_advisory(
@@ -904,27 +1017,28 @@ class KubeClient:
                 remaining = max_items - len(items)
 
             try:
-                if namespace:
-                    result = self.custom_api.list_namespaced_custom_object(
-                        group=group,
-                        version=version,
-                        namespace=namespace,
-                        plural=plural,
-                        label_selector=label_selector,
-                        _continue=continue_token,
-                        limit=remaining,
-                        **self._request_timeout_kwargs(),
-                    )
-                else:
-                    result = self.custom_api.list_cluster_custom_object(
-                        group=group,
-                        version=version,
-                        plural=plural,
-                        label_selector=label_selector,
-                        _continue=continue_token,
-                        limit=remaining,
-                        **self._request_timeout_kwargs(),
-                    )
+                with _undecodable_body_is_malformed():
+                    if namespace:
+                        result = self.custom_api.list_namespaced_custom_object(
+                            group=group,
+                            version=version,
+                            namespace=namespace,
+                            plural=plural,
+                            label_selector=label_selector,
+                            _continue=continue_token,
+                            limit=remaining,
+                            **self._request_timeout_kwargs(),
+                        )
+                    else:
+                        result = self.custom_api.list_cluster_custom_object(
+                            group=group,
+                            version=version,
+                            plural=plural,
+                            label_selector=label_selector,
+                            _continue=continue_token,
+                            limit=remaining,
+                            **self._request_timeout_kwargs(),
+                        )
             except ApiException as e:
                 if e.status == 404:
                     return []
@@ -932,6 +1046,7 @@ class KubeClient:
                     raise
                 raise
 
+            result = _json_object(result)
             page_items = result.get("items", [])
 
             # If we have a limit, only take what we need
@@ -1314,30 +1429,32 @@ class KubeClient:
         )
 
         try:
-            if namespace:
-                logger.debug("KUBE_CLIENT: Calling patch_namespaced_custom_object...")
-                result = self.custom_api.patch_namespaced_custom_object(
-                    group=group,
-                    version=version,
-                    namespace=namespace,
-                    plural=plural,
-                    name=name,
-                    body=patch,
-                    **self._request_timeout_kwargs(),
-                )
-                logger.debug("KUBE_CLIENT: patch_namespaced_custom_object returned successfully")
-            else:
-                logger.debug("KUBE_CLIENT: Calling patch_cluster_custom_object...")
-                result = self.custom_api.patch_cluster_custom_object(
-                    group=group,
-                    version=version,
-                    plural=plural,
-                    name=name,
-                    body=patch,
-                    **self._request_timeout_kwargs(),
-                )
-                logger.debug("KUBE_CLIENT: patch_cluster_custom_object returned successfully")
+            with _undecodable_body_is_malformed():
+                if namespace:
+                    logger.debug("KUBE_CLIENT: Calling patch_namespaced_custom_object...")
+                    result = self.custom_api.patch_namespaced_custom_object(
+                        group=group,
+                        version=version,
+                        namespace=namespace,
+                        plural=plural,
+                        name=name,
+                        body=patch,
+                        **self._request_timeout_kwargs(),
+                    )
+                    logger.debug("KUBE_CLIENT: patch_namespaced_custom_object returned successfully")
+                else:
+                    logger.debug("KUBE_CLIENT: Calling patch_cluster_custom_object...")
+                    result = self.custom_api.patch_cluster_custom_object(
+                        group=group,
+                        version=version,
+                        plural=plural,
+                        name=name,
+                        body=patch,
+                        **self._request_timeout_kwargs(),
+                    )
+                    logger.debug("KUBE_CLIENT: patch_cluster_custom_object returned successfully")
 
+            result = _json_object(result)
             logger.debug(
                 "KUBE_CLIENT: Patch result keys: %s",
                 list(result.keys()) if result else "None",
@@ -1426,9 +1543,11 @@ class KubeClient:
             return result
 
         try:
-            raw = self._api_client.call_api(
-                "/apis/{group}/{version}/namespaces/{namespace}/{plural}/{name}",
+            # The body is read inside this boundary: a failure reading it leaves the outcome
+            # unknown, so it must land before any acceptance.
+            body = self._request_bytes(
                 "PATCH",
+                "/apis/{group}/{version}/namespaces/{namespace}/{plural}/{name}",
                 path_params={
                     "group": CLUSTER_BACKUP_API_GROUP,
                     "version": CLUSTER_BACKUP_API_VERSION,
@@ -1438,14 +1557,8 @@ class KubeClient:
                 },
                 header_params={"Content-Type": GUARDED_PATCH_CONTENT_TYPE, "Accept": "application/json"},
                 body=patch_ops,
-                auth_settings=["BearerToken"],
-                _preload_content=False,
-                _return_http_data_only=True,
-                _request_timeout=(timeout_seconds if timeout_seconds is not None else self.request_timeout),
+                timeout=(timeout_seconds if timeout_seconds is not None else self.request_timeout),
             )
-            # The body is read lazily (`_preload_content=False`); a failure reading it leaves
-            # the outcome unknown, so it stays inside this boundary, before any acceptance.
-            body = raw.data
         except ApiException as exc:
             # Status only: API error bodies echo request content.
             if exc.status in GUARDED_PATCH_CONFLICT_STATUSES:
@@ -1709,24 +1822,25 @@ class KubeClient:
     ) -> Dict:
         """Create a custom resource once, reconciling named 409 conflicts."""
         try:
-            if namespace:
-                result = self.custom_api.create_namespaced_custom_object(
-                    group=group,
-                    version=version,
-                    namespace=namespace,
-                    plural=plural,
-                    body=body,
-                    **self._request_timeout_kwargs(),
-                )
-            else:
-                result = self.custom_api.create_cluster_custom_object(
-                    group=group,
-                    version=version,
-                    plural=plural,
-                    body=body,
-                    **self._request_timeout_kwargs(),
-                )
-            return result
+            with _undecodable_body_is_malformed():
+                if namespace:
+                    result = self.custom_api.create_namespaced_custom_object(
+                        group=group,
+                        version=version,
+                        namespace=namespace,
+                        plural=plural,
+                        body=body,
+                        **self._request_timeout_kwargs(),
+                    )
+                else:
+                    result = self.custom_api.create_cluster_custom_object(
+                        group=group,
+                        version=version,
+                        plural=plural,
+                        body=body,
+                        **self._request_timeout_kwargs(),
+                    )
+            return _json_object(result)
         except ApiException as e:
             if e.status == 409:
                 if not resource_name:
