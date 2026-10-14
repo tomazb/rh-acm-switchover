@@ -64,16 +64,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The Python CLI now works with the `kubernetes` Python client 37.x as well as 36.x and earlier
-  (#336). Client 37 split request preparation (`param_serialize`) out of `call_api`, which
-  rejects the older keywords. Before this fix, every strict-read discovery probe returned
-  `discovery_unverifiable`, and every guarded Restore JSON Patch reported `unverifiable` (not
-  accepted) without sending a request. Both now go through one adapter that detects the client
-  by feature, not by version. On client 37 a non-2xx response still raises the client's own
-  `ApiException`, so the 404 and 409/412/422 handling is unchanged. ConfigMap and bootstrap
-  Secret creates now send typed `V1ConfigMap`/`V1Secret` bodies, and the code type-checks under
-  37's inline annotations. A custom-object response that is not a JSON object now raises an
-  error instead of being read. The collection needed no change.
+- The Python CLI now works with the `kubernetes` Python client 37.x without dropping older
+  clients (#336). It was tested with 29.0.0, 36.0.3 and 37.0.1. The installable client versions
+  are those that also satisfy the rest of the dependency set: 28.x requires `urllib3<2`, which
+  conflicts with the `urllib3>=2.6.3` requirement. Client 37 split request preparation
+  (`param_serialize`) out of `call_api`, which rejects the older keywords. Before this fix,
+  every strict-read discovery probe returned `discovery_unverifiable`, and every guarded Restore
+  JSON Patch reported `unverifiable` (not accepted) without sending a request. Both now go
+  through one adapter that detects the client by feature, not by version. On client 37 a
+  non-2xx response still raises the client's own `ApiException`, so the 404 and 409/412/422
+  handling is unchanged. ConfigMap and bootstrap Secret creates now send typed
+  `V1ConfigMap`/`V1Secret` bodies; the Secret is converted whole by the client, so every
+  manifest field is kept. The code type-checks under 37's inline annotations. A custom-object
+  response that is not a JSON object now raises `MalformedResponseError` instead of being read.
+  Backup-coverage preflight reports it as a critical failure: it no longer swallows it as a
+  timestamp problem, and a bad timestamp no longer skips the remaining clusters. RBAC preflight
+  reports it as a critical RBAC validation failure. The collection needed no change.
 
 - A corrupt collection checkpoint now keeps blocking (R4-04 PR B, aligned with Python). A
   checkpoint that is not valid JSON (including invalid UTF-8) or whose top level is not a JSON object is copied to

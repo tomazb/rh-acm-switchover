@@ -15,7 +15,7 @@ from lib.constants import (
     MANAGED_CLUSTER_PLURAL,
     OBSERVABILITY_NAMESPACE,
 )
-from lib.exceptions import ValidationError
+from lib.exceptions import MalformedResponseError, ValidationError
 from lib.kube_client import KubeClient
 from lib.rbac_validator import validate_rbac_permissions
 
@@ -211,6 +211,17 @@ class PreflightValidator:
                 )
                 logger.warning(
                     "RBAC validation could not complete due to an API error. "
+                    "You can skip this check with --skip-rbac-validation."
+                )
+            except MalformedResponseError as e:
+                self.reporter.add_result(
+                    "RBAC Permissions",
+                    False,
+                    f"RBAC validation failed due to a malformed API response: {e}",
+                    critical=True,
+                )
+                logger.warning(
+                    "RBAC validation could not complete due to a malformed API response. "
                     "You can skip this check with --skip-rbac-validation."
                 )
             else:

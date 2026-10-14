@@ -44,7 +44,12 @@ from lib.constants import (
     STRICT_READ_REASON_OBJECT_NOT_FOUND,
     STRICT_READ_REASON_READ_FAILED,
 )
-from lib.exceptions import FatalError, PreconditionConflict, TargetDisappeared
+from lib.exceptions import (
+    FatalError,
+    MalformedResponseError,
+    PreconditionConflict,
+    TargetDisappeared,
+)
 from lib.strict_read import StrictReadOutcome, StrictReadStatus
 from lib.validation import InputValidator, ValidationError
 
@@ -110,7 +115,9 @@ def _json_object(response: object) -> Dict[str, Any]:
     object is a malformed response: it is raised as an error, never read as absence.
     """
     if not isinstance(response, dict):
-        raise TypeError(f"Malformed Kubernetes API response: expected a JSON object, got {type(response).__name__}")
+        raise MalformedResponseError(
+            f"Malformed Kubernetes API response: expected a JSON object, got {type(response).__name__}"
+        )
     return response
 
 

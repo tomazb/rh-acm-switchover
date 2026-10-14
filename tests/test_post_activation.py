@@ -1044,7 +1044,6 @@ stringData:
         }
 
         mock_v1 = Mock()
-        mock_v1.api_client = ApiClient()
         mock_apps_v1 = Mock()
         mock_v1.patch_namespaced_secret.side_effect = ApiException(status=404, reason="Not Found")
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))

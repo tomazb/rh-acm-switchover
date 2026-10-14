@@ -32,6 +32,7 @@ from lib.constants import (
     STRICT_READ_REASON_OBJECT_NOT_FOUND,
     STRICT_READ_REASON_READ_FAILED,
 )
+from lib.exceptions import MalformedResponseError
 from lib.kube_client import KubeClient, api_call, is_retryable_error
 from lib.strict_read import StrictReadOutcome, StrictReadStatus
 
@@ -793,7 +794,7 @@ class TestCustomObjectResponseShape:
         method, invoke = self._CALLS[call]
         getattr(mock_k8s_apis["custom_api"], method).return_value = response
 
-        with pytest.raises(TypeError, match="expected a JSON object"):
+        with pytest.raises(MalformedResponseError, match="expected a JSON object"):
             invoke(kube_client)
 
 

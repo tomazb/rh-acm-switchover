@@ -6,12 +6,14 @@ Post-activation verification module for ACM switchover.
 
 import base64
 import binascii
+import json
 import logging
 import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
-from typing import Dict, List, Optional, Tuple
+from types import SimpleNamespace
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import yaml
 from kubernetes import client, config
@@ -60,27 +62,18 @@ from lib.waiter import WaitConditionResult, wait_for_condition
 logger = logging.getLogger("acm_switchover")
 
 
-def _secret_create_body(doc: Dict) -> client.V1Secret:
-    """The import manifest's Secret document as a typed create body.
+def _secret_create_body(doc: Dict[str, Any]) -> client.V1Secret:
+    """The import manifest's Secret document, whole, as a typed create body.
 
-    Carries every top-level Secret field and the metadata a create sets. kubernetes 37.x
-    validates a mapping body into this same model before sending it.
+    The client's own model conversion builds it, so no field is selected by hand. kubernetes
+    37.x models provide `from_dict`, the validation its generated methods apply to a mapping
+    body; older clients only deserialize response-shaped input.
     """
-    metadata = doc.get("metadata") or {}
-    return client.V1Secret(
-        api_version=doc.get("apiVersion"),
-        kind=doc.get("kind"),
-        metadata=client.V1ObjectMeta(
-            name=metadata.get("name"),
-            namespace=metadata.get("namespace"),
-            labels=metadata.get("labels"),
-            annotations=metadata.get("annotations"),
-        ),
-        type=doc.get("type"),
-        data=doc.get("data"),
-        string_data=doc.get("stringData"),
-        immutable=doc.get("immutable"),
-    )
+    if hasattr(client.V1Secret, "from_dict"):
+        return client.V1Secret.from_dict(doc)
+    # The pre-37 `deserialize(response, response_type)` signature; 37.x's annotations differ.
+    legacy_deserialize: Callable[..., Any] = client.ApiClient().deserialize
+    return legacy_deserialize(SimpleNamespace(data=json.dumps(doc)), "V1Secret")
 
 
 class PostActivationVerification:

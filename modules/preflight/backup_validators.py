@@ -675,28 +675,38 @@ class ManagedClusterBackupValidator(BaseValidator):
             backup_completion_time = latest_backup.get("status", {}).get("completionTimestamp", "")
             clusters_after_backup = []
 
+            backup_time = None
             if backup_completion_time:
                 try:
                     # Parse backup completion time (ISO 8601 format)
                     backup_time = datetime.fromisoformat(backup_completion_time.replace("Z", "+00:00"))
-
-                    # Check each joined cluster's creation time against backup time
-                    for cluster_name in joined_clusters:
-                        cluster_info = primary.get_custom_resource(
-                            group=MANAGED_CLUSTER_API_GROUP,
-                            version=MANAGED_CLUSTER_API_VERSION,
-                            plural=MANAGED_CLUSTER_PLURAL,
-                            name=cluster_name,
-                        )
-                        if cluster_info:
-                            cluster_creation = cluster_info.get("metadata", {}).get("creationTimestamp", "")
-                            if cluster_creation:
-                                cluster_time = datetime.fromisoformat(cluster_creation.replace("Z", "+00:00"))
-                                if cluster_time > backup_time:
-                                    clusters_after_backup.append(cluster_name)
                 except (ValueError, TypeError):
-                    # If timestamp parsing fails, log warning but continue
                     logger.warning("Could not compare managed cluster timestamps.")
+
+            if backup_time is not None:
+                # Check each joined cluster's creation time against backup time. Only timestamp
+                # parsing is guarded here: an API failure or a malformed response must reach the
+                # critical-failure handler below, never stop the comparison and pass.
+                for cluster_name in joined_clusters:
+                    cluster_info = primary.get_custom_resource(
+                        group=MANAGED_CLUSTER_API_GROUP,
+                        version=MANAGED_CLUSTER_API_VERSION,
+                        plural=MANAGED_CLUSTER_PLURAL,
+                        name=cluster_name,
+                    )
+                    if not cluster_info:
+                        continue
+                    cluster_creation = cluster_info.get("metadata", {}).get("creationTimestamp", "")
+                    if not cluster_creation:
+                        continue
+                    try:
+                        cluster_time = datetime.fromisoformat(cluster_creation.replace("Z", "+00:00"))
+                        newer = cluster_time > backup_time
+                    except (ValueError, TypeError):
+                        logger.warning("Could not compare the creation timestamp of managed cluster %s.", cluster_name)
+                        continue
+                    if newer:
+                        clusters_after_backup.append(cluster_name)
 
             # Report failure if clusters were imported after the backup
             if clusters_after_backup:
