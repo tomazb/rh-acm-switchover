@@ -1,0 +1,20 @@
+---
+# One strict complete read of the destination hub's ManagedCluster inventory through the
+# activation role's R4-03 seam, published in the fact named by _acm_mc_fact. A failed,
+# partial or malformed read fails here: it is never an empty inventory.
+
+- name: Read the ManagedCluster inventory strictly
+  ansible.builtin.include_tasks: "{{ role_path }}/../activation/tasks/strict_read.yml"
+  vars:
+    _acm_read:
+      key: managedclusters
+      read_mode: list
+      api_version: cluster.open-cluster-management.io/v1
+      kind: ManagedCluster
+      resource_name: managedclusters
+    _acm_read_fact: "{{ _acm_mc_fact }}"
+
+- name: Refuse an unverified ManagedCluster inventory
+  ansible.builtin.fail:
+    msg: "ManagedCluster inventory read failed ({{ lookup('ansible.builtin.vars', _acm_mc_fact).read_status }})"
+  when: lookup('ansible.builtin.vars', _acm_mc_fact).read_status != 'ok'

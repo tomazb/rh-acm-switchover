@@ -19,7 +19,6 @@ from lib.constants import (
     EXPECTED_MANAGED_CLUSTER_COUNT_KEY,
     EXPECTED_MANAGED_CLUSTER_NAMES_KEY,
     MANAGED_CLUSTER_EXPECTATION_KEY,
-    PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME,
     RESUME_START_PHASE_KEY,
     STATE_KEY_RESUME_SUMMARY,
 )
@@ -31,6 +30,7 @@ from lib.teardown_record import (
     validate,
     validate_stored,
 )
+from lib.utils import Phase
 
 _KEY_PRIMARY_VERSION = "primary_version"
 _KEY_PRIMARY_OBS_DETECTED = "primary_observability_detected"
@@ -49,6 +49,10 @@ _KEY_NEW_BACKUP_NAME = "post_switchover_backup_name"
 _KEY_ARCHIVED_RESTORES = "archived_restores"
 _KEY_TEARDOWN_RECORDS = "decommission_teardown_records"
 _KEY_MIGRATION_BACKUPS = "migration_backups"
+_KEY_ARGOCD_REPAUSE_REQUIRED = "argocd_repause_required"
+_REPAUSE_FIELDS = frozenset({"failed_phase", "recorded_at"})
+# The phases a journal rescue records (lib/argocd_resume), as the collection's JOURNAL_RESCUE_PHASES.
+_REPAUSE_PHASES = frozenset(phase.value for phase in (Phase.ACTIVATION, Phase.POST_ACTIVATION, Phase.FINALIZATION))
 
 _UNSET = object()
 # Presence sentinel for strict reads: a stored null must not look like "never written".
@@ -328,16 +332,6 @@ class RunRecord:
         """Audit trail of restore resources deleted before enabling backups."""
         self._set(_KEY_ARCHIVED_RESTORES, restores)
 
-    # -- pre-activation velero restore: activation internal --
-
-    def record_pre_activation_velero_restore(self, name: Optional[str]) -> None:
-        """Velero restore name seen before the activation patch; None clears
-        the new-restore-signal requirement."""
-        self._set(PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME, name)
-
-    def pre_activation_velero_restore(self) -> Optional[str]:
-        return self._get(PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME, None)
-
     # -- resume summary: workflow -> test-release tooling / collection --
 
     def record_resume_start_phase(self, phase_name: str) -> None:
@@ -429,6 +423,55 @@ class RunRecord:
         validate_journal_transition(self.migration_backups(), candidate)
         self._set(_KEY_MIGRATION_BACKUPS, candidate)
         self._state.flush_state()
+
+    # -- Argo CD re-pause obligation: phase-failure rescue writes, retry discharges --
+
+    def record_argocd_repause_required(self, failed_phase: str, at_iso: str) -> None:
+        """A rescue under a migration journal is about to resume Argo CD auto-sync.
+
+        Written by lib/argocd_resume before any resume mutation, forced durable on
+        return; a failed write propagates and the caller must not resume. The
+        failed operational phase positions the retry (PR C decisions amendment
+        section 2.2). Kept outside the migration journal.
+        """
+        self._set(_KEY_ARGOCD_REPAUSE_REQUIRED, {"failed_phase": failed_phase, "recorded_at": at_iso})
+        self._state.flush_state()
+
+    def argocd_repause_required(self) -> Optional[str]:
+        """The failed phase a retry must re-pause Argo CD before resuming, or None.
+
+        A present value of any other shape raises, as the collection's reader does: exactly
+        the fields `failed_phase` and `recorded_at`, a journal rescue phase, and a non-empty
+        `recorded_at`. The obligation is never read as discharged.
+        """
+        stored = self._get(_KEY_ARGOCD_REPAUSE_REQUIRED)
+        if stored is None:
+            return None
+        if (
+            not isinstance(stored, dict)
+            or set(stored) != _REPAUSE_FIELDS
+            or not isinstance(stored["failed_phase"], str)
+            or stored["failed_phase"] not in _REPAUSE_PHASES
+            or not isinstance(stored["recorded_at"], str)
+            or not stored["recorded_at"]
+        ):
+            raise StateStructureError(f"{_KEY_ARGOCD_REPAUSE_REQUIRED} is malformed")
+        return stored["failed_phase"]
+
+    def clear_argocd_repause_required(self) -> None:
+        """The retry re-paused Argo CD; discharge the obligation with one staged durable write.
+
+        The clear is staged and flushed once. If that write fails or is interrupted,
+        the obligation is staged back as pending state, so the interruption save and
+        the exit flush write the marker rather than the clear.
+        """
+        previous = self._get(_KEY_ARGOCD_REPAUSE_REQUIRED)
+        try:
+            self._state._stage_config(_KEY_ARGOCD_REPAUSE_REQUIRED, None)
+            self._state.flush_state()
+        except BaseException:
+            self._state._stage_config(_KEY_ARGOCD_REPAUSE_REQUIRED, previous)
+            raise
 
     # -- lifecycle view: read side for report writers and show_state --
 

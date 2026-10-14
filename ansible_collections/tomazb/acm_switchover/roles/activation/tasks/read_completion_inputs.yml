@@ -1,0 +1,31 @@
+---
+# The strict reads one completion proof takes: the journaled ACM Restore, the complete
+# Velero Restore list of its namespace, and every frozen Backup.
+
+- name: Read the journaled Restore strictly
+  ansible.builtin.include_tasks: strict_read.yml
+  vars:
+    _acm_read:
+      key: "restore/{{ _acm_journal.restore.name }}"
+      read_mode: get
+      api_version: cluster.open-cluster-management.io/v1beta1
+      kind: Restore
+      resource_name: restores
+      namespace: open-cluster-management-backup
+      name: "{{ _acm_journal.restore.name }}"
+    _acm_read_fact: _acm_completion_restore_read
+
+- name: List the Velero Restores strictly
+  ansible.builtin.include_tasks: strict_read.yml
+  vars:
+    _acm_read:
+      key: velero_restores
+      read_mode: list
+      api_version: velero.io/v1
+      kind: Restore
+      resource_name: restores
+      namespace: open-cluster-management-backup
+    _acm_read_fact: _acm_completion_velero_read
+
+- name: Re-read the frozen Backups for the completion proof
+  ansible.builtin.include_tasks: read_frozen_backups.yml

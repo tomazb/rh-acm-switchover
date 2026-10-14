@@ -59,7 +59,13 @@ from lib.gitops_detector import GitOpsCollector
 from lib.report_artifacts import validate_report_artifact_directory
 from lib.run_record import HubFacts, MigrationJournalResetRefused, RunRecord
 from lib.utils import StateIdentityMismatch
-from lib.validation import InputValidator, ValidationError, validate_distinct_hub_identities
+from lib.validation import (
+    InputValidator,
+    ValidationError,
+    managed_cluster_expectation_waiver_request,
+    migration_cleanup_repair_request,
+    validate_distinct_hub_identities,
+)
 from modules import (
     Decommission,
     Finalization,
@@ -218,8 +224,81 @@ Examples:
         help=(
             "Minimum number of non-local ManagedClusters expected on the secondary hub after restore. "
             "Activation fails if fewer than N clusters are found. Default derives the expected count "
-            "from primary preflight; explicit 0 allows an empty hub."
+            "from primary preflight. An explicit N is an additional floor: the expected names derived "
+            "by preflight stay enforced, and explicit 0 allows an empty hub only when none were derived."
         ),
+    )
+    parser.add_argument(
+        "--skip-managed-cluster-expectations",
+        action="store_true",
+        help=(
+            "Request an audited waiver of the expected ManagedCluster name check. Requires "
+            "--managed-cluster-expectation-waiver-scope, -actor and -reason. It never waives the count "
+            "floor and is rejected when there is no expected name to waive in its scope."
+        ),
+    )
+    parser.add_argument(
+        "--managed-cluster-expectation-waiver-scope",
+        choices=["activation", "post_activation", "both"],
+        default=None,
+        help="Name check the waiver covers: activation, post_activation, or both.",
+    )
+    parser.add_argument(
+        "--managed-cluster-expectation-waiver-actor",
+        default=None,
+        metavar="TEXT",
+        help="Who is requesting the waiver (non-empty).",
+    )
+    parser.add_argument(
+        "--managed-cluster-expectation-waiver-reason",
+        default=None,
+        metavar="TEXT",
+        help="Why the waiver is requested (non-empty).",
+    )
+    parser.add_argument(
+        "--managed-cluster-expectation-waiver-request-id",
+        default=None,
+        metavar="TEXT",
+        help="Optional change or ticket reference for the waiver.",
+    )
+    parser.add_argument(
+        "--repair-migration-cleanup",
+        action="store_true",
+        help=(
+            "Acknowledge a migration Restore cleanup that requires recovery. This is an audited operator "
+            "acknowledgement, not evidence of a delete, and requires every --cleanup-repair-* option."
+        ),
+    )
+    parser.add_argument(
+        "--cleanup-repair-actor",
+        default=None,
+        metavar="TEXT",
+        help="Who is acknowledging the cleanup repair (non-empty).",
+    )
+    parser.add_argument(
+        "--cleanup-repair-reason",
+        default=None,
+        metavar="TEXT",
+        help="Why the cleanup repair is acknowledged (non-empty).",
+    )
+    parser.add_argument(
+        "--cleanup-repair-evidence",
+        action="append",
+        default=None,
+        metavar="TEXT",
+        help="Reference to evidence the operator inspected; repeat for each reference (at least one).",
+    )
+    parser.add_argument(
+        "--cleanup-repair-run-id",
+        default=None,
+        metavar="UUID",
+        help="Run ID of the migration journal being repaired.",
+    )
+    parser.add_argument(
+        "--cleanup-repair-operation-id",
+        default=None,
+        metavar="UUID",
+        help="Operation ID of the Restore cleanup being repaired.",
     )
 
     # State management
@@ -415,6 +494,7 @@ def _build_switchover_runner_hooks() -> operation_runners.SwitchoverRunnerHooks:
         fail_phase=_fail_phase,
         fail_unexpected_phase_state=_fail_unexpected_phase_state,
         on_phase_failure=_attempt_argocd_resume_on_failure,
+        rescue_repause=_repause_argocd_after_rescue,
     )
 
 
@@ -428,6 +508,7 @@ def _build_restore_only_runner_hooks() -> operation_runners.RestoreOnlyRunnerHoo
         fail_phase=_fail_phase,
         fail_unexpected_phase_state=_fail_unexpected_phase_state,
         on_phase_failure=_attempt_argocd_resume_on_failure,
+        rescue_repause=_repause_argocd_after_rescue,
     )
 
 
@@ -492,6 +573,8 @@ def _run_restore_only_argocd_pause(
     targeting only the secondary hub. Uses the same state keys (argocd_run_id,
     argocd_paused_apps) so --argocd-resume-only works after restore completes.
     """
+    if not _require_waivable_recorded_expectation(args, state, logger):
+        return False
     if not getattr(args, "argocd_manage", False):
         return True
     if state.is_step_completed(STEP_PAUSE_ARGOCD_APPS):
@@ -593,6 +676,17 @@ def _attempt_argocd_resume_on_failure(
         logger,
         kube_client_factory=KubeClient,
     )
+
+
+def _repause_argocd_after_rescue(
+    args: argparse.Namespace,
+    state: StateManager,
+    primary: Optional[KubeClient],
+    secondary: Optional[KubeClient],
+    logger: logging.Logger,
+) -> bool:
+    """Re-pause Argo CD before a retry's first phase when a journal rescue resumed it."""
+    return argocd_resume.repause_argocd_after_rescue(args, state, primary, secondary, logger)
 
 
 def _fail_phase(state: StateManager, message: str, logger: logging.Logger) -> bool:
@@ -714,6 +808,7 @@ def _run_phase_preflight(
         count=len(expected_managed_cluster_names),
         mode=expectation_mode,
     )
+    _require_waivable_expectation(args, expected_managed_cluster_names)
 
     if not getattr(args, "skip_gitops_check", False):
         _report_argocd_acm_impact(
@@ -803,6 +898,8 @@ def _run_phase_primary_prep(
     secondary: KubeClient,
     logger: logging.Logger,
 ) -> bool:
+    if not _require_waivable_recorded_expectation(args, state, logger):
+        return False
     _log_phase_banner("PHASE 2: PRIMARY HUB PREPARATION", logger)
     state.set_phase(Phase.PRIMARY_PREP)
 
@@ -845,6 +942,7 @@ def _run_phase_activation(
         min_managed_clusters=min_managed_clusters,
         expected_managed_cluster_names=expected_names,
         enforce_expected_managed_cluster_names=enforce_expected_names,
+        managed_cluster_expectation_waiver=managed_cluster_expectation_waiver_request(args),
     )
 
     if not activation.activate():
@@ -874,6 +972,7 @@ def _run_phase_post_activation(
         min_managed_clusters=min_managed_clusters,
         expected_managed_cluster_names=expected_names,
         enforce_expected_managed_cluster_names=enforce_expected_names,
+        managed_cluster_expectation_waiver=managed_cluster_expectation_waiver_request(args),
     )
 
     if not verification.verify():
@@ -893,6 +992,8 @@ def _resolve_managed_cluster_expectation(
     expected_names = list(expectation.names)
     expected_count = expectation.count
 
+    _require_waivable_expectation(args, expected_names)
+
     if raw_min is None:
         if expectation.mode is None:
             raise SwitchoverError(
@@ -904,9 +1005,41 @@ def _resolve_managed_cluster_expectation(
         if expectation.mode == MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY and expected_count == 0 and not expected_names:
             return 1, [], False
         return expected_count, expected_names, bool(expected_names)
-    if raw_min == 0:
-        return 0, [], False
-    return int(raw_min), [], False
+    # AC25: an explicit minimum is an additional count floor; recorded names stay enforced.
+    return int(raw_min), expected_names, bool(expected_names)
+
+
+def _require_waivable_recorded_expectation(
+    args: argparse.Namespace, state: StateManager, logger: logging.Logger
+) -> bool:
+    """Check a requested waiver against the recorded expectation before a resumed phase does any work.
+
+    A dry-run refusal is logged and returns False instead of raising, because the
+    raised error is recorded into the state file and a preview writes nothing.
+    """
+    if managed_cluster_expectation_waiver_request(args) is None:
+        return True
+    try:
+        _require_waivable_expectation(args, list(RunRecord(state).managed_cluster_expectation().names))
+    except SwitchoverError as exc:
+        if not getattr(args, "dry_run", False):
+            raise
+        logger.error("%s", exc)
+        return False
+    return True
+
+
+def _require_waivable_expectation(args: argparse.Namespace, expected_names: list[str]) -> None:
+    """Reject a requested waiver when the recorded expectation has no name to waive.
+
+    Python records one expected-name set for both the activation and post-activation
+    checks, so every waiver scope is covered by the same set.
+    """
+    if managed_cluster_expectation_waiver_request(args) is not None and not expected_names:
+        raise SwitchoverError(
+            "waiver_expected_names_empty: --skip-managed-cluster-expectations was requested, but no expected "
+            "ManagedCluster name is recorded to waive"
+        )
 
 
 def _run_phase_finalization(
@@ -916,6 +1049,8 @@ def _run_phase_finalization(
     secondary: KubeClient,
     logger: logging.Logger,
 ) -> bool:
+    if not _require_waivable_recorded_expectation(args, state, logger):
+        return False
     _log_phase_banner("PHASE 5: FINALIZATION", logger)
     state.set_phase(Phase.FINALIZATION)
 
@@ -934,6 +1069,7 @@ def _run_phase_finalization(
         disable_observability_on_secondary=getattr(args, "disable_observability_on_secondary", False),
         restore_only=is_restore_only,
         acknowledge_observability_not_migrated=getattr(args, "acknowledge_observability_not_migrated", False),
+        migration_cleanup_repair=migration_cleanup_repair_request(args),
     )
 
     if not finalization.finalize():
@@ -1269,6 +1405,9 @@ def _bind_runtime_hub_identities(
     except (runtime_bootstrap.HubIdentityVerificationError, ValidationError) as exc:
         raise _PhysicalHubIdentityRefusal(str(exc)) from None
 
+    # #332: a --force reset this run would refuse over a migration journal refuses before
+    # identity is persisted, so the refused state file stays unchanged.
+    operation_runners.refuse_implicit_journal_reset(args, state, logging.getLogger("acm_switchover"))
     state.ensure_hub_identities(
         hub_identities,
         allow_legacy_backfill=getattr(args, "force", False),

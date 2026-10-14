@@ -136,11 +136,12 @@ def test_cleanup_auto_import_annotations_patches_managed_clusters():
     text = (POST_ACTIVATION_TASKS / "cleanup_auto_import_annotations.yml").read_text()
 
     managed_cluster_queries = [
-        task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"
+        task for task in tasks if task.get("ansible.builtin.include_tasks") == "read_managed_clusters.yml"
     ]
     patch_tasks = [task for task in tasks if "kubernetes.core.k8s" in task]
 
-    assert managed_cluster_queries, "cleanup_auto_import_annotations.yml must query ManagedCluster resources"
+    # R4-04 Task 9: both reads (before the patch and the verification after it) are strict.
+    assert len(managed_cluster_queries) == 2, "cleanup must read ManagedClusters strictly before and after"
     assert patch_tasks, "cleanup_auto_import_annotations.yml must patch stale ManagedCluster annotations"
     assert (
         "disable-auto-import" in text

@@ -41,6 +41,30 @@ Purpose: Triage the existing Python-oriented test suite into collection-era test
 | `ansible_collections/tomazb/acm_switchover/tests/unit/test_mco_teardown_runtime.py` | collection unit | Collection MultiClusterObservability teardown runtime rows, including the destination-observability gate's pass/block/acknowledge outcomes and the finalization adapter |
 | `ansible_collections/tomazb/acm_switchover/tests/unit/test_uid_guarded_delete.py` | collection unit | `acm_uid_guarded_delete` module unit behavior: namespace-scope validation, fresh discovery, finite budgets, poll-sleep capping, DELETE-404 final proof |
 | `ansible_collections/tomazb/acm_switchover/tests/integration/test_uid_guarded_delete_runtime.py` | collection integration | `acm_uid_guarded_delete` against a fake Kubernetes API, including the UID-precondition wire body and the `no_log` fixture contract |
+| `tests/test_migration_evidence.py` | Python unit | R4-04 pure migration-evidence model edge cases |
+| `tests/test_migration_evidence_parity.py` | parity | R4-04 pure model in both form factors over `tests/fixtures/r4_04_migration_evidence_vectors.json` |
+| `tests/test_restore_guarded_mutation_parity.py` | parity | Guarded Restore patch, delete and create: request, classification, dry-run/check-mode prediction |
+| `tests/test_managed_cluster_expectation_parity.py` | parity | Additive ManagedCluster count/name expectation (Python resolver against the collection resolver task file) |
+| `tests/test_activation_evidence.py` | Python unit | Python activation transaction: freeze, guarded mutations, completion evidence, resume, dry-run |
+| `tests/test_activation_transaction_parity.py` | parity | Activation transaction outcomes, mutations and journals agree over identical fake hubs |
+| `tests/test_post_activation_transaction_parity.py` | parity | Post-activation evidence (readiness, name check or waiver, completion) agrees |
+| `tests/test_restore_cleanup_transaction_parity.py` | parity | Restore-cleanup transaction, recovery, repair and gates agree |
+| `tests/test_argocd_rescue_journal.py` | Python unit | Argo CD resume-on-failure under a migration journal: re-pause marker, no rewind, re-pause on retry |
+| `tests/test_restore_discovery.py` | Python unit | Strict passive sync Restore discovery |
+| `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_migration_evidence.py` | collection unit | `acm_migration_evidence` adapter: operations, refusal messages, templating floor |
+| `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/action/test_checkpoint_rescue_safeguards.py` | collection unit | `checkpoint_phase` journal safeguards: re-pause marker, refused pre-freeze resets, rewind fence |
+| `ansible_collections/tomazb/acm_switchover/tests/unit/test_activation_transaction_contracts.py` | collection unit | Activation role wiring of the transaction (guarded module only, freeze before mutation, `completed_at` last) |
+| `ansible_collections/tomazb/acm_switchover/tests/unit/test_post_activation_evidence_contracts.py` | collection unit | Post-activation role wiring of the evidence writes and the completed-marker refusal |
+| `ansible_collections/tomazb/acm_switchover/tests/unit/test_finalization_cleanup_contracts.py` | collection unit | Finalization role wiring of the cleanup transaction and the old-hub evidence gate |
+| `ansible_collections/tomazb/acm_switchover/tests/unit/test_journal_rescue_contracts.py` | collection unit | Playbook rescue and retry re-pause wiring under a journal |
+| `ansible_collections/tomazb/acm_switchover/tests/unit/test_migration_evidence_operator_inputs.py` | collection unit | Waiver and cleanup-repair operator inputs |
+| `ansible_collections/tomazb/acm_switchover/tests/unit/test_validate_mode_preview_contract.py` | collection unit | A direct `validate` entry into a mutating role mutates nothing |
+| `ansible_collections/tomazb/acm_switchover/tests/integration/test_activation_transaction_runtime.py` | collection integration | Shipped activation transaction tasks against a fake destination hub |
+| `ansible_collections/tomazb/acm_switchover/tests/integration/test_post_activation_evidence_runtime.py` | collection integration | Shipped post-activation evidence tasks, execute and check mode |
+| `ansible_collections/tomazb/acm_switchover/tests/integration/test_finalization_cleanup_runtime.py` | collection integration | Shipped Restore-cleanup transaction, recovery and repair tasks |
+| `ansible_collections/tomazb/acm_switchover/tests/integration/test_journal_rescue_runtime.py` | collection integration | Shipped-playbook Argo CD rescue under a journal |
+| `ansible_collections/tomazb/acm_switchover/tests/integration/test_role_entry_guard_runtime.py` | collection integration | Direct role entry guards: input validation, checkpoint requirement, recorded expectation |
+| `ansible_collections/tomazb/acm_switchover/tests/integration/test_checkpoint_rewind_fence_runtime.py` | collection integration | The `reset_from` rewind fence across real task workers |
 | `tests/test_scripts_integration.py` | partial drop, partial bridge docs | only bridge behavior retained |
 | `tests/test_rbac_validator.py` | parity, collection unit | SSAR shape, dry-run validation, and manifest/policy alignment are shared contracts |
 | `tests/release/adapters/test_python_cli.py` | release adapter | Python scenario commands must pass `--report-dir` |
@@ -61,6 +85,8 @@ Current boundary tests should verify:
 - Restore-only, Argo CD, discovery, decommission, RBAC bootstrap, checkpoint, report artifacts, and runtime parity now have collection unit, release adapter, or shared parity tests.
 - Bridge-only script behavior remains tested only where the script is still the supported bridge, especially full hub context enumeration through `scripts/discover-hub.sh`.
 - New parity-sensitive changes should add tests in both the Python suite and `ansible_collections/tomazb/acm_switchover/tests/unit/` unless the parity matrix records an approved divergence.
+- R4-04 migration evidence is covered by the rows above at the static, fake-backed and
+  fixture-backed tiers only. None of it is live certification evidence.
 - The distinct-physical-hub guard has Python unit/runtime coverage in
   `tests/test_validation.py`, `tests/test_main.py`, and
   `tests/test_validation_parity.py`; collection parity, integration, and

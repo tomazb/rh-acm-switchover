@@ -1,142 +1,523 @@
 ---
-- name: Build activation plan
-  tomazb.acm_switchover.acm_restore_info:
-    method: "{{ acm_switchover_operation.method }}"
-    activation_method: "{{ acm_switchover_operation.activation_method | default('patch') }}"
-    allow_conventional_name_fallback: "{{ acm_switchover_operation.allow_conventional_passive_restore_fallback | default(false) }}"
-    restores: >-
-      {{
-        [acm_switchover_restore_selection.restore]
-        if (acm_switchover_restore_selection is defined and acm_switchover_restore_selection.restore is not none)
-        else (acm_activation_restores_info.resources | default([]))
-      }}
-    backup_name: latest
-  register: acm_restore_activation_plan
+# R4-04 activation migration-evidence transaction (plan Task 8), the collection mirror of
+# SecondaryActivation._apply_migration_mutation. The journal is frozen and durably
+# persisted through checkpoint_phase status: update before any Restore mutation,
+# including the preparatory passive-sync deletion; a resumed run reuses and revalidates
+# it and never refreezes. Each guarded mutation is one request whose outcome is judged
+# only by acm_migration_evidence from `accepted`/`reason`, never `http_accepted`. A
+# preview (dry_run, validate or check mode) performs the same strict reads and
+# predictions, issues no Restore mutation and writes no journal transition.
 
-- name: Apply activation patch to Restore resource
-  kubernetes.core.k8s:
-    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.secondary.context }}"
-    state: patched
-    api_version: cluster.open-cluster-management.io/v1beta1
-    kind: Restore
-    name: "{{ acm_restore_activation_plan.operation.patch_target.name | default(acm_restore_activation_plan.restore.metadata.name) }}"
-    namespace: "{{ acm_restore_activation_plan.operation.patch_target.namespace | default(acm_restore_activation_plan.restore.metadata.namespace | default('open-cluster-management-backup')) }}"
-    definition: "{{ acm_restore_activation_plan.operation.patch }}"
-  register: _restore_patch_result
-  when:
-    - acm_restore_activation_plan.operation.action == 'patch'
-    - acm_restore_activation_plan.operation.patch is not none
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-
-- name: Verify activation patch is observed on Restore resource
-  kubernetes.core.k8s_info:
-    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.secondary.context }}"
-    api_version: cluster.open-cluster-management.io/v1beta1
-    kind: Restore
-    name: "{{ acm_restore_activation_plan.operation.patch_target.name | default(acm_restore_activation_plan.restore.metadata.name) }}"
-    namespace: "{{ acm_restore_activation_plan.operation.patch_target.namespace | default(acm_restore_activation_plan.restore.metadata.namespace | default('open-cluster-management-backup')) }}"
-  register: _restore_patch_verify
-  retries: 10
-  delay: 3
-  until: >-
-    {{
-      (_restore_patch_verify.resources | default([]) | length) > 0
-      and (
-        ((_restore_patch_verify.resources | first | default({})).get('metadata', {}).get('resourceVersion', ''))
-        != (acm_restore_activation_plan.restore.metadata.resourceVersion | default(''))
-      )
-      and (
-        ((_restore_patch_verify.resources | first | default({})).get('spec', {}).get('veleroManagedClustersBackupName', ''))
-        == 'latest'
-      )
-    }}
-  when:
-    - acm_restore_activation_plan.operation.action == 'patch'
-    - acm_restore_activation_plan.operation.patch is not none
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-
-- name: Delete source Restore before activation create
-  kubernetes.core.k8s:
-    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.secondary.context }}"
-    state: absent
-    api_version: cluster.open-cluster-management.io/v1beta1
-    kind: Restore
-    name: "{{ acm_restore_activation_plan.operation.delete_restore.name }}"
-    namespace: "{{ acm_restore_activation_plan.operation.delete_restore.namespace | default('open-cluster-management-backup') }}"
-  register: _restore_delete_result
-  when:
-    - acm_restore_activation_plan.operation.delete_restore is defined
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-
-- name: Wait for deleted Restore to disappear
-  kubernetes.core.k8s_info:
-    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.secondary.context }}"
-    api_version: cluster.open-cluster-management.io/v1beta1
-    kind: Restore
-    name: "{{ acm_restore_activation_plan.operation.delete_restore.name }}"
-    namespace: "{{ acm_restore_activation_plan.operation.delete_restore.namespace | default('open-cluster-management-backup') }}"
-  register: _restore_delete_wait
-  retries: 60
-  delay: 30
-  until: (_restore_delete_wait.resources | default([]) | length) == 0
-  when:
-    - acm_restore_activation_plan.operation.delete_restore is defined
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-
-- name: Create activation Restore resource when required
-  when:
-    - acm_restore_activation_plan.operation.create_restore is defined
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+- name: Freeze the migration journal when none is recorded
+  when: not (_acm_has_journal | bool)
   block:
-    - name: Create planned Restore resource
-      kubernetes.core.k8s:
-        kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-        context: "{{ acm_switchover_hubs.secondary.context }}"
-        state: present
-        definition: "{{ acm_restore_activation_plan.operation.create_restore }}"
-      register: _restore_create_result
-  rescue:
-    - name: Roll back passive sync Restore when activation create fails
-      kubernetes.core.k8s:
-        kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-        context: "{{ acm_switchover_hubs.secondary.context }}"
-        state: present
-        definition: "{{ acm_restore_activation_plan.operation.rollback_restore }}"
-      register: _restore_rollback_result
-      when: acm_restore_activation_plan.operation.rollback_restore is defined
-      ignore_errors: true
+    - name: List the destination ACM Restores for the freeze
+      ansible.builtin.include_tasks: strict_read.yml
+      vars:
+        _acm_read:
+          key: restores
+          read_mode: list
+          api_version: cluster.open-cluster-management.io/v1beta1
+          kind: Restore
+          resource_name: restores
+          namespace: open-cluster-management-backup
+        _acm_read_fact: _acm_freeze_restores_read
+      when: _acm_mutation_kind == 'passive_patch'
 
-    - name: Re-raise activation create failure with rollback context
-      ansible.builtin.fail:
-        msg: >-
-          Failed to create activation restore
-          {{ acm_restore_activation_plan.operation.create_restore.metadata.name }}:
-          {{ ansible_failed_result.msg | default('unknown failure') }}.{% if acm_restore_activation_plan.operation.rollback_restore is defined %}
-          {% if (_restore_rollback_result is defined) and not (_restore_rollback_result.failed | default(false)) %}
-          Recreated passive sync restore
-          {{ acm_restore_activation_plan.operation.rollback_restore.metadata.name }}
-          as rollback.{% else %}
-          Rollback failed to recreate passive sync restore
-          {{ acm_restore_activation_plan.operation.rollback_restore.metadata.name }}.{% endif %}{% endif %}
+    - name: Discover the passive sync Restore for the freeze
+      tomazb.acm_switchover.acm_migration_evidence:
+        operation: passive_restore
+        inputs:
+          restores_read: "{{ _acm_freeze_restores_read }}"
+      register: _acm_freeze_discovery
+      when: _acm_mutation_kind == 'passive_patch'
+
+    - name: Read the passive sync Restore for the freeze
+      ansible.builtin.include_tasks: strict_read.yml
+      vars:
+        _acm_read:
+          key: "restore/{{ _acm_freeze_discovery.restore.metadata.name }}"
+          read_mode: get
+          api_version: cluster.open-cluster-management.io/v1beta1
+          kind: Restore
+          resource_name: restores
+          namespace: open-cluster-management-backup
+          name: "{{ _acm_freeze_discovery.restore.metadata.name }}"
+        _acm_read_fact: _acm_freeze_live_read
+      when:
+        - _acm_mutation_kind == 'passive_patch'
+        - _acm_freeze_discovery.restore is not none
+
+    - name: Read the one-shot Restore target for the freeze
+      ansible.builtin.include_tasks: strict_read.yml
+      vars:
+        _acm_read:
+          key: "restore/{{ _acm_one_shot_target }}"
+          read_mode: get
+          api_version: cluster.open-cluster-management.io/v1beta1
+          kind: Restore
+          resource_name: restores
+          namespace: open-cluster-management-backup
+          name: "{{ _acm_one_shot_target }}"
+        _acm_read_fact: _acm_freeze_target_read
+        _acm_one_shot_target: "{{ 'restore-acm-full' if _acm_mutation_kind == 'full_restore' else 'restore-acm-activate' }}"
+      when: _acm_mutation_kind != 'passive_patch'
+
+    - name: List the Velero Backups for the freeze
+      ansible.builtin.include_tasks: strict_read.yml
+      vars:
+        _acm_read:
+          key: backups
+          read_mode: list
+          api_version: velero.io/v1
+          kind: Backup
+          resource_name: backups
+          namespace: open-cluster-management-backup
+        _acm_read_fact: _acm_freeze_inventory_read
+
+    - name: Freeze the controller-predicted Backups into a migration journal
+      tomazb.acm_switchover.acm_migration_evidence:
+        operation: freeze
+        inputs:
+          kind: "{{ _acm_mutation_kind }}"
+          acm_minor: "{{ _acm_activation_minor.acm_minor }}"
+          inventory_read: "{{ _acm_freeze_inventory_read }}"
+          restores_read: "{{ _acm_freeze_restores_read | default(omit) }}"
+          live_read: "{{ _acm_freeze_live_read | default(omit) }}"
+          target_read: "{{ _acm_freeze_target_read | default(omit) }}"
+      register: _acm_freeze
+
+    - name: Persist the frozen migration journal before any Restore mutation
+      tomazb.acm_switchover.checkpoint_phase:
+        phase: activation
+        checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+        status: update
+        operational_data:
+          migration_backups: "{{ _acm_freeze.candidate }}"
+      when: not (_acm_preview | bool)
+
+    - name: Report the migration evidence a preview would journal
+      ansible.builtin.debug:
+        msg: "[DRY-RUN] Would journal the {{ _acm_mutation_kind }} migration evidence before mutation: {{ _acm_freeze.frozen }}"
+      when: _acm_preview | bool
+
+    - name: Continue from the frozen migration journal
+      ansible.builtin.set_fact:
+        _acm_journal: "{{ _acm_freeze.candidate }}"
+        _acm_has_journal: true
+
+- name: Require the migration journal to belong to this run
+  tomazb.acm_switchover.acm_migration_evidence:
+    operation: journal_matches
+    inputs:
+      journal: "{{ _acm_journal }}"
+      kind: "{{ _acm_mutation_kind }}"
+      acm_minor: "{{ _acm_activation_minor.acm_minor }}"
+
+- name: Discover the ACM Restore status subresource
+  ansible.builtin.include_tasks: strict_read.yml
+  vars:
+    _acm_read:
+      key: restores_status
+      read_mode: discover
+      api_version: cluster.open-cluster-management.io/v1beta1
+      kind: Restore
+      resource_name: restores/status
+    _acm_read_fact: _acm_status_discovery_read
+
+- name: Require the status subresource that lets generation guard the Restore spec
+  tomazb.acm_switchover.acm_migration_evidence:
+    operation: status_subresource
+    inputs:
+      discovery_read: "{{ _acm_status_discovery_read }}"
+
+# The journal, not a step marker, decides what the Restore mutation still owes: an
+# accepted mutation is only reconciled.
+- name: Decide whether the journaled Restore mutation is still owed
+  ansible.builtin.set_fact:
+    _acm_mutation_pending: >-
+      {{
+        (_acm_journal.restore.generation is none)
+        if _acm_mutation_kind == 'passive_patch'
+        else (_acm_journal.restore.uid is none)
+      }}
+
+- name: Apply the guarded passive_patch
+  when:
+    - _acm_mutation_kind == 'passive_patch'
+    - _acm_mutation_pending | bool
+  block:
+    - name: Read the passive sync Restore at the final pre-PATCH boundary
+      ansible.builtin.include_tasks: strict_read.yml
+      vars:
+        _acm_read:
+          key: "restore/{{ _acm_journal.restore.name }}"
+          read_mode: get
+          api_version: cluster.open-cluster-management.io/v1beta1
+          kind: Restore
+          resource_name: restores
+          namespace: open-cluster-management-backup
+          name: "{{ _acm_journal.restore.name }}"
+        _acm_read_fact: _acm_patch_live_read
+
+    - name: Re-read the frozen Backups before the PATCH
+      ansible.builtin.include_tasks: read_frozen_backups.yml
+
+    - name: List the Velero Backups for the hive/cluster credential prediction
+      ansible.builtin.include_tasks: strict_read.yml
+      vars:
+        _acm_read:
+          key: backups
+          read_mode: list
+          api_version: velero.io/v1
+          kind: Backup
+          resource_name: backups
+          namespace: open-cluster-management-backup
+        _acm_read_fact: _acm_patch_inventory_read
+
+    - name: Prove every precondition at the final pre-PATCH boundary
+      tomazb.acm_switchover.acm_migration_evidence:
+        operation: pre_patch
+        inputs:
+          journal: "{{ _acm_journal }}"
+          live_read: "{{ _acm_patch_live_read }}"
+          backup_reads: "{{ _acm_backup_reads }}"
+          inventory_read: "{{ _acm_patch_inventory_read }}"
+      register: _acm_pre_patch
+
+    - name: Patch the passive sync Restore under the UID, resourceVersion and value guard
+      tomazb.acm_switchover.acm_restore_guarded_mutation:
+        kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+        context: "{{ acm_switchover_hubs.secondary.context }}"
+        action: patch
+        api_version: cluster.open-cluster-management.io/v1beta1
+        kind: Restore
+        namespace: "{{ _acm_pre_patch.namespace }}"
+        name: "{{ _acm_pre_patch.name }}"
+        expected_uid: "{{ _acm_pre_patch.uid }}"
+        expected_resource_version: "{{ _acm_pre_patch.resource_version }}"
+        expected_managed_clusters_backup_name: "{{ _acm_pre_patch.expected_managed_clusters_backup_name }}"
+        replacement_managed_clusters_backup_name: latest
+      check_mode: "{{ _acm_preview | bool }}"
+      register: _acm_patch_result
+      failed_when: false
+      no_log: true
+
+    # Only the classification is passed on: the registered result also echoes the arguments.
+    - name: Classify the guarded PATCH outcome
+      ansible.builtin.set_fact:
+        _acm_patch_outcome: >-
+          {{
+            {
+              'accepted': _acm_patch_result.accepted | default(false),
+              'reason': _acm_patch_result.reason | default('unverifiable'),
+              'uid': _acm_patch_result.uid | default(none),
+              'generation': _acm_patch_result.generation | default(none),
+              'generation_reported': _acm_patch_result.generation_reported | default(false),
+            }
+          }}
+
+    - name: Bind the accepted PATCH to the journal
+      when: not (_acm_preview | bool)
+      block:
+        - name: Read the patched Restore strictly
+          ansible.builtin.include_tasks: strict_read.yml
+          vars:
+            _acm_read:
+              key: "restore/{{ _acm_journal.restore.name }}"
+              read_mode: get
+              api_version: cluster.open-cluster-management.io/v1beta1
+              kind: Restore
+              resource_name: restores
+              namespace: open-cluster-management-backup
+              name: "{{ _acm_journal.restore.name }}"
+            _acm_read_fact: _acm_patch_post_read
+
+        - name: Bind the accepted PATCH and its post-read
+          tomazb.acm_switchover.acm_migration_evidence:
+            operation: post_patch
+            inputs:
+              journal: "{{ _acm_journal }}"
+              result: "{{ _acm_patch_outcome }}"
+              post_read: "{{ _acm_patch_post_read }}"
+          register: _acm_post_patch
+
+        - name: Persist the accepted PATCH evidence
+          tomazb.acm_switchover.checkpoint_phase:
+            phase: activation
+            checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+            status: update
+            operational_data:
+              migration_backups: "{{ _acm_post_patch.candidate }}"
+
+        - name: Continue from the patched migration journal
+          ansible.builtin.set_fact:
+            _acm_journal: "{{ _acm_post_patch.candidate }}"
+
+- name: Create the one-shot Restore from the migration journal
+  when:
+    - _acm_mutation_kind != 'passive_patch'
+    - _acm_mutation_pending | bool
+  block:
+    - name: Read the one-shot Restore target before the create
+      ansible.builtin.include_tasks: strict_read.yml
+      vars:
+        _acm_read:
+          key: "restore/{{ _acm_journal.restore.name }}"
+          read_mode: get
+          api_version: cluster.open-cluster-management.io/v1beta1
+          kind: Restore
+          resource_name: restores
+          namespace: open-cluster-management-backup
+          name: "{{ _acm_journal.restore.name }}"
+        _acm_read_fact: _acm_create_target_read
+
+    - name: Re-read the frozen Backups before the passive sync deletion
+      ansible.builtin.include_tasks: read_frozen_backups.yml
+
+    - name: List the destination ACM Restores before the create
+      ansible.builtin.include_tasks: strict_read.yml
+      vars:
+        _acm_read:
+          key: restores
+          read_mode: list
+          api_version: cluster.open-cluster-management.io/v1beta1
+          kind: Restore
+          resource_name: restores
+          namespace: open-cluster-management-backup
+        _acm_read_fact: _acm_create_restores_read
+
+    - name: Prove the pre-create boundary
+      tomazb.acm_switchover.acm_migration_evidence:
+        operation: pre_create
+        inputs:
+          journal: "{{ _acm_journal }}"
+          target_read: "{{ _acm_create_target_read }}"
+          backup_reads: "{{ _acm_backup_reads }}"
+          restores_read: "{{ _acm_create_restores_read }}"
+      register: _acm_pre_create
+
+    - name: Delete the discovered passive sync Restore, and only that object
+      when: _acm_pre_create.passive is not none
+      block:
+        - name: Read the passive sync Restore before its deletion
+          ansible.builtin.include_tasks: strict_read.yml
+          vars:
+            _acm_read:
+              key: "restore/{{ _acm_pre_create.passive.metadata.name }}"
+              read_mode: get
+              api_version: cluster.open-cluster-management.io/v1beta1
+              kind: Restore
+              resource_name: restores
+              namespace: open-cluster-management-backup
+              name: "{{ _acm_pre_create.passive.metadata.name }}"
+            _acm_read_fact: _acm_delete_live_read
+
+        - name: Prove the passive sync Restore is still the discovered one
+          tomazb.acm_switchover.acm_migration_evidence:
+            operation: pre_delete
+            inputs:
+              discovered: "{{ _acm_pre_create.passive }}"
+              live_read: "{{ _acm_delete_live_read }}"
+          register: _acm_pre_delete
+
+        - name: Delete the passive sync Restore under its UID and resourceVersion
+          tomazb.acm_switchover.acm_restore_guarded_mutation:
+            kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+            context: "{{ acm_switchover_hubs.secondary.context }}"
+            action: delete
+            api_version: cluster.open-cluster-management.io/v1beta1
+            kind: Restore
+            namespace: open-cluster-management-backup
+            name: "{{ _acm_pre_delete.name }}"
+            expected_uid: "{{ _acm_pre_delete.uid }}"
+            expected_resource_version: "{{ _acm_pre_delete.resource_version }}"
+          check_mode: "{{ _acm_preview | bool }}"
+          register: _acm_delete_result
+          failed_when: false
+          no_log: true
+          when: _acm_pre_delete.action == 'delete'
+
+        - name: Wait for the deleted passive sync Restore to disappear
+          when:
+            - _acm_pre_delete.action == 'delete'
+            - not (_acm_preview | bool)
+          block:
+            - name: Classify the guarded DELETE outcome
+              ansible.builtin.set_fact:
+                _acm_delete_outcome:
+                  reason: "{{ _acm_delete_result.reason | default('unverifiable') }}"
+
+            - name: Require the guarded DELETE to be accepted
+              tomazb.acm_switchover.acm_migration_evidence:
+                operation: post_delete
+                inputs:
+                  name: "{{ _acm_pre_delete.name }}"
+                  result: "{{ _acm_delete_outcome }}"
+
+            - name: Start the deletion wait
+              ansible.builtin.set_fact:
+                _acm_restore_absent: false
+
+            - name: Poll the deleted Restore until it is gone
+              ansible.builtin.include_tasks: poll_restore_absent.yml
+              loop: "{{ _acm_restore_poll_delays | default([0] + [10] * 12 + [30] * 56) }}"
+              loop_control:
+                loop_var: _acm_poll_delay
+              when: not (_acm_restore_absent | bool)
+
+            - name: Fail when the deleted Restore never disappeared
+              ansible.builtin.fail:
+                msg: >-
+                  Timeout waiting for deletion of restore {{ _acm_pre_delete.name }} after
+                  {{ _acm_restore_poll_delays | default([0] + [10] * 12 + [30] * 56) | sum }}s
+              when: not (_acm_restore_absent | bool)
+
+    - name: Re-read the frozen Backups at the create itself
+      ansible.builtin.include_tasks: read_frozen_backups.yml
+
+    - name: Build the journaled create body
+      tomazb.acm_switchover.acm_migration_evidence:
+        operation: create_body
+        inputs:
+          journal: "{{ _acm_journal }}"
+          backup_reads: "{{ _acm_backup_reads }}"
+      register: _acm_create_body
+
+    - name: Create the one-shot Restore with one request
+      tomazb.acm_switchover.acm_restore_guarded_mutation:
+        kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+        context: "{{ acm_switchover_hubs.secondary.context }}"
+        action: create
+        api_version: cluster.open-cluster-management.io/v1beta1
+        kind: Restore
+        namespace: open-cluster-management-backup
+        name: "{{ _acm_journal.restore.name }}"
+        body: "{{ _acm_create_body.body }}"
+      check_mode: "{{ _acm_preview | bool }}"
+      register: _acm_create_result
+      failed_when: false
+      no_log: true
+
+    - name: Classify the guarded create outcome
+      ansible.builtin.set_fact:
+        _acm_create_outcome: >-
+          {{
+            {
+              'accepted': _acm_create_result.accepted | default(false),
+              'reason': _acm_create_result.reason | default('unverifiable'),
+              'uid': _acm_create_result.uid | default(none),
+              'generation': _acm_create_result.generation | default(none),
+              'generation_reported': _acm_create_result.generation_reported | default(false),
+            }
+          }}
+
+    - name: Bind the accepted create to the journal
+      when: not (_acm_preview | bool)
+      block:
+        - name: Read the created Restore strictly
+          ansible.builtin.include_tasks: strict_read.yml
+          vars:
+            _acm_read:
+              key: "restore/{{ _acm_journal.restore.name }}"
+              read_mode: get
+              api_version: cluster.open-cluster-management.io/v1beta1
+              kind: Restore
+              resource_name: restores
+              namespace: open-cluster-management-backup
+              name: "{{ _acm_journal.restore.name }}"
+            _acm_read_fact: _acm_create_post_read
+
+        - name: Bind the accepted create and its post-read
+          tomazb.acm_switchover.acm_migration_evidence:
+            operation: post_create
+            inputs:
+              journal: "{{ _acm_journal }}"
+              result: "{{ _acm_create_outcome }}"
+              post_read: "{{ _acm_create_post_read }}"
+              deleted_passive: >-
+                {{ _acm_pre_delete.name if (_acm_pre_create.passive is not none and _acm_pre_delete.action == 'delete') else omit }}
+          register: _acm_post_create
+
+        - name: Persist the accepted create evidence
+          tomazb.acm_switchover.checkpoint_phase:
+            phase: activation
+            checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+            status: update
+            operational_data:
+              migration_backups: "{{ _acm_post_create.candidate }}"
+
+        - name: Continue from the created migration journal
+          ansible.builtin.set_fact:
+            _acm_journal: "{{ _acm_post_create.candidate }}"
+
+- name: Reconcile the journaled mutation on resume
+  when: not (_acm_mutation_pending | bool)
+  block:
+    - name: Read the journaled Restore strictly
+      ansible.builtin.include_tasks: strict_read.yml
+      vars:
+        _acm_read:
+          key: "restore/{{ _acm_journal.restore.name }}"
+          read_mode: get
+          api_version: cluster.open-cluster-management.io/v1beta1
+          kind: Restore
+          resource_name: restores
+          namespace: open-cluster-management-backup
+          name: "{{ _acm_journal.restore.name }}"
+        _acm_read_fact: _acm_reconcile_read
+
+    - name: Re-read the frozen Backups on resume
+      ansible.builtin.include_tasks: read_frozen_backups.yml
+
+    - name: Require the live Restore to be exactly the journaled mutation
+      tomazb.acm_switchover.acm_migration_evidence:
+        operation: reconcile
+        inputs:
+          journal: "{{ _acm_journal }}"
+          live_read: "{{ _acm_reconcile_read }}"
+          backup_reads: "{{ _acm_backup_reads }}"
 
 - name: Publish restore activation result
   ansible.builtin.set_fact:
     acm_switchover_restore_activation_result:
       changed: >-
         {{
-          (_restore_patch_result.changed | default(false))
-          or (_restore_delete_result.changed | default(false))
-          or (_restore_create_result.changed | default(false))
+          ((_acm_patch_result | default({})).changed | default(false))
+          or ((_acm_delete_result | default({})).changed | default(false))
+          or ((_acm_create_result | default({})).changed | default(false))
           or (
-            (((acm_switchover_execution | default({})).get('mode', 'dry_run') == 'dry_run') or ansible_check_mode)
-            and (acm_restore_activation_plan.changed | default(false))
+            (_acm_preview | bool)
+            and (
+              ((_acm_patch_result | default({})).would_change | default(false))
+              or ((_acm_create_result | default({})).would_change | default(false))
+            )
           )
         }}
-      restore: "{{ acm_restore_activation_plan.restore }}"
-      patch: "{{ acm_restore_activation_plan.patch }}"
-      operation: "{{ acm_restore_activation_plan.operation }}"
-      wait_target: "{{ acm_restore_activation_plan.wait_target }}"
+      restore: >-
+        {{
+          {
+            'name': _acm_journal.restore.name,
+            'namespace': _acm_journal.restore.namespace,
+            'uid': _acm_journal.restore.uid,
+            'generation': _acm_journal.restore.generation,
+          }
+        }}
+      operation:
+        mutation_kind: "{{ _acm_mutation_kind }}"
+        run_id: "{{ _acm_journal.run_id }}"
+        journaled: "{{ not (_acm_preview | bool) }}"
+      wait_target: >-
+        {{
+          {
+            'name': _acm_journal.restore.name,
+            'namespace': _acm_journal.restore.namespace,
+            'success_phases': (['Enabled', 'Finished', 'Completed'] if _acm_mutation_kind == 'passive_patch' else ['Finished', 'Completed']),
+            'failure_phases': ['FinishedWithErrors', 'Error', 'Failed', 'PartiallyFailed'],
+            'velero_restore_required': _acm_mutation_kind != 'full_restore',
+            'velero_restore_status_field': 'veleroManagedClustersRestoreName',
+            'velero_success_phases': ['Completed'],
+            'velero_failure_phases': ['Failed', 'PartiallyFailed'],
+            'managed_cluster_presence_required': _acm_mutation_kind == 'full_restore',
+          }
+        }}

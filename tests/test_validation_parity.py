@@ -79,6 +79,8 @@ def _python_args(case_input: dict) -> MockArgs:
     argocd = features.get("argocd") or {}
     restore_only = bool(operation.get("restore_only", False))
     hub_contexts = case_input.get("hub_contexts") or {}
+    waiver = operation.get("managed_cluster_expectation_waiver") or {}
+    repair = operation.get("migration_cleanup_repair") or {}
 
     return MockArgs(
         primary_context=hub_contexts.get("primary", None if restore_only else "primary-hub"),
@@ -101,6 +103,19 @@ def _python_args(case_input: dict) -> MockArgs:
         # the variable the plan's decision record names, so the shared fixture does
         # too and the CLI flag is mapped from that block.
         acknowledge_observability_not_migrated=bool(decommission.get("acknowledge_observability_not_migrated", False)),
+        # Passed through uncoerced: a non-boolean collection value must stay invalid here too.
+        skip_managed_cluster_expectations=operation.get("skip_managed_cluster_expectations", False),
+        managed_cluster_expectation_waiver_scope=waiver.get("scope"),
+        managed_cluster_expectation_waiver_actor=waiver.get("actor"),
+        managed_cluster_expectation_waiver_reason=waiver.get("reason"),
+        managed_cluster_expectation_waiver_request_id=waiver.get("request_id"),
+        # The collection has no enabling flag: a repair dict naming any field is the request.
+        repair_migration_cleanup=any(value not in (None, "", []) for value in repair.values()),
+        cleanup_repair_actor=repair.get("actor"),
+        cleanup_repair_reason=repair.get("reason"),
+        cleanup_repair_evidence=repair.get("inspected_evidence"),
+        cleanup_repair_run_id=repair.get("run_id"),
+        cleanup_repair_operation_id=repair.get("operation_id"),
     )
 
 

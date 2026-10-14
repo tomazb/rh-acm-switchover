@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, call, mock_open, patch
 
 import pytest
 
+from ansible_collections.tomazb.acm_switchover.plugins.action import checkpoint_phase
 from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import (
     ActionModule,
     build_phase_transition,
@@ -2415,8 +2416,8 @@ def test_resumed_enter_replaces_resume_summary_and_flags_process(tmp_path):
     result = action.run(task_vars=task_vars)
     assert result.get("failed") is not True
     assert result["ansible_facts"] == {
-        "_acm_switchover_resume_recorded": str(os.getpid())
-    }, "sentinel must carry the controller PID so a stale cached fact cannot fence a later process"
+        "_acm_switchover_resume_recorded": checkpoint_phase.invocation_id()
+    }, "sentinel must carry the invocation identity so a stale cached fact cannot fence a later process"
     with open(path, encoding="utf-8") as fh:
         persisted = json.load(fh)
     assert persisted["operational_data"]["resume_summary"] == {"resume_start_phase": "activation"}
@@ -2424,7 +2425,7 @@ def test_resumed_enter_replaces_resume_summary_and_flags_process(tmp_path):
 
 def test_same_process_later_enter_does_not_overwrite_resume_summary(tmp_path):
     task_vars = _task_vars_with_operation_identity()
-    task_vars["_acm_switchover_resume_recorded"] = str(os.getpid())
+    task_vars["_acm_switchover_resume_recorded"] = checkpoint_phase.invocation_id()
     path = _write_resumable_checkpoint(tmp_path, task_vars)
     with open(path, encoding="utf-8") as fh:
         record = json.load(fh)
@@ -2473,7 +2474,7 @@ def test_stale_cached_sentinel_from_other_process_does_not_fence(tmp_path):
     )
     result = action.run(task_vars=task_vars)
     assert result.get("failed") is not True
-    assert result["ansible_facts"] == {"_acm_switchover_resume_recorded": str(os.getpid())}
+    assert result["ansible_facts"] == {"_acm_switchover_resume_recorded": checkpoint_phase.invocation_id()}
     with open(path, encoding="utf-8") as fh:
         persisted = json.load(fh)
     assert persisted["operational_data"]["resume_summary"] == {"resume_start_phase": "activation"}
@@ -4346,9 +4347,11 @@ def test_entering_a_pre_freeze_phase_under_a_pre_freeze_reset_from_is_refused_wi
 def test_a_realistic_run_with_a_stale_reset_from_primary_prep(tmp_path):
     """Finding 2 walk-through: reset_from rides along on every task of the run.
 
-    The journal is written in activation (PR C), after the activation enter. Every
-    later enter carrying the stale option is allowed: nothing is pruned and no phase
-    moves back. A later rerun with the same option is refused at its first enter.
+    The journal is written in activation (PR C), after the activation enter. The rewind
+    is applied once per invocation (#332): the process-scoped fence the first enter
+    returns keeps every later enter from pruning again, so the primary_prep this run
+    completed stays completed. A later rerun with the same option is refused at its
+    first enter.
     """
     path = _write_phase_checkpoint(
         tmp_path,
@@ -4367,7 +4370,10 @@ def test_a_realistic_run_with_a_stale_reset_from_primary_prep(tmp_path):
                 **extra,
             }
         )
-        return action.run(task_vars=task_vars)
+        result = action.run(task_vars=dict(task_vars))
+        # Ansible keeps returned facts for the rest of the process.
+        task_vars.update(result.get("ansible_facts") or {})
+        return result
 
     # No journal yet: the operator's rewind prunes primary_prep and everything after it.
     assert step("preflight").get("failed") is not True
@@ -4375,21 +4381,29 @@ def test_a_realistic_run_with_a_stale_reset_from_primary_prep(tmp_path):
     assert step("primary_prep").get("failed") is not True
     assert step("primary_prep", "pass").get("failed") is not True
     assert _stored(path)["completed_phases"] == ["preflight", "primary_prep"]
-    # Existing behaviour, reported rather than changed here: the stale option re-prunes
-    # the primary_prep marker this same run just completed, on the activation enter.
+    # #332: the rewind was consumed by the preflight enter; the activation enter does not
+    # re-prune the primary_prep marker this same run just completed.
     assert step("activation").get("failed") is not True
-    assert _stored(path)["completed_phases"] == ["preflight"]
+    assert _stored(path)["completed_phases"] == ["preflight", "primary_prep"]
     # Activation freezes the journal mid-phase, then completes.
     assert step("activation", "update", operational_data={"migration_backups": _first_journal()})["changed"] is True
     assert step("activation", "pass").get("failed") is not True
-    assert _stored(path)["completed_phases"] == ["preflight", "activation"]
+    assert _stored(path)["completed_phases"] == ["preflight", "primary_prep", "activation"]
     # Later enters carry the stale option but prune nothing and move nothing back.
     for phase in ("post_activation", "finalization"):
         assert step(phase).get("failed") is not True, phase
         assert step(phase, "pass").get("failed") is not True, phase
-    assert _stored(path)["completed_phases"] == ["preflight", "activation", "post_activation", "finalization"]
+    assert _stored(path)["completed_phases"] == [
+        "preflight",
+        "primary_prep",
+        "activation",
+        "post_activation",
+        "finalization",
+    ]
     assert _stored(path)["operational_data"]["migration_backups"] == _first_journal()
-    # A rerun with the same option starts at preflight: that is a pre-freeze phase.
+    # A rerun (a new process) with the same option starts at preflight: it would prune the
+    # pre-freeze primary_prep over the journal, so it is refused.
+    task_vars.pop("_acm_switchover_rewind_consumed")
     before = _dir_snapshot(tmp_path)
     assert step("preflight")["failed"] is True
     assert _dir_snapshot(tmp_path) == before

@@ -14,12 +14,17 @@ def _load_playbook(name: str) -> list[dict]:
 
 
 def _get_task_block(playbook: list[dict]) -> dict:
-    """Return the first tasks-level block/rescue/always structure."""
+    """Return the block that carries the rescue: the post-identity block nested in the
+    reporting block, which is never entered by an identity-barrier failure."""
     for play in playbook:
         for task in play.get("tasks", []):
             if "block" in task:
-                return task
-    raise AssertionError("No block found in playbook")
+                if "rescue" in task:
+                    return task
+                nested = [child for child in task["block"] if "rescue" in child]
+                if nested:
+                    return nested[0]
+    raise AssertionError("No rescue block found in playbook")
 
 
 def _get_switchover_recovery_blocks(playbook: list[dict]) -> tuple[dict, dict]:
@@ -204,17 +209,30 @@ def test_primary_prep_rehydrates_argocd_run_id_from_checkpoint_before_pause():
     assert "argocd_run_id" in text
 
 
+def _journal_free_resume_tasks(rescue_tasks):
+    return [
+        t
+        for t in rescue_tasks
+        if t.get("ansible.builtin.include_role", {}).get("name", "") == "tomazb.acm_switchover.argocd_manage"
+        and "tasks_from" not in t["ansible.builtin.include_role"]
+    ]
+
+
+def _journal_resume_task(rescue_tasks):
+    (task,) = [
+        t for t in rescue_tasks if t.get("ansible.builtin.include_role", {}).get("tasks_from", "") == "journal_rescue"
+    ]
+    return task
+
+
 def test_switchover_rescue_uses_ignore_errors():
-    """switchover.yml rescue resume tasks must use ignore_errors to prevent compounding failures."""
+    """Journal-free resume tasks keep ignore_errors (unchanged since before R4-04)."""
     playbook = _load_playbook("switchover.yml")
     _, recovery_block = _get_switchover_recovery_blocks(playbook)
     rescue_tasks = recovery_block["rescue"]
 
-    resume_tasks = [
-        t
-        for t in rescue_tasks
-        if t.get("ansible.builtin.include_role", {}).get("name", "") == "tomazb.acm_switchover.argocd_manage"
-    ]
+    resume_tasks = _journal_free_resume_tasks(rescue_tasks)
+    assert len(resume_tasks) == 2
     for task in resume_tasks:
         assert (
             task.get("ignore_errors") is True
@@ -277,17 +295,14 @@ def test_restore_only_rescue_resumes_secondary_only():
     task_block = _get_task_block(playbook)
     rescue_tasks = task_block["rescue"]
 
-    resume_tasks = [
-        t
-        for t in rescue_tasks
-        if t.get("ansible.builtin.include_role", {}).get("name", "") == "tomazb.acm_switchover.argocd_manage"
-    ]
+    resume_tasks = _journal_free_resume_tasks(rescue_tasks)
     assert (
         len(resume_tasks) == 1
     ), f"restore_only rescue should resume only on secondary hub, found {len(resume_tasks)} resume tasks"
 
     vars_ = resume_tasks[0].get("vars", {})
     assert vars_.get("_argocd_discover_hub") == "secondary", "restore_only resume task must target secondary hub"
+    assert _journal_resume_task(rescue_tasks)["vars"]["_argocd_rescue_hubs"] == ["secondary"]
 
 
 def test_restore_only_rescue_has_resume_on_failure_guard():
@@ -308,16 +323,13 @@ def test_restore_only_rescue_has_resume_on_failure_guard():
 
 
 def test_restore_only_rescue_uses_ignore_errors():
-    """restore_only.yml rescue resume tasks must use ignore_errors."""
+    """Journal-free restore_only resume keeps ignore_errors (unchanged since before R4-04)."""
     playbook = _load_playbook("restore_only.yml")
     task_block = _get_task_block(playbook)
     rescue_tasks = task_block["rescue"]
 
-    resume_tasks = [
-        t
-        for t in rescue_tasks
-        if t.get("ansible.builtin.include_role", {}).get("name", "") == "tomazb.acm_switchover.argocd_manage"
-    ]
+    resume_tasks = _journal_free_resume_tasks(rescue_tasks)
+    assert len(resume_tasks) == 1
     for task in resume_tasks:
         assert (
             task.get("ignore_errors") is True

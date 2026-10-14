@@ -1,0 +1,45 @@
+---
+# One strict read of the destination hub for the R4-04 activation transaction, published
+# as {read_status, resources, resource_version} in the fact named by _acm_read_fact.
+#
+# Inputs: _acm_read (key, read_mode, api_version, kind, resource_name, and namespace or
+# name where they apply) and _acm_read_fact. A non-live test may pre-seed the result in
+# acm_switchover_test_overrides.migration_reads[key]; that seam is honoured only in the
+# dry_run and validate modes, so an executing run always reads the live hub.
+
+- name: Resolve whether {{ _acm_read.key }} is pre-seeded for a non-live run
+  ansible.builtin.set_fact:
+    _acm_read_overridden: >-
+      {{
+        (acm_switchover_execution.mode | default('dry_run')) in ['dry_run', 'validate']
+        and _acm_read.key in ((acm_switchover_test_overrides | default({})).get('migration_reads') or {})
+      }}
+
+- name: Read {{ _acm_read.key }} strictly from the destination hub
+  tomazb.acm_switchover.acm_k8s_read_outcome:
+    read_mode: "{{ _acm_read.read_mode }}"
+    api_version: "{{ _acm_read.api_version }}"
+    kind: "{{ _acm_read.kind }}"
+    resource_name: "{{ _acm_read.resource_name }}"
+    namespace: "{{ _acm_read.namespace | default(omit) }}"
+    name: "{{ _acm_read.name | default(omit) }}"
+    request_timeout: "{{ _acm_read.request_timeout | default(omit) }}"
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _acm_live_read
+  no_log: true
+  when: not (_acm_read_overridden | bool)
+
+# Only the outcome is published: the registered result also echoes the module arguments.
+- name: Publish the strict read of {{ _acm_read.key }}
+  ansible.builtin.set_fact:
+    "{{ _acm_read_fact }}": >-
+      {{
+        acm_switchover_test_overrides.migration_reads[_acm_read.key]
+        if (_acm_read_overridden | bool)
+        else {
+          'read_status': _acm_live_read.read_status | default('error'),
+          'resources': _acm_live_read.resources | default([]),
+          'resource_version': _acm_live_read.resource_version | default(none),
+        }
+      }}

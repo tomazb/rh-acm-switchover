@@ -143,17 +143,6 @@ class TestArchivedRestores:
         assert state.capture_state_snapshot()["config"]["archived_restores"] == restores
 
 
-class TestPreActivationVeleroRestore:
-    def test_none_by_default(self, record):
-        assert record.pre_activation_velero_restore() is None
-
-    def test_round_trip_and_clear(self, record):
-        record.record_pre_activation_velero_restore("velero-restore-1")
-        assert record.pre_activation_velero_restore() == "velero-restore-1"
-        record.record_pre_activation_velero_restore(None)
-        assert record.pre_activation_velero_restore() is None
-
-
 class TestResumeStartPhase:
     def test_record_writes_resume_summary_shape(self, state, record):
         record.record_resume_start_phase("activation")
@@ -748,3 +737,126 @@ class TestDryRunForceRefusalWritesNothing:
         assert exc_info.value.code == 1
         # The wrapper and main() both put the rehearsal back, exactly as before.
         assert restore.call_count == 2
+
+
+class TestIdentityBindingPrecedesNoRefusal:
+    """#332: a predictable --force journal refusal is raised before live hub identity is persisted."""
+
+    @pytest.mark.parametrize("fields", _FORCE_REFUSAL_STATES)
+    @pytest.mark.parametrize(
+        "argv, primary",
+        [
+            pytest.param(
+                ["--primary-context", "hub-a", "--secondary-context", "hub-b", "--method", "passive"]
+                + ["--old-hub-action", "secondary"],
+                "hub-a",
+                id="switchover",
+            ),
+            pytest.param(["--restore-only", "--secondary-context", "hub-b"], None, id="restore-only"),
+        ],
+    )
+    def test_the_refused_state_file_is_unchanged(self, tmp_path, first_write, fields, argv, primary):
+        path = _cli_journal_state(tmp_path, first_write, primary, **fields)
+        raw = json.loads(path.read_text())
+        raw.pop("hub_identities", None)
+        if fields["current_phase"] == "completed":
+            raw["last_updated"] = "2020-01-01T00:00:00+00:00"
+        path.write_text(json.dumps(raw, indent=2))
+        before = path.read_bytes()
+        clients = []
+        for context, uid in (("hub-a", "uid-a"), ("hub-b", "uid-b")):
+            client = Mock(context=context, dry_run=False)
+            client.get_cluster_identity.return_value = {"context": context, "cluster_uid": uid}
+            clients.append(client)
+        live_primary = clients[0] if primary else None
+        cli = ["acm_switchover.py", *argv, "--force", "--state-file", str(path)]
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(sys, "argv", cli))
+            stack.enter_context(patch("acm_switchover._initialize_clients", return_value=(live_primary, clients[1])))
+            stack.enter_context(patch("acm_switchover._write_python_report"))
+            with pytest.raises(SystemExit) as exc_info:
+                acm_switchover.main()
+        assert exc_info.value.code == 1
+        assert path.read_bytes() == before
+
+    def test_a_resumable_failed_state_still_binds_identity(self, tmp_path, first_write):
+        path = _cli_journal_state(
+            tmp_path,
+            first_write,
+            "hub-a",
+            current_phase="failed",
+            errors=[{"error": "activation failed", "phase": "activation", "timestamp": "2024-01-01T00:00:00Z"}],
+        )
+        state = StateManager(str(path))
+        state.state.pop("hub_identities", None)
+        clients = []
+        for context, uid in (("hub-a", "uid-a"), ("hub-b", "uid-b")):
+            client = Mock(context=context, dry_run=False)
+            client.get_cluster_identity.return_value = {"context": context, "cluster_uid": uid}
+            clients.append(client)
+        args = argparse.Namespace(force=True, restore_only=False, dry_run=False, validate_only=False)
+        acm_switchover._bind_runtime_hub_identities(args, state, clients[0], clients[1])
+        assert json.loads(path.read_text())["hub_identities"]["primary"]["cluster_uid"] == "uid-a"
+
+
+class TestArgocdRepauseMarker:
+    """PR C decisions amendment section 2.2: the re-pause obligation lives outside the journal."""
+
+    def test_round_trip_is_forced_durable(self, state, record):
+        assert record.argocd_repause_required() is None
+        with patch.object(state, "flush_state", wraps=state.flush_state) as flush:
+            record.record_argocd_repause_required("activation", "2024-01-01T00:00:00+00:00")
+        flush.assert_called_once()
+        assert RunRecord(StateManager(state.state_file)).argocd_repause_required() == "activation"
+        record.clear_argocd_repause_required()
+        assert RunRecord(StateManager(state.state_file)).argocd_repause_required() is None
+
+    @pytest.mark.parametrize("stored", ["activation", {}, {"failed_phase": ""}, {"failed_phase": 3}])
+    def test_a_malformed_marker_is_never_read_as_discharged(self, state, record, stored):
+        state.state["config"][run_record_module._KEY_ARGOCD_REPAUSE_REQUIRED] = stored
+        with pytest.raises(run_record_module.StateStructureError):
+            record.argocd_repause_required()
+
+    def test_a_failed_clear_keeps_the_obligation_for_later_writes(self, state, record):
+        record.record_argocd_repause_required("activation", "2024-01-01T00:00:00+00:00")
+        with patch.object(state, "_write_state", side_effect=OSError("EIO")):
+            with pytest.raises(OSError):
+                record.clear_argocd_repause_required()
+        assert record.argocd_repause_required() == "activation"
+        state.add_error("later write", "activation")
+        assert RunRecord(StateManager(state.state_file)).argocd_repause_required() == "activation"
+
+
+class TestF5InterruptedMarkerClear:
+    """Codex finding 5: an interruption during the clear never leaves the obligation only in memory."""
+
+    @pytest.mark.parametrize("interruption", ["before-flush", "first-write", "second-write"])
+    def test_an_interrupted_clear_keeps_the_marker_durable(self, state, record, interruption):
+        record.record_argocd_repause_required("activation", "2024-01-01T00:00:00+00:00")
+        original_write, original_flush = state._write_state, state.flush_state
+        calls = {"n": 0}
+
+        def write(snapshot):
+            calls["n"] += 1
+            if {"first-write": 1, "second-write": 2}.get(interruption) == calls["n"]:
+                raise KeyboardInterrupt
+            return original_write(snapshot)
+
+        def flush():
+            if interruption == "before-flush":
+                raise KeyboardInterrupt
+            return original_flush()
+
+        with patch.object(state, "_write_state", side_effect=write), patch.object(
+            state, "flush_state", side_effect=flush
+        ):
+            try:
+                record.clear_argocd_repause_required()
+                cleared = True
+            except KeyboardInterrupt:
+                cleared = False
+        # The interruption path saves pending state, as cli_outcomes and the exit flush do.
+        state.save_state()
+        on_disk = RunRecord(StateManager(state.state_file)).argocd_repause_required()
+        assert on_disk == (None if cleared else "activation")
+        assert record.argocd_repause_required() == on_disk

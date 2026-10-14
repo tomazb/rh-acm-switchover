@@ -29,6 +29,19 @@ acm_switchover_operation:
   old_hub_action: secondary
   activation_method: patch
   min_managed_clusters:
+  # R4-04 operator inputs; both stay disabled unless explicitly requested.
+  skip_managed_cluster_expectations: false
+  managed_cluster_expectation_waiver:
+    scope:
+    actor: ""
+    reason: ""
+    request_id:
+  migration_cleanup_repair:
+    actor: ""
+    reason: ""
+    inspected_evidence: []
+    run_id: ""
+    operation_id: ""
 
 acm_switchover_features:
   manage_auto_import_strategy: false

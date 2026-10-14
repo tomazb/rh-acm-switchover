@@ -19,7 +19,7 @@ Features:
 import logging
 import re
 from collections.abc import Mapping
-from typing import Pattern, Sequence
+from typing import Optional, Pattern, Sequence
 
 from lib import path_safety
 from lib.constants import (
@@ -34,10 +34,19 @@ from lib.constants import (
     VALIDATION_SETUP_ROLE_CHOICES,
 )
 from lib.exceptions import SecurityValidationError, ValidationError
+from lib.migration_evidence import MigrationEvidenceError
+from lib.migration_journal import validate_repair_request, validate_waiver_request
 
 logger = logging.getLogger("acm_switchover")
 
-__all__ = ["InputValidator", "SecurityValidationError", "ValidationError", "validate_distinct_hub_identities"]
+__all__ = [
+    "InputValidator",
+    "SecurityValidationError",
+    "ValidationError",
+    "managed_cluster_expectation_waiver_request",
+    "migration_cleanup_repair_request",
+    "validate_distinct_hub_identities",
+]
 
 # Kubernetes resource name validation patterns
 # Based on Kubernetes naming conventions: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/
@@ -104,6 +113,77 @@ def validate_distinct_hub_identities(hub_identities: Mapping[str, object]) -> No
 
     if cluster_uids["primary"] == cluster_uids["secondary"]:
         raise ValidationError(_SAME_PHYSICAL_HUB_MESSAGE)
+
+
+# R4-04 plan Task 6: the operator inputs, as (request field, argparse destination).
+_WAIVER_ARGS = (
+    ("scope", "managed_cluster_expectation_waiver_scope"),
+    ("actor", "managed_cluster_expectation_waiver_actor"),
+    ("reason", "managed_cluster_expectation_waiver_reason"),
+    ("request_id", "managed_cluster_expectation_waiver_request_id"),
+)
+_REPAIR_ARGS = (
+    ("actor", "cleanup_repair_actor"),
+    ("reason", "cleanup_repair_reason"),
+    ("inspected_evidence", "cleanup_repair_evidence"),
+    ("run_id", "cleanup_repair_run_id"),
+    ("operation_id", "cleanup_repair_operation_id"),
+)
+_UNSET_INPUTS: tuple[object, ...] = (None, "", [])
+_MALFORMED_WAIVER_MESSAGE = (
+    "malformed_waiver: --skip-managed-cluster-expectations requires --managed-cluster-expectation-waiver-scope "
+    "(activation, post_activation or both) and a non-empty --managed-cluster-expectation-waiver-actor and "
+    "--managed-cluster-expectation-waiver-reason; --managed-cluster-expectation-waiver-request-id is optional "
+    "but cannot be empty"
+)
+_MALFORMED_REPAIR_MESSAGE = (
+    "malformed_repair: --repair-migration-cleanup requires a non-empty --cleanup-repair-actor and "
+    "--cleanup-repair-reason, at least one --cleanup-repair-evidence reference (none empty), and a UUID "
+    "--cleanup-repair-run-id and --cleanup-repair-operation-id"
+)
+
+
+def managed_cluster_expectation_waiver_request(args: object) -> Optional[dict]:
+    """Return the validated expected-ManagedCluster waiver request, or None when none is requested.
+
+    The request only asks for the name predicate to be waived; it never changes the
+    recorded expectation and proves nothing until a phase journals it.
+    """
+    request = {field: getattr(args, dest, None) for field, dest in _WAIVER_ARGS}
+    enabled = getattr(args, "skip_managed_cluster_expectations", False)
+    if not isinstance(enabled, bool):
+        raise ValidationError("malformed_waiver: --skip-managed-cluster-expectations must be a boolean")
+    if not enabled:
+        if any(value not in _UNSET_INPUTS for value in request.values()):
+            raise ValidationError(
+                "malformed_waiver: --managed-cluster-expectation-waiver-* options require "
+                "--skip-managed-cluster-expectations"
+            )
+        return None
+    try:
+        return validate_waiver_request(request)
+    except MigrationEvidenceError:
+        raise ValidationError(_MALFORMED_WAIVER_MESSAGE) from None
+
+
+def migration_cleanup_repair_request(args: object) -> Optional[dict]:
+    """Return the validated cleanup-repair acknowledgement request, or None when none is requested.
+
+    The request is accepted only as a complete set and is not evidence that any
+    delete succeeded; the cleanup gate checks it against the journal and live state.
+    """
+    request = {field: getattr(args, dest, None) for field, dest in _REPAIR_ARGS}
+    enabled = getattr(args, "repair_migration_cleanup", False)
+    if not isinstance(enabled, bool):
+        raise ValidationError("malformed_repair: --repair-migration-cleanup must be a boolean")
+    if not enabled:
+        if any(value not in _UNSET_INPUTS for value in request.values()):
+            raise ValidationError("malformed_repair: --cleanup-repair-* options require --repair-migration-cleanup")
+        return None
+    try:
+        return validate_repair_request(request)
+    except MigrationEvidenceError:
+        raise ValidationError(_MALFORMED_REPAIR_MESSAGE) from None
 
 
 class InputValidator:
@@ -469,6 +549,33 @@ class InputValidator:
                 )
             if getattr(args, "old_hub_action", None) != "decommission":
                 raise ValidationError("--acknowledge-observability-not-migrated requires --old-hub-action decommission")
+
+        # R4-04 migration-evidence operator inputs (July design sections 2 and 4a). Each
+        # is refused where nothing evaluates it rather than silently ignored.
+        excluded_modes = [
+            (is_decommission, "--decommission"),
+            (is_setup, "--setup"),
+            (has_argocd_resume_only, "--argocd-resume-only"),
+            (has_validate_only, "--validate-only"),
+        ]
+        excluded_mode = next((flag for active, flag in excluded_modes if active), None)
+        waiver = managed_cluster_expectation_waiver_request(args)
+        if waiver is not None:
+            if excluded_mode:
+                raise ValidationError(
+                    f"waiver_not_applicable: --skip-managed-cluster-expectations cannot be used with "
+                    f"{excluded_mode}: no ManagedCluster expectation is evaluated"
+                )
+            if is_restore_only:
+                raise ValidationError(
+                    "waiver_expected_names_empty: --restore-only records no expected ManagedCluster name, so a "
+                    "waiver of any scope has nothing to waive"
+                )
+        if migration_cleanup_repair_request(args) is not None and excluded_mode:
+            raise ValidationError(
+                f"repair_not_applicable: --repair-migration-cleanup cannot be used with {excluded_mode}: "
+                "no migration Restore cleanup runs"
+            )
 
         # Validate Argo CD argument combinations
 

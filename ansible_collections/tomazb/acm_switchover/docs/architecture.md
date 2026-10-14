@@ -17,7 +17,7 @@ The collection defines:
 - playbook entrypoints
 - role boundaries
 - schema-versioned report artifacts
-- optional checkpoint contract
+- checkpoint contract (required in execute mode for the R4-04 migration-evidence journal; see [artifact-schema.md](artifact-schema.md))
 - RBAC bootstrap and validation contracts
 - decommission observability autodetection
 - release parity guardrails for report, checkpoint, decommission, restore-only, switchover, and RBAC/bootstrap artifacts

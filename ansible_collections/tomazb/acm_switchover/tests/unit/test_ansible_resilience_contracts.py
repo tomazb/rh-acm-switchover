@@ -27,58 +27,43 @@ def _load_yaml(path: pathlib.Path) -> list[dict]:
 
 
 def test_activate_restore_verifies_patch_application_after_patch():
-    """activation/activate_restore.yml must verify Restore patch application with polling."""
-    tasks = _load_yaml(ACTIVATION_TASKS / "activate_restore.yml")
+    """R4-04: an accepted guarded PATCH is bound only by a strict post-read and the post_patch decision."""
+    text = (ACTIVATION_TASKS / "activate_restore.yml").read_text()
+    patch_at = text.index("action: patch")
+    post_read = text.index("_acm_read_fact: _acm_patch_post_read", patch_at)
+    bind = text.index("operation: post_patch", post_read)
+    persist = text.index('migration_backups: "{{ _acm_post_patch.candidate }}"', bind)
+    assert patch_at < post_read < bind < persist
+    assert "kubernetes.core.k8s:" not in text, "Restore mutations go only through acm_restore_guarded_mutation"
+    tasks = str(_load_yaml(ACTIVATION_TASKS / "activate_restore.yml"))
+    assert "http_accepted" not in tasks, "acceptance is decided from accepted/reason, never http_accepted"
 
-    restore_queries = [task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "Restore"]
-    assert restore_queries, "activate_restore.yml must re-read Restore resources after patching"
 
-    verification_tasks = [
-        task
-        for task in restore_queries
-        if "resourceVersion" in str(task.get("until", ""))
-        or "veleroManagedClustersBackupName" in str(task.get("until", ""))
-    ]
-    assert verification_tasks, "activate_restore.yml must poll until the activation patch is observable"
-
-    verify_task = verification_tasks[0]
-    assert (
-        "retries" in verify_task and "delay" in verify_task
-    ), "activate_restore.yml must retry patch verification instead of trusting a single patch response"
-    until = str(verify_task.get("until", ""))
-    assert "resourceVersion" in until, "activate_restore.yml must verify a Restore resourceVersion change"
-    assert (
-        "veleroManagedClustersBackupName" in until
-    ), "activate_restore.yml must verify the managed-clusters backup field after patching"
+def _all_tasks(tasks):
+    for task in tasks:
+        yield task
+        for section in ("block", "rescue", "always"):
+            yield from _all_tasks(task.get(section) or [])
 
 
 def test_full_restore_waits_for_managed_cluster_presence_after_acm_restore():
-    """Full restore must wait for ManagedCluster resources after the ACM Restore is terminal."""
-    tasks = _load_yaml(ACTIVATION_TASKS / "wait_for_restore.yml")
-    text = (ACTIVATION_TASKS / "wait_for_restore.yml").read_text()
+    """R4-04: after the Restore completion proof, ManagedClusters are checked by strict reads;
+    a full restore polls them first, and the fresh completion proof is taken only after that."""
+    tasks = list(_all_tasks(_load_yaml(ACTIVATION_TASKS / "wait_for_restore.yml")))
+    names = [task.get("name") for task in tasks]
     expectation_text = (COMMON_TASKS / "resolve_managed_cluster_expectation.yml").read_text()
 
-    managed_cluster_waits = [
-        task
-        for task in tasks
-        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster" and "until" in task
-    ]
-
-    assert managed_cluster_waits, "wait_for_restore.yml must poll ManagedClusters for full Restore activation"
-    wait_task = managed_cluster_waits[0]
-    until = str(wait_task["until"])
-    when = str(wait_task.get("when", ""))
-
-    assert "managed_cluster_presence_required" in when
-    assert "metadata.name', 'ne', 'local-cluster'" in until
-    assert "_acm_activation_min_managed_clusters" in until
-    assert ">= (_acm_activation_min_managed_clusters | int)" in until
-    assert "_acm_activation_expected_managed_cluster_names" in until
-    assert "difference(" in until
-    assert "resolve_managed_cluster_expectation.yml" in text
+    poll = tasks[names.index("Poll the journaled Restore until its completion proof holds")]
+    mc_wait = tasks[names.index("Wait for full-restore ManagedCluster resources")]
+    verify = tasks[names.index("Verify the ManagedCluster resources were restored")]
+    bundle = tasks[names.index("Prove completion afresh and build the evidence bundle")]
+    assert names.index(poll["name"]) < names.index(mc_wait["name"]) < names.index(verify["name"])
+    assert names.index(verify["name"]) < names.index(bundle["name"])
+    assert mc_wait["ansible.builtin.include_tasks"] == "poll_managed_clusters.yml"
+    assert "acm_switchover_operation.method == 'full'" in str(mc_wait["when"])
+    assert verify["tomazb.acm_switchover.acm_migration_evidence"]["operation"] == "verify_managed_clusters"
     assert "acm_switchover_operation.min_managed_clusters is defined" in expectation_text
     assert "acm_switchover_expected_managed_cluster_count" in expectation_text
-    assert "acm_switchover_operation.restore_only | default(false) | bool" in expectation_text
     assert "1\n          if (acm_switchover_operation.restore_only | default(false) | bool)" in expectation_text
 
 
@@ -625,35 +610,32 @@ def test_checkpoint_fixture_seed_matches_runtime_checkpoint_contract():
 
 
 def test_activation_rediscovers_restore_facts_before_passive_selection():
-    """Checkpoint resume can skip preflight, so activation must discover Restore facts itself."""
-    assert (ACTIVATION_TASKS / "discover_resources.yml").exists()
+    """Checkpoint resume can skip preflight, so activation strictly reads the destination hub itself."""
     discover_text = (ACTIVATION_TASKS / "discover_resources.yml").read_text()
+    verify_text = (ACTIVATION_TASKS / "verify_passive_sync.yml").read_text()
     main_tasks = _load_yaml(ACTIVATION_TASKS / "main.yml")
     block_tasks = next(task["block"] for task in main_tasks if "block" in task)
     includes = [task.get("ansible.builtin.include_tasks", "") for task in block_tasks]
 
-    assert "register: _acm_activation_restores_live_info" in discover_text
-    assert "register: _acm_activation_mch_live_info" in discover_text
+    assert "key: multiclusterhubs" in discover_text and "strict_read.yml" in discover_text
     assert "acm_activation_mch_info:" in discover_text
-    assert "activation_restores_info" in discover_text
-    assert "acm_activation_restores_info:" in discover_text
-    assert "acm_activation_mch_info" in discover_text
-    assert "acm_switchover_test_overrides | default({})" in discover_text
-    assert "register: acm_secondary_restores_info" not in discover_text
-    assert includes[0] == "discover_resources.yml"
+    assert "key: restores" in verify_text and "operation: passive_restore" in verify_text
     assert includes.index("discover_resources.yml") < includes.index("verify_passive_sync.yml")
 
 
 def test_activation_uses_live_restore_facts_instead_of_preflight_restore_facts():
-    """Activation must not select or mutate Restores from stale preflight variables."""
+    """Activation must not select or mutate Restores from stale preflight variables or pre-seeded facts."""
     for path in [
         ACTIVATION_TASKS / "verify_passive_sync.yml",
         ACTIVATION_TASKS / "activate_restore.yml",
     ]:
         text = path.read_text()
-        assert "acm_activation_restores_info.resources" in text
-        assert "acm_secondary_restore_info" not in text
-        assert "acm_secondary_restores_info" not in text
+        assert "strict_read.yml" in text
+        for stale in ("acm_secondary_restore_info", "acm_secondary_restores_info", "acm_activation_restores_info"):
+            assert stale not in text, f"{path.name} must not read {stale}"
+    # The only pre-seed seam is the non-live override, honoured in dry_run and validate only.
+    strict_read = (ACTIVATION_TASKS / "strict_read.yml").read_text()
+    assert "in ['dry_run', 'validate']" in strict_read
 
 
 def test_resumable_roles_use_phase_local_discovery_facts():
@@ -735,8 +717,7 @@ def test_phase_local_facts_are_not_direct_register_targets():
 def test_activation_requires_passive_restore_ready_before_mutation_tasks():
     """Passive readiness must be asserted before auto-import or Restore mutations run."""
     verify_text = (ACTIVATION_TASKS / "verify_passive_sync.yml").read_text()
-    assert "restore_ready" in verify_text
-    assert "restore_ready_reason" in verify_text
+    assert "operation: verify_passive_sync" in verify_text
 
     main_tasks = _load_yaml(ACTIVATION_TASKS / "main.yml")
     block_tasks = next(task["block"] for task in main_tasks if "block" in task)
@@ -746,11 +727,13 @@ def test_activation_requires_passive_restore_ready_before_mutation_tasks():
     assert includes.index("verify_passive_sync.yml") < includes.index("activate_restore.yml")
 
 
-def test_restore_wait_accepts_only_benign_finished_with_errors():
-    """FinishedWithErrors is successful only for consecutive-switchover already-available messages."""
+def test_restore_wait_has_no_benign_error_allow_list():
+    """August section 5: the migration-evidence completion accepts no FinishedWithErrors allow-list;
+    the method-specific phase rule lives in acm_migration_evidence."""
     text = (ACTIVATION_TASKS / "wait_for_restore.yml").read_text()
-    assert "FinishedWithErrors" in text
-    assert "already available" in text
+    poll = (ACTIVATION_TASKS / "poll_restore_completion.yml").read_text()
+    assert "already available" not in text + poll
+    assert "operation: completion_poll" in poll
 
 
 def test_collection_mutation_tasks_default_missing_execution_mode_to_dry_run():

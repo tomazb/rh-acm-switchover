@@ -120,8 +120,8 @@ def test_switchover_report_contract_top_level_keys_are_stable() -> None:
 
     assert "rescue" not in outer
     assert "always" in outer
-    assert outer["block"][1].get("name") == "Run post-barrier switchover phases"
-    assert "always" not in outer["block"][1]
+    assert outer["block"][2].get("name") == "Run post-barrier switchover phases"
+    assert "always" not in outer["block"][2]
     assert contract is not None, "Build switchover report contract task not found in switchover.yml"
     assert contract["schema_version"] == "1.0"
     assert contract["source"] == "tomazb.acm_switchover"

@@ -52,6 +52,11 @@ def _restore(metadata):
 
 # (vector id, how the one request ends). `status` is an API error, `raise` a failure of the
 # request itself, `body` a 2xx with the given raw body, `deferred` a 2xx whose body read fails.
+def _with_constant(body, constant):
+    """`body`, already JSON, with one extra member whose value is a non-JSON constant."""
+    return (body[:-1] + f', "extra": {constant}}}').encode("utf-8")
+
+
 PATCH_VECTORS = [
     ("accepted", ("body", _restore({"uid": UID, "resourceVersion": "48300", "generation": 7}).encode())),
     ("accepted_without_generation", ("body", _restore({"uid": UID, "resourceVersion": "48300"}).encode())),
@@ -79,17 +84,42 @@ PATCH_VECTORS = [
     ("malformed_undecodable", ("body", b"<html>")),
     ("malformed_list", ("body", b"[]")),
     ("malformed_null", ("body", b"null")),
+    ("malformed_padded_rv", ("body", _restore({"uid": UID, "resourceVersion": "48300 ", "generation": 7}).encode())),
+    ("malformed_blank_rv", ("body", _restore({"uid": UID, "resourceVersion": " ", "generation": 7}).encode())),
+] + [
+    (
+        f"malformed_constant_{constant}",
+        ("body", _with_constant(_restore({"uid": UID, "resourceVersion": "48300", "generation": 7}), constant)),
+    )
+    for constant in ("NaN", "Infinity", "-Infinity")
 ]
 
-DELETE_VECTORS = [
-    ("accepted", ("ok", None)),
-    ("conflict_409", ("status", 409)),
-    ("conflict_412", ("status", 412)),
-    ("not_found_404", ("status", 404)),
-    ("forbidden_403", ("status", 403)),
-    ("server_error_500", ("status", 500)),
-    ("timeout", ("raise", lambda: ReadTimeoutError(None, "/restores", "read timed out"))),
-]
+DELETE_VECTORS = (
+    [
+        ("accepted", ("body", json.dumps({"kind": "Status", "status": "Success"}).encode())),
+        ("accepted_object", ("body", _restore({"uid": UID, "resourceVersion": "48300"}).encode())),
+        ("malformed_undecodable", ("body", b"<html>")),
+        ("malformed_invalid_utf8", ("body", b"\xff\xfe")),
+        ("malformed_list", ("body", b"[]")),
+        ("malformed_null", ("body", b"null")),
+    ]
+    + [
+        (
+            f"malformed_constant_{constant}",
+            ("body", _with_constant(json.dumps({"kind": "Status", "status": "Success"}), constant)),
+        )
+        for constant in ("NaN", "Infinity", "-Infinity")
+    ]
+    + [
+        ("conflict_409", ("status", 409)),
+        ("conflict_412", ("status", 412)),
+        ("not_found_404", ("status", 404)),
+        ("forbidden_403", ("status", 403)),
+        ("server_error_500", ("status", 500)),
+        ("timeout", ("raise", lambda: ReadTimeoutError(None, "/restores", "read timed out"))),
+        ("deferred_timeout", ("deferred", lambda: ReadTimeoutError(None, "/restores", "read timed out"))),
+    ]
+)
 
 PATCH_INPUTS = [
     {"expected_managed_clusters_backup_name": " Skip ", "replacement_managed_clusters_backup_name": "latest"},
@@ -128,8 +158,6 @@ def _collection_answer(outcome):
         raise value()
     if kind == "deferred":
         return _DeferredBody(value())
-    if kind == "ok":
-        return None
     return Mock(data=value)
 
 
@@ -146,6 +174,10 @@ class _Resource:
 
     def delete(self, **kwargs):
         self.calls.append(("delete", kwargs))
+        return _collection_answer(self.outcome)
+
+    def create(self, **kwargs):
+        self.calls.append(("create", kwargs))
         return _collection_answer(self.outcome)
 
 
@@ -185,6 +217,8 @@ def _run_collection(monkeypatch, args, resource, *, check_mode=False):
         "expected_resource_version": RESOURCE_VERSION,
         **args,
     }
+    for option in [key for key, value in args.items() if value is None]:
+        del module_args[option]
     if check_mode:
         module_args["_ansible_check_mode"] = True
     monkeypatch.setattr(collection_form, "AnsibleModule", CapturingAnsibleModule)
@@ -264,14 +298,7 @@ def test_patch_outcomes_are_classified_identically(python_client, monkeypatch, v
 
 @pytest.mark.parametrize(("vector_id", "outcome"), DELETE_VECTORS, ids=[vector[0] for vector in DELETE_VECTORS])
 def test_delete_outcomes_are_classified_identically(python_client, monkeypatch, vector_id, outcome):
-    kind, value = outcome
-    delete = python_client.custom_api.delete_namespaced_custom_object
-    if kind == "status":
-        delete.side_effect = ApiException(status=value, reason="Rejected")
-    elif kind == "raise":
-        delete.side_effect = value()
-    else:
-        delete.return_value = {}
+    python_client._api_client.call_api = Mock(**_python_answer(outcome))
     python_result = python_client.delete_restore_guarded(
         NAME, namespace=NAMESPACE, uid=UID, resource_version=RESOURCE_VERSION
     )
@@ -281,9 +308,121 @@ def test_delete_outcomes_are_classified_identically(python_client, monkeypatch, 
 
     assert _compared(python_result) == _compared(collection_result), vector_id
     assert collection_result.get("failed", False) is (not python_result["accepted"]), vector_id
-    python_preconditions = delete.call_args.kwargs["body"].preconditions
-    assert {"uid": python_preconditions.uid, "resourceVersion": python_preconditions.resource_version} == (
-        resource.calls[0][1]["body"]["preconditions"]
+    assert python_client._api_client.call_api.call_count == 1 and len(resource.calls) == 1
+    assert python_client._api_client.call_api.call_args.kwargs["body"] == resource.calls[0][1]["body"]
+
+
+class _HubPoolManager:
+    """The urllib3 pool manager under a real, installed `ApiClient`: it serves the discovery
+    documents the dynamic client reads and answers the one Restore request with a fixed
+    status and raw body, so both form factors run the installed client unmocked."""
+
+    _DISCOVERY = {
+        "/apis": {
+            "kind": "APIGroupList",
+            "groups": [
+                {
+                    "name": "cluster.open-cluster-management.io",
+                    "versions": [{"groupVersion": "cluster.open-cluster-management.io/v1beta1", "version": "v1beta1"}],
+                    "preferredVersion": {
+                        "groupVersion": "cluster.open-cluster-management.io/v1beta1",
+                        "version": "v1beta1",
+                    },
+                }
+            ],
+        },
+        "/api": {"kind": "APIVersions", "versions": ["v1"]},
+        "/api/v1": {"kind": "APIResourceList", "groupVersion": "v1", "resources": []},
+        "/apis/cluster.open-cluster-management.io/v1beta1": {
+            "kind": "APIResourceList",
+            "groupVersion": "cluster.open-cluster-management.io/v1beta1",
+            "resources": [{"name": "restores", "kind": "Restore", "namespaced": True, "verbs": ["delete"]}],
+        },
+    }
+
+    def __init__(self, status, body):
+        self._status = status
+        self._body = body
+        self.requests = []
+
+    def request(self, method, url, **kwargs):
+        import io
+        from urllib.parse import urlsplit
+
+        import urllib3
+
+        path = urlsplit(url).path
+        if method == "GET" and path == "/version":
+            status, body = 200, json.dumps({"major": "1", "minor": "35", "gitVersion": "v1.35.0"}).encode()
+        elif method == "GET" and path in self._DISCOVERY:
+            status, body = 200, json.dumps(self._DISCOVERY[path]).encode()
+        else:
+            self.requests.append({"method": method, "path": path, **kwargs})
+            status, body = self._status, self._body
+        return urllib3.HTTPResponse(
+            body=io.BytesIO(body),
+            status=status,
+            reason="Fake",
+            headers={"Content-Type": "application/json"},
+            preload_content=False,
+        )
+
+
+def _installed_api_client(pool_manager):
+    from kubernetes.client import ApiClient, Configuration
+
+    configuration = Configuration()
+    configuration.host = "https://hub.invalid"
+    configuration.api_key = {"BearerToken": "Bearer parity-token", "authorization": "Bearer parity-token"}
+    api_client = ApiClient(configuration=configuration)
+    api_client.rest_client.pool_manager = pool_manager
+    return api_client
+
+
+_DELETED_RESTORE = _restore({"name": NAME, "uid": UID, "resourceVersion": "48300"}).encode()
+_DELETE_STATUS = json.dumps({"kind": "Status", "apiVersion": "v1", "status": "Success"}).encode()
+
+
+@pytest.mark.parametrize("status", [200, 202])
+@pytest.mark.parametrize(
+    "body",
+    [_DELETE_STATUS, _DELETED_RESTORE, b"null", b"[]", b'"Restore"', b"{not json", b"\xff\xfe"],
+    ids=["status-object", "deleted-restore", "null", "list", "string", "invalid-json", "invalid-utf8"],
+)
+def test_a_2xx_delete_through_the_installed_client_is_classified_identically(monkeypatch, tmp_path, status, body):
+    """No decoder is mocked: each form factor sends its DELETE through the installed kubernetes
+    client (36 or 37) to a faked socket. A 202 is accepted exactly like a 200, and a body that is
+    not a JSON object is `malformed_response` in both."""
+    import tempfile
+
+    from kubernetes.dynamic import DynamicClient
+
+    # The dynamic client's discovery cache file lives in the temp directory; keep it per test.
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    python_pool = _HubPoolManager(status, body)
+    python_client = python_form.KubeClient.__new__(python_form.KubeClient)
+    python_client.request_timeout = 30
+    python_client.dry_run = False
+    python_client._api_client = _installed_api_client(python_pool)
+    python_result = python_client.delete_restore_guarded(
+        NAME, namespace=NAMESPACE, uid=UID, resource_version=RESOURCE_VERSION
+    )
+
+    collection_pool = _HubPoolManager(status, body)
+    dynamic = DynamicClient(_installed_api_client(collection_pool))
+    resource = dynamic.resources.get(
+        api_version="cluster.open-cluster-management.io/v1beta1", kind="Restore", name="restores"
+    )
+    collection_result = _run_collection(monkeypatch, {"action": "delete"}, resource)
+
+    assert _compared(python_result) == _compared(collection_result)
+    assert collection_result.get("failed", False) is (not python_result["accepted"])
+    expected = "ok" if body in (_DELETE_STATUS, _DELETED_RESTORE) else "malformed_response"
+    assert (python_result["reason"], python_result["http_accepted"]) == (expected, True)
+    assert [request["method"] for request in python_pool.requests] == ["DELETE"]
+    assert [request["method"] for request in collection_pool.requests] == ["DELETE"]
+    assert json.loads(python_pool.requests[0]["body"])["preconditions"] == (
+        json.loads(collection_pool.requests[0]["body"])["preconditions"]
     )
 
 
@@ -307,7 +446,7 @@ def test_patch_dry_run_and_check_mode_predict_identically_without_a_request(pyth
 
 def test_delete_dry_run_and_check_mode_predict_identically_without_a_request(python_client, monkeypatch):
     python_client.dry_run = True
-    delete = python_client.custom_api.delete_namespaced_custom_object
+    delete = python_client._api_client.call_api
     python_result = python_client.delete_restore_guarded(
         NAME, namespace=NAMESPACE, uid=UID, resource_version=RESOURCE_VERSION
     )
@@ -384,3 +523,105 @@ def test_the_runtime_implementations_do_not_import_each_other():
     collection_imports = _imported_modules(Path(collection_form.__file__))
     assert not any(name.startswith("ansible_collections") for name in python_imports)
     assert not any(name == "lib" or name.startswith(("lib.", "modules")) for name in collection_imports)
+
+
+# --- the single-request guarded CREATE (R4-04 PR C Task 8) -----------------------------
+
+CREATE_NAME = "restore-acm-full"
+CREATE_BODY = {
+    "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+    "kind": "Restore",
+    "metadata": {"name": CREATE_NAME, "namespace": NAMESPACE},
+    "spec": {"veleroManagedClustersBackupName": "acm-managed-clusters-schedule-20240101120000"},
+}
+CREATE_ARGS = {
+    "action": "create",
+    "name": CREATE_NAME,
+    "body": CREATE_BODY,
+    "expected_uid": None,
+    "expected_resource_version": None,
+}
+
+
+def _created(metadata):
+    return {"apiVersion": CREATE_BODY["apiVersion"], "kind": "Restore", "metadata": metadata, "spec": {}}
+
+
+# (vector id, how the one request ends). `created` is a 2xx whose raw body is the object's
+# JSON; the other kinds are as for PATCH_VECTORS. Both form factors read the raw body.
+CREATE_VECTORS = (
+    [
+        ("accepted", ("created", {"name": CREATE_NAME, "uid": "u-1", "resourceVersion": "10", "generation": 1})),
+        ("accepted_without_generation", ("created", {"name": CREATE_NAME, "uid": "u-1", "resourceVersion": "10"})),
+        (
+            "accepted_bool_generation",
+            ("created", {"name": CREATE_NAME, "uid": "u-1", "resourceVersion": "10", "generation": True}),
+        ),
+        ("malformed_missing_uid", ("created", {"name": CREATE_NAME, "resourceVersion": "10"})),
+        ("malformed_empty_uid", ("created", {"name": CREATE_NAME, "uid": "", "resourceVersion": "10"})),
+        ("malformed_missing_rv", ("created", {"name": CREATE_NAME, "uid": "u-1"})),
+        ("malformed_other_name", ("created", {"name": "other", "uid": "u-1", "resourceVersion": "10"})),
+        ("malformed_metadata", ("created", "not-a-mapping")),
+        ("malformed_undecodable", ("body", b"<html>")),
+        ("malformed_invalid_utf8", ("body", b"\xff\xfe")),
+        ("malformed_list", ("body", b"[]")),
+        ("malformed_null", ("body", b"null")),
+        ("malformed_blank_uid", ("created", {"name": CREATE_NAME, "uid": " ", "resourceVersion": "10"})),
+        ("malformed_padded_uid", ("created", {"name": CREATE_NAME, "uid": " u-1", "resourceVersion": "10"})),
+        ("malformed_blank_rv", ("created", {"name": CREATE_NAME, "uid": "u-1", "resourceVersion": " "})),
+        ("malformed_padded_rv", ("created", {"name": CREATE_NAME, "uid": "u-1", "resourceVersion": "10\t"})),
+    ]
+    + [
+        (
+            f"malformed_constant_{constant}",
+            (
+                "body",
+                _with_constant(
+                    json.dumps(_created({"name": CREATE_NAME, "uid": "u-1", "resourceVersion": "10", "generation": 1})),
+                    constant,
+                ),
+            ),
+        )
+        for constant in ("NaN", "Infinity", "-Infinity")
+    ]
+    + [
+        ("already_exists_409", ("status", 409)),
+        ("not_found_404", ("status", 404)),
+        ("server_error_500", ("status", 500)),
+        ("gateway_timeout_504", ("status", 504)),
+        ("timeout", ("raise", lambda: ReadTimeoutError(None, "/restores", "read timed out"))),
+        ("transport", ("raise", lambda: ProtocolError("connection reset"))),
+        ("deferred_timeout", ("deferred", lambda: ReadTimeoutError(None, "/restores", "read timed out"))),
+    ]
+)
+
+
+@pytest.mark.parametrize(("vector_id", "outcome"), CREATE_VECTORS, ids=[vector[0] for vector in CREATE_VECTORS])
+def test_create_outcomes_are_classified_identically(python_client, monkeypatch, vector_id, outcome):
+    kind, value = outcome
+    if kind == "created":
+        outcome = ("body", json.dumps(_created(value)).encode())
+    python_client._api_client.call_api = Mock(**_python_answer(outcome))
+    python_result = python_client.create_restore_guarded(CREATE_BODY, namespace=NAMESPACE)
+
+    resource = _Resource(outcome)
+    collection_result = _run_collection(monkeypatch, CREATE_ARGS, resource)
+
+    assert _compared(python_result) == _compared(collection_result), vector_id
+    assert collection_result.get("failed", False) is (not python_result["accepted"]), vector_id
+    assert python_client._api_client.call_api.call_count == 1 and len(resource.calls) == 1
+    assert python_client._api_client.call_api.call_args.kwargs["body"] == resource.calls[0][1]["body"] == CREATE_BODY
+
+
+def test_create_dry_run_and_check_mode_predict_identically_without_a_request(python_client, monkeypatch):
+    python_client.dry_run = True
+    create = python_client._api_client.call_api
+    python_result = python_client.create_restore_guarded(CREATE_BODY, namespace=NAMESPACE)
+
+    resource = _Resource(("raise", lambda: AssertionError("no request in check mode")))
+    collection_result = _run_collection(monkeypatch, CREATE_ARGS, resource, check_mode=True)
+
+    assert _compared(python_result) == _compared(collection_result)
+    assert (python_result["reason"], python_result["would_change"]) == ("predicted", True)
+    create.assert_not_called()
+    assert resource.calls == []

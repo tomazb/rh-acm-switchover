@@ -497,6 +497,10 @@ class StateManager:
         self.state["current_phase"] = phase.value
         self.flush_state()  # Phase transitions are critical checkpoints
 
+    def preview_phase(self, phase: Phase) -> None:
+        """Update the current phase in memory only, for a dry-run whose rollback restores the original."""
+        self.state["current_phase"] = phase.value
+
     def record_retry_error_baseline(self, phase: Any, count: int) -> None:
         """Record the error baseline for a resumed retry attempt."""
         phase_value = phase.value if isinstance(phase, Phase) else str(phase)
@@ -535,10 +539,23 @@ class StateManager:
         return copy.deepcopy(self.state)
 
     def restore_state_snapshot(self, snapshot: Dict[str, Any]) -> None:
-        """Restore a complete durable state snapshot without refreshing timestamps."""
+        """Restore a complete durable state snapshot without refreshing timestamps.
+
+        A state file that already holds the snapshot is not rewritten, so a dry-run
+        that wrote nothing leaves the file untouched.
+        """
         self.state = copy.deepcopy(snapshot)
         self._dirty = False
-        self._write_state(self.state)
+        if self._stored_state() != self.state:
+            self._write_state(self.state)
+
+    def _stored_state(self) -> Optional[Dict[str, Any]]:
+        """The state file's parsed contents, or None when it is absent or unreadable."""
+        try:
+            with open(self.state_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return None
 
     def mark_step_completed(self, step_name: str) -> None:
         """Mark a step as completed, recording the report phase active at the time.
@@ -607,6 +624,16 @@ class StateManager:
         config[key] = copy.deepcopy(value)
         self._dirty = True
         self.save_state()
+
+    def _stage_config(self, key: str, value: Any) -> None:
+        """Set a configuration value in memory and mark the state pending, without writing.
+
+        Private storage accessor for lib/run_record.RunRecord: the caller's next forced
+        flush is the one durable write, and until it succeeds every later save or exit
+        flush still writes the staged state.
+        """
+        self.state["config"][key] = copy.deepcopy(value)
+        self._dirty = True
 
     def _get_config(self, key: str, default: Any = None) -> Any:
         """Return an isolated copy of a stored value, or the caller-owned default.

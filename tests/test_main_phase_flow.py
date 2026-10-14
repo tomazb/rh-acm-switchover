@@ -654,6 +654,72 @@ class TestPhaseHandlerFailure:
         assert len(errors) >= 1
         assert any("preflight failed" in e.get("error", "") for e in errors)
 
+    @pytest.mark.parametrize(
+        "dry_run, handler_fails_phase, hook_runs",
+        [
+            pytest.param(False, True, True, id="execute-phase-failure"),
+            pytest.param(False, False, True, id="execute-refusal"),
+            pytest.param(True, True, True, id="dry-run-phase-failure"),
+            pytest.param(True, False, False, id="dry-run-refusal"),
+        ],
+    )
+    def test_failure_hook_runs_for_a_failed_phase_and_every_execute_failure(
+        self, tmp_path, dry_run, handler_fails_phase, hook_runs
+    ):
+        """A dry-run refusal before phase work leaves the phase unchanged and is not a phase failure."""
+        from types import SimpleNamespace
+
+        from lib.utils import Phase, StateManager
+        from lib.workflow import run_phase_flow
+
+        state = StateManager(str(tmp_path / "state.json"))
+        state.set_phase(Phase.PRIMARY_PREP)
+
+        def handler(_args, phase_state, *_rest):
+            if handler_fails_phase:
+                phase_state.set_phase(Phase.FAILED)
+            return False
+
+        hook = Mock()
+        result = run_phase_flow(
+            SimpleNamespace(dry_run=dry_run),
+            state,
+            Mock(),
+            Mock(),
+            logging.getLogger("test"),
+            ((handler, (Phase.PRIMARY_PREP,), Phase.PRIMARY_PREP),),
+            "switchover",
+            Mock(),
+            Mock(),
+            hook,
+        )
+
+        assert result is False
+        assert hook.called is hook_runs
+
+    @pytest.mark.parametrize("dry_run", [False, True], ids=["execute", "dry-run"])
+    def test_failed_state_retry_phase_keeps_the_repause_marker_precedence(self, tmp_path, dry_run):
+        """A dry-run retries the same phase as an execution, in memory only; an execution persists it."""
+        from types import SimpleNamespace
+
+        from lib.operation_runners import SWITCHOVER_RESUMABLE_PHASES
+        from lib.run_record import RunRecord
+        from lib.utils import Phase, StateManager
+        from lib.workflow import FailedStateConfig, handle_failed_state
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.add_error("finalization failed", Phase.FINALIZATION.value)
+        RunRecord(state).record_argocd_repause_required(Phase.ACTIVATION.value, "2026-10-14T00:00:00Z")
+        state.set_phase(Phase.FAILED)
+        config = FailedStateConfig(resumable_phases=SWITCHOVER_RESUMABLE_PHASES, operation_noun="switchover")
+
+        with patch.object(StateManager, "_write_state", autospec=True) as write_state:
+            handle_failed_state(SimpleNamespace(dry_run=dry_run), state, Mock(), config)
+
+        assert state.get_current_phase() == Phase.ACTIVATION
+        assert write_state.called is not dry_run
+
     def test_phase_handler_exception_propagates(self, tmp_path):
         """When a phase handler raises an unexpected exception, it should
         propagate (the caller main() catches and records it)."""
@@ -812,6 +878,7 @@ class TestRestoreOnlyFlow:
 
         args = make_restore_only_args()
         state = Mock(spec=StateManager)
+        state._get_config.side_effect = lambda key, default=None: default
         # Return INIT first, then follow each phase transition via set_phase
         current = [Phase.INIT]
 
@@ -893,6 +960,7 @@ class TestRestoreOnlyFlow:
 
         args = make_restore_only_args(validate_only=True)
         state = Mock(spec=StateManager)
+        state._get_config.side_effect = lambda key, default=None: default
         state.get_current_phase.return_value = Phase.INIT
         state.get_state_age.return_value = None
         secondary = Mock()
@@ -912,6 +980,7 @@ class TestRestoreOnlyFlow:
 
         args = make_restore_only_args()
         state = Mock(spec=StateManager)
+        state._get_config.side_effect = lambda key, default=None: default
         state.get_current_phase.return_value = Phase.INIT
         state.get_state_age.return_value = None
         secondary = Mock()
@@ -958,6 +1027,7 @@ class TestRestoreOnlyFlow:
         # Explicitly verify old_hub_action is set to "none" by run_restore_only
         args.method = "full"
         state = Mock()
+        state._get_config.side_effect = lambda key, default=None: default
         state.get_current_phase.return_value = Phase.INIT
         state.get_state_age.return_value = None
         secondary = Mock()
@@ -1087,6 +1157,39 @@ class TestObservabilityAcknowledgementCliPlumbing:
             assert _run_phase_finalization(args, state, None, Mock(), Mock()) is True
 
         assert finalization_class.call_args.kwargs["acknowledge_observability_not_migrated"] is True
+
+    def test_finalization_receives_the_validated_cleanup_repair_request(self):
+        """--repair-migration-cleanup reaches the Restore-cleanup transaction as the validated request."""
+        from argparse import Namespace
+
+        request = {
+            "actor": "operator@example.com",
+            "reason": "the Restore was removed out of band",
+            "inspected_evidence": ["audit-log:restore-delete"],
+            "run_id": "5b7c9a1e-3f2d-4c8b-9e6a-0d1f2a3b4c5d",
+            "operation_id": "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a",
+        }
+        args = Namespace(
+            method="full",
+            dry_run=False,
+            old_hub_action="secondary",
+            restore_only=False,
+            min_managed_clusters=1,
+            repair_migration_cleanup=True,
+            cleanup_repair_actor=request["actor"],
+            cleanup_repair_reason=request["reason"],
+            cleanup_repair_evidence=request["inspected_evidence"],
+            cleanup_repair_run_id=request["run_id"],
+            cleanup_repair_operation_id=request["operation_id"],
+        )
+        state = Mock()
+        state._get_config = Mock(side_effect=lambda key, default=None: default)
+
+        with patch("acm_switchover.Finalization") as finalization_class:
+            finalization_class.return_value.finalize.return_value = True
+            _run_phase_finalization(args, state, None, Mock(), Mock())
+
+        assert finalization_class.call_args.kwargs["migration_cleanup_repair"] == request
 
     def test_a_missing_attribute_falls_back_to_not_acknowledged(self):
         """The fallback for a destructive acknowledgement must be the safe direction."""

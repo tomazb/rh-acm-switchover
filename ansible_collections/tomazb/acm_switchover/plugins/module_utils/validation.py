@@ -18,6 +18,11 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
     VALIDATION_METHOD_CHOICES,
     VALIDATION_OLD_HUB_ACTION_CHOICES,
 )
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_evidence import MigrationEvidenceError
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_journal import (
+    validate_repair_request,
+    validate_waiver_request,
+)
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.path_safety import ValidationError
 
 CONTEXT_NAME_MAX_LENGTH = 128
@@ -111,6 +116,102 @@ def _validate_observability_acknowledgement(
         raise ValidationError("acknowledge_observability_not_migrated requires old_hub_action=decommission")
 
 
+# R4-04 plan Task 6: the operator inputs. With no enabling flag of its own, a
+# repair block is requested once it is not a dict, carries an undocumented key, or
+# names any field; the waiver block is enabled by skip_managed_cluster_expectations.
+_WAIVER_KEYS = ("scope", "actor", "reason", "request_id")
+_REPAIR_KEYS = ("actor", "reason", "inspected_evidence", "run_id", "operation_id")
+_UNSET_INPUTS: tuple[object, ...] = (None, "", [])
+_MALFORMED_WAIVER_MESSAGE = (
+    "malformed_waiver: skip_managed_cluster_expectations requires managed_cluster_expectation_waiver.scope "
+    "(activation, post_activation or both) and a non-empty managed_cluster_expectation_waiver.actor and "
+    "managed_cluster_expectation_waiver.reason; managed_cluster_expectation_waiver.request_id is optional "
+    "but cannot be empty"
+)
+_MALFORMED_REPAIR_MESSAGE = (
+    "malformed_repair: migration_cleanup_repair requires a non-empty actor and reason, at least one "
+    "inspected_evidence reference (none empty), and a UUID run_id and operation_id"
+)
+
+
+def _names_any_field(value: object, keys: Sequence[str]) -> bool:
+    if value is None:
+        return False
+    if not isinstance(value, dict) or not set(value) <= set(keys):
+        return True
+    return any(item not in _UNSET_INPUTS for item in value.values())
+
+
+def _waiver_request(operation: dict) -> dict | None:
+    """Mirror of the Python CLI's --skip-managed-cluster-expectations waiver request."""
+    waiver = operation.get("managed_cluster_expectation_waiver")
+    enabled = operation.get("skip_managed_cluster_expectations", False)
+    if not isinstance(enabled, bool):
+        raise ValidationError("malformed_waiver: skip_managed_cluster_expectations must be a boolean")
+    if not enabled:
+        if _names_any_field(waiver, _WAIVER_KEYS):
+            raise ValidationError(
+                "malformed_waiver: managed_cluster_expectation_waiver requires skip_managed_cluster_expectations: true"
+            )
+        return None
+    if isinstance(waiver, dict):
+        # request_id is optional: an omitted key is null, as the CLI's unset option is.
+        waiver = {"request_id": None, **waiver}
+    try:
+        return validate_waiver_request(waiver)
+    except MigrationEvidenceError:
+        raise ValidationError(_MALFORMED_WAIVER_MESSAGE) from None
+
+
+def _repair_request(operation: dict) -> dict | None:
+    """Mirror of the Python CLI's --repair-migration-cleanup acknowledgement request."""
+    repair = operation.get("migration_cleanup_repair")
+    if not _names_any_field(repair, _REPAIR_KEYS):
+        return None
+    try:
+        return validate_repair_request(repair)
+    except MigrationEvidenceError:
+        raise ValidationError(_MALFORMED_REPAIR_MESSAGE) from None
+
+
+def _validate_migration_evidence_inputs(
+    operation: dict,
+    *,
+    execution_mode: str,
+    restore_only: bool,
+    standalone_decommission: bool,
+) -> tuple[dict | None, dict | None]:
+    """Mirror of the Python CLI's waiver and cleanup-repair rules; returns both requests.
+
+    Each is refused where nothing evaluates it rather than silently ignored.
+    """
+    if standalone_decommission:
+        excluded_mode = "a standalone decommission"
+    elif execution_mode == "validate":
+        excluded_mode = "validate mode"
+    else:
+        excluded_mode = None
+    waiver = _waiver_request(operation)
+    if waiver is not None:
+        if excluded_mode:
+            raise ValidationError(
+                f"waiver_not_applicable: skip_managed_cluster_expectations cannot be used with {excluded_mode}: "
+                "no ManagedCluster expectation is evaluated"
+            )
+        if restore_only:
+            raise ValidationError(
+                "waiver_expected_names_empty: restore_only records no expected ManagedCluster name, so a "
+                "waiver of any scope has nothing to waive"
+            )
+    repair = _repair_request(operation)
+    if repair is not None and excluded_mode:
+        raise ValidationError(
+            f"repair_not_applicable: migration_cleanup_repair cannot be used with {excluded_mode}: "
+            "no migration Restore cleanup runs"
+        )
+    return waiver, repair
+
+
 def validate_operation_inputs(
     operation: dict,
     features: dict,
@@ -185,6 +286,12 @@ def validate_operation_inputs(
         old_hub_action=old_hub_action,
         standalone_decommission=bool(operation.get("decommission", False)),
     )
+    waiver, repair = _validate_migration_evidence_inputs(
+        operation,
+        execution_mode=execution_mode,
+        restore_only=restore_only,
+        standalone_decommission=bool(operation.get("decommission", False)),
+    )
 
     if restore_only:
         method = operation.get("method", "full")
@@ -202,6 +309,8 @@ def validate_operation_inputs(
             "activation_method": activation_method,
             "argocd_manage": argocd_manage,
             "argocd_resume_on_failure": argocd_resume_on_failure,
+            "managed_cluster_expectation_waiver": waiver,
+            "migration_cleanup_repair": repair,
         }
 
     method = operation.get("method", "passive")
@@ -221,4 +330,6 @@ def validate_operation_inputs(
         "activation_method": activation_method,
         "argocd_manage": argocd_manage,
         "argocd_resume_on_failure": argocd_resume_on_failure,
+        "managed_cluster_expectation_waiver": waiver,
+        "migration_cleanup_repair": repair,
     }

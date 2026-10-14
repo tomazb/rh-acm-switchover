@@ -19,8 +19,9 @@ def _get_report_contract(playbook: list[dict]) -> dict:
         )
         assert "rescue" not in outer
         assert outer["block"][0].get("name") == "Establish trusted identity and checkpoint barrier"
-        assert outer["block"][1].get("name") == "Run post-barrier switchover phases"
-        assert "always" not in outer["block"][1]
+        assert outer["block"][1].get("name") == "Re-pause Argo CD recorded by a failure rescue"
+        assert outer["block"][2].get("name") == "Run post-barrier switchover phases"
+        assert "always" not in outer["block"][2]
         tasks = outer.get("always", []) or []
     else:
         tasks = [

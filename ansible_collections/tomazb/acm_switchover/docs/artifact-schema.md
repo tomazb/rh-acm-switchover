@@ -187,8 +187,10 @@ the original in place, and fails; every later run stays blocked until the operat
 repairs or removes the file or sets `checkpoint.reset: true`. If the copy fails, the
 run still fails and the original is untouched. An unreadable file fails without a copy.
 
-`operational_data.migration_backups` is reserved for the R4-04 migration journal,
-which no role writes yet. Only `checkpoint_phase` `status: update` writes it: that
+`operational_data.migration_backups` holds the R4-04 migration journal, which the
+`activation`, `post_activation`, and `finalization` roles write one validated
+transition at a time. An executing `activation` therefore requires
+`checkpoint.enabled: true`. Only `checkpoint_phase` `status: update` writes it: that
 status needs checkpointing enabled and an existing checkpoint whose current phase is
 the requested one, accepts only `migration_backups` in `operational_data` (no other
 key, no `error` or `report_ref`), always proves the operation identity even when
@@ -213,6 +215,14 @@ collection refuses the schema 1.0 rebuild that would discard operational data;
 journal-preserving `reset_from` rebuilds remain allowed. Check mode previews every one
 of these refusals. Only
 `checkpoint.reset: true` starts a checkpoint without the journal.
+
+`operational_data.argocd_repause_required` (`{failed_phase, recorded_at}`) is the Argo CD
+re-pause marker of PR C decisions amendment section 2.2. It sits beside the journal, never
+inside it, and is recorded only by a `status: fail` of `activation`, `post_activation`, or
+`finalization` carrying `argocd_repause: true` on a checkpoint that holds a journal key; the
+result reports `argocd_repause_recorded`. The retry's `repause_recovery.yml` clears it with
+`clear_argocd_repause: true` only after every re-pause succeeded. A malformed marker blocks
+rather than reading as cleared.
 
 During execute-mode resume, the action plugin records
 `operational_data.resume_summary.resume_start_phase` the first time it enters a

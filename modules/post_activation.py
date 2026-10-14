@@ -12,6 +12,8 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
+from contextlib import AbstractContextManager, nullcontext
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -42,6 +44,7 @@ from lib.constants import (
     MANAGED_CLUSTER_AGENT_NAMESPACE,
     MANAGED_CLUSTER_API_GROUP,
     MANAGED_CLUSTER_API_VERSION,
+    MANAGED_CLUSTER_EXPECTATION_WAIVER_FLAG,
     MANAGED_CLUSTER_PLURAL,
     MAX_KUBECONFIG_SIZE,
     OBSERVABILITY_NAMESPACE,
@@ -54,12 +57,25 @@ from lib.constants import (
     THANOS_COMPACTOR_LABEL_SELECTOR,
     THANOS_COMPACTOR_STATEFULSET,
 )
-from lib.exceptions import SwitchoverError
+from lib.exceptions import FatalError, SwitchoverError
 from lib.kube_client import KubeClient
+from lib.migration_evidence import MigrationEvidenceError
+from lib.migration_post_activation import (
+    managed_cluster_readiness,
+    post_activation_completion,
+    post_activation_names_evidence,
+    post_activation_waiver,
+    require_completed_restore,
+)
+from lib.run_record import RunRecord, StateStructureError
 from lib.utils import Phase, StateManager, dry_run_skip
 from lib.waiter import WaitConditionResult, wait_for_condition
 
 logger = logging.getLogger("acm_switchover")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _secret_create_body(doc: Dict[str, Any]) -> client.V1Secret:
@@ -90,19 +106,35 @@ class PostActivationVerification:
         min_managed_clusters: int = 0,
         expected_managed_cluster_names: Optional[List[str]] = None,
         enforce_expected_managed_cluster_names: bool = False,
+        managed_cluster_expectation_waiver: Optional[Dict] = None,
     ):
         self.secondary = secondary_client
         self.state = state_manager
+        self.run_record = RunRecord(state_manager)
         self.has_observability = has_observability
         self.dry_run = dry_run
         self.min_managed_clusters = min_managed_clusters
         self.expected_managed_cluster_names = sorted(expected_managed_cluster_names or [])
         self.enforce_expected_managed_cluster_names = enforce_expected_managed_cluster_names
+        # A validated waiver request (lib.validation), journaled only for the post_activation scope.
+        self.managed_cluster_expectation_waiver = managed_cluster_expectation_waiver
+        # True once a journaled or newly journaled waiver covers the post-activation name check.
+        self._names_waived = False
         self._cached_managed_clusters: Optional[List[Dict]] = None  # Cache for managed clusters
         # Kubeconfig caching to reduce repeated file I/O (findings #10)
         self._kubeconfig_cache: Optional[Dict] = None
         self._kubeconfig_paths: List[str] = []
         self._kubeconfig_mtime: Dict[str, float] = {}
+
+    def _step(self, step_name: str) -> AbstractContextManager:
+        """Guard one step; a dry-run consults completion markers but never records one.
+
+        A dry-run skips the step's work, so a marker it recorded would let a later
+        executing run skip work that never ran.
+        """
+        if self.dry_run:
+            return nullcontext(not self.state.is_step_completed(step_name))
+        return self.state.step(step_name, logger)
 
     def _get_managed_clusters(self, force_refresh: bool = False) -> List[Dict]:
         """Get managed clusters with caching.
@@ -114,12 +146,15 @@ class PostActivationVerification:
             List of managed cluster resources
         """
         if self._cached_managed_clusters is None or force_refresh:
-            self._cached_managed_clusters = self.secondary.list_custom_resources(
-                group=MANAGED_CLUSTER_API_GROUP,
-                version=MANAGED_CLUSTER_API_VERSION,
-                plural=MANAGED_CLUSTER_PLURAL,
-            )
+            self._cached_managed_clusters = self._strict_managed_clusters()
         return self._cached_managed_clusters
+
+    def _strict_managed_clusters(self) -> List[Dict]:
+        """The positively complete ManagedCluster inventory; a failed read is never zero clusters."""
+        outcome = self.secondary.list_managed_clusters_strict()
+        if not outcome.is_success:
+            raise FatalError(f"ManagedCluster inventory read failed ({outcome.status.value}: {outcome.reason})")
+        return outcome.items
 
     def verify(self) -> bool:
         """
@@ -131,8 +166,13 @@ class PostActivationVerification:
         logger.info("Starting post-activation verification...")
 
         try:
-            # Phase 1: Cluster connectivity verification
+            # R4-04: the journal and the waiver are proven before any work mutates anything.
+            journal = self._load_post_activation_journal()
+            waiver = self._post_activation_waiver(journal)
+
+            # Phase 1: Cluster connectivity verification, then its name evidence
             self._verify_cluster_connections()
+            journal = self._record_names_evidence(journal, waiver)
 
             # Phase 2: Auto-import cleanup verification
             self._verify_auto_import_cleanup_step()
@@ -143,6 +183,8 @@ class PostActivationVerification:
             else:
                 logger.info("Skipping Observability verification (not detected)")
 
+            # The last post-activation evidence: every required operation above succeeded.
+            self._record_completion_evidence(journal)
             logger.info("Post-activation verification completed successfully")
             return True
 
@@ -171,11 +213,14 @@ class PostActivationVerification:
         """
         klusterlet_step_checked = False
 
-        with self.state.step("verify_clusters_connected", logger) as should_run:
+        with self._step("verify_clusters_connected") as should_run:
             if should_run:
                 try:
                     # Initial brief wait - clusters may connect automatically
                     self._verify_managed_clusters_connected(timeout=INITIAL_CLUSTER_WAIT_TIMEOUT)
+                except FatalError:
+                    # A failed or malformed inventory read is not "not connected yet".
+                    raise
                 except SwitchoverError as e:
                     # Timeout - clusters not connected yet
                     logger.warning(
@@ -183,7 +228,7 @@ class PostActivationVerification:
                         e,
                     )
                     logger.info("Checking if klusterlets need to be fixed (may be pointing to old hub)...")
-                    with self.state.step("verify_klusterlet_connections", logger) as should_run_fix:
+                    with self._step("verify_klusterlet_connections") as should_run_fix:
                         klusterlet_step_checked = True
                         if should_run_fix:
                             self._verify_klusterlet_connections()
@@ -195,13 +240,13 @@ class PostActivationVerification:
         # Optional: Verify klusterlet connections (non-blocking)
         # This may have already been done above if clusters didn't connect initially
         if not klusterlet_step_checked:
-            with self.state.step("verify_klusterlet_connections", logger) as should_run:
+            with self._step("verify_klusterlet_connections") as should_run:
                 if should_run:
                     self._verify_klusterlet_connections()
 
     def _verify_auto_import_cleanup_step(self) -> None:
         """Verify disable-auto-import annotations are cleared from ManagedClusters."""
-        with self.state.step("verify_auto_import_cleanup", logger) as should_run:
+        with self._step("verify_auto_import_cleanup") as should_run:
             if should_run:
                 self._verify_disable_auto_import_cleared()
 
@@ -212,106 +257,38 @@ class PostActivationVerification:
         Includes scaling up components, restarting API, verifying pods,
         and checking metrics collection.
         """
-        with self.state.step("scale_up_observability_components", logger) as should_run:
+        with self._step("scale_up_observability_components") as should_run:
             if should_run:
                 self._scale_up_observability_components()
 
-        with self.state.step("restart_observatorium_api", logger) as should_run:
+        with self._step("restart_observatorium_api") as should_run:
             if should_run:
                 self._restart_observatorium_api()
 
-        with self.state.step("verify_observability_pods", logger) as should_run:
+        with self._step("verify_observability_pods") as should_run:
             if should_run:
                 self._verify_observability_pods()
 
-        with self.state.step("verify_metrics_collection", logger) as should_run:
+        with self._step("verify_metrics_collection") as should_run:
             if should_run:
                 self._verify_metrics_collection()
 
     @dry_run_skip(message="Skipping wait for ManagedCluster connections")
-    def _verify_managed_clusters_connected(self, timeout: int = CLUSTER_VERIFY_TIMEOUT):
-        """Verify all ManagedClusters are connected."""
+    def _verify_managed_clusters_connected(self, timeout: int = CLUSTER_VERIFY_TIMEOUT) -> Optional[Dict]:
+        """Wait until the strict ManagedCluster inventory proves readiness (Available and Joined).
 
-        latest_status = {
-            "available": 0,
-            "joined": 0,
-            "total": 0,
-            "pending": [],
-        }
+        Returns the accepted readiness decision (None in a dry-run).
+        """
+
+        latest: Dict = {}
 
         def _poll_clusters():
-            nonlocal latest_status
-            managed_clusters = self.secondary.list_custom_resources(
-                group=MANAGED_CLUSTER_API_GROUP,
-                version=MANAGED_CLUSTER_API_VERSION,
-                plural=MANAGED_CLUSTER_PLURAL,
-            )
-
-            if not managed_clusters:
-                latest_status = {"available": 0, "joined": 0, "total": 0, "pending": []}
-                return WaitConditionResult.pending("no ManagedClusters found")
-
-            total_clusters = 0
-            available_clusters = 0
-            joined_clusters = 0
-            pending_clusters = []
-            observed_names = []
-
-            for mc in managed_clusters:
-                mc_name = mc.get("metadata", {}).get("name")
-
-                if mc_name == LOCAL_CLUSTER_NAME:
-                    continue
-
-                total_clusters += 1
-                if mc_name:
-                    observed_names.append(mc_name)
-                conditions = mc.get("status", {}).get("conditions", [])
-
-                is_available = any(
-                    c.get("type") == "ManagedClusterConditionAvailable" and c.get("status") == "True"
-                    for c in conditions
-                )
-                is_joined = any(
-                    c.get("type") == "ManagedClusterJoined" and c.get("status") == "True" for c in conditions
-                )
-
-                if is_available:
-                    available_clusters += 1
-                if is_joined:
-                    joined_clusters += 1
-                if not (is_available and is_joined):
-                    pending_clusters.append(mc_name or "unknown")
-
-            latest_status = {
-                "available": available_clusters,
-                "joined": joined_clusters,
-                "total": total_clusters,
-                "pending": pending_clusters,
-            }
-
-            missing_expected = sorted(set(self.expected_managed_cluster_names) - set(observed_names))
-            if self.enforce_expected_managed_cluster_names and missing_expected:
-                pending_clusters.extend(missing_expected)
-                latest_status["pending"] = pending_clusters
-                return WaitConditionResult.pending("missing expected ManagedCluster(s): " + ", ".join(missing_expected))
-
-            if self.min_managed_clusters > 0 and total_clusters < self.min_managed_clusters:
-                return WaitConditionResult.pending(
-                    f"found {total_clusters}/{self.min_managed_clusters} expected ManagedCluster(s)"
-                )
-
-            # If there are no non-local ManagedClusters, that's OK - nothing to wait for
-            if total_clusters == 0:
-                return WaitConditionResult.complete(
-                    "No non-local ManagedClusters to verify (only local-cluster exists)"
-                )
-
-            is_ready = available_clusters == total_clusters and joined_clusters == total_clusters
-            detail = f"available={available_clusters}/{total_clusters}, " f"joined={joined_clusters}/{total_clusters}"
-            if is_ready:
-                return WaitConditionResult.complete(detail)
-            return WaitConditionResult.pending(detail)
+            decision = self._managed_cluster_readiness()
+            latest.clear()
+            latest.update(decision)
+            if decision["ready"]:
+                return WaitConditionResult.complete(self._readiness_detail(decision))
+            return WaitConditionResult.pending(self._readiness_detail(decision))
 
         success = wait_for_condition(
             "ManagedCluster connections",
@@ -322,31 +299,127 @@ class PostActivationVerification:
         )
 
         if not success:
-            missing_expected = sorted(
-                set(self.expected_managed_cluster_names) - set(self._non_local_managed_cluster_names())
-            )
-            if self.enforce_expected_managed_cluster_names and missing_expected:
+            if latest.get("code") == "expected_names_missing":
                 raise SwitchoverError(
-                    "Missing expected ManagedCluster(s) after activation: " + ", ".join(missing_expected)
+                    "Missing expected ManagedCluster(s) after activation (expected_names_missing): "
+                    + ", ".join(latest["missing"])
                 )
-            raise SwitchoverError(
-                "Timeout waiting for ManagedClusters to connect. "
-                f"{latest_status['available']}/{latest_status['total']} available, "
-                f"{latest_status['joined']}/{latest_status['total']} joined"
-            )
+            detail = self._readiness_detail(latest) if latest else "no readiness decision"
+            raise SwitchoverError(f"Timeout waiting for ManagedClusters to connect ({latest.get('code')}): {detail}")
+        return dict(latest)
 
-    def _non_local_managed_cluster_names(self) -> List[str]:
-        """Return non-local ManagedCluster names visible on the secondary hub."""
-        clusters = self.secondary.list_custom_resources(
-            group=MANAGED_CLUSTER_API_GROUP,
-            version=MANAGED_CLUSTER_API_VERSION,
-            plural=MANAGED_CLUSTER_PLURAL,
+    def _effective_expected_names(self) -> List[str]:
+        return list(self.expected_managed_cluster_names) if self.enforce_expected_managed_cluster_names else []
+
+    def _managed_cluster_readiness(self) -> Dict:
+        """One strict ManagedCluster inventory read and its readiness decision (names, floor, conditions)."""
+        return self._evidence(
+            managed_cluster_readiness,
+            items=self._strict_managed_clusters(),
+            expected_names=self._effective_expected_names(),
+            min_managed_clusters=self.min_managed_clusters,
+            names_waived=self._names_waived,
         )
-        return sorted(
-            item.get("metadata", {}).get("name")
-            for item in clusters
-            if item.get("metadata", {}).get("name") and item.get("metadata", {}).get("name") != LOCAL_CLUSTER_NAME
+
+    def _readiness_detail(self, decision: Dict) -> str:
+        code = decision["code"]
+        if code == "inventory_empty":
+            return "no ManagedClusters found"
+        if code == "expected_names_missing":
+            return "missing expected ManagedCluster(s): " + ", ".join(decision["missing"])
+        if code == "count_below_minimum":
+            return f"found {decision['count']}/{self.min_managed_clusters} expected ManagedCluster(s)"
+        if code == "clusters_not_ready":
+            return "not Available and Joined: " + ", ".join(decision["pending"])
+        if decision["count"] == 0:
+            return "No non-local ManagedClusters to verify (only local-cluster exists)"
+        return f"available and joined={decision['count']}/{decision['count']}"
+
+    # -- R4-04 migration evidence: post_activation.names_verified_at (or the waiver), then completed_at --
+
+    def _load_post_activation_journal(self) -> Optional[Dict]:
+        """The migration journal post-activation records into.
+
+        An executing run requires one with restore.completed_at: switchover, restore-only
+        and full restore all journal at activation, so its absence means post-activation
+        cannot prove a migration and must not record completion. A dry-run may have none
+        (a preview journals nothing) and writes no evidence.
+        """
+        try:
+            journal = self.run_record.migration_backups()
+        except (MigrationEvidenceError, StateStructureError) as exc:
+            raise FatalError(f"The recorded migration journal is invalid and blocks post-activation: {exc}") from exc
+        if self.dry_run:
+            return journal
+        return self._evidence(require_completed_restore, journal)
+
+    def _post_activation_waiver(self, journal: Optional[Dict]) -> Optional[Dict]:
+        """The waiver covering the post-activation name check: the journaled one, else a post_activation request."""
+        if self.dry_run:
+            return None
+        decision = self._evidence(
+            post_activation_waiver,
+            journal=journal,
+            requested=self.managed_cluster_expectation_waiver,
+            expected_names=self._effective_expected_names(),
+            flag=MANAGED_CLUSTER_EXPECTATION_WAIVER_FLAG,
+            journaled_at=_now_iso(),
         )
+        waiver = decision["waiver"]
+        if waiver is not None:
+            logger.warning(
+                "Expected ManagedCluster name check waived for post-activation by %s (%s); "
+                "the count floor and readiness still apply",
+                waiver["actor"],
+                waiver["reason"],
+            )
+        self._names_waived = waiver is not None
+        return waiver
+
+    def _record_names_evidence(self, journal: Optional[Dict], waiver: Optional[Dict]) -> Optional[Dict]:
+        """Prove readiness with the bounded strict wait, then record the name check or the waiver once.
+
+        Runs on every attempt, completed step markers notwithstanding, with the same
+        bounded wait the collection polls; recorded evidence is kept, and a failed
+        proof fails the attempt without clearing it.
+        """
+        if self.dry_run:
+            logger.info("[DRY-RUN] Would verify and record the post-activation ManagedCluster name evidence")
+            return journal
+        readiness = self._verify_managed_clusters_connected()
+        decision = self._evidence(
+            post_activation_names_evidence, journal=journal, readiness=readiness, waiver=waiver, now=_now_iso()
+        )
+        if decision["write"]:
+            self._persist_journal(decision["candidate"])
+        return decision["candidate"]
+
+    def _record_completion_evidence(self, journal: Optional[Dict]) -> None:
+        """Record post_activation.completed_at, the last post-activation evidence transition, once."""
+        if self.dry_run:
+            logger.info("[DRY-RUN] Would record post-activation completion evidence")
+            return
+        decision = self._evidence(post_activation_completion, journal=journal, now=_now_iso())
+        if decision["write"]:
+            self._persist_journal(decision["candidate"])
+            logger.info("Recorded post-activation completion evidence")
+
+    def _persist_journal(self, candidate: Dict) -> None:
+        """Durably record a journal transition through RunRecord; a failure fails the phase."""
+        try:
+            self.run_record.record_migration_backups(candidate)
+        except MigrationEvidenceError as exc:
+            raise FatalError(f"The migration journal transition was refused: {exc}") from exc
+        except OSError as exc:
+            raise FatalError(f"The migration journal could not be recorded durably: {exc}") from exc
+
+    @staticmethod
+    def _evidence(function, *args, **kwargs):
+        """Call a pure evidence helper, turning its fail-closed refusal into a FatalError."""
+        try:
+            return function(*args, **kwargs)
+        except MigrationEvidenceError as exc:
+            raise FatalError(f"Migration evidence refused ({exc})") from exc
 
     @dry_run_skip(message="Skipping scale-up of observability components")
     def _scale_up_observability_components(self):

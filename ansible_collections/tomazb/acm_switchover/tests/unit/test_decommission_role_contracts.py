@@ -1459,12 +1459,16 @@ class FakeDecommissionAPI:
         list_inventory_sequences_by_plural: Optional[dict] = None,
         list_revision_sequences_by_plural: Optional[dict] = None,
         api_resources_by_group: Optional[dict] = None,
+        extra_group_versions: Optional[dict] = None,
     ):
         #: Overridable so a hub can serve a group/version that positively does NOT
         #: serve ``multiclusterobservabilities``. That is the only way to produce a
         #: real ``kind_not_served``: the module requires a well-formed APIResourceList
         #: without the plural, and a 404 on the discovery path is `error`, not absence.
         self.api_resources_by_group = dict(api_resources_by_group or _GROUP_API_RESOURCES)
+        #: group -> (version, resources) served alongside the group's preferred version, so a
+        #: destination hub can answer the old-hub evidence gate's ACM Restore locator read.
+        self.extra_group_versions = dict(extra_group_versions or {})
         self.store: Dict[str, List[dict]] = {
             "multiclusterobservabilities": copy.deepcopy(multiclusterobservabilities),
             "multiclusterhubs": copy.deepcopy(multiclusterhubs),
@@ -1475,6 +1479,7 @@ class FakeDecommissionAPI:
             "deployments": copy.deepcopy(deployments or []),
             "replicasets": copy.deepcopy(replicasets or []),
             "clusterserviceversions": copy.deepcopy(clusterserviceversions or []),
+            "restores": [],
         }
         self.delete_status_by_plural = dict(delete_status_by_plural)
         self.read_status_by_plural = dict(read_status_by_plural)
@@ -1564,6 +1569,10 @@ class FakeDecommissionAPI:
             selected.append(item)
         return selected
 
+    def _served_versions(self, group: str, version: str) -> list:
+        extra = self.extra_group_versions.get(group)
+        return [version] if extra is None else [version, extra[0]]
+
     def _discovery_payload(self, path: str):
         if path == "/version":
             return {"major": "1", "minor": "28", "gitVersion": "v1.28.0"}
@@ -1585,7 +1594,10 @@ class FakeDecommissionAPI:
                 "groups": [
                     {
                         "name": group,
-                        "versions": [{"groupVersion": f"{group}/{version}", "version": version}],
+                        "versions": [
+                            {"groupVersion": f"{group}/{served}", "version": served}
+                            for served in self._served_versions(group, version)
+                        ],
                         "preferredVersion": {
                             "groupVersion": f"{group}/{version}",
                             "version": version,
@@ -1594,7 +1606,7 @@ class FakeDecommissionAPI:
                     for group, (version, _) in self.api_resources_by_group.items()
                 ],
             }
-        for group, (version, resources) in self.api_resources_by_group.items():
+        for group, (version, resources) in [*self.api_resources_by_group.items(), *self.extra_group_versions.items()]:
             if path == f"/apis/{group}/{version}":
                 return {
                     "kind": "APIResourceList",
@@ -2166,6 +2178,26 @@ def _namespace_object(name: str, uid: Optional[str] = None) -> dict:
     return {"apiVersion": "v1", "kind": "Namespace", "metadata": metadata}
 
 
+#: The destination's ACM Restore kind: the old-hub evidence gate (plan Task 11) reads the
+#: journaled Restore locator there, and an empty store answers with a current-route 404.
+_RESTORE_API_RESOURCE = {
+    "name": "restores",
+    "singularName": "restore",
+    "namespaced": True,
+    "kind": "Restore",
+    "verbs": ["get", "list"],
+}
+_VECTORS_PATH = (
+    pathlib.Path(__file__).resolve().parents[5] / "tests" / "fixtures" / "r4_04_migration_evidence_vectors.json"
+)
+
+
+def _completed_migration_journal() -> dict:
+    """The shared vector of a completed Restore cleanup with complete migration evidence."""
+    cases = json.loads(_VECTORS_PATH.read_text(encoding="utf-8"))["cases"]
+    return next(case for case in cases if case["id"] == "journal-cleanup-completed")["input"]["candidate"]
+
+
 def _destination_api(destination_mco: str, destination_namespace: str) -> "FakeDecommissionAPI":
     """A second fake hub serving exactly the four reads the C5 gate performs there.
 
@@ -2196,6 +2228,7 @@ def _destination_api(destination_mco: str, destination_namespace: str) -> "FakeD
         read_status_by_plural=({"multiclusterobservabilities": 403} if destination_mco == "unverifiable" else {}),
         named_read_status_by_plural=({"namespaces": 403} if destination_namespace == "unverifiable" else {}),
         api_resources_by_group=api_resources,
+        extra_group_versions={"cluster.open-cluster-management.io": ("v1beta1", [_RESTORE_API_RESOURCE])},
     )
 
 
@@ -2252,6 +2285,7 @@ def run_decommission_role(
     csv_read_status: int = 200,
     object_read_statuses: Optional[Dict[str, int]] = None,
     collection_root: Optional[pathlib.Path] = None,
+    old_hub_evidence: bool = True,
 ) -> dict:
     """Run the decommission role against declared fakes and return one canonical result.
 
@@ -2284,8 +2318,12 @@ def run_decommission_role(
     # A destination hub exists only when this run declares one. Every pre-C5b row keeps
     # its exact request footprint: with no secondary, delete_observability.yml never
     # includes the gate and no destination fake is ever started.
+    # The integrated entries always have one: the old-hub evidence gate reads the destination.
     with_destination = (
-        destination_mco is not None or destination_namespace is not None or integrated_finalization_secondary
+        destination_mco is not None
+        or destination_namespace is not None
+        or integrated_finalization_secondary
+        or integrated_finalization
     )
     if collection_root is not None and standalone_playbook:
         raise ValueError(
@@ -2620,6 +2658,27 @@ def run_decommission_role(
         vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False), encoding="utf-8")
 
         playbook_path = workspace / "decommission-harness.yml"
+        # What finalization/tasks/main.yml publishes before any old-hub adapter: the validated
+        # journal of a completed Restore cleanup and that cleanup's result (plan Task 11). Without
+        # it an adapter entered directly must refuse before any mutation.
+        migration_context = (
+            [
+                {
+                    "name": f"{_HARNESS_TASK_PREFIX}publish the finalization migration context",
+                    "ansible.builtin.set_fact": {
+                        "_acm_journal": _completed_migration_journal(),
+                        "_acm_has_journal": True,
+                        "acm_switchover_journaled_restore_cleanup_result": {
+                            "changed": False,
+                            "step": "terminal",
+                            "state": "completed",
+                        },
+                    },
+                }
+            ]
+            if old_hub_evidence
+            else []
+        )
         if integrated_finalization_secondary:
             # The REAL secondary-disposition adapter, loaded from the shipped
             # finalization role rather than copied here.
@@ -2631,13 +2690,14 @@ def run_decommission_role(
                             "connection": "local",
                             "gather_facts": False,
                             "tasks": [
+                                *migration_context,
                                 {
                                     "name": f"{_HARNESS_TASK_PREFIX}run the real old-hub observability adapter",
                                     "ansible.builtin.include_role": {
                                         "name": "tomazb.acm_switchover.finalization",
                                         "tasks_from": "disable_old_hub_observability.yml",
                                     },
-                                }
+                                },
                             ],
                         }
                     ],
@@ -2659,13 +2719,14 @@ def run_decommission_role(
                             "connection": "local",
                             "gather_facts": False,
                             "tasks": [
+                                *migration_context,
                                 {
                                     "name": f"{_HARNESS_TASK_PREFIX}run the real handle_old_hub path",
                                     "ansible.builtin.include_role": {
                                         "name": "tomazb.acm_switchover.finalization",
                                         "tasks_from": "handle_old_hub.yml",
                                     },
-                                }
+                                },
                             ],
                         }
                     ],
@@ -3189,9 +3250,8 @@ def test_execute_mode_fails_closed_when_checkpointing_is_unavailable():
     message = failed[0]["result"]["msg"]
     assert "durable checkpoint state" in message
     assert "acm_switchover_execution.checkpoint.enabled" in message
-    # The shipped file that sets it to false, named so an operator hitting this cold
-    # knows what to change.
-    assert "examples/group_vars/all.yml" in message
+    # The shipped example enables checkpointing, so the message no longer claims otherwise.
+    assert "sets it to false" not in message
 
 
 def test_validate_mode_is_refused_and_issues_no_delete():

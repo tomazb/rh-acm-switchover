@@ -7,9 +7,59 @@
   register: _checkpoint_enter
   when: acm_switchover_execution.checkpoint.enabled | default(false)
 
+# PR C decisions amendment 2.2 rule 3: the Argo CD re-pause a failure rescue left runs
+# before any finalization work, outside the phase rescue (a failed re-pause resumes nothing).
+- name: Re-pause Argo CD recorded by a failure rescue
+  ansible.builtin.include_role:
+    name: tomazb.acm_switchover.argocd_manage
+    tasks_from: repause_recovery
+  when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
+
 - name: Run finalization phase
   when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
   block:
+    # The direct role entry (docs/variable-reference.md) proves its operator inputs
+    # before any mutation.
+    - name: Guard the finalization role entry
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/guard_role_entry.yml"
+      vars:
+        _acm_role_entry_phase: finalization
+
+    # R4-04: the journal comes only from the checkpoint enter and is validated before any
+    # Restore cleanup, old-hub action or BackupSchedule enablement. Restore-only and full
+    # runs journal at activation too, so an executing run has no journal-free path.
+    - name: Publish the finalization migration journal facts
+      ansible.builtin.set_fact:
+        _acm_preview: >-
+          {{ (acm_switchover_execution.mode | default('dry_run')) != 'execute' or ansible_check_mode }}
+        # A templated null does not survive the non-native templating of the ansible-core
+        # floor, so the journal is a mapping ({} when none) and its presence a boolean.
+        _acm_journal: >-
+          {{ (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal')) or {} }}
+        _acm_has_journal: >-
+          {{ (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal')) is not none }}
+        # The validated cleanup-repair acknowledgement ({} when none was requested).
+        _acm_cleanup_repair_request: >-
+          {{
+            (((_acm_role_entry_inputs.results | default([])
+              | selectattr('id', 'equalto', 'preflight-input-operation') | list | first | default({}))
+              .get('details') or {}).get('migration_cleanup_repair')) or {}
+          }}
+
+    - name: Refuse an invalid recorded migration journal
+      ansible.builtin.fail:
+        msg: >-
+          The recorded migration journal is invalid and blocks finalization. Repair the checkpoint, or
+          start a new migration with the full checkpoint reset (checkpoint.reset).
+      when: >-
+        (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal_outcome', 'absent'))
+        not in ['absent', 'valid']
+
+    # Ahead of every old-hub action and of BackupSchedule enablement, on every pass: the
+    # journal, not a phase marker, decides what the journaled Restore cleanup still owes.
+    - name: Reconcile the journaled Restore cleanup
+      ansible.builtin.include_tasks: cleanup_journaled_restore.yml
+
     - name: Restore backup verification baseline from checkpoint
       ansible.builtin.set_fact:
         acm_switchover_backup_schedule_enabled_at: >-
@@ -43,6 +93,9 @@
         - not (acm_switchover_operation.restore_only | default(false))
         - not (acm_switchover_features.skip_observability_checks | default(false) | bool)
         - (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
+        # As Finalization: only a primary with Observability is torn down. A direct entry
+        # without the preflight fact keeps the teardown, which discovers the MCO live.
+        - acm_switchover_primary_has_observability | default(true) | bool
 
     - name: Clean up secondary restore resources before enabling backups
       ansible.builtin.include_tasks: cleanup_restores.yml
@@ -88,7 +141,8 @@
           status: pass
           changed: >-
             {{
-              (acm_switchover_cleanup_restores_result.changed | default(false))
+              (acm_switchover_journaled_restore_cleanup_result.changed | default(false))
+              or (acm_switchover_cleanup_restores_result.changed | default(false))
               or (acm_switchover_disable_old_hub_observability_result.changed | default(false))
               or (acm_switchover_enable_backups_result.changed | default(false))
               or (acm_switchover_verify_backups_result.changed | default(false))
@@ -101,6 +155,7 @@
             }}
           old_hub_action: "{{ acm_switchover_operation.old_hub_action | default('secondary') }}"
           disable_old_hub_observability: "{{ acm_switchover_disable_old_hub_observability_result | default({}) }}"
+          journaled_restore_cleanup: "{{ acm_switchover_journaled_restore_cleanup_result | default({}) }}"
           cleanup_restores: "{{ acm_switchover_cleanup_restores_result | default({}) }}"
           enable_backups: "{{ acm_switchover_enable_backups_result | default({}) }}"
           backup_schedule_collision_repair: "{{ acm_switchover_repair_backup_schedule_collision_result | default({}) }}"
@@ -111,20 +166,48 @@
       tags:
         - finalization
   rescue:
+    # Only an acknowledged write proves the marker durable; a visible one may not be.
+    - name: Record the original finalization failure
+      ansible.builtin.set_fact:
+        _acm_phase_failure: "{{ ansible_failed_result.msg | default('unknown failure') }}"
+        _acm_repause_marker_durable: false
+
+    # Amendment 2.2 rule 2: under a migration journal the re-pause marker is durable in
+    # this same fail transition, before the play rescue may resume Argo CD. A failed
+    # write is reported with the original failure, never instead of it.
     - name: Mark checkpoint failure
-      tomazb.acm_switchover.checkpoint_phase:
-        phase: finalization
-        checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
-        status: fail
-        error: "{{ ansible_failed_result.msg | default('unknown failure') }}"
-        operational_data:
-          backup_schedule_enabled_at: "{{ acm_switchover_backup_schedule_enabled_at | default('') }}"
-          saved_backup_schedule: "{{ acm_switchover_saved_backup_schedule | default('') }}"
       when: acm_switchover_execution.checkpoint.enabled | default(false)
+      block:
+        - name: Record the failed phase and any Argo CD re-pause obligation
+          tomazb.acm_switchover.checkpoint_phase:
+            phase: finalization
+            checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+            status: fail
+            error: "{{ _acm_phase_failure }}"
+            argocd_repause: >-
+              {{
+                (acm_switchover_features.argocd.manage | default(false) | bool)
+                and (acm_switchover_features.argocd.resume_on_failure | default(false) | bool)
+              }}
+            operational_data:
+              backup_schedule_enabled_at: "{{ acm_switchover_backup_schedule_enabled_at | default('') }}"
+              saved_backup_schedule: "{{ acm_switchover_saved_backup_schedule | default('') }}"
+          register: _acm_fail_transition
+
+        - name: Acknowledge the durable Argo CD re-pause marker
+          ansible.builtin.set_fact:
+            _acm_repause_marker_durable: "{{ _acm_fail_transition.argocd_repause_recorded | default(false) }}"
+      rescue:
+        - name: Report the failure the checkpoint could not record
+          ansible.builtin.fail:
+            msg: >-
+              {{ _acm_phase_failure }} The checkpoint could not record this failure:
+              {{ ansible_failed_result.msg | default('unknown failure') }}. No Argo CD re-pause
+              marker is durable, so no Argo CD Application may be resumed.
 
     - name: Re-raise failure
       ansible.builtin.fail:
-        msg: "{{ ansible_failed_result.msg | default('Phase finalization failed') }}"
+        msg: "{{ _acm_phase_failure }}"
 
 - name: Mark checkpoint phase completion
   # No file artifact for finalization; report_ref not applicable

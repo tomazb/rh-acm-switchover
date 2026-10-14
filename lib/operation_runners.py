@@ -34,8 +34,25 @@ from lib.workflow import (
     handle_completed_state,
     handle_failed_state,
     log_operation_completion,
+    refuse_predictable_journal_reset,
     run_phase_flow,
     run_validate_only_preflight,
+)
+
+# Phases a FAILED state may retry from, per flow.
+SWITCHOVER_RESUMABLE_PHASES: Tuple[Phase, ...] = (
+    Phase.PREFLIGHT,
+    Phase.PRIMARY_PREP,
+    Phase.SECONDARY_VERIFY,
+    Phase.ACTIVATION,
+    Phase.POST_ACTIVATION,
+    Phase.FINALIZATION,
+)
+RESTORE_ONLY_RESUMABLE_PHASES: Tuple[Phase, ...] = (
+    Phase.PREFLIGHT,
+    Phase.ACTIVATION,
+    Phase.POST_ACTIVATION,
+    Phase.FINALIZATION,
 )
 
 DecommissionRunner = Callable[[Any, Any, Any, Any], bool]
@@ -60,6 +77,8 @@ class SwitchoverRunnerHooks:
     fail_phase: FailPhaseHandler
     fail_unexpected_phase_state: UnexpectedPhaseHandler
     on_phase_failure: FailureHook
+    # Runs before any phase of a retry: the Argo CD re-pause a rescue left behind.
+    rescue_repause: Optional[PhaseHandler] = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +91,14 @@ class RestoreOnlyRunnerHooks:
     fail_phase: FailPhaseHandler
     fail_unexpected_phase_state: UnexpectedPhaseHandler
     on_phase_failure: FailureHook
+    # Runs before any phase of a retry: the Argo CD re-pause a rescue left behind.
+    rescue_repause: Optional[PhaseHandler] = None
+
+
+def refuse_implicit_journal_reset(args: Any, state: Any, logger: Any) -> None:
+    """Refuse, before any write, a --force reset this operation's flow would make over a journal."""
+    resumable = RESTORE_ONLY_RESUMABLE_PHASES if getattr(args, "restore_only", False) else SWITCHOVER_RESUMABLE_PHASES
+    refuse_predictable_journal_reset(args, state, logger, resumable)
 
 
 def execute_operation(
@@ -121,14 +148,7 @@ def run_switchover_impl(
         state,
         logger,
         FailedStateConfig(
-            resumable_phases=(
-                Phase.PREFLIGHT,
-                Phase.PRIMARY_PREP,
-                Phase.SECONDARY_VERIFY,
-                Phase.ACTIVATION,
-                Phase.POST_ACTIVATION,
-                Phase.FINALIZATION,
-            ),
+            resumable_phases=SWITCHOVER_RESUMABLE_PHASES,
             operation_noun=OPERATION_NOUN_SWITCHOVER,
         ),
     )
@@ -176,6 +196,7 @@ def run_switchover_impl(
         hooks.fail_phase,
         hooks.fail_unexpected_phase_state,
         hooks.on_phase_failure,
+        before_phases=hooks.rescue_repause,
     ):
         return False
 
@@ -225,12 +246,7 @@ def run_restore_only_impl(
         state,
         logger,
         FailedStateConfig(
-            resumable_phases=(
-                Phase.PREFLIGHT,
-                Phase.ACTIVATION,
-                Phase.POST_ACTIVATION,
-                Phase.FINALIZATION,
-            ),
+            resumable_phases=RESTORE_ONLY_RESUMABLE_PHASES,
             operation_noun=OPERATION_NOUN_RESTORE,
         ),
     )
@@ -265,6 +281,7 @@ def run_restore_only_impl(
         hooks.fail_phase,
         hooks.fail_unexpected_phase_state,
         hooks.on_phase_failure,
+        before_phases=hooks.rescue_repause,
     ):
         return False
 

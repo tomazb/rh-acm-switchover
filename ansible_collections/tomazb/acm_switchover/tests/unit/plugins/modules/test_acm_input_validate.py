@@ -3,6 +3,7 @@
 import pathlib
 from typing import Any
 
+import pytest
 import yaml
 
 from ansible_collections.tomazb.acm_switchover.plugins.modules import acm_input_validate
@@ -670,3 +671,125 @@ def test_preflight_validation_task_passes_the_decommission_variable():
     )
 
     assert args["decommission"] == "{{ acm_switchover_decommission | default({}) }}"
+
+
+_RUN_ID = "3f2c8e1a-0b4d-4c6e-9a7f-1d2e3f4a5b6c"
+_OPERATION_ID = "9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+_WAIVER = {
+    "scope": "both",
+    "actor": "operator@example.com",
+    "reason": "the primary inventory is stale",
+    "request_id": "CHG-1",
+}
+_REPAIR = {
+    "actor": "operator@example.com",
+    "reason": "the Restore was deleted by this run",
+    "inspected_evidence": ["audit-log:restore-delete"],
+    "run_id": _RUN_ID,
+    "operation_id": _OPERATION_ID,
+}
+
+
+def _migration_input_result(operation: dict) -> dict:
+    results = build_input_validation_results(
+        {
+            "hubs": {
+                "primary": {"context": "primary-hub", "kubeconfig": "./kubeconfigs/hub.kubeconfig"},
+                "secondary": {"context": "secondary-hub", "kubeconfig": "./kubeconfigs/hub.kubeconfig"},
+            },
+            "operation": {
+                "method": "passive",
+                "activation_method": "patch",
+                "old_hub_action": "secondary",
+                **operation,
+            },
+            "execution": {"mode": "execute"},
+            "features": {"argocd": {"manage": False}},
+        }
+    )
+    return next(item for item in results if item["id"] == "preflight-input-operation")
+
+
+def test_validated_waiver_and_repair_are_exposed_as_effective_inputs():
+    result = _migration_input_result(
+        {
+            "skip_managed_cluster_expectations": True,
+            "managed_cluster_expectation_waiver": _WAIVER,
+            "migration_cleanup_repair": _REPAIR,
+        }
+    )
+    assert result["status"] == "pass"
+    assert result["details"]["managed_cluster_expectation_waiver"] == _WAIVER
+    assert result["details"]["migration_cleanup_repair"] == _REPAIR
+
+
+def test_unrequested_waiver_and_repair_are_exposed_as_none():
+    result = _migration_input_result(
+        {
+            "skip_managed_cluster_expectations": False,
+            "managed_cluster_expectation_waiver": {"scope": None, "actor": "", "reason": "", "request_id": None},
+            "migration_cleanup_repair": {
+                "actor": "",
+                "reason": "",
+                "inspected_evidence": [],
+                "run_id": "",
+                "operation_id": "",
+            },
+        }
+    )
+    assert result["status"] == "pass"
+    assert result["details"]["managed_cluster_expectation_waiver"] is None
+    assert result["details"]["migration_cleanup_repair"] is None
+
+
+def test_skip_flag_without_a_waiver_block_is_malformed():
+    result = _migration_input_result({"skip_managed_cluster_expectations": True})
+    assert result["status"] == "fail"
+    assert result["message"].startswith("malformed_waiver:")
+
+
+def test_waiver_block_with_an_undocumented_key_is_malformed():
+    result = _migration_input_result(
+        {
+            "skip_managed_cluster_expectations": True,
+            "managed_cluster_expectation_waiver": {**_WAIVER, "outcome": "waived"},
+        }
+    )
+    assert result["message"].startswith("malformed_waiver:")
+
+
+def test_repair_block_that_is_not_a_dict_is_malformed():
+    result = _migration_input_result({"migration_cleanup_repair": "operator@example.com"})
+    assert result["message"].startswith("malformed_repair:")
+
+
+def test_repair_block_with_an_undocumented_key_is_a_malformed_request():
+    result = _migration_input_result({"migration_cleanup_repair": {"acknowledged_at": ""}})
+    assert result["message"].startswith("malformed_repair:")
+
+
+def test_omitted_request_id_is_optional():
+    """Review finding 1: request_id is optional, so omitting the key equals null."""
+    waiver = {key: value for key, value in _WAIVER.items() if key != "request_id"}
+    result = _migration_input_result(
+        {"skip_managed_cluster_expectations": True, "managed_cluster_expectation_waiver": waiver}
+    )
+    assert result["status"] == "pass"
+    assert result["details"]["managed_cluster_expectation_waiver"] == dict(waiver, request_id=None)
+
+
+def test_omitted_request_id_does_not_mutate_the_operator_input():
+    waiver = {key: value for key, value in _WAIVER.items() if key != "request_id"}
+    _migration_input_result({"skip_managed_cluster_expectations": True, "managed_cluster_expectation_waiver": waiver})
+    assert "request_id" not in waiver
+
+
+@pytest.mark.parametrize("value", ["false", "true", "yes", 1, 0, None, []])
+def test_skip_flag_must_be_a_real_boolean(value):
+    """Review finding 3: only a real boolean enables or disables the waiver."""
+    result = _migration_input_result(
+        {"skip_managed_cluster_expectations": value, "managed_cluster_expectation_waiver": _WAIVER}
+    )
+    assert result["status"] == "fail"
+    assert result["message"].startswith("malformed_waiver:")
+    assert "must be a boolean" in result["message"]

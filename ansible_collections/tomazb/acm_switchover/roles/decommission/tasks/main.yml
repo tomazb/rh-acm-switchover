@@ -105,8 +105,7 @@
       Refusing decommission in execute mode without durable checkpoint state: the
       identity map must be persisted BEFORE the first delete. Set
       acm_switchover_execution.checkpoint.enabled to true (with backend file and a
-      writable path) -- the shipped examples/group_vars/all.yml sets it to false --
-      or preview with acm_switchover_execution.mode set to dry_run.
+      writable path), or preview with acm_switchover_execution.mode set to dry_run.
   when:
     - not ansible_check_mode
     - (acm_switchover_execution.mode | default('dry_run')) in ['execute', 'validate']

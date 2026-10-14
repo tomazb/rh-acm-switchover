@@ -278,6 +278,21 @@ def _require_unpadded_identity(uid: str, resource_version: str, action: str) -> 
             raise ValidationError(f"The {field} for a guarded Restore {action} carries surrounding whitespace.")
 
 
+def _is_generation(value: Any) -> bool:
+    """A Kubernetes metadata.generation: a positive integer, never a boolean."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def _is_response_identity(value: Any) -> bool:
+    """A response `metadata.uid` or `metadata.resourceVersion`: non-empty, without surrounding whitespace."""
+    return isinstance(value, str) and bool(value) and value == value.strip()
+
+
+def _reject_json_constant(constant: str) -> Any:
+    """`json.loads` hook: NaN and the infinities are not JSON, so a body carrying one is malformed."""
+    raise ValueError(f"Malformed Kubernetes API response: non-JSON constant {constant}")
+
+
 # Standard retry decorator for API calls
 retry_api_call = retry(
     retry=retry_if_exception(_should_retry),
@@ -1184,11 +1199,14 @@ class KubeClient:
         plural: str,
         name: str,
         namespace: Optional[str] = None,
+        request_timeout: Optional[int] = None,
     ) -> StrictReadOutcome:
         """Strictly GET one named custom resource, or fail closed.
 
         OBJECT_ABSENT is returned only for a 404 that followed a successful
-        discovery determination that the kind is served.
+        discovery determination that the kind is served. ``request_timeout``
+        bounds the object GET instead of the client default (a caller's
+        remaining deadline).
         """
         self._validate_resource_inputs(namespace, name, "custom resource")
 
@@ -1204,7 +1222,7 @@ class KubeClient:
                     namespace=namespace,
                     plural=plural,
                     name=name,
-                    **self._request_timeout_kwargs(),
+                    **self._request_timeout_kwargs(request_timeout),
                 )
             else:
                 resource = self.custom_api.get_cluster_custom_object(
@@ -1212,7 +1230,7 @@ class KubeClient:
                     version=version,
                     plural=plural,
                     name=name,
-                    **self._request_timeout_kwargs(),
+                    **self._request_timeout_kwargs(request_timeout),
                 )
         except ApiException as exc:
             if exc.status == 404:
@@ -1497,10 +1515,11 @@ class KubeClient:
         A timeout is not acceptance, whether it strikes the request or the later read of the
         response body. Acceptance is verified only when the decoded response carries the
         proved `metadata.uid` and a non-empty `metadata.resourceVersion`; only then is its
-        integer `generation` published, and a missing generation is reported as None with
-        `generation_reported` False, never inferred. A 2xx whose identity is malformed is
-        `malformed_response` with `accepted` False, `changed` False and no identity or
-        generation evidence; `http_accepted` records that the server answered 2xx.
+        positive integer `generation` published, and an omitted generation is reported as None
+        with `generation_reported` False, never inferred. A 2xx whose identity is malformed, or
+        whose generation is present but not a positive integer, is `malformed_response` with
+        `accepted` False, `changed` False and no identity or generation evidence;
+        `http_accepted` records that the server answered 2xx.
 
         In dry-run no request is made; `would_change` carries the prediction and `changed`
         stays False.
@@ -1576,7 +1595,7 @@ class KubeClient:
 
         result.update(http_accepted=True, reason="malformed_response")
         try:
-            response = json.loads(body.decode("utf-8"))
+            response = json.loads(body.decode("utf-8"), parse_constant=_reject_json_constant)
         except Exception:
             return result
         metadata = response.get("metadata") if isinstance(response, dict) else None
@@ -1584,12 +1603,15 @@ class KubeClient:
             return result
         response_revision = metadata.get("resourceVersion")
         # Identity first: a generation is evidence only for the proved object (C §5.1).
-        if metadata.get("uid") != uid or not isinstance(response_revision, str) or not response_revision:
+        if metadata.get("uid") != uid or not _is_response_identity(response_revision):
+            return result
+        # Only an omitted generation falls back to the strict re-read (C §5.1); a present
+        # invalid one is a malformed response (J §1b).
+        if "generation" in metadata and not _is_generation(metadata["generation"]):
             return result
         result.update(accepted=True, changed=would_change, reason="ok", uid=uid, resource_version=response_revision)
-        generation = metadata.get("generation")
-        if isinstance(generation, int) and not isinstance(generation, bool):
-            result.update(generation=generation, generation_reported=True)
+        if "generation" in metadata:
+            result.update(generation=metadata["generation"], generation_reported=True)
         return result
 
     def _guarded_restore_result(self) -> Dict[str, Any]:
@@ -1617,12 +1639,15 @@ class KubeClient:
     ) -> Dict[str, Any]:
         """Delete an ACM Restore only while it is the proved UID at the proved resourceVersion.
 
-        Delegates the one request to `delete_custom_resource_preconditioned` with both
-        preconditions and maps its outcome to the guarded-mutation result shape (see
-        `json_patch_custom_resource_guarded`), without `generation`. A 409/412 is
-        `precondition_failed` with `conflict` True, a 404 is `not_found`, and anything else,
-        including a timeout, is `unverifiable`. Nothing is retried and no exception text is
-        returned. In dry-run the primitive is never reached: the result is a prediction.
+        Sends one DELETE whose DeleteOptions carry both preconditions, through the same
+        transport adapter as the guarded PATCH and CREATE, and maps its outcome to the
+        guarded-mutation result shape (see `json_patch_custom_resource_guarded`), without
+        `generation`. The body is read raw: the generated clients decode a DELETE body for a
+        200 only, and a 202 is as much an accepted delete. A 409/412 is
+        `precondition_failed` with `conflict` True, a 404 is `not_found`, a 2xx whose body is
+        not a decodable JSON object is `malformed_response` with `accepted` False, and anything
+        else, including a timeout, is `unverifiable`. Nothing is retried and no exception text is
+        returned. In dry-run no request is made: the result is a prediction.
 
         Raises:
             ValidationError: invalid name/namespace, or an empty or whitespace-padded uid or
@@ -1643,24 +1668,36 @@ class KubeClient:
             return result
 
         try:
-            self.delete_custom_resource_preconditioned(
-                CLUSTER_BACKUP_API_GROUP,
-                CLUSTER_BACKUP_API_VERSION,
-                RESTORE_PLURAL,
-                name,
-                uid=uid,
-                resource_version=resource_version,
-                namespace=namespace,
-                timeout_seconds=(timeout_seconds if timeout_seconds is not None else self.request_timeout),
+            # The body is read inside this boundary: a failure reading it leaves the outcome unknown.
+            raw = self._request_bytes(
+                "DELETE",
+                "/apis/{group}/{version}/namespaces/{namespace}/{plural}/{name}",
+                path_params={
+                    "group": CLUSTER_BACKUP_API_GROUP,
+                    "version": CLUSTER_BACKUP_API_VERSION,
+                    "namespace": namespace,
+                    "plural": RESTORE_PLURAL,
+                    "name": name,
+                },
+                header_params={"Content-Type": "application/json", "Accept": "application/json"},
+                body={
+                    "apiVersion": "v1",
+                    "kind": "DeleteOptions",
+                    "preconditions": {"uid": uid, "resourceVersion": resource_version},
+                },
+                timeout=(timeout_seconds if timeout_seconds is not None else self.request_timeout),
             )
-        except PreconditionConflict:
-            logger.warning(
-                "Guarded delete of %s/%s rejected: the live object is not the proved one", RESTORE_PLURAL, name
-            )
-            result.update(conflict=True, reason="precondition_failed")
-            return result
-        except TargetDisappeared:
-            result["reason"] = "not_found"
+        except ApiException as exc:
+            # Status only: API error bodies echo request content.
+            if exc.status in (409, 412):
+                logger.warning(
+                    "Guarded delete of %s/%s rejected: the live object is not the proved one", RESTORE_PLURAL, name
+                )
+                result.update(conflict=True, reason="precondition_failed")
+            elif exc.status == 404:
+                result["reason"] = "not_found"
+            else:
+                logger.error("Guarded delete of %s/%s failed with HTTP %s", RESTORE_PLURAL, name, exc.status)
             return result
         except Exception as exc:
             logger.error(
@@ -1669,6 +1706,19 @@ class KubeClient:
                 name,
                 type(exc).__name__,
             )
+            return result
+
+        try:
+            response = json.loads(raw.decode("utf-8"), parse_constant=_reject_json_constant)
+        except Exception:
+            response = None
+        if not isinstance(response, dict):
+            logger.error(
+                "Guarded delete of %s/%s was answered 2xx with a malformed body; it is not accepted",
+                RESTORE_PLURAL,
+                name,
+            )
+            result.update(http_accepted=True, reason="malformed_response")
             return result
 
         result.update(
@@ -1680,6 +1730,97 @@ class KubeClient:
             resource_version=resource_version,
         )
         return result
+
+    def create_restore_guarded(
+        self, body: Dict[str, Any], *, namespace: str, timeout_seconds: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Create an ACM Restore with exactly one request and no inferred acceptance.
+
+        Unlike `create_custom_resource`, nothing is retried and a 409 is never reconciled by
+        re-reading the object: the create is accepted only when the 2xx response names the
+        requested object with a non-empty `metadata.uid` and `metadata.resourceVersion`. A
+        409 is `already_exists` with `conflict` True; a timeout or any other failure is
+        `unverifiable`. A 2xx whose body is not a decodable JSON object is
+        `malformed_response`, never acceptance. The positive integer `generation` is published
+        only from an accepted response, with `generation_reported` False when it is omitted; a
+        present invalid one is `malformed_response`. Callers still owe a
+        strict post-create read. In dry-run no request is made and the result is a
+        prediction. Returns the guarded-mutation result shape of
+        `json_patch_custom_resource_guarded`; no body or exception text is included.
+
+        Raises:
+            ValidationError: invalid name or namespace.
+        """
+        metadata = body.get("metadata") if isinstance(body, dict) else None
+        name = metadata.get("name") if isinstance(metadata, dict) else None
+        if not isinstance(namespace, str) or not namespace:
+            raise ValidationError(f"A namespace is required to create {RESTORE_PLURAL}/{name}.")
+        self._validate_resource_inputs(namespace, name, "custom resource")
+        result = self._guarded_restore_result()
+        result.update(generation=None, generation_reported=False)
+
+        if self.dry_run:
+            logger.info("[DRY-RUN] Would create %s/%s", RESTORE_PLURAL, name)
+            result.update(would_change=True, reason="predicted")
+            return result
+
+        try:
+            # The raw body is read inside this boundary and decoded here, as for the guarded
+            # PATCH: a failure reading it leaves the outcome unknown, and an undecodable 2xx
+            # is classified the same way on every client version.
+            raw = self._request_bytes(
+                "POST",
+                "/apis/{group}/{version}/namespaces/{namespace}/{plural}",
+                path_params={
+                    "group": CLUSTER_BACKUP_API_GROUP,
+                    "version": CLUSTER_BACKUP_API_VERSION,
+                    "namespace": namespace,
+                    "plural": RESTORE_PLURAL,
+                },
+                header_params={"Content-Type": "application/json", "Accept": "application/json"},
+                body=body,
+                timeout=(timeout_seconds if timeout_seconds is not None else self.request_timeout),
+            )
+        except ApiException as exc:
+            if exc.status == 409:
+                logger.warning("Create of %s/%s rejected: the name is already taken", RESTORE_PLURAL, name)
+                result.update(conflict=True, reason="already_exists")
+            else:
+                logger.error("Create of %s/%s failed with HTTP %s", RESTORE_PLURAL, name, exc.status)
+            return result
+        except Exception as exc:
+            logger.error(
+                "Create of %s/%s did not complete (%s); it is not accepted", RESTORE_PLURAL, name, type(exc).__name__
+            )
+            return result
+
+        result.update(http_accepted=True, reason="malformed_response")
+        try:
+            created = json.loads(raw.decode("utf-8"), parse_constant=_reject_json_constant)
+        except Exception:
+            return result
+        created_metadata = created.get("metadata") if isinstance(created, dict) else None
+        if not isinstance(created_metadata, dict) or created_metadata.get("name") != name:
+            return result
+        uid = created_metadata.get("uid")
+        revision = created_metadata.get("resourceVersion")
+        if not _is_response_identity(uid) or not _is_response_identity(revision):
+            return result
+        if "generation" in created_metadata and not _is_generation(created_metadata["generation"]):
+            return result
+        result.update(accepted=True, changed=True, reason="ok", uid=uid, resource_version=revision)
+        if "generation" in created_metadata:
+            result.update(generation=created_metadata["generation"], generation_reported=True)
+        return result
+
+    def api_resource_served(self, group: str, version: str, resource_name: str) -> StrictReadOutcome:
+        """Strictly determine whether discovery lists `resource_name` (a kind or `plural/subresource`).
+
+        ITEMS when listed, CRD_ABSENT when a valid discovery document for the group/version
+        omits it, ERROR when discovery cannot be verified. A CRD publishes
+        `<plural>/status` only while its status subresource is enabled.
+        """
+        return self._discovery_serves(group, version, resource_name)
 
     def create_custom_resource(
         self,

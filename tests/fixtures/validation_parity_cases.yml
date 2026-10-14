@@ -453,3 +453,551 @@
       acknowledge_observability_not_migrated: false
   expected:
     passed: true
+
+# R4-04 plan Task 6: the expected-ManagedCluster waiver and the cleanup-repair request.
+# The collection names the request by a non-empty field of its dict; the Python CLI by its
+# flag, which the parity harness sets whenever the fixture's dict names any field.
+- name: complete activation waiver is accepted
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      skip_managed_cluster_expectations: true
+      managed_cluster_expectation_waiver:
+        scope: activation
+        actor: operator@example.com
+        reason: the primary inventory is stale
+        request_id: null
+    execution:
+      mode: execute
+  expected:
+    passed: true
+
+- name: complete both-scope waiver with request id is accepted
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      skip_managed_cluster_expectations: true
+      managed_cluster_expectation_waiver:
+        scope: both
+        actor: operator@example.com
+        reason: the primary inventory is stale
+        request_id: CHG-1
+    execution:
+      mode: execute
+  expected:
+    passed: true
+
+- name: restore only refuses a post-activation waiver
+  kind: operation
+  input:
+    operation:
+      restore_only: true
+      method: full
+      activation_method: patch
+      old_hub_action: null
+      skip_managed_cluster_expectations: true
+      managed_cluster_expectation_waiver:
+        scope: post_activation
+        actor: operator@example.com
+        reason: the primary inventory is stale
+        request_id: null
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "waiver_expected_names_empty:"
+
+- name: waiver without actor is malformed
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      skip_managed_cluster_expectations: true
+      managed_cluster_expectation_waiver:
+        scope: activation
+        actor: ""
+        reason: the primary inventory is stale
+        request_id: null
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "malformed_waiver:"
+
+- name: waiver without reason is malformed
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      skip_managed_cluster_expectations: true
+      managed_cluster_expectation_waiver:
+        scope: post_activation
+        actor: operator@example.com
+        reason: ""
+        request_id: null
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "malformed_waiver:"
+
+- name: waiver without scope is malformed
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      skip_managed_cluster_expectations: true
+      managed_cluster_expectation_waiver:
+        scope: null
+        actor: operator@example.com
+        reason: the primary inventory is stale
+        request_id: null
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "malformed_waiver:"
+
+- name: waiver with an empty request id is malformed
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      skip_managed_cluster_expectations: true
+      managed_cluster_expectation_waiver:
+        scope: both
+        actor: operator@example.com
+        reason: the primary inventory is stale
+        request_id: ""
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "malformed_waiver:"
+
+- name: waiver details without the skip flag are rejected
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      skip_managed_cluster_expectations: false
+      managed_cluster_expectation_waiver:
+        scope: activation
+        actor: operator@example.com
+        reason: the primary inventory is stale
+        request_id: null
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "malformed_waiver:"
+
+- name: empty waiver defaults without the skip flag constrain nothing
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      skip_managed_cluster_expectations: false
+      managed_cluster_expectation_waiver:
+        scope: null
+        actor: ""
+        reason: ""
+        request_id: null
+    execution:
+      mode: execute
+  expected:
+    passed: true
+
+- name: waiver rejected in validate mode
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      skip_managed_cluster_expectations: true
+      managed_cluster_expectation_waiver:
+        scope: both
+        actor: operator@example.com
+        reason: the primary inventory is stale
+        request_id: null
+    execution:
+      mode: validate
+  expected:
+    passed: false
+    contains: "waiver_not_applicable:"
+
+- name: waiver rejected for standalone decommission
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: decommission
+      decommission: true
+      skip_managed_cluster_expectations: true
+      managed_cluster_expectation_waiver:
+        scope: both
+        actor: operator@example.com
+        reason: the primary inventory is stale
+        request_id: null
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "waiver_not_applicable:"
+
+- name: restore-only activation waiver has no expected name to waive
+  kind: hub_contexts
+  input:
+    hub_contexts:
+      primary: null
+      secondary: secondary-hub
+    operation:
+      restore_only: true
+      method: full
+      old_hub_action: null
+      skip_managed_cluster_expectations: true
+      managed_cluster_expectation_waiver:
+        scope: activation
+        actor: operator@example.com
+        reason: the primary inventory is stale
+        request_id: null
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "waiver_expected_names_empty:"
+
+- name: restore-only both-scope waiver has no activation name to waive
+  kind: hub_contexts
+  input:
+    hub_contexts:
+      primary: null
+      secondary: secondary-hub
+    operation:
+      restore_only: true
+      method: full
+      old_hub_action: null
+      skip_managed_cluster_expectations: true
+      managed_cluster_expectation_waiver:
+        scope: both
+        actor: operator@example.com
+        reason: the primary inventory is stale
+        request_id: null
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "waiver_expected_names_empty:"
+
+- name: restore-only post-activation waiver is refused with valid hub contexts
+  kind: hub_contexts
+  input:
+    hub_contexts:
+      primary: null
+      secondary: secondary-hub
+    operation:
+      restore_only: true
+      method: full
+      old_hub_action: null
+      skip_managed_cluster_expectations: true
+      managed_cluster_expectation_waiver:
+        scope: post_activation
+        actor: operator@example.com
+        reason: the primary inventory is stale
+        request_id: null
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "waiver_expected_names_empty:"
+
+- name: complete cleanup repair request is accepted
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      migration_cleanup_repair:
+        actor: operator@example.com
+        reason: the Restore was deleted by this run
+        inspected_evidence:
+          - audit-log:restore-delete
+          - oc get restore
+        run_id: 3f2c8e1a-0b4d-4c6e-9a7f-1d2e3f4a5b6c
+        operation_id: 9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+    execution:
+      mode: execute
+  expected:
+    passed: true
+
+- name: partial cleanup repair request is malformed
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      migration_cleanup_repair:
+        actor: operator@example.com
+        reason: ""
+        inspected_evidence: []
+        run_id: ""
+        operation_id: ""
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "malformed_repair:"
+
+- name: cleanup repair request without inspected evidence is malformed
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      migration_cleanup_repair:
+        actor: operator@example.com
+        reason: the Restore was deleted by this run
+        inspected_evidence: []
+        run_id: 3f2c8e1a-0b4d-4c6e-9a7f-1d2e3f4a5b6c
+        operation_id: 9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "malformed_repair:"
+
+- name: cleanup repair request with a non-UUID run id is malformed
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      migration_cleanup_repair:
+        actor: operator@example.com
+        reason: the Restore was deleted by this run
+        inspected_evidence:
+          - audit-log:restore-delete
+        run_id: run-1
+        operation_id: 9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "malformed_repair:"
+
+- name: empty cleanup repair defaults constrain nothing
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      migration_cleanup_repair:
+        actor: ""
+        reason: ""
+        inspected_evidence: []
+        run_id: ""
+        operation_id: ""
+    execution:
+      mode: execute
+  expected:
+    passed: true
+
+- name: cleanup repair rejected in validate mode
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      migration_cleanup_repair:
+        actor: operator@example.com
+        reason: the Restore was deleted by this run
+        inspected_evidence:
+          - audit-log:restore-delete
+        run_id: 3f2c8e1a-0b4d-4c6e-9a7f-1d2e3f4a5b6c
+        operation_id: 9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+    execution:
+      mode: validate
+  expected:
+    passed: false
+    contains: "repair_not_applicable:"
+
+- name: cleanup repair rejected for standalone decommission
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: decommission
+      decommission: true
+      migration_cleanup_repair:
+        actor: operator@example.com
+        reason: the Restore was deleted by this run
+        inspected_evidence:
+          - audit-log:restore-delete
+        run_id: 3f2c8e1a-0b4d-4c6e-9a7f-1d2e3f4a5b6c
+        operation_id: 9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "repair_not_applicable:"
+
+- name: cleanup repair accepted for restore-only
+  kind: hub_contexts
+  input:
+    hub_contexts:
+      primary: null
+      secondary: secondary-hub
+    operation:
+      restore_only: true
+      method: full
+      old_hub_action: null
+      migration_cleanup_repair:
+        actor: operator@example.com
+        reason: the Restore was deleted by this run
+        inspected_evidence:
+          - audit-log:restore-delete
+        run_id: 3f2c8e1a-0b4d-4c6e-9a7f-1d2e3f4a5b6c
+        operation_id: 9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+    execution:
+      mode: execute
+  expected:
+    passed: true
+
+# Task 6 review findings: an omitted optional request_id equals null, and the
+# enabling field accepts only a real boolean.
+- name: waiver with the optional request id omitted is accepted
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      skip_managed_cluster_expectations: true
+      managed_cluster_expectation_waiver:
+        scope: both
+        actor: operator
+        reason: stale inventory
+    execution:
+      mode: execute
+  expected:
+    passed: true
+
+- name: string false skip flag with a complete waiver is malformed
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      skip_managed_cluster_expectations: "false"
+      managed_cluster_expectation_waiver:
+        scope: both
+        actor: operator
+        reason: stale inventory
+        request_id: null
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "malformed_waiver:"
+
+- name: string true skip flag is malformed
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      skip_managed_cluster_expectations: "true"
+      managed_cluster_expectation_waiver:
+        scope: both
+        actor: operator
+        reason: stale inventory
+        request_id: null
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "malformed_waiver:"
+
+- name: integer skip flag is malformed
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      skip_managed_cluster_expectations: 1
+      managed_cluster_expectation_waiver:
+        scope: both
+        actor: operator
+        reason: stale inventory
+        request_id: null
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "malformed_waiver:"
+
+- name: null skip flag is malformed
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+      skip_managed_cluster_expectations: null
+    execution:
+      mode: execute
+  expected:
+    passed: false
+    contains: "malformed_waiver:"

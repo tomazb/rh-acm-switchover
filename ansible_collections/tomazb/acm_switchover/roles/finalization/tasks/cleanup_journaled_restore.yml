@@ -1,0 +1,225 @@
+---
+# R4-04 durable Restore-cleanup transaction (plan Task 10, July design section 4a), the
+# collection mirror of Finalization._run_restore_cleanup_transaction. It runs on every pass,
+# ahead of the old-hub observability teardown and BackupSchedule enablement, and the journal
+# alone decides the step. A fresh teardown barrier (the activation completion proof) and
+# durable intent precede the guarded UID+resourceVersion DELETE; recovery and an operator
+# repair are durable journal writes through checkpoint_phase status: update. A preview
+# (dry_run, validate or check mode) reads nothing, writes nothing and reports the step.
+#
+# A named 404 counts as absence only when acm_k8s_read_outcome proves the route current; its
+# fail-closed stale-route refusal can only stall an absence proof here, never fake one.
+
+- name: Report the Restore-cleanup step a preview would take
+  when: _acm_preview | bool
+  block:
+    - name: Decide the journaled Restore-cleanup step for the preview
+      tomazb.acm_switchover.acm_migration_evidence:
+        operation: cleanup_step
+        inputs:
+          journal: "{{ _acm_journal }}"
+          repair_requested: "{{ (_acm_cleanup_repair_request | length) > 0 }}"
+      register: _acm_cleanup_preview
+      when: _acm_has_journal | bool
+
+    - name: Report the predicted Restore-cleanup step
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            '[DRY-RUN] Journaled Restore ' ~ _acm_journal.restore.name ~ ' cleanup step: ' ~ _acm_cleanup_preview.step
+            if (_acm_has_journal | bool)
+            else '[DRY-RUN] Would revalidate and delete the journaled Restore under its UID and resourceVersion'
+          }}
+
+- name: Reconcile the journaled Restore cleanup to a terminal state
+  when: not (_acm_preview | bool)
+  block:
+    - name: Decide the journaled Restore-cleanup step
+      tomazb.acm_switchover.acm_migration_evidence:
+        operation: cleanup_step
+        inputs:
+          journal: "{{ _acm_journal if (_acm_has_journal | bool) else omit }}"
+          repair_requested: "{{ (_acm_cleanup_repair_request | length) > 0 }}"
+      register: _acm_cleanup_step
+
+    # The journaled controller lane decides the barrier and the guarded delete alike: a
+    # destination whose live ACM minor changed refuses (August amendment section 10).
+    - name: Require the journaled controller lane
+      when: _acm_cleanup_step.step in ['revalidate', 'delete']
+      block:
+        - name: Read the destination MultiClusterHub strictly
+          ansible.builtin.include_tasks: "{{ role_path }}/../activation/tasks/strict_read.yml"
+          vars:
+            _acm_read:
+              key: multiclusterhubs
+              read_mode: list
+              api_version: operator.open-cluster-management.io/v1
+              kind: MultiClusterHub
+              resource_name: multiclusterhubs
+              namespace: open-cluster-management
+            _acm_read_fact: _acm_cleanup_mch_read
+
+        - name: Resolve the live ACM minor
+          tomazb.acm_switchover.acm_migration_evidence:
+            operation: acm_minor
+            inputs:
+              mch_read: "{{ _acm_cleanup_mch_read }}"
+          register: _acm_cleanup_minor
+
+        - name: Require the live ACM minor the journal was frozen on
+          tomazb.acm_switchover.acm_migration_evidence:
+            operation: journal_matches
+            inputs:
+              journal: "{{ _acm_journal }}"
+              kind: "{{ _acm_journal.restore.mutation_kind }}"
+              acm_minor: "{{ _acm_cleanup_minor.acm_minor }}"
+
+    - name: Record the operator's audited cleanup repair
+      when: _acm_cleanup_step.step == 'repair'
+      block:
+        - name: Read the journaled Restore locator for the repair
+          ansible.builtin.include_tasks: "{{ role_path }}/../activation/tasks/strict_read.yml"
+          vars:
+            _acm_read:
+              key: "restore/{{ _acm_journal.restore.name }}"
+              read_mode: get
+              api_version: cluster.open-cluster-management.io/v1beta1
+              kind: Restore
+              resource_name: restores
+              namespace: "{{ _acm_journal.restore.namespace }}"
+              name: "{{ _acm_journal.restore.name }}"
+            _acm_read_fact: _acm_repair_read
+
+        - name: Accept the repair only for a proven-absent locator
+          tomazb.acm_switchover.acm_migration_evidence:
+            operation: cleanup_repair
+            inputs:
+              journal: "{{ _acm_journal }}"
+              request: "{{ _acm_cleanup_repair_request }}"
+              live_read: "{{ _acm_repair_read }}"
+          register: _acm_cleanup_repair
+
+        - name: Persist the repaired cleanup
+          tomazb.acm_switchover.checkpoint_phase:
+            phase: finalization
+            checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+            status: update
+            operational_data:
+              migration_backups: "{{ _acm_cleanup_repair.candidate }}"
+
+        - name: Continue from the repaired migration journal
+          ansible.builtin.set_fact:
+            _acm_journal: "{{ _acm_cleanup_repair.candidate }}"
+
+        - name: Report the audited repair
+          ansible.builtin.debug:
+            msg: >-
+              Restore cleanup {{ _acm_journal.cleanup.operation_id }} repaired by
+              {{ _acm_journal.cleanup.repair.actor }} ({{ _acm_journal.cleanup.repair.reason }}); no delete or
+              absence is claimed for this run
+
+    - name: Revalidate the journaled Restore and record cleanup intent
+      when: _acm_cleanup_step.step == 'revalidate'
+      block:
+        - name: Read the completion proof inputs of the journaled Restore
+          ansible.builtin.include_tasks: "{{ role_path }}/../activation/tasks/read_completion_inputs.yml"
+
+        # The evidence barrier: the completion proof activation recorded, re-run live.
+        - name: Revalidate the recorded completion evidence before teardown
+          tomazb.acm_switchover.acm_migration_evidence:
+            operation: revalidate_completed
+            inputs:
+              journal: "{{ _acm_journal }}"
+              restore_read: "{{ _acm_completion_restore_read }}"
+              velero_read: "{{ _acm_completion_velero_read }}"
+              backup_reads: "{{ _acm_backup_reads }}"
+
+        - name: Record the teardown revalidation once
+          tomazb.acm_switchover.acm_migration_evidence:
+            operation: teardown_revalidated
+            inputs:
+              journal: "{{ _acm_journal }}"
+          register: _acm_teardown_revalidated
+
+        - name: Persist the teardown revalidation
+          tomazb.acm_switchover.checkpoint_phase:
+            phase: finalization
+            checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+            status: update
+            operational_data:
+              migration_backups: "{{ _acm_teardown_revalidated.candidate }}"
+          when: _acm_teardown_revalidated.write | bool
+
+        - name: Build the cleanup intent
+          tomazb.acm_switchover.acm_migration_evidence:
+            operation: cleanup_intent
+            inputs:
+              journal: "{{ _acm_teardown_revalidated.candidate }}"
+          register: _acm_cleanup_intent
+
+        - name: Persist the cleanup intent before any DELETE
+          tomazb.acm_switchover.checkpoint_phase:
+            phase: finalization
+            checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+            status: update
+            operational_data:
+              migration_backups: "{{ _acm_cleanup_intent.candidate }}"
+
+        - name: Continue from the cleanup intent
+          ansible.builtin.set_fact:
+            _acm_journal: "{{ _acm_cleanup_intent.candidate }}"
+
+    - name: Delete the journaled Restore and prove its absence
+      when: _acm_cleanup_step.step in ['revalidate', 'delete']
+      block:
+        - name: Read the shared cleanup bounds
+          tomazb.acm_switchover.acm_migration_evidence:
+            operation: cleanup_schedule
+          register: _acm_cleanup_schedule
+
+        - name: Start the guarded DELETE attempts
+          ansible.builtin.set_fact:
+            _acm_cleanup_accepted: false
+
+        - name: Attempt the guarded DELETE within the shared bound
+          ansible.builtin.include_tasks: cleanup_journaled_restore_attempt.yml
+          loop: "{{ range(1, (_acm_cleanup_schedule.attempts | int) + 1) | list }}"
+          loop_control:
+            loop_var: _acm_cleanup_attempt
+
+        # The poll timeout is elapsed time: waits, reads and the final verification all count.
+        # Epoch seconds from now() (local, naive), the clock acm_migration_evidence checks with
+        # time.time(); now(utc=true).timestamp() would read a UTC wall time as local.
+        - name: Start the absence poll
+          ansible.builtin.set_fact:
+            _acm_cleanup_done: false
+            _acm_cleanup_deadline: >-
+              {{
+                now().timestamp()
+                + (_acm_cleanup_poll_timeout | default(_acm_cleanup_schedule.poll_timeout) | float)
+              }}
+
+        - name: Poll the journaled Restore until its absence is proven
+          ansible.builtin.include_tasks: poll_journaled_restore_absent.yml
+          loop: "{{ _acm_cleanup_poll_delays | default(_acm_cleanup_schedule.poll_delays) }}"
+          loop_control:
+            loop_var: _acm_poll_delay
+
+        - name: Fail when the journaled Restore never disappeared
+          ansible.builtin.fail:
+            msg: >-
+              Timeout waiting for the journaled Restore {{ _acm_journal.restore.name }} to disappear after
+              {{ _acm_cleanup_poll_timeout | default(_acm_cleanup_schedule.poll_timeout) }}s; the cleanup
+              stays resumable
+          when: not (_acm_cleanup_done | bool)
+
+- name: Publish the journaled Restore cleanup result
+  ansible.builtin.set_fact:
+    acm_switchover_journaled_restore_cleanup_result:
+      changed: "{{ (_acm_cleanup_accepted | default(false)) | bool }}"
+      step: >-
+        {{
+          ((_acm_cleanup_preview | default({})) if (_acm_preview | bool) else (_acm_cleanup_step | default({})))
+          .get('step')
+        }}
+      state: "{{ _acm_journal.cleanup.state if (_acm_has_journal | bool) else none }}"

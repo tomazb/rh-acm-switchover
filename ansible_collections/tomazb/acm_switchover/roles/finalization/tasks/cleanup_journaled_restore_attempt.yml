@@ -1,0 +1,123 @@
+---
+# One guarded DELETE attempt of the journaled Restore (Finalization._delete_journaled_restore):
+# the final strict read and full projection check, then a DELETE carrying both the UID and
+# that read's resourceVersion. A conflict or a 404 leaves the next attempt to re-read and
+# re-validate in full; the last refused attempt fails. Included in a loop over
+# _acm_cleanup_attempt; each attempt guards itself at execution time, so the attempts after
+# an accepted DELETE do nothing.
+
+- name: Attempt one guarded DELETE of the journaled Restore
+  when: not (_acm_cleanup_accepted | bool)
+  block:
+    - name: Read the journaled Restore at the final pre-delete boundary
+      ansible.builtin.include_tasks: "{{ role_path }}/../activation/tasks/strict_read.yml"
+      vars:
+        _acm_read:
+          key: "restore/{{ _acm_journal.restore.name }}"
+          read_mode: get
+          api_version: cluster.open-cluster-management.io/v1beta1
+          kind: Restore
+          resource_name: restores
+          namespace: "{{ _acm_journal.restore.namespace }}"
+          name: "{{ _acm_journal.restore.name }}"
+        _acm_read_fact: _acm_cleanup_final_read
+
+    - name: Prove the journaled Restore at the final pre-delete boundary
+      tomazb.acm_switchover.acm_migration_evidence:
+        operation: cleanup_pre_delete
+        inputs:
+          journal: "{{ _acm_journal }}"
+          live_read: "{{ _acm_cleanup_final_read }}"
+      register: _acm_cleanup_pre_delete
+
+    - name: Persist the recovery the final read requires
+      tomazb.acm_switchover.checkpoint_phase:
+        phase: finalization
+        checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+        status: update
+        operational_data:
+          migration_backups: "{{ _acm_cleanup_pre_delete.candidate }}"
+      when: _acm_cleanup_pre_delete.action == 'recover'
+
+    - name: Block on the recorded cleanup recovery
+      ansible.builtin.fail:
+        msg: >-
+          The journaled Restore {{ _acm_recovered.cleanup.name }} cleanup requires recovery
+          ({{ _acm_recovered.cleanup.recovery.reason_code }}{{
+            (', observed UID ' ~ _acm_recovered.cleanup.recovery.observed_uid)
+            if _acm_recovered.cleanup.recovery.observed_uid else '' }}). Nothing at the locator was deleted
+          or adopted. Inspect the destination hub, then acknowledge with
+          acm_switchover_operation.migration_cleanup_repair, naming run ID {{ _acm_recovered.run_id }} and
+          operation ID {{ _acm_recovered.cleanup.operation_id }}.
+      vars:
+        _acm_recovered: "{{ _acm_cleanup_pre_delete.candidate }}"
+      when: _acm_cleanup_pre_delete.action == 'recover'
+
+    # The DELETE task is no_log, so its own failure would carry a censored result; the rescue
+    # re-raises the refusal by its sanitized reason only, as the Python CLI reports it.
+    - name: Delete the journaled Restore and report a refusal by its reason
+      block:
+        - name: Delete the journaled Restore under its UID and resourceVersion
+          tomazb.acm_switchover.acm_restore_guarded_mutation:
+            kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+            context: "{{ acm_switchover_hubs.secondary.context }}"
+            action: delete
+            api_version: cluster.open-cluster-management.io/v1beta1
+            kind: Restore
+            namespace: "{{ _acm_journal.restore.namespace }}"
+            name: "{{ _acm_journal.restore.name }}"
+            expected_uid: "{{ _acm_cleanup_pre_delete.uid }}"
+            expected_resource_version: "{{ _acm_cleanup_pre_delete.resource_version }}"
+            request_timeout: "{{ _acm_cleanup_schedule.request_timeout }}"
+          check_mode: "{{ _acm_preview | bool }}"
+          register: _acm_cleanup_delete_result
+          # Only a DELETE that removed nothing (a precondition conflict or a 404) continues, to be
+          # re-read and re-validated in full; every other refusal fails here, never absorbed.
+          failed_when: >-
+            (_acm_cleanup_delete_result.reason | default('unverifiable'))
+            not in ['ok', 'precondition_failed', 'not_found']
+          no_log: true
+      rescue:
+        - name: Refuse the guarded DELETE by its sanitized reason
+          ansible.builtin.fail:
+            msg: >-
+              Migration evidence refused (delete_not_accepted: the guarded DELETE was not accepted
+              ({{ _acm_cleanup_delete_result.reason | default('unverifiable') }}))
+
+    # Only the classification is passed on: the registered result also echoes the arguments.
+    - name: Classify the guarded DELETE outcome
+      ansible.builtin.set_fact:
+        _acm_cleanup_delete_outcome: >-
+          {{
+            {
+              'accepted': _acm_cleanup_delete_result.accepted | default(false),
+              'reason': _acm_cleanup_delete_result.reason | default('unverifiable'),
+              'uid': _acm_cleanup_delete_result.uid | default(none),
+              'resource_version': _acm_cleanup_delete_result.resource_version | default(none),
+            }
+          }}
+
+    - name: Judge the guarded DELETE by its verified acceptance
+      tomazb.acm_switchover.acm_migration_evidence:
+        operation: cleanup_delete_outcome
+        inputs:
+          journal: "{{ _acm_journal }}"
+          result: "{{ _acm_cleanup_delete_outcome }}"
+          resource_version: "{{ _acm_cleanup_pre_delete.resource_version }}"
+          attempt: "{{ _acm_cleanup_attempt }}"
+      register: _acm_cleanup_delete_decision
+
+    - name: Persist the accepted DELETE
+      tomazb.acm_switchover.checkpoint_phase:
+        phase: finalization
+        checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+        status: update
+        operational_data:
+          migration_backups: "{{ _acm_cleanup_delete_decision.candidate }}"
+      when: _acm_cleanup_delete_decision.outcome == 'accepted'
+
+    - name: Continue from the accepted DELETE
+      ansible.builtin.set_fact:
+        _acm_journal: "{{ _acm_cleanup_delete_decision.candidate }}"
+        _acm_cleanup_accepted: true
+      when: _acm_cleanup_delete_decision.outcome == 'accepted'

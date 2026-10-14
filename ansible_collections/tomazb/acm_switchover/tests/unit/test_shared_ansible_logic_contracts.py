@@ -23,13 +23,15 @@ def _activation_block_tasks() -> list[dict]:
 
 
 def test_activation_and_post_activation_use_shared_managed_cluster_expectation():
-    activation_tasks = _load_tasks(ACTIVATION_TASKS / "wait_for_restore.yml")
+    activation_tasks = [
+        nested
+        for task in _load_tasks(ACTIVATION_TASKS / "wait_for_restore.yml")
+        for nested in [task, *(task.get("block") or [])]
+    ]
     post_activation_tasks = _load_tasks(POST_ACTIVATION_TASKS / "verify_managed_clusters.yml")
 
     activation_include = next(
-        task
-        for task in activation_tasks
-        if task.get("name") == "Resolve full-restore managed-cluster presence expectation"
+        task for task in activation_tasks if task.get("name") == "Resolve the activation managed-cluster expectation"
     )
     post_activation_include = next(
         task for task in post_activation_tasks if task.get("name") == "Resolve managed-cluster verification expectation"
@@ -58,7 +60,8 @@ def test_shared_managed_cluster_expectation_handles_undefined_or_null_inputs():
     text = (COMMON_TASKS / "resolve_managed_cluster_expectation.yml").read_text()
 
     assert "(acm_switchover_managed_cluster_expectation_mode | default('')) in" in text
-    assert "acm_switchover_managed_clusters | default({}, true)" in text
+    # The klusterlet map is never an expectation (restore-only parity with the Python CLI).
+    assert "acm_switchover_managed_clusters |" not in text
 
 
 def test_shared_managed_cluster_expectation_validates_counts_before_int_coercion():

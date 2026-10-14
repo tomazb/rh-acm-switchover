@@ -214,6 +214,15 @@ Owns phase-flow execution and state-driven entry decisions:
 - `handle_completed_state` — handles reruns against a recently completed state
 - `handle_failed_state` — prepares a failed state for retry, or exits when the retry phase is unknown
 - `run_validate_only_preflight` — the validate-only path
+- `refuse_predictable_journal_reset` — refuses, before any write, a `--force` run whose implicit
+  reset would discard a migration journal
+
+Before any phase work, `run_phase_flow` runs the `before_phases` hook, which re-pauses Argo CD when
+a failure rescue left the re-pause marker. It then refuses a resume at finalization whose migration
+journal lacks `restore.completed_at` or `post_activation.completed_at` (dry-run excepted); the refusal
+names the `current_phase` the operator can set to re-record that evidence against the kept journal.
+Like the collection, a retry therefore re-pauses first, and Argo CD stays paused while the operator
+follows the refusal guidance.
 
 `CompletedStateConfig`, `FailedStateConfig`, and `CompletionLogConfig` carry the parameters for
 these decisions, keeping the banners and exit behaviour consistent across operations.
@@ -250,7 +259,11 @@ and prevents a stale or invalid phase from falling through to `COMPLETED`.
 
 `RunRecord` is the facade for cross-phase run facts — what preflight discovered, and what each
 phase recorded for later phases or reports. It exposes only named, typed operations
-(`HubFacts`, `ManagedClusterExpectation`, `StepRecord`, `ErrorRecord`, `RunSummary`).
+(`HubFacts`, `ManagedClusterExpectation`, `StepRecord`, `ErrorRecord`, `RunSummary`). R4-04 adds the
+migration journal (`migration_backups()` / `record_migration_backups()`, which validate the whole
+journal and every transition and persist it as one forced-durable value) and the Argo CD re-pause
+marker (`record_argocd_repause_required()`, `argocd_repause_required()`,
+`clear_argocd_repause_required()`), which lives outside the journal.
 
 The split matters: the durable file behind the run belongs to `StateManager`, but the vocabulary
 of the cross-phase fact keys belongs to `RunRecord` alone. Reaching those `RunRecord`-owned
@@ -376,8 +389,40 @@ It supports:
 - passive method activation
 - full restore creation
 - restore deletion propagation handling for `--activation-method restore`
-- managed-cluster-count enforcement
+- managed-cluster name and count enforcement
 - temporary auto-import strategy handling for newer ACM versions
+
+Activation is the R4-04 migration transaction's first owner. The pure decisions live in
+`lib/migration_evidence.py` (Backup selection), `lib/migration_child_evidence.py` (Velero child
+roles, cohort and completion) and `lib/migration_journal.py` (the journal schema and transitions);
+the module performs the strict reads, the guarded mutations and the journal writes, in this order:
+
+```mermaid
+flowchart TD
+    A[Activation step] --> B{Journal recorded?}
+    B -->|no| C[Strict Backup inventory<br/>predict controller selection]
+    C --> D[Journal frozen Backups<br/>forced-durable, before any mutation]
+    B -->|yes| E[Require same mutation kind<br/>and ACM minor, never refreeze]
+    D --> F{Mutation kind}
+    E --> P{Accepted mutation recorded?}
+    P -->|no| F
+    P -->|yes| Q[Strictly reconcile journaled Restore<br/>and frozen Backups, no mutation]
+    Q --> M
+    F -->|passive_patch| G[Final pre-PATCH strict reads<br/>legacy hive/cluster prediction]
+    G --> H[JSON Patch guarded by UID,<br/>resourceVersion and raw field]
+    F -->|passive_restore / full_restore| I[Refuse an unowned Restore<br/>at the target name]
+    I --> J[Guarded delete of the passive<br/>sync Restore, when one exists]
+    J --> K[Re-prove frozen Backups,<br/>then one POST create, never adopted]
+    H --> L[Strict post-read binds UID<br/>and generation into the journal]
+    K --> L
+    L --> M[Poll ACM phase and Velero children,<br/>names or waiver, count floor]
+    M --> N[Fresh completion proof]
+    N --> O[Journal completion bundle,<br/>then restore.completed_at last]
+```
+
+A non-accepted mutation records nothing and is never rolled back or retried automatically; the
+next run re-proves the hub from the journal. Dry-run performs the reads and predictions and writes
+nothing.
 
 Important activation-related flags:
 
@@ -393,13 +438,53 @@ Important activation-related flags:
 - observability component health and restarts
 - follow-up guidance for operator verification
 
+An executing run first requires the journal with `restore.completed_at`
+(`lib/migration_post_activation.py`). On every attempt, step markers notwithstanding, it proves
+readiness from strict inventory reads with a bounded wait and records
+`post_activation.names_verified_at` (or journals a `post_activation`-scoped waiver), and it records
+`post_activation.completed_at` last, after every other post-activation operation succeeded.
+
 ### Finalization
 
 `modules/finalization.py` completes switchover by:
 
+- running the durable Restore-cleanup transaction for the journaled Restore
 - re-enabling or recreating `BackupSchedule`
 - verifying new backups after promotion
 - handling the old hub according to `--old-hub-action`
+
+The Restore-cleanup decisions are pure functions in `lib/migration_cleanup.py`; `Finalization`
+owns the strict reads, the guarded DELETE and the journal writes. The order is:
+
+```mermaid
+flowchart TD
+    A[FINALIZATION] --> B[Load and validate the journal]
+    B --> C{cleanup step}
+    C -->|not_started| D[Live teardown revalidation<br/>restore.teardown_revalidated_at]
+    D --> E[Durable cleanup intent<br/>new operation ID]
+    E --> F
+    C -->|intent_persisted / delete_accepted| F[Strict GET, then DELETE guarded by<br/>UID + resourceVersion, bounded retries]
+    F --> G[Bounded absence poll,<br/>final strict 404 → completed]
+    C -->|recovery_required| R{repair requested?}
+    R -->|no| X[Refuse: cleanup_recovery_required]
+    R -->|yes| S[Audited repair after a fresh<br/>absent read → repaired]
+    F -->|absent without completion<br/>or replacement UID| Y[recovery_required, block]
+    G -->|replacement during poll| Y
+    C -->|completed / repaired| H
+    G --> H
+    S --> H
+    H{old hub action secondary<br/>with observability?} -->|yes| I[Old-hub evidence gate,<br/>then MCO teardown]
+    H -->|no| J
+    I --> J[Generic cleanup of other switchover<br/>Restores, fresh locator-absence gate]
+    J --> K[Enable BackupSchedule,<br/>verify backups and MCH]
+    K --> L{old hub action}
+    L -->|secondary / decommission| M[Old-hub evidence gate,<br/>then old-hub action]
+    L -->|none| N[Leave old hub unchanged]
+```
+
+The old-hub evidence gate requires `post_activation.completed_at`, a `completed` or `repaired`
+cleanup, the activation name check or a waiver covering it, and a fresh strict read proving the
+journaled locator empty. A dry-run previews each step and is not gated.
 
 The old-hub dispositions are not equivalent in blast radius. `secondary` sets up passive sync
 for failback. `none` leaves the hub untouched. `decommission` is **destructive**: finalization
@@ -584,12 +669,25 @@ sequenceDiagram
     CLI->>Mods: run primary preparation
     Mods->>Argo: optionally pause ACM-touching Applications
     CLI->>Mods: run activation
-    Mods->>S: patch restore or create full restore
+    Mods->>S: strict Backup inventory and Restore reads
+    Mods->>State: journal frozen Backups (forced-durable)
+    Mods->>S: UID/resourceVersion-guarded patch of the passive restore, or one POST create
+    Mods->>State: journal mutation, then completion evidence
     CLI->>Mods: run post-activation verification
+    Mods->>State: journal name check or waiver, then post_activation.completed_at
     CLI->>Mods: run finalization
-    Mods->>S: destination-observability gate (fresh source+destination reads)
-    Mods->>P: UID-preconditioned MultiClusterObservability delete
-    Mods->>P: absence poll, pod drain, final completion proof
+    Mods->>S: fresh teardown revalidation
+    Mods->>State: persist teardown evidence and cleanup intent
+    Mods->>S: strict GET, then UID + resourceVersion guarded DELETE
+    Mods->>State: persist delete_accepted
+    Mods->>S: bounded absence poll and final strict absence read
+    Mods->>State: persist completed, or recovery_required and stop
+    opt old_hub_action secondary, primary present, observability detected and checks enabled
+        Mods->>S: old-hub evidence gate (fresh journaled-locator read)
+        Mods->>S: destination-observability gate (fresh source+destination reads)
+        Mods->>P: UID-preconditioned MultiClusterObservability delete
+        Mods->>P: absence poll, pod drain, final completion proof
+    end
     Mods->>State: persist completion and config
     opt --dry-run
         CLI->>State: restore pre-run state snapshot
@@ -630,6 +728,11 @@ Important state categories:
 
 - `current_phase`
 - `completed_steps`
+- the recorded ManagedCluster expectation (`names`, `count`, and `managed_cluster_expectation_mode`:
+  `derived_from_preflight`, `restore_only`, `explicit_minimum`, or `explicit_empty_allowed`). The
+  persisted value `explicit_empty_allowed` records an explicit `--min-managed-clusters 0`; despite
+  its name it permits an empty destination only when no name is expected, because recorded names
+  stay enforced. It is a persisted state value and is not renamed
 - `hub_identities` — per-role `{context, cluster_uid}` recorded from each hub's `kube-system` namespace UID; resume re-reads live UIDs and fails closed before mutation if a recorded UID no longer matches the cluster behind the same context name, if hub identities are missing for an in-progress switchover, or if the live UID is unreadable. Operators must use `--reset-state` (different cluster on purpose) or `--force` (legacy state, after manual verification) to recover.
 - durable MultiClusterObservability teardown records, read and written through the `RunRecord` facade — one
   per resource key, carrying `{expected_uid, phase}` plus `{observed_at, resource_versions, absence_proofs}`
@@ -642,6 +745,8 @@ Important state categories:
 - saved resources needed for version-specific restore/unpause behavior
 - Argo CD pause metadata such as `argocd_run_id` and `argocd_paused_apps`
 - error history
+- the R4-04 migration journal (`config.migration_backups`) and the Argo CD re-pause marker, both
+  through `RunRecord`. Only `--reset-state` removes the journal; the implicit `--force` resets refuse
 - optional schema-versioned report artifacts written through `--report-dir`
 
 Operational guarantees:
@@ -739,7 +844,7 @@ The collection uses a fundamentally different architecture from the Python CLI:
 - **Thin custom plugins** (`modules/`, `action/`, `module_utils/`) handle operations that need retry semantics, structured polling, or checkpoint persistence beyond what stock `kubernetes.core` modules provide
 - **Playbooks** (`switchover.yml`, `restore_only.yml`, `preflight.yml`, `decommission.yml`, `rbac_bootstrap.yml`, `discovery.yml`, `argocd_resume.yml`) are the operator entrypoints. `playbooks/` holds one further file, `argocd_manage_test.yml`, which is deliberately not listed here: it is an integration-test playbook that drives the `argocd_manage` role through a pause/resume cycle against mock applications, not an operator entrypoint. It is still syntax-checked, because verification surface 6 globs `playbooks/*.yml` — see [Testing guide](testing.md#the-nine-verification-surfaces)
 - **Grouped variables** (`acm_switchover_hubs`, `acm_switchover_operation`, `acm_switchover_features`) replace CLI flags as the primary operator interface
-- **Optional checkpoint backend** replaces `StateManager` for long-running or interrupted runs; Ansible-native idempotency handles the default case
+- **Checkpoint backend** replaces `StateManager`. It is required in execute mode for the activation, post-activation and finalization migration-evidence transaction, whose journal lives only in checkpoint `operational_data` and is written through explicit `checkpoint_phase` `status: update` transitions; the `acm_migration_evidence` module mirrors the Python decisions without performing I/O
 - **Report artifacts** carry schema version `1.0` on the preflight, switchover, and restore-only paths. The decommission result does not: its role publishes no `schema_version` field, and `acm_report_artifact` writes the report it is given unchanged. Python and collection reports preserve aligned status/report contracts without requiring identical top-level fields for every report type
 - **Decommission observability** defaults to namespace autodetection in the collection, with explicit `true`/`false` overrides for known environments
 - **Klusterlet helpers** use bounded direct Kubernetes requests and worker futures. Defaults are 10 workers, 30-second per-request timeouts, and 180-second worker future timeout windows for each probe/remediation batch; worker future timeouts are reported as failed cluster results.

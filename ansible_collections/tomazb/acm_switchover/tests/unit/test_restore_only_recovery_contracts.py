@@ -62,69 +62,23 @@ def test_switchover_identity_refusal_cannot_use_restore_recovery_shape():
 
     assert "rescue" not in outer
     assert outer["block"][0]["name"] == "Establish trusted identity and checkpoint barrier"
-    assert outer["block"][1]["name"] == "Run post-barrier switchover phases"
-    assert "rescue" in outer["block"][1]
+    # The Argo CD re-pause recovery runs after the barrier and outside the phase rescue.
+    assert outer["block"][1]["name"] == "Re-pause Argo CD recorded by a failure rescue"
+    assert "rescue" not in outer["block"][1]
+    assert outer["block"][2]["name"] == "Run post-barrier switchover phases"
+    assert "rescue" in outer["block"][2]
 
 
-def test_verify_passive_sync_passes_activation_method_to_restore_selector():
-    """Passive activation resume must let acm_restore_info see activation_method=restore."""
-    tasks = yaml.safe_load((ACTIVATION_TASKS / "verify_passive_sync.yml").read_text())
-    selector_tasks = [t for t in tasks if "tomazb.acm_switchover.acm_restore_info" in t]
-    assert selector_tasks, "verify_passive_sync.yml must call acm_restore_info"
-
-    selector = selector_tasks[0]["tomazb.acm_switchover.acm_restore_info"]
-    assert "activation_method" in selector, (
-        "verify_passive_sync.yml must pass activation_method through to acm_restore_info "
-        "so reruns can recognize restore-acm-activate"
-    )
-
-
-def test_verify_passive_sync_requires_passive_restore_candidate():
-    """Passive activation precheck requires sync-enabled restore for patch mode and initial option-B runs."""
+def test_verify_passive_sync_runs_only_before_the_migration_freeze():
+    """Once a journal exists the transaction re-proves the passive Restore itself, and a one-shot
+    activation may already have deleted it, so the pre-freeze verification is not repeated."""
+    main_tasks = yaml.safe_load((ACTIVATION_TASKS / "main.yml").read_text())
+    block = next(task["block"] for task in main_tasks if "block" in task)
+    (verify,) = [task for task in block if task.get("ansible.builtin.include_tasks") == "verify_passive_sync.yml"]
+    assert verify["when"] == ["acm_switchover_operation.method == 'passive'", "not (_acm_has_journal | bool)"]
     text = (ACTIVATION_TASKS / "verify_passive_sync.yml").read_text()
-    assert "sync_enabled_count" in text, (
-        "verify_passive_sync.yml must check sync_enabled_count so that patch-mode runs "
-        "and initial option-B runs (before activation restore is created) require a passive sync restore"
-    )
-    assert "allow_conventional_passive_restore_fallback" in text, (
-        "verify_passive_sync.yml must put conventional-name passive restore compatibility "
-        "behind an explicit opt-in variable"
-    )
-
-
-def test_verify_passive_sync_skips_assert_for_option_b_resume_state():
-    """verify_passive_sync.yml must not fail when activation_method=restore and only restore-acm-activate exists."""
-    tasks = yaml.safe_load((ACTIVATION_TASKS / "verify_passive_sync.yml").read_text())
-
-    assert_tasks = [t for t in tasks if "ansible.builtin.assert" in t]
-    assert assert_tasks, "verify_passive_sync.yml must contain a passive restore assert"
-
-    assert_task = assert_tasks[0]
-    when_clause = str(assert_task.get("when", ""))
-    assert "_acm_activation_restore_resume" in when_clause, (
-        "The passive restore assert must be guarded by the _acm_activation_restore_resume flag "
-        "so that option-B resume (only restore-acm-activate present) is not rejected"
-    )
-    assert (
-        "not" in when_clause
-    ), "The passive restore assert must be skipped (not asserted) when in the option-B resume state"
-    assert "not (_acm_activation_restore_resume | bool)" in when_clause, (
-        "The passive restore assert must boolean-cast _acm_activation_restore_resume; "
-        "without | bool, a string-valued Ansible fact can take the wrong truthiness path"
-    )
-
-
-def test_verify_passive_sync_publishes_activation_restore_in_resume_state():
-    """verify_passive_sync.yml must publish restore-acm-activate as selection for option-B resume."""
-    text = (ACTIVATION_TASKS / "verify_passive_sync.yml").read_text()
-    assert "restore-acm-activate" in text, (
-        "verify_passive_sync.yml must reference restore-acm-activate to handle the resume state "
-        "where only the activation Restore is present"
-    )
-    assert "_acm_activation_restore_resume" in text, (
-        "verify_passive_sync.yml must set a resume-state flag to guard the passive-sync assert "
-        "and choose the correct publish task"
-    )
+    assert "operation: verify_passive_sync" in text
+    assert "allow_conventional_passive_restore_fallback" not in text
 
 
 def test_activation_checkpoint_persists_argocd_run_id():
@@ -139,26 +93,13 @@ def test_activation_checkpoint_defaults_checkpoint_enter_before_discovery_namesp
     assert "((_checkpoint_enter | default({})) or {}).get('facts', {})" in text
 
 
-def test_activation_wait_rejects_stale_velero_restore_signal():
-    """Activation wait must require a new managed-clusters Velero restore name when one existed before activation."""
-    tasks = yaml.safe_load((ACTIVATION_TASKS / "wait_for_restore.yml").read_text())
-    wait_task = next(t for t in tasks if t.get("name") == "Wait for managed-clusters Velero restore to be created")
-    stale_asserts = [t for t in tasks if t.get("name") == "Fail when managed-clusters Velero restore signal is stale"]
-
-    assert "previous_velero_restore_name" in wait_task["until"], (
-        "wait_for_restore.yml must keep polling while the Restore still reports the "
-        "pre-activation managed-clusters Velero restore signal"
-    )
-    assert "!=" in wait_task["until"]
-    assert stale_asserts == []
-
-
-def test_restore_wait_uses_exact_benign_finished_with_errors_matching():
-    """FinishedWithErrors compatibility must not use loose substring matching."""
-    text = (ACTIVATION_TASKS / "wait_for_restore.yml").read_text()
-
-    assert "match', '^ManagedCluster [^ ]+ already available$'" in text
-    assert "reject('search', 'already available')" not in text
+def test_activation_wait_proves_completion_from_the_journal():
+    """The completion proof binds the journaled Restore and its children, so a pre-activation
+    Velero restore signal can never stand in for this transaction's (August section 4 step 8)."""
+    poll = (ACTIVATION_TASKS / "poll_restore_completion.yml").read_text()
+    assert "_acm_journal.restore.name" in poll
+    assert "key: velero_restores" in poll
+    assert "previous_velero_restore_name" not in (ACTIVATION_TASKS / "wait_for_restore.yml").read_text()
 
 
 def test_preflight_skipped_checkpoint_requires_expected_managedcluster_metadata():
@@ -314,7 +255,8 @@ def test_restore_only_validates_rehydrated_discovery_namespace_lists():
 
 def test_restore_only_rehydrate_is_guarded_by_checkpoint_enablement():
     """Restore-only rehydrate must skip cleanly when checkpointing is disabled."""
-    tasks = _load_playbook("restore_only.yml")[0]["tasks"][0]["block"]
+    outer = _load_playbook("restore_only.yml")[0]["tasks"][0]["block"]
+    tasks = [task for task in outer if "rescue" in task][0]["block"]
     rehydrate_task = next(
         task for task in tasks if task.get("name") == "Rehydrate Argo CD run_id from checkpoint before pause"
     )

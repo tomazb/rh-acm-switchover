@@ -219,6 +219,40 @@ Recovery options:
 This protects against silently resuming a partially completed switchover on
 the wrong cluster when contexts are reused.
 
+#### Migration journal on resume
+
+Activation records a **migration journal** in the state file (`config.migration_backups`)
+before it mutates any Restore. From then on the journal is one fixed migration: every
+retry and resume reuses it, re-reads the frozen Backups and the journaled Restore
+strictly, and never freezes newer Backups (see [Migration evidence](#migration-evidence)).
+A resume refuses when the live ACM minor version or the activation method no longer
+matches the journal.
+
+- `--force` never discards a journal. The implicit resets — a stale completed state, a
+  failed state with no resumable phase, a context mismatch, or missing contexts on an
+  in-progress state — refuse with a message pointing at `--reset-state`.
+- `--reset-state` remains the explicit fresh-run boundary. It deletes the journal along
+  with the rest of the state; a later run freezes a new migration.
+- A resume at finalization whose journal lacks `restore.completed_at` or
+  `post_activation.completed_at` refuses with
+  `Migration evidence refused (restore_not_completed: …)` or
+  `(post_activation_not_completed: …)`. The migration journal is unchanged, and a plain
+  re-run refuses again. A recorded Argo CD re-pause marker is honored first: the re-pause
+  runs and clears the marker before the refusal, so Argo CD stays paused while you recover.
+  The message gives this recovery:
+
+  > The migration journal is unchanged. For missing post-activation completion, set
+  > `current_phase` to `post_activation_verification`. For missing Restore completion, set
+  > it to `activation` and remove only the `completed_steps` entry named
+  > `wait_restore_completion`, if present. Preserve the migration journal, mutation markers,
+  > and Argo CD re-pause marker. Re-run with the same arguments; the tool must establish the
+  > missing evidence from fresh reads. Do not synthesize completion timestamps or replace
+  > frozen Backup identities. Missing accepted-mutation evidence requires operator
+  > reconciliation. `--reset-state` deliberately discards the transaction.
+
+  If the message says the journal is invalid, repair the journal in the state file, without
+  synthesizing completion timestamps or replacing frozen Backup identities.
+
 ⚠️ **`--reset-state` also destroys durable MultiClusterObservability teardown
 records.** `--reset-state` removes the whole state file, including the durable
 per-resource teardown records (`delete_started` → `cr_absent` → `drain_pending`
@@ -263,9 +297,13 @@ python acm_switchover.py \
 ```
 
 > **Note:** The restore controller may briefly treat a deleted passive restore as still active.
-> The tool now waits for deletion to fully propagate before creating `restore-acm-activate`.
-> If you run this manually, wait for deletion to complete and re-create the activation restore
-> if the phase shows `FinishedWithErrors`.
+> The tool deletes the passive sync Restore under its UID and resourceVersion, waits for the
+> deletion to propagate, and only then creates `restore-acm-activate`. If that create is not
+> accepted, nothing is rolled back or recreated automatically: the error says whether the
+> passive sync Restore was already deleted, and a re-run re-proves the destination hub from
+> the migration journal (a `restore-acm-activate` the failed attempt left behind is refused as
+> unowned, otherwise the create is repeated). If you run this manually, wait for deletion to
+> complete before creating the activation restore.
 
 > **Passive Restore requirements (hard fail-closed):** Preflight and activation
 > require a sync-enabled passive Restore — one whose
@@ -275,18 +313,25 @@ python acm_switchover.py \
 > sync flag is **not** sufficient). Create or repair the sync-enabled Restore
 > on the secondary before re-running.
 >
-> A passive Restore that reaches phase `FinishedWithErrors` is treated as
-> benign **only** when every reported error message matches the exact pattern
-> `ManagedCluster <name> already available`. Any other `FinishedWithErrors`
-> message fails activation.
+> Before activation, the passive sync Restore counts as ready in phase `Enabled`,
+> `Finished`, `Completed` or `Running`, or in `FinishedWithErrors` **only** when every
+> reported error message matches the exact pattern `ManagedCluster <name> already available`.
+> That allowance covers only this readiness check. The activation completion proof never
+> accepts `FinishedWithErrors` or `Completed`: the activated ACM Restore must reach `Finished`
+> (a patched passive sync Restore may also be `Enabled`, and only with the complete Velero
+> child proof), and every required Velero child Restore must be `Completed`.
 >
 > **Note:** `--activation-method` applies only to `--method passive`.
 > When `--min-managed-clusters` is omitted, the tool derives the expected non-local
 > ManagedCluster names/count from primary preflight and enforces that set after
 > activation. In `--restore-only` mode, omitted `--min-managed-clusters` defaults
 > to at least one restored non-local ManagedCluster because no primary inventory is
-> available. Use `--min-managed-clusters N` to provide an explicit minimum instead;
-> `N` must be non-negative, and explicit `0` opts into an empty restore target.
+> available (the collection likewise never derives restore-only names or a count from its
+> `acm_switchover_managed_clusters` klusterlet map). An explicit `--min-managed-clusters N` (`N` non-negative) is an
+> **additional** count floor: it replaces the derived count, never the derived names,
+> which stay enforced. Explicit `0` therefore permits an empty destination only when
+> no expected name exists (for example in `--restore-only`). To lift the name check
+> itself, use the audited waiver described under [Migration evidence](#migration-evidence).
 
 **Post-activation klusterlet remediation:**
 After activation, the tool verifies that managed clusters are joined and
@@ -340,8 +385,206 @@ python acm_switchover.py \
 
 **Considerations:**
 - Longer restore time (all resources restored)
-- Requires `latest` backups for credentials, resources, and managed clusters
+- Needs selectable credentials, resources, and managed-clusters Backups of one generation;
+  activation freezes the controller's `latest` choice for each and creates `restore-acm-full`
+  with those concrete Backup names, never the `latest` alias
 - CleanupBeforeRestore applied
+
+## Migration Evidence
+
+Activation, post-activation, and finalization share one durable **migration journal**
+(`migration_backups`, schema version 2). The Python CLI keeps it in its state file; the
+Ansible collection keeps it in checkpoint `operational_data`. The two stores are
+independent: each form factor reads and writes only its own journal, and a migration
+started by one cannot be resumed by the other. The schema, transitions, reason codes, and
+refusals are the same on both sides and are held equal by the root parity tests.
+
+### What activation freezes
+
+Before any Restore mutation — including the guarded delete of the passive sync Restore for
+`--activation-method restore` — activation strictly reads the Velero Backup inventory,
+predicts the restore controller's own Backup selection, and durably journals the selected
+Backups with their identity and status. What the Restore spec carries depends on the method:
+
+| Method | Restore | Backup fields written |
+| --- | --- | --- |
+| `--method passive` (patch) | the passive sync Restore, patched under its UID and resourceVersion | ManagedClusters `latest` |
+| `--method passive --activation-method restore` | one-shot `restore-acm-activate` | ManagedClusters `latest`; credentials and resources `skip` |
+| `--method full` and `--restore-only` | `restore-acm-full` | concrete credentials, resources, and managed-clusters Backup names |
+
+`latest` stays in the spec only where the controller's own selection must run. Every Backup
+and Velero child Restore that activation accepts as evidence is concrete and journaled, and
+completion re-reads each frozen Backup and fails if it was replaced or its status drifted.
+A resume never refreezes: it reuses the journaled Backups even if newer ones exist.
+
+On ACM 2.12–2.16 a patched passive sync Restore may also request `CredentialsHive` and
+`CredentialsCluster` Velero Restores. Activation predicts both before the patch: reuse of the
+frozen credentials Backup (the selector shortcut of the supported Backup schedules) or a
+proven "no candidate" is permitted; a selected distinct hive or cluster Backup, or a
+prediction that cannot be proven, refuses the patch with no Restore mutation. At completion,
+any child Restore of this Restore bound to a dedicated `acm-credentials-hive-schedule` or
+`acm-credentials-cluster-schedule` Backup blocks, **including a historical child from before
+the patch**. This restricts destination hubs whose passive sync history includes the legacy
+three-Backup credentials format: a patch activation cannot complete while such a child of the
+passive sync Restore exists.
+
+A resume that finds the Restore mutation recorded but the journal lacking it, or a Restore at
+the target name that this run never recorded creating, refuses: the object is never adopted.
+Review and delete it, then retry — or start over with `--reset-state` where the message says so.
+
+### Expected ManagedCluster names and the audited waiver
+
+Activation and post-activation each check the expected names derived by preflight and the
+count floor (see `--min-managed-clusters` above). `--skip-managed-cluster-expectations`
+requests an audited waiver of the **name check only**:
+
+```bash
+python acm_switchover.py ... \
+  --skip-managed-cluster-expectations \
+  --managed-cluster-expectation-waiver-scope both \
+  --managed-cluster-expectation-waiver-actor "jane@example.com" \
+  --managed-cluster-expectation-waiver-reason "cluster-x retired after preflight" \
+  --managed-cluster-expectation-waiver-request-id CHG-1234   # optional
+```
+
+- The scope is `activation`, `post_activation`, or `both`; actor and reason must be non-empty.
+- It is rejected with `--validate-only`, `--decommission`, `--setup`, and
+  `--argocd-resume-only`; it is rejected with `--restore-only` in every scope, because restore-only
+  records no expected name; and it is rejected when its scope has no expected name to waive.
+- It never lifts the count floor, Restore identity, Backup provenance, completion,
+  post-activation completion, cleanup recovery or repair, final locator absence, or teardown
+  revalidation.
+- The waiver is journaled once, when its phase decides the name check (activation journals an
+  `activation` or `both` waiver, post-activation a `post_activation` one). A later run must
+  repeat the same request or none; a different request is refused.
+
+The collection equivalents are listed in the
+[CLI migration map](../../ansible_collections/tomazb/acm_switchover/docs/cli-migration-map.md).
+
+### Finalization order and the Restore-cleanup transaction
+
+Finalization runs in this order on every pass:
+
+1. **Journaled Restore cleanup.** The journal, not a step marker, decides the step. A fresh
+   pass revalidates the journaled Restore live (identity, generation, owned spec, cleanup
+   policy, child evidence, frozen Backups), records `restore.teardown_revalidated_at`, durably
+   records cleanup intent with a new operation ID, then deletes the Restore under its UID and
+   the resourceVersion of an immediately preceding strict read. A conflict re-reads and
+   retries up to three times. After an accepted delete, absence is polled for at most 300
+   seconds of elapsed time, and only a final strict 404 records `completed`.
+2. **Old-hub observability teardown** — `--old-hub-action secondary` only, unless observability
+   is skipped (`--skip-observability-checks`) or absent; the old-hub evidence gate (below) runs
+   first.
+3. **BackupSchedule enablement.** Other switchover Restores (other names) keep the existing
+   name-based cleanup, but only once the journaled cleanup is terminal; an object at the
+   journaled name blocks instead of being deleted. A fresh strict read must prove the
+   journaled name absent immediately before the BackupSchedule is enabled. BackupSchedule
+   collision repair is the exception to "immediately before the write": it proves the name
+   absent immediately before it deletes the BackupSchedule, then waits for the deletion
+   (about 30 seconds at most) and recreates the schedule without a second read, so a failed
+   read can never leave the hub without a BackupSchedule. Each proof establishes absence only
+   at the instant of the read; it reserves nothing. BackupSchedule inventory reads are strict:
+   an unreadable inventory refuses to change BackupSchedules.
+4. Backup and MultiClusterHub verification, auto-import reset.
+5. **Old-hub disposition** (`--old-hub-action`), behind the old-hub evidence gate.
+
+The **old-hub evidence gate** runs immediately before every integrated old-hub action. It
+requires `post_activation.completed_at`, a `completed` or `repaired` cleanup, the activation
+name check or a waiver covering it, and a fresh strict read proving that nothing occupies the
+journaled Restore name. A missing post-activation completion refuses first, with
+`post_activation_not_completed`; otherwise missing evidence refuses with the first missing reason
+code (`cleanup_not_terminal`, `activation_names_unverified`, or `locator_occupied`) and lists all
+of them. A dry-run previews and is not gated. Standalone `--decommission` is outside this
+transaction.
+
+### Cleanup recovery and operator repair
+
+The cleanup never treats an unexplained absence as success. A resumed cleanup that finds the
+Restore absent without recorded completion (`absent_without_completion`), a different UID at
+the name (`replacement_uid`), or a replacement appearing while polling
+(`replacement_during_poll`) durably records `recovery_required` and blocks cleanup,
+BackupSchedule enablement, and every old-hub action. Nothing at the name is deleted or
+adopted. An unreadable or malformed read changes nothing and blocks only the current attempt.
+A poll timeout leaves the cleanup resumable.
+
+The error that first records `recovery_required` names the run and operation IDs. A later
+retry without repair reports `cleanup_recovery_required`; recover the IDs from the original
+error or the retained journal's `run_id` and `cleanup.operation_id`. After inspecting the
+destination hub, acknowledge the recovery explicitly:
+
+```bash
+python acm_switchover.py ... \
+  --repair-migration-cleanup \
+  --cleanup-repair-actor "jane@example.com" \
+  --cleanup-repair-reason "Restore deleted manually during the incident" \
+  --cleanup-repair-evidence "INC-42 audit log" \
+  --cleanup-repair-run-id <run ID from the error> \
+  --cleanup-repair-operation-id <operation ID from the error>
+```
+
+A repair is accepted only in `recovery_required`, only for the exact run and operation IDs,
+and only when a fresh strict read proves the journaled name absent; it is recorded as an
+audited acknowledgement, never as a delete or absence this run performed. Remove the repair
+options on later runs: once the cleanup is `repaired` (or in any state other than
+`recovery_required`) a repair request is refused (`repair_not_permitted`). The repair options
+are rejected with `--validate-only`, `--decommission`, `--setup`, and `--argocd-resume-only`.
+
+### Argo CD after a failure under a journal
+
+With `--argocd-manage --argocd-resume-on-failure`, a phase failure **before** the journal
+exists keeps the previous behavior: Applications are resumed. Before a journal exists,
+switchover recovery rewinds to primary preparation. Python restore-only records a retry at
+preflight; collection restore-only resumes the secondary Applications without rewinding
+checkpoint phases. Once a journal exists (a failure in activation,
+post-activation, or finalization), the rescue never rewinds: it first durably records an
+Argo CD re-pause marker in the state (outside the journal), then resumes the paused
+Applications, and the retry stays at the failed phase. The retry re-pauses the
+Applications (both hubs; the secondary hub for `--restore-only`) before any further phase
+work, never replays the rest of primary preparation, and clears the marker only after the
+re-pause succeeds. If the marker cannot be recorded, no Application is resumed. A failed
+resume is reported with the original failure and names `--argocd-resume-only` for manual
+recovery; a failed re-pause fails the retry and keeps the marker, so the next retry re-pauses
+again.
+
+### Ansible collection specifics
+
+- **Execute mode needs the checkpoint.** The journal lives only in the checkpoint, so an
+  executing `activation` refuses before any Restore mutation unless
+  `acm_switchover_execution.checkpoint.enabled: true`, and finalization has no journal-free
+  path.
+- **Direct role entry.** A direct role invocation validates operator inputs before ordinary phase mutations. Any recorded Argo CD re-pause obligation runs first. `activation`, `post_activation`, and `finalization` validate their
+  operator inputs (including the waiver) at their own entry, restore the ManagedCluster
+  expectation the checkpoint recorded, and refuse a waiver scope with no expected name. In
+  execute mode, `activation` and `post_activation` refuse when no expectation is recorded and
+  `min_managed_clusters` is not set explicitly; `finalization` restores a recorded expectation
+  but does not refuse without one. A `validate` entry stays non-mutating.
+- **Rewinds.** `checkpoint.reset_from: activation`, `post_activation`, or `finalization` keeps
+  and revalidates the journal; `reset_from: preflight` or `primary_prep` is refused while a
+  journal exists. The full `checkpoint.reset: true` is the only reset that discards it. A
+  completed `post_activation` marker without the evidence it claims is refused at the
+  `post_activation` role, and `reset_from: post_activation` re-runs post-activation against
+  the kept journal. The Python CLI has no phase-rewind option; its equivalent is the
+  `current_phase` edit described under [Migration journal on resume](#migration-journal-on-resume).
+  This is a tooling difference between the form factors, not a behavior divergence.
+- **Argo CD rescue.** The `switchover.yml` and `restore_only.yml` rescues follow the rule
+  above: with a journal they record the re-pause marker in the failed phase's `fail`
+  transition, resume only once that write is acknowledged, and never issue the
+  `primary_prep` reset; failures are reported with the original failure, not ignored.
+
+### Dry-run and check mode
+
+`--dry-run` performs the strict reads and predictions and reports what it would freeze,
+mutate, or record. The collection's `dry_run` and `validate` modes and native `--check` are
+previews too. Preview modes write no migration-journal transition and send no Restore
+mutation. Python skips the finalization-entry marker refusal in dry-run, but finalization
+previews in both form factors can still refuse an existing journal whose required completion
+evidence is missing.
+
+### Evidence boundary
+
+The migration-evidence behavior is covered by fake-backed unit, integration, scenario, and
+parity tests in both form factors. None of that is live certification evidence; see the
+[testing guide](../development/testing.md).
 
 ## Advanced Scenarios
 
@@ -500,9 +743,11 @@ python acm_switchover.py \
 
 **What happens:**
 1. **Preflight** — validates the target hub only (ACM version, BSL credentials, namespaces)
-2. **Activation** — creates a one-time full Restore from the latest backup in S3
+2. **Activation** — journals the latest credentials, resources, and managed-clusters Backups
+   by name, then creates a one-time full Restore with those concrete names (see
+   [Migration evidence](#migration-evidence))
 3. **Post-Activation** — waits for ManagedClusters to connect and verifies klusterlet agents
-4. **Finalization** — attempts to enable BackupSchedule on the new hub; if none is found (ACM excludes BackupSchedule from Velero backups to avoid circular backup-of-backup), a warning is emitted and the operator must create one manually after restore
+4. **Finalization** — deletes the journaled Restore through the Restore-cleanup transaction, then attempts to enable BackupSchedule on the new hub; if none is found (ACM excludes BackupSchedule from Velero backups to avoid circular backup-of-backup), a warning is emitted and the operator must create one manually after restore
 
 **Key differences from normal switchover:**
 - No `--primary-context` needed (there is no primary hub)
@@ -874,7 +1119,8 @@ python acm_switchover.py \
   --secondary-context secondary-acm-hub
 ```
 
-This deletes all progress tracking and starts from scratch.
+This deletes all progress tracking and starts from scratch, including any recorded
+migration journal (see [Migration journal on resume](#migration-journal-on-resume)).
 
 ### Use Custom State File
 

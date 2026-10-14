@@ -7,7 +7,9 @@
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
   register: _acm_finalization_backup_schedules_live_info
-  when: acm_finalization_backup_schedules_info is not defined
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'execute'
+    - acm_finalization_backup_schedules_info is not defined
 
 - name: Publish live finalization BackupSchedule resources
   ansible.builtin.set_fact:
@@ -15,6 +17,13 @@
   when:
     - _acm_finalization_backup_schedules_live_info is defined
     - not (_acm_finalization_backup_schedules_live_info.skipped | default(false))
+
+# R4-04 (strict-read correction): an executing run decides BackupSchedule enablement,
+# verification and collision repair from a fresh, strictly complete inventory, never a
+# pre-seeded or partial one.
+- name: Read and publish the finalization BackupSchedules strictly
+  ansible.builtin.include_tasks: read_backup_schedules.yml
+  when: acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Refresh finalization MultiClusterHub in execute mode or when not pre-seeded
   kubernetes.core.k8s_info:

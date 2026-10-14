@@ -293,7 +293,9 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--method {passive,full}` | Switchover method: `passive` or `full` (required) |
 | `--old-hub-action {secondary,decommission,none}` | Action for old hub after switchover (required) |
 | `--activation-method {patch,restore}` | Activation method for passive restores (default: patch) |
-| `--min-managed-clusters N` | Require at least `N` non-local `ManagedCluster` resources after restore. `N` must be non-negative. Omitted: derives from primary preflight (switchover) or defaults to `1` (`--restore-only`). Explicit `0` opts into an empty restore target. |
+| `--min-managed-clusters N` | Require at least `N` non-local `ManagedCluster` resources after restore. `N` must be non-negative. Omitted: derives the expected names and count from primary preflight (switchover) or defaults to `1` (`--restore-only`). An explicit `N` is an additional floor; the derived names stay enforced, so explicit `0` permits an empty restore target only when no name is expected. |
+| `--skip-managed-cluster-expectations` | Audited waiver of the expected `ManagedCluster` name check only (never the count floor). Requires `--managed-cluster-expectation-waiver-scope {activation,post_activation,both}`, `--managed-cluster-expectation-waiver-actor` and `--managed-cluster-expectation-waiver-reason`; `--managed-cluster-expectation-waiver-request-id` is optional |
+| `--repair-migration-cleanup` | Acknowledge a Restore cleanup in `recovery_required` after inspection. Requires `--cleanup-repair-actor`, `--cleanup-repair-reason`, one or more `--cleanup-repair-evidence`, and the `--cleanup-repair-run-id` / `--cleanup-repair-operation-id` the recovery error names. Drop these options once the cleanup is repaired |
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing or advancing resume state |
 | `--decommission` | Decommission old hub (interactive) |
@@ -301,7 +303,7 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--setup` | Deploy RBAC resources and optionally generate kubeconfigs |
 | `--include-decommission` | With `--setup`, also deploy the opt-in decommission RBAC extension |
 | `--state-file PATH` | Path to state file (default: .state/switchover-<primary>__<secondary>.json) |
-| `--reset-state` | Reset state file and start fresh |
+| `--reset-state` | Reset state file and start fresh; also discards a recorded migration journal (`--force` never does) |
 | `--manage-auto-import-strategy` | Temporarily set ImportAndSync on destination hub (ACM 2.14+) |
 | `--skip-observability-checks` | Explicitly bypass blocking Observability steps even if detected |
 | `--disable-observability-on-secondary` | Deprecated compatibility flag; `--old-hub-action secondary` now deletes MCO automatically |
@@ -315,9 +317,10 @@ oc rollout restart deployment/observability-observatorium-api \
 For `--setup`, `--include-decommission` requires `--role operator` or `--role both`.
 
 > **Note:** When using `--activation-method restore`, ensure the passive restore is fully deleted
-> before creating `restore-acm-activate`. The tool now waits for deletion to propagate; if done
-> manually and the restore shows `Phase=FinishedWithErrors`, delete/recreate after confirming the
-> old restore is gone.
+> before creating `restore-acm-activate`. The tool deletes it under its UID and resourceVersion and
+> waits for deletion to propagate. If the create is then not accepted, the tool does not recreate
+> the passive restore: re-run, and the retry re-proves the hub from the migration journal. If done
+> manually, create the activation restore only after confirming the old restore is gone.
 
 ## Exit Codes
 
@@ -472,7 +475,7 @@ podman run -it --rm \
 | `--method passive` | Use passive sync method (required) |
 | `--method full` | Use full restore method (required) |
 | `--activation-method {patch,restore}` | Activation option for passive method |
-| `--min-managed-clusters N` | Enforce a non-negative minimum restored non-local `ManagedCluster` count. Omitted defaults to `1` in `--restore-only` (and to the derived primary count in switchover); explicit `0` opts into an empty restore target. |
+| `--min-managed-clusters N` | Enforce a non-negative minimum restored non-local `ManagedCluster` count, in addition to the expected names. Omitted defaults to `1` in `--restore-only` (and to the derived primary names and count in switchover); explicit `0` permits an empty restore target only when no name is expected. |
 | `--old-hub-action` | Action for old hub: `secondary`, `decommission`, or `none` (required) |
 | `--disable-observability-on-secondary` | Deprecated compatibility flag; `--old-hub-action secondary` now deletes MCO automatically |
 | `--acknowledge-observability-not-migrated` | Acknowledge a proven-absent destination observability stack and proceed (only with `--old-hub-action decommission`; not valid with `--decommission`, `--validate-only`, `--restore-only`, `--setup` or `--argocd-resume-only`) |

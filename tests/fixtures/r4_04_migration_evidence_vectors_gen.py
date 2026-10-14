@@ -3530,6 +3530,52 @@ rcase("repair-run-id-mismatch-blocks", dict(REPAIR, run_id=OTHER_UUID), RR, "rep
 rcase("repair-operation-id-mismatch-blocks", dict(REPAIR, operation_id=OTHER_UUID), RR, "repair_identity_mismatch")
 rcase("repair-invalid-journal-blocks", REPAIR, mut(RR, cleanup__recovery=None), "invalid_cleanup_state")
 
+# validate_waiver_request / validate_repair_request (plan Task 6: the operator inputs) ----------------------
+# The request is the journal record minus what journaling adds, held to the same field rules.
+fn = "validate_waiver_request"
+WREQ = {key: value for key, value in waiver("activation").items() if key not in ("flag", "journaled_at", "outcome")}
+
+
+def wrcase(case_id, candidate, expect):
+    case(case_id, ALL, WV, fn, {"candidate": candidate}, ok(candidate) if expect is None else err(expect))
+
+
+wrcase("waiver-request-activation", WREQ, None)
+wrcase("waiver-request-both-with-request-id", dict(WREQ, scope="both", request_id="CHG-1"), None)
+wrcase("waiver-request-post-activation", dict(WREQ, scope="post_activation"), None)
+wrcase("waiver-request-null-blocks", None, "malformed_waiver")
+wrcase("waiver-request-missing-scope-blocks", {k: v for k, v in WREQ.items() if k != "scope"}, "malformed_waiver")
+wrcase("waiver-request-null-scope-blocks", dict(WREQ, scope=None), "malformed_waiver")
+wrcase("waiver-request-unknown-scope-blocks", dict(WREQ, scope="teardown"), "malformed_waiver")
+wrcase("waiver-request-empty-actor-blocks", dict(WREQ, actor=""), "malformed_waiver")
+wrcase("waiver-request-null-reason-blocks", dict(WREQ, reason=None), "malformed_waiver")
+wrcase("waiver-request-empty-request-id-blocks", dict(WREQ, request_id=""), "malformed_waiver")
+wrcase("waiver-request-journal-field-blocks", dict(WREQ, outcome="waived"), "malformed_waiver")
+
+fn = "validate_repair_request"
+RREQ = {key: value for key, value in REPAIR.items() if key != "acknowledged_at"}
+
+
+def rrcase(case_id, candidate, expect):
+    case(case_id, ALL, RPS, fn, {"candidate": candidate}, ok(candidate) if expect is None else err(expect))
+
+
+rrcase("repair-request-complete", RREQ, None)
+rrcase("repair-request-null-blocks", None, "malformed_repair")
+rrcase("repair-request-empty-actor-blocks", dict(RREQ, actor=""), "malformed_repair")
+rrcase("repair-request-null-reason-blocks", dict(RREQ, reason=None), "malformed_repair")
+rrcase("repair-request-no-evidence-blocks", dict(RREQ, inspected_evidence=[]), "malformed_repair")
+rrcase(
+    "repair-request-empty-evidence-item-blocks", dict(RREQ, inspected_evidence=["audit-log", ""]), "malformed_repair"
+)
+rrcase("repair-request-run-id-not-uuid-blocks", dict(RREQ, run_id="run-1"), "malformed_repair")
+rrcase(
+    "repair-request-operation-id-missing-blocks",
+    {k: v for k, v in RREQ.items() if k != "operation_id"},
+    "malformed_repair",
+)
+rrcase("repair-request-journal-field-blocks", dict(RREQ, acknowledged_at=T_REPAIR), "malformed_repair")
+
 # --- Selection, ownership and completion refinements --------------------------------------
 # a non-string resource type is an unsupported type, never an uncoded TypeError.
 for label, rtype in [("list", []), ("object", {}), ("null", None)]:
@@ -3570,20 +3616,45 @@ REF_TABLES["sync_branch"] = {
     "2.16": "restore_controller.go:502-527",
     "2.17": "restore_controller.go:656-692",
 }
+# Legacy activation renames the activation-step Credentials and ResourcesGeneric children with
+# "-active" when those options are not skip (U2.12 restore_controller.go:549-552 and equivalents);
+# the sync branch's unsuffixed Credentials output is the one the hive/cluster shortcut shares (D §1.2).
+REF_TABLES["legacy_active"] = {
+    "2.12": "restore_controller.go:549-552",
+    "2.13": "restore_controller.go:548-551",
+    "2.14": "restore_controller.go:723-726",
+    "2.15": "restore_controller.go:723-726",
+    "2.16": "restore_controller.go:723-726",
+}
 case(
     "patch-names-legacy",
     LEGACY,
-    refs2(LEGACY, "name", "only_mc", "sync_branch"),
+    refs2(LEGACY, "name", "only_mc", "sync_branch", "legacy_active"),
     fn,
     {"controller_contract": LEG, "acm_restore_name": R, "frozen_backups": PATCH_FROZEN},
     ok(
         {
             "ManagedClusters": gname(MC_B),
+            "CredentialsActive": gname(ACT_CRED_B, True),
+            "ResourcesGenericActive": gname(ACT_GEN_B, True),
             "Credentials": gname(ACT_CRED_B),
-            "ResourcesGeneric": gname(ACT_GEN_B),
             "Resources": gname(ACT_RES_B),
+            "ResourcesGeneric": gname(ACT_GEN_B),
         }
     ),
+)
+case(
+    "patch-names-legacy-active-collision-blocks",
+    LEGACY,
+    refs2(LEGACY, "name", "legacy_active"),
+    fn,
+    {
+        "controller_contract": LEG,
+        "acm_restore_name": R,
+        "frozen_backups": dict(PATCH_FROZEN, activation_resources=proj(ACT_CRED_B + "-active")),
+    },
+    err("generated_name_collision"),
+    True,
 )
 case(
     "patch-names-2.17",
@@ -4175,6 +4246,1427 @@ case(
     err("active_prediction_mismatch"),
     True,
 )
+
+# --- PR C Task 7: legacy passive_patch hive/cluster requests (PR C decisions amendment §1.2) -----
+# D is the PR C decisions amendment. On the legacy lanes the sync branch can request CredentialsHive
+# and CredentialsCluster from `latest`: the controller selects the latest Credentials Backup and, when
+# its spec.orLabelSelectors is non-empty, returns that same Backup; otherwise it correlates the hive
+# and cluster tokens from its name (U2.12-2.16 restore.go getVeleroBackupName).
+DOCS["D"] = "2026-09-30-r4-04-pr-c-decisions-amendment.md"
+REF_TABLES["shortcut"] = {
+    "2.12": "restore.go:502-580",
+    "2.13": "restore.go:502-580",
+    "2.14": "restore.go:509-587",
+    "2.15": "restore.go:509-587",
+    "2.16": "restore.go:509-587",
+}
+REF_TABLES["variant_requests"] = {
+    "2.12": "restore.go:607-625",
+    "2.13": "restore.go:607-625",
+    "2.14": "restore.go:614-632",
+    "2.15": "restore.go:614-632",
+    "2.16": "restore.go:614-632",
+    "2.17": "restore.go:53-73",
+}
+REF_TABLES["variant_substring"] = {
+    "2.12": "restore.go:561-573",
+    "2.13": "restore.go:561-573",
+    "2.14": "restore.go:568-580",
+    "2.15": "restore.go:568-580",
+    "2.16": "restore.go:568-580",
+}
+DEFAULT_SPOTS["predict_passive_patch_credential_variants"] = ("D:61-78",)
+DEFAULT_SPOTS["require_no_credential_variant_children"] = ("D:79-94",)
+DEFAULT_SPOTS["require_same_backup_generation"] = ("J:88-91",)
+VAR_L = refs2(LEGACY, "shortcut", "variant_requests", "sync_branch") + refs(LEGACY, "latest", "sort")
+VAR_C = VAR_L + refs(LEGACY, "correlated", "timestamp")
+HIVE_EXACT = backup("acm-credentials-hive-schedule-20240102120000", start=NEW)
+CLUSTER_EXACT = backup("acm-credentials-cluster-schedule-20240102120000", start=NEW)
+HIVE_NEAR = backup("acm-credentials-hive-schedule-20240102120010", start="2024-01-02T12:00:10Z")
+HIVE_NEAR2 = backup("acm-credentials-hive-schedule-20240102120020", start="2024-01-02T12:00:20Z")
+CLUSTER_NEAR = backup("acm-credentials-cluster-schedule-20240102120015", start="2024-01-02T12:00:15Z")
+HIVE_FAR = backup("acm-credentials-hive-schedule-20240102130000", start="2024-01-02T13:00:00Z")
+
+
+def with_selectors(raw, selectors):
+    raw = copy.deepcopy(raw)
+    raw["spec"] = {} if selectors is ABSENT else {"orLabelSelectors": selectors}
+    return raw
+
+
+SELECTORS = [{"matchExpressions": [{"key": "cluster.open-cluster-management.io/type", "operator": "Exists"}]}]
+CRED_SHORTCUT = with_selectors(backup(ACT_CRED_B, start=NEW), SELECTORS)
+CRED_PLAIN = with_selectors(backup(ACT_CRED_B, start=NEW), [])
+
+
+def variants(inventory, contract=LEG, frozen=None, namespace=NS):
+    others = [raw for raw in PATCH_INVENTORY if raw["metadata"]["name"] != ACT_CRED_B]
+    return {
+        "controller_contract": contract,
+        "inventory": others + inventory,
+        "activation_credentials": proj(ACT_CRED_B) if frozen is None else frozen,
+        "namespace": namespace,
+    }
+
+
+fn = "predict_passive_patch_credential_variants"
+case("variants-legacy-shortcut", LEGACY, VAR_L, fn, variants([CRED_SHORTCUT]), ok("shortcut"))
+case(
+    "variants-legacy-shortcut-with-dedicated-backups-unselected",
+    LEGACY,
+    VAR_L,
+    fn,
+    variants([CRED_SHORTCUT, HIVE_EXACT, CLUSTER_EXACT]),
+    ok("shortcut"),
+)
+case("variants-legacy-no-candidate", LEGACY, VAR_C, fn, variants([CRED_PLAIN, HIVE_FAR]), ok("no_candidate"))
+case(
+    "variants-legacy-no-candidate-without-spec",
+    LEGACY,
+    VAR_C,
+    fn,
+    variants([with_selectors(backup(ACT_CRED_B, start=NEW), ABSENT)]),
+    ok("no_candidate"),
+)
+case(
+    "variants-legacy-null-selectors-no-candidate",
+    LEGACY,
+    VAR_C,
+    fn,
+    variants([with_selectors(backup(ACT_CRED_B, start=NEW), None)]),
+    ok("no_candidate"),
+)
+for label, extra in [
+    ("hive-exact", [HIVE_EXACT]),
+    ("hive-fallback", [HIVE_NEAR]),
+    ("cluster-only-exact", [CLUSTER_EXACT]),
+    ("cluster-only-fallback", [CLUSTER_NEAR]),
+]:
+    case(
+        f"variants-legacy-{label}-blocks",
+        LEGACY,
+        VAR_C,
+        fn,
+        variants([CRED_PLAIN] + extra),
+        err("legacy_credential_variant_selected"),
+        True,
+    )
+case(
+    "variants-legacy-fallback-ambiguous-blocks",
+    LEGACY,
+    VAR_C,
+    fn,
+    variants([CRED_PLAIN, HIVE_NEAR, HIVE_NEAR2]),
+    err("correlated_ambiguous"),
+    True,
+)
+newer_cred = with_selectors(backup("acm-credentials-schedule-20240103120000", start="2024-01-03T12:00:00Z"), SELECTORS)
+case(
+    "variants-legacy-latest-credentials-moved-blocks",
+    LEGACY,
+    VAR_L,
+    fn,
+    variants([CRED_SHORTCUT, newer_cred]),
+    err("credential_variant_source_mismatch"),
+    True,
+)
+case(
+    "variants-legacy-frozen-credentials-missing-blocks",
+    LEGACY,
+    VAR_L,
+    fn,
+    variants([]),
+    err("credential_variant_source_mismatch"),
+    True,
+)
+tied_cred = with_selectors(backup("acm-credentials-schedule-20240102120000x", start=NEW), SELECTORS)
+case(
+    "variants-legacy-latest-tie-blocks",
+    LEGACY,
+    VAR_L,
+    fn,
+    variants([CRED_SHORTCUT, tied_cred]),
+    err("latest_ambiguous"),
+    True,
+)
+for label, selectors in [("string", "matchLabels"), ("object", {"matchLabels": {}})]:
+    case(
+        f"variants-legacy-selectors-{label}-malformed-blocks",
+        LEGACY,
+        VAR_L,
+        fn,
+        variants([with_selectors(backup(ACT_CRED_B, start=NEW), selectors)]),
+        err("malformed_inventory"),
+        True,
+    )
+malformed_spec = backup(ACT_CRED_B, start=NEW)
+malformed_spec["spec"] = ["orLabelSelectors"]
+case(
+    "variants-legacy-spec-malformed-blocks",
+    LEGACY,
+    VAR_L,
+    fn,
+    variants([malformed_spec]),
+    err("malformed_inventory"),
+    True,
+)
+case(
+    "variants-2.17-not-requested",
+    V17,
+    refs2(V17, "variant_requests"),
+    fn,
+    variants([CRED_PLAIN, HIVE_EXACT], A17),
+    ok("not_requested"),
+)
+for label, contract, frozen, code in [
+    ("unknown-contract", "legacy", None, "unknown_controller_contract"),
+    ("empty-name", LEG, dict(proj(ACT_CRED_B), name=""), "frozen_backups_invalid"),
+    ("null-projection", A17, [], "frozen_backups_invalid"),
+    ("missing-field", LEG, {k: v for k, v in proj(ACT_CRED_B).items() if k != "warnings"}, "frozen_backups_invalid"),
+    ("other-namespace", LEG, dict(proj(ACT_CRED_B), namespace="other"), "frozen_backups_invalid"),
+    ("other-namespace-2.17", A17, dict(proj(ACT_CRED_B), namespace="other"), "frozen_backups_invalid"),
+]:
+    case(
+        f"variants-{label}-rejected",
+        ALL,
+        [],
+        fn,
+        variants([CRED_SHORTCUT], contract, frozen),
+        err(code),
+        True,
+    )
+# Codex pre-PR finding 1: the selected latest Credentials Backup must be the frozen object,
+# all seven fields, before either branch is permitted; a same-name replacement is refused.
+for label, live, code in [
+    ("replaced-uid", backup(ACT_CRED_B, start=NEW, uid="uid-replacement"), "credential_variant_source_mismatch"),
+    (
+        "completed-at",
+        backup(ACT_CRED_B, start=NEW, completion="2024-01-01T12:06:00Z"),
+        "credential_variant_source_mismatch",
+    ),
+    ("warnings", backup(ACT_CRED_B, start=NEW, warnings=2), "credential_variant_source_mismatch"),
+    ("errors", backup(ACT_CRED_B, start=NEW, errors=1), "backup_has_errors"),
+    ("phase", backup(ACT_CRED_B, start=NEW, phase="PartiallyFailed"), "backup_not_completed"),
+    ("namespace", backup(ACT_CRED_B, start=NEW, namespace="other"), "backup_namespace_mismatch"),
+]:
+    for branch, selectors in [("shortcut", SELECTORS), ("no-candidate", [])]:
+        case(
+            f"variants-legacy-{label}-{branch}-frozen-mismatch-blocks",
+            LEGACY,
+            VAR_L,
+            fn,
+            variants([with_selectors(live, selectors)]),
+            err(code),
+            True,
+        )
+case(
+    "variants-legacy-frozen-warnings-differ-blocks",
+    LEGACY,
+    VAR_L,
+    fn,
+    variants([CRED_SHORTCUT], frozen=dict(proj(ACT_CRED_B), warnings=1)),
+    err("credential_variant_source_mismatch"),
+    True,
+)
+
+fn = "require_no_credential_variant_children"
+VARC_L = refs2(LEGACY, "variant_substring", "owner", "index")
+hive_child = child(gname(HIVE_EXACT["metadata"]["name"]), HIVE_EXACT["metadata"]["name"])
+cluster_child_later = child(gname(CLUSTER_NEAR["metadata"]["name"]), CLUSTER_NEAR["metadata"]["name"])
+contains_child = child(f"{R}-copy-of-hive", "copy-acm-credentials-hive-schedule")
+foreign_hive = child(gname(HIVE_EXACT["metadata"]["name"]) + "-x", HIVE_EXACT["metadata"]["name"])
+foreign_hive["metadata"]["ownerReferences"] = [owner_ref(uid="uid-previous")]
+
+
+def no_variants(children, contract=LEG, owner_name=R, owner_uid=RUID):
+    return {
+        "controller_contract": contract,
+        "acm_restore_name": owner_name,
+        "acm_restore_uid": owner_uid,
+        "namespace_restores": children,
+    }
+
+
+case("variant-children-legacy-clean", LEGACY, VARC_L, fn, no_variants(LEG_CHILDREN), ok(None))
+for label, extra in [
+    ("historical-hive", child(gname(HIVE_EXACT["metadata"]["name"]), HIVE_EXACT["metadata"]["name"], "Failed")),
+    ("current-hive", hive_child),
+    ("later-cluster", cluster_child_later),
+    ("contains-token", contains_child),
+]:
+    case(
+        f"variant-children-legacy-{label}-blocks",
+        LEGACY,
+        VARC_L,
+        fn,
+        no_variants(LEG_CHILDREN + [extra]),
+        err("credential_variant_child"),
+        True,
+    )
+case(
+    "variant-children-legacy-foreign-owner-ignored",
+    LEGACY,
+    VARC_L,
+    fn,
+    no_variants(LEG_CHILDREN + [foreign_hive]),
+    ok(None),
+)
+case(
+    "variant-children-2.17-not-requested",
+    V17,
+    refs2(V17, "variant_requests"),
+    fn,
+    no_variants(LEG_CHILDREN + [hive_child], A17),
+    ok(None),
+)
+bad_backup_name = child(gname("x"), "x")
+bad_backup_name["spec"]["backupName"] = 7
+for label, inp, code in [
+    ("malformed-backup-name", no_variants(LEG_CHILDREN + [bad_backup_name]), "malformed_velero_restore"),
+    ("malformed-list", no_variants({"items": []}), "malformed_restore_list"),
+    ("empty-owner", no_variants(LEG_CHILDREN, owner_uid=""), "malformed_child_expectation"),
+    ("unknown-contract", no_variants(LEG_CHILDREN, "active"), "unknown_controller_contract"),
+]:
+    case(f"variant-children-{label}-rejected", ALL, [], fn, inp, err(code), True)
+
+# passive_patch_completion: the D §1.2 rule 3 backstop and the rule 4 shared unsuffixed child.
+fn = "passive_patch_completion"
+VARP_L = PP_L + refs2(LEGACY, "variant_substring", "shortcut")
+shared_cred = child(gname(ACT_CRED_B), ACT_CRED_B)
+active_cred = child(gname(ACT_CRED_B, True), ACT_CRED_B)
+SHARED_POST = dict(LEG_POST, veleroCredentialsRestoreName=gname(ACT_CRED_B, True))
+SHARED_CHILDREN = [old_cred, old_res, old_gen, p_mc, active_cred, p_gen]
+case(
+    "patch-legacy-shared-credentials-child-journaled",
+    LEGACY,
+    VARP_L,
+    fn,
+    patch(LEG, SHARED_POST, SHARED_CHILDREN + [shared_cred]),
+    ok(
+        lists(
+            managed_clusters=[p_mc],
+            activation_credentials=[active_cred, shared_cred],
+            activation_resources_generic=[p_gen],
+        )
+    ),
+)
+case(
+    "patch-legacy-shared-credentials-child-absent-not-required",
+    LEGACY,
+    VARP_L,
+    fn,
+    patch(LEG, SHARED_POST, SHARED_CHILDREN),
+    ok(lists(managed_clusters=[p_mc], activation_credentials=[active_cred], activation_resources_generic=[p_gen])),
+)
+foreign_shared = child(gname(ACT_CRED_B), ACT_CRED_B, refs=[owner_ref(uid="uid-previous")])
+wrong_shared = child(gname(ACT_CRED_B), CRED_B)
+running_shared = child(gname(ACT_CRED_B), ACT_CRED_B, "InProgress")
+for label, extra, code in [
+    ("foreign-owner", foreign_shared, "velero_restore_owner_mismatch"),
+    ("wrong-backup", wrong_shared, "velero_restore_backup_mismatch"),
+    ("not-completed", running_shared, "velero_restore_not_completed"),
+]:
+    case(
+        f"patch-legacy-shared-credentials-child-{label}-blocks",
+        LEGACY,
+        VARP_L,
+        fn,
+        patch(LEG, SHARED_POST, SHARED_CHILDREN + [extra]),
+        err(code),
+        True,
+    )
+for label, extra in [("historical-hive", hive_child), ("later-cluster", cluster_child_later)]:
+    case(
+        f"patch-legacy-{label}-child-blocks-completion",
+        LEGACY,
+        VARP_L,
+        fn,
+        patch(LEG, LEG_POST, LEG_CHILDREN + [extra]),
+        err("credential_variant_child"),
+        True,
+    )
+case(
+    "patch-2.17-hive-named-child-outside-cohort-ignored",
+    V17,
+    PP_17,
+    fn,
+    patch(A17, P17_POST, P17_CHILDREN + [child("stray-hive", HIVE_EXACT["metadata"]["name"], refs=[])]),
+    ok(lists(managed_clusters=[p_mc], activation_credentials=[p_cred_act], activation_resources_generic=[p_gen_act])),
+)
+
+# --- PR C Task 7: the full_restore same-generation rule (July design §1) ---------------------------
+fn = "require_same_backup_generation"
+GEN_ALL = refs(ALL, "timestamp")
+case("generation-same", ALL, GEN_ALL, fn, {"backup_names": [MC_B, CRED_B, RES_B]}, ok(1704110400000000000), True)
+case(
+    "generation-same-fraction",
+    ALL,
+    GEN_ALL,
+    fn,
+    {"backup_names": [MC_B + ".5", CRED_B + ".50"]},
+    ok(1704110400500000000),
+    True,
+)
+case(
+    "generation-mixed-blocks",
+    ALL,
+    GEN_ALL,
+    fn,
+    {"backup_names": [MC_B, "acm-credentials-schedule-20240101120001", RES_B]},
+    err("mixed_backup_generation"),
+    True,
+)
+for label, names, code in [
+    ("no-hyphen", [MC_B, "manual"], "backup_generation_unparseable"),
+    ("bad-suffix", [MC_B, "acm-credentials-schedule-2024"], "backup_generation_unparseable"),
+    ("zero-time", ["acm-managed-clusters-schedule-00010101000000"], "backup_generation_unparseable"),
+    ("empty-list", [], "malformed_backup_names"),
+    ("empty-name", [MC_B, ""], "malformed_backup_names"),
+    ("not-a-list", MC_B, "malformed_backup_names"),
+]:
+    case(f"generation-{label}-rejected", ALL, [], fn, {"backup_names": names}, err(code), True)
+
+
+# --- Post-activation completion evidence (plan Task 9) ------------------------------------------
+# J §2 waiver scope, §3 strict inventory, §4 completion strictly last; A §7 additive expectations.
+PA_DONE = journal("full_restore", LEG, "completed")
+PA_POST = journal("full_restore", LEG, "post")
+PA_NAMED = mut(PA_DONE, post_activation__names_verified_at=T_POST_NAMES)
+PA_PRE = journal("full_restore", LEG)
+PA_REQ = {
+    "scope": "post_activation",
+    "actor": "operator@example.com",
+    "reason": "the list is stale",
+    "request_id": None,
+}
+PA_WAIVER = dict(PA_REQ, flag=WAIVED_FLAG, journaled_at=T_POST_NAMES, outcome="waived")
+PA_BOTH = waiver("both")
+PA_ACTIVATION = mut(PA_DONE, restore__names_verified_at=T_NAMES, waiver=waiver("activation"))
+
+fn = "require_completed_restore"
+PJ = drefs(ALL, "J:543-552", "A:777-800")
+case("post-activation-journal-completed", ALL, PJ, fn, {"journal": PA_DONE}, ok(PA_DONE))
+case("post-activation-journal-post-completed", ALL, PJ, fn, {"journal": PA_POST}, ok(PA_POST))
+case("post-activation-journal-absent-blocks", ALL, PJ, fn, {"journal": None}, err("journal_required"))
+case("post-activation-journal-pre-completion-blocks", ALL, PJ, fn, {"journal": PA_PRE}, err("restore_not_completed"))
+case(
+    "post-activation-journal-invalid-blocks",
+    ALL,
+    PJ,
+    fn,
+    {"journal": mut(PA_DONE, waiver=False)},
+    err("malformed_journal"),
+)
+
+fn = "require_post_activation_completed"
+case("post-activation-marker-with-evidence", ALL, PJ, fn, {"journal": PA_POST}, ok(PA_POST))
+case(
+    "post-activation-marker-without-completion-blocks",
+    ALL,
+    PJ,
+    fn,
+    {"journal": PA_NAMED},
+    err("post_activation_not_completed"),
+)
+case("post-activation-marker-pre-completion-blocks", ALL, PJ, fn, {"journal": PA_PRE}, err("restore_not_completed"))
+case("post-activation-marker-no-journal-blocks", ALL, PJ, fn, {"journal": None}, err("journal_required"))
+
+fn = "post_activation_waiver"
+PW = drefs(ALL, "J:446-470", "J:543-552")
+
+
+def pwcase(case_id, doc, requested, expect, names=NAMES):
+    inp = {
+        "journal": doc,
+        "requested": requested,
+        "expected_names": names,
+        "flag": WAIVED_FLAG,
+        "journaled_at": T_POST_NAMES,
+    }
+    case(case_id, ALL, PW, fn, inp, expect if isinstance(expect, dict) else err(expect))
+
+
+NO_WAIVER = ok({"waiver": None, "record": False})
+pwcase("post-activation-waiver-none", PA_DONE, None, NO_WAIVER)
+pwcase("post-activation-waiver-request-journaled", PA_DONE, PA_REQ, ok({"waiver": PA_WAIVER, "record": True}))
+pwcase(
+    "post-activation-waiver-request-id-journaled",
+    PA_DONE,
+    dict(PA_REQ, request_id="CHG-7"),
+    ok({"waiver": dict(PA_WAIVER, request_id="CHG-7"), "record": True}),
+)
+# Activation journals activation and both scopes; post-activation journals only its own scope.
+pwcase("post-activation-waiver-both-request-not-journaled", PA_DONE, dict(PA_REQ, scope="both"), NO_WAIVER)
+pwcase("post-activation-waiver-activation-request-ignored", PA_DONE, dict(PA_REQ, scope="activation"), NO_WAIVER)
+pwcase("post-activation-waiver-after-name-check-not-journaled", PA_NAMED, PA_REQ, NO_WAIVER)
+pwcase(
+    "post-activation-waiver-journaled-both-reused",
+    mut(PA_DONE, waiver=PA_BOTH),
+    None,
+    ok({"waiver": PA_BOTH, "record": False}),
+)
+pwcase(
+    "post-activation-waiver-journaled-both-same-request",
+    mut(PA_DONE, waiver=PA_BOTH),
+    {key: PA_BOTH[key] for key in ("scope", "actor", "reason", "request_id")},
+    ok({"waiver": PA_BOTH, "record": False}),
+)
+pwcase(
+    "post-activation-waiver-journaled-post-reused",
+    mut(PA_DONE, waiver=PA_WAIVER),
+    PA_REQ,
+    ok({"waiver": PA_WAIVER, "record": False}),
+)
+pwcase("post-activation-waiver-journaled-activation-does-not-cover", PA_ACTIVATION, None, NO_WAIVER)
+pwcase(
+    "post-activation-waiver-different-actor-blocks",
+    mut(PA_DONE, waiver=PA_BOTH),
+    {"scope": "both", "actor": "other@example.com", "reason": PA_BOTH["reason"], "request_id": None},
+    "waiver_request_mismatch",
+)
+pwcase("post-activation-waiver-different-scope-blocks", PA_ACTIVATION, PA_REQ, "waiver_request_mismatch")
+pwcase("post-activation-waiver-no-names-blocks", PA_DONE, PA_REQ, "waiver_expected_names_empty", names=[])
+pwcase(
+    "post-activation-waiver-both-no-names-blocks",
+    PA_DONE,
+    dict(PA_REQ, scope="both"),
+    "waiver_expected_names_empty",
+    names=[],
+)
+pwcase(
+    "post-activation-waiver-activation-request-no-post-names",
+    PA_DONE,
+    dict(PA_REQ, scope="activation"),
+    NO_WAIVER,
+    names=[],
+)
+pwcase(
+    "post-activation-waiver-journaled-no-names-blocks",
+    mut(PA_DONE, waiver=PA_BOTH),
+    None,
+    "waiver_expected_names_empty",
+    names=[],
+)
+pwcase("post-activation-waiver-malformed-request-blocks", PA_DONE, dict(PA_REQ, actor=""), "malformed_waiver")
+pwcase("post-activation-waiver-unknown-scope-blocks", PA_DONE, dict(PA_REQ, scope="all"), "malformed_waiver")
+pwcase("post-activation-waiver-no-journal-blocks", None, PA_REQ, "journal_required")
+pwcase("post-activation-waiver-pre-completion-blocks", PA_PRE, None, "restore_not_completed")
+
+fn = "managed_cluster_readiness"
+PR = drefs(ALL, "J:446-470", "J:473-490", "A:693-748")
+
+
+def mcl(name, available="True", joined="True", **extra):
+    conditions = []
+    if available is not None:
+        conditions.append({"type": "ManagedClusterConditionAvailable", "status": available})
+    if joined is not None:
+        conditions.append({"type": "ManagedClusterJoined", "status": joined})
+    out = {"metadata": {"name": name}, "status": {"conditions": conditions}}
+    out.update(extra)
+    return out
+
+
+LOCAL = mcl("local-cluster")
+
+
+def ready(names, missing=(), pending=(), code=None, waived=False):
+    return {
+        "ready": code is None,
+        "code": code,
+        "names": sorted(names),
+        "missing": list(missing),
+        "pending": list(pending),
+        "count": len(names),
+        "names_waived": waived,
+    }
+
+
+def prcase(case_id, items, expect, names=NAMES, minimum=2, waived=False):
+    inp = {"items": items, "expected_names": names, "min_managed_clusters": minimum, "names_waived": waived}
+    case(case_id, ALL, PR, fn, inp, ok(expect) if expect.get("names") is not None else expect)
+
+
+AB = [LOCAL, mcl("cluster-b"), mcl("cluster-a")]
+prcase("readiness-all-ready", AB, ready(NAMES))
+prcase("readiness-extra-cluster-ready", AB + [mcl("cluster-c")], ready(NAMES + ["cluster-c"]))
+prcase("readiness-empty-inventory", [], ready([], NAMES, code="inventory_empty"))
+# An explicit zero floor with no expected name permits an empty destination, local-cluster
+# included (a hub with self-management disabled has none); any expectation keeps the refusal.
+prcase("readiness-empty-inventory-no-expectation", [], ready([]), names=[], minimum=0)
+prcase("readiness-empty-inventory-floor-one", [], ready([], code="inventory_empty"), names=[], minimum=1)
+prcase(
+    "readiness-empty-inventory-zero-floor-names-waived",
+    [],
+    ready([], NAMES, code="inventory_empty", waived=True),
+    minimum=0,
+    waived=True,
+)
+prcase("readiness-only-local-zero-floor", [LOCAL], ready([]), names=[], minimum=0)
+prcase("readiness-only-local-floor-one", [LOCAL], ready([], code="count_below_minimum"), names=[], minimum=1)
+prcase(
+    "readiness-missing-name",
+    [LOCAL, mcl("cluster-a")],
+    ready(["cluster-a"], ["cluster-b"], code="expected_names_missing"),
+)
+prcase(
+    "readiness-missing-name-zero-floor",
+    [LOCAL, mcl("cluster-a")],
+    ready(["cluster-a"], ["cluster-b"], code="expected_names_missing"),
+    minimum=0,
+)
+prcase(
+    "readiness-missing-name-waived",
+    [LOCAL, mcl("cluster-a"), mcl("cluster-c")],
+    ready(["cluster-a", "cluster-c"], ["cluster-b"], waived=True),
+    waived=True,
+)
+prcase(
+    "readiness-waiver-never-lifts-the-floor",
+    [LOCAL, mcl("cluster-a")],
+    ready(["cluster-a"], ["cluster-b"], code="count_below_minimum", waived=True),
+    waived=True,
+)
+prcase(
+    "readiness-waiver-never-lifts-readiness",
+    [LOCAL, mcl("cluster-a", available="False"), mcl("cluster-c")],
+    ready(["cluster-a", "cluster-c"], ["cluster-b"], ["cluster-a"], code="clusters_not_ready", waived=True),
+    waived=True,
+)
+prcase(
+    "readiness-floor-above-names",
+    AB,
+    ready(NAMES, code="count_below_minimum"),
+    minimum=3,
+)
+prcase(
+    "readiness-not-available",
+    [LOCAL, mcl("cluster-a", available="False"), mcl("cluster-b")],
+    ready(NAMES, pending=["cluster-a"], code="clusters_not_ready"),
+)
+prcase(
+    "readiness-not-joined",
+    [LOCAL, mcl("cluster-a"), mcl("cluster-b", joined=None)],
+    ready(NAMES, pending=["cluster-b"], code="clusters_not_ready"),
+)
+prcase(
+    "readiness-no-status",
+    [LOCAL, mcl("cluster-a"), {"metadata": {"name": "cluster-b"}}],
+    ready(NAMES, pending=["cluster-b"], code="clusters_not_ready"),
+)
+prcase(
+    "readiness-local-cluster-not-required-ready",
+    [mcl("local-cluster", available="False"), mcl("cluster-a"), mcl("cluster-b")],
+    ready(NAMES),
+)
+prcase(
+    "readiness-missing-name-precedes-pending",
+    [LOCAL, mcl("cluster-a", available="Unknown")],
+    ready(["cluster-a"], ["cluster-b"], ["cluster-a"], code="expected_names_missing"),
+)
+prcase("readiness-items-not-a-list-blocks", {"items": []}, err("malformed_inventory"))
+prcase("readiness-nameless-cluster-blocks", [LOCAL, {"metadata": {}}], err("malformed_inventory"))
+prcase("readiness-non-object-cluster-blocks", [LOCAL, "cluster-a"], err("malformed_inventory"))
+prcase("readiness-status-not-object-blocks", [LOCAL, mcl("cluster-a", status=[])], err("malformed_inventory"))
+prcase(
+    "readiness-conditions-not-list-blocks",
+    [LOCAL, mcl("cluster-a", status={"conditions": {}})],
+    err("malformed_inventory"),
+)
+prcase(
+    "readiness-condition-not-object-blocks",
+    [LOCAL, mcl("cluster-a", status={"conditions": ["Available"]})],
+    err("malformed_inventory"),
+)
+prcase("readiness-expected-names-malformed-blocks", AB, err("malformed_expected_names"), names=["cluster-a", ""])
+prcase("readiness-negative-floor-blocks", AB, err("malformed_expectation"), minimum=-1)
+prcase("readiness-boolean-floor-blocks", AB, err("malformed_expectation"), minimum=True)
+prcase("readiness-waiver-flag-malformed-blocks", AB, err("malformed_expectation"), waived="yes")
+
+fn = "post_activation_names_evidence"
+PN = drefs(ALL, "J:446-470", "J:543-552")
+READY = ready(NAMES)
+READY_WAIVED = ready(NAMES + ["cluster-c"], waived=True)
+
+
+def pncase(case_id, doc, readiness, waiver_record, expect):
+    inp = {"journal": doc, "readiness": readiness, "waiver": waiver_record, "now": T_POST_NAMES}
+    case(case_id, ALL, PN, fn, inp, expect if isinstance(expect, dict) else err(expect))
+
+
+pncase("names-evidence-recorded", PA_DONE, READY, None, ok({"candidate": PA_NAMED, "write": True}))
+pncase("names-evidence-kept-on-resume", PA_POST, READY, None, ok({"candidate": PA_POST, "write": False}))
+case(
+    "names-evidence-kept-at-a-later-time",
+    ALL,
+    PN,
+    fn,
+    {"journal": PA_NAMED, "readiness": READY, "waiver": None, "now": T_REVALIDATED},
+    ok({"candidate": PA_NAMED, "write": False}),
+)
+pncase(
+    "names-evidence-waiver-journaled",
+    PA_DONE,
+    READY_WAIVED,
+    PA_WAIVER,
+    ok({"candidate": mut(PA_DONE, waiver=PA_WAIVER), "write": True}),
+)
+pncase(
+    "names-evidence-journaled-waiver-kept",
+    mut(PA_DONE, waiver=PA_BOTH),
+    READY_WAIVED,
+    PA_BOTH,
+    ok({"candidate": mut(PA_DONE, waiver=PA_BOTH), "write": False}),
+)
+pncase(
+    "names-evidence-not-ready-blocks",
+    PA_DONE,
+    ready(["cluster-a"], ["cluster-b"], code="expected_names_missing"),
+    None,
+    "managed_clusters_not_ready",
+)
+pncase("names-evidence-waived-decision-without-waiver-blocks", PA_DONE, READY_WAIVED, None, "readiness_waiver_mismatch")
+pncase("names-evidence-waiver-with-enforced-decision-blocks", PA_DONE, READY, PA_WAIVER, "readiness_waiver_mismatch")
+pncase("names-evidence-activation-waiver-blocks", PA_DONE, READY_WAIVED, waiver("activation"), "waiver_scope_mismatch")
+pncase(
+    "names-evidence-different-waiver-blocks",
+    mut(PA_DONE, waiver=PA_BOTH),
+    READY_WAIVED,
+    PA_WAIVER,
+    "frozen_field_changed",
+)
+pncase("names-evidence-malformed-waiver-blocks", PA_DONE, READY_WAIVED, dict(PA_WAIVER, actor=""), "malformed_waiver")
+pncase("names-evidence-malformed-readiness-blocks", PA_DONE, {"ready": True}, None, "malformed_readiness")
+pncase("names-evidence-pre-completion-blocks", PA_PRE, READY, None, "restore_not_completed")
+pncase("names-evidence-no-journal-blocks", None, READY, None, "journal_required")
+
+fn = "post_activation_completion"
+PC = drefs(ALL, "J:543-552")
+PA_NAMED_DONE = mut(PA_NAMED, post_activation__completed_at=T_POST_DONE)
+PA_WAIVED = mut(PA_DONE, waiver=PA_WAIVER)
+
+
+def pccase(case_id, doc, expect):
+    case(
+        case_id, ALL, PC, fn, {"journal": doc, "now": T_POST_DONE}, expect if isinstance(expect, dict) else err(expect)
+    )
+
+
+pccase("completion-after-name-check", PA_NAMED, ok({"candidate": PA_NAMED_DONE, "write": True}))
+pccase("completion-kept-on-resume", PA_POST, ok({"candidate": PA_POST, "write": False}))
+case(
+    "completion-kept-at-a-later-time",
+    ALL,
+    PC,
+    fn,
+    {"journal": PA_POST, "now": T_REVALIDATED},
+    ok({"candidate": PA_POST, "write": False}),
+)
+pccase(
+    "completion-under-post-activation-waiver",
+    PA_WAIVED,
+    ok({"candidate": mut(PA_WAIVED, post_activation__completed_at=T_POST_DONE), "write": True}),
+)
+pccase(
+    "completion-under-both-waiver",
+    mut(PA_DONE, waiver=PA_BOTH),
+    ok({"candidate": mut(PA_DONE, waiver=PA_BOTH, post_activation__completed_at=T_POST_DONE), "write": True}),
+)
+pccase("completion-without-name-check-blocks", PA_DONE, "post_activation_names_unverified")
+pccase("completion-under-activation-waiver-blocks", PA_ACTIVATION, "post_activation_names_unverified")
+pccase("completion-pre-completion-blocks", PA_PRE, "restore_not_completed")
+pccase("completion-no-journal-blocks", None, "journal_required")
+
+
+# --- Restore-cleanup transaction (plan Task 10) -----------------------------------------------
+# J §1 cleanup invariants, §4a barrier, state machine, final pre-delete boundary, resume and
+# repair; A §6 projection; C §3.1 passive `latest` projection. Inputs are journals plus the
+# one strict live read (None for a proven 404) each step consumes.
+CL_POST = journal("full_restore", LEG, "post")
+CL_REVAL = journal("full_restore", LEG, "revalidated")
+CL_INTENT = journal("full_restore", LEG, "revalidated", "intent_persisted")
+CL_ACCEPTED = journal("full_restore", LEG, "revalidated", "delete_accepted")
+CL_DONE = journal("full_restore", LEG, "revalidated", "completed")
+CL_RECOVERY = journal("full_restore", LEG, "revalidated", "recovery_required")
+CL_RECOVERY_ACCEPTED = journal("full_restore", LEG, "revalidated", "recovery_required", accepted=True)
+CL_REPAIRED = journal("full_restore", LEG, "revalidated", "repaired")
+CL_PA_DONE = journal("full_restore", LEG, "completed")
+CL_REQUEST = {key: value for key, value in REPAIR.items() if key != "acknowledged_at"}
+CL_REPLACEMENT = "uid-replacement"
+CL_SPOTS = {
+    "barrier": "J:621-653",
+    "machine": "J:655-683",
+    "boundary": "J:685-731",
+    "resume": "J:733-765",
+    "repair": "J:766-791",
+    "states": "J:198-229",
+}
+
+
+def cl_tag(kind, contract):
+    return f"{kind.replace('_', '-')}-{'legacy' if contract == LEG else '2.17'}"
+
+
+def cl_refs(*spots):
+    return drefs(ALL, *(CL_SPOTS[spot] for spot in spots))
+
+
+def live_restore(kind, contract, uid=RUID, rv="2002", generation=4, spec=None, metadata=None):
+    """A strict live ACM Restore holding exactly the journaled owned projection."""
+    restore = journal(kind, contract, "post")["restore"]
+    if kind == "passive_patch":
+        owned = {MC_F: "latest", CREDS_F: "latest", RES_F: "latest", "syncRestoreWithNewBackups": True}
+    elif kind == "passive_restore":
+        owned = {MC_F: "latest", CREDS_F: "skip", RES_F: "skip"}
+    else:
+        owned = dict(restore["backup_fields"])
+    owned["cleanupBeforeRestore"] = "CleanupRestored"
+    owned.update(spec or {})
+    meta = {"name": R, "namespace": NS, "uid": uid, "resourceVersion": rv, "generation": generation}
+    meta.update(metadata or {})
+    return {"apiVersion": ACM_API, "kind": "Restore", "metadata": meta, "spec": owned}
+
+
+LIVE_FULL = live_restore("full_restore", LEG)
+LIVE_REPLACEMENT = live_restore("full_restore", LEG, uid=CL_REPLACEMENT, rv="3003")
+# Responses a strict read may never classify: truncated to the identity pair, another
+# locator, or not a Restore of the ACM API.
+TRUNCATED = {"metadata": {"uid": RUID, "resourceVersion": "123"}}
+TRUNCATED_REPLACEMENT = {"metadata": {"uid": CL_REPLACEMENT, "resourceVersion": "123"}}
+WRONG_NAME = mut(LIVE_FULL, metadata__name="other-restore")
+WRONG_API = mut(LIVE_FULL, apiVersion="velero.io/v1")
+NO_KIND = mut(LIVE_FULL, kind=DELETE)
+MALFORMED_READS = [
+    ("truncated", TRUNCATED, "malformed_restore_read"),
+    ("truncated-replacement", TRUNCATED_REPLACEMENT, "malformed_restore_read"),
+    ("wrong-locator", WRONG_NAME, "restore_locator_mismatch"),
+    ("wrong-api", WRONG_API, "malformed_restore_read"),
+    ("no-kind", NO_KIND, "malformed_restore_read"),
+    (
+        "replacement-at-another-locator",
+        mut(LIVE_REPLACEMENT, metadata__namespace="default"),
+        "restore_locator_mismatch",
+    ),
+]
+
+
+def recovered(doc, reason, now, observed=None):
+    out = mut(doc, cleanup__state="recovery_required")
+    out["cleanup"]["recovery"] = {
+        "required_at": now,
+        "reason_code": reason,
+        "observed_uid": observed[0] if observed else None,
+        "observed_resource_version": observed[1] if observed else None,
+    }
+    return out
+
+
+fn = "cleanup_schedule"
+case(
+    "cleanup-schedule-shared-bounds",
+    ALL,
+    cl_refs("boundary"),
+    fn,
+    {},
+    ok({"attempts": 4, "poll_delays": [0] + [5] * 60, "poll_timeout": 300, "request_timeout": 30}),
+)
+
+fn = "cleanup_step"
+
+
+def stok(case_id, doc, step, repair_requested=False, spots=("resume",)):
+    inp = {"journal": doc, "repair_requested": repair_requested}
+    case(case_id, ALL, cl_refs(*spots), fn, inp, ok({"step": step}))
+
+
+def sterr(case_id, doc, code, repair_requested=False, spots=("resume",)):
+    inp = {"journal": doc, "repair_requested": repair_requested}
+    case(case_id, ALL, cl_refs(*spots), fn, inp, err(code))
+
+
+stok("cleanup-step-not-started-revalidates", CL_POST, "revalidate", spots=("barrier", "resume"))
+stok("cleanup-step-revalidated-timestamp-is-not-fresh-success", CL_REVAL, "revalidate", spots=("barrier", "resume"))
+stok("cleanup-step-intent-deletes", CL_INTENT, "delete")
+stok("cleanup-step-delete-accepted-retries-the-delete", CL_ACCEPTED, "delete")
+stok("cleanup-step-completed-is-terminal", CL_DONE, "terminal")
+stok("cleanup-step-repaired-is-terminal", CL_REPAIRED, "terminal")
+stok("cleanup-step-recovery-with-repair-request", CL_RECOVERY, "repair", True, ("repair",))
+sterr("cleanup-step-recovery-blocks", CL_RECOVERY, "cleanup_recovery_required")
+sterr("cleanup-step-recovery-after-accepted-delete-blocks", CL_RECOVERY_ACCEPTED, "cleanup_recovery_required")
+sterr("cleanup-step-repair-request-on-completed-refused", CL_DONE, "repair_not_permitted", True, ("repair",))
+sterr("cleanup-step-repair-request-on-repaired-refused", CL_REPAIRED, "repair_not_permitted", True, ("repair",))
+sterr("cleanup-step-repair-request-on-not-started-refused", CL_POST, "repair_not_permitted", True, ("repair",))
+sterr("cleanup-step-repair-request-on-intent-refused", CL_INTENT, "repair_not_permitted", True, ("repair",))
+sterr("cleanup-step-no-journal-blocks", None, "journal_required")
+sterr("cleanup-step-pre-completion-blocks", PA_PRE, "restore_not_completed")
+sterr("cleanup-step-post-activation-incomplete-blocks", CL_PA_DONE, "post_activation_not_completed")
+sterr("cleanup-step-invalid-journal-blocks", mut(CL_INTENT, cleanup__intent_at=None), "invalid_cleanup_state")
+sterr("cleanup-step-repair-flag-malformed", CL_RECOVERY, "malformed_cleanup_input", "yes")
+
+fn = "teardown_revalidated"
+TR = cl_refs("barrier")
+case(
+    "teardown-revalidated-recorded-once",
+    ALL,
+    TR,
+    fn,
+    {"journal": CL_POST, "now": T_REVALIDATED},
+    ok({"candidate": CL_REVAL, "write": True}),
+)
+case(
+    "teardown-revalidated-kept-on-a-later-pass",
+    ALL,
+    TR,
+    fn,
+    {"journal": CL_REVAL, "now": T_INTENT},
+    ok({"candidate": CL_REVAL, "write": False}),
+)
+case(
+    "teardown-revalidated-after-intent-refused",
+    ALL,
+    TR,
+    fn,
+    {"journal": CL_INTENT, "now": T_REVALIDATED},
+    err("cleanup_state_mismatch"),
+)
+case(
+    "teardown-revalidated-before-post-activation-blocks",
+    ALL,
+    TR,
+    fn,
+    {"journal": CL_PA_DONE, "now": T_REVALIDATED},
+    err("post_activation_not_completed"),
+)
+
+fn = "cleanup_intent"
+CI = cl_refs("machine", "states")
+for kind, contract in KINDS:
+    case(
+        f"cleanup-intent-copies-the-restore-{cl_tag(kind, contract)}",
+        JLANES[contract],
+        drefs(JLANES[contract], CL_SPOTS["machine"], CL_SPOTS["states"]),
+        fn,
+        {"journal": journal(kind, contract, "revalidated"), "operation_id": JOP, "now": T_INTENT},
+        ok({"candidate": journal(kind, contract, "revalidated", "intent_persisted")}),
+    )
+case(
+    "cleanup-intent-without-teardown-revalidation-blocks",
+    ALL,
+    CI,
+    fn,
+    {"journal": CL_POST, "operation_id": JOP, "now": T_INTENT},
+    err("teardown_not_revalidated"),
+)
+case(
+    "cleanup-intent-never-minted-twice",
+    ALL,
+    CI,
+    fn,
+    {"journal": CL_INTENT, "operation_id": OTHER_UUID, "now": T_INTENT},
+    err("cleanup_state_mismatch"),
+)
+case(
+    "cleanup-intent-operation-id-not-a-uuid",
+    ALL,
+    CI,
+    fn,
+    {"journal": CL_REVAL, "operation_id": "op-1", "now": T_INTENT},
+    err("malformed_cleanup"),
+)
+case(
+    "cleanup-intent-malformed-time",
+    ALL,
+    CI,
+    fn,
+    {"journal": CL_REVAL, "operation_id": JOP, "now": "soon"},
+    err("malformed_cleanup"),
+)
+
+fn = "pre_delete"
+PD = cl_refs("boundary", "resume")
+
+
+def pdcase(case_id, doc, live, expect, lanes=ALL):
+    inp = {"journal": doc, "live": live, "now": T_RECOVERY}
+    case(case_id, lanes, drefs(lanes, CL_SPOTS["boundary"], CL_SPOTS["resume"]), fn, inp, expect)
+
+
+DELETE_DECISION = ok({"action": "delete", "uid": RUID, "resource_version": "2002"})
+for kind, contract in KINDS:
+    pdcase(
+        f"pre-delete-binds-the-journaled-restore-{cl_tag(kind, contract)}",
+        journal(kind, contract, "revalidated", "intent_persisted"),
+        live_restore(kind, contract),
+        DELETE_DECISION,
+        JLANES[contract],
+    )
+pdcase("pre-delete-retries-from-delete-accepted", CL_ACCEPTED, LIVE_FULL, DELETE_DECISION)
+pdcase(
+    "pre-delete-status-only-change-binds-the-new-resource-version",
+    CL_INTENT,
+    live_restore("full_restore", LEG, rv="2009"),
+    ok({"action": "delete", "uid": RUID, "resource_version": "2009"}),
+)
+pdcase(
+    "pre-delete-absent-without-completion-recovers",
+    CL_INTENT,
+    None,
+    ok({"action": "recover", "candidate": recovered(CL_INTENT, "absent_without_completion", T_RECOVERY)}),
+)
+pdcase(
+    "pre-delete-absent-after-accepted-delete-recovers",
+    CL_ACCEPTED,
+    None,
+    ok({"action": "recover", "candidate": recovered(CL_ACCEPTED, "absent_without_completion", T_RECOVERY)}),
+)
+pdcase(
+    "pre-delete-replacement-recovers-and-is-kept",
+    CL_INTENT,
+    LIVE_REPLACEMENT,
+    ok(
+        {
+            "action": "recover",
+            "candidate": recovered(CL_INTENT, "replacement_uid", T_RECOVERY, (CL_REPLACEMENT, "3003")),
+        }
+    ),
+)
+pdcase(
+    "pre-delete-replacement-after-accepted-delete-recovers",
+    CL_ACCEPTED,
+    LIVE_REPLACEMENT,
+    ok(
+        {
+            "action": "recover",
+            "candidate": recovered(CL_ACCEPTED, "replacement_uid", T_RECOVERY, (CL_REPLACEMENT, "3003")),
+        }
+    ),
+)
+pdcase(
+    "pre-delete-replacement-without-resource-version-blocks",
+    CL_INTENT,
+    mut(LIVE_REPLACEMENT, metadata__resourceVersion=DELETE),
+    err("malformed_restore_read"),
+)
+pdcase("pre-delete-missing-uid-blocks", CL_INTENT, mut(LIVE_FULL, metadata__uid=""), err("malformed_restore_read"))
+pdcase(
+    "pre-delete-metadata-not-an-object-blocks", CL_INTENT, mut(LIVE_FULL, metadata=[]), err("malformed_restore_read")
+)
+pdcase("pre-delete-spec-not-an-object-blocks", CL_INTENT, mut(LIVE_FULL, spec=None), err("malformed_restore_read"))
+pdcase("pre-delete-live-not-an-object-blocks", CL_INTENT, ["restore"], err("malformed_restore_read"))
+pdcase(
+    "pre-delete-locator-mismatch-blocks",
+    CL_INTENT,
+    mut(LIVE_FULL, metadata__namespace="default"),
+    err("restore_locator_mismatch"),
+)
+pdcase(
+    "pre-delete-generation-drift-blocks",
+    CL_INTENT,
+    live_restore("full_restore", LEG, generation=5),
+    err("restore_spec_drift"),
+)
+pdcase(
+    "pre-delete-boolean-generation-blocks",
+    CL_INTENT,
+    mut(LIVE_FULL, metadata__generation=True),
+    err("restore_spec_drift"),
+)
+pdcase(
+    "pre-delete-backup-field-drift-blocks",
+    CL_INTENT,
+    live_restore("full_restore", LEG, spec={RES_F: RES_B + "-other"}),
+    err("restore_spec_drift"),
+)
+pdcase(
+    "pre-delete-latest-alias-on-a-concrete-field-blocks",
+    CL_INTENT,
+    live_restore("full_restore", LEG, spec={CREDS_F: "latest"}),
+    err("restore_spec_drift"),
+)
+pdcase(
+    "pre-delete-cleanup-policy-drift-blocks",
+    CL_INTENT,
+    live_restore("full_restore", LEG, spec={"cleanupBeforeRestore": "None"}),
+    err("restore_spec_drift"),
+)
+pdcase(
+    "pre-delete-passive-patch-uppercase-latest-blocks",
+    journal("passive_patch", LEG, "revalidated", "intent_persisted"),
+    live_restore("passive_patch", LEG, spec={MC_F: "Latest"}),
+    err("restore_spec_drift"),
+    LEGACY,
+)
+pdcase(
+    "pre-delete-passive-restore-skip-field-touched-blocks",
+    journal("passive_restore", LEG, "revalidated", "intent_persisted"),
+    live_restore("passive_restore", LEG, spec={CREDS_F: "latest"}),
+    err("restore_spec_drift"),
+    LEGACY,
+)
+pdcase(
+    "pre-delete-passive-restore-skip-field-dropped-blocks",
+    journal("passive_restore", LEG, "revalidated", "intent_persisted"),
+    mut(live_restore("passive_restore", LEG), spec__veleroResourcesBackupName=DELETE),
+    err("restore_spec_drift"),
+    LEGACY,
+)
+pdcase(
+    "pre-delete-float-generation-blocks",
+    CL_INTENT,
+    mut(LIVE_FULL, metadata__generation=4.0),
+    err("restore_spec_drift"),
+)
+for name, read, code in MALFORMED_READS:
+    pdcase(f"pre-delete-{name}-response-blocks", CL_INTENT, read, err(code))
+pdcase("pre-delete-before-intent-refused", CL_REVAL, LIVE_FULL, err("cleanup_state_mismatch"))
+pdcase("pre-delete-after-completion-refused", CL_DONE, LIVE_FULL, err("cleanup_state_mismatch"))
+pdcase("pre-delete-under-recovery-refused", CL_RECOVERY, None, err("cleanup_state_mismatch"))
+
+fn = "delete_outcome"
+ACCEPTED_RESULT = {"accepted": True, "reason": "ok", "uid": RUID, "resource_version": "2002"}
+
+
+def docase(case_id, doc, result, expect, attempt=1, resource_version="2002", now=T_ACCEPTED):
+    inp = {"journal": doc, "result": result, "resource_version": resource_version, "attempt": attempt, "now": now}
+    case(case_id, ALL, cl_refs("machine", "boundary"), fn, inp, expect)
+
+
+docase(
+    "delete-accepted-records-the-audit-pair",
+    CL_INTENT,
+    ACCEPTED_RESULT,
+    ok({"outcome": "accepted", "candidate": CL_ACCEPTED}),
+)
+docase(
+    "delete-accepted-again-rewrites-only-the-audit-pair",
+    CL_ACCEPTED,
+    dict(ACCEPTED_RESULT, resource_version="2005"),
+    ok(
+        {
+            "outcome": "accepted",
+            "candidate": mut(
+                CL_ACCEPTED, cleanup__final_get_resource_version="2005", cleanup__delete_accepted_at=T_ABSENT
+            ),
+        }
+    ),
+    resource_version="2005",
+    now=T_ABSENT,
+)
+docase(
+    "delete-conflict-retries-the-full-validation",
+    CL_INTENT,
+    {"accepted": False, "reason": "precondition_failed"},
+    ok({"outcome": "retry"}),
+)
+docase(
+    "delete-conflict-on-the-last-retry-retries",
+    CL_INTENT,
+    {"accepted": False, "reason": "precondition_failed"},
+    ok({"outcome": "retry"}),
+    attempt=3,
+)
+docase(
+    "delete-conflict-retries-exhausted-blocks",
+    CL_INTENT,
+    {"accepted": False, "reason": "precondition_failed"},
+    err("cleanup_conflict_retries_exhausted"),
+    attempt=4,
+)
+docase(
+    "delete-not-found-rereads-the-locator",
+    CL_ACCEPTED,
+    {"accepted": False, "reason": "not_found"},
+    ok({"outcome": "retry"}),
+)
+docase(
+    "delete-unverifiable-is-not-accepted",
+    CL_INTENT,
+    {"accepted": False, "reason": "unverifiable"},
+    err("delete_not_accepted"),
+)
+docase(
+    "delete-http-accepted-but-unverified-is-not-accepted",
+    CL_INTENT,
+    {"accepted": False, "http_accepted": True, "reason": "malformed_response"},
+    err("delete_not_accepted"),
+)
+docase(
+    "delete-accepted-flag-without-ok-reason-is-not-accepted",
+    CL_INTENT,
+    {"accepted": True, "reason": "predicted"},
+    err("delete_not_accepted"),
+)
+docase("delete-result-not-an-object", CL_INTENT, "ok", err("delete_not_accepted"))
+docase(
+    "delete-accepted-for-another-uid-blocks",
+    CL_INTENT,
+    dict(ACCEPTED_RESULT, uid=CL_REPLACEMENT),
+    err("malformed_delete_result"),
+)
+docase(
+    "delete-accepted-for-another-resource-version-blocks",
+    CL_INTENT,
+    dict(ACCEPTED_RESULT, resource_version="2001"),
+    err("malformed_delete_result"),
+)
+docase("delete-attempt-zero-malformed", CL_INTENT, ACCEPTED_RESULT, err("malformed_cleanup_input"), attempt=0)
+docase("delete-attempt-boolean-malformed", CL_INTENT, ACCEPTED_RESULT, err("malformed_cleanup_input"), attempt=True)
+docase("delete-after-completion-refused", CL_DONE, ACCEPTED_RESULT, err("cleanup_state_mismatch"))
+
+fn = "absence_poll"
+
+
+def apcase(case_id, doc, live, expect):
+    case(case_id, ALL, cl_refs("boundary"), fn, {"journal": doc, "live": live, "now": T_RECOVERY}, expect)
+
+
+apcase("absence-poll-same-uid-pending", CL_ACCEPTED, LIVE_FULL, ok({"state": "pending"}))
+apcase("absence-poll-first-absence", CL_ACCEPTED, None, ok({"state": "absent"}))
+apcase(
+    "absence-poll-replacement-recovers",
+    CL_ACCEPTED,
+    LIVE_REPLACEMENT,
+    ok(
+        {
+            "state": "recover",
+            "candidate": recovered(CL_ACCEPTED, "replacement_during_poll", T_RECOVERY, (CL_REPLACEMENT, "3003")),
+        }
+    ),
+)
+apcase(
+    "absence-poll-malformed-read-blocks", CL_ACCEPTED, mut(LIVE_FULL, metadata__uid=None), err("malformed_restore_read")
+)
+apcase("absence-poll-before-accepted-delete-refused", CL_INTENT, None, err("cleanup_state_mismatch"))
+for name, read, code in MALFORMED_READS:
+    apcase(f"absence-poll-{name}-response-blocks", CL_ACCEPTED, read, err(code))
+
+fn = "final_absence"
+
+
+def facase(case_id, doc, live, expect):
+    case(case_id, ALL, cl_refs("boundary", "machine"), fn, {"journal": doc, "live": live, "now": T_ABSENT}, expect)
+
+
+facase("final-absence-completes-the-cleanup", CL_ACCEPTED, None, ok({"state": "completed", "candidate": CL_DONE}))
+facase(
+    "final-absence-replacement-recovers",
+    CL_ACCEPTED,
+    LIVE_REPLACEMENT,
+    ok(
+        {
+            "state": "recover",
+            "candidate": recovered(CL_ACCEPTED, "replacement_during_poll", T_ABSENT, (CL_REPLACEMENT, "3003")),
+        }
+    ),
+)
+facase("final-absence-same-uid-not-confirmed", CL_ACCEPTED, LIVE_FULL, err("absence_not_confirmed"))
+facase(
+    "final-absence-malformed-read-blocks", CL_ACCEPTED, mut(LIVE_FULL, metadata__uid=7), err("malformed_restore_read")
+)
+facase("final-absence-before-accepted-delete-refused", CL_INTENT, None, err("cleanup_state_mismatch"))
+facase("final-absence-after-completion-refused", CL_DONE, None, err("cleanup_state_mismatch"))
+for name, read, code in MALFORMED_READS:
+    facase(f"final-absence-{name}-response-blocks", CL_ACCEPTED, read, err(code))
+
+fn = "repair_cleanup"
+
+
+def rpcase(case_id, doc, request, live, expect):
+    inp = {"journal": doc, "request": request, "live": live, "now": T_REPAIR}
+    case(case_id, ALL, cl_refs("repair"), fn, inp, expect)
+
+
+rpcase("repair-acknowledges-the-recovery", CL_RECOVERY, CL_REQUEST, None, ok({"candidate": CL_REPAIRED}))
+rpcase(
+    "repair-keeps-the-accepted-delete-evidence",
+    CL_RECOVERY_ACCEPTED,
+    CL_REQUEST,
+    None,
+    ok({"candidate": journal("full_restore", LEG, "revalidated", "repaired", accepted=True)}),
+)
+rpcase("repair-live-locator-refused", CL_RECOVERY, CL_REQUEST, LIVE_REPLACEMENT, err("repair_locator_occupied"))
+rpcase("repair-live-journaled-restore-refused", CL_RECOVERY, CL_REQUEST, LIVE_FULL, err("repair_locator_occupied"))
+rpcase(
+    "repair-other-run-refused", CL_RECOVERY, dict(CL_REQUEST, run_id=OTHER_UUID), None, err("repair_identity_mismatch")
+)
+rpcase(
+    "repair-other-operation-refused",
+    CL_RECOVERY,
+    dict(CL_REQUEST, operation_id=OTHER_UUID),
+    None,
+    err("repair_identity_mismatch"),
+)
+rpcase("repair-empty-actor-refused", CL_RECOVERY, dict(CL_REQUEST, actor=""), None, err("malformed_repair"))
+rpcase(
+    "repair-no-evidence-refused", CL_RECOVERY, dict(CL_REQUEST, inspected_evidence=[]), None, err("malformed_repair")
+)
+rpcase("repair-request-carrying-a-time-refused", CL_RECOVERY, REPAIR, None, err("malformed_repair"))
+rpcase("repair-on-completed-refused", CL_DONE, CL_REQUEST, None, err("repair_not_permitted"))
+rpcase("repair-on-intent-refused", CL_INTENT, CL_REQUEST, None, err("repair_not_permitted"))
+rpcase("repair-malformed-live-read-refused", CL_RECOVERY, CL_REQUEST, ["restore"], err("malformed_restore_read"))
+rpcase(
+    "repair-truncated-live-read-refused", CL_RECOVERY, CL_REQUEST, TRUNCATED_REPLACEMENT, err("malformed_restore_read")
+)
+
+fn = "require_locator_absent"
+
+
+def lacase(case_id, doc, live, expect):
+    case(case_id, ALL, cl_refs("resume", "repair"), fn, {"journal": doc, "live": live}, expect)
+
+
+lacase("locator-absent-after-completion", CL_DONE, None, ok({}))
+lacase("locator-absent-after-repair", CL_REPAIRED, None, ok({}))
+lacase("locator-replacement-after-completion-blocks", CL_DONE, LIVE_REPLACEMENT, err("locator_occupied"))
+lacase("locator-replacement-after-repair-blocks", CL_REPAIRED, LIVE_REPLACEMENT, err("locator_occupied"))
+lacase("locator-malformed-read-blocks", CL_DONE, ["restore"], err("malformed_restore_read"))
+lacase("locator-truncated-read-blocks", CL_DONE, TRUNCATED_REPLACEMENT, err("malformed_restore_read"))
+lacase("locator-gate-under-recovery-blocks", CL_RECOVERY, None, err("cleanup_not_terminal"))
+lacase("locator-gate-before-completion-blocks", CL_ACCEPTED, None, err("cleanup_not_terminal"))
+lacase("locator-gate-before-intent-blocks", CL_REVAL, None, err("cleanup_not_terminal"))
+lacase("locator-gate-without-journal-blocks", None, None, err("journal_required"))
+
+fn = "generic_cleanup_restores"
+OTHER_RESTORES = [
+    {"metadata": {"name": "restore-acm-passive-sync", "namespace": NS}, "spec": {"syncRestoreWithNewBackups": True}},
+    {"metadata": {"name": "restore-acm-full", "namespace": NS}, "spec": {}},
+]
+
+
+def gccase(case_id, doc, restores, expect):
+    case(case_id, ALL, cl_refs("boundary"), fn, {"journal": doc, "restores": restores}, expect)
+
+
+gccase("generic-cleanup-after-completion-keeps-the-others", CL_DONE, OTHER_RESTORES, ok({"restores": OTHER_RESTORES}))
+gccase("generic-cleanup-after-repair-keeps-the-others", CL_REPAIRED, [], ok({"restores": []}))
+gccase(
+    "generic-cleanup-never-routes-the-journaled-locator",
+    CL_DONE,
+    OTHER_RESTORES + [LIVE_REPLACEMENT],
+    err("locator_occupied"),
+)
+gccase("generic-cleanup-before-terminal-blocks", CL_ACCEPTED, OTHER_RESTORES, err("cleanup_not_terminal"))
+gccase("generic-cleanup-unnamed-restore-blocks", CL_DONE, [{"metadata": {}}], err("malformed_inventory"))
+gccase("generic-cleanup-inventory-not-a-list", CL_DONE, {"items": []}, err("malformed_inventory"))
+
+# --- Old-hub evidence gate (plan Task 11) -------------------------------------------------------
+# J §4 gate (the complete §1a bundle, post-activation completion, teardown revalidation, terminal
+# cleanup and a fresh locator read) and §2 waiver: the waiver satisfies only the two expected-name
+# predicates. Every "waived-*" vector carries a waiver covering both predicates, so a refusal
+# there proves the waiver bypasses nothing else.
+fn = "require_old_hub_evidence"
+OH_SPOTS = ("J:375-375", "J:543-601", "J:452-471")
+OH_WAIVER = waiver("both")
+OH_WAIVED = mut(CL_DONE, waiver=OH_WAIVER, restore__names_verified_at=None, post_activation__names_verified_at=None)
+
+
+def ohcase(case_id, doc, live, expect):
+    case(case_id, ALL, drefs(ALL, *OH_SPOTS), fn, {"journal": doc, "live": live}, expect)
+
+
+for kind, contract in KINDS:
+    ohcase(
+        f"old-hub-gate-{cl_tag(kind, contract)}-completed-and-absent",
+        journal(kind, contract, "revalidated", "completed"),
+        None,
+        ok({}),
+    )
+ohcase("old-hub-gate-repaired-and-absent", CL_REPAIRED, None, ok({}))
+ohcase("old-hub-gate-waiver-covers-both-name-checks", OH_WAIVED, None, ok({}))
+ohcase(
+    "old-hub-gate-activation-waiver-covers-the-activation-name-check",
+    mut(CL_DONE, waiver=waiver("activation"), restore__names_verified_at=None),
+    None,
+    ok({}),
+)
+ohcase(
+    "old-hub-gate-post-activation-waiver-covers-the-post-activation-name-check",
+    mut(CL_DONE, waiver=waiver("post_activation"), post_activation__names_verified_at=None),
+    None,
+    ok({}),
+)
+ohcase(
+    "old-hub-gate-unverified-activation-names-block",
+    mut(CL_DONE, restore__names_verified_at=None),
+    None,
+    err("activation_names_unverified"),
+)
+ohcase(
+    "old-hub-gate-post-activation-waiver-leaves-activation-names-blocking",
+    mut(CL_DONE, waiver=waiver("post_activation"), restore__names_verified_at=None),
+    None,
+    err("activation_names_unverified"),
+)
+ohcase(
+    "old-hub-gate-activation-waiver-leaves-post-activation-names-blocking",
+    mut(CL_DONE, waiver=waiver("activation"), post_activation__names_verified_at=None),
+    None,
+    err("post_activation_names_unverified"),
+)
+ohcase("old-hub-gate-without-journal-blocks", None, None, err("journal_required"))
+ohcase("old-hub-gate-occupied-locator-blocks", CL_DONE, LIVE_REPLACEMENT, err("locator_occupied"))
+ohcase("old-hub-gate-malformed-read-blocks", CL_DONE, ["restore"], err("malformed_restore_read"))
+ohcase("old-hub-gate-truncated-read-blocks", CL_DONE, TRUNCATED_REPLACEMENT, err("malformed_restore_read"))
+ohcase(
+    "old-hub-gate-missing-evidence-reports-the-first-gap",
+    mut(CL_REVAL, restore__names_verified_at=None),
+    LIVE_FULL,
+    err("cleanup_not_terminal"),
+)
+for case_id, doc, code in (
+    ("identity-uid", mut(OH_WAIVED, restore__uid=None), "incomplete_bundle"),
+    ("identity-generation", mut(OH_WAIVED, restore__generation=None), "incomplete_bundle"),
+    ("identity-locator", mut(OH_WAIVED, cleanup__name="restore-acm-other"), "cleanup_copy_mismatch"),
+    ("fingerprint", mut(OH_WAIVED, restore__spec_fingerprint="0" * 64), "fingerprint_mismatch"),
+    ("provenance-verification", mut(OH_WAIVED, restore__backup_names_verified_at=None), "incomplete_bundle"),
+    ("provenance-children", mut(OH_WAIVED, restore__velero_restores__managed_clusters=[]), "completion_child_count"),
+    ("completion", mut(OH_WAIVED, restore__completed_at=None), "teardown_revalidation_premature"),
+    (
+        "post-activation-completion",
+        mut(OH_WAIVED, post_activation__completed_at=None),
+        "teardown_revalidation_premature",
+    ),
+    ("teardown-revalidation", mut(OH_WAIVED, restore__teardown_revalidated_at=None), "cleanup_prerequisite_missing"),
+    ("cleanup-not-started", mut(CL_REVAL, waiver=OH_WAIVER), "cleanup_not_terminal"),
+    ("cleanup-intent", mut(CL_INTENT, waiver=OH_WAIVER), "cleanup_not_terminal"),
+    ("cleanup-delete-accepted", mut(CL_ACCEPTED, waiver=OH_WAIVER), "cleanup_not_terminal"),
+    ("cleanup-recovery", mut(CL_RECOVERY, waiver=OH_WAIVER), "cleanup_not_terminal"),
+    (
+        "repair-identity",
+        mut(CL_REPAIRED, waiver=OH_WAIVER, cleanup__repair__run_id=OTHER_UUID),
+        "repair_identity_mismatch",
+    ),
+):
+    ohcase(f"old-hub-gate-waived-{case_id}-blocks", doc, None, err(code))
+ohcase("old-hub-gate-waived-occupied-locator-blocks", OH_WAIVED, LIVE_REPLACEMENT, err("locator_occupied"))
+
+
+# --- Cleanup polling deadline (Task 10 review round 2) ------------------------------------------
+# J §4a "poll within a fixed timeout": the deadline bounds every read and every classification.
+fn = "poll_read_timeout"
+for case_id, remaining, expect in (
+    ("poll-read-timeout-full-budget-capped", 300, ok(30)),
+    ("poll-read-timeout-floors-the-budget", 29.9, ok(29)),
+    ("poll-read-timeout-one-second", 1.0, ok(1)),
+    ("poll-read-timeout-floors-below-two", 1.7, ok(1)),
+    ("poll-read-timeout-under-a-second-skips-the-read", 0.999, ok(None)),
+    ("poll-read-timeout-fraction-skips-the-read", 0.2, ok(None)),
+    ("poll-read-timeout-spent-budget", 0, ok(None)),
+    ("poll-read-timeout-past-deadline", -5, ok(None)),
+    ("poll-read-timeout-boolean-malformed", True, err("malformed_cleanup_input")),
+    ("poll-read-timeout-text-malformed", "10", err("malformed_cleanup_input")),
+):
+    case(case_id, ALL, cl_refs("boundary"), fn, {"remaining": remaining}, expect)
+
+fn = "require_within_deadline"
+for case_id, remaining, expect in (
+    ("within-deadline-with-budget", 0.1, ok({})),
+    ("within-deadline-at-the-deadline", 0, ok({})),
+    ("within-deadline-just-past-refused", -0.1, err("poll_deadline_passed")),
+    ("within-deadline-boolean-malformed", False, err("malformed_cleanup_input")),
+    ("within-deadline-text-malformed", "0", err("malformed_cleanup_input")),
+):
+    case(case_id, ALL, cl_refs("boundary"), fn, {"remaining": remaining}, expect)
 
 
 def build():

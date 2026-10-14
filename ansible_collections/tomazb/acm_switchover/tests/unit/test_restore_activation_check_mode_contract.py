@@ -15,7 +15,9 @@ ACTIVATE_RESTORE = ROLES_DIR / "activation" / "tasks" / "activate_restore.yml"
 
 
 def test_activate_restore_published_changed_covers_native_check_mode():
+    """The preview fact covers native check mode, and the published changed reports a preview's prediction."""
+    discover = (ROLES_DIR / "activation" / "tasks" / "discover_resources.yml").read_text()
+    assert "_acm_preview: >-" in discover and "ansible_check_mode" in discover
     text = ACTIVATE_RESTORE.read_text()
-    assert (
-        "ansible_check_mode" in text
-    ), "activate_restore.yml published changed must treat native check mode like dry_run"
+    assert "(_acm_preview | bool)" in text and "would_change" in text
+    assert 'check_mode: "{{ _acm_preview | bool }}"' in text

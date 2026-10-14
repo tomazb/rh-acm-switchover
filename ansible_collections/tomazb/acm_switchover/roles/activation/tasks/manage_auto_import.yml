@@ -19,7 +19,7 @@
     context: "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
   register: _auto_import_managed_clusters
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - _acm_secondary_supports_auto_import | bool
     - (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
 
@@ -33,7 +33,7 @@
         | list
       }}
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - _acm_secondary_supports_auto_import | bool
     - (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
 
@@ -47,7 +47,7 @@
     context: "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
   register: _import_controller_cm
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - _acm_secondary_supports_auto_import | bool
     - (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
     - (_auto_import_non_local_clusters | length) > 0
@@ -58,7 +58,7 @@
       {{ (_import_controller_cm.resources | default([]) | first | default({}))
          .get('data', {}).get('autoImportStrategy', 'default') }}
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - _acm_secondary_supports_auto_import | bool
     - (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
     - (_auto_import_non_local_clusters | length) > 0
@@ -69,7 +69,7 @@
       Detect-only: destination hub has existing clusters with default autoImportStrategy;
       set acm_switchover_features.manage_auto_import_strategy=true to temporarily use ImportAndSync.
   when:
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - _acm_secondary_supports_auto_import | bool
     - (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
     - (_auto_import_non_local_clusters | length) > 0
@@ -101,7 +101,7 @@
   register: _auto_import_patched
   when:
     - _auto_import_current_strategy != 'ImportAndSync'
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - _acm_secondary_supports_auto_import | bool
     - (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
     - (_auto_import_non_local_clusters | length) > 0

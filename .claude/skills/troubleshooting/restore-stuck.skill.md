@@ -118,7 +118,9 @@ oc describe $VELERO_RESTORE -n open-cluster-management-backup --context <seconda
 - `"CRD not found"` → Missing operator on secondary hub
 - `"forbidden"` → RBAC issue
 
-**Resolution:** For non-critical partial failures, ACM restore may still complete. Wait and monitor.
+**Resolution:** For non-critical partial failures, a manual ACM restore may still complete.
+The automation's completion proof refuses any required Velero child that is not `Completed`,
+so waiting does not unblock an automated run: fix the cause and recover per the runbook.
 
 ---
 

@@ -1,39 +1,50 @@
 ---
-- name: Use activation Restore test override when supplied
+# R4-04: every activation decision starts from strict reads of the destination hub
+# (strict_read.yml) and the migration journal checkpoint_phase validated at the enter.
+
+- name: Read the destination MultiClusterHub strictly
+  ansible.builtin.include_tasks: strict_read.yml
+  vars:
+    _acm_read:
+      key: multiclusterhubs
+      read_mode: list
+      api_version: operator.open-cluster-management.io/v1
+      kind: MultiClusterHub
+      resource_name: multiclusterhubs
+      namespace: open-cluster-management
+    _acm_read_fact: _acm_activation_mch_read
+
+- name: Resolve the live ACM minor and its pinned controller contract
+  tomazb.acm_switchover.acm_migration_evidence:
+    operation: acm_minor
+    inputs:
+      mch_read: "{{ _acm_activation_mch_read }}"
+  register: _acm_activation_minor
+
+- name: Publish the activation MultiClusterHub and migration transaction facts
   ansible.builtin.set_fact:
-    acm_activation_restores_info: "{{ (acm_switchover_test_overrides | default({})).activation_restores_info }}"
-  when: (acm_switchover_test_overrides | default({})).activation_restores_info is defined
+    acm_activation_mch_info:
+      resources: "{{ _acm_activation_mch_read.resources }}"
+    _acm_mutation_kind: >-
+      {{
+        'full_restore' if acm_switchover_operation.method == 'full'
+        else ('passive_restore' if (acm_switchover_operation.activation_method | default('patch')) == 'restore'
+        else 'passive_patch')
+      }}
+    _acm_preview: >-
+      {{ (acm_switchover_execution.mode | default('dry_run')) != 'execute' or ansible_check_mode }}
+    # A templated null does not survive the non-native templating of the ansible-core
+    # floor, so the journal is a mapping ({} when none) and its presence a boolean.
+    _acm_journal: >-
+      {{ (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal')) or {} }}
+    _acm_has_journal: >-
+      {{ (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal')) is not none }}
 
-- name: Read live secondary Restore resources for activation
-  kubernetes.core.k8s_info:
-    api_version: cluster.open-cluster-management.io/v1beta1
-    kind: Restore
-    namespace: open-cluster-management-backup
-    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.secondary.context }}"
-  register: _acm_activation_restores_live_info
-  when: (acm_switchover_test_overrides | default({})).activation_restores_info is not defined
-
-- name: Publish live activation Restore resources
-  ansible.builtin.set_fact:
-    acm_activation_restores_info: "{{ _acm_activation_restores_live_info }}"
-  when:
-    - _acm_activation_restores_live_info is defined
-    - not (_acm_activation_restores_live_info.skipped | default(false))
-
-- name: Read activation MultiClusterHub when not pre-seeded by tests
-  kubernetes.core.k8s_info:
-    api_version: operator.open-cluster-management.io/v1
-    kind: MultiClusterHub
-    namespace: open-cluster-management
-    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.secondary.context }}"
-  register: _acm_activation_mch_live_info
-  when: acm_activation_mch_info is not defined
-
-- name: Publish live activation MultiClusterHub resources
-  ansible.builtin.set_fact:
-    acm_activation_mch_info: "{{ _acm_activation_mch_live_info }}"
-  when:
-    - _acm_activation_mch_live_info is defined
-    - not (_acm_activation_mch_live_info.skipped | default(false))
+- name: Refuse an invalid recorded migration journal
+  ansible.builtin.fail:
+    msg: >-
+      The recorded migration journal is invalid and blocks activation. Repair the checkpoint, or start
+      a new migration with the full checkpoint reset (checkpoint.reset).
+  when: >-
+    (((_checkpoint_enter | default({})).get('facts') or {}).get('migration_journal_outcome', 'absent'))
+    not in ['absent', 'valid']

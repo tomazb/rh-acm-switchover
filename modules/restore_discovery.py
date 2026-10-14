@@ -1,7 +1,7 @@
 """Shared restore discovery helpers for ACM switchover workflows."""
 
 import re
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from lib.constants import (
     BACKUP_NAMESPACE,
@@ -11,7 +11,9 @@ from lib.constants import (
     RESTORE_PLURAL,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
 )
+from lib.exceptions import FatalError
 from lib.kube_client import KubeClient
+from lib.migration_evidence import rfc3339_ns
 
 BENIGN_ALREADY_AVAILABLE_MESSAGE = re.compile(BENIGN_ALREADY_AVAILABLE_MESSAGE_PATTERN)
 
@@ -41,6 +43,49 @@ def find_passive_sync_restore(client: KubeClient, namespace: str = BACKUP_NAMESP
         return passive_candidates[0]
 
     return None
+
+
+def find_passive_sync_restore_strict(client: KubeClient, namespace: str = BACKUP_NAMESPACE) -> Optional[Dict]:
+    """Return the newest sync-enabled passive Restore from a positively complete strict LIST.
+
+    R4-04 (July design section 3): "no passive Restore" is concluded only from a
+    complete read. A failed, partial or absent-API read, a malformed item, or a tie
+    for the newest creationTimestamp raises FatalError before any create, patch or
+    delete decision. None means the complete list holds no sync-enabled Restore.
+    """
+    outcome = client.list_custom_resources_strict(
+        group=CLUSTER_BACKUP_API_GROUP,
+        version=CLUSTER_BACKUP_API_VERSION,
+        plural=RESTORE_PLURAL,
+        namespace=namespace,
+    )
+    if not outcome.is_success:
+        raise FatalError(
+            f"Passive Restore discovery in {namespace} failed ({outcome.status.value}: {outcome.reason}); "
+            "no Restore mutation was attempted"
+        )
+    candidates = []
+    for item in outcome.items:
+        metadata = item.get("metadata")
+        spec = item.get("spec", {})
+        if not isinstance(metadata, dict) or not _non_empty_str(metadata.get("name")) or not isinstance(spec, dict):
+            raise FatalError(f"Passive Restore discovery in {namespace} returned a malformed Restore")
+        if spec.get(SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS) is True:
+            created = rfc3339_ns(metadata.get("creationTimestamp"))
+            if created is None:
+                raise FatalError(f"Passive sync Restore {metadata['name']} has no valid creationTimestamp")
+            candidates.append((created, item))
+    if not candidates:
+        return None
+    newest = max(created for created, _ in candidates)
+    winners = [item for created, item in candidates if created == newest]
+    if len(winners) > 1:
+        raise FatalError(f"{len(winners)} sync-enabled passive Restores share the newest creationTimestamp")
+    return winners[0]
+
+
+def _non_empty_str(value: Any) -> bool:
+    return isinstance(value, str) and bool(value)
 
 
 def is_benign_already_available_message(message: object) -> bool:

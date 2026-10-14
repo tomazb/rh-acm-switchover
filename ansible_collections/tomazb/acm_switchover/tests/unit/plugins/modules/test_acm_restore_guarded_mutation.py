@@ -83,9 +83,12 @@ class _RawResponse:
 class FakeResource:
     """A dynamic-client Restore resource that records every request it receives."""
 
-    def __init__(self, *, patch_result: Any = None, delete_result: Any = None, namespaced: bool = True) -> None:
+    def __init__(
+        self, *, patch_result: Any = None, delete_result: Any = None, create_result: Any = None, namespaced: bool = True
+    ) -> None:
         self.patch_result = patch_result
         self.delete_result = delete_result
+        self.create_result = create_result
         self.namespaced = namespaced
         self.calls: list[tuple[str, dict]] = []
 
@@ -107,8 +110,24 @@ class FakeResource:
         return result
 
     def delete(self, **kwargs):
+        """Like patch: the raw response of a ``serialize=False`` request."""
         self.calls.append(("delete", kwargs))
-        return self._answer(self.delete_result)
+        result = self._answer(self.delete_result)
+        if isinstance(result, bytes):
+            return _RawResponse(result)
+        if result is None or isinstance(result, (dict, list, str)):
+            return _RawResponse(json.dumps(result).encode("utf-8"))
+        return result
+
+    def create(self, **kwargs):
+        """Like patch: the raw response of a ``serialize=False`` request."""
+        self.calls.append(("create", kwargs))
+        result = self._answer(self.create_result)
+        if isinstance(result, bytes):
+            return _RawResponse(result)
+        if result is None or isinstance(result, (dict, list, str)):
+            return _RawResponse(json.dumps(result).encode("utf-8"))
+        return result
 
     def get(self, **kwargs):  # pragma: no cover - a call here is itself the failure
         raise AssertionError("the guarded mutation module owns no read")
@@ -138,6 +157,30 @@ def _delete_args(**overrides) -> dict:
     del args["replacement_managed_clusters_backup_name"]
     args.update(overrides)
     return args
+
+
+_CREATE_NAME = "restore-acm-full"
+_CREATE_BODY = {
+    "apiVersion": _API_VERSION,
+    "kind": "Restore",
+    "metadata": {"name": _CREATE_NAME, "namespace": _NAMESPACE},
+    "spec": {"veleroManagedClustersBackupName": "acm-managed-clusters-schedule-20240101120000"},
+}
+
+
+def _create_args(**overrides) -> dict:
+    args = {
+        "kubeconfig": "/home/op/.kube/config",
+        "context": "secondary-hub",
+        "action": "create",
+        "api_version": _API_VERSION,
+        "kind": "Restore",
+        "namespace": _NAMESPACE,
+        "name": _CREATE_NAME,
+        "body": _CREATE_BODY,
+    }
+    args.update(overrides)
+    return {key: value for key, value in args.items() if value is not None}
 
 
 def _run(monkeypatch, args: dict, *, resource: FakeResource | None = None, check_mode: bool = False) -> dict:
@@ -225,6 +268,36 @@ def test_delete_failures_follow_the_shared_classification_and_are_never_retried(
     assert [name for name, _ in resource.calls] == ["delete"]
 
 
+@pytest.mark.parametrize(
+    "body",
+    [None, [], "Restore", b"{not json", b"\xff\xfe", b""],
+    ids=["null", "list", "string", "invalid-json", "invalid-utf8", "empty"],
+)
+def test_a_2xx_delete_whose_body_is_not_a_json_object_is_never_acceptance(monkeypatch, body):
+    """The server answered 2xx, but nothing in the answer can be read as the delete of the
+    proved Restore: it is `malformed_response`, as in the Python helper."""
+    resource = FakeResource(delete_result=body)
+    result = _run(monkeypatch, _delete_args(), resource=resource)
+
+    assert result["failed"] is True
+    assert (result["accepted"], result["http_accepted"], result["changed"]) == (False, True, False)
+    assert (result["reason"], result["uid"], result["resource_version"]) == ("malformed_response", None, None)
+    assert [name for name, _ in resource.calls] == ["delete"]
+
+
+def test_a_delete_whose_body_cannot_be_read_is_never_acceptance(monkeypatch):
+    class _UnreadableResponse:
+        @property
+        def data(self):
+            raise ReadTimeoutError(None, "/restores", "read timed out")
+
+    resource = FakeResource(delete_result=_UnreadableResponse())
+    result = _run(monkeypatch, _delete_args(), resource=resource)
+
+    assert result["failed"] is True
+    assert (result["accepted"], result["http_accepted"], result["reason"]) == (False, False, "unverifiable")
+
+
 # --- the guarded patch ------------------------------------------------------------------
 
 
@@ -273,15 +346,34 @@ def test_the_patch_response_is_read_raw_and_decoded_by_the_module(monkeypatch):
     assert (result["reason"], result["generation"]) == ("ok", 3)
 
 
-@pytest.mark.parametrize("generation", [None, "7", True, 7.0])
-def test_a_missing_or_non_integer_generation_is_reported_never_invented(monkeypatch, generation):
+def test_an_omitted_generation_is_reported_never_invented(monkeypatch):
     metadata = {"uid": "3f0c2a4e-uid", "resourceVersion": "48300"}
-    if generation is not None:
-        metadata["generation"] = generation
     result = _run(monkeypatch, _patch_args(), resource=FakeResource(patch_result=_accepted_restore(metadata)))
     assert result["accepted"] is True
     assert result["generation"] is None
     assert result["generation_reported"] is False
+
+
+@pytest.mark.parametrize("generation", [None, "7", "2", True, False, 7.0, 0, -1, [7], {"value": 7}])
+def test_a_present_but_invalid_generation_is_a_malformed_response(monkeypatch, generation):
+    """C section 5.1 recovers only an omitted generation; a present invalid one is malformed (J section 1b)."""
+    metadata = {"uid": "3f0c2a4e-uid", "resourceVersion": "48300", "generation": generation}
+    result = _run(monkeypatch, _patch_args(), resource=FakeResource(patch_result=_accepted_restore(metadata)))
+    result.pop("_resolved")
+    result.pop("msg")
+    assert result == {
+        "failed": True,
+        "accepted": False,
+        "http_accepted": True,
+        "changed": False,
+        "would_change": False,
+        "conflict": False,
+        "reason": "malformed_response",
+        "uid": None,
+        "resource_version": None,
+        "generation": None,
+        "generation_reported": False,
+    }
 
 
 @pytest.mark.parametrize(
@@ -386,6 +478,7 @@ def test_delete_sends_both_uid_and_resource_version_preconditions(monkeypatch):
                     "kind": "DeleteOptions",
                     "preconditions": {"uid": "3f0c2a4e-uid", "resourceVersion": "48213"},
                 },
+                "serialize": False,
             },
         )
     ]
@@ -556,7 +649,9 @@ def _wire_client(monkeypatch, tmp_path, answer):
         f"/apis/{_API_VERSION}": {
             "kind": "APIResourceList",
             "groupVersion": _API_VERSION,
-            "resources": [{"name": "restores", "kind": "Restore", "namespaced": True, "verbs": ["patch", "delete"]}],
+            "resources": [
+                {"name": "restores", "kind": "Restore", "namespaced": True, "verbs": ["patch", "delete", "create"]}
+            ],
         },
     }
     configuration = Configuration()
@@ -573,7 +668,8 @@ def _wire_client(monkeypatch, tmp_path, answer):
             )
         requests.append({"method": method, "path": path, **kwargs})
         status, body = answer
-        return HTTPResponse(body=json.dumps(body).encode(), status=status, headers={"Content-Type": "application/json"})
+        raw = body if isinstance(body, bytes) else json.dumps(body).encode()
+        return HTTPResponse(body=raw, status=status, headers={"Content-Type": "application/json"})
 
     import tempfile
 
@@ -638,6 +734,76 @@ def test_the_wire_delete_carries_both_preconditions(monkeypatch, tmp_path):
     assert result["changed"] is True
 
 
+@pytest.mark.parametrize("status", [200, 202])
+def test_a_wire_delete_answered_2xx_with_an_object_is_accepted(monkeypatch, tmp_path, status):
+    requests = _wire_client(monkeypatch, tmp_path, (status, {"kind": "Status", "status": "Success"}))
+    result = _run_wire(monkeypatch, _delete_args())
+    assert [request["method"] for request in requests] == ["DELETE"]
+    assert (result.get("failed", False), result["accepted"], result["reason"]) == (False, True, "ok")
+
+
+@pytest.mark.parametrize("body", [None, b"{not json"], ids=["null", "invalid-json"])
+def test_a_wire_delete_answered_2xx_with_a_malformed_body_is_not_accepted(monkeypatch, tmp_path, body):
+    requests = _wire_client(monkeypatch, tmp_path, (200, body))
+    result = _run_wire(monkeypatch, _delete_args())
+    assert [request["method"] for request in requests] == ["DELETE"]
+    assert (result["failed"], result["accepted"], result["http_accepted"]) == (True, False, True)
+    assert result["reason"] == "malformed_response"
+
+
+def _with_constant(payload, constant):
+    """`payload` serialized as JSON with one extra member whose value is `constant`."""
+    encoded = json.dumps(payload)
+    return (encoded[:-1] + f', "extra": {constant}}}').encode("utf-8")
+
+
+_WIRE_ACTIONS = {
+    "patch": (
+        _patch_args,
+        200,
+        _accepted_restore({"uid": "3f0c2a4e-uid", "resourceVersion": "48300", "generation": 7}),
+    ),
+    "delete": (_delete_args, 202, {"kind": "Status", "apiVersion": "v1", "status": "Success"}),
+    "create": (
+        _create_args,
+        201,
+        _accepted_restore({"name": _CREATE_NAME, "uid": "u-1", "resourceVersion": "10", "generation": 1}),
+    ),
+}
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+@pytest.mark.parametrize("action", sorted(_WIRE_ACTIONS))
+def test_a_wire_2xx_body_with_a_non_json_constant_is_never_acceptance(monkeypatch, tmp_path, action, constant):
+    """Python's json module reads NaN and the infinities by default; none is JSON, so a body
+    carrying one is a malformed response for every action, never evidence."""
+    args, status, payload = _WIRE_ACTIONS[action]
+    requests = _wire_client(monkeypatch, tmp_path, (status, _with_constant(payload, constant)))
+    result = _run_wire(monkeypatch, args())
+    assert len(requests) == 1
+    assert (result["failed"], result["accepted"], result["http_accepted"]) == (True, False, True)
+    assert (result["reason"], result["uid"], result["resource_version"]) == ("malformed_response", None, None)
+
+
+@pytest.mark.parametrize(
+    ("action", "identity"),
+    [
+        ("patch", {"uid": "3f0c2a4e-uid", "resourceVersion": " "}),
+        ("patch", {"uid": "3f0c2a4e-uid", "resourceVersion": "48300 "}),
+        ("create", {"name": _CREATE_NAME, "uid": " ", "resourceVersion": "10"}),
+        ("create", {"name": _CREATE_NAME, "uid": " u-1", "resourceVersion": "10"}),
+        ("create", {"name": _CREATE_NAME, "uid": "u-1", "resourceVersion": " "}),
+    ],
+)
+def test_a_wire_padded_response_identity_is_never_acceptance(monkeypatch, tmp_path, action, identity):
+    args, status, _payload = _WIRE_ACTIONS[action]
+    requests = _wire_client(monkeypatch, tmp_path, (status, _accepted_restore(identity)))
+    result = _run_wire(monkeypatch, args())
+    assert len(requests) == 1
+    assert (result["failed"], result["accepted"], result["reason"]) == (True, False, "malformed_response")
+    assert (result["uid"], result["resource_version"]) == (None, None)
+
+
 # --- documentation ----------------------------------------------------------------------
 
 
@@ -676,3 +842,133 @@ def test_a_wire_response_without_kind_is_decoded_by_the_module_not_the_client(mo
         True,
         "malformed_response",
     )
+
+
+# --- R4-04 PR C Task 8: the single-request guarded CREATE (mirror of create_restore_guarded) ---
+
+
+def _created(**metadata) -> dict:
+    base = {"name": _CREATE_NAME, "namespace": _NAMESPACE}
+    base.update(metadata)
+    return {"apiVersion": _API_VERSION, "kind": "Restore", "metadata": base, "spec": {}}
+
+
+def test_an_accepted_create_reports_identity_and_generation_from_one_request(monkeypatch):
+    resource = FakeResource(create_result=_created(uid="u-1", resourceVersion="10", generation=1))
+    result = _run(monkeypatch, _create_args(), resource=resource)
+    assert (result["accepted"], result["changed"], result["reason"]) == (True, True, "ok")
+    assert (result["uid"], result["resource_version"], result["generation"]) == ("u-1", "10", 1)
+    assert result["generation_reported"] is True and result["http_accepted"] is True
+    assert [call for call, _ in resource.calls] == ["create"]
+    kwargs = resource.calls[0][1]
+    assert (kwargs["body"], kwargs["namespace"], kwargs["serialize"]) == (_CREATE_BODY, _NAMESPACE, False)
+
+
+def test_a_create_without_a_generation_is_accepted_but_never_inferred(monkeypatch):
+    resource = FakeResource(create_result=_created(uid="u-1", resourceVersion="10"))
+    result = _run(monkeypatch, _create_args(), resource=resource)
+    assert result["accepted"] is True
+    assert (result["generation"], result["generation_reported"]) == (None, False)
+
+
+@pytest.mark.parametrize("generation", [None, "7", "2", True, False, 7.0, 0, -1, [7], {"value": 7}])
+def test_a_create_with_a_present_but_invalid_generation_is_a_malformed_response(monkeypatch, generation):
+    resource = FakeResource(create_result=_created(uid="u-1", resourceVersion="10", generation=generation))
+    result = _run(monkeypatch, _create_args(), resource=resource)
+    assert (result["failed"], result["accepted"], result["http_accepted"]) == (True, False, True)
+    assert (result["reason"], result["uid"], result["resource_version"]) == ("malformed_response", None, None)
+    assert (result["generation"], result["generation_reported"]) == (None, False)
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"resourceVersion": "10"},
+        {"uid": "", "resourceVersion": "10"},
+        {"uid": "u-1"},
+        {"uid": "u-1", "resourceVersion": "10", "name": "other"},
+    ],
+)
+def test_a_2xx_create_without_the_created_identity_is_not_accepted(monkeypatch, metadata):
+    resource = FakeResource(create_result=_created(**metadata))
+    result = _run(monkeypatch, _create_args(), resource=resource)
+    assert (result["failed"], result["accepted"], result["http_accepted"]) == (True, False, True)
+    assert (result["reason"], result["uid"], result["generation"]) == ("malformed_response", None, None)
+
+
+def test_a_create_conflict_is_never_reconciled(monkeypatch):
+    resource = FakeResource(create_result=ApiException(status=409, reason=_SECRET))
+    result = _run(monkeypatch, _create_args(), resource=resource)
+    assert (result["failed"], result["accepted"], result["conflict"], result["reason"]) == (
+        True,
+        False,
+        True,
+        "already_exists",
+    )
+    assert [call for call, _ in resource.calls] == ["create"]
+    assert "abc123" not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ApiException(status=504),
+        ApiException(status=500, reason=_SECRET),
+        ApiException(status=404),
+        ReadTimeoutError(None, "/", _SECRET),
+        ProtocolError(_SECRET),
+    ],
+)
+def test_a_create_timeout_or_failure_is_unverifiable_and_not_retried(monkeypatch, error):
+    resource = FakeResource(create_result=error)
+    result = _run(monkeypatch, _create_args(), resource=resource)
+    assert (result["failed"], result["accepted"], result["conflict"], result["reason"]) == (
+        True,
+        False,
+        False,
+        "unverifiable",
+    )
+    assert [call for call, _ in resource.calls] == ["create"]
+    assert "abc123" not in json.dumps(result)
+
+
+def test_check_mode_predicts_a_create_without_a_client(monkeypatch):
+    result = _run(monkeypatch, _create_args(), resource=None, check_mode=True)
+    assert result["_resolved"] == []
+    assert (result["accepted"], result["would_change"], result["reason"]) == (False, True, "predicted")
+    assert (result["generation"], result["generation_reported"]) == (None, False)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        _create_args(body=None),
+        _create_args(expected_uid="u-1"),
+        _create_args(expected_resource_version="10"),
+        _create_args(expected_managed_clusters_backup_name="skip"),
+        _create_args(body={**_CREATE_BODY, "metadata": {"name": "other", "namespace": _NAMESPACE}}),
+        _create_args(body={**_CREATE_BODY, "metadata": {"name": _CREATE_NAME, "namespace": "default"}}),
+        _create_args(body={**_CREATE_BODY, "kind": "BackupSchedule"}),
+        _create_args(body={**_CREATE_BODY, "apiVersion": "cluster.open-cluster-management.io/v1"}),
+        _patch_args(body=_CREATE_BODY),
+        _delete_args(body=_CREATE_BODY),
+        _patch_args(expected_uid=None),
+        _delete_args(expected_uid=None),
+    ],
+)
+@pytest.mark.parametrize("check_mode", [False, True])
+def test_create_arguments_that_do_not_fit_are_rejected_before_any_request(monkeypatch, args, check_mode):
+    resource = FakeResource()
+    result = _run(monkeypatch, args, resource=resource, check_mode=check_mode)
+    assert result["failed"] is True
+    assert result["_resolved"] == []
+    assert resource.calls == []
+
+
+def test_the_wire_create_is_one_post_of_the_body(monkeypatch, tmp_path):
+    requests = _wire_client(monkeypatch, tmp_path, (201, _created(uid="u-1", resourceVersion="10", generation=1)))
+    result = _run_wire(monkeypatch, _create_args())
+    assert [request["method"] for request in requests] == ["POST"]
+    assert requests[0]["path"] == f"/apis/{_API_VERSION}/namespaces/{_NAMESPACE}/restores"
+    assert json.loads(requests[0]["body"]) == _CREATE_BODY
+    assert (result["reason"], result["uid"], result["generation"]) == ("ok", "u-1", 1)

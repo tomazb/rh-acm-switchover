@@ -19,6 +19,15 @@
           ansible.builtin.include_role:
             name: tomazb.acm_switchover.preflight
             tasks_from: identity_barrier
+          vars:
+            _acm_identity_barrier_requires_checkpoint: true
+
+        # PR C decisions amendment 2.2 rule 3: a retry re-pauses Argo CD before any
+        # further phase work when a failure rescue left the re-pause marker.
+        - name: Re-pause Argo CD recorded by a failure rescue
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.argocd_manage
+            tasks_from: repause_recovery
 
         - name: Run post-barrier switchover phases
           block:
@@ -48,6 +57,38 @@
                 name: tomazb.acm_switchover.finalization
 
           rescue:
+            - name: Record the original switchover failure
+              ansible.builtin.set_fact:
+                _acm_switchover_failure: "{{ ansible_failed_result.msg | default('Switchover failed') }}"
+                _argocd_rescue_outcome: ""
+
+            - name: Read the checkpoint the failure left
+              when: acm_switchover_execution.checkpoint.enabled | default(false)
+              block:
+                - name: Read checkpoint facts for the failure rescue
+                  tomazb.acm_switchover.checkpoint_phase:
+                    read_facts: true
+                    checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+                  register: _argocd_rescue_checkpoint
+              rescue:
+                # Unreadable: journal presence is unproven, so the journal rules apply.
+                - name: Record the unreadable checkpoint for the failure rescue
+                  ansible.builtin.set_fact:
+                    _argocd_rescue_checkpoint:
+                      facts:
+                        migration_journal_present: true
+                        argocd_repause_required:
+
+            # PR C decisions amendment 2.2: with a migration journal, valid or invalid,
+            # the rescue never rewinds to primary_prep; journal-free runs are unchanged.
+            - name: Decide whether a migration journal governs the failure rescue
+              ansible.builtin.set_fact:
+                _acm_rescue_under_journal: >-
+                  {{
+                    (acm_switchover_execution.checkpoint.enabled | default(false) | bool)
+                    and (((_argocd_rescue_checkpoint | default({})).get('facts') or {}).get('migration_journal_present', true) | bool)
+                  }}
+
             - name: Attempt Argo CD resume on secondary hub after failure
               ansible.builtin.include_role:
                 name: tomazb.acm_switchover.argocd_manage
@@ -55,6 +96,7 @@
                 acm_switchover_argocd_mode_override: resume
                 _argocd_discover_hub: secondary
               when:
+                - not (_acm_rescue_under_journal | bool)
                 - acm_switchover_features.argocd.manage | default(false)
                 - acm_switchover_features.argocd.resume_on_failure | default(false)
               ignore_errors: true  # noqa: ignore-errors
@@ -66,6 +108,7 @@
                 acm_switchover_argocd_mode_override: resume
                 _argocd_discover_hub: primary
               when:
+                - not (_acm_rescue_under_journal | bool)
                 - acm_switchover_features.argocd.manage | default(false)
                 - acm_switchover_features.argocd.resume_on_failure | default(false)
                 - acm_switchover_hubs.primary is defined
@@ -82,14 +125,32 @@
                   argocd_run_id: "{{ acm_switchover_argocd.run_id | default('') }}"
                   argocd_discovery_namespaces: "{{ acm_switchover_argocd_discovery_namespaces | default({}) }}"
               when:
+                - not (_acm_rescue_under_journal | bool)
                 - acm_switchover_features.argocd.manage | default(false)
                 - acm_switchover_features.argocd.resume_on_failure | default(false)
                 - acm_switchover_execution.checkpoint.enabled | default(false)
               ignore_errors: true  # noqa: ignore-errors
 
+            - name: Resume Argo CD under the migration journal after failure
+              ansible.builtin.include_role:
+                name: tomazb.acm_switchover.argocd_manage
+                tasks_from: journal_rescue
+              vars:
+                _argocd_rescue_hubs:
+                  - secondary
+                  - primary
+              when:
+                - _acm_rescue_under_journal | bool
+                - not (_argocd_repause_failed | default(false) | bool)
+                - acm_switchover_features.argocd.manage | default(false)
+                - acm_switchover_features.argocd.resume_on_failure | default(false)
+
             - name: Re-raise original switchover failure
               ansible.builtin.fail:
-                msg: "{{ ansible_failed_result.msg | default('Switchover failed') }}"
+                msg: >-
+                  {{ _acm_switchover_failure }}{{
+                    (' ' ~ _argocd_rescue_outcome) if (_argocd_rescue_outcome | default('') | length) > 0 else ''
+                  }}
 
       always:
         - name: Build switchover report contract

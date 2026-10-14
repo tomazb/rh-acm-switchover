@@ -1855,6 +1855,42 @@ def _real_api_client(pool_manager):
     return api_client
 
 
+def _real_kube_client(pool_manager):
+    """A KubeClient whose raw transport and generated custom-object API both run the installed
+    client unmocked down to the faked socket."""
+    from kubernetes.client import CustomObjectsApi
+
+    client = KubeClient.__new__(KubeClient)
+    client.request_timeout = 30
+    client.dry_run = False
+    client._api_client = _real_api_client(pool_manager)
+    client.custom_api = CustomObjectsApi(client._api_client)
+    return client
+
+
+# A 2xx body no form factor may read as an answer: not JSON, not UTF-8, not an object, or of
+# a content type kubernetes 37 does not deserialize.
+_MALFORMED_2XX_BODIES = [
+    pytest.param(b"null", "application/json", id="null"),
+    pytest.param(b"[]", "application/json", id="list"),
+    pytest.param(b'"Restore"', "application/json", id="string"),
+    pytest.param(b"{not json", "application/json", id="invalid-json"),
+    pytest.param(b"\xff\xfe", "application/json", id="invalid-utf8"),
+    pytest.param(b"null", "application/octet-stream", id="unsupported-content-type"),
+]
+
+
+# The three non-standard constants Python's json module accepts by default. None is JSON, so a
+# body carrying one is not a JSON object even when every other member is well formed.
+_NON_JSON_CONSTANTS = ["NaN", "Infinity", "-Infinity"]
+
+
+def _with_constant(payload, constant):
+    """`payload` serialized as JSON with one extra member whose value is `constant`."""
+    encoded = json.dumps(payload)
+    return (encoded[:-1] + f', "extra": {constant}}}').encode("utf-8")
+
+
 class TestDiscoveryProver:
     """R4-03: kind absence must come from a successful discovery response."""
 
@@ -2336,6 +2372,17 @@ class TestStrictCustomResourceReads:
         assert outcome.status is StrictReadStatus.ITEMS
         assert outcome.resource is resource
         assert outcome.resource_version == "77"
+
+    def test_named_get_takes_a_caller_deadline_as_its_request_timeout(self):
+        """R4-04 Task 10: a poll's strict read is capped to the remaining poll budget."""
+        resource = {"metadata": {"name": "mch", "uid": "u-1", "resourceVersion": "77"}}
+        client = self._client(get_result=resource)
+        client.get_custom_resource_strict("g", "v1", "widgets", "mch", request_timeout=7)
+        assert client.custom_api.get_cluster_custom_object.call_args.kwargs["_request_timeout"] == 7
+        client.get_custom_resource_strict("g", "v1", "widgets", "mch")
+        assert (
+            client.custom_api.get_cluster_custom_object.call_args.kwargs["_request_timeout"] == client.request_timeout
+        )
 
     @pytest.mark.parametrize(
         "metadata",
@@ -3162,16 +3209,18 @@ class TestGuardedRestoreJsonPatch:
             "generation_reported": True,
         }
 
-    @pytest.mark.parametrize("generation", [None, "7", True, 7.0])
-    def test_a_missing_or_non_integer_generation_is_reported_never_invented(self, kube_client, generation):
-        metadata = {"uid": "3f0c2a4e-uid", "resourceVersion": "48300"}
-        if generation is not None:
-            metadata["generation"] = generation
-        self._accepted(kube_client, metadata)
+    def test_an_omitted_generation_is_reported_never_invented(self, kube_client):
+        self._accepted(kube_client, {"uid": "3f0c2a4e-uid", "resourceVersion": "48300"})
         result = self._patch(kube_client)
         assert result["accepted"] is True
         assert result["generation"] is None
         assert result["generation_reported"] is False
+
+    @pytest.mark.parametrize("generation", [None, "7", "2", True, False, 7.0, 0, -1, [7], {"value": 7}])
+    def test_a_present_but_invalid_generation_is_a_malformed_response(self, kube_client, generation):
+        """C section 5.1 recovers only an omitted generation; a present invalid one is malformed (J section 1b)."""
+        self._accepted(kube_client, {"uid": "3f0c2a4e-uid", "resourceVersion": "48300", "generation": generation})
+        assert self._patch(kube_client) == self._MALFORMED_IDENTITY
 
     _MALFORMED_IDENTITY = {
         "accepted": False,
@@ -3413,6 +3462,29 @@ class TestGuardedRestoreJsonPatch:
         assert (result["accepted"], result["http_accepted"], result["reason"]) == (False, False, "unverifiable")
         assert len(pool_manager.calls) == 1
 
+    @pytest.mark.parametrize("constant", _NON_JSON_CONSTANTS)
+    def test_a_real_client_non_json_constant_is_malformed(self, constant):
+        pool_manager = _RecordingPoolManager(body=_with_constant(self._ACCEPTED_BODY, constant))
+
+        result = self._real_client(pool_manager).json_patch_custom_resource_guarded(
+            "restore-acm-passive-sync", **self._kwargs()
+        )
+
+        assert result == self._MALFORMED_IDENTITY
+        assert len(pool_manager.calls) == 1
+
+    @pytest.mark.parametrize("revision", [" ", "48300 ", " 48300", "\t"])
+    def test_a_real_client_padded_response_revision_is_malformed(self, revision):
+        body = dict(self._ACCEPTED_BODY, metadata={"uid": "3f0c2a4e-uid", "resourceVersion": revision, "generation": 7})
+        pool_manager = _RecordingPoolManager(payload=body)
+
+        result = self._real_client(pool_manager).json_patch_custom_resource_guarded(
+            "restore-acm-passive-sync", **self._kwargs()
+        )
+
+        assert result == self._MALFORMED_IDENTITY
+        assert len(pool_manager.calls) == 1
+
     def test_a_real_client_undecodable_accepted_body_is_malformed(self):
         pool_manager = _RecordingPoolManager(body=b"<html>")
 
@@ -3432,9 +3504,8 @@ class TestGuardedRestoreJsonPatch:
 
 
 class TestGuardedRestoreDelete:
-    """The narrow Restore delete wrapper: it delegates to delete_custom_resource_preconditioned
-    with both preconditions and maps its outcome to the guarded-mutation result shape. In
-    dry-run it predicts without reaching the primitive."""
+    """The narrow Restore delete: one raw DELETE carrying both preconditions, mapped to the
+    guarded-mutation result shape. In dry-run it predicts without a request."""
 
     _ARGS = {
         "namespace": "open-cluster-management-backup",
@@ -3461,8 +3532,14 @@ class TestGuardedRestoreDelete:
         result.update(updates)
         return result
 
+    @staticmethod
+    def _answer(client, response):
+        """Answer the one raw DELETE with `response` as its JSON body."""
+        client._api_client.call_api = Mock(return_value=Mock(data=json.dumps(response).encode("utf-8")))
+
     def test_an_accepted_delete_sends_both_preconditions_once(self, kube_client):
-        kube_client.custom_api.delete_namespaced_custom_object = Mock(return_value={})
+        self._answer(kube_client, {"kind": "Status", "status": "Success"})
+        kube_client.custom_api.delete_namespaced_custom_object = Mock()
         result = self._delete(kube_client, timeout_seconds=9)
         assert result == self._shape(
             accepted=True,
@@ -3472,17 +3549,19 @@ class TestGuardedRestoreDelete:
             uid="3f0c2a4e-uid",
             resource_version="48213",
         )
-        call = kube_client.custom_api.delete_namespaced_custom_object.call_args
-        assert kube_client.custom_api.delete_namespaced_custom_object.call_count == 1
-        assert (call.kwargs["group"], call.kwargs["version"], call.kwargs["plural"]) == (
-            "cluster.open-cluster-management.io",
-            "v1beta1",
-            "restores",
-        )
-        assert call.kwargs["namespace"] == "open-cluster-management-backup"
+        kube_client.custom_api.delete_namespaced_custom_object.assert_not_called()
+        assert kube_client._api_client.call_api.call_count == 1
+        call = kube_client._api_client.call_api.call_args
+        assert call.args == ("/apis/{group}/{version}/namespaces/{namespace}/{plural}/{name}", "DELETE")
+        assert call.kwargs["path_params"] == {
+            "group": "cluster.open-cluster-management.io",
+            "version": "v1beta1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "restores",
+            "name": "restore-acm-passive-sync",
+        }
         assert call.kwargs["_request_timeout"] == 9
-        body = call.kwargs["body"]
-        assert (body.preconditions.uid, body.preconditions.resource_version) == ("3f0c2a4e-uid", "48213")
+        assert call.kwargs["body"]["preconditions"] == {"uid": "3f0c2a4e-uid", "resourceVersion": "48213"}
 
     @pytest.mark.parametrize(
         ("exc", "conflict", "reason"),
@@ -3496,14 +3575,14 @@ class TestGuardedRestoreDelete:
         ],
     )
     def test_failures_are_classified_once_and_never_retried(self, kube_client, exc, conflict, reason):
-        kube_client.custom_api.delete_namespaced_custom_object = Mock(side_effect=exc)
+        kube_client._api_client.call_api = Mock(side_effect=exc)
         assert self._delete(kube_client) == self._shape(conflict=conflict, reason=reason)
-        assert kube_client.custom_api.delete_namespaced_custom_object.call_count == 1
+        assert kube_client._api_client.call_api.call_count == 1
 
     def test_the_default_timeout_is_the_client_request_timeout(self, kube_client):
-        kube_client.custom_api.delete_namespaced_custom_object = Mock(return_value={})
+        self._answer(kube_client, {"kind": "Status", "status": "Success"})
         assert self._delete(kube_client)["accepted"] is True
-        call = kube_client.custom_api.delete_namespaced_custom_object.call_args
+        call = kube_client._api_client.call_api.call_args
         assert call.kwargs["_request_timeout"] == kube_client.request_timeout
 
     def test_dry_run_predicts_without_any_api_call(self, dry_run_client):
@@ -3533,19 +3612,330 @@ class TestGuardedRestoreDelete:
     def test_invalid_inputs_are_rejected_before_any_request_even_in_dry_run(self, kube_client, overrides):
         from lib.validation import ValidationError
 
-        kube_client.custom_api.delete_namespaced_custom_object = Mock()
+        kube_client._api_client.call_api = Mock()
         for dry_run in (False, True):
             kube_client.dry_run = dry_run
             with pytest.raises(ValidationError):
                 self._delete(kube_client, **overrides)
-        kube_client.custom_api.delete_namespaced_custom_object.assert_not_called()
+        kube_client._api_client.call_api.assert_not_called()
 
     def test_failures_never_expose_exception_text(self, kube_client, caplog):
         secret = "R4-04-DELETE-SECRET token=abc123"
         exc = ApiException(status=500, reason=secret)
         exc.body = secret
-        kube_client.custom_api.delete_namespaced_custom_object = Mock(side_effect=exc)
+        kube_client._api_client.call_api = Mock(side_effect=exc)
         with caplog.at_level("DEBUG", logger="acm_switchover"):
             result = self._delete(kube_client)
         assert "abc123" not in json.dumps(result)
         assert "abc123" not in caplog.text
+
+    def test_the_guarded_delete_binds_the_real_api_client_signature(self):
+        pool_manager = _RecordingPoolManager(payload={"kind": "Status", "status": "Success"})
+
+        result = self._delete(_real_kube_client(pool_manager), timeout_seconds=9)
+
+        assert result == self._shape(
+            accepted=True, http_accepted=True, changed=True, reason="ok", uid="3f0c2a4e-uid", resource_version="48213"
+        )
+        [call] = pool_manager.calls
+        assert call["method"] == "DELETE"
+        assert call["url"].endswith(
+            "/apis/cluster.open-cluster-management.io/v1beta1/namespaces/open-cluster-management-backup"
+            "/restores/restore-acm-passive-sync"
+        )
+        assert json.loads(call["body"])["preconditions"] == {"uid": "3f0c2a4e-uid", "resourceVersion": "48213"}
+        assert call["timeout"].total == 9
+
+    @pytest.mark.parametrize(
+        ("status", "conflict", "reason"),
+        [(409, True, "precondition_failed"), (412, True, "precondition_failed"), (404, False, "not_found")]
+        + [(status, False, "unverifiable") for status in (403, 500, 504)],
+    )
+    def test_a_real_client_http_error_is_classified_once(self, status, conflict, reason):
+        pool_manager = _RecordingPoolManager(status=status, payload={"kind": "Status", "code": status})
+
+        assert self._delete(_real_kube_client(pool_manager)) == self._shape(conflict=conflict, reason=reason)
+        assert len(pool_manager.calls) == 1
+
+    _DELETED_RESTORE = {
+        "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+        "kind": "Restore",
+        "metadata": {"name": "restore-acm-passive-sync", "uid": "3f0c2a4e-uid", "resourceVersion": "48214"},
+    }
+
+    @pytest.mark.parametrize("status", [200, 202])
+    @pytest.mark.parametrize(
+        "payload",
+        [{"kind": "Status", "apiVersion": "v1", "status": "Success"}, _DELETED_RESTORE],
+        ids=["status-object", "deleted-restore"],
+    )
+    def test_a_real_client_2xx_object_is_acceptance(self, status, payload):
+        """A 202 is as much an accepted DELETE as a 200, whether the server answers with a Status
+        or with the object whose deletion it started. The generated clients decode a DELETE body
+        for 200 only, so the guarded delete reads the raw body itself."""
+        pool_manager = _RecordingPoolManager(status=status, payload=payload)
+
+        result = self._delete(_real_kube_client(pool_manager))
+
+        assert result == self._shape(
+            accepted=True, http_accepted=True, changed=True, reason="ok", uid="3f0c2a4e-uid", resource_version="48213"
+        )
+        assert len(pool_manager.calls) == 1
+
+    @pytest.mark.parametrize("status", [200, 202])
+    @pytest.mark.parametrize(("body", "content_type"), _MALFORMED_2XX_BODIES)
+    def test_a_real_client_malformed_2xx_body_is_not_acceptance(self, body, content_type, status):
+        """The server answered 2xx, so the Restore may be gone, but nothing in the answer can be
+        read as a delete of the proved object: it is not accepted, on every client version."""
+        pool_manager = _RecordingPoolManager(status=status, body=body, content_type=content_type)
+
+        result = self._delete(_real_kube_client(pool_manager))
+
+        assert result == self._shape(http_accepted=True, reason="malformed_response")
+        assert len(pool_manager.calls) == 1
+
+    @pytest.mark.parametrize("status", [200, 202])
+    @pytest.mark.parametrize("constant", _NON_JSON_CONSTANTS)
+    def test_a_real_client_non_json_constant_is_not_acceptance(self, constant, status):
+        payload = {"kind": "Status", "apiVersion": "v1", "status": "Success"}
+        pool_manager = _RecordingPoolManager(status=status, body=_with_constant(payload, constant))
+
+        result = self._delete(_real_kube_client(pool_manager))
+
+        assert result == self._shape(http_accepted=True, reason="malformed_response")
+        assert len(pool_manager.calls) == 1
+
+    def test_a_real_client_body_read_failure_is_not_acceptance(self):
+        pool_manager = _RecordingPoolManager(body=_UnreadableBody(ReadTimeoutError(None, "/restores", "timed out")))
+
+        assert self._delete(_real_kube_client(pool_manager)) == self._shape()
+        assert len(pool_manager.calls) == 1
+
+
+class TestGuardedRestoreCreate:
+    """R4-04 PR C Task 7: one create request; acceptance only from a 2xx body that names the
+    created object. A 409, a timeout or any other failure is never reconciled into success."""
+
+    _BODY = {
+        "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+        "kind": "Restore",
+        "metadata": {"name": "restore-acm-full", "namespace": "open-cluster-management-backup"},
+        "spec": {"veleroManagedClustersBackupName": "acm-managed-clusters-schedule-20240101120000"},
+    }
+
+    def _create(self, client, body=None):
+        return client.create_restore_guarded(body or self._BODY, namespace="open-cluster-management-backup")
+
+    @staticmethod
+    def _answer(client, response):
+        """Answer the one raw POST with `response` as its JSON body."""
+        client._api_client.call_api = Mock(return_value=Mock(data=json.dumps(response).encode("utf-8")))
+
+    @staticmethod
+    def _created(**metadata):
+        base = {"name": "restore-acm-full", "namespace": "open-cluster-management-backup"}
+        base.update(metadata)
+        return {"kind": "Restore", "metadata": base, "spec": {}}
+
+    def test_an_accepted_create_reports_identity_and_generation(self, kube_client):
+        self._answer(kube_client, self._created(uid="u-1", resourceVersion="10", generation=1))
+        result = self._create(kube_client)
+        assert result["accepted"] is True and result["changed"] is True and result["reason"] == "ok"
+        assert (result["uid"], result["resource_version"], result["generation"]) == ("u-1", "10", 1)
+        assert result["generation_reported"] is True
+        kube_client._api_client.call_api.assert_called_once()
+
+    def test_a_missing_generation_is_not_inferred(self, kube_client):
+        self._answer(kube_client, self._created(uid="u-1", resourceVersion="10"))
+        result = self._create(kube_client)
+        assert result["accepted"] is True
+        assert result["generation"] is None and result["generation_reported"] is False
+
+    @pytest.mark.parametrize("generation", [None, "7", "2", True, False, 7.0, 0, -1, [7], {"value": 7}])
+    def test_a_present_but_invalid_generation_is_a_malformed_response(self, kube_client, generation):
+        self._answer(kube_client, self._created(uid="u-1", resourceVersion="10", generation=generation))
+        result = self._create(kube_client)
+        assert (result["accepted"], result["http_accepted"], result["changed"]) == (False, True, False)
+        assert (result["reason"], result["uid"], result["resource_version"]) == ("malformed_response", None, None)
+        assert (result["generation"], result["generation_reported"]) == (None, False)
+
+    @pytest.mark.parametrize(
+        "metadata",
+        [
+            {"resourceVersion": "10"},
+            {"uid": "", "resourceVersion": "10"},
+            {"uid": "u-1"},
+            {"uid": "u-1", "resourceVersion": "10", "name": "other"},
+        ],
+    )
+    def test_a_2xx_without_the_created_identity_is_not_accepted(self, kube_client, metadata):
+        self._answer(kube_client, self._created(**metadata))
+        result = self._create(kube_client)
+        assert result["accepted"] is False and result["http_accepted"] is True
+        assert result["reason"] == "malformed_response" and result["uid"] is None
+
+    def test_a_conflict_is_never_reconciled(self, kube_client):
+        kube_client._api_client.call_api = Mock(side_effect=ApiException(status=409))
+        kube_client.custom_api.get_namespaced_custom_object = Mock()
+        result = self._create(kube_client)
+        assert result["accepted"] is False and result["conflict"] is True and result["reason"] == "already_exists"
+        kube_client.custom_api.get_namespaced_custom_object.assert_not_called()
+        kube_client._api_client.call_api.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "error", [ApiException(status=504), TimeoutError("read timed out"), ApiException(status=500)]
+    )
+    def test_a_timeout_or_server_error_is_unverifiable_and_not_retried(self, kube_client, error):
+        kube_client._api_client.call_api = Mock(side_effect=error)
+        result = self._create(kube_client)
+        assert result["accepted"] is False and result["reason"] == "unverifiable"
+        kube_client._api_client.call_api.assert_called_once()
+
+    def test_dry_run_predicts_without_a_request(self, dry_run_client):
+        dry_run_client._api_client.call_api = Mock()
+        result = self._create(dry_run_client)
+        assert result["accepted"] is False and result["would_change"] is True and result["reason"] == "predicted"
+        dry_run_client._api_client.call_api.assert_not_called()
+
+    def test_failures_never_expose_exception_text(self, kube_client, caplog):
+        secret = "R4-04-CREATE-SECRET token=abc123"
+        exc = ApiException(status=500, reason=secret)
+        exc.body = secret
+        kube_client._api_client.call_api = Mock(side_effect=exc)
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            result = self._create(kube_client)
+        assert "abc123" not in json.dumps(result)
+        assert "abc123" not in caplog.text
+
+    _ACCEPTED = {
+        "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+        "kind": "Restore",
+        "metadata": {"name": "restore-acm-full", "uid": "u-1", "resourceVersion": "10", "generation": 1},
+    }
+
+    def test_the_guarded_create_binds_the_real_api_client_signature(self):
+        """A single POST through the installed client, on every supported version: the request
+        body is the Restore, the bearer token and the caller's timeout bound it."""
+        pool_manager = _RecordingPoolManager(status=201, payload=self._ACCEPTED)
+
+        result = _real_kube_client(pool_manager).create_restore_guarded(
+            self._BODY, namespace="open-cluster-management-backup", timeout_seconds=11
+        )
+
+        assert (result["accepted"], result["reason"], result["uid"], result["generation"]) == (True, "ok", "u-1", 1)
+        [call] = pool_manager.calls
+        assert call["method"] == "POST"
+        assert call["url"].endswith(
+            "/apis/cluster.open-cluster-management.io/v1beta1/namespaces/open-cluster-management-backup/restores"
+        )
+        assert json.loads(call["body"]) == self._BODY
+        assert {key.lower(): value for key, value in call["headers"].items()}["authorization"] == (
+            "Bearer binding-test-token"
+        )
+        assert call["timeout"].total == 11
+
+    @pytest.mark.parametrize(
+        ("status", "body", "conflict", "reason"),
+        [
+            (409, b'{"kind": "Status", "code": 409}', True, "already_exists"),
+            (403, b'{"kind": "Status", "code": 403}', False, "unverifiable"),
+            (404, b'{"kind": "Status", "code": 404}', False, "unverifiable"),
+            (500, b'{"kind": "Status", "code": 500}', False, "unverifiable"),
+            (504, b"<html>", False, "unverifiable"),
+        ],
+    )
+    def test_a_real_client_http_error_is_never_acceptance(self, status, body, conflict, reason):
+        pool_manager = _RecordingPoolManager(status=status, body=body)
+
+        result = self._create(_real_kube_client(pool_manager))
+
+        assert (result["accepted"], result["http_accepted"], result["conflict"], result["reason"]) == (
+            False,
+            False,
+            conflict,
+            reason,
+        )
+        assert len(pool_manager.calls) == 1
+
+    def test_a_real_client_undecodable_error_body_is_never_acceptance(self):
+        """Before 37 the client decodes an error body while raising it, so a 409 whose body is
+        not UTF-8 is unverifiable there and `already_exists` on 37: never accepted on either."""
+        pool_manager = _RecordingPoolManager(status=409, body=b"\xff\xfe")
+
+        result = self._create(_real_kube_client(pool_manager))
+
+        assert (result["accepted"], result["http_accepted"], result["changed"]) == (False, False, False)
+        assert result["reason"] in ("already_exists", "unverifiable")
+        assert len(pool_manager.calls) == 1
+
+    @pytest.mark.parametrize(("body", "content_type"), _MALFORMED_2XX_BODIES)
+    def test_a_real_client_malformed_2xx_body_is_not_acceptance(self, body, content_type):
+        """The POST may have landed, so this is never a failure to compensate for and never an
+        accepted create: it is `malformed_response`, with no identity, on every client version."""
+        pool_manager = _RecordingPoolManager(status=201, body=body, content_type=content_type)
+
+        result = self._create(_real_kube_client(pool_manager))
+
+        assert (result["accepted"], result["http_accepted"], result["changed"], result["reason"]) == (
+            False,
+            True,
+            False,
+            "malformed_response",
+        )
+        assert (result["uid"], result["resource_version"], result["generation_reported"]) == (None, None, False)
+        assert len(pool_manager.calls) == 1
+
+    @pytest.mark.parametrize("constant", _NON_JSON_CONSTANTS)
+    def test_a_real_client_non_json_constant_is_not_acceptance(self, constant):
+        pool_manager = _RecordingPoolManager(status=201, body=_with_constant(self._ACCEPTED, constant))
+
+        result = self._create(_real_kube_client(pool_manager))
+
+        assert (result["accepted"], result["http_accepted"], result["reason"]) == (False, True, "malformed_response")
+        assert (result["uid"], result["resource_version"], result["generation_reported"]) == (None, None, False)
+        assert len(pool_manager.calls) == 1
+
+    @pytest.mark.parametrize(
+        "identity",
+        [
+            {"uid": " ", "resourceVersion": "10"},
+            {"uid": " u-1", "resourceVersion": "10"},
+            {"uid": "u-1", "resourceVersion": " "},
+            {"uid": "u-1", "resourceVersion": "10\n"},
+        ],
+    )
+    def test_a_real_client_padded_response_identity_is_not_acceptance(self, identity):
+        body = dict(self._ACCEPTED, metadata={"name": "restore-acm-full", "generation": 1, **identity})
+        pool_manager = _RecordingPoolManager(status=201, payload=body)
+
+        result = self._create(_real_kube_client(pool_manager))
+
+        assert (result["accepted"], result["http_accepted"], result["reason"]) == (False, True, "malformed_response")
+        assert (result["uid"], result["resource_version"], result["generation_reported"]) == (None, None, False)
+        assert len(pool_manager.calls) == 1
+
+    def test_a_real_client_body_read_failure_is_not_acceptance(self):
+        pool_manager = _RecordingPoolManager(status=201, body=_UnreadableBody(ProtocolError("reset")))
+
+        result = self._create(_real_kube_client(pool_manager))
+
+        assert (result["accepted"], result["http_accepted"], result["reason"]) == (False, False, "unverifiable")
+        assert len(pool_manager.calls) == 1
+
+
+class TestApiResourceServed:
+    """The public discovery check: the Restore status subresource is served, absent, or unverifiable."""
+
+    def test_status_subresource_is_asserted_through_discovery(self):
+        body = {
+            "kind": "APIResourceList",
+            "groupVersion": "cluster.open-cluster-management.io/v1beta1",
+            "resources": [{"name": "restores", "kind": "Restore"}, {"name": "restores/status", "kind": "Restore"}],
+        }
+        client = TestDiscoveryProver()._client(Mock(return_value=TestDiscoveryProver._body(body)))
+        served = client.api_resource_served("cluster.open-cluster-management.io", "v1beta1", "restores/status")
+        assert served.status is StrictReadStatus.ITEMS
+        body["resources"] = body["resources"][:1]
+        client = TestDiscoveryProver()._client(Mock(return_value=TestDiscoveryProver._body(body)))
+        absent = client.api_resource_served("cluster.open-cluster-management.io", "v1beta1", "restores/status")
+        assert absent.status is StrictReadStatus.CRD_ABSENT

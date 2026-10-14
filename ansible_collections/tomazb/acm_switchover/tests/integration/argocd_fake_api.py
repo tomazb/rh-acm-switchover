@@ -65,8 +65,11 @@ class FakeArgoCDHub:
         namespace_list_failures: dict[str, str] | None = None,
         kube_system_status: int = 200,
         kube_system_body: dict | None = None,
+        patch_failure_status: int | None = None,
     ):
         self.cluster_uid = cluster_uid
+        # Every Application PATCH fails with this status when set.
+        self._patch_failure_status = patch_failure_status
         self._applications = {
             (item["metadata"]["namespace"], item["metadata"]["name"]): copy.deepcopy(item) for item in applications
         }
@@ -183,6 +186,9 @@ class FakeArgoCDHub:
                     return
 
                 body = self._read_json()
+                if hub._patch_failure_status is not None:
+                    self._status(hub._patch_failure_status, message="fixture patch failure", reason="InternalError")
+                    return
                 with hub._lock:
                     key = (namespace, name)
                     if key not in hub._applications:

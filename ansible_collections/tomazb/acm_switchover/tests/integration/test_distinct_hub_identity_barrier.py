@@ -519,3 +519,25 @@ def test_completed_preflight_rereads_before_using_skipped_phase(
     assert output.index(barrier_task) < output.index(skipped_validation_task) < output.index(skipped_restore_task)
     assert run.checkpoint_after == run.checkpoint_before
     assert _write_requests(run) == []
+
+
+@pytest.mark.parametrize("restore_only", [False, True], ids=["switchover", "restore-only"])
+def test_an_executing_run_without_checkpointing_is_refused_before_any_mutation(run_distinct_hub_playbook, restore_only):
+    """Activation needs the checkpoint for its journal, so the refusal precedes primary_prep and the Argo CD pause."""
+    run = run_distinct_hub_playbook(
+        checkpoint_enabled=False,
+        restore_only=restore_only,
+        primary_applications=[application("argocd", "primary-app", automated=True)],
+        secondary_applications=[application("argocd", "secondary-app", automated=True)],
+        variables={"acm_switchover_features": {"argocd": {"manage": True, "resume_on_failure": True}}},
+    )
+    output = _visible_output(run)
+
+    assert run.completed.returncode != 0
+    assert "Activation records its migration evidence in the checkpoint before any Restore mutation" in output
+    assert len(_identity_gets(run.secondary_requests)) == 1
+    assert "Run primary prep" not in output
+    assert "Pause Argo CD auto-sync on secondary hub before restore" not in output
+    assert "Attempt Argo CD resume" not in output
+    assert _write_requests(run) == []
+    assert run.checkpoint_after is None

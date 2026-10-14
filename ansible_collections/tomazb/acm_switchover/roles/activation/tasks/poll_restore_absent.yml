@@ -1,0 +1,41 @@
+---
+# One poll of a deleted Restore (SecondaryActivation._wait_for_restore_absent): absent,
+# still present, or refused when a replacement holds its name. Included in a bounded loop
+# over _acm_poll_delay values.
+# Ansible decides an include loop's `when` for every item before any included task runs, so
+# each poll guards itself at execution time: once the decision is accepted the remaining polls
+# do nothing, and the accepted decision lives in a fact a skipped poll never overwrites.
+
+- name: Poll the deleted Restore until it is gone
+  when: not (_acm_restore_absent | bool)
+  block:
+    - name: Wait before re-reading the deleted Restore
+      ansible.builtin.pause:
+        seconds: "{{ _acm_poll_delay }}"
+      when: _acm_poll_delay | int > 0
+
+    - name: Re-read the deleted Restore strictly
+      ansible.builtin.include_tasks: strict_read.yml
+      vars:
+        _acm_read:
+          key: "restore/{{ _acm_pre_delete.name }}"
+          read_mode: get
+          api_version: cluster.open-cluster-management.io/v1beta1
+          kind: Restore
+          resource_name: restores
+          namespace: open-cluster-management-backup
+          name: "{{ _acm_pre_delete.name }}"
+        _acm_read_fact: _acm_absence_read
+
+    - name: Decide whether the deleted Restore is gone
+      tomazb.acm_switchover.acm_migration_evidence:
+        operation: deletion_poll
+        inputs:
+          name: "{{ _acm_pre_delete.name }}"
+          uid: "{{ _acm_pre_delete.uid }}"
+          live_read: "{{ _acm_absence_read }}"
+      register: _acm_absence
+
+    - name: Record the deletion poll
+      ansible.builtin.set_fact:
+        _acm_restore_absent: "{{ _acm_absence.absent }}"

@@ -44,6 +44,8 @@
 - name: Attempt klusterlet auto-remediation
   ansible.builtin.include_tasks: fix_klusterlet.yml
   when:
+    # Remediation rewrites managed-cluster state: validate previews it like a dry run.
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - (_klusterlet_remediation_candidates | default([]) | length) > 0
     - (acm_switchover_managed_clusters | default({}) | length) > 0
 

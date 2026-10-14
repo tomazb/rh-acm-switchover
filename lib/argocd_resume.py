@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from lib import runtime_bootstrap
@@ -12,7 +13,11 @@ from lib.constants import (
 )
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
+from lib.run_record import RunRecord, migration_journal_present
 from lib.utils import Phase
+
+# PR C decisions amendment section 2.2: the phases a journal can exist in when they fail.
+_JOURNAL_RESCUE_PHASES = (Phase.ACTIVATION, Phase.POST_ACTIVATION, Phase.FINALIZATION)
 
 
 def _required_resume_roles(paused_hub_roles: set[str], stored_identities: Any) -> set[str]:
@@ -303,6 +308,11 @@ def attempt_argocd_resume_on_failure(
         status.entry_count,
         status.run_id,
     )
+    if migration_journal_present(state.capture_state_snapshot()):
+        _resume_on_failure_under_journal(
+            args, state, primary, secondary, logger, register, status.entry_count, kube_client_factory
+        )
+        return
     try:
         resume_primary, resume_secondary = prepare_argocd_resume_clients(
             args,
@@ -342,3 +352,157 @@ def attempt_argocd_resume_on_failure(
             "Argo CD resume-on-failure failed: %s. Use --argocd-resume-only to resume manually.",
             exc,
         )
+
+
+def _resume_on_failure_under_journal(
+    args: Any,
+    state: Any,
+    primary: Optional[KubeClient],
+    secondary: Optional[KubeClient],
+    logger: logging.Logger,
+    register: ArgocdPauseRegister,
+    entry_count: int,
+    kube_client_factory: type[KubeClient],
+) -> None:
+    """Resume Argo CD after a failure that left a migration journal (PR C decisions amendment 2.2).
+
+    No rewind to a pre-freeze phase: the pause step stays completed and the retry
+    stays at the failed phase. The re-pause marker is durable before any resume
+    mutation; every failure is logged and recorded against the failed phase, so
+    no caller records a phase-less error that would lose the retry position.
+    """
+    failed_phase = state.get_last_error_phase()
+    if failed_phase not in _JOURNAL_RESCUE_PHASES:
+        logger.error(
+            "Argo CD resume-on-failure refused: a migration journal exists but the failed phase (%s) "
+            "cannot be determined. No Application was resumed; use --argocd-resume-only after review.",
+            failed_phase.value if failed_phase else "unknown",
+        )
+        return
+    if getattr(args, "dry_run", False):
+        logger.info(
+            "[DRY-RUN] Would record the Argo CD re-pause marker, resume %d Application(s), and re-pause "
+            "them before %s continues on retry.",
+            entry_count,
+            failed_phase.value,
+        )
+        return
+
+    run_record = RunRecord(state)
+    try:
+        run_record.record_argocd_repause_required(failed_phase.value, datetime.now(timezone.utc).isoformat())
+    except Exception as exc:
+        _record_rescue_failure(
+            state,
+            logger,
+            failed_phase,
+            f"Argo CD resume-on-failure refused: the re-pause marker could not be recorded durably ({exc}). "
+            "No Application was resumed; they stay paused.",
+        )
+        return
+
+    try:
+        resume_primary, resume_secondary = prepare_argocd_resume_clients(
+            args,
+            state,
+            register.paused_hub_roles(),
+            primary,
+            secondary,
+            logger,
+            allow_primary_load_from_state=False,
+            kube_client_factory=kube_client_factory,
+        )
+        summary = register.resume(resume_primary, resume_secondary)
+    except Exception as exc:
+        _record_rescue_failure(
+            state,
+            logger,
+            failed_phase,
+            f"Argo CD resume-on-failure failed: {exc}. The retry re-pauses Argo CD before {failed_phase.value} "
+            "continues; use --argocd-resume-only to resume manually.",
+        )
+        return
+    if summary.failed or summary.remaining_in_register:
+        _record_rescue_failure(
+            state,
+            logger,
+            failed_phase,
+            f"Argo CD resume-on-failure left {summary.remaining_in_register} Application(s) paused "
+            f"(failed={summary.failed}). The retry re-pauses Argo CD before {failed_phase.value} continues; "
+            "use --argocd-resume-only to resume manually.",
+        )
+        return
+    logger.info(
+        "Argo CD resume-on-failure restored %d and already resumed %d Application(s); the migration journal "
+        "is kept and the retry re-pauses them before %s continues.",
+        summary.restored,
+        summary.already_resumed,
+        failed_phase.value,
+    )
+
+
+def _record_rescue_failure(state: Any, logger: logging.Logger, failed_phase: Phase, message: str) -> None:
+    """Log a rescue failure and record it against the failed phase, never against FAILED."""
+    logger.error(message)
+    try:
+        state.add_error(message, phase=failed_phase.value)
+    except Exception as exc:
+        logger.error("The rescue failure could not be recorded in the state file: %s", exc)
+
+
+def repause_argocd_after_rescue(
+    args: Any,
+    state: Any,
+    primary: Optional[KubeClient],
+    secondary: Optional[KubeClient],
+    logger: logging.Logger,
+) -> bool:
+    """Re-pause Argo CD before any phase work when a rescue left the re-pause marker.
+
+    PR C decisions amendment section 2.2 rule 3: the same register and pause
+    semantics as the original pause (both hubs for a switchover, the secondary
+    hub for restore-only), bypassing the completed pause step and never
+    replaying the rest of primary preparation. The marker is cleared only after
+    the re-pause succeeds; a failure fails the run at the recorded phase.
+    """
+    run_record = RunRecord(state)
+    marker_phase = run_record.argocd_repause_required()
+    if marker_phase is None:
+        return True
+    failed_phase = Phase(marker_phase)
+    hubs = [(secondary, HUB_ROLE_SECONDARY)]
+    if not getattr(args, "restore_only", False):
+        hubs.insert(0, (primary, HUB_ROLE_PRIMARY))
+    roles = ", ".join(role for _, role in hubs)
+    if getattr(args, "dry_run", False):
+        logger.info("[DRY-RUN] Would re-pause Argo CD auto-sync on the %s hub(s) before %s.", roles, marker_phase)
+        return True
+
+    logger.info("Re-pausing Argo CD auto-sync on the %s hub(s) before %s (resume-on-failure).", roles, marker_phase)
+    try:
+        summary = ArgocdPauseRegister(state).pause_hubs(hubs)
+    except Exception as exc:
+        return _fail_repause(state, logger, failed_phase, f"Argo CD re-pause failed: {exc}")
+    if summary.blocked or summary.failed:
+        return _fail_repause(
+            state,
+            logger,
+            failed_phase,
+            f"Argo CD re-pause failed (blocked={summary.blocked}, failed={summary.failed}); "
+            "pause the owning ApplicationSets or the Applications first",
+        )
+    try:
+        run_record.clear_argocd_repause_required()
+    except Exception as exc:
+        return _fail_repause(
+            state, logger, failed_phase, f"Argo CD re-pause succeeded but its marker could not be cleared ({exc})"
+        )
+    return True
+
+
+def _fail_repause(state: Any, logger: logging.Logger, failed_phase: Phase, message: str) -> bool:
+    message += f"; the retry stays at {failed_phase.value} and re-pauses again."
+    logger.error(message)
+    state.add_error(message, phase=failed_phase.value)
+    state.set_phase(Phase.FAILED)
+    return False

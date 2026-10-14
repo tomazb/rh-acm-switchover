@@ -1,57 +1,43 @@
 ---
-- name: Select passive sync restore
-  tomazb.acm_switchover.acm_restore_info:
-    activation_method: "{{ acm_switchover_operation.activation_method | default('patch') }}"
-    allow_conventional_name_fallback: "{{ acm_switchover_operation.allow_conventional_passive_restore_fallback | default(false) }}"
-    restores: >-
-      {{ acm_activation_restores_info.resources | default([]) }}
-  register: acm_passive_restore_selection
+# The passive sync Restore is discovered from a strictly complete LIST and strictly
+# re-read: it must be sync-enabled and activation-ready (SecondaryActivation._verify_passive_sync).
 
-- name: Flag Option-B activation-restore resume state
-  ansible.builtin.set_fact:
-    _acm_activation_restore_resume: >-
-      {{
-        acm_switchover_operation.activation_method | default('patch') == 'restore'
-        and (acm_passive_restore_selection.sync_enabled_count | default(0) | int) == 0
-        and (
-          acm_activation_restores_info.resources | default([])
-          | selectattr('metadata.name', 'equalto', 'restore-acm-activate')
-          | list | length
-        ) > 0
-      }}
+- name: List the destination ACM Restores strictly
+  ansible.builtin.include_tasks: strict_read.yml
+  vars:
+    _acm_read:
+      key: restores
+      read_mode: list
+      api_version: cluster.open-cluster-management.io/v1beta1
+      kind: Restore
+      resource_name: restores
+      namespace: open-cluster-management-backup
+    _acm_read_fact: _acm_passive_list_read
 
-- name: Require ready passive sync restore on the secondary hub
-  ansible.builtin.assert:
-    that:
-      - acm_passive_restore_selection.restore is not none
-      - acm_passive_restore_selection.restore_ready | default(false)
-      - >-
-        (acm_passive_restore_selection.sync_enabled_count | default(0) | int) > 0
-        or (
-          acm_switchover_operation.allow_conventional_passive_restore_fallback | default(false) | bool
-          and (acm_passive_restore_selection.reason | default('')) == 'conventional_name_fallback'
-        )
-    fail_msg: >-
-      Passive switchover requires a secondary passive Restore resource with
-      syncRestoreWithNewBackups=true, and it must be activation-ready.
-      The conventional restore-acm-passive-sync fallback is accepted only when
-      acm_switchover_operation.allow_conventional_passive_restore_fallback=true.
-      {{ acm_passive_restore_selection.restore_ready_reason | default('No readiness reason was reported.') }}
-  when: not (_acm_activation_restore_resume | bool)
+- name: Discover the passive sync Restore
+  tomazb.acm_switchover.acm_migration_evidence:
+    operation: passive_restore
+    inputs:
+      restores_read: "{{ _acm_passive_list_read }}"
+  register: _acm_passive_discovery
 
-- name: Publish passive restore selection
-  ansible.builtin.set_fact:
-    acm_switchover_restore_selection:
-      restore: "{{ acm_passive_restore_selection.restore }}"
-  when: not (_acm_activation_restore_resume | bool)
+- name: Read the discovered passive sync Restore strictly
+  ansible.builtin.include_tasks: strict_read.yml
+  vars:
+    _acm_read:
+      key: "restore/{{ _acm_passive_discovery.restore.metadata.name }}"
+      read_mode: get
+      api_version: cluster.open-cluster-management.io/v1beta1
+      kind: Restore
+      resource_name: restores
+      namespace: open-cluster-management-backup
+      name: "{{ _acm_passive_discovery.restore.metadata.name }}"
+    _acm_read_fact: _acm_passive_live_read
+  when: _acm_passive_discovery.restore is not none
 
-- name: Publish activation restore as selection for Option-B resume
-  ansible.builtin.set_fact:
-    acm_switchover_restore_selection:
-      restore: >-
-        {{
-          acm_activation_restores_info.resources | default([])
-          | selectattr('metadata.name', 'equalto', 'restore-acm-activate')
-          | first
-        }}
-  when: _acm_activation_restore_resume | bool
+- name: Require an activation-ready passive sync Restore
+  tomazb.acm_switchover.acm_migration_evidence:
+    operation: verify_passive_sync
+    inputs:
+      restores_read: "{{ _acm_passive_list_read }}"
+      live_read: "{{ _acm_passive_live_read | default({}) }}"

@@ -22,7 +22,25 @@ from lib.migration_child_evidence import (
     passive_patch_required_predictions,
     predict_one_shot_child_names,
     predict_passive_patch_child_names,
+    predict_passive_patch_credential_variants,
+    require_no_credential_variant_children,
     validate_velero_child,
+)
+from lib.migration_cleanup import (
+    absence_poll,
+    cleanup_intent,
+    cleanup_schedule,
+    cleanup_step,
+    delete_outcome,
+    final_absence,
+    generic_cleanup_restores,
+    poll_read_timeout,
+    pre_delete,
+    repair_cleanup,
+    require_locator_absent,
+    require_old_hub_evidence,
+    require_within_deadline,
+    teardown_revalidated,
 )
 from lib.migration_evidence import (
     ACM_MINOR_CONTRACTS,
@@ -34,6 +52,7 @@ from lib.migration_evidence import (
     normalize_backup_evidence,
     predict_correlated_backup,
     predict_latest_backup,
+    require_same_backup_generation,
     rfc3339_ns,
     select_correlated_evidence,
     select_latest_evidence,
@@ -46,7 +65,17 @@ from lib.migration_journal import (
     validate_journal_transition,
     validate_migration_journal,
     validate_repair,
+    validate_repair_request,
     validate_waiver,
+    validate_waiver_request,
+)
+from lib.migration_post_activation import (
+    managed_cluster_readiness,
+    post_activation_completion,
+    post_activation_names_evidence,
+    post_activation_waiver,
+    require_completed_restore,
+    require_post_activation_completed,
 )
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "r4_04_migration_evidence_vectors.json"
@@ -71,6 +100,9 @@ FUNCTIONS = {
     "passive_patch_required_predictions": passive_patch_required_predictions,
     "freeze_passive_patch_backups": freeze_passive_patch_backups,
     "validate_velero_child": validate_velero_child,
+    "predict_passive_patch_credential_variants": predict_passive_patch_credential_variants,
+    "require_no_credential_variant_children": require_no_credential_variant_children,
+    "require_same_backup_generation": require_same_backup_generation,
     "normalize_child_list": normalize_child_list,
     "canonical_restore_projection": canonical_restore_projection,
     "restore_spec_fingerprint": restore_spec_fingerprint,
@@ -79,9 +111,31 @@ FUNCTIONS = {
     "validate_journal_transition": validate_journal_transition,
     "validate_waiver": validate_waiver,
     "validate_repair": validate_repair,
+    "validate_waiver_request": validate_waiver_request,
+    "validate_repair_request": validate_repair_request,
     "rfc3339_ns": rfc3339_ns,
     "go_normalize": go_normalize,
     "validate_backup_projection": validate_backup_projection,
+    "managed_cluster_readiness": managed_cluster_readiness,
+    "post_activation_completion": post_activation_completion,
+    "post_activation_names_evidence": post_activation_names_evidence,
+    "post_activation_waiver": post_activation_waiver,
+    "require_completed_restore": require_completed_restore,
+    "require_post_activation_completed": require_post_activation_completed,
+    "absence_poll": absence_poll,
+    "cleanup_intent": cleanup_intent,
+    "cleanup_schedule": cleanup_schedule,
+    "cleanup_step": cleanup_step,
+    "delete_outcome": delete_outcome,
+    "final_absence": final_absence,
+    "generic_cleanup_restores": generic_cleanup_restores,
+    "pre_delete": pre_delete,
+    "repair_cleanup": repair_cleanup,
+    "require_locator_absent": require_locator_absent,
+    "poll_read_timeout": poll_read_timeout,
+    "require_within_deadline": require_within_deadline,
+    "require_old_hub_evidence": require_old_hub_evidence,
+    "teardown_revalidated": teardown_revalidated,
 }
 NS = "open-cluster-management-backup"
 
@@ -103,6 +157,15 @@ def test_vector(case):
     else:
         result = function(**case["input"])
         assert (list(result) if isinstance(result, tuple) else result) == case["expect"]["result"]
+
+
+def test_the_old_hub_gate_lists_every_missing_check():
+    """J section 4: a refusal names every check lacking evidence, the first one as its code."""
+    case = next(case for case in CASES if case["id"] == "old-hub-gate-missing-evidence-reports-the-first-gap")
+    with pytest.raises(MigrationEvidenceError) as excinfo:
+        require_old_hub_evidence(**case["input"])
+    assert excinfo.value.code == "cleanup_not_terminal"
+    assert str(excinfo.value).endswith(": cleanup_not_terminal, activation_names_unverified, locator_occupied")
 
 
 def test_every_public_function_has_vectors():

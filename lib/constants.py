@@ -89,6 +89,15 @@ DECOMMISSION_POD_INTERVAL = 30
 # API request timeout for delete operations (prevents hanging API calls)
 DELETE_REQUEST_TIMEOUT = 30
 
+# R4-04 Restore-cleanup transaction (July design section 4a), parity-shared with the
+# collection: guarded DELETE attempts after the first (each repeats the full final-GET
+# validation), the bounded absence poll after an accepted DELETE, and each DELETE's own
+# request timeout. The design fixes none of the values.
+RESTORE_CLEANUP_CONFLICT_RETRY_LIMIT = 3
+RESTORE_CLEANUP_POLL_TIMEOUT = 300
+RESTORE_CLEANUP_POLL_INTERVAL = 5
+RESTORE_CLEANUP_REQUEST_TIMEOUT = 30
+
 # ManagedCluster deletion wait (for finalizers to complete before MCH deletion)
 MANAGED_CLUSTER_DELETE_TIMEOUT = 300
 MANAGED_CLUSTER_DELETE_INTERVAL = 10
@@ -192,7 +201,8 @@ MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY = "restore_only"
 MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT = "derived_from_preflight"
 MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED = "explicit_empty_allowed"
 MANAGED_CLUSTER_EXPECTATION_EXPLICIT_MINIMUM = "explicit_minimum"
-PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME = "pre_activation_velero_managed_clusters_restore_name"
+# The CLI flag a journaled expected-name waiver records as its `flag` (R4-04 July section 2).
+MANAGED_CLUSTER_EXPECTATION_WAIVER_FLAG = "--skip-managed-cluster-expectations"
 
 # State file naming and location
 STATE_DIR_ENV_VAR = "ACM_SWITCHOVER_STATE_DIR"

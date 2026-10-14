@@ -91,7 +91,7 @@ def test_repair_backup_schedule_collision_deletes_and_recreates_schedule():
     assert create_tasks, "collision repair must recreate the BackupSchedule"
     assert "rescue:" in text
     assert "Restore BackupSchedule after failed collision repair" in text
-    assert "default('dry_run') != 'dry_run'" in text
+    assert "default('dry_run') == 'execute'" in text
     assert "restore_only_no_backup_schedule" in text
 
 
@@ -213,7 +213,7 @@ def test_enable_backups_only_records_baseline_for_real_runs():
     text = (FINALIZATION_TASKS / "enable_backups.yml").read_text()
     assert "acm_switchover_backup_schedule_enabled_at" in text
     assert (
-        "default('dry_run') != 'dry_run'" in text
+        "default('dry_run') == 'execute'" in text
     ), "enable_backups.yml must guard baseline timestamp recording for real execution only"
 
 

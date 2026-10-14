@@ -1,18 +1,52 @@
 ---
-- name: Use discovered secondary Restore resources in dry-run mode
-  ansible.builtin.set_fact:
-    _acm_secondary_restores_to_cleanup: "{{ acm_finalization_restores_info | default({'resources': []}) }}"
-  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+# Generic cleanup of the other switchover Restores. The journaled Restore locator is reserved
+# for its own transaction (cleanup_journaled_restore.yml): an executing run classifies the
+# strictly complete Restore list only once that cleanup is terminal, and an object at the
+# journaled locator blocks instead of being deleted here.
 
-- name: Read Restore resources on the secondary hub
-  kubernetes.core.k8s_info:
-    api_version: cluster.open-cluster-management.io/v1beta1
-    kind: Restore
-    namespace: open-cluster-management-backup
-    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.secondary.context }}"
-  register: _acm_secondary_restores_to_cleanup
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+- name: Read Restore resources on the secondary hub strictly
+  ansible.builtin.include_tasks: "{{ role_path }}/../activation/tasks/strict_read.yml"
+  vars:
+    _acm_read:
+      key: restores
+      read_mode: list
+      api_version: cluster.open-cluster-management.io/v1beta1
+      kind: Restore
+      resource_name: restores
+      namespace: open-cluster-management-backup
+    _acm_read_fact: _acm_generic_restores_read
+  when: acm_switchover_execution.mode | default('dry_run') == 'execute'
+
+- name: Reserve the journaled Restore locator from generic cleanup
+  tomazb.acm_switchover.acm_migration_evidence:
+    operation: cleanup_generic_restores
+    inputs:
+      journal: "{{ _acm_journal if (_acm_has_journal | bool) else omit }}"
+      restores_read: "{{ _acm_generic_restores_read }}"
+  register: _acm_generic_restores
+  when: not (_acm_preview | bool)
+
+# A preview predicts the journaled Restore's own transaction separately.
+- name: Select the Restores generic cleanup classifies
+  ansible.builtin.set_fact:
+    _acm_secondary_restores_to_cleanup:
+      resources: >-
+        {{
+          _acm_generic_restores.restores
+          if not (_acm_preview | bool)
+          else (
+            _acm_preview_restores | rejectattr('metadata.name', 'equalto', _acm_journal.restore.name) | list
+            if (_acm_has_journal | bool)
+            else _acm_preview_restores
+          )
+        }}
+  vars:
+    _acm_preview_restores: >-
+      {{
+        (_acm_generic_restores_read | default({})).get('resources', [])
+        if acm_switchover_execution.mode | default('dry_run') == 'execute'
+        else (acm_finalization_restores_info | default({'resources': []})).get('resources', [])
+      }}
 
 - name: Initialize Restore cleanup classification
   ansible.builtin.set_fact:
@@ -75,7 +109,7 @@
   register: _acm_secondary_restore_cleanup_results
   when:
     - (_acm_secondary_cleanup_candidate_restores | default([]) | length) > 0
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Wait for secondary Restore cleanup to finish
   kubernetes.core.k8s_info:
@@ -100,7 +134,7 @@
     ) == 0
   when:
     - (_acm_secondary_cleanup_candidate_restores | default([]) | length) > 0
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Publish restore cleanup result
   ansible.builtin.set_fact:
@@ -109,7 +143,7 @@
         {{
           (_acm_secondary_restore_cleanup_results.changed | default(false))
           or (
-            acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+            acm_switchover_execution.mode | default('dry_run') != 'execute'
             and (_acm_secondary_cleanup_candidate_restores | default([]) | length) > 0
           )
         }}

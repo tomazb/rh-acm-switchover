@@ -34,8 +34,11 @@ def test_restore_activation_fixture_reports_delete_and_create_plan(
     completed, report = run_switchover_fixture("restore_activation_success.yml")
     assert completed.returncode == 0
     assert report["phases"]["activation"]["status"] == "pass"
-    assert report["phases"]["activation"]["operation"]["action"] == "delete_and_create"
+    # A dry run predicts the journaled transaction and records nothing.
+    assert report["phases"]["activation"]["operation"]["mutation_kind"] == "passive_restore"
+    assert report["phases"]["activation"]["operation"]["journaled"] is False
     assert report["phases"]["activation"]["wait_target"]["name"] == "restore-acm-activate"
+    assert "Would journal the passive_restore migration evidence" in completed.stdout
 
 
 def test_stale_preflight_restore_facts_do_not_allow_failed_live_activation_restore(
@@ -43,8 +46,8 @@ def test_stale_preflight_restore_facts_do_not_allow_failed_live_activation_resto
 ):
     completed, report = run_switchover_fixture("stale_preflight_live_activation_failure.yml")
     assert completed.returncode != 0
-    assert "Passive Restore phase Failed failed." in completed.stdout
-    assert "Build activation plan" not in completed.stdout
+    assert "Passive sync restore not ready: Failed" in completed.stdout
+    assert "Freeze the controller-predicted Backups into a migration journal" not in completed.stdout
     assert report.get("phases", {}).get("activation") is None
 
 
@@ -52,7 +55,7 @@ def test_full_activation_fixture_reports_full_restore_plan(run_switchover_fixtur
     completed, report = run_switchover_fixture("full_activation_success.yml")
     assert completed.returncode == 0
     assert report["phases"]["activation"]["status"] == "pass"
-    assert report["phases"]["activation"]["operation"]["action"] == "create"
+    assert report["phases"]["activation"]["operation"]["mutation_kind"] == "full_restore"
     assert report["phases"]["activation"]["wait_target"]["name"] == "restore-acm-full"
 
 

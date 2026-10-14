@@ -34,8 +34,21 @@
 | `method` | `passive`, `full` | `passive` | Switchover activation strategy |
 | `old_hub_action` | `secondary`, `decommission`, `none` | `secondary` | Finalization action for the old hub |
 | `activation_method` | `patch`, `restore` | `patch` | Passive activation mechanism; `restore` is valid only with `method=passive` |
-| `min_managed_clusters` | int or null | null | Omitted/null derives expected non-local ManagedCluster names/count from preflight; restore-only omitted requires at least one restored non-local ManagedCluster unless `allow_zero_managed_clusters` is explicitly enabled; explicit `0` opts into an empty non-local ManagedCluster target like the Python CLI; positive values enforce that minimum count |
+| `min_managed_clusters` | int or null | null | Omitted/null derives expected non-local ManagedCluster names/count from preflight. Restore-only activation defaults to a minimum of one. To permit an empty destination through both activation and post-activation, explicitly set `min_managed_clusters: 0` and have no expected names. `allow_zero_managed_clusters` affects only post-activation resolution when the minimum is omitted and no names are expected. An explicit value is an additional count floor, like the Python CLI: it never clears the expected names, so explicit `0` permits an empty non-local ManagedCluster target only when no name is expected, and a positive value enforces that minimum count beside the names. `allow_zero_managed_clusters` likewise resolves to false whenever names are expected |
+| `skip_managed_cluster_expectations` | bool | `false` | Request the audited waiver of the expected ManagedCluster **name** check (never the count floor). Requires `managed_cluster_expectation_waiver` |
+| `managed_cluster_expectation_waiver.scope` | `activation`, `post_activation`, `both`, or null | null | Name check the waiver covers; required when `skip_managed_cluster_expectations` is true. Restore-only refuses every scope (`waiver_expected_names_empty`): it records no expected name |
+| `managed_cluster_expectation_waiver.actor` / `.reason` | str | `""` | Who requests the waiver and why; both non-empty when requested |
+| `managed_cluster_expectation_waiver.request_id` | str or null | null | Optional change or ticket reference; cannot be empty when set |
+| `migration_cleanup_repair` | dict | all fields empty | Audited acknowledgement of a journaled Restore cleanup in `recovery_required`. Naming any field requests it, and then all are required: non-empty `actor` and `reason`, a non-empty `inspected_evidence` list, and the UUID `run_id` and `operation_id` the recovery error names. Accepted only in `recovery_required` after a fresh read proves the journaled Restore absent; clear it once the cleanup is repaired, since a repeated request is then refused |
 | `restore_only` | bool | `false` | Set by `playbooks/restore_only.yml`; direct role invocations must set it explicitly |
+
+A direct role invocation validates operator inputs before ordinary phase mutations. Any recorded Argo CD re-pause obligation runs first. A direct invocation of the `activation`, `post_activation`, or
+`finalization` role validates these operator inputs at the role's own entry, restores the ManagedCluster
+expectation the checkpoint recorded, and refuses a waiver whose scope has no expected name. In
+execute mode `activation` and `post_activation` also refuse when no expectation is recorded and
+`min_managed_clusters` is unset; `finalization` does not. A `validate` entry stays non-mutating.
+The waiver and repair inputs are rejected in `validate` mode and for the standalone decommission
+playbook.
 
 ### `acm_switchover_managed_clusters`
 
@@ -43,7 +56,9 @@ Optional mapping of managed-cluster names to direct kubeconfig data used for
 klusterlet probing and remediation. When entries include `kubeconfig`,
 preflight RBAC validation also checks the managed-cluster
 `open-cluster-management-agent` permissions through that kubeconfig before
-post-activation reaches klusterlet operations.
+post-activation reaches klusterlet operations. It is never a ManagedCluster
+expectation: as in the Python CLI, restore-only records no expected name, and
+neither the names nor the count floor is derived from this mapping.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -60,7 +75,7 @@ post-activation reaches klusterlet operations.
 | `skip_rbac_validation` | bool | `false` | Skip RBAC self-validation in preflight |
 | `disable_observability_on_secondary` | bool | `false` | Deprecated compatibility setting; old-hub MCO deletion is now automatic when keeping the old hub as secondary |
 | `argocd.manage` | bool | `false` | Pause ACM-touching Argo CD Applications during switchover; blocks ApplicationSet-managed child apps, unknown/stale Application impact, and failed post-patch pause verification |
-| `argocd.resume_on_failure` | bool | `false` | Best-effort resume of Applications paused by the current run if switchover fails |
+| `argocd.resume_on_failure` | bool | `false` | Best-effort resume of Applications paused by the current run if switchover fails. Without a migration journal a switchover retry rewinds to `primary_prep` (restore-only resumes the secondary Applications without rewinding checkpoint phases); with one it records a durable re-pause marker first, never rewinds, and the retry re-pauses before further phase work (requires `checkpoint.enabled`) |
 | `klusterlet.strict_remediation` | bool | `false` | Module-level immediate failure toggle for klusterlet remediation. The role still fails after the post-remediation re-check when remediation failed or klusterlets remain on the wrong hub |
 
 ### `acm_switchover_execution`
@@ -71,11 +86,11 @@ post-activation reaches klusterlet operations.
 | `verbose` | bool | `false` | Enable verbose collection output where roles expose additional debug detail |
 | `force` | bool | `false` | Operator override flag reserved for compatibility with Python CLI state-reset workflows |
 | `report_dir` | str | `./artifacts` | Directory for JSON report artifacts; validated by the safe-path policy |
-| `checkpoint.enabled` | bool | `false` | Enable file-backed phase checkpointing. Required (`true`) in execute mode for the `old_hub_action: secondary` finalization adapter's MultiClusterObservability teardown, which persists a durable identity map before its guarded delete and refuses to run without it — the default `false` now fails that path closed with an explicit message before any read, instead of failing opaquely mid-teardown. |
+| `checkpoint.enabled` | bool | `false` | Enable file-backed phase checkpointing. Required (`true`) in execute mode for the `activation` role, which records the R4-04 migration journal in the checkpoint before any Restore mutation and refuses to run without it (the `switchover` and `restore_only` playbooks refuse at the identity barrier, before any phase mutates anything; the shipped `examples/group_vars/all.yml` enables it), and for the `old_hub_action: secondary` finalization adapter's MultiClusterObservability teardown, which persists a durable identity map before its guarded delete and refuses to run without it — the default `false` now fails that path closed with an explicit message before any read, instead of failing opaquely mid-teardown. |
 | `checkpoint.backend` | str | `file` | Checkpoint backend; only `file` is currently supported |
 | `checkpoint.path` | str | `.state/switchover.json` | Checkpoint JSON path; validated by the safe-path policy before controller-side reads or writes |
 | `checkpoint.reset` | bool | `false` | Start a fresh checkpoint from `preflight` and ignore existing checkpoint content |
-| `checkpoint.reset_from` | phase name or empty string | `""` | Remove the named phase and every downstream phase from `completed_phases`; used for safe retries such as Argo CD resume-on-failure |
+| `checkpoint.reset_from` | phase name or empty string | `""` | Remove the named phase and every downstream phase from `completed_phases`. With a migration journal, `activation`, `post_activation`, or `finalization` keeps and revalidates it (for example `post_activation` re-runs post-activation when a completed `post_activation` marker lacks its evidence), and `preflight` or `primary_prep` is refused |
 | `concurrency.klusterlet_probe_workers` | int | `10` | Maximum concurrent klusterlet probe workers; set to `1` for sequential probing |
 | `concurrency.klusterlet_remediation_workers` | int | `10` | Maximum concurrent klusterlet remediation workers; set to `1` for sequential remediation |
 | `timeouts.klusterlet_request_seconds` | int | `30` | Per Kubernetes API request timeout for direct klusterlet probe/remediation calls |
@@ -141,7 +156,7 @@ Resume is fail-closed on unresolved obligations (ADR-0001; see `coexistence.md`)
 | `acm_switchover_preflight_result.report` | dict | Structured preflight report payload |
 | `acm_switchover_preflight_result.path` | string | Path to the written JSON report |
 | `acm_switchover_expected_managed_cluster_names` | list[str] | Non-local ManagedCluster names observed on the primary during preflight; empty for restore-only because no primary is available |
-| `acm_switchover_expected_managed_cluster_count` | int | Count derived from `acm_switchover_expected_managed_cluster_names`; restore-only records `0` here but post-activation still requires a restored non-local ManagedCluster unless `allow_zero_managed_clusters` is explicitly enabled |
+| `acm_switchover_expected_managed_cluster_count` | int | Count derived from `acm_switchover_expected_managed_cluster_names`; restore-only records `0` here but still requires a restored non-local ManagedCluster unless `min_managed_clusters: 0` is set explicitly (activation and post-activation) or, for post-activation only with the minimum omitted, `allow_zero_managed_clusters` is enabled |
 | `acm_switchover_primary_has_observability` | bool | Effective primary Observability detection after `skip_observability_checks`; persisted in checkpoints for old-hub finalization behavior |
 | `acm_switchover_secondary_has_observability` | bool | Effective secondary Observability detection after `skip_observability_checks`; persisted in checkpoints for post-activation Observability verification |
 

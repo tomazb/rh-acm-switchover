@@ -272,3 +272,51 @@ def test_resume_after_preflight_uses_phase_local_discovery_facts(
         _task_pattern("primary_prep", "Pause BackupSchedule on primary hub", "included"),
         completed.stdout,
     ), "primary_prep should resume without preflight-owned BackupSchedule facts"
+
+
+# -- R4-04 Task 10: a resumed finalization reconciles the journaled Restore cleanup ----------------
+
+_VECTORS = _REPO_ROOT / "tests" / "fixtures" / "r4_04_migration_evidence_vectors.json"
+_POST_ACTIVATION_DONE = ["preflight", "primary_prep", "activation", "post_activation"]
+# A plain resume: the fixture's reset_from: primary_prep rewinds before the freeze, which a
+# journal refuses.
+_PLAIN_RESUME = {"acm_switchover_execution": {"checkpoint": {"reset_from": ""}}}
+
+
+def _journal(case_id: str) -> dict:
+    cases = json.loads(_VECTORS.read_text(encoding="utf-8"))["cases"]
+    return next(case for case in cases if case["id"] == case_id)["input"]["candidate"]
+
+
+def test_a_dry_run_resume_at_finalization_reports_the_journaled_cleanup_step(run_checkpoint_fixture):
+    journal = _journal("journal-cleanup-intent-persisted")
+
+    completed, checkpoint = run_checkpoint_fixture(
+        "interrupted_after_activation.yml",
+        pre_completed_phases=_POST_ACTIVATION_DONE,
+        operational_data={"migration_backups": journal},
+        vars_overrides=_PLAIN_RESUME,
+        checkpoint_schema_version="2.0",
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "Journaled Restore acm-restore cleanup step: delete" in completed.stdout
+    assert checkpoint["operational_data"]["migration_backups"] == journal
+    assert checkpoint["completed_phases"] == _POST_ACTIVATION_DONE
+
+
+def test_a_dry_run_resume_over_a_recovery_required_cleanup_blocks_visibly(run_checkpoint_fixture):
+    journal = _journal("journal-cleanup-recovery-required")
+
+    completed, checkpoint = run_checkpoint_fixture(
+        "interrupted_after_activation.yml",
+        pre_completed_phases=_POST_ACTIVATION_DONE,
+        operational_data={"migration_backups": journal},
+        vars_overrides=_PLAIN_RESUME,
+        checkpoint_schema_version="2.0",
+    )
+
+    assert completed.returncode != 0
+    assert "cleanup_recovery_required" in completed.stdout + completed.stderr
+    assert checkpoint["operational_data"]["migration_backups"] == journal
+    assert checkpoint["completed_phases"] == _POST_ACTIVATION_DONE

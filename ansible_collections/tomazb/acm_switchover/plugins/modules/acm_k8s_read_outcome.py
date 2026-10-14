@@ -15,14 +15,19 @@ description:
   - Distinguishes successful empty results, named NotFound, and unverifiable
     errors without returning raw exception or response body content.
   - Read-only; always reports C(changed=false). Owns no retry or phase policy.
+  - C(read_mode=discover) sends no object request at all; it reports whether one live
+    discovery document of C(api_version) lists C(resource_name), such as a
+    C(<plural>/status) subresource.
 author:
   - ACM Switchover Contributors (@tomazb)
 options:
   read_mode:
-    description: Named object get versus collection list.
+    description:
+      - Named object get, collection list, or C(discover) for a discovery-only check of
+        C(resource_name).
     type: str
     required: true
-    choices: [get, list]
+    choices: [get, list, discover]
   api_version:
     description: Kubernetes API version for the resource.
     type: str
@@ -50,6 +55,12 @@ options:
         name, so a wrong name makes that 404 C(error) or C(kind_not_served).
     type: str
     required: true
+  request_timeout:
+    description:
+      - Seconds that bound a named get instead of the default strict-read request timeout,
+        for a caller holding a shorter remaining deadline.
+    type: float
+    required: false
 extends_documentation_fragment:
   - kubernetes.core.k8s_auth_options
 """
@@ -107,6 +118,9 @@ read_status:
     - C(kind_not_served) when the API group/version was read successfully and
       positively does not serve this kind.
     - C(error) for every other unverifiable outcome.
+    - For C(read_mode=discover), C(ok) when the readable discovery document of the
+      requested group/version lists C(resource_name), C(kind_not_served) when it omits it,
+      and C(error) when discovery cannot be verified.
   type: str
   returned: always
   choices: [ok, not_found, kind_not_served, error]
@@ -148,7 +162,7 @@ def _argument_spec() -> dict[str, Any]:
     spec = deepcopy(AUTH_ARG_SPEC)
     spec.update(
         {
-            "read_mode": {"type": "str", "required": True, "choices": ["get", "list"]},
+            "read_mode": {"type": "str", "required": True, "choices": ["get", "list", "discover"]},
             "api_version": {"type": "str", "required": True},
             "kind": {"type": "str", "required": True},
             "namespace": {"type": "str", "required": False},
@@ -160,6 +174,7 @@ def _argument_spec() -> dict[str, Any]:
                 "default": [],
             },
             "resource_name": {"type": "str", "required": True},
+            "request_timeout": {"type": "float", "required": False},
         }
     )
     return spec
@@ -197,6 +212,11 @@ def run_module(module: AnsibleModule) -> None:
         _exit_outcome(module, "error")
         return
 
+    if read_mode == "discover":
+        served = _discovery_serves(api_client, module.params["api_version"], resource_name)
+        _exit_outcome(module, {True: "ok", False: "kind_not_served"}.get(served, "error"))
+        return
+
     read_status, resources, revision = strict_read(
         api_client,
         read_mode=read_mode,
@@ -206,6 +226,7 @@ def run_module(module: AnsibleModule) -> None:
         namespace=module.params.get("namespace"),
         name=name,
         label_selectors=module.params.get("label_selectors") or [],
+        request_timeout=module.params.get("request_timeout"),
     )
     _exit_outcome(module, read_status, resources, revision)
 

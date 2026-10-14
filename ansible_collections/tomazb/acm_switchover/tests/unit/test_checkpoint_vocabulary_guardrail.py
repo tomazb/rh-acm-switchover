@@ -16,6 +16,9 @@ way to consume that data and are excluded from the playbook scan below.
 import pathlib
 import re
 
+import pytest
+import yaml
+
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
     KEY_DECOMMISSION_TEARDOWN_RECORDS,
     KEY_MIGRATION_BACKUPS,
@@ -116,21 +119,262 @@ def _yaml_files():
             yield from sorted(directory.rglob(pattern))
 
 
-def test_migration_journal_key_is_never_named_in_role_or_playbook_yaml():
-    """No YAML reads or writes the journal key; the facade is checkpoint_phase status: update.
+# #332: the one YAML shape that may name the journal key. It is the sole operational_data
+# key of a checkpoint_phase `status: update` task, and its value is exactly the complete
+# candidate a validating acm_migration_evidence task of the same file registered. The
+# allowance is structural (parsed YAML), per task, never per file.
+JOURNAL_WRITER_MODULE = "tomazb.acm_switchover.checkpoint_phase"
+JOURNAL_CANDIDATE_MODULE = "tomazb.acm_switchover.acm_migration_evidence"
+_CANDIDATE_REFERENCE = re.compile(r"^\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\.candidate\s*\}\}$")
 
-    A future journal writer is a checkpoint_phase `status: update` task and needs an
-    explicit, narrow allowance here rather than a silent exemption.
+
+# The acm_migration_evidence operations that return a journal candidate.
+CANDIDATE_OPERATIONS = frozenset(
+    {
+        "freeze",
+        "post_patch",
+        "post_create",
+        "completion_bundle",
+        "complete",
+        "post_activation_names_evidence",
+        "post_activation_completion",
+        "teardown_revalidated",
+        "cleanup_intent",
+        "cleanup_pre_delete",
+        "cleanup_delete_outcome",
+        "cleanup_absence_poll",
+        "cleanup_final_absence",
+        "cleanup_repair",
+    }
+)
+_PLAY_TASK_LISTS = ("pre_tasks", "tasks", "post_tasks", "handlers")
+_SET_FACT_MODULES = ("ansible.builtin.set_fact", "ansible.legacy.set_fact", "set_fact")
+# Round-2 finding 2: a task file, role or vars file a task pulls in can reassign any name,
+# and this file-local check cannot see into it, so none may run between producer and writer.
+_INCLUDE_MODULES = frozenset(
+    f"{prefix}{name}"
+    for prefix in ("", "ansible.builtin.", "ansible.legacy.")
+    for name in ("include", "include_tasks", "import_tasks", "include_role", "import_role", "include_vars")
+)
+# Round-3 finding 1: a handler flush runs notified handlers, whose files this check cannot see
+# either. Ansible also flushes handlers (and runs a play's roles) between a play's task lists,
+# so _executable_tasks puts this marker at every such boundary.
+_META_MODULES = frozenset(f"{prefix}meta" for prefix in ("", "ansible.builtin.", "ansible.legacy."))
+_SECTION_BOUNDARY = {"ansible.builtin.meta": "flush_handlers"}
+
+
+def _is_reassignment_barrier(task: dict) -> bool:
+    if _INCLUDE_MODULES.intersection(task):
+        return True
+    return any(task.get(module) == "flush_handlers" for module in _META_MODULES)
+
+
+def _executable_tasks(document) -> list:
+    """Every task Ansible would execute from this document, in file order.
+
+    A playbook's task lists, or a role task file's top-level list, and their blocks,
+    rescues and always sections. Mappings anywhere else (play or task `vars`, module
+    arguments) are data, never tasks. A synthetic handler flush separates a playbook's
+    task lists.
     """
-    offenders = [
-        str(path.relative_to(COLLECTION_ROOT))
-        for path in _yaml_files()
-        if KEY_MIGRATION_BACKUPS in path.read_text(encoding="utf-8")
-    ]
-    assert not offenders, (
-        f"The '{KEY_MIGRATION_BACKUPS}' operational_data key is owned by module_utils/checkpoint.py "
-        f"and must not be named in YAML. Offenders: {offenders}"
+    if not isinstance(document, list):
+        return []
+    is_playbook = any(isinstance(item, dict) and ("hosts" in item or "import_playbook" in item) for item in document)
+    lists = (
+        [play.get(name) or [] for play in document if isinstance(play, dict) for name in _PLAY_TASK_LISTS]
+        if is_playbook
+        else [document]
     )
+    tasks: list = []
+
+    def walk(items):
+        for task in items if isinstance(items, list) else []:
+            if not isinstance(task, dict):
+                continue
+            tasks.append(task)
+            for section in ("block", "rescue", "always"):
+                walk(task.get(section))
+
+    for items in lists:
+        if tasks:
+            tasks.append(_SECTION_BOUNDARY)
+        walk(items)
+    return tasks
+
+
+def _assigned_names(node) -> list:
+    """Names any `vars` mapping in the document defines (repeats kept)."""
+    names: list = []
+    if isinstance(node, dict):
+        if isinstance(node.get("vars"), dict):
+            names.extend(node["vars"])
+        for value in node.values():
+            names.extend(_assigned_names(value))
+    elif isinstance(node, list):
+        for item in node:
+            names.extend(_assigned_names(item))
+    return names
+
+
+def _candidate_registers(document) -> dict:
+    """Registers that can only hold a validated candidate, mapped to their producer's position.
+
+    The register of an executable acm_migration_evidence task running a candidate-producing
+    operation, registered exactly once in the file and never reassigned by another register,
+    a set_fact or a vars mapping. The position indexes `_executable_tasks(document)`.
+    """
+    tasks = _executable_tasks(document)
+    registered = [task["register"] for task in tasks if isinstance(task.get("register"), str)]
+    reassigned = set(_assigned_names(document))
+    for task in tasks:
+        for module in _SET_FACT_MODULES:
+            if isinstance(task.get(module), dict):
+                reassigned.update(task[module])
+    candidates = {}
+    for position, task in enumerate(tasks):
+        args = task.get(JOURNAL_CANDIDATE_MODULE)
+        name = task.get("register")
+        if isinstance(args, dict) and args.get("operation") in CANDIDATE_OPERATIONS and isinstance(name, str):
+            if registered.count(name) == 1 and name not in reassigned:
+                candidates[name] = position
+    return candidates
+
+
+def _is_allowed_journal_write(task: dict, registers: dict, tasks: list) -> bool:
+    args = task.get(JOURNAL_WRITER_MODULE)
+    if not isinstance(args, dict) or args.get("status") != "update":
+        return False
+    data = args.get("operational_data")
+    if not isinstance(data, dict) or list(data) != [KEY_MIGRATION_BACKUPS]:
+        return False
+    value = data[KEY_MIGRATION_BACKUPS]
+    match = _CANDIDATE_REFERENCE.match(value.strip()) if isinstance(value, str) else None
+    if match is None or match.group(1) not in registers:
+        return False
+    producer = registers[match.group(1)]
+    writer = next(position for position, item in enumerate(tasks) if item is task)
+    return producer < writer and not any(_is_reassignment_barrier(item) for item in tasks[producer + 1 : writer])
+
+
+def journal_key_offenders(node, registers: dict, where: str = "", executable=None) -> list:
+    """Locations naming the journal key outside the allowed writer shape of an executable task."""
+    executable = executable if executable is not None else _executable_tasks(node)
+    offenders = []
+    if isinstance(node, dict):
+        allowed = any(task is node for task in executable) and _is_allowed_journal_write(node, registers, executable)
+        for key, value in node.items():
+            location = f"{where}/{key}"
+            if isinstance(key, str) and KEY_MIGRATION_BACKUPS in key:
+                offenders.append(location)
+            if allowed and key == JOURNAL_WRITER_MODULE:
+                value = {name: item for name, item in value.items() if name != "operational_data"}
+            offenders.extend(journal_key_offenders(value, registers, location, executable))
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            offenders.extend(journal_key_offenders(item, registers, f"{where}[{index}]", executable))
+    elif isinstance(node, str) and KEY_MIGRATION_BACKUPS in node:
+        offenders.append(where)
+    return offenders
+
+
+class _TaskLoader(yaml.SafeLoader):
+    """Safe loading that keeps Ansible's custom tags (e.g. !unsafe) as their plain values."""
+
+
+_TaskLoader.add_multi_constructor("!", lambda loader, _tag, node: loader.construct_scalar(node))
+
+
+def yaml_journal_key_offenders(paths) -> list:
+    offenders: list = []
+    for path in paths:
+        for document in yaml.load_all(path.read_text(encoding="utf-8"), Loader=_TaskLoader):
+            registers = _candidate_registers(document)
+            offenders.extend(f"{path.name}:{location}" for location in journal_key_offenders(document, registers, ""))
+    return offenders
+
+
+def test_migration_journal_key_is_named_in_yaml_only_by_validated_update_writes():
+    """No YAML reads the journal key; it writes it only through checkpoint_phase status: update."""
+    offenders = yaml_journal_key_offenders(_yaml_files())
+    assert not offenders, (
+        f"The '{KEY_MIGRATION_BACKUPS}' operational_data key is owned by module_utils/checkpoint.py; YAML may "
+        "name it only as the sole operational_data key of a checkpoint_phase status: update task whose value "
+        f"is a registered acm_migration_evidence candidate. Offenders: {offenders}"
+    )
+
+
+_ALLOWED_WRITER = f"""
+- name: Build the candidate
+  {JOURNAL_CANDIDATE_MODULE}:
+    operation: freeze
+  register: _candidate_result
+- name: Persist the candidate
+  {JOURNAL_WRITER_MODULE}:
+    phase: activation
+    checkpoint: "{{{{ acm_switchover_execution.checkpoint }}}}"
+    status: update
+    operational_data:
+      {KEY_MIGRATION_BACKUPS}: "{{{{ _candidate_result.candidate }}}}"
+"""
+
+
+@pytest.mark.parametrize("suffix", [".yml", ".yaml"])
+def test_the_allowance_admits_the_validated_update_writer(tmp_path, suffix):
+    path = tmp_path / f"tasks{suffix}"
+    path.write_text(_ALLOWED_WRITER, encoding="utf-8")
+    assert yaml_journal_key_offenders([path]) == []
+
+
+@pytest.mark.parametrize("suffix", [".yml", ".yaml"])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        ("status: update", "status: pass"),
+        ("status: update", "status: fail"),
+        (f"      {KEY_MIGRATION_BACKUPS}:", f"      argocd_run_id: x\n      {KEY_MIGRATION_BACKUPS}:"),
+        ("_candidate_result.candidate }}", "_candidate_result.candidate | combine({}) }}"),
+        ("_candidate_result.candidate }}", "_candidate_result }}"),
+        ("  register: _candidate_result", "  register: _other_result"),
+        (f"  {JOURNAL_CANDIDATE_MODULE}:", "  ansible.builtin.set_fact:"),
+        (f"  {JOURNAL_WRITER_MODULE}:", "  tomazb.acm_switchover.acm_checkpoint:"),
+        ("  register: _candidate_result", "  register: _candidate_result\n  when: facts." + KEY_MIGRATION_BACKUPS),
+    ],
+    ids=[
+        "status-pass",
+        "status-fail",
+        "extra-key",
+        "filtered-value",
+        "whole-result",
+        "unregistered",
+        "not-a-candidate-module",
+        "other-action",
+        "raw-read-in-when",
+    ],
+)
+def test_the_allowance_rejects_every_other_shape(tmp_path, suffix, mutation):
+    old, new = mutation
+    assert old in _ALLOWED_WRITER
+    path = tmp_path / f"tasks{suffix}"
+    path.write_text(_ALLOWED_WRITER.replace(old, new, 1), encoding="utf-8")
+    assert yaml_journal_key_offenders([path])
+
+
+def test_the_allowance_finds_raw_uses_nested_in_blocks_and_values(tmp_path):
+    path = tmp_path / "play.yml"
+    path.write_text(
+        f"""
+- hosts: localhost
+  tasks:
+    - block:
+        - ansible.builtin.set_fact:
+            journal: "{{{{ _checkpoint_enter.facts['{KEY_MIGRATION_BACKUPS}'] }}}}"
+      rescue:
+        - ansible.builtin.debug:
+            msg: {KEY_MIGRATION_BACKUPS}
+""",
+        encoding="utf-8",
+    )
+    assert len(yaml_journal_key_offenders([path])) == 2
 
 
 def test_migration_journal_key_literal_lives_only_in_its_owner():
@@ -181,3 +425,135 @@ def test_migration_journal_constant_detector_catches_a_plugin_shaped_use():
     )
     assert len([line for line in snippet.splitlines() if MIGRATION_JOURNAL_CONSTANT.search(line)]) == 2
     assert not MIGRATION_JOURNAL_CONSTANT.search("_KEY_MIGRATION_BACKUPS_FOR_TESTS = 1")
+
+
+_FORGED_IN_PLAY_VARS = f"""
+- hosts: localhost
+  vars:
+    decoy:
+      {JOURNAL_CANDIDATE_MODULE}:
+        operation: freeze
+      register: forged
+    forged:
+      candidate: {{}}
+  tasks:
+    - name: Persist the forged candidate
+      {JOURNAL_WRITER_MODULE}:
+        phase: activation
+        checkpoint: "{{{{ acm_switchover_execution.checkpoint }}}}"
+        status: update
+        operational_data:
+          {KEY_MIGRATION_BACKUPS}: "{{{{ forged.candidate }}}}"
+"""
+
+
+@pytest.mark.parametrize("suffix", [".yml", ".yaml"])
+def test_a_registration_inside_data_is_not_a_candidate(tmp_path, suffix):
+    """Review finding 5: a register in play vars is data, and the vars supply the forged value."""
+    path = tmp_path / f"play{suffix}"
+    path.write_text(_FORGED_IN_PLAY_VARS, encoding="utf-8")
+    assert yaml_journal_key_offenders([path])
+
+
+@pytest.mark.parametrize(
+    "overwrite",
+    [
+        "- name: Overwrite it\n  ansible.builtin.set_fact:\n    _candidate_result: {}\n",
+        "- name: Overwrite it\n  ansible.builtin.debug:\n    msg: x\n  register: _candidate_result\n",
+        "- name: Overwrite it\n  ansible.builtin.include_tasks: x.yml\n  vars:\n    _candidate_result: {}\n",
+        "- name: Overwrite it\n  ansible.legacy.set_fact:\n    _candidate_result: {}\n",
+    ],
+    ids=["set-fact", "second-register", "vars", "legacy-set-fact"],
+)
+@pytest.mark.parametrize("suffix", [".yml", ".yaml"])
+def test_an_overwritten_candidate_register_is_refused(tmp_path, suffix, overwrite):
+    path = tmp_path / f"tasks{suffix}"
+    head, writer = _ALLOWED_WRITER.split("- name: Persist the candidate")
+    path.write_text(head + overwrite + "- name: Persist the candidate" + writer, encoding="utf-8")
+    assert yaml_journal_key_offenders([path])
+
+
+def test_a_non_candidate_operation_register_is_refused(tmp_path):
+    path = tmp_path / "tasks.yml"
+    path.write_text(_ALLOWED_WRITER.replace("operation: freeze", "operation: acm_minor"), encoding="utf-8")
+    assert yaml_journal_key_offenders([path])
+
+
+def test_a_registration_inside_play_vars_alone_is_not_a_candidate(tmp_path):
+    """Review finding 5: the forged value comes from outside the file; only the register is in data."""
+    path = tmp_path / "play.yml"
+    path.write_text(_FORGED_IN_PLAY_VARS.replace("    forged:\n      candidate: {}\n", ""), encoding="utf-8")
+    assert "forged:\n      candidate" not in path.read_text(encoding="utf-8")
+    assert yaml_journal_key_offenders([path])
+
+
+_INCLUDE_BETWEEN = {
+    "include_tasks": "- name: Run another file\n  ansible.builtin.include_tasks: overwrite.yml\n",
+    "import_tasks": "- name: Run another file\n  ansible.builtin.import_tasks: overwrite.yml\n",
+    "include_role": "- name: Run a role\n  ansible.builtin.include_role:\n    name: overwrite\n",
+    "import_role": "- name: Run a role\n  ansible.builtin.import_role:\n    name: overwrite\n",
+    "include_vars": "- name: Load vars\n  ansible.builtin.include_vars: overwrite.yml\n",
+    "short-name": "- name: Run another file\n  include_tasks: overwrite.yml\n",
+    "nested-in-block": "- block:\n    - ansible.builtin.include_tasks: overwrite.yml\n",
+}
+
+
+@pytest.mark.parametrize("between", list(_INCLUDE_BETWEEN.values()), ids=list(_INCLUDE_BETWEEN))
+def test_an_include_between_producer_and_writer_is_refused(tmp_path, between):
+    """Round-2 finding 2: the included file may reassign the candidate; this check cannot see it."""
+    path = tmp_path / "tasks.yml"
+    head, writer = _ALLOWED_WRITER.split("- name: Persist the candidate")
+    path.write_text(head + between + "- name: Persist the candidate" + writer, encoding="utf-8")
+    assert yaml_journal_key_offenders([path])
+
+
+def test_an_include_outside_the_producer_writer_span_is_admitted(tmp_path):
+    path = tmp_path / "tasks.yml"
+    include = _INCLUDE_BETWEEN["include_tasks"]
+    path.write_text(include + _ALLOWED_WRITER.lstrip("\n") + include, encoding="utf-8")
+    assert yaml_journal_key_offenders([path]) == []
+
+
+def test_a_writer_before_its_producer_is_refused(tmp_path):
+    path = tmp_path / "tasks.yml"
+    head, writer = _ALLOWED_WRITER.split("- name: Persist the candidate")
+    path.write_text("- name: Persist the candidate" + writer + head, encoding="utf-8")
+    assert yaml_journal_key_offenders([path])
+
+
+# Round-3 finding 1: a notified handler runs at a handler flush and can include a file that
+# reassigns the candidate; this file-local check cannot see a handler file.
+_NOTIFYING_WRITER = _ALLOWED_WRITER.replace(
+    "  register: _candidate_result\n", "  register: _candidate_result\n  changed_when: true\n  notify: overwrite\n"
+)
+
+
+@pytest.mark.parametrize("meta", ["ansible.builtin.meta", "meta", "ansible.legacy.meta"])
+def test_a_handler_flush_between_producer_and_writer_is_refused(tmp_path, meta):
+    path = tmp_path / "tasks.yml"
+    head, writer = _NOTIFYING_WRITER.split("- name: Persist the candidate")
+    flush = f"- name: Run the notified handlers\n  {meta}: flush_handlers\n"
+    path.write_text(head + flush + "- name: Persist the candidate" + writer, encoding="utf-8")
+    assert yaml_journal_key_offenders([path])
+
+
+def test_a_handler_flush_outside_the_producer_writer_span_is_admitted(tmp_path):
+    path = tmp_path / "tasks.yml"
+    flush = "- name: Run the notified handlers\n  ansible.builtin.meta: flush_handlers\n"
+    path.write_text(flush + _NOTIFYING_WRITER.lstrip("\n") + flush, encoding="utf-8")
+    assert yaml_journal_key_offenders([path]) == []
+
+
+def test_a_play_section_boundary_between_producer_and_writer_is_refused(tmp_path):
+    """Handlers flush, and a play's roles run, between pre_tasks and tasks."""
+    head, writer = _NOTIFYING_WRITER.split("- name: Persist the candidate")
+    indent = lambda text: "".join(f"    {line}\n" if line else "\n" for line in text.strip("\n").splitlines())
+    path = tmp_path / "play.yml"
+    path.write_text(
+        "- hosts: localhost\n  roles:\n    - overwrite\n  pre_tasks:\n"
+        + indent(head)
+        + "  tasks:\n"
+        + indent("- name: Persist the candidate" + writer),
+        encoding="utf-8",
+    )
+    assert yaml_journal_key_offenders([path])

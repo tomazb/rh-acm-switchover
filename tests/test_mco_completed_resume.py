@@ -1,6 +1,6 @@
 """Regression coverage for persisted completed MCO teardown resumes."""
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -162,7 +162,9 @@ def test_finalization_adapter_accepts_a_reproved_completed_record(tmp_path):
         old_hub_action="secondary",
     )
 
-    finalization._disable_observability_on_old_hub()
+    # The R4-04 migration-evidence gate at the adapter entry is covered in test_finalization.py.
+    with patch.object(Finalization, "_require_old_hub_evidence"):
+        finalization._disable_observability_on_old_hub()
 
     assert run_record.teardown_record(MCO_KEY) == completed
     assert state_path.read_bytes() == before

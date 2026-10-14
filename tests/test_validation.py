@@ -1465,3 +1465,237 @@ class TestAcknowledgeObservabilityNotMigratedFlag:
         InputValidator.validate_all_cli_args(
             self._args(acknowledge_observability_not_migrated=False, old_hub_action="secondary")
         )
+
+
+_RUN_ID = "3f2c8e1a-0b4d-4c6e-9a7f-1d2e3f4a5b6c"
+_OPERATION_ID = "9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+
+
+def _switchover_args(**overrides):
+    base = dict(
+        primary_context="primary-hub",
+        secondary_context="secondary-hub",
+        method="passive",
+        activation_method="patch",
+        old_hub_action="secondary",
+        log_format="text",
+        state_file=".state/switchover-state.json",
+        decommission=False,
+        setup=False,
+        restore_only=False,
+        validate_only=False,
+        argocd_resume_only=False,
+    )
+    base.update(overrides)
+    return MockArgs(**base)
+
+
+class TestManagedClusterExpectationWaiverInputs:
+    """Plan Task 6: the waiver needs the flag, a scope and a non-empty actor and reason."""
+
+    @staticmethod
+    def _args(**overrides):
+        waiver = dict(
+            skip_managed_cluster_expectations=True,
+            managed_cluster_expectation_waiver_scope="activation",
+            managed_cluster_expectation_waiver_actor="operator@example.com",
+            managed_cluster_expectation_waiver_reason="the primary inventory is stale",
+            managed_cluster_expectation_waiver_request_id=None,
+        )
+        waiver.update(overrides)
+        return _switchover_args(**waiver)
+
+    def _reject(self, args):
+        with pytest.raises(ValidationError) as excinfo:
+            InputValidator.validate_all_cli_args(args)
+        return str(excinfo.value)
+
+    @pytest.mark.parametrize("scope", ["activation", "post_activation", "both"])
+    def test_complete_waiver_is_accepted_and_exposed(self, scope):
+        args = self._args(managed_cluster_expectation_waiver_scope=scope)
+        InputValidator.validate_all_cli_args(args)
+        assert validation.managed_cluster_expectation_waiver_request(args) == {
+            "scope": scope,
+            "actor": "operator@example.com",
+            "reason": "the primary inventory is stale",
+            "request_id": None,
+        }
+
+    def test_request_id_is_optional_and_carried(self):
+        args = self._args(managed_cluster_expectation_waiver_request_id="CHG-42")
+        InputValidator.validate_all_cli_args(args)
+        assert validation.managed_cluster_expectation_waiver_request(args)["request_id"] == "CHG-42"
+
+    def test_absent_waiver_is_not_requested(self):
+        args = _switchover_args()
+        InputValidator.validate_all_cli_args(args)
+        assert validation.managed_cluster_expectation_waiver_request(args) is None
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"managed_cluster_expectation_waiver_scope": None},
+            {"managed_cluster_expectation_waiver_scope": "teardown"},
+            {"managed_cluster_expectation_waiver_actor": None},
+            {"managed_cluster_expectation_waiver_actor": ""},
+            {"managed_cluster_expectation_waiver_reason": None},
+            {"managed_cluster_expectation_waiver_reason": ""},
+            {"managed_cluster_expectation_waiver_request_id": ""},
+        ],
+    )
+    def test_incomplete_waiver_is_malformed(self, overrides):
+        message = self._reject(self._args(**overrides))
+        assert message.startswith("malformed_waiver:")
+        assert "--skip-managed-cluster-expectations" in message
+
+    @pytest.mark.parametrize(
+        "field, value",
+        [
+            ("managed_cluster_expectation_waiver_scope", "both"),
+            ("managed_cluster_expectation_waiver_actor", "operator@example.com"),
+            ("managed_cluster_expectation_waiver_reason", "stale"),
+            ("managed_cluster_expectation_waiver_request_id", "CHG-1"),
+        ],
+    )
+    def test_waiver_details_without_the_flag_are_rejected(self, field, value):
+        message = self._reject(_switchover_args(**{field: value}))
+        assert message.startswith("malformed_waiver:")
+        assert "require --skip-managed-cluster-expectations" in message
+
+    @pytest.mark.parametrize(
+        "overrides, mode",
+        [
+            ({"decommission": True, "secondary_context": None}, "--decommission"),
+            ({"setup": True, "admin_kubeconfig": "./admin.kubeconfig"}, "--setup"),
+            ({"argocd_resume_only": True}, "--argocd-resume-only"),
+            ({"validate_only": True}, "--validate-only"),
+        ],
+    )
+    def test_waiver_is_rejected_where_no_expectation_is_evaluated(self, overrides, mode):
+        message = self._reject(self._args(**overrides))
+        assert message.startswith("waiver_not_applicable:")
+        assert mode in message
+
+    @pytest.mark.parametrize("scope", ["activation", "post_activation", "both"])
+    def test_restore_only_has_no_names_to_waive(self, scope):
+        args = self._args(
+            restore_only=True,
+            primary_context=None,
+            method="full",
+            old_hub_action=None,
+            managed_cluster_expectation_waiver_scope=scope,
+        )
+        message = self._reject(args)
+        assert message.startswith("waiver_expected_names_empty:")
+
+    @pytest.mark.parametrize("value", ["false", "true", 1, None])
+    def test_skip_flag_must_be_a_real_boolean(self, value):
+        """Review finding 3: a non-boolean enabling field is malformed, never truthy or falsy."""
+        message = self._reject(self._args(skip_managed_cluster_expectations=value))
+        assert message.startswith("malformed_waiver:")
+        assert "must be a boolean" in message
+
+    def test_waiver_is_independent_of_an_explicit_minimum(self):
+        InputValidator.validate_all_cli_args(self._args(min_managed_clusters=0))
+
+
+class TestMigrationCleanupRepairInputs:
+    """Plan Task 6: cleanup repair is accepted only as a complete acknowledgement request."""
+
+    @staticmethod
+    def _args(**overrides):
+        repair = dict(
+            repair_migration_cleanup=True,
+            cleanup_repair_actor="operator@example.com",
+            cleanup_repair_reason="the Restore was deleted by this run",
+            cleanup_repair_evidence=["audit-log:restore-delete"],
+            cleanup_repair_run_id=_RUN_ID,
+            cleanup_repair_operation_id=_OPERATION_ID,
+        )
+        repair.update(overrides)
+        return _switchover_args(**repair)
+
+    def _reject(self, args):
+        with pytest.raises(ValidationError) as excinfo:
+            InputValidator.validate_all_cli_args(args)
+        return str(excinfo.value)
+
+    def test_complete_repair_is_accepted_and_exposed(self):
+        args = self._args(cleanup_repair_evidence=["audit-log:restore-delete", "oc get restore"])
+        InputValidator.validate_all_cli_args(args)
+        assert validation.migration_cleanup_repair_request(args) == {
+            "actor": "operator@example.com",
+            "reason": "the Restore was deleted by this run",
+            "run_id": _RUN_ID,
+            "operation_id": _OPERATION_ID,
+            "inspected_evidence": ["audit-log:restore-delete", "oc get restore"],
+        }
+
+    def test_repair_is_accepted_for_restore_only(self):
+        InputValidator.validate_all_cli_args(
+            self._args(restore_only=True, primary_context=None, method="full", old_hub_action=None)
+        )
+
+    def test_absent_repair_is_not_requested(self):
+        args = _switchover_args()
+        InputValidator.validate_all_cli_args(args)
+        assert validation.migration_cleanup_repair_request(args) is None
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"cleanup_repair_actor": None},
+            {"cleanup_repair_actor": ""},
+            {"cleanup_repair_reason": None},
+            {"cleanup_repair_evidence": None},
+            {"cleanup_repair_evidence": []},
+            {"cleanup_repair_evidence": ["audit-log", ""]},
+            {"cleanup_repair_run_id": None},
+            {"cleanup_repair_run_id": "run-1"},
+            {"cleanup_repair_operation_id": None},
+            {"cleanup_repair_operation_id": "not-a-uuid"},
+        ],
+    )
+    def test_incomplete_repair_is_malformed(self, overrides):
+        message = self._reject(self._args(**overrides))
+        assert message.startswith("malformed_repair:")
+        assert "--repair-migration-cleanup" in message
+
+    @pytest.mark.parametrize("value", ["false", "true", 1, None])
+    def test_repair_flag_must_be_a_real_boolean(self, value):
+        message = self._reject(self._args(repair_migration_cleanup=value))
+        assert message.startswith("malformed_repair:")
+        assert "must be a boolean" in message
+
+    def test_flag_alone_is_malformed(self):
+        args = _switchover_args(repair_migration_cleanup=True)
+        assert self._reject(args).startswith("malformed_repair:")
+
+    @pytest.mark.parametrize(
+        "field, value",
+        [
+            ("cleanup_repair_actor", "operator@example.com"),
+            ("cleanup_repair_reason", "deleted"),
+            ("cleanup_repair_evidence", ["audit-log"]),
+            ("cleanup_repair_run_id", _RUN_ID),
+            ("cleanup_repair_operation_id", _OPERATION_ID),
+        ],
+    )
+    def test_repair_details_without_the_flag_are_rejected(self, field, value):
+        message = self._reject(_switchover_args(**{field: value}))
+        assert message.startswith("malformed_repair:")
+        assert "require --repair-migration-cleanup" in message
+
+    @pytest.mark.parametrize(
+        "overrides, mode",
+        [
+            ({"decommission": True, "secondary_context": None}, "--decommission"),
+            ({"setup": True, "admin_kubeconfig": "./admin.kubeconfig"}, "--setup"),
+            ({"argocd_resume_only": True}, "--argocd-resume-only"),
+            ({"validate_only": True}, "--validate-only"),
+        ],
+    )
+    def test_repair_is_rejected_where_no_cleanup_runs(self, overrides, mode):
+        message = self._reject(self._args(**overrides))
+        assert message.startswith("repair_not_applicable:")
+        assert mode in message

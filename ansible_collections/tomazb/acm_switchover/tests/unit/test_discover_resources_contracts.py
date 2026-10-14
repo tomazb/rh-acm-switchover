@@ -19,95 +19,40 @@ POST_ACTIVATION_DISCOVER = ROLES_DIR / "post_activation" / "tasks" / "discover_r
 
 
 class TestActivationDiscoverResources:
-    """Activation discover_resources.yml must use test_overrides for Restores and standard guards for MCH."""
+    """R4-04: activation strictly reads the destination hub; fixtures pre-seed only non-live runs."""
 
     def setup_method(self):
         self.tasks = yaml.safe_load(ACTIVATION_DISCOVER.read_text()) or []
+        self.strict_read = yaml.safe_load((ACTIVATION_DISCOVER.parent / "strict_read.yml").read_text()) or []
 
     def test_file_exists(self):
         assert ACTIVATION_DISCOVER.exists(), "activation/tasks/discover_resources.yml must exist"
 
-    def test_restores_use_test_override_pattern(self):
-        """Activation Restore discovery uses acm_switchover_test_overrides, not a bare is-not-defined guard.
+    def test_mch_is_read_strictly_through_the_shared_read(self):
+        reads = [t for t in self.tasks if t.get("ansible.builtin.include_tasks") == "strict_read.yml"]
+        assert [t["vars"]["_acm_read"]["kind"] for t in reads] == ["MultiClusterHub"]
+        assert reads[0]["vars"]["_acm_read"]["read_mode"] == "list"
+        assert not [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
 
-        This allows tests to pre-seed Restore data via a dedicated override variable rather than
-        the normal fact variable, which may already be set from a previous role run.
-        """
-        set_fact_tasks = [t for t in self.tasks if "ansible.builtin.set_fact" in t]
-        override_tasks = [t for t in set_fact_tasks if "test_overrides" in _when_text(t)]
-        assert override_tasks, (
-            "activation/discover_resources.yml must have a set_fact task guarded by "
-            "acm_switchover_test_overrides.activation_restores_info to allow test pre-seeding"
-        )
+    def test_strict_reads_use_the_secondary_hub(self):
+        (read,) = [t for t in self.strict_read if "tomazb.acm_switchover.acm_k8s_read_outcome" in t]
+        params = read["tomazb.acm_switchover.acm_k8s_read_outcome"]
+        assert "secondary" in params["kubeconfig"] and "secondary" in params["context"]
 
-    def test_restores_live_read_skipped_when_test_override_supplied(self):
-        """Live Restore read must be gated so it is skipped when a test override is supplied."""
-        k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        restore_reads = [t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Restore"]
-        assert restore_reads, "activation/discover_resources.yml must read Restore resources"
-        for task in restore_reads:
-            when = _when_text(task)
-            assert (
-                "acm_switchover_test_overrides" in when and "is not defined" in when
-            ), "Live Restore read must be gated on acm_switchover_test_overrides so tests can skip it by supplying an override"
+    def test_the_override_seam_is_non_live_only(self):
+        """An executing run always reads the live hub; pre-seeded reads serve dry_run/validate fixtures."""
+        resolve = self.strict_read[0]["ansible.builtin.set_fact"]["_acm_read_overridden"]
+        assert "migration_reads" in resolve
+        assert "in ['dry_run', 'validate']" in resolve
+        (read,) = [t for t in self.strict_read if "tomazb.acm_switchover.acm_k8s_read_outcome" in t]
+        assert _when_text(read) == "not (_acm_read_overridden | bool)"
+        published = self.strict_read[-1]["ansible.builtin.set_fact"]["{{ _acm_read_fact }}"]
+        assert "if (_acm_read_overridden | bool)" in published and "'read_status'" in published
 
-    def test_restores_live_read_uses_secondary_hub(self):
-        """Activation live Restore read must target the secondary hub."""
-        k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        restore_reads = [t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Restore"]
-        assert restore_reads
-        for task in restore_reads:
-            params = task["kubernetes.core.k8s_info"]
-            assert "secondary" in str(
-                params.get("kubeconfig", "")
-            ), "Activation Restore live read must use acm_switchover_hubs.secondary.kubeconfig"
-            assert "secondary" in str(
-                params.get("context", "")
-            ), "Activation Restore live read must use acm_switchover_hubs.secondary.context"
-
-    def test_mch_uses_standard_is_not_defined_guard(self):
-        """Activation MCH discovery must use the standard 'is not defined' pre-seed guard."""
-        k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        mch_reads = [
-            t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "MultiClusterHub"
-        ]
-        assert mch_reads, "activation/discover_resources.yml must read MultiClusterHub resources"
-        for task in mch_reads:
-            when = _when_text(task)
-            assert "acm_activation_mch_info is not defined" in when, (
-                "MCH read must use 'when: acm_activation_mch_info is not defined' guard "
-                "to allow tests to pre-seed without triggering a live cluster read"
-            )
-
-    def test_mch_live_read_uses_secondary_hub(self):
-        """Activation MCH read must target the secondary hub (new hub being activated)."""
-        k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        mch_reads = [
-            t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "MultiClusterHub"
-        ]
-        assert mch_reads
-        for task in mch_reads:
-            params = task["kubernetes.core.k8s_info"]
-            assert "secondary" in str(params.get("kubeconfig", "")), (
-                "MCH live read must use acm_switchover_hubs.secondary.kubeconfig — "
-                "MCH readiness is checked on the new (secondary) hub"
-            )
-
-    def test_publish_tasks_guard_against_skipped_registers(self):
-        """Publish set_fact tasks must guard against skipped register values.
-
-        If the live read was skipped (because test override was supplied), the register variable
-        has skipped=True. Publishing it without the guard would set the fact to the skip result,
-        breaking downstream templates that iterate over resources.
-        """
-        publish_tasks = [t for t in self.tasks if "Publish live" in t.get("name", "")]
-        assert publish_tasks, "activation/discover_resources.yml must have 'Publish live...' set_fact tasks"
-        for task in publish_tasks:
-            when = _when_text(task)
-            assert "skipped" in when, (
-                f"Publish task '{task.get('name')}' must guard against skipped register "
-                "with 'not (register.skipped | default(false))'"
-            )
+    def test_an_invalid_journal_refuses_before_any_restore_read(self):
+        names = [t.get("name") for t in self.tasks]
+        assert names[-1] == "Refuse an invalid recorded migration journal"
+        assert "migration_journal_outcome" in _when_text(self.tasks[-1])
 
 
 class TestFinalizationDiscoverResources:
@@ -245,27 +190,19 @@ class TestPostActivationDiscoverResources:
     def test_file_exists(self):
         assert POST_ACTIVATION_DISCOVER.exists(), "post_activation/tasks/discover_resources.yml must exist"
 
-    def test_managed_clusters_uses_is_not_defined_guard(self):
-        """ManagedCluster discovery must use 'is not defined' guard to allow test pre-seeding."""
-        k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        mc_reads = [t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"]
-        assert mc_reads, "post_activation/discover_resources.yml must read ManagedCluster resources"
-        for task in mc_reads:
-            when = _when_text(task)
-            assert "acm_secondary_managed_clusters_info is not defined" in when, (
-                "ManagedCluster read must use 'when: acm_secondary_managed_clusters_info is not defined' "
-                "so unit tests can inject fixture data without needing a live cluster"
-            )
+    def test_managed_clusters_are_read_strictly_without_a_pre_seed_guard(self):
+        """R4-04 Task 9: every execution reads the live inventory strictly; a pre-seed never stands in."""
+        includes = [t.get("ansible.builtin.include_tasks") for t in self.tasks]
+        assert includes == ["read_managed_clusters.yml"]
+        assert self.tasks[0]["vars"] == {"_acm_mc_fact": "acm_secondary_managed_clusters_info"}
+        assert "is not defined" not in POST_ACTIVATION_DISCOVER.read_text()
 
     def test_managed_clusters_uses_secondary_hub(self):
         """ManagedCluster reads must target the secondary hub (new hub after switchover)."""
-        k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        mc_reads = [t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"]
-        assert mc_reads
-        for task in mc_reads:
-            params = task["kubernetes.core.k8s_info"]
-            assert "secondary" in str(params.get("kubeconfig", "")), (
-                "ManagedCluster reads must use secondary hub kubeconfig — "
-                "post_activation checks that clusters connected to the new hub"
-            )
-            assert "secondary" in str(params.get("context", "")), "ManagedCluster reads must use secondary hub context"
+        seam = yaml.safe_load(
+            (POST_ACTIVATION_DISCOVER.parents[2] / "activation" / "tasks" / "strict_read.yml").read_text()
+        )
+        (read,) = [t for t in seam if "tomazb.acm_switchover.acm_k8s_read_outcome" in t]
+        params = read["tomazb.acm_switchover.acm_k8s_read_outcome"]
+        assert params["kubeconfig"] == "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+        assert params["context"] == "{{ acm_switchover_hubs.secondary.context }}"
