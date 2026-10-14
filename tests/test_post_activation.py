@@ -967,6 +967,43 @@ data:
         mock_v1.create_namespaced_secret.assert_called_once()
         mock_apps_v1.patch_namespaced_deployment.assert_called_once()
 
+    def test_force_klusterlet_reconnect_creates_the_manifest_secret_as_a_typed_body(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """The create body is a V1Secret whose wire form is the manifest's Secret document."""
+        from kubernetes.client import ApiClient, V1Secret
+
+        verify = self._make_verify(mock_secondary_client, mock_state_manager)
+
+        import_docs = """---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bootstrap-hub-kubeconfig
+  namespace: open-cluster-management-agent
+  labels:
+    app: klusterlet
+type: Opaque
+data:
+  kubeconfig: dGVzdAo=
+"""
+        mock_secondary_client.get_secret.return_value = {
+            "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
+        }
+
+        mock_v1 = Mock()
+        mock_apps_v1 = Mock()
+        mock_v1.patch_namespaced_secret.side_effect = ApiException(status=404, reason="Not Found")
+        verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
+
+        with patch("modules.post_activation.wait_for_condition", return_value=True):
+            assert verify._force_klusterlet_reconnect("test-cluster", "test-context") is True
+
+        create = mock_v1.create_namespaced_secret.call_args
+        assert create.kwargs["namespace"] == "open-cluster-management-agent"
+        assert isinstance(create.kwargs["body"], V1Secret)
+        assert ApiClient().sanitize_for_serialization(create.kwargs["body"]) == yaml.safe_load(import_docs)
+
     def test_force_klusterlet_reconnect_retries_patch_after_create_conflict(
         self, mock_secondary_client, mock_state_manager
     ):

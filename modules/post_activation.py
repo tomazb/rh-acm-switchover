@@ -60,6 +60,29 @@ from lib.waiter import WaitConditionResult, wait_for_condition
 logger = logging.getLogger("acm_switchover")
 
 
+def _secret_create_body(doc: Dict) -> client.V1Secret:
+    """The import manifest's Secret document as a typed create body.
+
+    Carries every top-level Secret field and the metadata a create sets. kubernetes 37.x
+    validates a mapping body into this same model before sending it.
+    """
+    metadata = doc.get("metadata") or {}
+    return client.V1Secret(
+        api_version=doc.get("apiVersion"),
+        kind=doc.get("kind"),
+        metadata=client.V1ObjectMeta(
+            name=metadata.get("name"),
+            namespace=metadata.get("namespace"),
+            labels=metadata.get("labels"),
+            annotations=metadata.get("annotations"),
+        ),
+        type=doc.get("type"),
+        data=doc.get("data"),
+        string_data=doc.get("stringData"),
+        immutable=doc.get("immutable"),
+    )
+
+
 class PostActivationVerification:
     """Handles post-activation verification on secondary hub."""
 
@@ -1225,7 +1248,7 @@ class PostActivationVerification:
         try:
             v1.create_namespaced_secret(
                 namespace=namespace,
-                body=body,
+                body=_secret_create_body(body),
                 _request_timeout=DELETE_REQUEST_TIMEOUT,
             )
             logger.debug("Created bootstrap-hub-kubeconfig secret on %s", cluster_name)

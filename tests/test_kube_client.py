@@ -765,6 +765,39 @@ class TestKubeClient:
 
 
 @pytest.mark.unit
+class TestCustomObjectResponseShape:
+    """Custom-object API methods return the decoded JSON body untyped; a body that is not a
+    JSON object is a malformed response, raised as an error and never read as absence."""
+
+    _CALLS = {
+        "route-host": ("get_namespaced_custom_object", lambda c: c.get_route_host("ns", "r")),
+        "get": ("get_namespaced_custom_object", lambda c: c.get_custom_resource("g", "v1", "widgets", "w", "ns")),
+        "get-advisory": (
+            "get_cluster_custom_object",
+            lambda c: c.get_custom_resource_advisory("g", "v1", "widgets", "w"),
+        ),
+        "list": ("list_namespaced_custom_object", lambda c: c.list_custom_resources("g", "v1", "widgets", "ns")),
+        "patch": (
+            "patch_namespaced_custom_object",
+            lambda c: c.patch_custom_resource("g", "v1", "widgets", "w", {"spec": {}}, namespace="ns"),
+        ),
+        "create": (
+            "create_namespaced_custom_object",
+            lambda c: c.create_custom_resource("g", "v1", "widgets", {"metadata": {"name": "w"}}, namespace="ns"),
+        ),
+    }
+
+    @pytest.mark.parametrize("response", [None, [], "Widget", 7], ids=["null", "list", "string", "number"])
+    @pytest.mark.parametrize("call", sorted(_CALLS))
+    def test_a_non_object_response_raises(self, kube_client, mock_k8s_apis, call, response):
+        method, invoke = self._CALLS[call]
+        getattr(mock_k8s_apis["custom_api"], method).return_value = response
+
+        with pytest.raises(TypeError, match="expected a JSON object"):
+            invoke(kube_client)
+
+
+@pytest.mark.unit
 class TestKubeClientRequestTimeouts:
     """Kubernetes API calls should pass explicit per-request timeout bounds."""
 
@@ -1029,6 +1062,23 @@ class TestMutatorIdempotency:
         assert result == {"metadata": {"name": "cm1"}, "data": {"k": "v"}}
         mock_k8s_apis["core_api"].create_namespaced_config_map.assert_called_once()
         mock_k8s_apis["core_api"].patch_namespaced_config_map.assert_not_called()
+
+    def test_create_or_patch_configmap_sends_a_typed_configmap_body(self, kube_client, mock_k8s_apis):
+        """The create body is a V1ConfigMap whose wire form is the plain ConfigMap document."""
+        from kubernetes.client import ApiClient, V1ConfigMap
+
+        mock_k8s_apis["core_api"].create_namespaced_config_map.return_value = MagicMock()
+
+        kube_client.create_or_patch_configmap("ns", "cm1", {"k": "v"})
+
+        body = mock_k8s_apis["core_api"].create_namespaced_config_map.call_args.kwargs["body"]
+        assert isinstance(body, V1ConfigMap)
+        assert ApiClient().sanitize_for_serialization(body) == {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": "cm1", "namespace": "ns"},
+            "data": {"k": "v"},
+        }
 
     def test_create_or_patch_configmap_patches_on_409(self, kube_client, mock_k8s_apis):
         """ConfigMap upsert patches when create returns 409 (concurrent create or timeout-after-create)."""
@@ -1710,8 +1760,9 @@ def _real_api_client(pool_manager):
     from kubernetes.client import ApiClient, Configuration
 
     configuration = Configuration()
-    # The key `load_kube_config` populates from a kubeconfig token.
-    configuration.api_key = {"BearerToken": "Bearer binding-test-token"}
+    # The key `load_kube_config` populates from a kubeconfig token: `BearerToken` from 36.x,
+    # `authorization` before it.
+    configuration.api_key = {"BearerToken": "Bearer binding-test-token", "authorization": "Bearer binding-test-token"}
     api_client = ApiClient(configuration=configuration)
     api_client.rest_client.pool_manager = pool_manager
     return api_client
