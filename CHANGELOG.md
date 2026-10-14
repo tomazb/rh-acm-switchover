@@ -10,9 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **R4-04 migration evidence workflow (Python + Collection, PR C).** Activation durably journals the
-  Backups the restore controller will use (`migration_backups`, schema 2) before any Restore mutation,
-  mutates the Restore only through UID/resourceVersion-guarded requests, and records completion only
-  from the method-specific ACM phase plus the lane-specific Velero child proof. `passive_patch` and the
+  Backups the restore controller will use (`migration_backups`, schema 2) before any Restore mutation.
+  Restore PATCH and DELETE requests use UID/resourceVersion guards. CREATE sends one POST, never adopts
+  or reconciles an existing object, and records identity only after validating the accepted response
+  and a strict post-create read. Completion is recorded only from the method-specific ACM phase plus
+  the lane-specific Velero child proof. `passive_patch` and the
   one-shot `passive_restore` keep ManagedClusters `latest`; `full_restore` (and restore-only) writes the
   concrete Backup names; every accepted Backup and child is concrete and journaled, and a resume reuses
   the journal without refreezing. Post-activation records the name check (or a journaled waiver) and

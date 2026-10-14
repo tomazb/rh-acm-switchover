@@ -127,9 +127,12 @@ Shared behavior:
   proven "no candidate" only), and any owner child bound to a dedicated hive or cluster credential
   Backup blocks completion — including a historical child, which restricts installations whose
   sync Restore history includes the legacy three-Backup format.
+- **Guards.** Restore PATCH and DELETE requests use UID/resourceVersion guards. CREATE sends one POST, never adopts or reconciles an existing object, and records identity only after validating the accepted response and a strict post-create read.
 - **Completion.** The ACM Restore must be `Finished` (`passive_patch` also `Enabled` with the full
-  child proof); required Velero children must be `Completed`. `restore.completed_at` and
-  `post_activation.completed_at` are each written last in their phase.
+  child proof); required Velero children must be `Completed`. `restore.completed_at` is the final
+  activation-journal evidence write; immediate-import annotations follow before activation
+  succeeds. `post_activation.completed_at` is written after all required post-activation work
+  succeeds.
 - **Count and name additivity.** An explicit minimum is an additional floor; recorded names stay
   enforced. The waiver lifts only the name check and is journaled once; a different later
   request is refused.
@@ -152,14 +155,17 @@ Shared behavior:
   and no read is sent with less than one second left (Python `poll_read_timeout`, collection
   `acm_migration_evidence` `cleanup_poll_read_timeout` feeding `acm_k8s_read_outcome`
   `request_timeout`); the deadline is re-checked immediately before a poll decision is
-  persisted. Recovery messages name the journal
-  run ID and the cleanup operation ID, and the repair confirmation names the operation ID; a
-  repair request on a cleanup that is not `recovery_required` is refused (`repair_not_permitted`).
+  persisted. The error that first records `recovery_required` names the run and operation IDs.
+  A later retry without repair reports `cleanup_recovery_required`; recover the IDs from the
+  original error or the retained journal's `run_id` and `cleanup.operation_id`. The repair
+  confirmation names the operation ID; a repair request on a cleanup that is not
+  `recovery_required` is refused (`repair_not_permitted`).
 - **Argo CD rescue.** With a journal, no form factor rewinds to `primary_prep`; each durably
   records a re-pause marker outside the journal before resuming, and the retry re-pauses before
   further phase work (PR C decisions amendment section 2.2).
-- **Previews.** Dry-run, `validate`, and native check mode read and predict but write no journal
-  transition and send no Restore mutation.
+- **Previews.** Preview modes write no migration-journal transition and send no Restore mutation.
+  Python skips the finalization-entry marker refusal in dry-run, but finalization previews in both
+  form factors can still refuse an existing journal whose required completion evidence is missing.
 
 Independent stores: each form factor reads and writes only its own journal. There is no
 dual-write, handoff, or cross-form-factor resume of a migration.

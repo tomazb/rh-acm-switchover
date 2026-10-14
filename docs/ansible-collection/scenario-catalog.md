@@ -87,7 +87,7 @@ Each scenario records:
 - migration-journal expectation: once a journal exists, a failure in activation,
   post-activation, or finalization (switchover and restore-only) records the Argo CD re-pause marker
   before any resume, never rewinds to `primary_prep`, keeps the journal, and the retry
-  re-pauses before any further phase work; a journal-free failure keeps the rewind
+  re-pauses before any further phase work; a journal-free failure keeps the pre-R4-04 behavior
 
 ### SCENARIO-009 RBAC bootstrap and validation
 

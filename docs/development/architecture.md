@@ -402,12 +402,15 @@ flowchart TD
     C --> D[Journal frozen Backups<br/>forced-durable, before any mutation]
     B -->|yes| E[Require same mutation kind<br/>and ACM minor, never refreeze]
     D --> F{Mutation kind}
-    E --> F
+    E --> P{Accepted mutation recorded?}
+    P -->|no| F
+    P -->|yes| Q[Strictly reconcile journaled Restore<br/>and frozen Backups, no mutation]
+    Q --> M
     F -->|passive_patch| G[Final pre-PATCH strict reads<br/>legacy hive/cluster prediction]
     G --> H[JSON Patch guarded by UID,<br/>resourceVersion and raw field]
     F -->|passive_restore / full_restore| I[Refuse an unowned Restore<br/>at the target name]
     I --> J[Guarded delete of the passive<br/>sync Restore, when one exists]
-    J --> K[Re-prove frozen Backups,<br/>then one guarded create]
+    J --> K[Re-prove frozen Backups,<br/>then one POST create, never adopted]
     H --> L[Strict post-read binds UID<br/>and generation into the journal]
     K --> L
     L --> M[Poll ACM phase and Velero children,<br/>names or waiver, count floor]
@@ -666,17 +669,23 @@ sequenceDiagram
     CLI->>Mods: run activation
     Mods->>S: strict Backup inventory and Restore reads
     Mods->>State: journal frozen Backups (forced-durable)
-    Mods->>S: guarded patch of the passive restore, or guarded create
+    Mods->>S: UID/resourceVersion-guarded patch of the passive restore, or one POST create
     Mods->>State: journal mutation, then completion evidence
     CLI->>Mods: run post-activation verification
     Mods->>State: journal name check or waiver, then post_activation.completed_at
     CLI->>Mods: run finalization
-    Mods->>State: cleanup intent, delete_accepted, completed (or recovery_required)
-    Mods->>S: UID + resourceVersion guarded Restore DELETE and strict absence reads
-    Mods->>S: old-hub evidence gate (fresh journaled-locator read)
-    Mods->>S: destination-observability gate (fresh source+destination reads)
-    Mods->>P: UID-preconditioned MultiClusterObservability delete
-    Mods->>P: absence poll, pod drain, final completion proof
+    Mods->>S: fresh teardown revalidation
+    Mods->>State: persist teardown evidence and cleanup intent
+    Mods->>S: strict GET, then UID + resourceVersion guarded DELETE
+    Mods->>State: persist delete_accepted
+    Mods->>S: bounded absence poll and final strict absence read
+    Mods->>State: persist completed, or recovery_required and stop
+    opt old_hub_action secondary, primary present, observability detected and checks enabled
+        Mods->>S: old-hub evidence gate (fresh journaled-locator read)
+        Mods->>S: destination-observability gate (fresh source+destination reads)
+        Mods->>P: UID-preconditioned MultiClusterObservability delete
+        Mods->>P: absence poll, pod drain, final completion proof
+    end
     Mods->>State: persist completion and config
     opt --dry-run
         CLI->>State: restore pre-run state snapshot

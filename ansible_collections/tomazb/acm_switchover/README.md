@@ -40,9 +40,11 @@ tool; the operator-facing walkthrough is in the repository's `docs/operations/us
 
 The `activation`, `post_activation`, and `finalization` roles carry the R4-04
 migration-evidence transaction: activation journals the Backups the restore
-controller will use before any Restore mutation, Restore mutations are UID- and
-resourceVersion-guarded through `acm_restore_guarded_mutation`, completion
-needs the Velero child proof, and finalization deletes the journaled Restore
+controller will use before any Restore mutation, and Restore mutations go
+through `acm_restore_guarded_mutation`. Restore PATCH and DELETE requests use
+UID/resourceVersion guards. CREATE sends one POST, never adopts or reconciles
+an existing object, and records identity only after validating the accepted
+response and a strict post-create read. Completion needs the Velero child proof, and finalization deletes the journaled Restore
 through a durable, recoverable cleanup transaction before BackupSchedule
 enablement and any old-hub action. The journal lives in checkpoint
 `operational_data`, so execute mode requires

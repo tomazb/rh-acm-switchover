@@ -236,12 +236,20 @@ matches the journal.
 - A resume at finalization whose journal lacks `restore.completed_at` or
   `post_activation.completed_at` refuses with
   `Migration evidence refused (restore_not_completed: …)` or
-  `(post_activation_not_completed: …)`. Nothing is changed and a plain re-run refuses
-  again. To record the missing evidence against the same journal, set `current_phase`
-  in the state file to the phase the message names (`activation` or
-  `post_activation_verification`) and re-run with the same arguments. If the message
-  says the journal is invalid, repair the journal in the state file. `--reset-state`
-  instead starts a new migration and discards the journal.
+  `(post_activation_not_completed: …)`. The migration journal is unchanged, and a plain
+  re-run refuses again. The message gives this recovery:
+
+  > The migration journal is unchanged. For missing post-activation completion, set
+  > `current_phase` to `post_activation_verification`. For missing Restore completion, set
+  > it to `activation` and remove only the `completed_steps` entry named
+  > `wait_restore_completion`, if present. Preserve the migration journal, mutation markers,
+  > and Argo CD re-pause marker. Re-run with the same arguments; the tool must establish the
+  > missing evidence from fresh reads. Do not synthesize completion timestamps or replace
+  > frozen Backup identities. Missing accepted-mutation evidence requires operator
+  > reconciliation. `--reset-state` deliberately discards the transaction.
+
+  If the message says the journal is invalid, repair the journal in the state file, without
+  synthesizing completion timestamps or replacing frozen Backup identities.
 
 ⚠️ **`--reset-state` also destroys durable MultiClusterObservability teardown
 records.** `--reset-state` removes the whole state file, including the durable
@@ -490,7 +498,9 @@ BackupSchedule enablement, and every old-hub action. Nothing at the name is dele
 adopted. An unreadable or malformed read changes nothing and blocks only the current attempt.
 A poll timeout leaves the cleanup resumable.
 
-The error names the journal run ID and the cleanup operation ID. After inspecting the
+The error that first records `recovery_required` names the run and operation IDs. A later
+retry without repair reports `cleanup_recovery_required`; recover the IDs from the original
+error or the retained journal's `run_id` and `cleanup.operation_id`. After inspecting the
 destination hub, acknowledge the recovery explicitly:
 
 ```bash
@@ -513,8 +523,10 @@ are rejected with `--validate-only`, `--decommission`, `--setup`, and `--argocd-
 ### Argo CD after a failure under a journal
 
 With `--argocd-manage --argocd-resume-on-failure`, a phase failure **before** the journal
-exists keeps the previous behavior: Applications are resumed and the retry rewinds to
-primary preparation, which re-pauses them. Once a journal exists (a failure in activation,
+exists keeps the previous behavior: Applications are resumed. Before a journal exists,
+switchover recovery rewinds to primary preparation. Python restore-only records a retry at
+preflight; collection restore-only resumes the secondary Applications without rewinding
+checkpoint phases. Once a journal exists (a failure in activation,
 post-activation, or finalization), the rescue never rewinds: it first durably records an
 Argo CD re-pause marker in the state (outside the journal), then resumes the paused
 Applications, and the retry stays at the failed phase. The retry re-pauses the
@@ -531,7 +543,7 @@ again.
   executing `activation` refuses before any Restore mutation unless
   `acm_switchover_execution.checkpoint.enabled: true`, and finalization has no journal-free
   path.
-- **Direct role entry.** `activation`, `post_activation`, and `finalization` validate their
+- **Direct role entry.** A direct role invocation validates operator inputs before ordinary phase mutations. Any recorded Argo CD re-pause obligation runs first. `activation`, `post_activation`, and `finalization` validate their
   operator inputs (including the waiver) at their own entry, restore the ManagedCluster
   expectation the checkpoint recorded, and refuse a waiver scope with no expected name. In
   execute mode, `activation` and `post_activation` refuse when no expectation is recorded and
@@ -553,9 +565,11 @@ again.
 ### Dry-run and check mode
 
 `--dry-run` performs the strict reads and predictions and reports what it would freeze,
-mutate, or record, but writes no journal transition and sends no Restore mutation. A dry-run
-never refuses on missing post-activation evidence. The collection's `dry_run` and `validate`
-modes and native `--check` behave the same way.
+mutate, or record. The collection's `dry_run` and `validate` modes and native `--check` are
+previews too. Preview modes write no migration-journal transition and send no Restore
+mutation. Python skips the finalization-entry marker refusal in dry-run, but finalization
+previews in both form factors can still refuse an existing journal whose required completion
+evidence is missing.
 
 ### Evidence boundary
 
