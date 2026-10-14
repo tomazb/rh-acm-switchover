@@ -1004,6 +1004,42 @@ data:
         assert isinstance(create.kwargs["body"], V1Secret)
         assert ApiClient().sanitize_for_serialization(create.kwargs["body"]) == yaml.safe_load(import_docs)
 
+    def test_force_klusterlet_reconnect_create_body_accepts_an_unquoted_yaml_timestamp(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """YAML loads an unquoted timestamp as a datetime; the typed create body must still be
+        built, and its wire form is the one the client would send for the document itself."""
+        from kubernetes.client import ApiClient
+
+        verify = self._make_verify(mock_secondary_client, mock_state_manager)
+
+        import_docs = """---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bootstrap-hub-kubeconfig
+  namespace: open-cluster-management-agent
+  creationTimestamp: 2025-01-01T00:00:00Z
+type: Opaque
+data:
+  kubeconfig: dGVzdAo=
+"""
+        mock_secondary_client.get_secret.return_value = {
+            "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
+        }
+
+        mock_v1 = Mock()
+        mock_apps_v1 = Mock()
+        mock_v1.patch_namespaced_secret.side_effect = ApiException(status=404, reason="Not Found")
+        verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
+
+        with patch("modules.post_activation.wait_for_condition", return_value=True):
+            assert verify._force_klusterlet_reconnect("test-cluster", "test-context") is True
+
+        body = mock_v1.create_namespaced_secret.call_args.kwargs["body"]
+        api = ApiClient()
+        assert api.sanitize_for_serialization(body) == api.sanitize_for_serialization(yaml.safe_load(import_docs))
+
     def test_force_klusterlet_reconnect_create_body_keeps_every_manifest_field(
         self, mock_secondary_client, mock_state_manager
     ):
