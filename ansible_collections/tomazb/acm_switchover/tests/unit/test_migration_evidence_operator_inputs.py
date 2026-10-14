@@ -99,6 +99,14 @@ def test_role_defaults_document_the_disabled_operator_inputs(role):
     assert operation["migration_cleanup_repair"] == EMPTY_REPAIR
 
 
+def test_example_group_vars_leave_the_managed_cluster_minimum_unset():
+    """restore_only.yml reuses the example: an explicit 0 there is the empty-target opt-in and
+    would switch off restore-only's default floor of one restored non-local ManagedCluster."""
+    operation = _load(COLLECTION_DIR / "examples" / "group_vars" / "all.yml")["acm_switchover_operation"]
+
+    assert operation.get("min_managed_clusters") is None
+
+
 def test_example_group_vars_document_the_disabled_operator_inputs():
     operation = _load(COLLECTION_DIR / "examples" / "group_vars" / "all.yml")["acm_switchover_operation"]
 

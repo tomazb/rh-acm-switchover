@@ -11,8 +11,11 @@ acm_switchover_operation:
   method: passive
   old_hub_action: secondary
   activation_method: patch
-  # An explicit minimum is an additional count floor; preflight-derived names stay enforced.
-  min_managed_clusters: 0
+  # Leave the minimum unset so each flow uses its default: switchover derives the expected
+  # ManagedCluster names and count from preflight, and restore-only requires at least one
+  # restored non-local ManagedCluster. An explicit minimum is an additional count floor;
+  # preflight-derived names stay enforced. An explicit 0 is the opt-in for an empty target.
+  # min_managed_clusters: 1
   # Audited waiver of the expected ManagedCluster name check. To request it, set
   # skip_managed_cluster_expectations: true with a scope (activation, post_activation
   # or both) and a non-empty actor and reason; request_id is optional.
