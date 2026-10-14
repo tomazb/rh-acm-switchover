@@ -423,16 +423,22 @@ class TestArgParsing:
         assert args.cleanup_repair_operation_id == "9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
 
     def test_waiver_scope_choices_are_fixed(self):
-        argv = [
+        # Every other required switchover argument is present, so the scope is the only fault.
+        base = [
             "script.py",
             "--primary-context",
             "p1",
             "--secondary-context",
             "p2",
+            "--method",
+            "passive",
+            "--old-hub-action",
+            "secondary",
             "--managed-cluster-expectation-waiver-scope",
-            "teardown",
         ]
-        with patch("sys.argv", argv), pytest.raises(SystemExit):
+        with patch("sys.argv", base + ["both"]):
+            assert parse_args().managed_cluster_expectation_waiver_scope == "both"
+        with patch("sys.argv", base + ["teardown"]), pytest.raises(SystemExit):
             parse_args()
 
     def test_validate_args_warns_when_argocd_manage_has_no_effect_in_validate_only(
