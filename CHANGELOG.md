@@ -170,7 +170,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CREATE: the Python guarded DELETE goes through the transport adapter, and the collection DELETE
   is sent with `serialize=False`. A 202 with a JSON object body is accepted like a 200 (the
   generated clients decode a DELETE body for a 200 only). Decommission's preconditioned delete is
-  unchanged.
+  unchanged. In both form factors a guarded Restore CREATE, PATCH or DELETE response that carries
+  `NaN`, `Infinity` or `-Infinity` is not JSON and is `malformed_response`, and a response
+  `metadata.uid` or `metadata.resourceVersion` that is blank or carries surrounding whitespace
+  is `malformed_response` with no identity evidence.
 
 - A corrupt collection checkpoint now keeps blocking (R4-04 PR B, aligned with Python). A
   checkpoint that is not valid JSON (including invalid UTF-8) or whose top level is not a JSON object is copied to

@@ -1880,6 +1880,17 @@ _MALFORMED_2XX_BODIES = [
 ]
 
 
+# The three non-standard constants Python's json module accepts by default. None is JSON, so a
+# body carrying one is not a JSON object even when every other member is well formed.
+_NON_JSON_CONSTANTS = ["NaN", "Infinity", "-Infinity"]
+
+
+def _with_constant(payload, constant):
+    """`payload` serialized as JSON with one extra member whose value is `constant`."""
+    encoded = json.dumps(payload)
+    return (encoded[:-1] + f', "extra": {constant}}}').encode("utf-8")
+
+
 class TestDiscoveryProver:
     """R4-03: kind absence must come from a successful discovery response."""
 
@@ -3451,6 +3462,29 @@ class TestGuardedRestoreJsonPatch:
         assert (result["accepted"], result["http_accepted"], result["reason"]) == (False, False, "unverifiable")
         assert len(pool_manager.calls) == 1
 
+    @pytest.mark.parametrize("constant", _NON_JSON_CONSTANTS)
+    def test_a_real_client_non_json_constant_is_malformed(self, constant):
+        pool_manager = _RecordingPoolManager(body=_with_constant(self._ACCEPTED_BODY, constant))
+
+        result = self._real_client(pool_manager).json_patch_custom_resource_guarded(
+            "restore-acm-passive-sync", **self._kwargs()
+        )
+
+        assert result == self._MALFORMED_IDENTITY
+        assert len(pool_manager.calls) == 1
+
+    @pytest.mark.parametrize("revision", [" ", "48300 ", " 48300", "\t"])
+    def test_a_real_client_padded_response_revision_is_malformed(self, revision):
+        body = dict(self._ACCEPTED_BODY, metadata={"uid": "3f0c2a4e-uid", "resourceVersion": revision, "generation": 7})
+        pool_manager = _RecordingPoolManager(payload=body)
+
+        result = self._real_client(pool_manager).json_patch_custom_resource_guarded(
+            "restore-acm-passive-sync", **self._kwargs()
+        )
+
+        assert result == self._MALFORMED_IDENTITY
+        assert len(pool_manager.calls) == 1
+
     def test_a_real_client_undecodable_accepted_body_is_malformed(self):
         pool_manager = _RecordingPoolManager(body=b"<html>")
 
@@ -3660,6 +3694,17 @@ class TestGuardedRestoreDelete:
         assert result == self._shape(http_accepted=True, reason="malformed_response")
         assert len(pool_manager.calls) == 1
 
+    @pytest.mark.parametrize("status", [200, 202])
+    @pytest.mark.parametrize("constant", _NON_JSON_CONSTANTS)
+    def test_a_real_client_non_json_constant_is_not_acceptance(self, constant, status):
+        payload = {"kind": "Status", "apiVersion": "v1", "status": "Success"}
+        pool_manager = _RecordingPoolManager(status=status, body=_with_constant(payload, constant))
+
+        result = self._delete(_real_kube_client(pool_manager))
+
+        assert result == self._shape(http_accepted=True, reason="malformed_response")
+        assert len(pool_manager.calls) == 1
+
     def test_a_real_client_body_read_failure_is_not_acceptance(self):
         pool_manager = _RecordingPoolManager(body=_UnreadableBody(ReadTimeoutError(None, "/restores", "timed out")))
 
@@ -3837,6 +3882,35 @@ class TestGuardedRestoreCreate:
             False,
             "malformed_response",
         )
+        assert (result["uid"], result["resource_version"], result["generation_reported"]) == (None, None, False)
+        assert len(pool_manager.calls) == 1
+
+    @pytest.mark.parametrize("constant", _NON_JSON_CONSTANTS)
+    def test_a_real_client_non_json_constant_is_not_acceptance(self, constant):
+        pool_manager = _RecordingPoolManager(status=201, body=_with_constant(self._ACCEPTED, constant))
+
+        result = self._create(_real_kube_client(pool_manager))
+
+        assert (result["accepted"], result["http_accepted"], result["reason"]) == (False, True, "malformed_response")
+        assert (result["uid"], result["resource_version"], result["generation_reported"]) == (None, None, False)
+        assert len(pool_manager.calls) == 1
+
+    @pytest.mark.parametrize(
+        "identity",
+        [
+            {"uid": " ", "resourceVersion": "10"},
+            {"uid": " u-1", "resourceVersion": "10"},
+            {"uid": "u-1", "resourceVersion": " "},
+            {"uid": "u-1", "resourceVersion": "10\n"},
+        ],
+    )
+    def test_a_real_client_padded_response_identity_is_not_acceptance(self, identity):
+        body = dict(self._ACCEPTED, metadata={"name": "restore-acm-full", "generation": 1, **identity})
+        pool_manager = _RecordingPoolManager(status=201, payload=body)
+
+        result = self._create(_real_kube_client(pool_manager))
+
+        assert (result["accepted"], result["http_accepted"], result["reason"]) == (False, True, "malformed_response")
         assert (result["uid"], result["resource_version"], result["generation_reported"]) == (None, None, False)
         assert len(pool_manager.calls) == 1
 

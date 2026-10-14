@@ -649,7 +649,9 @@ def _wire_client(monkeypatch, tmp_path, answer):
         f"/apis/{_API_VERSION}": {
             "kind": "APIResourceList",
             "groupVersion": _API_VERSION,
-            "resources": [{"name": "restores", "kind": "Restore", "namespaced": True, "verbs": ["patch", "delete"]}],
+            "resources": [
+                {"name": "restores", "kind": "Restore", "namespaced": True, "verbs": ["patch", "delete", "create"]}
+            ],
         },
     }
     configuration = Configuration()
@@ -747,6 +749,59 @@ def test_a_wire_delete_answered_2xx_with_a_malformed_body_is_not_accepted(monkey
     assert [request["method"] for request in requests] == ["DELETE"]
     assert (result["failed"], result["accepted"], result["http_accepted"]) == (True, False, True)
     assert result["reason"] == "malformed_response"
+
+
+def _with_constant(payload, constant):
+    """`payload` serialized as JSON with one extra member whose value is `constant`."""
+    encoded = json.dumps(payload)
+    return (encoded[:-1] + f', "extra": {constant}}}').encode("utf-8")
+
+
+_WIRE_ACTIONS = {
+    "patch": (
+        _patch_args,
+        200,
+        _accepted_restore({"uid": "3f0c2a4e-uid", "resourceVersion": "48300", "generation": 7}),
+    ),
+    "delete": (_delete_args, 202, {"kind": "Status", "apiVersion": "v1", "status": "Success"}),
+    "create": (
+        _create_args,
+        201,
+        _accepted_restore({"name": _CREATE_NAME, "uid": "u-1", "resourceVersion": "10", "generation": 1}),
+    ),
+}
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+@pytest.mark.parametrize("action", sorted(_WIRE_ACTIONS))
+def test_a_wire_2xx_body_with_a_non_json_constant_is_never_acceptance(monkeypatch, tmp_path, action, constant):
+    """Python's json module reads NaN and the infinities by default; none is JSON, so a body
+    carrying one is a malformed response for every action, never evidence."""
+    args, status, payload = _WIRE_ACTIONS[action]
+    requests = _wire_client(monkeypatch, tmp_path, (status, _with_constant(payload, constant)))
+    result = _run_wire(monkeypatch, args())
+    assert len(requests) == 1
+    assert (result["failed"], result["accepted"], result["http_accepted"]) == (True, False, True)
+    assert (result["reason"], result["uid"], result["resource_version"]) == ("malformed_response", None, None)
+
+
+@pytest.mark.parametrize(
+    ("action", "identity"),
+    [
+        ("patch", {"uid": "3f0c2a4e-uid", "resourceVersion": " "}),
+        ("patch", {"uid": "3f0c2a4e-uid", "resourceVersion": "48300 "}),
+        ("create", {"name": _CREATE_NAME, "uid": " ", "resourceVersion": "10"}),
+        ("create", {"name": _CREATE_NAME, "uid": " u-1", "resourceVersion": "10"}),
+        ("create", {"name": _CREATE_NAME, "uid": "u-1", "resourceVersion": " "}),
+    ],
+)
+def test_a_wire_padded_response_identity_is_never_acceptance(monkeypatch, tmp_path, action, identity):
+    args, status, _payload = _WIRE_ACTIONS[action]
+    requests = _wire_client(monkeypatch, tmp_path, (status, _accepted_restore(identity)))
+    result = _run_wire(monkeypatch, args())
+    assert len(requests) == 1
+    assert (result["failed"], result["accepted"], result["reason"]) == (True, False, "malformed_response")
+    assert (result["uid"], result["resource_version"]) == (None, None)
 
 
 # --- documentation ----------------------------------------------------------------------

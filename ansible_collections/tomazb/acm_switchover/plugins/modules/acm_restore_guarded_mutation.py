@@ -320,10 +320,15 @@ def _base_result(action: str) -> dict:
     return result
 
 
+def _reject_json_constant(constant):
+    """`json.loads` hook: NaN and the infinities are not JSON, so a body carrying one is malformed."""
+    raise ValueError(f"non-JSON constant {constant}")
+
+
 def _decode_response(body):
     """The decoded response mapping, or None when the body is not a JSON object."""
     try:
-        response = json.loads(body.decode("utf-8"))
+        response = json.loads(body.decode("utf-8"), parse_constant=_reject_json_constant)
     except Exception:  # noqa: BLE001 -- an undecodable body is a malformed response
         return None
     return response if isinstance(response, dict) else None
@@ -332,6 +337,11 @@ def _decode_response(body):
 def _is_generation(value) -> bool:
     """A Kubernetes metadata.generation: a positive integer, never a boolean."""
     return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def _is_response_identity(value) -> bool:
+    """A response metadata.uid or metadata.resourceVersion: non-empty, without surrounding whitespace."""
+    return isinstance(value, str) and bool(value) and value == value.strip()
 
 
 def _record_patch_response(result: dict, body, expected_uid: str, would_change: bool) -> None:
@@ -347,7 +357,7 @@ def _record_patch_response(result: dict, body, expected_uid: str, would_change: 
     if not isinstance(metadata, dict):
         return
     revision = metadata.get("resourceVersion")
-    if metadata.get("uid") != expected_uid or not isinstance(revision, str) or not revision:
+    if metadata.get("uid") != expected_uid or not _is_response_identity(revision):
         return
     # Only an omitted generation falls back to the strict re-read (C section 5.1); a present
     # invalid one is a malformed response (J section 1b).
@@ -390,7 +400,7 @@ def _record_create_response(result: dict, body, name: str) -> None:
     if not isinstance(metadata, dict) or metadata.get("name") != name:
         return
     uid, revision = metadata.get("uid"), metadata.get("resourceVersion")
-    if not isinstance(uid, str) or not uid or not isinstance(revision, str) or not revision:
+    if not _is_response_identity(uid) or not _is_response_identity(revision):
         return
     if "generation" in metadata and not _is_generation(metadata["generation"]):
         return

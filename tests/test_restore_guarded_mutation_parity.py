@@ -52,6 +52,11 @@ def _restore(metadata):
 
 # (vector id, how the one request ends). `status` is an API error, `raise` a failure of the
 # request itself, `body` a 2xx with the given raw body, `deferred` a 2xx whose body read fails.
+def _with_constant(body, constant):
+    """`body`, already JSON, with one extra member whose value is a non-JSON constant."""
+    return (body[:-1] + f', "extra": {constant}}}').encode("utf-8")
+
+
 PATCH_VECTORS = [
     ("accepted", ("body", _restore({"uid": UID, "resourceVersion": "48300", "generation": 7}).encode())),
     ("accepted_without_generation", ("body", _restore({"uid": UID, "resourceVersion": "48300"}).encode())),
@@ -79,23 +84,42 @@ PATCH_VECTORS = [
     ("malformed_undecodable", ("body", b"<html>")),
     ("malformed_list", ("body", b"[]")),
     ("malformed_null", ("body", b"null")),
+    ("malformed_padded_rv", ("body", _restore({"uid": UID, "resourceVersion": "48300 ", "generation": 7}).encode())),
+    ("malformed_blank_rv", ("body", _restore({"uid": UID, "resourceVersion": " ", "generation": 7}).encode())),
+] + [
+    (
+        f"malformed_constant_{constant}",
+        ("body", _with_constant(_restore({"uid": UID, "resourceVersion": "48300", "generation": 7}), constant)),
+    )
+    for constant in ("NaN", "Infinity", "-Infinity")
 ]
 
-DELETE_VECTORS = [
-    ("accepted", ("body", json.dumps({"kind": "Status", "status": "Success"}).encode())),
-    ("accepted_object", ("body", _restore({"uid": UID, "resourceVersion": "48300"}).encode())),
-    ("malformed_undecodable", ("body", b"<html>")),
-    ("malformed_invalid_utf8", ("body", b"\xff\xfe")),
-    ("malformed_list", ("body", b"[]")),
-    ("malformed_null", ("body", b"null")),
-    ("conflict_409", ("status", 409)),
-    ("conflict_412", ("status", 412)),
-    ("not_found_404", ("status", 404)),
-    ("forbidden_403", ("status", 403)),
-    ("server_error_500", ("status", 500)),
-    ("timeout", ("raise", lambda: ReadTimeoutError(None, "/restores", "read timed out"))),
-    ("deferred_timeout", ("deferred", lambda: ReadTimeoutError(None, "/restores", "read timed out"))),
-]
+DELETE_VECTORS = (
+    [
+        ("accepted", ("body", json.dumps({"kind": "Status", "status": "Success"}).encode())),
+        ("accepted_object", ("body", _restore({"uid": UID, "resourceVersion": "48300"}).encode())),
+        ("malformed_undecodable", ("body", b"<html>")),
+        ("malformed_invalid_utf8", ("body", b"\xff\xfe")),
+        ("malformed_list", ("body", b"[]")),
+        ("malformed_null", ("body", b"null")),
+    ]
+    + [
+        (
+            f"malformed_constant_{constant}",
+            ("body", _with_constant(json.dumps({"kind": "Status", "status": "Success"}), constant)),
+        )
+        for constant in ("NaN", "Infinity", "-Infinity")
+    ]
+    + [
+        ("conflict_409", ("status", 409)),
+        ("conflict_412", ("status", 412)),
+        ("not_found_404", ("status", 404)),
+        ("forbidden_403", ("status", 403)),
+        ("server_error_500", ("status", 500)),
+        ("timeout", ("raise", lambda: ReadTimeoutError(None, "/restores", "read timed out"))),
+        ("deferred_timeout", ("deferred", lambda: ReadTimeoutError(None, "/restores", "read timed out"))),
+    ]
+)
 
 PATCH_INPUTS = [
     {"expected_managed_clusters_backup_name": " Skip ", "replacement_managed_clusters_backup_name": "latest"},
@@ -525,30 +549,51 @@ def _created(metadata):
 
 # (vector id, how the one request ends). `created` is a 2xx whose raw body is the object's
 # JSON; the other kinds are as for PATCH_VECTORS. Both form factors read the raw body.
-CREATE_VECTORS = [
-    ("accepted", ("created", {"name": CREATE_NAME, "uid": "u-1", "resourceVersion": "10", "generation": 1})),
-    ("accepted_without_generation", ("created", {"name": CREATE_NAME, "uid": "u-1", "resourceVersion": "10"})),
-    (
-        "accepted_bool_generation",
-        ("created", {"name": CREATE_NAME, "uid": "u-1", "resourceVersion": "10", "generation": True}),
-    ),
-    ("malformed_missing_uid", ("created", {"name": CREATE_NAME, "resourceVersion": "10"})),
-    ("malformed_empty_uid", ("created", {"name": CREATE_NAME, "uid": "", "resourceVersion": "10"})),
-    ("malformed_missing_rv", ("created", {"name": CREATE_NAME, "uid": "u-1"})),
-    ("malformed_other_name", ("created", {"name": "other", "uid": "u-1", "resourceVersion": "10"})),
-    ("malformed_metadata", ("created", "not-a-mapping")),
-    ("malformed_undecodable", ("body", b"<html>")),
-    ("malformed_invalid_utf8", ("body", b"\xff\xfe")),
-    ("malformed_list", ("body", b"[]")),
-    ("malformed_null", ("body", b"null")),
-    ("already_exists_409", ("status", 409)),
-    ("not_found_404", ("status", 404)),
-    ("server_error_500", ("status", 500)),
-    ("gateway_timeout_504", ("status", 504)),
-    ("timeout", ("raise", lambda: ReadTimeoutError(None, "/restores", "read timed out"))),
-    ("transport", ("raise", lambda: ProtocolError("connection reset"))),
-    ("deferred_timeout", ("deferred", lambda: ReadTimeoutError(None, "/restores", "read timed out"))),
-]
+CREATE_VECTORS = (
+    [
+        ("accepted", ("created", {"name": CREATE_NAME, "uid": "u-1", "resourceVersion": "10", "generation": 1})),
+        ("accepted_without_generation", ("created", {"name": CREATE_NAME, "uid": "u-1", "resourceVersion": "10"})),
+        (
+            "accepted_bool_generation",
+            ("created", {"name": CREATE_NAME, "uid": "u-1", "resourceVersion": "10", "generation": True}),
+        ),
+        ("malformed_missing_uid", ("created", {"name": CREATE_NAME, "resourceVersion": "10"})),
+        ("malformed_empty_uid", ("created", {"name": CREATE_NAME, "uid": "", "resourceVersion": "10"})),
+        ("malformed_missing_rv", ("created", {"name": CREATE_NAME, "uid": "u-1"})),
+        ("malformed_other_name", ("created", {"name": "other", "uid": "u-1", "resourceVersion": "10"})),
+        ("malformed_metadata", ("created", "not-a-mapping")),
+        ("malformed_undecodable", ("body", b"<html>")),
+        ("malformed_invalid_utf8", ("body", b"\xff\xfe")),
+        ("malformed_list", ("body", b"[]")),
+        ("malformed_null", ("body", b"null")),
+        ("malformed_blank_uid", ("created", {"name": CREATE_NAME, "uid": " ", "resourceVersion": "10"})),
+        ("malformed_padded_uid", ("created", {"name": CREATE_NAME, "uid": " u-1", "resourceVersion": "10"})),
+        ("malformed_blank_rv", ("created", {"name": CREATE_NAME, "uid": "u-1", "resourceVersion": " "})),
+        ("malformed_padded_rv", ("created", {"name": CREATE_NAME, "uid": "u-1", "resourceVersion": "10\t"})),
+    ]
+    + [
+        (
+            f"malformed_constant_{constant}",
+            (
+                "body",
+                _with_constant(
+                    json.dumps(_created({"name": CREATE_NAME, "uid": "u-1", "resourceVersion": "10", "generation": 1})),
+                    constant,
+                ),
+            ),
+        )
+        for constant in ("NaN", "Infinity", "-Infinity")
+    ]
+    + [
+        ("already_exists_409", ("status", 409)),
+        ("not_found_404", ("status", 404)),
+        ("server_error_500", ("status", 500)),
+        ("gateway_timeout_504", ("status", 504)),
+        ("timeout", ("raise", lambda: ReadTimeoutError(None, "/restores", "read timed out"))),
+        ("transport", ("raise", lambda: ProtocolError("connection reset"))),
+        ("deferred_timeout", ("deferred", lambda: ReadTimeoutError(None, "/restores", "read timed out"))),
+    ]
+)
 
 
 @pytest.mark.parametrize(("vector_id", "outcome"), CREATE_VECTORS, ids=[vector[0] for vector in CREATE_VECTORS])

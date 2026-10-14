@@ -283,6 +283,16 @@ def _is_generation(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 1
 
 
+def _is_response_identity(value: Any) -> bool:
+    """A response `metadata.uid` or `metadata.resourceVersion`: non-empty, without surrounding whitespace."""
+    return isinstance(value, str) and bool(value) and value == value.strip()
+
+
+def _reject_json_constant(constant: str) -> Any:
+    """`json.loads` hook: NaN and the infinities are not JSON, so a body carrying one is malformed."""
+    raise ValueError(f"Malformed Kubernetes API response: non-JSON constant {constant}")
+
+
 # Standard retry decorator for API calls
 retry_api_call = retry(
     retry=retry_if_exception(_should_retry),
@@ -1585,7 +1595,7 @@ class KubeClient:
 
         result.update(http_accepted=True, reason="malformed_response")
         try:
-            response = json.loads(body.decode("utf-8"))
+            response = json.loads(body.decode("utf-8"), parse_constant=_reject_json_constant)
         except Exception:
             return result
         metadata = response.get("metadata") if isinstance(response, dict) else None
@@ -1593,7 +1603,7 @@ class KubeClient:
             return result
         response_revision = metadata.get("resourceVersion")
         # Identity first: a generation is evidence only for the proved object (C §5.1).
-        if metadata.get("uid") != uid or not isinstance(response_revision, str) or not response_revision:
+        if metadata.get("uid") != uid or not _is_response_identity(response_revision):
             return result
         # Only an omitted generation falls back to the strict re-read (C §5.1); a present
         # invalid one is a malformed response (J §1b).
@@ -1699,7 +1709,7 @@ class KubeClient:
             return result
 
         try:
-            response = json.loads(raw.decode("utf-8"))
+            response = json.loads(raw.decode("utf-8"), parse_constant=_reject_json_constant)
         except Exception:
             response = None
         if not isinstance(response, dict):
@@ -1786,7 +1796,7 @@ class KubeClient:
 
         result.update(http_accepted=True, reason="malformed_response")
         try:
-            created = json.loads(raw.decode("utf-8"))
+            created = json.loads(raw.decode("utf-8"), parse_constant=_reject_json_constant)
         except Exception:
             return result
         created_metadata = created.get("metadata") if isinstance(created, dict) else None
@@ -1794,7 +1804,7 @@ class KubeClient:
             return result
         uid = created_metadata.get("uid")
         revision = created_metadata.get("resourceVersion")
-        if not isinstance(uid, str) or not uid or not isinstance(revision, str) or not revision:
+        if not _is_response_identity(uid) or not _is_response_identity(revision):
             return result
         if "generation" in created_metadata and not _is_generation(created_metadata["generation"]):
             return result
