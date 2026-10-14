@@ -121,9 +121,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Python CLI does, instead of previewing it as skipped.
 - A Python `--dry-run` that refuses an invalid recorded migration journal at a completed
   post-activation phase, or an expectation waiver with no recorded name to waive before primary
-  preparation or finalization, now writes nothing to the state file: the refusal is logged rather
-  than recorded as a run error or a `failed` phase, a dry-run records no resume summary, and the
-  dry-run state rollback skips a rewrite when the file already holds the original state.
+  preparation or finalization, now writes nothing to the state file, also when it retries a `failed`
+  state: the refusal is logged rather than recorded as a run error or a `failed` phase, a dry-run
+  recovers the retry phase in memory and records no resume summary, and the dry-run state rollback
+  skips a rewrite when the file already holds the original state. Such a refusal is not a phase
+  failure, so `--argocd-resume-on-failure` does not run for it.
 - A refused journaled-Restore DELETE in collection finalization now reports
   `delete_not_accepted` with its reason instead of a censored `no_log` failure.
 - The Python refusal of a resume at finalization whose migration journal lacks
