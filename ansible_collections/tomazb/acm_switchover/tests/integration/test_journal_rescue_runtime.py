@@ -332,3 +332,139 @@ def test_a_finalization_cleanup_failure_under_a_journal_records_the_marker(run_d
     assert data["migration_backups"] == journal
     assert run.checkpoint["errors"][-1]["phase"] == "finalization"
     assert [patch["name"] for patch in run.primary_patches] == ["primary-owned"]
+
+
+# -- Compositions: a rescue run, then its retry against the same checkpoint (D-42) ----------------
+
+
+def _vector_journal(case_id):
+    cases = json.loads(_VECTORS.read_text(encoding="utf-8"))["cases"]
+    return next(case for case in cases if case["id"] == case_id)["input"]["candidate"]
+
+
+def _restore_only_checkpoint(**operational_data):
+    checkpoint = _checkpoint(**operational_data)
+    checkpoint["operation_identity"].update(
+        primary_context="",
+        primary_cluster_uid="",
+        method="full",
+        restore_only=True,
+        old_hub_action="none",
+    )
+    checkpoint.update(phase="preflight", completed_phases=["preflight"])
+    return checkpoint
+
+
+def test_a_restore_only_rescue_then_its_retry_repauses_the_secondary_hub_first(run_distinct_hub_playbook):
+    journal = _journal()
+    rescued = run_distinct_hub_playbook(
+        restore_only=True,
+        secondary_applications=[_paused("secondary-owned")],
+        checkpoint_record=_restore_only_checkpoint(migration_backups=journal),
+        variables=_variables(),
+    )
+    output = _output(rescued)
+
+    assert rescued.completed.returncode != 0, output
+    assert rescued.checkpoint["operational_data"]["argocd_repause_required"]["failed_phase"] == "activation"
+    assert rescued.checkpoint["completed_phases"] == ["preflight"]
+    assert [patch["name"] for patch in rescued.secondary_patches] == ["secondary-owned"]
+
+    # The retry against the same checkpoint: the resumed Application is running again.
+    retry = run_distinct_hub_playbook(
+        restore_only=True,
+        secondary_applications=[_running("secondary-owned")],
+        checkpoint_record=None,
+        variables=_variables(manage=False, resume_on_failure=False),
+    )
+    output = _output(retry)
+
+    assert retry.completed.returncode != 0, output
+    assert "argocd_repause_required" not in retry.checkpoint["operational_data"]
+    assert retry.checkpoint["operational_data"]["migration_backups"] == journal
+    assert [patch["name"] for patch in retry.secondary_patches] == ["secondary-owned"]
+    assert retry.secondary_patches[0]["body"]["metadata"]["annotations"]["acm-switchover.argoproj.io/paused-by"] == (
+        RUN_ID
+    )
+    assert retry.primary_requests == []
+    requests = retry.secondary_requests
+    assert _first_index(requests, lambda r: r["method"] == "PATCH") < _first_index(requests, _restore_read)
+
+
+def test_a_post_activation_rescue_then_its_retry_repauses_before_post_activation(run_distinct_hub_playbook):
+    journal = _vector_journal("journal-completed-passive-patch-legacy")
+    checkpoint = _checkpoint(migration_backups=journal)
+    checkpoint.update(phase="activation", completed_phases=["preflight", "primary_prep", "activation"])
+    rescued = run_distinct_hub_playbook(
+        primary_applications=[_paused("primary-owned")],
+        secondary_applications=[_paused("secondary-owned")],
+        checkpoint_record=checkpoint,
+        variables=_variables(),
+    )
+    output = _output(rescued)
+
+    assert rescued.completed.returncode != 0, output
+    data = rescued.checkpoint["operational_data"]
+    assert data["argocd_repause_required"]["failed_phase"] == "post_activation"
+    assert data["migration_backups"] == journal
+    assert rescued.checkpoint["completed_phases"] == ["preflight", "primary_prep", "activation"]
+    assert rescued.checkpoint["errors"][-1]["phase"] == "post_activation"
+    assert [patch["name"] for patch in rescued.primary_patches] == ["primary-owned"]
+    assert [patch["name"] for patch in rescued.secondary_patches] == ["secondary-owned"]
+
+    retry = run_distinct_hub_playbook(
+        primary_applications=[_running("primary-owned")],
+        secondary_applications=[_running("secondary-owned")],
+        checkpoint_record=None,
+        variables=_variables(manage=False, resume_on_failure=False),
+    )
+    output = _output(retry)
+
+    assert retry.completed.returncode != 0, output
+    assert "argocd_repause_required" not in retry.checkpoint["operational_data"]
+    assert retry.checkpoint["operational_data"]["migration_backups"] == journal
+    assert retry.checkpoint["completed_phases"] == ["preflight", "primary_prep", "activation"]
+    for patches, name in ((retry.primary_patches, "primary-owned"), (retry.secondary_patches, "secondary-owned")):
+        assert [patch["name"] for patch in patches] == [name]
+    # The re-pause precedes the post-activation phase's first hub read.
+    requests = retry.secondary_requests
+    assert _first_index(requests, lambda r: r["method"] == "PATCH") < _first_index(requests, _restore_read)
+
+
+def test_a_partial_resume_keeps_the_marker_and_its_retry_repauses(run_distinct_hub_playbook):
+    journal = _journal()
+    rescued = run_distinct_hub_playbook(
+        primary_applications=[_paused("primary-owned")],
+        secondary_applications=[_paused("secondary-owned")],
+        checkpoint_record=_checkpoint(migration_backups=journal),
+        variables=_variables(),
+        primary_patch_failure_status=500,
+    )
+    output = _output(rescued)
+
+    # The secondary hub resumed, the primary did not: visible, with the obligation kept.
+    assert rescued.completed.returncode != 0, output
+    assert [patch["name"] for patch in rescued.secondary_patches] == ["secondary-owned"]
+    assert rescued.primary_patches == []
+    assert "Argo CD resume-on-failure failed" in output
+    data = rescued.checkpoint["operational_data"]
+    assert data["argocd_repause_required"]["failed_phase"] == "activation"
+    assert data["migration_backups"] == journal
+    assert rescued.checkpoint["completed_phases"] == ["preflight", "primary_prep"]
+    assert "ignored=0" in output
+
+    # The retry finds one hub running and one still paused; it re-pauses before phase work.
+    retry = run_distinct_hub_playbook(
+        primary_applications=[_paused("primary-owned")],
+        secondary_applications=[_running("secondary-owned")],
+        checkpoint_record=None,
+        variables=_variables(manage=False, resume_on_failure=False),
+    )
+    output = _output(retry)
+
+    assert retry.completed.returncode != 0, output
+    assert "argocd_repause_required" not in retry.checkpoint["operational_data"]
+    assert retry.checkpoint["operational_data"]["migration_backups"] == journal
+    assert [patch["name"] for patch in retry.secondary_patches] == ["secondary-owned"]
+    requests = retry.secondary_requests
+    assert _first_index(requests, lambda r: r["method"] == "PATCH") < _first_index(requests, _restore_read)

@@ -224,6 +224,7 @@ def run_distinct_hub_playbook(tmp_path):
         variables: dict | None = None,
         native_check: bool = False,
         secondary_patch_failure_status: int | None = None,
+        primary_patch_failure_status: int | None = None,
         checkpoint_dir_read_only: bool = False,
         restore_only: bool = False,
         fail_directory_fsync_after_marker: bool = False,
@@ -234,6 +235,7 @@ def run_distinct_hub_playbook(tmp_path):
             applications=list(primary_applications or []),
             kube_system_status=primary_identity_status,
             kube_system_body=primary_identity_body,
+            patch_failure_status=primary_patch_failure_status,
         )
         secondary = FakeArgoCDHub(
             cluster_uid=secondary_uid,
