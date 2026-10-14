@@ -1855,6 +1855,31 @@ def _real_api_client(pool_manager):
     return api_client
 
 
+def _real_kube_client(pool_manager):
+    """A KubeClient whose raw transport and generated custom-object API both run the installed
+    client unmocked down to the faked socket."""
+    from kubernetes.client import CustomObjectsApi
+
+    client = KubeClient.__new__(KubeClient)
+    client.request_timeout = 30
+    client.dry_run = False
+    client._api_client = _real_api_client(pool_manager)
+    client.custom_api = CustomObjectsApi(client._api_client)
+    return client
+
+
+# A 2xx body no form factor may read as an answer: not JSON, not UTF-8, not an object, or of
+# a content type kubernetes 37 does not deserialize.
+_MALFORMED_2XX_BODIES = [
+    pytest.param(b"null", "application/json", id="null"),
+    pytest.param(b"[]", "application/json", id="list"),
+    pytest.param(b'"Restore"', "application/json", id="string"),
+    pytest.param(b"{not json", "application/json", id="invalid-json"),
+    pytest.param(b"\xff\xfe", "application/json", id="invalid-utf8"),
+    pytest.param(b"null", "application/octet-stream", id="unsupported-content-type"),
+]
+
+
 class TestDiscoveryProver:
     """R4-03: kind absence must come from a successful discovery response."""
 
@@ -3579,34 +3604,33 @@ class TestGuardedRestoreCreate:
         return client.create_restore_guarded(body or self._BODY, namespace="open-cluster-management-backup")
 
     @staticmethod
+    def _answer(client, response):
+        """Answer the one raw POST with `response` as its JSON body."""
+        client._api_client.call_api = Mock(return_value=Mock(data=json.dumps(response).encode("utf-8")))
+
+    @staticmethod
     def _created(**metadata):
         base = {"name": "restore-acm-full", "namespace": "open-cluster-management-backup"}
         base.update(metadata)
         return {"kind": "Restore", "metadata": base, "spec": {}}
 
     def test_an_accepted_create_reports_identity_and_generation(self, kube_client):
-        kube_client.custom_api.create_namespaced_custom_object = Mock(
-            return_value=self._created(uid="u-1", resourceVersion="10", generation=1)
-        )
+        self._answer(kube_client, self._created(uid="u-1", resourceVersion="10", generation=1))
         result = self._create(kube_client)
         assert result["accepted"] is True and result["changed"] is True and result["reason"] == "ok"
         assert (result["uid"], result["resource_version"], result["generation"]) == ("u-1", "10", 1)
         assert result["generation_reported"] is True
-        kube_client.custom_api.create_namespaced_custom_object.assert_called_once()
+        kube_client._api_client.call_api.assert_called_once()
 
     def test_a_missing_generation_is_not_inferred(self, kube_client):
-        kube_client.custom_api.create_namespaced_custom_object = Mock(
-            return_value=self._created(uid="u-1", resourceVersion="10")
-        )
+        self._answer(kube_client, self._created(uid="u-1", resourceVersion="10"))
         result = self._create(kube_client)
         assert result["accepted"] is True
         assert result["generation"] is None and result["generation_reported"] is False
 
     @pytest.mark.parametrize("generation", [None, "7", "2", True, False, 7.0, 0, -1, [7], {"value": 7}])
     def test_a_present_but_invalid_generation_is_a_malformed_response(self, kube_client, generation):
-        kube_client.custom_api.create_namespaced_custom_object = Mock(
-            return_value=self._created(uid="u-1", resourceVersion="10", generation=generation)
-        )
+        self._answer(kube_client, self._created(uid="u-1", resourceVersion="10", generation=generation))
         result = self._create(kube_client)
         assert (result["accepted"], result["http_accepted"], result["changed"]) == (False, True, False)
         assert (result["reason"], result["uid"], result["resource_version"]) == ("malformed_response", None, None)
@@ -3622,43 +3646,129 @@ class TestGuardedRestoreCreate:
         ],
     )
     def test_a_2xx_without_the_created_identity_is_not_accepted(self, kube_client, metadata):
-        kube_client.custom_api.create_namespaced_custom_object = Mock(return_value=self._created(**metadata))
+        self._answer(kube_client, self._created(**metadata))
         result = self._create(kube_client)
         assert result["accepted"] is False and result["http_accepted"] is True
         assert result["reason"] == "malformed_response" and result["uid"] is None
 
     def test_a_conflict_is_never_reconciled(self, kube_client):
-        kube_client.custom_api.create_namespaced_custom_object = Mock(side_effect=ApiException(status=409))
+        kube_client._api_client.call_api = Mock(side_effect=ApiException(status=409))
         kube_client.custom_api.get_namespaced_custom_object = Mock()
         result = self._create(kube_client)
         assert result["accepted"] is False and result["conflict"] is True and result["reason"] == "already_exists"
         kube_client.custom_api.get_namespaced_custom_object.assert_not_called()
-        kube_client.custom_api.create_namespaced_custom_object.assert_called_once()
+        kube_client._api_client.call_api.assert_called_once()
 
     @pytest.mark.parametrize(
         "error", [ApiException(status=504), TimeoutError("read timed out"), ApiException(status=500)]
     )
     def test_a_timeout_or_server_error_is_unverifiable_and_not_retried(self, kube_client, error):
-        kube_client.custom_api.create_namespaced_custom_object = Mock(side_effect=error)
+        kube_client._api_client.call_api = Mock(side_effect=error)
         result = self._create(kube_client)
         assert result["accepted"] is False and result["reason"] == "unverifiable"
-        kube_client.custom_api.create_namespaced_custom_object.assert_called_once()
+        kube_client._api_client.call_api.assert_called_once()
 
     def test_dry_run_predicts_without_a_request(self, dry_run_client):
-        dry_run_client.custom_api.create_namespaced_custom_object = Mock()
+        dry_run_client._api_client.call_api = Mock()
         result = self._create(dry_run_client)
         assert result["accepted"] is False and result["would_change"] is True and result["reason"] == "predicted"
-        dry_run_client.custom_api.create_namespaced_custom_object.assert_not_called()
+        dry_run_client._api_client.call_api.assert_not_called()
 
     def test_failures_never_expose_exception_text(self, kube_client, caplog):
         secret = "R4-04-CREATE-SECRET token=abc123"
         exc = ApiException(status=500, reason=secret)
         exc.body = secret
-        kube_client.custom_api.create_namespaced_custom_object = Mock(side_effect=exc)
+        kube_client._api_client.call_api = Mock(side_effect=exc)
         with caplog.at_level("DEBUG", logger="acm_switchover"):
             result = self._create(kube_client)
         assert "abc123" not in json.dumps(result)
         assert "abc123" not in caplog.text
+
+    _ACCEPTED = {
+        "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+        "kind": "Restore",
+        "metadata": {"name": "restore-acm-full", "uid": "u-1", "resourceVersion": "10", "generation": 1},
+    }
+
+    def test_the_guarded_create_binds_the_real_api_client_signature(self):
+        """A single POST through the installed client, on every supported version: the request
+        body is the Restore, the bearer token and the caller's timeout bound it."""
+        pool_manager = _RecordingPoolManager(status=201, payload=self._ACCEPTED)
+
+        result = _real_kube_client(pool_manager).create_restore_guarded(
+            self._BODY, namespace="open-cluster-management-backup", timeout_seconds=11
+        )
+
+        assert (result["accepted"], result["reason"], result["uid"], result["generation"]) == (True, "ok", "u-1", 1)
+        [call] = pool_manager.calls
+        assert call["method"] == "POST"
+        assert call["url"].endswith(
+            "/apis/cluster.open-cluster-management.io/v1beta1/namespaces/open-cluster-management-backup/restores"
+        )
+        assert json.loads(call["body"]) == self._BODY
+        assert {key.lower(): value for key, value in call["headers"].items()}["authorization"] == (
+            "Bearer binding-test-token"
+        )
+        assert call["timeout"].total == 11
+
+    @pytest.mark.parametrize(
+        ("status", "body", "conflict", "reason"),
+        [
+            (409, b'{"kind": "Status", "code": 409}', True, "already_exists"),
+            (403, b'{"kind": "Status", "code": 403}', False, "unverifiable"),
+            (404, b'{"kind": "Status", "code": 404}', False, "unverifiable"),
+            (500, b'{"kind": "Status", "code": 500}', False, "unverifiable"),
+            (504, b"<html>", False, "unverifiable"),
+        ],
+    )
+    def test_a_real_client_http_error_is_never_acceptance(self, status, body, conflict, reason):
+        pool_manager = _RecordingPoolManager(status=status, body=body)
+
+        result = self._create(_real_kube_client(pool_manager))
+
+        assert (result["accepted"], result["http_accepted"], result["conflict"], result["reason"]) == (
+            False,
+            False,
+            conflict,
+            reason,
+        )
+        assert len(pool_manager.calls) == 1
+
+    def test_a_real_client_undecodable_error_body_is_never_acceptance(self):
+        """Before 37 the client decodes an error body while raising it, so a 409 whose body is
+        not UTF-8 is unverifiable there and `already_exists` on 37: never accepted on either."""
+        pool_manager = _RecordingPoolManager(status=409, body=b"\xff\xfe")
+
+        result = self._create(_real_kube_client(pool_manager))
+
+        assert (result["accepted"], result["http_accepted"], result["changed"]) == (False, False, False)
+        assert result["reason"] in ("already_exists", "unverifiable")
+        assert len(pool_manager.calls) == 1
+
+    @pytest.mark.parametrize(("body", "content_type"), _MALFORMED_2XX_BODIES)
+    def test_a_real_client_malformed_2xx_body_is_not_acceptance(self, body, content_type):
+        """The POST may have landed, so this is never a failure to compensate for and never an
+        accepted create: it is `malformed_response`, with no identity, on every client version."""
+        pool_manager = _RecordingPoolManager(status=201, body=body, content_type=content_type)
+
+        result = self._create(_real_kube_client(pool_manager))
+
+        assert (result["accepted"], result["http_accepted"], result["changed"], result["reason"]) == (
+            False,
+            True,
+            False,
+            "malformed_response",
+        )
+        assert (result["uid"], result["resource_version"], result["generation_reported"]) == (None, None, False)
+        assert len(pool_manager.calls) == 1
+
+    def test_a_real_client_body_read_failure_is_not_acceptance(self):
+        pool_manager = _RecordingPoolManager(status=201, body=_UnreadableBody(ProtocolError("reset")))
+
+        result = self._create(_real_kube_client(pool_manager))
+
+        assert (result["accepted"], result["http_accepted"], result["reason"]) == (False, False, "unverifiable")
+        assert len(pool_manager.calls) == 1
 
 
 class TestApiResourceServed:

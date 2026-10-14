@@ -1702,9 +1702,10 @@ class KubeClient:
         re-reading the object: the create is accepted only when the 2xx response names the
         requested object with a non-empty `metadata.uid` and `metadata.resourceVersion`. A
         409 is `already_exists` with `conflict` True; a timeout or any other failure is
-        `unverifiable`. The positive integer `generation` is published only from an accepted
-        response, with `generation_reported` False when it is omitted; a present invalid one
-        is `malformed_response`. Callers still owe a
+        `unverifiable`. A 2xx whose body is not a decodable JSON object is
+        `malformed_response`, never acceptance. The positive integer `generation` is published
+        only from an accepted response, with `generation_reported` False when it is omitted; a
+        present invalid one is `malformed_response`. Callers still owe a
         strict post-create read. In dry-run no request is made and the result is a
         prediction. Returns the guarded-mutation result shape of
         `json_patch_custom_resource_guarded`; no body or exception text is included.
@@ -1726,13 +1727,21 @@ class KubeClient:
             return result
 
         try:
-            created = self.custom_api.create_namespaced_custom_object(
-                group=CLUSTER_BACKUP_API_GROUP,
-                version=CLUSTER_BACKUP_API_VERSION,
-                namespace=namespace,
-                plural=RESTORE_PLURAL,
+            # The raw body is read inside this boundary and decoded here, as for the guarded
+            # PATCH: a failure reading it leaves the outcome unknown, and an undecodable 2xx
+            # is classified the same way on every client version.
+            raw = self._request_bytes(
+                "POST",
+                "/apis/{group}/{version}/namespaces/{namespace}/{plural}",
+                path_params={
+                    "group": CLUSTER_BACKUP_API_GROUP,
+                    "version": CLUSTER_BACKUP_API_VERSION,
+                    "namespace": namespace,
+                    "plural": RESTORE_PLURAL,
+                },
+                header_params={"Content-Type": "application/json", "Accept": "application/json"},
                 body=body,
-                _request_timeout=(timeout_seconds if timeout_seconds is not None else self.request_timeout),
+                timeout=(timeout_seconds if timeout_seconds is not None else self.request_timeout),
             )
         except ApiException as exc:
             if exc.status == 409:
@@ -1748,6 +1757,10 @@ class KubeClient:
             return result
 
         result.update(http_accepted=True, reason="malformed_response")
+        try:
+            created = json.loads(raw.decode("utf-8"))
+        except Exception:
+            return result
         created_metadata = created.get("metadata") if isinstance(created, dict) else None
         if not isinstance(created_metadata, dict) or created_metadata.get("name") != name:
             return result

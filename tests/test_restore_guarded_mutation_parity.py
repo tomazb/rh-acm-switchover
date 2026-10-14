@@ -414,8 +414,8 @@ def _created(metadata):
     return {"apiVersion": CREATE_BODY["apiVersion"], "kind": "Restore", "metadata": metadata, "spec": {}}
 
 
-# (vector id, how the one request ends). A 2xx body is the decoded object for Python and its
-# JSON for the collection's raw response.
+# (vector id, how the one request ends). `created` is a 2xx whose raw body is the object's
+# JSON; the other kinds are as for PATCH_VECTORS. Both form factors read the raw body.
 CREATE_VECTORS = [
     ("accepted", ("created", {"name": CREATE_NAME, "uid": "u-1", "resourceVersion": "10", "generation": 1})),
     ("accepted_without_generation", ("created", {"name": CREATE_NAME, "uid": "u-1", "resourceVersion": "10"})),
@@ -428,39 +428,40 @@ CREATE_VECTORS = [
     ("malformed_missing_rv", ("created", {"name": CREATE_NAME, "uid": "u-1"})),
     ("malformed_other_name", ("created", {"name": "other", "uid": "u-1", "resourceVersion": "10"})),
     ("malformed_metadata", ("created", "not-a-mapping")),
+    ("malformed_undecodable", ("body", b"<html>")),
+    ("malformed_invalid_utf8", ("body", b"\xff\xfe")),
+    ("malformed_list", ("body", b"[]")),
+    ("malformed_null", ("body", b"null")),
     ("already_exists_409", ("status", 409)),
     ("not_found_404", ("status", 404)),
     ("server_error_500", ("status", 500)),
     ("gateway_timeout_504", ("status", 504)),
     ("timeout", ("raise", lambda: ReadTimeoutError(None, "/restores", "read timed out"))),
     ("transport", ("raise", lambda: ProtocolError("connection reset"))),
+    ("deferred_timeout", ("deferred", lambda: ReadTimeoutError(None, "/restores", "read timed out"))),
 ]
 
 
 @pytest.mark.parametrize(("vector_id", "outcome"), CREATE_VECTORS, ids=[vector[0] for vector in CREATE_VECTORS])
 def test_create_outcomes_are_classified_identically(python_client, monkeypatch, vector_id, outcome):
     kind, value = outcome
-    create = python_client.custom_api.create_namespaced_custom_object
     if kind == "created":
-        create.return_value = _created(value)
-        collection_outcome = ("body", json.dumps(_created(value)).encode())
-    else:
-        create.side_effect = _python_answer(outcome)["side_effect"]
-        collection_outcome = outcome
+        outcome = ("body", json.dumps(_created(value)).encode())
+    python_client._api_client.call_api = Mock(**_python_answer(outcome))
     python_result = python_client.create_restore_guarded(CREATE_BODY, namespace=NAMESPACE)
 
-    resource = _Resource(collection_outcome)
+    resource = _Resource(outcome)
     collection_result = _run_collection(monkeypatch, CREATE_ARGS, resource)
 
     assert _compared(python_result) == _compared(collection_result), vector_id
     assert collection_result.get("failed", False) is (not python_result["accepted"]), vector_id
-    assert create.call_count == 1 and len(resource.calls) == 1
-    assert create.call_args.kwargs["body"] == resource.calls[0][1]["body"] == CREATE_BODY
+    assert python_client._api_client.call_api.call_count == 1 and len(resource.calls) == 1
+    assert python_client._api_client.call_api.call_args.kwargs["body"] == resource.calls[0][1]["body"] == CREATE_BODY
 
 
 def test_create_dry_run_and_check_mode_predict_identically_without_a_request(python_client, monkeypatch):
     python_client.dry_run = True
-    create = python_client.custom_api.create_namespaced_custom_object
+    create = python_client._api_client.call_api
     python_result = python_client.create_restore_guarded(CREATE_BODY, namespace=NAMESPACE)
 
     resource = _Resource(("raise", lambda: AssertionError("no request in check mode")))

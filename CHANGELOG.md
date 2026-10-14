@@ -156,6 +156,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot be decoded or is malformed has an unknown outcome: the journaled create reports it as
   not accepted and refuses, and nothing is mutated again (activation has no passive-Restore
   rollback; see Changed). The collection needed no change.
+- The Python guarded Restore CREATE now sends its one POST through the same transport adapter as
+  the guarded PATCH and decodes the response itself, so a 2xx whose body is not a decodable JSON
+  object is `malformed_response` (not accepted, no applied evidence, nothing mutated again) on
+  every supported `kubernetes` client version, as in the collection; on 37 it was reported as
+  `unverifiable`.
 
 - A corrupt collection checkpoint now keeps blocking (R4-04 PR B, aligned with Python). A
   checkpoint that is not valid JSON (including invalid UTF-8) or whose top level is not a JSON object is copied to

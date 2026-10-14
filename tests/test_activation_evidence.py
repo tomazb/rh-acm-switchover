@@ -1566,6 +1566,40 @@ def test_f7_a_non_accepted_create_never_triggers_another_mutation(state, result)
     assert journal["restore"]["uid"] is None and journal["restore"]["generation"] is None
 
 
+@pytest.mark.parametrize(
+    ("body", "content_type"),
+    [
+        (b"null", "application/json"),
+        (b"{not json", "application/json"),
+        (b"\xff\xfe", "application/json"),
+        (b"null", "application/octet-stream"),
+    ],
+    ids=["null", "invalid-json", "invalid-utf8", "unsupported-content-type"],
+)
+def test_f7_a_malformed_create_response_through_the_installed_client_is_never_compensated(state, body, content_type):
+    """#337 on the journaled create: a 2xx POST whose body the installed client (36 or 37)
+    cannot read may have created the Restore, so it is not accepted and nothing is mutated
+    again; no applied evidence is recorded."""
+    from tests.test_kube_client import _RecordingPoolManager, _real_kube_client
+
+    hub = _hub(state)
+    original = hub.create_restore_guarded
+    pool_manager = _RecordingPoolManager(status=201, body=body, content_type=content_type)
+
+    def create_through_the_installed_client(restore, **kwargs):
+        original(restore, **kwargs)
+        return _real_kube_client(pool_manager).create_restore_guarded(restore, **kwargs)
+
+    hub.create_restore_guarded = create_through_the_installed_client
+    hub.create_custom_resource = lambda *a, **k: pytest.fail("the passive sync Restore was recreated")
+    with _no_wait(), pytest.raises(FatalError, match=r"not accepted \(malformed_response\)"):
+        _activation(hub, state, "passive_restore")._apply_migration_mutation()
+    assert [call["method"] for call in pool_manager.calls] == ["POST"]
+    assert [kind for kind, _, _ in hub.mutations] == ["delete", "create"]
+    journal = RunRecord(state).migration_backups()
+    assert journal["restore"]["uid"] is None and journal["restore"]["generation"] is None
+
+
 def test_f7_an_ambiguous_create_that_landed_is_refused_on_the_next_run(state):
     hub = _hub(state)
     original = hub.create_restore_guarded
