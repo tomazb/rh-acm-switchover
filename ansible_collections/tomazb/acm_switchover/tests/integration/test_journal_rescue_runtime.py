@@ -468,3 +468,36 @@ def test_a_partial_resume_keeps_the_marker_and_its_retry_repauses(run_distinct_h
     assert [patch["name"] for patch in retry.secondary_patches] == ["secondary-owned"]
     requests = retry.secondary_requests
     assert _first_index(requests, lambda r: r["method"] == "PATCH") < _first_index(requests, _restore_read)
+
+
+def test_a_finalization_retry_repauses_then_refuses_an_incomplete_journal(run_distinct_hub_playbook):
+    """D-41 composed, as the Python CLI: re-pause first, then refuse the journal lacking post-activation."""
+    journal = _vector_journal("journal-completed-passive-patch-legacy")
+    checkpoint = _checkpoint(migration_backups=journal, argocd_repause_required=_marker("finalization"))
+    checkpoint.update(
+        phase="post_activation", completed_phases=["preflight", "primary_prep", "activation", "post_activation"]
+    )
+    run = run_distinct_hub_playbook(
+        primary_applications=[_running("primary-owned")],
+        secondary_applications=[_running("secondary-owned")],
+        checkpoint_record=checkpoint,
+        variables=_variables(manage=False, resume_on_failure=False),
+    )
+    output = _output(run)
+
+    assert run.completed.returncode != 0, output
+    assert "post_activation_not_completed" in output
+    # The marker clear after a successful re-pause precedes the completed-marker refusal.
+    assert output.index("Clear the Argo CD re-pause marker after the re-pause") < output.index(
+        "Require the evidence a completed post_activation marker claims"
+    )
+    for patches, name in ((run.primary_patches, "primary-owned"), (run.secondary_patches, "secondary-owned")):
+        assert [patch["name"] for patch in patches] == [name]
+        assert patches[0]["body"]["metadata"]["annotations"]["acm-switchover.argoproj.io/paused-by"] == RUN_ID
+    assert "argocd_repause_required" not in run.checkpoint["operational_data"]
+    assert run.checkpoint["operational_data"]["migration_backups"] == journal
+    # No Restore mutation and no phase read after the refusal.
+    assert not [
+        request for request in _writes(run.secondary_requests) if request["path"].startswith(RESTORE_API_PREFIX)
+    ]
+    assert not [request for request in run.secondary_requests if _restore_read(request)]

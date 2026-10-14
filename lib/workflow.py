@@ -330,17 +330,19 @@ def run_phase_flow(
             logger,
         )
 
-    refusal = _post_activation_marker_refusal(args, state, current_phase)
-    if refusal is not None:
-        return fail_phase(state, refusal, logger)
-
     resume_start_phase = CANONICAL_PHASE_NAMES.get(current_phase)
     if current_phase != Phase.INIT and resume_start_phase is not None:
         RunRecord(state).record_resume_start_phase(resume_start_phase)
 
-    # Obligations a failed run left for its retry run before any phase work.
+    # Obligations a failed run left for its retry run before any phase work. The Argo CD
+    # re-pause precedes the journal refusal below, as in the collection, so Argo CD stays
+    # paused while the operator follows the refusal guidance.
     if before_phases is not None and not before_phases(args, state, primary, secondary, logger):
         return False
+
+    refusal = _post_activation_marker_refusal(args, state, current_phase)
+    if refusal is not None:
+        return fail_phase(state, refusal, logger)
 
     ran_phase = False
     for handler, allowed_states, expected_phase in phase_flow:

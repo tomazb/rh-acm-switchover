@@ -205,6 +205,7 @@ def _retry(
     phase=Phase.ACTIVATION,
     journal=JOURNAL,
     rescued=False,
+    on_pause=None,
 ):
     """Rescue a failed `phase`, then retry the same flow with every phase handler mocked.
 
@@ -239,6 +240,8 @@ def _retry(
 
     def pause_hubs(_self, hubs):
         order.append(("pause", [role for _, role in hubs]))
+        if on_pause is not None:
+            on_pause()
         return pause if pause is not None else PauseSummary(newly_paused=len(hubs), run_id="run-2")
 
     args = SimpleNamespace(
@@ -360,31 +363,58 @@ class TestRetryRepausesBeforePhaseWork:
 
 
 class TestFinalizationRetryWithAnIncompleteJournal:
-    """D-41 composed: a finalization rescue's marker, then a retry over a journal lacking post-activation."""
+    """D-41 composed: a finalization rescue's marker, then a retry over a journal lacking post-activation.
 
-    def test_the_refusal_comes_first_and_keeps_the_marker_for_the_next_run(self, tmp_path):
-        path, _, result, order, clients = _retry(tmp_path, phase=Phase.FINALIZATION, journal=NO_POST_ACTIVATION)
+    Like the collection's finalization role, the retry re-pauses first and then refuses the journal,
+    so Argo CD stays paused while the operator follows the refusal guidance.
+    """
+
+    def test_the_retry_repauses_then_refuses_the_journal(self, tmp_path):
+        path = tmp_path / "state.json"
+        marker_at_pause = []
+        _, _, result, order, clients = _retry(
+            tmp_path,
+            phase=Phase.FINALIZATION,
+            journal=NO_POST_ACTIVATION,
+            on_pause=lambda: marker_at_pause.append(_marker(path)),
+        )
         stored = _on_disk(path)
 
-        # lib/workflow.py run_phase_flow refuses the journal before the before-phases re-pause:
-        # no re-pause, no phase work, no cluster call and no journal or evidence write.
         assert result is False
-        assert order == []
+        # The primary-prep pause register re-pauses both hubs, and nothing runs after the refusal.
+        assert order == [("pause", ["primary", "secondary"])]
+        # The marker was still recorded while the re-pause ran; it is cleared only after it succeeded.
+        assert marker_at_pause == [{**marker_at_pause[0], "failed_phase": Phase.FINALIZATION.value}]
+        assert stored["config"].get("argocd_repause_required") is None
+        # The refusal still follows: no cluster call, no journal or evidence write, no phase work.
+        assert "post_activation_not_completed" in stored["errors"][-1]["error"]
+        assert stored["errors"][-1]["phase"] == Phase.FINALIZATION.value
         for client in clients:
             assert [name for name, *_ in client.mock_calls if name != "get_cluster_identity"] == []
         assert stored["config"]["migration_backups"] == NO_POST_ACTIVATION
-        assert "post_activation_not_completed" in stored["errors"][-1]["error"]
-        # The obligation stays recorded for the run that follows.
-        assert stored["config"]["argocd_repause_required"]["failed_phase"] == Phase.FINALIZATION.value
 
-        # The operator follows the refusal's guidance; that next run re-pauses before any phase work.
+        # The operator follows the refusal's guidance; Argo CD is already paused for that run.
         stored["current_phase"] = Phase.POST_ACTIVATION.value
         path.write_text(json.dumps(stored), encoding="utf-8")
         _, _, result, order, _ = _retry(tmp_path, rescued=True)
 
         assert result is True
-        assert order == [("pause", ["primary", "secondary"]), "post_activation", "finalization"]
-        assert _marker(path) is None
+        assert order == ["post_activation", "finalization"]
+
+    def test_a_failed_repause_fails_visibly_and_keeps_the_marker(self, tmp_path):
+        path, _, result, order, _ = _retry(
+            tmp_path,
+            phase=Phase.FINALIZATION,
+            journal=NO_POST_ACTIVATION,
+            pause=PauseSummary(failed=1, run_id="run-2"),
+        )
+        stored = _on_disk(path)
+
+        assert result is False
+        assert order == [("pause", ["primary", "secondary"])]
+        assert stored["config"]["argocd_repause_required"]["failed_phase"] == Phase.FINALIZATION.value
+        assert "re-pause" in stored["errors"][-1]["error"]
+        assert stored["config"]["migration_backups"] == NO_POST_ACTIVATION
 
 
 def test_the_marker_positions_the_retry_when_the_last_error_lost_the_phase(tmp_path):
