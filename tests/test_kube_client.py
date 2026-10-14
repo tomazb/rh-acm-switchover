@@ -841,12 +841,31 @@ class TestUndecodableCustomObjectBodies:
             invoke(self._client(pool_manager))
         assert len(pool_manager.calls) == 1
 
+    @staticmethod
+    def _rest_layer_decodes_before_its_status_check():
+        """Some clients (29.x) decode every body in the REST layer before checking the status,
+        so an undecodable HTTP error body never becomes an `ApiException` at all."""
+        pool_manager = _RecordingPoolManager(status=409, body=b"\xff\xfe")
+        try:
+            _real_api_client(pool_manager).rest_client.request("GET", "http://fake.invalid/x")
+        except UnicodeDecodeError:
+            return True
+        except ApiException:
+            return False
+        return False
+
     @pytest.mark.parametrize("call", ["patch", "create"])
     def test_an_http_error_with_an_undecodable_body_stays_an_api_exception(self, call):
         pool_manager = _RecordingPoolManager(status=409, body=b"\xff\xfe")
+        client = self._client(pool_manager)
 
+        if self._rest_layer_decodes_before_its_status_check():
+            # The status is lost inside the client, so the outcome is unknown: malformed.
+            with pytest.raises(MalformedResponseError):
+                self._CALLS[call][1](client)
+            return
         with pytest.raises(ApiException) as excinfo:
-            self._CALLS[call][1](self._client(pool_manager))
+            self._CALLS[call][1](client)
         assert excinfo.value.status == 409
 
 

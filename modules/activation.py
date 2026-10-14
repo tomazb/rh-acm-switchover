@@ -75,6 +75,22 @@ def _unverified_restore_create(restore_name: str, error: MalformedResponseError)
     )
 
 
+def _unverified_rollback_create(
+    restore_name: str, error: Exception, passive_name: str, rollback_error: MalformedResponseError
+) -> FatalError:
+    """The error for a rollback recreate of the passive Restore answered 2xx with a malformed body.
+
+    The server accepted the recreate, so the passive Restore may exist: the rollback is
+    unverified, not failed, and nothing more is created here.
+    """
+    return FatalError(
+        f"Failed to create Restore {restore_name}: {error}. The rollback recreate of passive sync Restore "
+        f"{BACKUP_NAMESPACE}/{passive_name} is unverified: the API server accepted the request but returned "
+        f"a malformed response ({rollback_error}). The passive Restore may exist; reconcile it before "
+        f"retrying: oc -n {BACKUP_NAMESPACE} get restore.{CLUSTER_BACKUP_API_GROUP} {passive_name} -o yaml"
+    )
+
+
 class SecondaryActivation:
     """Handles activation steps on secondary hub."""
 
@@ -383,6 +399,10 @@ class SecondaryActivation:
             if passive_restore_deleted and passive_restore_snapshot:
                 try:
                     self._recreate_restore_from_snapshot(passive_restore_snapshot)
+                except MalformedResponseError as rollback_error:
+                    raise _unverified_rollback_create(
+                        MANAGED_CLUSTER_RESTORE_NAME, e, restore_name, rollback_error
+                    ) from e
                 except Exception as rollback_error:
                     raise FatalError(
                         f"Failed to create activation restore {MANAGED_CLUSTER_RESTORE_NAME}: {e}. "
@@ -848,6 +868,8 @@ class SecondaryActivation:
                 passive_name = passive_restore_snapshot.get("metadata", {}).get("name", RESTORE_PASSIVE_SYNC_NAME)
                 try:
                     self._recreate_restore_from_snapshot(passive_restore_snapshot)
+                except MalformedResponseError as rollback_error:
+                    raise _unverified_rollback_create(RESTORE_FULL_NAME, e, passive_name, rollback_error) from e
                 except Exception as rollback_error:
                     raise FatalError(
                         f"Failed to create full restore {RESTORE_FULL_NAME}: {e}. "

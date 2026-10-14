@@ -75,13 +75,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-2xx response still raises the client's own `ApiException`, so the 404 and 409/412/422
   handling is unchanged. ConfigMap and bootstrap Secret creates now send typed
   `V1ConfigMap`/`V1Secret` bodies; the Secret is converted whole by the client, so every
-  manifest field is kept. The code type-checks under 37's inline annotations. A custom-object
-  response that is not a JSON object now raises `MalformedResponseError` instead of being read.
+  manifest field is kept. The code type-checks under 37's inline annotations. A 2xx
+  custom-object response that is not a JSON object, or whose body the client cannot decode,
+  now raises `MalformedResponseError` instead of being read.
   Backup-coverage preflight reports it as a critical failure: it no longer swallows it as a
   timestamp problem, and a bad timestamp no longer skips the remaining clusters. RBAC preflight
   reports it as a critical RBAC validation failure. A Restore create that the API server
   accepted but answered with a malformed body is reported as unverified and needing
-  reconciliation; no rollback recreates the passive Restore. The collection needed no change.
+  reconciliation; no rollback recreates the passive Restore. A rollback recreate answered the
+  same way is reported as unverified, not as failed. The collection needed no change.
 
 - A corrupt collection checkpoint now keeps blocking (R4-04 PR B, aligned with Python). A
   checkpoint that is not valid JSON (including invalid UTF-8) or whose top level is not a JSON object is copied to
