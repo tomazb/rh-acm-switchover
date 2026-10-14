@@ -181,8 +181,10 @@ collection operator uses `reset_from: post_activation` (or `activation`). The re
 the same on both sides.
 
 **Collection execute mode requires the checkpoint.** The collection journal exists only in the
-checkpoint, so an executing `activation` refuses without `checkpoint.enabled: true`. Python state
-is always on.
+checkpoint, so an executing `activation` refuses without `checkpoint.enabled: true`. The
+`switchover` and `restore_only` playbooks refuse such a run at the identity barrier, before
+`primary_prep` or the Argo CD pause mutates anything; a direct `activation` role entry refuses at
+its entry. Python state is always on.
 
 **Stale cached route and cleanup liveness (#317).** The collection's named Restore reads in the
 cleanup transaction follow the #317 stale-route rule above: a 404 through a stale cached route is

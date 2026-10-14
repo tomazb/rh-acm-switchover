@@ -34,6 +34,8 @@
           ansible.builtin.include_role:
             name: tomazb.acm_switchover.preflight
             tasks_from: identity_barrier
+          vars:
+            _acm_identity_barrier_requires_checkpoint: true
 
         # PR C decisions amendment 2.2 rule 3: a retry re-pauses Argo CD on the
         # secondary hub before any further phase work when a failure rescue left the

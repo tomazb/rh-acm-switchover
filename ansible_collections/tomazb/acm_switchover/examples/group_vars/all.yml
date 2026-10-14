@@ -50,10 +50,10 @@ acm_switchover_execution:
   concurrency:
     klusterlet_probe_workers: 10
     klusterlet_remediation_workers: 10
-  # Set enabled: true to run mode: execute. Activation records the migration journal in
-  # the checkpoint before any Restore mutation and refuses to execute without it.
+  # mode: execute requires enabled: true. Activation records the migration journal in the
+  # checkpoint before any Restore mutation, and the playbooks refuse to execute without it.
   checkpoint:
-    enabled: false
+    enabled: true
     backend: file
     path: .state/switchover.json
     reset: false

@@ -3250,9 +3250,8 @@ def test_execute_mode_fails_closed_when_checkpointing_is_unavailable():
     message = failed[0]["result"]["msg"]
     assert "durable checkpoint state" in message
     assert "acm_switchover_execution.checkpoint.enabled" in message
-    # The shipped file that sets it to false, named so an operator hitting this cold
-    # knows what to change.
-    assert "examples/group_vars/all.yml" in message
+    # The shipped example enables checkpointing, so the message no longer claims otherwise.
+    assert "sets it to false" not in message
 
 
 def test_validate_mode_is_refused_and_issues_no_delete():

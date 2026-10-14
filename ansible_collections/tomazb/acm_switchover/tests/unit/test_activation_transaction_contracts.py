@@ -95,3 +95,22 @@ def test_a_preview_waits_for_nothing_and_writes_no_evidence():
     tasks = yaml.safe_load((TASKS / "wait_for_restore.yml").read_text(encoding="utf-8"))
     gated = [task for task in tasks if "block" in task]
     assert gated and all("not (_acm_preview | bool)" in str(task["when"]) for task in gated)
+
+
+def test_the_shipped_example_enables_the_checkpoint_activation_requires():
+    example = TASKS.parents[2] / "examples" / "group_vars" / "all.yml"
+    execution = yaml.safe_load(example.read_text(encoding="utf-8"))["acm_switchover_execution"]
+    assert execution["mode"] == "execute"
+    assert execution["checkpoint"]["enabled"] is True
+
+
+def test_the_playbooks_that_reach_activation_require_the_checkpoint_at_the_identity_barrier():
+    collection = TASKS.parents[2]
+    barrier = list(_flat(yaml.safe_load((collection / "roles/preflight/tasks/identity_barrier.yml").read_text())))
+    names = [task.get("name") for task in barrier]
+    guard = names.index("Require the checkpoint that stores the migration journal before any phase work")
+    assert names.index("Enter checkpointed phase") < guard
+    for playbook in ("switchover.yml", "restore_only.yml"):
+        tasks = list(_flat(yaml.safe_load((collection / "playbooks" / playbook).read_text())[0]["tasks"]))
+        include = next(task for task in tasks if task.get("name") == "Establish trusted identity and checkpoint barrier")
+        assert include["vars"] == {"_acm_identity_barrier_requires_checkpoint": True}, playbook
