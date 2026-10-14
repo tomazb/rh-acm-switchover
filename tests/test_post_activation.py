@@ -3058,6 +3058,17 @@ class TestPostActivationMigrationEvidence:
         assert _stored_journal(tmp_path) == COMPLETED_JOURNAL
 
 
+# The Codex T12 review (B1) recovery guidance, verbatim.
+MISSING_EVIDENCE_GUIDANCE = (
+    "The migration journal is unchanged. For missing post-activation completion, set `current_phase` to "
+    "`post_activation_verification`. For missing Restore completion, set it to `activation` and remove only the "
+    "`completed_steps` entry named `wait_restore_completion`, if present. Preserve the migration journal, mutation "
+    "markers, and Argo CD re-pause marker. Re-run with the same arguments; the tool must establish the missing "
+    "evidence from fresh reads. Do not synthesize completion timestamps or replace frozen Backup identities. "
+    "Missing accepted-mutation evidence requires operator reconciliation. `--reset-state` deliberately discards "
+    "the transaction."
+)
+
 _POST_ACTIVATION_STEPS = (
     "verify_clusters_connected",
     "verify_klusterlet_connections",
@@ -3191,9 +3202,9 @@ class TestPostActivationEvidenceReviewFindings:
         finalization.assert_not_called()
         message = failed[-1]
         assert message.startswith(f"Migration evidence refused ({code}:")
-        assert "migration journal is unchanged" in message
-        assert f"set current_phase to '{phase}' in the state file {state.state_file}" in message
-        assert "--reset-state starts a new migration and discards the journal" in message
+        assert MISSING_EVIDENCE_GUIDANCE in message
+        assert f"set it to `{phase}`" in message or f"set `current_phase` to `{phase}`" in message
+        assert f"State file: {state.state_file}." in message
         assert _stored_journal(tmp_path) == journal
 
     def test_b2_an_invalid_journal_refusal_names_repair_or_an_explicit_reset(self, tmp_path):
@@ -3205,7 +3216,8 @@ class TestPostActivationEvidenceReviewFindings:
         assert result is False
         assert "current_phase" not in failed[-1]
         assert f"repair it in the state file {state.state_file}" in failed[-1]
-        assert "--reset-state starts a new migration and discards the journal" in failed[-1]
+        assert "Do not synthesize completion timestamps or replace frozen Backup identities." in failed[-1]
+        assert "`--reset-state` deliberately discards the transaction." in failed[-1]
 
     def test_b2_following_the_refusal_guidance_records_the_evidence_and_resumes(self, tmp_path):
         """The named rerun re-proves post-activation over the kept journal, its step markers notwithstanding."""

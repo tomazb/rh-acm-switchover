@@ -262,11 +262,21 @@ def run_validate_only_preflight(
         state.restore_runtime_checkpoint(runtime_checkpoint)
 
 
-# The phase whose rerun records the evidence a refused resume past post-activation lacks.
-_MISSING_EVIDENCE_RERUN_PHASES = {
-    "restore_not_completed": Phase.ACTIVATION,
-    "post_activation_not_completed": Phase.POST_ACTIVATION,
-}
+# The codes whose evidence a rerun can establish from fresh reads against the kept journal.
+_MISSING_EVIDENCE_CODES = ("restore_not_completed", "post_activation_not_completed")
+_MISSING_EVIDENCE_GUIDANCE = (
+    "The migration journal is unchanged. For missing post-activation completion, set `current_phase` to "
+    "`post_activation_verification`. For missing Restore completion, set it to `activation` and remove only the "
+    "`completed_steps` entry named `wait_restore_completion`, if present. Preserve the migration journal, mutation "
+    "markers, and Argo CD re-pause marker. Re-run with the same arguments; the tool must establish the missing "
+    "evidence from fresh reads. Do not synthesize completion timestamps or replace frozen Backup identities. "
+    "Missing accepted-mutation evidence requires operator reconciliation. `--reset-state` deliberately discards "
+    "the transaction."
+)
+_INVALID_JOURNAL_GUIDANCE = (
+    "Do not synthesize completion timestamps or replace frozen Backup identities. "
+    "`--reset-state` deliberately discards the transaction."
+)
 
 
 def _post_activation_marker_refusal(
@@ -277,7 +287,7 @@ def _post_activation_marker_refusal(
     The collection refuses the same journal at its completed post_activation phase marker
     (R4-04 Task 9). A dry-run predicts and refuses nothing; a journal-free state is left
     to finalization's own evidence gate. The refusal keeps the journal and names the
-    rerun that records the missing evidence, since a plain retry resumes here again.
+    rerun that establishes the missing evidence, since a plain retry resumes here again.
     """
     if current_phase != Phase.FINALIZATION or getattr(args, "dry_run", False):
         return None
@@ -286,18 +296,14 @@ def _post_activation_marker_refusal(
         if journal is not None:
             require_post_activation_completed(journal)
     except (MigrationEvidenceError, StateStructureError) as exc:
-        rerun_phase = _MISSING_EVIDENCE_RERUN_PHASES.get(getattr(exc, "code", ""))
-        if rerun_phase is None:
-            guidance = f"The recorded migration journal is invalid: repair it in the state file {state.state_file}"
-        else:
-            guidance = (
-                "The migration journal is unchanged, and a plain re-run resumes at finalization and refuses again. "
-                f"To record the missing evidence against the recorded journal, set current_phase to "
-                f"'{rerun_phase.value}' in the state file {state.state_file} and re-run with the same arguments"
+        if getattr(exc, "code", "") in _MISSING_EVIDENCE_CODES:
+            return (
+                f"Migration evidence refused ({exc}). A plain re-run resumes at finalization and refuses again. "
+                f"{_MISSING_EVIDENCE_GUIDANCE} State file: {state.state_file}."
             )
         return (
-            f"Migration evidence refused ({exc}). {guidance}. "
-            "--reset-state starts a new migration and discards the journal."
+            f"Migration evidence refused ({exc}). The recorded migration journal is invalid: repair it in the "
+            f"state file {state.state_file}. {_INVALID_JOURNAL_GUIDANCE}"
         )
     return None
 

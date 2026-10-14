@@ -7,8 +7,11 @@ checked against the state file at the instant of each mutation.
 
 import copy
 import json
+import logging
 from contextlib import contextmanager
-from unittest.mock import patch
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -23,7 +26,7 @@ from lib.constants import (
 from lib.exceptions import FatalError
 from lib.run_record import RunRecord
 from lib.strict_read import StrictReadOutcome
-from lib.utils import StateManager
+from lib.utils import Phase, StateManager
 
 SecondaryActivation = activation_module.SecondaryActivation
 NS = BACKUP_NAMESPACE
@@ -1274,6 +1277,58 @@ def test_activate_blocks_a_completed_wait_marker_without_completion_evidence(sta
     with _no_wait():
         assert _activation(hub, state, "full_restore").activate() is False
     assert "no completion evidence" in state.get_errors()[-1]["error"]
+
+
+def test_following_the_restore_completion_guidance_establishes_the_evidence(state):
+    """Codex T12 B1: a finalization resume refused for restore_not_completed recovers as the refusal says.
+
+    Setting current_phase alone reaches the completed wait marker and refuses again; also
+    removing only wait_restore_completion lets the retry prove completion from fresh reads.
+    """
+    from lib.workflow import run_phase_flow
+
+    hub, _ = _mutated(state, "full_restore")
+    complete(hub, RESTORE_FULL_NAME, version="2.14.3", kind="full_restore")
+    for step in ("create_full_restore", "wait_restore_completion", "apply_immediate_import_annotations"):
+        state.mark_step_completed(step)
+    state.set_phase(Phase.FINALIZATION)
+    failed = []
+    run_phase_flow(
+        SimpleNamespace(dry_run=False),
+        state,
+        None,
+        hub,
+        logging.getLogger("test"),
+        ((Mock(return_value=True), (Phase.FINALIZATION,), Phase.FINALIZATION),),
+        "switchover",
+        lambda _state, message, _logger: failed.append(message) or False,
+        Mock(),
+        Mock(),
+    )
+    assert failed and failed[-1].startswith("Migration evidence refused (restore_not_completed:")
+    assert "remove only the `completed_steps` entry named `wait_restore_completion`" in failed[-1]
+    frozen = copy.deepcopy(RunRecord(state).migration_backups())
+
+    def edited(remove_wait_marker):
+        raw = json.loads(Path(state.state_file).read_text(encoding="utf-8"))
+        raw["current_phase"] = Phase.ACTIVATION.value
+        if remove_wait_marker:
+            raw["completed_steps"] = [s for s in raw["completed_steps"] if s["name"] != "wait_restore_completion"]
+        Path(state.state_file).write_text(json.dumps(raw), encoding="utf-8")
+        return StateManager(state.state_file)
+
+    phase_only = edited(remove_wait_marker=False)
+    with _no_wait():
+        assert _activation(hub, phase_only, "full_restore").activate() is False
+    assert "no completion evidence" in phase_only.get_errors()[-1]["error"]
+
+    recovered = edited(remove_wait_marker=True)
+    with _no_wait():
+        assert _activation(hub, recovered, "full_restore").activate() is True
+    journal = RunRecord(recovered).migration_backups()
+    assert journal["restore"]["completed_at"] is not None
+    assert journal["backups"] == frozen["backups"] and journal["run_id"] == frozen["run_id"]
+    assert [kind for kind, _, _ in hub.mutations] == ["create"]
 
 
 def test_a_backup_drifting_during_the_passive_delete_blocks_the_create(state):
