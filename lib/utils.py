@@ -497,6 +497,10 @@ class StateManager:
         self.state["current_phase"] = phase.value
         self.flush_state()  # Phase transitions are critical checkpoints
 
+    def preview_phase(self, phase: Phase) -> None:
+        """Update the current phase in memory only, for a dry-run whose rollback restores the original."""
+        self.state["current_phase"] = phase.value
+
     def record_retry_error_baseline(self, phase: Any, count: int) -> None:
         """Record the error baseline for a resumed retry attempt."""
         phase_value = phase.value if isinstance(phase, Phase) else str(phase)

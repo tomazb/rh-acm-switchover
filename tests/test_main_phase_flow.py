@@ -654,6 +654,72 @@ class TestPhaseHandlerFailure:
         assert len(errors) >= 1
         assert any("preflight failed" in e.get("error", "") for e in errors)
 
+    @pytest.mark.parametrize(
+        "dry_run, handler_fails_phase, hook_runs",
+        [
+            pytest.param(False, True, True, id="execute-phase-failure"),
+            pytest.param(False, False, True, id="execute-refusal"),
+            pytest.param(True, True, True, id="dry-run-phase-failure"),
+            pytest.param(True, False, False, id="dry-run-refusal"),
+        ],
+    )
+    def test_failure_hook_runs_for_a_failed_phase_and_every_execute_failure(
+        self, tmp_path, dry_run, handler_fails_phase, hook_runs
+    ):
+        """A dry-run refusal before phase work leaves the phase unchanged and is not a phase failure."""
+        from types import SimpleNamespace
+
+        from lib.utils import Phase, StateManager
+        from lib.workflow import run_phase_flow
+
+        state = StateManager(str(tmp_path / "state.json"))
+        state.set_phase(Phase.PRIMARY_PREP)
+
+        def handler(_args, phase_state, *_rest):
+            if handler_fails_phase:
+                phase_state.set_phase(Phase.FAILED)
+            return False
+
+        hook = Mock()
+        result = run_phase_flow(
+            SimpleNamespace(dry_run=dry_run),
+            state,
+            Mock(),
+            Mock(),
+            logging.getLogger("test"),
+            ((handler, (Phase.PRIMARY_PREP,), Phase.PRIMARY_PREP),),
+            "switchover",
+            Mock(),
+            Mock(),
+            hook,
+        )
+
+        assert result is False
+        assert hook.called is hook_runs
+
+    @pytest.mark.parametrize("dry_run", [False, True], ids=["execute", "dry-run"])
+    def test_failed_state_retry_phase_keeps_the_repause_marker_precedence(self, tmp_path, dry_run):
+        """A dry-run retries the same phase as an execution, in memory only; an execution persists it."""
+        from types import SimpleNamespace
+
+        from lib.operation_runners import SWITCHOVER_RESUMABLE_PHASES
+        from lib.run_record import RunRecord
+        from lib.utils import Phase, StateManager
+        from lib.workflow import FailedStateConfig, handle_failed_state
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.add_error("finalization failed", Phase.FINALIZATION.value)
+        RunRecord(state).record_argocd_repause_required(Phase.ACTIVATION.value, "2026-10-14T00:00:00Z")
+        state.set_phase(Phase.FAILED)
+        config = FailedStateConfig(resumable_phases=SWITCHOVER_RESUMABLE_PHASES, operation_noun="switchover")
+
+        with patch.object(StateManager, "_write_state", autospec=True) as write_state:
+            handle_failed_state(SimpleNamespace(dry_run=dry_run), state, Mock(), config)
+
+        assert state.get_current_phase() == Phase.ACTIVATION
+        assert write_state.called is not dry_run
+
     def test_phase_handler_exception_propagates(self, tmp_path):
         """When a phase handler raises an unexpected exception, it should
         propagate (the caller main() catches and records it)."""

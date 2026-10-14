@@ -191,7 +191,11 @@ def handle_failed_state(
         logger.info(WORKFLOW_FAILED_AT_PHASE_MESSAGE, last_error_phase.value)
         logger.info(WORKFLOW_RETRY_FROM_PHASE_MESSAGE)
         state.record_retry_error_baseline(last_error_phase, len(errors))
-        state.set_phase(last_error_phase)
+        if getattr(args, "dry_run", False):
+            # A dry-run retries in memory only: a refusal before phase work must leave the state file unwritten.
+            state.preview_phase(last_error_phase)
+        else:
+            state.set_phase(last_error_phase)
         return
 
     logger.warning(WORKFLOW_CANNOT_DETERMINE_FAILED_PHASE_MESSAGE)
@@ -356,7 +360,9 @@ def run_phase_flow(
             ran_phase = True
             result = handler(args, state, primary, secondary, logger)
             if not result:
-                on_phase_failure(args, state, primary, secondary, logger)
+                # A dry-run refusal before phase work is not a phase failure: only a FAILED phase runs the hook.
+                if not getattr(args, "dry_run", False) or state.get_current_phase() == Phase.FAILED:
+                    on_phase_failure(args, state, primary, secondary, logger)
                 return False
             if state.get_current_phase() != expected_phase:
                 fail_unexpected_phase_state(state, expected_phase, logger)

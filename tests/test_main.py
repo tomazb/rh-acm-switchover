@@ -52,7 +52,7 @@ from acm_switchover import (
 )
 from lib import KubeClient
 from lib import argocd as argocd_lib
-from lib import cli_outcomes
+from lib import argocd_resume, cli_outcomes
 from lib.argocd_register import PauseSummary
 from lib.constants import (
     DRY_RUN_RESTORE_ONLY_COMPLETION_MESSAGE,
@@ -3994,20 +3994,28 @@ _DRY_RUN_WAIVER_ARGV = [
     "CHG-1",
 ]
 
+# A refusal before phase work is not a phase failure: the resume-on-failure hook must not run.
+_DRY_RUN_RESUME_ON_FAILURE_ARGV = ["--argocd-manage", "--argocd-resume-on-failure"]
+
 
 @pytest.mark.unit
 class TestDryRunRefusalWritesNothing:
     """A dry-run refused before any phase work leaves the state file untouched: zero writes, not a rollback."""
 
     @staticmethod
-    def _state_file(tmp_path, phase, journal=None, restore_only=False):
+    def _state_file(tmp_path, phase, journal=None, restore_only=False, failed=False):
+        """A state resumable at `phase`; `failed` records it as a FAILED state whose last error is at `phase`."""
         state_file = tmp_path / "state.json"
         state = StateManager(str(state_file))
         state.state["contexts"] = {"primary": None if restore_only else "p1", "secondary": "p2"}
         state.state["hub_identities"] = {"secondary": {"context": "p2", "cluster_uid": "uid-secondary"}}
         if not restore_only:
             state.state["hub_identities"]["primary"] = {"context": "p1", "cluster_uid": "uid-primary"}
-        state.state["current_phase"] = phase.value
+        state.state["current_phase"] = Phase.FAILED.value if failed else phase.value
+        if failed:
+            state.state["errors"] = [
+                {"error": "earlier failure", "phase": phase.value, "timestamp": "2026-10-14T00:00:00Z"}
+            ]
         if journal is not None:
             state.state["config"]["migration_backups"] = journal
         state.flush_state()
@@ -4038,32 +4046,37 @@ class TestDryRunRefusalWritesNothing:
         content = state_file.read_bytes()
         with patch("sys.argv", argv), patch("acm_switchover._initialize_clients", return_value=clients), patch.object(
             StateManager, "_write_state", counting_write_state
-        ):
+        ), patch(
+            "lib.argocd_resume.attempt_argocd_resume_on_failure", wraps=argocd_resume.attempt_argocd_resume_on_failure
+        ) as failure_hook:
             with pytest.raises(SystemExit) as exc_info:
                 main()
         after = os.stat(state_file)
         assert len(writes) == 0, f"{len(writes)} state write(s) during a refused dry-run"
+        failure_hook.assert_not_called()
         assert state_file.read_bytes() == content
         assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
         return exc_info.value.code
 
+    @pytest.mark.parametrize("failed", [False, True], ids=["resume", "failed-retry"])
     @pytest.mark.parametrize("restore_only", [False, True], ids=["switchover", "restore-only"])
-    def test_invalid_journal_refusal_at_completed_post_activation(self, tmp_path, capsys, restore_only):
+    def test_invalid_journal_refusal_at_completed_post_activation(self, tmp_path, capsys, restore_only, failed):
         journal = _EVIDENCE_VECTOR_CASES["journal-run-id-not-uuid"]["input"]["candidate"]
-        state_file = self._state_file(tmp_path, Phase.FINALIZATION, journal, restore_only)
+        state_file = self._state_file(tmp_path, Phase.FINALIZATION, journal, restore_only, failed)
 
-        exit_code = self._run_dry_run_main(state_file, restore_only=restore_only)
+        exit_code = self._run_dry_run_main(state_file, _DRY_RUN_RESUME_ON_FAILURE_ARGV, restore_only=restore_only)
 
         assert exit_code == EXIT_FAILURE
         stderr = capsys.readouterr().err
         assert "The recorded migration journal is invalid" in stderr
         assert "Operation failed" in stderr
 
+    @pytest.mark.parametrize("failed", [False, True], ids=["resume", "failed-retry"])
     @pytest.mark.parametrize("phase", [Phase.PRIMARY_PREP, Phase.FINALIZATION], ids=["primary-prep", "finalization"])
-    def test_waiver_without_recorded_names_refused_before_phase_work(self, tmp_path, capsys, phase):
-        state_file = self._state_file(tmp_path, phase)
+    def test_waiver_without_recorded_names_refused_before_phase_work(self, tmp_path, capsys, phase, failed):
+        state_file = self._state_file(tmp_path, phase, failed=failed)
 
-        exit_code = self._run_dry_run_main(state_file, _DRY_RUN_WAIVER_ARGV)
+        exit_code = self._run_dry_run_main(state_file, [*_DRY_RUN_WAIVER_ARGV, *_DRY_RUN_RESUME_ON_FAILURE_ARGV])
 
         assert exit_code == EXIT_FAILURE
         assert "waiver_expected_names_empty" in capsys.readouterr().err
