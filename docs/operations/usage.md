@@ -479,7 +479,12 @@ Finalization runs in this order on every pass:
    name-based cleanup, but only once the journaled cleanup is terminal; an object at the
    journaled name blocks instead of being deleted. A fresh strict read must prove the
    journaled name absent immediately before the BackupSchedule is enabled. BackupSchedule
-   inventory reads are strict: an unreadable inventory refuses to change BackupSchedules.
+   collision repair is the exception to "immediately before the write": it proves the name
+   absent immediately before it deletes the BackupSchedule, then waits for the deletion
+   (about 30 seconds at most) and recreates the schedule without a second read, so a failed
+   read can never leave the hub without a BackupSchedule. Each proof establishes absence only
+   at the instant of the read; it reserves nothing. BackupSchedule inventory reads are strict:
+   an unreadable inventory refuses to change BackupSchedules.
 4. Backup and MultiClusterHub verification, auto-import reset.
 5. **Old-hub disposition** (`--old-hub-action`), behind the old-hub evidence gate.
 

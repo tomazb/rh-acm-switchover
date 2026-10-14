@@ -1,8 +1,11 @@
 ---
-# R4-04: immediately before any write that leaves an enabled BackupSchedule (enablement,
-# collision recreation, the collision rescue's restoration), the journaled Restore cleanup must
-# be terminal and a fresh strict read must prove its locator empty. A same-name object inherits
-# no evidence and blocks. Callers include this only outside a preview.
+# R4-04: immediately before any write that leaves an enabled BackupSchedule (enablement, the
+# collision rescue's restoration), the journaled Restore cleanup must be terminal and a fresh
+# strict read must prove its locator empty. Collision repair proves it immediately before its
+# DELETE, then waits for the deletion and recreates without a second read, so a failed read can
+# never leave the hub without a BackupSchedule. A proof establishes absence only at the instant
+# of the read (design J); it reserves nothing. A same-name object inherits no evidence and
+# blocks. Callers include this only outside a preview.
 
 - name: Read the journaled Restore locator before a BackupSchedule write
   ansible.builtin.include_tasks: "{{ role_path }}/../activation/tasks/strict_read.yml"
