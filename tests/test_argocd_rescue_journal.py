@@ -90,6 +90,12 @@ def _marker(path):
 
 
 RESUMED = argocd_lib.ResumeSummary(restored=2, already_resumed=0, failed=0)
+# Restore completion recorded, post-activation completion not.
+NO_POST_ACTIVATION = next(
+    case["input"]["candidate"]
+    for case in json.loads(VECTORS.read_text(encoding="utf-8"))["cases"]
+    if case["id"] == "journal-completed-full-restore-2.17"
+)
 
 
 class TestRescueUnderJournal:
@@ -188,14 +194,29 @@ class TestRescueUnderJournal:
         assert STEP_PAUSE_ARGOCD_APPS not in [step["name"] for step in stored["completed_steps"]]
 
 
-def _retry(tmp_path, *, restore_only=False, dry_run=False, pause=None, clear_error=None):
-    """Rescue a failed ACTIVATION, then retry the same flow with every phase handler mocked."""
-    path, state = _failed_state(tmp_path, restore_only=restore_only)
+def _retry(
+    tmp_path,
+    *,
+    restore_only=False,
+    dry_run=False,
+    pause=None,
+    clear_error=None,
+    phase=Phase.ACTIVATION,
+    journal=JOURNAL,
+    rescued=False,
+):
+    """Rescue a failed `phase`, then retry the same flow with every phase handler mocked.
+
+    With rescued=True the state file from an earlier call is retried again without a new rescue.
+    """
     primary, secondary = _clients()
-    with patch.object(ArgocdPauseRegister, "resume", return_value=RESUMED):
-        acm_switchover._attempt_argocd_resume_on_failure(
-            _args(restore_only=restore_only), state, None if restore_only else primary, secondary, LOGGER
-        )
+    path = tmp_path / "state.json"
+    if not rescued:
+        path, state = _failed_state(tmp_path, phase=phase, journal=journal, restore_only=restore_only)
+        with patch.object(ArgocdPauseRegister, "resume", return_value=RESUMED):
+            acm_switchover._attempt_argocd_resume_on_failure(
+                _args(restore_only=restore_only), state, None if restore_only else primary, secondary, LOGGER
+            )
     order = []
     handlers = {}
     phases = {
@@ -252,12 +273,12 @@ def _retry(tmp_path, *, restore_only=False, dry_run=False, pause=None, clear_err
     finally:
         for item in reversed(patches):
             item.stop()
-    return path, state, result, order
+    return path, state, result, order, (primary, secondary)
 
 
 class TestRetryRepausesBeforePhaseWork:
     def test_switchover_retry_repauses_both_hubs_first_and_clears_the_marker(self, tmp_path):
-        path, state, result, order = _retry(tmp_path)
+        path, state, result, order, _ = _retry(tmp_path)
         assert result is True
         assert order[0] == ("pause", ["primary", "secondary"])
         assert order[1:] == ["activation", "post_activation", "finalization"]
@@ -266,7 +287,7 @@ class TestRetryRepausesBeforePhaseWork:
         assert stored["config"]["migration_backups"] == JOURNAL
 
     def test_restore_only_retry_repauses_the_secondary_hub_only(self, tmp_path):
-        path, state, result, order = _retry(tmp_path, restore_only=True)
+        path, state, result, order, _ = _retry(tmp_path, restore_only=True)
         assert result is True
         assert order[0] == ("pause", ["secondary"])
         assert "restore_only_argocd" not in order and "preflight" not in order
@@ -280,7 +301,7 @@ class TestRetryRepausesBeforePhaseWork:
         ],
     )
     def test_a_failed_repause_blocks_the_retry_visibly(self, tmp_path, pause):
-        path, state, result, order = _retry(tmp_path, pause=pause)
+        path, state, result, order, _ = _retry(tmp_path, pause=pause)
         assert result is False
         assert order == [("pause", ["primary", "secondary"])]
         stored = _on_disk(path)
@@ -290,7 +311,7 @@ class TestRetryRepausesBeforePhaseWork:
         assert "re-pause" in stored["errors"][-1]["error"]
 
     def test_a_failed_marker_clearing_blocks_and_keeps_the_marker(self, tmp_path):
-        path, state, result, order = _retry(tmp_path, clear_error=OSError("EIO"))
+        path, state, result, order, _ = _retry(tmp_path, clear_error=OSError("EIO"))
         assert result is False
         assert order == [("pause", ["primary", "secondary"])]
         stored = _on_disk(path)
@@ -299,10 +320,38 @@ class TestRetryRepausesBeforePhaseWork:
 
     def test_dry_run_retry_reports_and_writes_no_marker_change(self, tmp_path, caplog):
         caplog.set_level(logging.INFO)
-        path, state, result, order = _retry(tmp_path, dry_run=True)
+        path, state, result, order, _ = _retry(tmp_path, dry_run=True)
         assert ("pause", ["primary", "secondary"]) not in order
         assert _on_disk(path)["config"]["argocd_repause_required"]["failed_phase"] == Phase.ACTIVATION.value
         assert any("[DRY-RUN]" in record.message and "re-pause" in record.message for record in caplog.records)
+
+
+class TestFinalizationRetryWithAnIncompleteJournal:
+    """D-41 composed: a finalization rescue's marker, then a retry over a journal lacking post-activation."""
+
+    def test_the_refusal_comes_first_and_keeps_the_marker_for_the_next_run(self, tmp_path):
+        path, _, result, order, clients = _retry(tmp_path, phase=Phase.FINALIZATION, journal=NO_POST_ACTIVATION)
+        stored = _on_disk(path)
+
+        # lib/workflow.py run_phase_flow refuses the journal before the before-phases re-pause:
+        # no re-pause, no phase work, no cluster call and no journal or evidence write.
+        assert result is False
+        assert order == []
+        for client in clients:
+            assert [name for name, *_ in client.mock_calls if name != "get_cluster_identity"] == []
+        assert stored["config"]["migration_backups"] == NO_POST_ACTIVATION
+        assert "post_activation_not_completed" in stored["errors"][-1]["error"]
+        # The obligation stays recorded for the run that follows.
+        assert stored["config"]["argocd_repause_required"]["failed_phase"] == Phase.FINALIZATION.value
+
+        # The operator follows the refusal's guidance; that next run re-pauses before any phase work.
+        stored["current_phase"] = Phase.POST_ACTIVATION.value
+        path.write_text(json.dumps(stored), encoding="utf-8")
+        _, _, result, order, _ = _retry(tmp_path, rescued=True)
+
+        assert result is True
+        assert order == [("pause", ["primary", "secondary"]), "post_activation", "finalization"]
+        assert _marker(path) is None
 
 
 def test_the_marker_positions_the_retry_when_the_last_error_lost_the_phase(tmp_path):
