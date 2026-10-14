@@ -53,26 +53,36 @@
         _acm_recovered: "{{ _acm_cleanup_pre_delete.candidate }}"
       when: _acm_cleanup_pre_delete.action == 'recover'
 
-    - name: Delete the journaled Restore under its UID and resourceVersion
-      tomazb.acm_switchover.acm_restore_guarded_mutation:
-        kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-        context: "{{ acm_switchover_hubs.secondary.context }}"
-        action: delete
-        api_version: cluster.open-cluster-management.io/v1beta1
-        kind: Restore
-        namespace: "{{ _acm_journal.restore.namespace }}"
-        name: "{{ _acm_journal.restore.name }}"
-        expected_uid: "{{ _acm_cleanup_pre_delete.uid }}"
-        expected_resource_version: "{{ _acm_cleanup_pre_delete.resource_version }}"
-        request_timeout: "{{ _acm_cleanup_schedule.request_timeout }}"
-      check_mode: "{{ _acm_preview | bool }}"
-      register: _acm_cleanup_delete_result
-      # Judged below by cleanup_delete_outcome, never here: a failure of this no_log task would
-      # censor its refusal reason. Only a DELETE that removed nothing (a precondition conflict or
-      # a 404) continues, to be re-read and re-validated in full; every other refusal fails the
-      # judgement with its reason (delete_not_accepted), never absorbed.
-      failed_when: false
-      no_log: true
+    # The DELETE task is no_log, so its own failure would carry a censored result; the rescue
+    # re-raises the refusal by its sanitized reason only, as the Python CLI reports it.
+    - name: Delete the journaled Restore and report a refusal by its reason
+      block:
+        - name: Delete the journaled Restore under its UID and resourceVersion
+          tomazb.acm_switchover.acm_restore_guarded_mutation:
+            kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+            context: "{{ acm_switchover_hubs.secondary.context }}"
+            action: delete
+            api_version: cluster.open-cluster-management.io/v1beta1
+            kind: Restore
+            namespace: "{{ _acm_journal.restore.namespace }}"
+            name: "{{ _acm_journal.restore.name }}"
+            expected_uid: "{{ _acm_cleanup_pre_delete.uid }}"
+            expected_resource_version: "{{ _acm_cleanup_pre_delete.resource_version }}"
+            request_timeout: "{{ _acm_cleanup_schedule.request_timeout }}"
+          check_mode: "{{ _acm_preview | bool }}"
+          register: _acm_cleanup_delete_result
+          # Only a DELETE that removed nothing (a precondition conflict or a 404) continues, to be
+          # re-read and re-validated in full; every other refusal fails here, never absorbed.
+          failed_when: >-
+            (_acm_cleanup_delete_result.reason | default('unverifiable'))
+            not in ['ok', 'precondition_failed', 'not_found']
+          no_log: true
+      rescue:
+        - name: Refuse the guarded DELETE by its sanitized reason
+          ansible.builtin.fail:
+            msg: >-
+              Migration evidence refused (delete_not_accepted: the guarded DELETE was not accepted
+              ({{ _acm_cleanup_delete_result.reason | default('unverifiable') }}))
 
     # Only the classification is passed on: the registered result also echoes the arguments.
     - name: Classify the guarded DELETE outcome
