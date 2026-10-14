@@ -3470,9 +3470,8 @@ class TestGuardedRestoreJsonPatch:
 
 
 class TestGuardedRestoreDelete:
-    """The narrow Restore delete wrapper: it delegates to delete_custom_resource_preconditioned
-    with both preconditions and maps its outcome to the guarded-mutation result shape. In
-    dry-run it predicts without reaching the primitive."""
+    """The narrow Restore delete: one raw DELETE carrying both preconditions, mapped to the
+    guarded-mutation result shape. In dry-run it predicts without a request."""
 
     _ARGS = {
         "namespace": "open-cluster-management-backup",
@@ -3499,8 +3498,14 @@ class TestGuardedRestoreDelete:
         result.update(updates)
         return result
 
+    @staticmethod
+    def _answer(client, response):
+        """Answer the one raw DELETE with `response` as its JSON body."""
+        client._api_client.call_api = Mock(return_value=Mock(data=json.dumps(response).encode("utf-8")))
+
     def test_an_accepted_delete_sends_both_preconditions_once(self, kube_client):
-        kube_client.custom_api.delete_namespaced_custom_object = Mock(return_value={})
+        self._answer(kube_client, {"kind": "Status", "status": "Success"})
+        kube_client.custom_api.delete_namespaced_custom_object = Mock()
         result = self._delete(kube_client, timeout_seconds=9)
         assert result == self._shape(
             accepted=True,
@@ -3510,17 +3515,19 @@ class TestGuardedRestoreDelete:
             uid="3f0c2a4e-uid",
             resource_version="48213",
         )
-        call = kube_client.custom_api.delete_namespaced_custom_object.call_args
-        assert kube_client.custom_api.delete_namespaced_custom_object.call_count == 1
-        assert (call.kwargs["group"], call.kwargs["version"], call.kwargs["plural"]) == (
-            "cluster.open-cluster-management.io",
-            "v1beta1",
-            "restores",
-        )
-        assert call.kwargs["namespace"] == "open-cluster-management-backup"
+        kube_client.custom_api.delete_namespaced_custom_object.assert_not_called()
+        assert kube_client._api_client.call_api.call_count == 1
+        call = kube_client._api_client.call_api.call_args
+        assert call.args == ("/apis/{group}/{version}/namespaces/{namespace}/{plural}/{name}", "DELETE")
+        assert call.kwargs["path_params"] == {
+            "group": "cluster.open-cluster-management.io",
+            "version": "v1beta1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "restores",
+            "name": "restore-acm-passive-sync",
+        }
         assert call.kwargs["_request_timeout"] == 9
-        body = call.kwargs["body"]
-        assert (body.preconditions.uid, body.preconditions.resource_version) == ("3f0c2a4e-uid", "48213")
+        assert call.kwargs["body"]["preconditions"] == {"uid": "3f0c2a4e-uid", "resourceVersion": "48213"}
 
     @pytest.mark.parametrize(
         ("exc", "conflict", "reason"),
@@ -3534,14 +3541,14 @@ class TestGuardedRestoreDelete:
         ],
     )
     def test_failures_are_classified_once_and_never_retried(self, kube_client, exc, conflict, reason):
-        kube_client.custom_api.delete_namespaced_custom_object = Mock(side_effect=exc)
+        kube_client._api_client.call_api = Mock(side_effect=exc)
         assert self._delete(kube_client) == self._shape(conflict=conflict, reason=reason)
-        assert kube_client.custom_api.delete_namespaced_custom_object.call_count == 1
+        assert kube_client._api_client.call_api.call_count == 1
 
     def test_the_default_timeout_is_the_client_request_timeout(self, kube_client):
-        kube_client.custom_api.delete_namespaced_custom_object = Mock(return_value={})
+        self._answer(kube_client, {"kind": "Status", "status": "Success"})
         assert self._delete(kube_client)["accepted"] is True
-        call = kube_client.custom_api.delete_namespaced_custom_object.call_args
+        call = kube_client._api_client.call_api.call_args
         assert call.kwargs["_request_timeout"] == kube_client.request_timeout
 
     def test_dry_run_predicts_without_any_api_call(self, dry_run_client):
@@ -3571,18 +3578,18 @@ class TestGuardedRestoreDelete:
     def test_invalid_inputs_are_rejected_before_any_request_even_in_dry_run(self, kube_client, overrides):
         from lib.validation import ValidationError
 
-        kube_client.custom_api.delete_namespaced_custom_object = Mock()
+        kube_client._api_client.call_api = Mock()
         for dry_run in (False, True):
             kube_client.dry_run = dry_run
             with pytest.raises(ValidationError):
                 self._delete(kube_client, **overrides)
-        kube_client.custom_api.delete_namespaced_custom_object.assert_not_called()
+        kube_client._api_client.call_api.assert_not_called()
 
     def test_failures_never_expose_exception_text(self, kube_client, caplog):
         secret = "R4-04-DELETE-SECRET token=abc123"
         exc = ApiException(status=500, reason=secret)
         exc.body = secret
-        kube_client.custom_api.delete_namespaced_custom_object = Mock(side_effect=exc)
+        kube_client._api_client.call_api = Mock(side_effect=exc)
         with caplog.at_level("DEBUG", logger="acm_switchover"):
             result = self._delete(kube_client)
         assert "abc123" not in json.dumps(result)
@@ -3616,11 +3623,37 @@ class TestGuardedRestoreDelete:
         assert self._delete(_real_kube_client(pool_manager)) == self._shape(conflict=conflict, reason=reason)
         assert len(pool_manager.calls) == 1
 
+    _DELETED_RESTORE = {
+        "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+        "kind": "Restore",
+        "metadata": {"name": "restore-acm-passive-sync", "uid": "3f0c2a4e-uid", "resourceVersion": "48214"},
+    }
+
+    @pytest.mark.parametrize("status", [200, 202])
+    @pytest.mark.parametrize(
+        "payload",
+        [{"kind": "Status", "apiVersion": "v1", "status": "Success"}, _DELETED_RESTORE],
+        ids=["status-object", "deleted-restore"],
+    )
+    def test_a_real_client_2xx_object_is_acceptance(self, status, payload):
+        """A 202 is as much an accepted DELETE as a 200, whether the server answers with a Status
+        or with the object whose deletion it started. The generated clients decode a DELETE body
+        for 200 only, so the guarded delete reads the raw body itself."""
+        pool_manager = _RecordingPoolManager(status=status, payload=payload)
+
+        result = self._delete(_real_kube_client(pool_manager))
+
+        assert result == self._shape(
+            accepted=True, http_accepted=True, changed=True, reason="ok", uid="3f0c2a4e-uid", resource_version="48213"
+        )
+        assert len(pool_manager.calls) == 1
+
+    @pytest.mark.parametrize("status", [200, 202])
     @pytest.mark.parametrize(("body", "content_type"), _MALFORMED_2XX_BODIES)
-    def test_a_real_client_malformed_2xx_body_is_not_acceptance(self, body, content_type):
+    def test_a_real_client_malformed_2xx_body_is_not_acceptance(self, body, content_type, status):
         """The server answered 2xx, so the Restore may be gone, but nothing in the answer can be
         read as a delete of the proved object: it is not accepted, on every client version."""
-        pool_manager = _RecordingPoolManager(body=body, content_type=content_type)
+        pool_manager = _RecordingPoolManager(status=status, body=body, content_type=content_type)
 
         result = self._delete(_real_kube_client(pool_manager))
 

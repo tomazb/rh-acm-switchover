@@ -2869,6 +2869,29 @@ class TestRestoreCleanupTransaction:
         assert _stored(tmp_path)["cleanup"]["state"] == "delete_accepted"
         assert cleanup_secondary.get_custom_resource_strict.call_count == 62
 
+    @pytest.mark.parametrize("status", [200, 202])
+    def test_a_delete_the_installed_client_sees_answered_2xx_advances_to_delete_accepted(
+        self, tmp_path, cleanup_secondary, no_sleep, status
+    ):
+        """The guarded DELETE runs through the installed kubernetes client down to a faked socket:
+        a 202 carrying the deleted Restore is an accepted delete, exactly like a 200."""
+        from tests.test_kube_client import _real_kube_client, _RecordingPoolManager
+
+        deleted = {
+            "kind": "Restore",
+            "metadata": {"name": "acm-restore", "uid": RESTORE_UID, "resourceVersion": "2003"},
+        }
+        pool_manager = _RecordingPoolManager(status=status, payload=deleted)
+        cleanup_secondary.get_custom_resource_strict.return_value = _live()
+        cleanup_secondary.delete_restore_guarded.side_effect = _real_kube_client(pool_manager).delete_restore_guarded
+        fin = _cleanup_fin(_cleanup_state(tmp_path, CLEANUP_INTENT), cleanup_secondary)
+
+        with pytest.raises(FatalError, match="Timeout waiting for the journaled Restore"):
+            fin._run_restore_cleanup_transaction()
+
+        assert [call["method"] for call in pool_manager.calls] == ["DELETE"]
+        assert _stored(tmp_path)["cleanup"]["state"] == "delete_accepted"
+
     @pytest.mark.parametrize("journal", [CLEANUP_DONE, CLEANUP_REPAIRED], ids=["completed", "repaired"])
     def test_terminal_cleanup_touches_nothing(self, tmp_path, cleanup_secondary, barrier, journal):
         fin = _cleanup_fin(_cleanup_state(tmp_path, journal), cleanup_secondary)

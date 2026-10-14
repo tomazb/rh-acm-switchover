@@ -274,19 +274,7 @@ def test_patch_outcomes_are_classified_identically(python_client, monkeypatch, v
 
 @pytest.mark.parametrize(("vector_id", "outcome"), DELETE_VECTORS, ids=[vector[0] for vector in DELETE_VECTORS])
 def test_delete_outcomes_are_classified_identically(python_client, monkeypatch, vector_id, outcome):
-    kind, value = outcome
-    delete = python_client.custom_api.delete_namespaced_custom_object
-    if kind == "status":
-        delete.side_effect = ApiException(status=value, reason="Rejected")
-    elif kind in ("raise", "deferred"):
-        # The generated method reads the body inside the request: a failed read raises there.
-        delete.side_effect = value()
-    else:
-        # The generated method decodes the body itself; kubernetes 37 raises what it cannot.
-        try:
-            delete.return_value = json.loads(value.decode("utf-8"))
-        except ValueError as exc:
-            delete.side_effect = exc
+    python_client._api_client.call_api = Mock(**_python_answer(outcome))
     python_result = python_client.delete_restore_guarded(
         NAME, namespace=NAMESPACE, uid=UID, resource_version=RESOURCE_VERSION
     )
@@ -296,9 +284,121 @@ def test_delete_outcomes_are_classified_identically(python_client, monkeypatch, 
 
     assert _compared(python_result) == _compared(collection_result), vector_id
     assert collection_result.get("failed", False) is (not python_result["accepted"]), vector_id
-    python_preconditions = delete.call_args.kwargs["body"].preconditions
-    assert {"uid": python_preconditions.uid, "resourceVersion": python_preconditions.resource_version} == (
-        resource.calls[0][1]["body"]["preconditions"]
+    assert python_client._api_client.call_api.call_count == 1 and len(resource.calls) == 1
+    assert python_client._api_client.call_api.call_args.kwargs["body"] == resource.calls[0][1]["body"]
+
+
+class _HubPoolManager:
+    """The urllib3 pool manager under a real, installed `ApiClient`: it serves the discovery
+    documents the dynamic client reads and answers the one Restore request with a fixed
+    status and raw body, so both form factors run the installed client unmocked."""
+
+    _DISCOVERY = {
+        "/apis": {
+            "kind": "APIGroupList",
+            "groups": [
+                {
+                    "name": "cluster.open-cluster-management.io",
+                    "versions": [{"groupVersion": "cluster.open-cluster-management.io/v1beta1", "version": "v1beta1"}],
+                    "preferredVersion": {
+                        "groupVersion": "cluster.open-cluster-management.io/v1beta1",
+                        "version": "v1beta1",
+                    },
+                }
+            ],
+        },
+        "/api": {"kind": "APIVersions", "versions": ["v1"]},
+        "/api/v1": {"kind": "APIResourceList", "groupVersion": "v1", "resources": []},
+        "/apis/cluster.open-cluster-management.io/v1beta1": {
+            "kind": "APIResourceList",
+            "groupVersion": "cluster.open-cluster-management.io/v1beta1",
+            "resources": [{"name": "restores", "kind": "Restore", "namespaced": True, "verbs": ["delete"]}],
+        },
+    }
+
+    def __init__(self, status, body):
+        self._status = status
+        self._body = body
+        self.requests = []
+
+    def request(self, method, url, **kwargs):
+        import io
+        from urllib.parse import urlsplit
+
+        import urllib3
+
+        path = urlsplit(url).path
+        if method == "GET" and path == "/version":
+            status, body = 200, json.dumps({"major": "1", "minor": "35", "gitVersion": "v1.35.0"}).encode()
+        elif method == "GET" and path in self._DISCOVERY:
+            status, body = 200, json.dumps(self._DISCOVERY[path]).encode()
+        else:
+            self.requests.append({"method": method, "path": path, **kwargs})
+            status, body = self._status, self._body
+        return urllib3.HTTPResponse(
+            body=io.BytesIO(body),
+            status=status,
+            reason="Fake",
+            headers={"Content-Type": "application/json"},
+            preload_content=False,
+        )
+
+
+def _installed_api_client(pool_manager):
+    from kubernetes.client import ApiClient, Configuration
+
+    configuration = Configuration()
+    configuration.host = "https://hub.invalid"
+    configuration.api_key = {"BearerToken": "Bearer parity-token", "authorization": "Bearer parity-token"}
+    api_client = ApiClient(configuration=configuration)
+    api_client.rest_client.pool_manager = pool_manager
+    return api_client
+
+
+_DELETED_RESTORE = _restore({"name": NAME, "uid": UID, "resourceVersion": "48300"}).encode()
+_DELETE_STATUS = json.dumps({"kind": "Status", "apiVersion": "v1", "status": "Success"}).encode()
+
+
+@pytest.mark.parametrize("status", [200, 202])
+@pytest.mark.parametrize(
+    "body",
+    [_DELETE_STATUS, _DELETED_RESTORE, b"null", b"[]", b'"Restore"', b"{not json", b"\xff\xfe"],
+    ids=["status-object", "deleted-restore", "null", "list", "string", "invalid-json", "invalid-utf8"],
+)
+def test_a_2xx_delete_through_the_installed_client_is_classified_identically(monkeypatch, tmp_path, status, body):
+    """No decoder is mocked: each form factor sends its DELETE through the installed kubernetes
+    client (36 or 37) to a faked socket. A 202 is accepted exactly like a 200, and a body that is
+    not a JSON object is `malformed_response` in both."""
+    import tempfile
+
+    from kubernetes.dynamic import DynamicClient
+
+    # The dynamic client's discovery cache file lives in the temp directory; keep it per test.
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    python_pool = _HubPoolManager(status, body)
+    python_client = python_form.KubeClient.__new__(python_form.KubeClient)
+    python_client.request_timeout = 30
+    python_client.dry_run = False
+    python_client._api_client = _installed_api_client(python_pool)
+    python_result = python_client.delete_restore_guarded(
+        NAME, namespace=NAMESPACE, uid=UID, resource_version=RESOURCE_VERSION
+    )
+
+    collection_pool = _HubPoolManager(status, body)
+    dynamic = DynamicClient(_installed_api_client(collection_pool))
+    resource = dynamic.resources.get(
+        api_version="cluster.open-cluster-management.io/v1beta1", kind="Restore", name="restores"
+    )
+    collection_result = _run_collection(monkeypatch, {"action": "delete"}, resource)
+
+    assert _compared(python_result) == _compared(collection_result)
+    assert collection_result.get("failed", False) is (not python_result["accepted"])
+    expected = "ok" if body in (_DELETE_STATUS, _DELETED_RESTORE) else "malformed_response"
+    assert (python_result["reason"], python_result["http_accepted"]) == (expected, True)
+    assert [request["method"] for request in python_pool.requests] == ["DELETE"]
+    assert [request["method"] for request in collection_pool.requests] == ["DELETE"]
+    assert json.loads(python_pool.requests[0]["body"])["preconditions"] == (
+        json.loads(collection_pool.requests[0]["body"])["preconditions"]
     )
 
 
@@ -322,7 +422,7 @@ def test_patch_dry_run_and_check_mode_predict_identically_without_a_request(pyth
 
 def test_delete_dry_run_and_check_mode_predict_identically_without_a_request(python_client, monkeypatch):
     python_client.dry_run = True
-    delete = python_client.custom_api.delete_namespaced_custom_object
+    delete = python_client._api_client.call_api
     python_result = python_client.delete_restore_guarded(
         NAME, namespace=NAMESPACE, uid=UID, resource_version=RESOURCE_VERSION
     )

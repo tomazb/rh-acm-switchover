@@ -732,6 +732,14 @@ def test_the_wire_delete_carries_both_preconditions(monkeypatch, tmp_path):
     assert result["changed"] is True
 
 
+@pytest.mark.parametrize("status", [200, 202])
+def test_a_wire_delete_answered_2xx_with_an_object_is_accepted(monkeypatch, tmp_path, status):
+    requests = _wire_client(monkeypatch, tmp_path, (status, {"kind": "Status", "status": "Success"}))
+    result = _run_wire(monkeypatch, _delete_args())
+    assert [request["method"] for request in requests] == ["DELETE"]
+    assert (result.get("failed", False), result["accepted"], result["reason"]) == (False, True, "ok")
+
+
 @pytest.mark.parametrize("body", [None, b"{not json"], ids=["null", "invalid-json"])
 def test_a_wire_delete_answered_2xx_with_a_malformed_body_is_not_accepted(monkeypatch, tmp_path, body):
     requests = _wire_client(monkeypatch, tmp_path, (200, body))

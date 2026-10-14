@@ -166,8 +166,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `malformed_response` (not accepted, `http_accepted` true) in both form factors, on every
   supported `kubernetes` client version. Python accepted a `null`, list or string body (and, before
   client 37, invalid JSON), and the collection accepted invalid JSON; both now refuse it like any
-  other unaccepted delete. The collection DELETE is now sent with `serialize=False` and its body
-  decoded by the module, as for its PATCH and CREATE.
+  other unaccepted delete. Both form factors read the raw DELETE body themselves, as for PATCH and
+  CREATE: the Python guarded DELETE goes through the transport adapter, and the collection DELETE
+  is sent with `serialize=False`. A 202 with a JSON object body is accepted like a 200 (the
+  generated clients decode a DELETE body for a 200 only). Decommission's preconditioned delete is
+  unchanged.
 
 - A corrupt collection checkpoint now keeps blocking (R4-04 PR B, aligned with Python). A
   checkpoint that is not valid JSON (including invalid UTF-8) or whose top level is not a JSON object is copied to
