@@ -485,6 +485,25 @@ def test_the_final_pre_patch_boundary_decides_identically(tmp_path, request, cha
     forms.assert_same(outcomes, compare_message=request.node.callspec.id != "deleted-backup")
 
 
+@pytest.mark.parametrize("selectors", [[{"matchLabels": {"a": "b"}}], []], ids=["shortcut", "no-candidate"])
+def test_a_credentials_backup_replaced_before_the_final_list_issues_zero_patch_identically(tmp_path, selectors):
+    """Codex pre-PR finding 1: the strict GET still sees the frozen UID, the final LIST a replacement."""
+    forms = _frozen_patch(tmp_path)
+    journal = col_checkpoint.migration_backups(forms.store)
+
+    def replace_in_the_list(hub):
+        replacement = ev.backup(ev.CRED_B, uid="uid-replacement", spec={"orLabelSelectors": selectors})
+        items = [raw for name, raw in hub.backups.items() if name != ev.CRED_B] + [replacement]
+        hub.failures["list:backups"] = StrictReadOutcome.from_items(copy.deepcopy(items), "1")
+
+    forms.both(replace_in_the_list)
+    outcomes = forms.run("passive_patch")
+    forms.assert_same(outcomes)
+    assert outcomes[0] is not None and "credential_variant_source_mismatch" in outcomes[0]
+    assert forms.col_hub.mutations == []
+    assert col_checkpoint.migration_backups(forms.store) == journal
+
+
 def test_a_different_activation_method_on_resume_blocks_identically(tmp_path):
     forms = _frozen_patch(tmp_path)
     forms.assert_same(forms.run("passive_restore"))

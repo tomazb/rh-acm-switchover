@@ -342,6 +342,26 @@ def test_a_patch_conflict_records_no_generation_and_the_retry_repatches(run_acti
     assert retry.journal["restore"]["generation"] == 4
 
 
+@pytest.mark.parametrize("selectors", [[{"matchLabels": {"a": "b"}}], []], ids=["shortcut", "no-candidate"])
+def test_a_credentials_backup_replaced_before_the_final_list_issues_zero_patch(run_activation, hub, selectors):
+    """Codex pre-PR finding 1: the strict GET still sees the frozen UID, the final LIST a replacement."""
+    patch_path = f"/apis/cluster.open-cluster-management.io/v1beta1/namespaces/{NS}/restores/{PASSIVE}"
+    hub.failures[("PATCH", patch_path)] = 409
+    frozen = run_activation("passive_patch", hub)
+    assert frozen.completed.returncode != 0
+    assert frozen.journal["restore"]["generation"] is None
+    hub.failures.clear()
+    replacement = dict(copy.deepcopy(hub.backups[CRED_B]), spec={"orLabelSelectors": selectors})
+    replacement["metadata"]["uid"] = "uid-replacement"
+    hub.backup_list_items = [raw for name, raw in hub.backups.items() if name != CRED_B] + [replacement]
+    retry = run_activation("passive_patch", hub)
+    assert retry.completed.returncode != 0
+    assert "credential_variant_source_mismatch" in retry.output
+    assert [request["method"] for request in hub.writes] == ["PATCH"]  # only the first, rejected attempt
+    assert hub.mutations == []
+    assert retry.journal == frozen.journal
+
+
 # --- completion evidence (8c) -------------------------------------------------------------------
 
 

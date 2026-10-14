@@ -472,9 +472,14 @@ def pre_patch(*, journal: Dict[str, Any], live_read: Any, backup_reads: Any, inv
         )
     revalidate_frozen_backups(journal, backup_reads)
     contract = restore["controller_contract"]
-    credentials = journal["backups"]["activation_credentials"]["name"]
     inventory = strict_list(inventory_read, "Velero Backup inventory")
-    variants = _evidence(predict_passive_patch_credential_variants, contract, inventory, credentials)
+    variants = _evidence(
+        predict_passive_patch_credential_variants,
+        contract,
+        inventory,
+        journal["backups"]["activation_credentials"],
+        BACKUP_NAMESPACE,
+    )
     _evidence(predict_passive_patch_child_names, contract, name, journal["backups"])
     return {
         "name": name,

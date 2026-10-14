@@ -4299,9 +4299,14 @@ CRED_SHORTCUT = with_selectors(backup(ACT_CRED_B, start=NEW), SELECTORS)
 CRED_PLAIN = with_selectors(backup(ACT_CRED_B, start=NEW), [])
 
 
-def variants(inventory, contract=LEG, name=ACT_CRED_B):
+def variants(inventory, contract=LEG, frozen=None, namespace=NS):
     others = [raw for raw in PATCH_INVENTORY if raw["metadata"]["name"] != ACT_CRED_B]
-    return {"controller_contract": contract, "inventory": others + inventory, "activation_credentials_name": name}
+    return {
+        "controller_contract": contract,
+        "inventory": others + inventory,
+        "activation_credentials": proj(ACT_CRED_B) if frozen is None else frozen,
+        "namespace": namespace,
+    }
 
 
 fn = "predict_passive_patch_credential_variants"
@@ -4413,20 +4418,56 @@ case(
     variants([CRED_PLAIN, HIVE_EXACT], A17),
     ok("not_requested"),
 )
-for label, contract, name, code in [
-    ("unknown-contract", "legacy", ACT_CRED_B, "unknown_controller_contract"),
-    ("empty-name", LEG, "", "frozen_backups_invalid"),
-    ("null-name", A17, None, "frozen_backups_invalid"),
+for label, contract, frozen, code in [
+    ("unknown-contract", "legacy", None, "unknown_controller_contract"),
+    ("empty-name", LEG, dict(proj(ACT_CRED_B), name=""), "frozen_backups_invalid"),
+    ("null-projection", A17, [], "frozen_backups_invalid"),
+    ("missing-field", LEG, {k: v for k, v in proj(ACT_CRED_B).items() if k != "warnings"}, "frozen_backups_invalid"),
+    ("other-namespace", LEG, dict(proj(ACT_CRED_B), namespace="other"), "frozen_backups_invalid"),
+    ("other-namespace-2.17", A17, dict(proj(ACT_CRED_B), namespace="other"), "frozen_backups_invalid"),
 ]:
     case(
         f"variants-{label}-rejected",
         ALL,
         [],
         fn,
-        variants([CRED_SHORTCUT], contract, name),
+        variants([CRED_SHORTCUT], contract, frozen),
         err(code),
         True,
     )
+# Codex pre-PR finding 1: the selected latest Credentials Backup must be the frozen object,
+# all seven fields, before either branch is permitted; a same-name replacement is refused.
+for label, live, code in [
+    ("replaced-uid", backup(ACT_CRED_B, start=NEW, uid="uid-replacement"), "credential_variant_source_mismatch"),
+    (
+        "completed-at",
+        backup(ACT_CRED_B, start=NEW, completion="2024-01-01T12:06:00Z"),
+        "credential_variant_source_mismatch",
+    ),
+    ("warnings", backup(ACT_CRED_B, start=NEW, warnings=2), "credential_variant_source_mismatch"),
+    ("errors", backup(ACT_CRED_B, start=NEW, errors=1), "backup_has_errors"),
+    ("phase", backup(ACT_CRED_B, start=NEW, phase="PartiallyFailed"), "backup_not_completed"),
+    ("namespace", backup(ACT_CRED_B, start=NEW, namespace="other"), "backup_namespace_mismatch"),
+]:
+    for branch, selectors in [("shortcut", SELECTORS), ("no-candidate", [])]:
+        case(
+            f"variants-legacy-{label}-{branch}-frozen-mismatch-blocks",
+            LEGACY,
+            VAR_L,
+            fn,
+            variants([with_selectors(live, selectors)]),
+            err(code),
+            True,
+        )
+case(
+    "variants-legacy-frozen-warnings-differ-blocks",
+    LEGACY,
+    VAR_L,
+    fn,
+    variants([CRED_SHORTCUT], frozen=dict(proj(ACT_CRED_B), warnings=1)),
+    err("credential_variant_source_mismatch"),
+    True,
+)
 
 fn = "require_no_credential_variant_children"
 VARC_L = refs2(LEGACY, "variant_substring", "owner", "index")

@@ -176,6 +176,8 @@ class FakeMigrationHub:
         self.controller = controller
         # (method, path prefix) -> HTTP status served instead of the object.
         self.failures: dict[tuple[str, str], int] = {}
+        # Served by the Velero Backup LIST instead of the store, while a GET still reads the store.
+        self.backup_list_items: list[dict] | None = None
         self.mutations: list[tuple[str, str, Any]] = []
         self._requests: list[dict] = []
         self._rv = 2000
@@ -409,12 +411,15 @@ class FakeMigrationHub:
                         return
                     store, list_kind, api_version, name = target
                     if name is None:
+                        items = list(store.values())
+                        if store is hub.backups and hub.backup_list_items is not None:
+                            items = hub.backup_list_items
                         self._json(
                             {
                                 "apiVersion": api_version,
                                 "kind": list_kind,
                                 "metadata": {"resourceVersion": hub.next_rv()},
-                                "items": [copy.deepcopy(item) for item in store.values()],
+                                "items": [copy.deepcopy(item) for item in items],
                             }
                         )
                         return

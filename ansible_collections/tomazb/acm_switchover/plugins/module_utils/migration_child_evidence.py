@@ -22,6 +22,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_ev
     ACM_MINOR_CONTRACTS,
     SCHEDULE_TOKENS,
     MigrationEvidenceError,
+    normalize_backup_evidence,
     predict_correlated_backup,
     predict_latest_backup,
     select_correlated_evidence,
@@ -315,22 +316,27 @@ def predict_passive_patch_child_names(
 
 
 def predict_passive_patch_credential_variants(
-    controller_contract: Any, inventory: Any, activation_credentials_name: Any
+    controller_contract: Any, inventory: Any, activation_credentials: Any, namespace: str
 ) -> str:
     """Decide the legacy passive_patch hive/cluster credential requests before the PATCH.
 
     PR C decisions amendment section 1.2 rule 1, on the strictly complete Backup
     inventory of the final pre-PATCH boundary. The controller resolves both
     requests from the latest Credentials Backup, which must be the frozen
-    activation_credentials Backup. "shortcut": its spec.orLabelSelectors is
-    non-empty, so both requests reuse it. "no_candidate": neither token
-    correlates with it. "not_requested": 2.17 has no such request types.
-    A different latest Backup, a correlated selection, an ambiguity or a
-    malformed inventory raises, so the PATCH is never issued.
+    activation_credentials Backup: its seven-field projection must equal the
+    frozen one, so a same-name replacement is refused. "shortcut": its
+    spec.orLabelSelectors is non-empty, so both requests reuse it.
+    "no_candidate": neither token correlates with it. "not_requested": 2.17
+    has no such request types. A different latest Backup, a correlated
+    selection, an ambiguity or a malformed inventory raises, so the PATCH is
+    never issued.
     """
     _require_contract(controller_contract)
-    if not _non_empty_str(activation_credentials_name):
-        raise MigrationEvidenceError("frozen_backups_invalid", "the frozen credentials Backup has no name")
+    try:
+        frozen = validate_backup_projection(activation_credentials, namespace)
+    except MigrationEvidenceError as exc:
+        raise MigrationEvidenceError("frozen_backups_invalid", str(exc)) from exc
+    activation_credentials_name = frozen["name"]
     if controller_contract == _ACTIVE:
         return "not_requested"
     raw = predict_latest_backup(inventory, "Credentials")[1]
@@ -338,6 +344,11 @@ def predict_passive_patch_credential_variants(
         raise MigrationEvidenceError(
             "credential_variant_source_mismatch",
             f"the latest Credentials Backup is not the frozen {activation_credentials_name}",
+        )
+    if normalize_backup_evidence(raw, namespace) != frozen:
+        raise MigrationEvidenceError(
+            "credential_variant_source_mismatch",
+            f"the latest Credentials Backup {activation_credentials_name} was replaced or drifted since the freeze",
         )
     spec = raw.get("spec", {})
     selectors = spec.get("orLabelSelectors") if isinstance(spec, dict) else None

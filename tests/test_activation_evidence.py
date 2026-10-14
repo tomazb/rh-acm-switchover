@@ -475,6 +475,18 @@ class TestPassivePatchBoundary:
         assert hub.mutations == []
         assert RunRecord(state).migration_backups()["backups"] == journal["backups"]
 
+    @pytest.mark.parametrize("selectors", [[{"matchLabels": {"a": "b"}}], []], ids=["shortcut", "no-candidate"])
+    def test_a_credentials_backup_replaced_before_the_final_list_issues_zero_patch(self, state, selectors):
+        """Codex pre-PR finding 1: the strict GET still sees the frozen UID, the final LIST a replacement."""
+        hub, journal = self._frozen(state)
+        replacement = backup(CRED_B, uid="uid-replacement", spec={"orLabelSelectors": selectors})
+        items = [raw for name, raw in hub.backups.items() if name != CRED_B] + [replacement]
+        hub.failures["list:backups"] = StrictReadOutcome.from_items(copy.deepcopy(items), "1")
+        with pytest.raises(FatalError, match="credential_variant_source_mismatch"):
+            _activation(hub, state, "passive_patch")._apply_migration_mutation()
+        assert hub.mutations == []
+        assert RunRecord(state).migration_backups() == journal
+
     @pytest.mark.parametrize(
         "mutate",
         [

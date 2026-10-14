@@ -445,9 +445,12 @@ class SecondaryActivation:
             raise FatalError(f"{name} changed since the migration freeze; the journaled precondition no longer holds")
         self._revalidate_frozen_backups(journal)
         contract = restore["controller_contract"]
-        credentials = journal["backups"]["activation_credentials"]["name"]
         variants = self._evidence(
-            predict_passive_patch_credential_variants, contract, self._strict_backup_inventory(), credentials
+            predict_passive_patch_credential_variants,
+            contract,
+            self._strict_backup_inventory(),
+            journal["backups"]["activation_credentials"],
+            BACKUP_NAMESPACE,
         )
         logger.info("Hive/cluster credential requests before the patch: %s", variants)
         self._evidence(predict_passive_patch_child_names, contract, name, journal["backups"])
