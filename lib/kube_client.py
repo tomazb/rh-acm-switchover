@@ -1632,8 +1632,9 @@ class KubeClient:
         Delegates the one request to `delete_custom_resource_preconditioned` with both
         preconditions and maps its outcome to the guarded-mutation result shape (see
         `json_patch_custom_resource_guarded`), without `generation`. A 409/412 is
-        `precondition_failed` with `conflict` True, a 404 is `not_found`, and anything else,
-        including a timeout, is `unverifiable`. Nothing is retried and no exception text is
+        `precondition_failed` with `conflict` True, a 404 is `not_found`, a 2xx whose body is
+        not a decodable JSON object is `malformed_response` with `accepted` False, and anything
+        else, including a timeout, is `unverifiable`. Nothing is retried and no exception text is
         returned. In dry-run the primitive is never reached: the result is a prediction.
 
         Raises:
@@ -1655,16 +1656,26 @@ class KubeClient:
             return result
 
         try:
-            self.delete_custom_resource_preconditioned(
-                CLUSTER_BACKUP_API_GROUP,
-                CLUSTER_BACKUP_API_VERSION,
+            with _undecodable_body_is_malformed():
+                response = self.delete_custom_resource_preconditioned(
+                    CLUSTER_BACKUP_API_GROUP,
+                    CLUSTER_BACKUP_API_VERSION,
+                    RESTORE_PLURAL,
+                    name,
+                    uid=uid,
+                    resource_version=resource_version,
+                    namespace=namespace,
+                    timeout_seconds=(timeout_seconds if timeout_seconds is not None else self.request_timeout),
+                )
+            _json_object(response)
+        except MalformedResponseError:
+            logger.error(
+                "Guarded delete of %s/%s was answered 2xx with a malformed body; it is not accepted",
                 RESTORE_PLURAL,
                 name,
-                uid=uid,
-                resource_version=resource_version,
-                namespace=namespace,
-                timeout_seconds=(timeout_seconds if timeout_seconds is not None else self.request_timeout),
             )
+            result.update(http_accepted=True, reason="malformed_response")
+            return result
         except PreconditionConflict:
             logger.warning(
                 "Guarded delete of %s/%s rejected: the live object is not the proved one", RESTORE_PLURAL, name
@@ -1908,7 +1919,7 @@ class KubeClient:
         resource_version: Optional[str] = None,
         namespace: Optional[str] = None,
         timeout_seconds: Optional[int] = None,
-    ) -> None:
+    ) -> object:
         """Delete a custom resource only if it is still the object identified by ``uid``.
 
         The preconditions travel in the delete body, so the API server evaluates them
@@ -1923,6 +1934,9 @@ class KubeClient:
         would convert the 404 into a ``True`` return, making an accepted delete and an
         already-absent object indistinguishable -- exactly the ambiguity this primitive
         exists to remove.
+
+        Returns the response body as the installed client decoded it, unvalidated; a caller
+        that reads it as evidence validates it itself.
 
         Raises:
             ValidationError: name/namespace invalid, or ``uid`` empty.
@@ -1958,7 +1972,7 @@ class KubeClient:
 
         try:
             if namespace:
-                self.custom_api.delete_namespaced_custom_object(
+                return self.custom_api.delete_namespaced_custom_object(
                     group=group,
                     version=version,
                     namespace=namespace,
@@ -1966,10 +1980,9 @@ class KubeClient:
                     name=name,
                     **kwargs,
                 )
-            else:
-                self.custom_api.delete_cluster_custom_object(
-                    group=group, version=version, plural=plural, name=name, **kwargs
-                )
+            return self.custom_api.delete_cluster_custom_object(
+                group=group, version=version, plural=plural, name=name, **kwargs
+            )
         except ApiException as exc:
             if exc.status in (409, 412):
                 raise PreconditionConflict(

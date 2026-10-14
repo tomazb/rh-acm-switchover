@@ -34,6 +34,8 @@ description:
     C(generation) published, and when it omits one C(generation_reported) is false. A
     response with any other identity, or with a C(generation) that is present but not a
     positive integer, fails with C(reason=malformed_response); this holds for a create too.
+    A 2xx response of any action whose body is not a decodable JSON object fails with
+    C(reason=malformed_response) and is never acceptance.
   - Owns no read, polling or phase policy. Check mode makes no API call and reports the
     prediction in C(would_change).
 options:
@@ -170,7 +172,8 @@ reason:
     - C(ok), C(predicted) (check mode), C(precondition_failed), C(not_found),
       C(already_exists) (a create whose name is taken), C(unverifiable), C(invalid_input)
       or C(malformed_response) (a successful PATCH or CREATE whose response lacks the proved
-      or requested identity or a resourceVersion; the module fails).
+      or requested identity or a resourceVersion, or a successful request of any action whose
+      body is not a JSON object; the module fails).
   returned: always
   type: str
   sample: ok
@@ -439,9 +442,9 @@ def _validated_request(params: dict):
 
 
 def _submit(resource, params: dict, patch_ops):
-    """The one guarded request. Returns the raw PATCH response body; a DELETE returns None.
+    """The one guarded request. Returns its raw response body.
 
-    The PATCH is not deserialized by the client, and its body is read here, inside the
+    No response is deserialized by the client, and its body is read here, inside the
     caller's failure boundary: a failure reading it leaves the outcome unknown and is never
     taken for acceptance. Decoding is left to the caller, as in the Python helper.
     """
@@ -457,7 +460,7 @@ def _submit(resource, params: dict, patch_ops):
             serialize=False,
         )
         return raw.data
-    resource.delete(
+    raw = resource.delete(
         name=params["name"],
         namespace=params["namespace"],
         body={
@@ -468,8 +471,9 @@ def _submit(resource, params: dict, patch_ops):
                 "resourceVersion": params["expected_resource_version"],
             },
         },
+        serialize=False,
     )
-    return None
+    return raw.data
 
 
 def _failure_message(action: str, name: str, conflict: bool, reason: str) -> str:
@@ -556,6 +560,14 @@ def run_module(module: AnsibleModule) -> None:
             )
             return
     else:
+        if _decode_response(response) is None:
+            fail(
+                f"The response to the guarded delete of {params['name']} is not a JSON object, "
+                "so the delete is not verified.",
+                http_accepted=True,
+                reason=REASON_MALFORMED_RESPONSE,
+            )
+            return
         result.update(
             accepted=True,
             http_accepted=True,

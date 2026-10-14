@@ -82,13 +82,19 @@ PATCH_VECTORS = [
 ]
 
 DELETE_VECTORS = [
-    ("accepted", ("ok", None)),
+    ("accepted", ("body", json.dumps({"kind": "Status", "status": "Success"}).encode())),
+    ("accepted_object", ("body", _restore({"uid": UID, "resourceVersion": "48300"}).encode())),
+    ("malformed_undecodable", ("body", b"<html>")),
+    ("malformed_invalid_utf8", ("body", b"\xff\xfe")),
+    ("malformed_list", ("body", b"[]")),
+    ("malformed_null", ("body", b"null")),
     ("conflict_409", ("status", 409)),
     ("conflict_412", ("status", 412)),
     ("not_found_404", ("status", 404)),
     ("forbidden_403", ("status", 403)),
     ("server_error_500", ("status", 500)),
     ("timeout", ("raise", lambda: ReadTimeoutError(None, "/restores", "read timed out"))),
+    ("deferred_timeout", ("deferred", lambda: ReadTimeoutError(None, "/restores", "read timed out"))),
 ]
 
 PATCH_INPUTS = [
@@ -128,8 +134,6 @@ def _collection_answer(outcome):
         raise value()
     if kind == "deferred":
         return _DeferredBody(value())
-    if kind == "ok":
-        return None
     return Mock(data=value)
 
 
@@ -274,10 +278,15 @@ def test_delete_outcomes_are_classified_identically(python_client, monkeypatch, 
     delete = python_client.custom_api.delete_namespaced_custom_object
     if kind == "status":
         delete.side_effect = ApiException(status=value, reason="Rejected")
-    elif kind == "raise":
+    elif kind in ("raise", "deferred"):
+        # The generated method reads the body inside the request: a failed read raises there.
         delete.side_effect = value()
     else:
-        delete.return_value = {}
+        # The generated method decodes the body itself; kubernetes 37 raises what it cannot.
+        try:
+            delete.return_value = json.loads(value.decode("utf-8"))
+        except ValueError as exc:
+            delete.side_effect = exc
     python_result = python_client.delete_restore_guarded(
         NAME, namespace=NAMESPACE, uid=UID, resource_version=RESOURCE_VERSION
     )

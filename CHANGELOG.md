@@ -161,6 +161,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   object is `malformed_response` (not accepted, no applied evidence, nothing mutated again) on
   every supported `kubernetes` client version, as in the collection; on 37 it was reported as
   `unverifiable`.
+- A guarded Restore DELETE answered 2xx with a body that is not a decodable JSON object is now
+  `malformed_response` (not accepted, `http_accepted` true) in both form factors, on every
+  supported `kubernetes` client version. Python accepted a `null`, list or string body (and, before
+  client 37, invalid JSON), and the collection accepted invalid JSON; both now refuse it like any
+  other unaccepted delete. The collection DELETE is now sent with `serialize=False` and its body
+  decoded by the module, as for its PATCH and CREATE.
 
 - A corrupt collection checkpoint now keeps blocking (R4-04 PR B, aligned with Python). A
   checkpoint that is not valid JSON (including invalid UTF-8) or whose top level is not a JSON object is copied to

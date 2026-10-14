@@ -3588,6 +3588,51 @@ class TestGuardedRestoreDelete:
         assert "abc123" not in json.dumps(result)
         assert "abc123" not in caplog.text
 
+    def test_the_guarded_delete_binds_the_real_api_client_signature(self):
+        pool_manager = _RecordingPoolManager(payload={"kind": "Status", "status": "Success"})
+
+        result = self._delete(_real_kube_client(pool_manager), timeout_seconds=9)
+
+        assert result == self._shape(
+            accepted=True, http_accepted=True, changed=True, reason="ok", uid="3f0c2a4e-uid", resource_version="48213"
+        )
+        [call] = pool_manager.calls
+        assert call["method"] == "DELETE"
+        assert call["url"].endswith(
+            "/apis/cluster.open-cluster-management.io/v1beta1/namespaces/open-cluster-management-backup"
+            "/restores/restore-acm-passive-sync"
+        )
+        assert json.loads(call["body"])["preconditions"] == {"uid": "3f0c2a4e-uid", "resourceVersion": "48213"}
+        assert call["timeout"].total == 9
+
+    @pytest.mark.parametrize(
+        ("status", "conflict", "reason"),
+        [(409, True, "precondition_failed"), (412, True, "precondition_failed"), (404, False, "not_found")]
+        + [(status, False, "unverifiable") for status in (403, 500, 504)],
+    )
+    def test_a_real_client_http_error_is_classified_once(self, status, conflict, reason):
+        pool_manager = _RecordingPoolManager(status=status, payload={"kind": "Status", "code": status})
+
+        assert self._delete(_real_kube_client(pool_manager)) == self._shape(conflict=conflict, reason=reason)
+        assert len(pool_manager.calls) == 1
+
+    @pytest.mark.parametrize(("body", "content_type"), _MALFORMED_2XX_BODIES)
+    def test_a_real_client_malformed_2xx_body_is_not_acceptance(self, body, content_type):
+        """The server answered 2xx, so the Restore may be gone, but nothing in the answer can be
+        read as a delete of the proved object: it is not accepted, on every client version."""
+        pool_manager = _RecordingPoolManager(body=body, content_type=content_type)
+
+        result = self._delete(_real_kube_client(pool_manager))
+
+        assert result == self._shape(http_accepted=True, reason="malformed_response")
+        assert len(pool_manager.calls) == 1
+
+    def test_a_real_client_body_read_failure_is_not_acceptance(self):
+        pool_manager = _RecordingPoolManager(body=_UnreadableBody(ReadTimeoutError(None, "/restores", "timed out")))
+
+        assert self._delete(_real_kube_client(pool_manager)) == self._shape()
+        assert len(pool_manager.calls) == 1
+
 
 class TestGuardedRestoreCreate:
     """R4-04 PR C Task 7: one create request; acceptance only from a 2xx body that names the

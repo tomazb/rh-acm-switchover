@@ -110,8 +110,14 @@ class FakeResource:
         return result
 
     def delete(self, **kwargs):
+        """Like patch: the raw response of a ``serialize=False`` request."""
         self.calls.append(("delete", kwargs))
-        return self._answer(self.delete_result)
+        result = self._answer(self.delete_result)
+        if isinstance(result, bytes):
+            return _RawResponse(result)
+        if result is None or isinstance(result, (dict, list, str)):
+            return _RawResponse(json.dumps(result).encode("utf-8"))
+        return result
 
     def create(self, **kwargs):
         """Like patch: the raw response of a ``serialize=False`` request."""
@@ -260,6 +266,36 @@ def test_delete_failures_follow_the_shared_classification_and_are_never_retried(
     assert (result["conflict"], result["reason"]) == (conflict, reason)
     assert (result["changed"], result["accepted"]) == (False, False)
     assert [name for name, _ in resource.calls] == ["delete"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [None, [], "Restore", b"{not json", b"\xff\xfe", b""],
+    ids=["null", "list", "string", "invalid-json", "invalid-utf8", "empty"],
+)
+def test_a_2xx_delete_whose_body_is_not_a_json_object_is_never_acceptance(monkeypatch, body):
+    """The server answered 2xx, but nothing in the answer can be read as the delete of the
+    proved Restore: it is `malformed_response`, as in the Python helper."""
+    resource = FakeResource(delete_result=body)
+    result = _run(monkeypatch, _delete_args(), resource=resource)
+
+    assert result["failed"] is True
+    assert (result["accepted"], result["http_accepted"], result["changed"]) == (False, True, False)
+    assert (result["reason"], result["uid"], result["resource_version"]) == ("malformed_response", None, None)
+    assert [name for name, _ in resource.calls] == ["delete"]
+
+
+def test_a_delete_whose_body_cannot_be_read_is_never_acceptance(monkeypatch):
+    class _UnreadableResponse:
+        @property
+        def data(self):
+            raise ReadTimeoutError(None, "/restores", "read timed out")
+
+    resource = FakeResource(delete_result=_UnreadableResponse())
+    result = _run(monkeypatch, _delete_args(), resource=resource)
+
+    assert result["failed"] is True
+    assert (result["accepted"], result["http_accepted"], result["reason"]) == (False, False, "unverifiable")
 
 
 # --- the guarded patch ------------------------------------------------------------------
@@ -442,6 +478,7 @@ def test_delete_sends_both_uid_and_resource_version_preconditions(monkeypatch):
                     "kind": "DeleteOptions",
                     "preconditions": {"uid": "3f0c2a4e-uid", "resourceVersion": "48213"},
                 },
+                "serialize": False,
             },
         )
     ]
@@ -629,7 +666,8 @@ def _wire_client(monkeypatch, tmp_path, answer):
             )
         requests.append({"method": method, "path": path, **kwargs})
         status, body = answer
-        return HTTPResponse(body=json.dumps(body).encode(), status=status, headers={"Content-Type": "application/json"})
+        raw = body if isinstance(body, bytes) else json.dumps(body).encode()
+        return HTTPResponse(body=raw, status=status, headers={"Content-Type": "application/json"})
 
     import tempfile
 
@@ -692,6 +730,15 @@ def test_the_wire_delete_carries_both_preconditions(monkeypatch, tmp_path):
     assert [request["method"] for request in requests] == ["DELETE"]
     assert json.loads(requests[0]["body"])["preconditions"] == {"uid": "3f0c2a4e-uid", "resourceVersion": "48213"}
     assert result["changed"] is True
+
+
+@pytest.mark.parametrize("body", [None, b"{not json"], ids=["null", "invalid-json"])
+def test_a_wire_delete_answered_2xx_with_a_malformed_body_is_not_accepted(monkeypatch, tmp_path, body):
+    requests = _wire_client(monkeypatch, tmp_path, (200, body))
+    result = _run_wire(monkeypatch, _delete_args())
+    assert [request["method"] for request in requests] == ["DELETE"]
+    assert (result["failed"], result["accepted"], result["http_accepted"]) == (True, False, True)
+    assert result["reason"] == "malformed_response"
 
 
 # --- documentation ----------------------------------------------------------------------
