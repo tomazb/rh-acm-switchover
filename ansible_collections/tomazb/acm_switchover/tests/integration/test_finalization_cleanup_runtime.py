@@ -627,6 +627,86 @@ def test_collision_recreation_requires_a_fresh_absent_locator(run_activation, ru
     assert hub.acm[name]["metadata"]["uid"] == "uid-replacement"
 
 
+_SCHEDULES_PATH = (
+    "/apis/cluster.open-cluster-management.io/v1beta1/namespaces/open-cluster-management-backup/backupschedules"
+)
+
+
+def _collision_schedule(hub):
+    schedule = {
+        "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+        "kind": "BackupSchedule",
+        "metadata": {"name": "schedule-rhacm", "namespace": "open-cluster-management-backup", "uid": "uid-bs"},
+        "spec": {"veleroSchedule": "0 */1 * * *"},
+        "status": {"phase": "Enabled"},
+    }
+    hub.schedules["schedule-rhacm"] = schedule
+    return schedule
+
+
+def _schedule_writes(hub):
+    return [
+        r["method"] for r in hub.requests if r["method"] in {"DELETE", "POST", "PUT"} and _SCHEDULES_PATH in r["path"]
+    ]
+
+
+def test_collision_repair_never_reads_the_locator_between_the_delete_and_the_recreate(
+    run_activation, run_finalization, hub  # noqa: F811
+):
+    """CodeRabbit 4274709915: the last locator proof precedes the BackupSchedule DELETE, as in
+    Python, so a read failure there can never strike between the DELETE and the re-create."""
+    journal = completed_journal(run_activation, "full_restore", hub)
+    assert run_finalization("full_restore", hub, journal).journal["cleanup"]["state"] == "completed"
+    locator = _RESTORES + journal["restore"]["name"]
+    schedule = _collision_schedule(hub)
+    plain_failure = hub._failure
+
+    def fail_locator_reads_after_the_schedule_delete(method, path):
+        if method == "GET" and path == locator and "DELETE" in _schedule_writes(hub):
+            return 500
+        return plain_failure(method, path)
+
+    hub._failure = fail_locator_reads_after_the_schedule_delete
+
+    run = run_finalization(
+        "full_restore",
+        hub,
+        None,
+        tasks=("cleanup_journaled_restore", "repair_backup_schedule_collision"),
+        published={"acm_finalization_backup_schedules_info": {"resources": [schedule]}},
+    )
+
+    assert run.completed.returncode == 0, run.output
+    assert _schedule_writes(hub) == ["DELETE", "POST"]
+    assert "schedule-rhacm" in hub.schedules
+
+
+def test_a_locator_read_error_before_collision_repair_leaves_the_schedule_and_is_retryable(
+    run_activation, run_finalization, hub  # noqa: F811
+):
+    journal = completed_journal(run_activation, "full_restore", hub)
+    assert run_finalization("full_restore", hub, journal).journal["cleanup"]["state"] == "completed"
+    locator = _RESTORES + journal["restore"]["name"]
+    schedule = _collision_schedule(hub)
+    hub.failures[("GET", locator)] = 500
+    args = {
+        "tasks": ("cleanup_journaled_restore", "repair_backup_schedule_collision"),
+        "published": {"acm_finalization_backup_schedules_info": {"resources": [schedule]}},
+    }
+
+    refused = run_finalization("full_restore", hub, None, **args)
+
+    assert refused.completed.returncode != 0
+    assert _schedule_writes(hub) == []
+    assert hub.schedules["schedule-rhacm"]["metadata"]["uid"] == "uid-bs"
+
+    del hub.failures[("GET", locator)]
+    retried = run_finalization("full_restore", hub, None, **args)
+
+    assert retried.completed.returncode == 0, retried.output
+    assert _schedule_writes(hub) == ["DELETE", "POST"]
+
+
 def test_the_poll_deadline_writes_no_completion(run_activation, run_finalization, hub):  # noqa: F811
     """Finding 4: the shared poll timeout is elapsed time; once spent, nothing completes."""
     journal = completed_journal(run_activation, "full_restore", hub)

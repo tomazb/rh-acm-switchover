@@ -69,21 +69,25 @@ def test_the_enablement_gate_precedes_every_backup_schedule_write():
 
 
 def test_every_collision_recreation_is_gated_on_a_proven_empty_locator():
-    """Finding 1: the delete/recreate cycle, the recreate and the rescue restoration each re-prove absence."""
+    """Finding 1: the delete/recreate cycle and the rescue restoration each re-prove absence first.
+
+    CodeRabbit 4274709915: the cycle's proof is the step right before its DELETE, never between
+    the DELETE and the re-create, where a refusal or a read failure would leave no BackupSchedule.
+    """
     tasks = _load("repair_backup_schedule_collision.yml")
     names = [task.get("name") for task in tasks]
-    assert names.index("Prove the journaled Restore locator empty before collision repair") < names.index(
-        "Recreate BackupSchedule for collision repair"
-    )
-    cycle = tasks[names.index("Recreate BackupSchedule for collision repair")]
-    for section, write in (
-        (cycle["block"], "Recreate BackupSchedule after collision repair delete"),
-        (cycle["rescue"][1]["block"], "Restore BackupSchedule from saved body after failed collision repair"),
-    ):
-        steps = [task.get("name") for task in section]
-        gate = steps.index(write) - 1
-        assert section[gate][_INCLUDE] == "require_journaled_locator_absent.yml"
-        assert section[gate]["when"] == "not (_acm_preview | bool)"
+    cycle_index = names.index("Recreate BackupSchedule for collision repair")
+    gate = tasks[cycle_index - 1]
+    assert gate["name"] == "Prove the journaled Restore locator empty before collision repair"
+    assert gate[_INCLUDE] == "require_journaled_locator_absent.yml"
+    cycle = tasks[cycle_index]
+    assert cycle["block"][0]["name"] == "Delete BackupSchedule for collision repair"
+    assert not [task for task in cycle["block"] if _INCLUDE in task], "no locator proof inside the delete/recreate"
+    restoration = cycle["rescue"][1]["block"]
+    steps = [task.get("name") for task in restoration]
+    restore_gate = restoration[steps.index("Restore BackupSchedule from saved body after failed collision repair") - 1]
+    assert restore_gate[_INCLUDE] == "require_journaled_locator_absent.yml"
+    assert restore_gate["when"] == "not (_acm_preview | bool)"
 
 
 def test_the_journaled_locator_is_deleted_only_by_the_guarded_primitive():

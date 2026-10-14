@@ -162,6 +162,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   object is `malformed_response` (not accepted, no applied evidence, nothing mutated again) on
   every supported `kubernetes` client version, as in the collection; on 37 it was reported as
   `unverifiable`.
+- BackupSchedule collision repair now proves the journaled Restore locator empty as the last step
+  before it deletes the BackupSchedule, and no longer between the delete and the re-create, in both
+  form factors. A locator refusal or a transient read failure now leaves the existing BackupSchedule
+  untouched and a plain retry repairs it; before, it could leave the hub with no BackupSchedule and a
+  retry that failed with "No BackupSchedule found". The Python refusal is no longer wrapped as
+  "Failed to recreate BackupSchedule".
 - Post-activation readiness with a zero ManagedCluster floor and no expected name (for example an
   explicit `min_managed_clusters: 0` / `--min-managed-clusters 0` empty target) now accepts an
   empty ManagedCluster inventory, as activation already did: a hub with self-management disabled

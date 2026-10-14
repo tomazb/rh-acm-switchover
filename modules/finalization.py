@@ -1558,10 +1558,6 @@ class Finalization:
                 phase or "Unknown",
             )
 
-        # R4-04: an enabled BackupSchedule is recreated only after terminal Restore cleanup and a
-        # fresh strict read proving the journaled locator empty, enablement marker or not.
-        self._require_journaled_locator_absent(self._cleanup_journal)
-
         schedule_uid = schedule.get("metadata", {}).get("uid")
         # Save the spec for recreation
         schedule_spec = schedule.get("spec", {})
@@ -1575,12 +1571,17 @@ class Finalization:
             namespace=BACKUP_NAMESPACE,
         )
 
+        # R4-04: an enabled BackupSchedule is recreated only after terminal Restore cleanup and a
+        # fresh strict read proving the journaled locator empty, enablement marker or not. The
+        # proof is the last step before the first mutation, never between the delete and the
+        # re-create: a refusal or a read failure there would leave the hub without a schedule.
         if not current_schedule:
             logger.warning(
                 "BackupSchedule %s no longer exists (may have been deleted by another process), creating new one",
                 schedule_name,
             )
             # Skip deletion, just create new schedule below
+            self._require_journaled_locator_absent(self._cleanup_journal)
         else:
             current_uid = current_schedule.get("metadata", {}).get("uid")
             if schedule_uid and current_uid and current_uid != schedule_uid:
@@ -1593,6 +1594,7 @@ class Finalization:
             # Use latest spec to avoid recreating from stale data
             schedule_spec = current_schedule.get("spec", {})
 
+            self._require_journaled_locator_absent(self._cleanup_journal)
             # Delete the old schedule
             try:
                 self.secondary.delete_custom_resource(
@@ -1625,7 +1627,6 @@ class Finalization:
                 "spec": schedule_spec,
             }
 
-            self._require_journaled_locator_absent(self._cleanup_journal)
             self.secondary.create_custom_resource(
                 group=CLUSTER_BACKUP_API_GROUP,
                 version=CLUSTER_BACKUP_API_VERSION,

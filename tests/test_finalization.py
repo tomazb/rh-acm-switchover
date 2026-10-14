@@ -3195,6 +3195,7 @@ def test_collision_recreation_requires_a_fresh_absent_locator(tmp_path, cleanup_
     cleanup_secondary.list_custom_resources_strict.return_value = StrictReadOutcome.from_items(
         [{"metadata": {"name": "schedule", "uid": "uid-1"}, "spec": {}, "status": {"phase": "Enabled"}}]
     )
+    cleanup_secondary.get_custom_resource.return_value = {"metadata": {"name": "schedule", "uid": "uid-1"}, "spec": {}}
     cleanup_secondary.get_custom_resource_strict.return_value = _live(uid="uid-new", rv="3003")
     state = _cleanup_state(tmp_path, CLEANUP_DONE)
     state.mark_step_completed("enable_backup_schedule")
@@ -3207,6 +3208,56 @@ def test_collision_recreation_requires_a_fresh_absent_locator(tmp_path, cleanup_
     cleanup_secondary.delete_custom_resource.assert_not_called()
     cleanup_secondary.delete_custom_resource_preconditioned.assert_not_called()
     cleanup_secondary.create_custom_resource.assert_not_called()
+
+
+def _collision_fin(tmp_path, cleanup_secondary):
+    schedule = {"metadata": {"name": "schedule", "uid": "uid-1"}, "spec": {"paused": False}, "status": {}}
+    cleanup_secondary.list_custom_resources_strict.return_value = StrictReadOutcome.from_items([schedule])
+    cleanup_secondary.get_custom_resource.return_value = copy.deepcopy(schedule)
+    state = _cleanup_state(tmp_path, CLEANUP_DONE)
+    state.mark_step_completed("enable_backup_schedule")
+    fin = _cleanup_fin(state, cleanup_secondary)
+    fin._cleanup_journal = CLEANUP_DONE
+    return fin
+
+
+@pytest.mark.unit
+def test_collision_repair_never_reads_the_locator_between_the_delete_and_the_recreate(tmp_path, cleanup_secondary):
+    """CodeRabbit 4274709915: the last locator proof precedes the BackupSchedule DELETE. A read
+    failure that would have struck between the DELETE and the re-create can no longer leave
+    the hub without a BackupSchedule."""
+    fin = _collision_fin(tmp_path, cleanup_secondary)
+    cleanup_secondary.get_custom_resource_strict.side_effect = [ABSENT, StrictReadOutcome.error("Timeout")]
+
+    with patch.object(fin, "_wait_for_backup_schedule_deletion"):
+        fin._fix_backup_schedule_collision()
+
+    assert cleanup_secondary.get_custom_resource_strict.call_count == 1
+    cleanup_secondary.delete_custom_resource.assert_called_once()
+    cleanup_secondary.create_custom_resource.assert_called_once()
+
+
+@pytest.mark.unit
+def test_a_transient_locator_read_error_leaves_the_backup_schedule_intact_and_retryable(tmp_path, cleanup_secondary):
+    fin = _collision_fin(tmp_path, cleanup_secondary)
+    cleanup_secondary.get_custom_resource_strict.side_effect = [StrictReadOutcome.error("Timeout")]
+
+    with patch.object(fin, "_wait_for_backup_schedule_deletion"):
+        with pytest.raises(FatalError, match="unreadable is never absent") as refused:
+            fin._fix_backup_schedule_collision()
+
+    # Raised as the real cause, not wrapped as a recreate failure.
+    assert "Failed to recreate" not in str(refused.value)
+    cleanup_secondary.delete_custom_resource.assert_not_called()
+    cleanup_secondary.create_custom_resource.assert_not_called()
+
+    # The BackupSchedule is still there, so a plain retry repairs it.
+    cleanup_secondary.get_custom_resource_strict.side_effect = None
+    cleanup_secondary.get_custom_resource_strict.return_value = ABSENT
+    with patch.object(fin, "_wait_for_backup_schedule_deletion"):
+        fin._fix_backup_schedule_collision()
+    cleanup_secondary.delete_custom_resource.assert_called_once()
+    cleanup_secondary.create_custom_resource.assert_called_once()
 
 
 @pytest.mark.unit

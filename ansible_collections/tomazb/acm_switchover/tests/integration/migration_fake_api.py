@@ -471,6 +471,11 @@ class FakeMigrationHub:
                 body = self._body() or {}
                 with hub._lock:
                     target = hub._collection(path)
+                    if target is not None and target[0] is hub.schedules and target[3] in hub.schedules:
+                        # A plain BackupSchedule delete (collision repair); no preconditions.
+                        deleted = hub.schedules.pop(target[3])
+                        self._json(deleted)
+                        return
                     if target is None or target[0] is not hub.acm or target[3] is None or target[3] not in hub.acm:
                         self._status(404, "NotFound")
                         return
@@ -493,6 +498,17 @@ class FakeMigrationHub:
                 body = self._body() or {}
                 with hub._lock:
                     target = hub._collection(path)
+                    if target is not None and target[0] is hub.schedules and target[3] is None:
+                        # A BackupSchedule create (collision repair re-create).
+                        name = (body.get("metadata") or {}).get("name")
+                        if name in hub.schedules:
+                            self._status(409, "AlreadyExists", "the name is already taken")
+                            return
+                        created = copy.deepcopy(body)
+                        created["metadata"].update(uid=f"uid-{name}-recreated", resourceVersion=hub.next_rv())
+                        hub.schedules[name] = created
+                        self._json(copy.deepcopy(created), status=201)
+                        return
                     if target is None or target[0] is not hub.acm or target[3] is not None:
                         self._status(404, "NotFound")
                         return

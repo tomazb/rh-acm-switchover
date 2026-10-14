@@ -61,6 +61,8 @@
 
 # R4-04: collision repair recreates an enabled BackupSchedule; it starts only over terminal
 # Restore cleanup and a proven-empty journaled locator, whatever enablement already recorded.
+# The proof is the last step before the DELETE, never between the DELETE and the re-create:
+# a refusal or a read failure there would leave the hub without a BackupSchedule.
 - name: Prove the journaled Restore locator empty before collision repair
   ansible.builtin.include_tasks: require_journaled_locator_absent.yml
   when:
@@ -96,10 +98,6 @@
       retries: 30
       delay: 5
       until: (_backup_schedule_collision_delete_wait.resources | default([]) | length) == 0
-
-    - name: Prove the journaled Restore locator empty before the recreate
-      ansible.builtin.include_tasks: require_journaled_locator_absent.yml
-      when: not (_acm_preview | bool)
 
     - name: Recreate BackupSchedule after collision repair delete
       kubernetes.core.k8s:
