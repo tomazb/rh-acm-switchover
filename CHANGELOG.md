@@ -155,7 +155,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports it as a critical RBAC validation failure. An activation Restore create whose response
   cannot be decoded or is malformed has an unknown outcome: the journaled create reports it as
   not accepted and refuses, and nothing is mutated again (activation has no passive-Restore
-  rollback; see Changed). The collection needed no change.
+  rollback; see Changed). This client support needed no collection change; the guarded DELETE
+  response check below changes the collection module.
 - The Python guarded Restore CREATE now sends its one POST through the same transport adapter as
   the guarded PATCH and decodes the response itself, so a 2xx whose body is not a decodable JSON
   object is `malformed_response` (not accepted, no applied evidence, nothing mutated again) on
