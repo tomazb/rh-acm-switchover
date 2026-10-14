@@ -237,7 +237,9 @@ matches the journal.
   `post_activation.completed_at` refuses with
   `Migration evidence refused (restore_not_completed: …)` or
   `(post_activation_not_completed: …)`. The migration journal is unchanged, and a plain
-  re-run refuses again. The message gives this recovery:
+  re-run refuses again. A recorded Argo CD re-pause marker is honored first: the re-pause
+  runs and clears the marker before the refusal, so Argo CD stays paused while you recover.
+  The message gives this recovery:
 
   > The migration journal is unchanged. For missing post-activation completion, set
   > `current_phase` to `post_activation_verification`. For missing Restore completion, set

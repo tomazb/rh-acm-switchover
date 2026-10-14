@@ -217,10 +217,12 @@ Owns phase-flow execution and state-driven entry decisions:
 - `refuse_predictable_journal_reset` — refuses, before any write, a `--force` run whose implicit
   reset would discard a migration journal
 
-Before any phase work, `run_phase_flow` refuses a resume at finalization whose migration journal
-lacks `restore.completed_at` or `post_activation.completed_at` (dry-run excepted); the refusal names
-the `current_phase` the operator can set to re-record that evidence against the kept journal. It then
-runs the `before_phases` hook, which re-pauses Argo CD when a failure rescue left the re-pause marker.
+Before any phase work, `run_phase_flow` runs the `before_phases` hook, which re-pauses Argo CD when
+a failure rescue left the re-pause marker. It then refuses a resume at finalization whose migration
+journal lacks `restore.completed_at` or `post_activation.completed_at` (dry-run excepted); the refusal
+names the `current_phase` the operator can set to re-record that evidence against the kept journal.
+Like the collection, a retry therefore re-pauses first, and Argo CD stays paused while the operator
+follows the refusal guidance.
 
 `CompletedStateConfig`, `FailedStateConfig`, and `CompletionLogConfig` carry the parameters for
 these decisions, keeping the banners and exit behaviour consistent across operations.

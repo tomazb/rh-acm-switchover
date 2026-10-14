@@ -162,7 +162,8 @@ Shared behavior:
   `recovery_required` is refused (`repair_not_permitted`).
 - **Argo CD rescue.** With a journal, no form factor rewinds to `primary_prep`; each durably
   records a re-pause marker outside the journal before resuming, and the retry re-pauses before
-  further phase work (PR C decisions amendment section 2.2).
+  further phase work (PR C decisions amendment section 2.2). Both form factors re-pause before
+  refusing a resume past post-activation whose journal lacks the completion evidence.
 - **Previews.** Preview modes write no migration-journal transition and send no Restore mutation.
   Python skips the finalization-entry marker refusal in dry-run, but finalization previews in both
   form factors can still refuse an existing journal whose required completion evidence is missing.
