@@ -38,7 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Explicit Argo CD recovery after a phase failure under a migration journal (PR C decisions amendment
   section 2.2, both form factors): resume-on-failure durably records a re-pause marker outside the
   journal before resuming, never rewinds to primary preparation, and the retry re-pauses Argo CD
-  before any further phase work (secondary hub only for restore-only).
+  before any further phase work (secondary hub only for restore-only). A marker clear that fails
+  after its checkpoint replacement became visible writes the marker back and fails the retry, in
+  both form factors.
 
 - R4-04 PR B migration-evidence model, dormant (Python + Collection, mirrored, pure): pinned
   cluster-backup-operator Backup selection for ACM 2.12–2.17 (direct `latest` and exact-first

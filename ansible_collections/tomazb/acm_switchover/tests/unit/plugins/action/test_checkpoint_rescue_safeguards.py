@@ -241,6 +241,45 @@ def test_a_failed_clear_write_keeps_the_marker(tmp_path, monkeypatch):
     assert _stored(path)["operational_data"]["argocd_repause_required"] == _marker()
 
 
+def test_a_clear_replaced_without_directory_durability_writes_the_marker_back(tmp_path, monkeypatch):
+    """A-28/D-42: the cleared checkpoint is visible but not durable; the obligation is restored, visibly."""
+    path = _write_phase_checkpoint(
+        tmp_path, data={"migration_backups": _first_journal(), "argocd_repause_required": _marker()}
+    )
+    action = _clear_action(path)
+    calls = []
+
+    def fsync_parent_directory(_path):
+        calls.append(_stored(path)["operational_data"].get("argocd_repause_required"))
+        if len(calls) == 1:
+            raise OSError("EIO")
+
+    monkeypatch.setattr(action, "_fsync_parent_directory", fsync_parent_directory)
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+
+    assert result["failed"] is True
+    assert "indeterminate" in result["msg"]
+    # The first replacement landed without the marker; the restoring write put it back.
+    assert calls == [None, _marker()]
+    assert _stored(path)["operational_data"]["argocd_repause_required"] == _marker()
+
+
+def test_a_clear_whose_restoring_write_also_fails_reports_the_marker_indeterminate(tmp_path, monkeypatch):
+    path = _write_phase_checkpoint(
+        tmp_path, data={"migration_backups": _first_journal(), "argocd_repause_required": _marker()}
+    )
+    action = _clear_action(path)
+
+    def fsync_parent_directory(_path):
+        raise OSError("EIO")
+
+    monkeypatch.setattr(action, "_fsync_parent_directory", fsync_parent_directory)
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+
+    assert result["failed"] is True
+    assert "re-pause marker is indeterminate" in result["msg"]
+
+
 # --- #332: an applied rewind is consumed once per invocation -----------------------------------
 
 

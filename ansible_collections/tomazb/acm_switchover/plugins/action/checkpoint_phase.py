@@ -258,6 +258,7 @@ class ActionModule(ActionBase):
             return {"changed": False, "checkpoint": checkpoint_data}
         if not checkpoint_data.get("operation_identity"):
             return self._missing_operation_identity_failure()
+        previous = deepcopy(checkpoint_data)
         try:
             changed = clear_argocd_repause_required(checkpoint_data)
         except ValueError as exc:
@@ -266,7 +267,22 @@ class ActionModule(ActionBase):
             checkpoint_data["updated_at"] = datetime.now(timezone.utc).isoformat()
             save_result = self._save_checkpoint(path, checkpoint_data)
             if save_result is not None and save_result.get("failed"):
-                return save_result
+                # A failed clear may already be visible, so the marker is written back, as the
+                # Python CLI restages it for its next flush; the obligation is never discharged.
+                restore_result = self._save_checkpoint(path, previous)
+                if restore_result is not None and restore_result.get("failed"):
+                    return {
+                        "failed": True,
+                        "msg": (
+                            f"{save_result['msg']} Writing the re-pause marker back also failed "
+                            f"({restore_result['msg']}); the re-pause marker is indeterminate. The re-pause itself "
+                            "succeeded; inspect the checkpoint before retrying."
+                        ),
+                    }
+                return {
+                    "failed": True,
+                    "msg": f"{save_result['msg']} The re-pause marker was written back; the retry re-pauses again.",
+                }
         return {"changed": changed, "checkpoint": checkpoint_data}
 
     def _run_teardown_record_data(self, *, task_vars: dict) -> dict:
