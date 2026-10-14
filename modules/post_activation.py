@@ -71,9 +71,11 @@ def _secret_create_body(doc: Dict[str, Any]) -> client.V1Secret:
     """
     if hasattr(client.V1Secret, "from_dict"):
         return client.V1Secret.from_dict(doc)
+    api = client.ApiClient()
     # The pre-37 `deserialize(response, response_type)` signature; 37.x's annotations differ.
-    legacy_deserialize: Callable[..., Any] = client.ApiClient().deserialize
-    return legacy_deserialize(SimpleNamespace(data=json.dumps(doc)), "V1Secret")
+    legacy_deserialize: Callable[..., Any] = api.deserialize
+    # Serialized by the client first: YAML loads an unquoted timestamp as a datetime.
+    return legacy_deserialize(SimpleNamespace(data=json.dumps(api.sanitize_for_serialization(doc))), "V1Secret")
 
 
 class PostActivationVerification:

@@ -43,7 +43,7 @@ from lib.constants import (
     VELERO_BACKUP_LATEST,
     VELERO_BACKUP_SKIP,
 )
-from lib.exceptions import FatalError, SwitchoverError
+from lib.exceptions import FatalError, MalformedResponseError, SwitchoverError
 from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.run_record import RunRecord
@@ -59,6 +59,20 @@ logger = logging.getLogger("acm_switchover")
 MIN_MANAGED_CLUSTERS = 0
 
 AUTO_IMPORT_VERIFY_ERROR = "Unable to verify autoImportStrategy on the destination hub; verify API access and retry."
+
+
+def _unverified_restore_create(restore_name: str, error: MalformedResponseError) -> FatalError:
+    """The error for a Restore POST answered 2xx with a malformed body.
+
+    The server accepted the request, so the Restore may exist. Recreating the passive Restore
+    as a rollback could leave two Restores, so nothing more is created here.
+    """
+    return FatalError(
+        f"Creation of Restore {BACKUP_NAMESPACE}/{restore_name} is unverified: the API server accepted "
+        f"the request but returned a malformed response ({error}). The Restore may exist. No rollback "
+        f"was attempted; reconcile it before retrying: oc -n {BACKUP_NAMESPACE} get "
+        f"restore.{CLUSTER_BACKUP_API_GROUP} {restore_name} -o yaml"
+    )
 
 
 class SecondaryActivation:
@@ -363,6 +377,8 @@ class SecondaryActivation:
                 namespace=BACKUP_NAMESPACE,
             )
             logger.info("Created %s resource", MANAGED_CLUSTER_RESTORE_NAME)
+        except MalformedResponseError as e:
+            raise _unverified_restore_create(MANAGED_CLUSTER_RESTORE_NAME, e) from e
         except Exception as e:
             if passive_restore_deleted and passive_restore_snapshot:
                 try:
@@ -825,6 +841,8 @@ class SecondaryActivation:
                 body=restore_body,
                 namespace=BACKUP_NAMESPACE,
             )
+        except MalformedResponseError as e:
+            raise _unverified_restore_create(RESTORE_FULL_NAME, e) from e
         except Exception as e:
             if passive_restore_deleted and passive_restore_snapshot:
                 passive_name = passive_restore_snapshot.get("metadata", {}).get("name", RESTORE_PASSIVE_SYNC_NAME)
