@@ -3138,8 +3138,11 @@ class TestPostActivationEvidenceReviewFindings:
             finalization.assert_not_called()
             assert "post_activation_not_completed" in failed[-1]
 
-    def test_b2_a_dry_run_resume_past_post_activation_refuses_an_invalid_journal(self, tmp_path):
-        """Only missing evidence is a dry-run prediction; an invalid journal refuses in every mode."""
+    def test_b2_a_dry_run_resume_past_post_activation_refuses_an_invalid_journal(self, tmp_path, caplog):
+        """Only missing evidence is a dry-run prediction; an invalid journal refuses in every mode.
+
+        The preview refusal is logged without the failure hook, which would record the error.
+        """
         from lib.utils import Phase
         from lib.workflow import run_phase_flow
 
@@ -3168,7 +3171,8 @@ class TestPostActivationEvidenceReviewFindings:
 
         assert result is False
         finalization.assert_not_called()
-        assert "The recorded migration journal is invalid" in failed[-1]
+        assert failed == []
+        assert "The recorded migration journal is invalid" in caplog.text
         assert _stored_journal(tmp_path) == journal
 
     def test_b2_a_resume_past_recorded_post_activation_evidence_continues(self, tmp_path):

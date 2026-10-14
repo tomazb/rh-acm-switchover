@@ -544,6 +544,21 @@ class TestStateManager:
         assert reloaded._get_config("primary_version") == "2.14.0"
         assert reloaded.state["last_updated"] == original_timestamp
 
+    def test_restore_state_snapshot_leaves_an_untouched_state_file_unwritten(self, tmp_path):
+        """A state file that already holds the snapshot is not rewritten."""
+        state_path = tmp_path / "untouched-snapshot.json"
+        sm = StateManager(str(state_path))
+        sm.set_phase(Phase.POST_ACTIVATION)
+        snapshot = sm.capture_state_snapshot()
+        before = os.stat(state_path)
+
+        with patch.object(StateManager, "_write_state") as write_state:
+            sm.restore_state_snapshot(snapshot)
+
+        write_state.assert_not_called()
+        assert sm.state == snapshot
+        assert os.stat(state_path).st_mtime_ns == before.st_mtime_ns
+
     def test_restore_state_snapshot_rolls_back_full_durable_state(self, tmp_path):
         """Dry-run snapshots should restore phase, errors, completed steps, and config."""
         state_path = tmp_path / "dry-run-snapshot.json"

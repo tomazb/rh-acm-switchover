@@ -331,8 +331,9 @@ def run_phase_flow(
             logger,
         )
 
+    # A dry-run records no resume summary: its refusals below must leave the state file unwritten.
     resume_start_phase = CANONICAL_PHASE_NAMES.get(current_phase)
-    if current_phase != Phase.INIT and resume_start_phase is not None:
+    if current_phase != Phase.INIT and resume_start_phase is not None and not getattr(args, "dry_run", False):
         RunRecord(state).record_resume_start_phase(resume_start_phase)
 
     # Obligations a failed run left for its retry run before any phase work. The Argo CD
@@ -343,6 +344,10 @@ def run_phase_flow(
 
     refusal = _post_activation_marker_refusal(args, state, current_phase)
     if refusal is not None:
+        if getattr(args, "dry_run", False):
+            # A preview refusal records nothing: the failure hook would write the error and FAILED phase.
+            logger.error(refusal)
+            return False
         return fail_phase(state, refusal, logger)
 
     ran_phase = False

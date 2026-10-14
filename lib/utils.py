@@ -535,10 +535,23 @@ class StateManager:
         return copy.deepcopy(self.state)
 
     def restore_state_snapshot(self, snapshot: Dict[str, Any]) -> None:
-        """Restore a complete durable state snapshot without refreshing timestamps."""
+        """Restore a complete durable state snapshot without refreshing timestamps.
+
+        A state file that already holds the snapshot is not rewritten, so a dry-run
+        that wrote nothing leaves the file untouched.
+        """
         self.state = copy.deepcopy(snapshot)
         self._dirty = False
-        self._write_state(self.state)
+        if self._stored_state() != self.state:
+            self._write_state(self.state)
+
+    def _stored_state(self) -> Optional[Dict[str, Any]]:
+        """The state file's parsed contents, or None when it is absent or unreadable."""
+        try:
+            with open(self.state_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return None
 
     def mark_step_completed(self, step_name: str) -> None:
         """Mark a step as completed, recording the report phase active at the time.

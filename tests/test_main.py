@@ -3,6 +3,7 @@
 Tests argument parsing and basic entry point logic.
 """
 
+import copy
 import json
 import logging
 import os
@@ -3973,3 +3974,96 @@ class TestCliOutcomesDelegation:
             exit_failure=EXIT_FAILURE,
             exit_interrupt=EXIT_INTERRUPT,
         )
+
+
+_EVIDENCE_VECTOR_CASES = {
+    case["id"]: case
+    for case in json.loads(
+        (Path(__file__).parent / "fixtures" / "r4_04_migration_evidence_vectors.json").read_text(encoding="utf-8")
+    )["cases"]
+}
+_DRY_RUN_WAIVER_ARGV = [
+    "--skip-managed-cluster-expectations",
+    "--managed-cluster-expectation-waiver-scope",
+    "both",
+    "--managed-cluster-expectation-waiver-actor",
+    "operator@example.com",
+    "--managed-cluster-expectation-waiver-reason",
+    "stale inventory",
+    "--managed-cluster-expectation-waiver-request-id",
+    "CHG-1",
+]
+
+
+@pytest.mark.unit
+class TestDryRunRefusalWritesNothing:
+    """A dry-run refused before any phase work leaves the state file untouched: zero writes, not a rollback."""
+
+    @staticmethod
+    def _state_file(tmp_path, phase, journal=None, restore_only=False):
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.state["contexts"] = {"primary": None if restore_only else "p1", "secondary": "p2"}
+        state.state["hub_identities"] = {"secondary": {"context": "p2", "cluster_uid": "uid-secondary"}}
+        if not restore_only:
+            state.state["hub_identities"]["primary"] = {"context": "p1", "cluster_uid": "uid-primary"}
+        state.state["current_phase"] = phase.value
+        if journal is not None:
+            state.state["config"]["migration_backups"] = journal
+        state.flush_state()
+        return state_file
+
+    @staticmethod
+    def _run_dry_run_main(state_file, extra_argv=(), restore_only=False):
+        primary = Mock()
+        primary.get_cluster_identity.return_value = {"context": "p1", "cluster_uid": "uid-primary"}
+        secondary = Mock()
+        secondary.get_cluster_identity.return_value = {"context": "p2", "cluster_uid": "uid-secondary"}
+        if restore_only:
+            mode_argv = ["--restore-only", "--secondary-context", "p2", "--method", "full"]
+            clients = (None, secondary)
+        else:
+            mode_argv = ["--primary-context", "p1", "--secondary-context", "p2", "--method", "passive"]
+            mode_argv += ["--old-hub-action", "secondary"]
+            clients = (primary, secondary)
+        argv = ["acm_switchover.py", *mode_argv, "--dry-run", "--state-file", str(state_file), *extra_argv]
+        writes = []
+        original_write_state = StateManager._write_state
+
+        def counting_write_state(self, state):
+            writes.append(copy.deepcopy(state))
+            original_write_state(self, state)
+
+        before = os.stat(state_file)
+        content = state_file.read_bytes()
+        with patch("sys.argv", argv), patch("acm_switchover._initialize_clients", return_value=clients), patch.object(
+            StateManager, "_write_state", counting_write_state
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+        after = os.stat(state_file)
+        assert len(writes) == 0, f"{len(writes)} state write(s) during a refused dry-run"
+        assert state_file.read_bytes() == content
+        assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+        return exc_info.value.code
+
+    @pytest.mark.parametrize("restore_only", [False, True], ids=["switchover", "restore-only"])
+    def test_invalid_journal_refusal_at_completed_post_activation(self, tmp_path, capsys, restore_only):
+        journal = _EVIDENCE_VECTOR_CASES["journal-run-id-not-uuid"]["input"]["candidate"]
+        state_file = self._state_file(tmp_path, Phase.FINALIZATION, journal, restore_only)
+
+        exit_code = self._run_dry_run_main(state_file, restore_only=restore_only)
+
+        assert exit_code == EXIT_FAILURE
+        stderr = capsys.readouterr().err
+        assert "The recorded migration journal is invalid" in stderr
+        assert "Operation failed" in stderr
+
+    @pytest.mark.parametrize("phase", [Phase.PRIMARY_PREP, Phase.FINALIZATION], ids=["primary-prep", "finalization"])
+    def test_waiver_without_recorded_names_refused_before_phase_work(self, tmp_path, capsys, phase):
+        state_file = self._state_file(tmp_path, phase)
+
+        exit_code = self._run_dry_run_main(state_file, _DRY_RUN_WAIVER_ARGV)
+
+        assert exit_code == EXIT_FAILURE
+        assert "waiver_expected_names_empty" in capsys.readouterr().err

@@ -38,11 +38,13 @@ PRE_COMPLETION = _vector("post-activation-journal-pre-completion-blocks")["input
 
 
 class Run:
-    def __init__(self, completed, hub, before, after):
+    def __init__(self, completed, hub, before, after, unwritten):
         self.completed = completed
         self.hub = hub
         self.before = before
         self.after = after
+        # The checkpoint file kept its inode and mtime: nothing was written, not even identical bytes.
+        self.unwritten = unwritten
 
     @property
     def output(self) -> str:
@@ -158,6 +160,7 @@ def run_post_activation(tmp_path):
         vars_file = tmp_path / "vars.yml"
         vars_file.write_text(yaml.safe_dump(variables, sort_keys=False), encoding="utf-8")
         before = checkpoint_path.read_bytes()
+        stat_before = checkpoint_path.stat()
         command = ["ansible-playbook", str(playbook), "-i", "localhost,", "-e", f"@{vars_file}"]
         if check:
             command.append("--check")
@@ -170,7 +173,9 @@ def run_post_activation(tmp_path):
             env=_ansible_env(_repo_root(), tmp_path),
             timeout=300,
         )
-        return Run(completed, hub, before, checkpoint_path.read_bytes())
+        stat_after = checkpoint_path.stat()
+        unwritten = (stat_after.st_ino, stat_after.st_mtime_ns) == (stat_before.st_ino, stat_before.st_mtime_ns)
+        return Run(completed, hub, before, checkpoint_path.read_bytes(), unwritten)
 
     return _run
 
@@ -332,6 +337,7 @@ def test_an_invalid_recorded_journal_is_refused_in_every_mode(run_post_activatio
     assert run.journal == {"schema_version": 9}
     if mode == "dry_run":
         assert run.after == run.before
+        assert run.unwritten  # the preview fail transition writes nothing
 
 
 def test_a_dry_run_with_a_valid_journal_still_previews(run_post_activation, hub):
@@ -355,3 +361,4 @@ def test_a_completed_phase_preview_refuses_an_invalid_recorded_journal(run_post_
     assert "The recorded migration journal is invalid and blocks post-activation" in run.output
     assert hub.writes == []
     assert run.after == run.before
+    assert run.unwritten
