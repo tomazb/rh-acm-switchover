@@ -1362,6 +1362,7 @@ class PostActivationVerification:
             self._source_dir("users", user_name) if user_name else "",
             user_name,
             MAX_KUBECONFIG_SIZE,
+            source=self._kubeconfig_sources.get(("contexts", context_name), ""),
         )
 
     def _source_dir(self, section: str, name: Optional[str]) -> str:

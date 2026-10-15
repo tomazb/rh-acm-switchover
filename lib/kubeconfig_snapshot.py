@@ -78,6 +78,8 @@ class SpokeSnapshot(NamedTuple):
     token: Optional[str]
     username: Optional[str]
     password: Optional[str]
+    # Provenance only (the kubeconfig the context came from): never used to build a client.
+    source: str = ""
 
     def __repr__(self) -> str:  # never print captured material
         return f"SpokeSnapshot(context={self.context_name!r}, server={self.server!r})"
@@ -181,6 +183,7 @@ def build_snapshot(
     user_base_dir: str,
     user_reference: Optional[str],
     size_limit: int,
+    source: str = "",
 ) -> SpokeSnapshot:
     """Capture one selected context, or raise ``SnapshotError`` (amendment §6).
 
@@ -219,6 +222,7 @@ def build_snapshot(
         token=_token(user, user_base_dir, size_limit),
         username=username if isinstance(username, str) else None,
         password=password if isinstance(password, str) else None,
+        source=source,
     )
 
 
