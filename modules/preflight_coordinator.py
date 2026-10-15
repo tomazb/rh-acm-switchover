@@ -304,9 +304,13 @@ class PreflightValidator:
         Only a positively complete strict read derives an expectation (#340 E1); any other
         outcome is a critical preflight failure, never an expectation of zero clusters.
         """
-        if self.restore_only or self.primary is None:
+        if self.restore_only:
             return []
         try:
+            if self.primary is None:
+                raise MigrationEvidenceError(
+                    "inventory_unreadable", "no primary hub client is available to read the ManagedCluster inventory"
+                )
             outcome = self.primary.list_managed_clusters_strict()
             if not outcome.is_success:
                 detail = f"{outcome.status.value}: {outcome.reason}" if outcome.reason else outcome.status.value

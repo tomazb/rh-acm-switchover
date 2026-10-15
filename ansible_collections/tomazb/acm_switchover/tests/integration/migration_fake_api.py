@@ -171,6 +171,8 @@ class FakeMigrationHub:
         self.annotated_clusters: set[str] = set()
         # Successive ManagedCluster LISTs serve these name lists first, then managed_clusters.
         self.managed_cluster_reads: list[list[str]] = []
+        # A hub with self-management disabled serves no local-cluster at all.
+        self.serve_local_cluster = True
         self.status_served = status_served
         self.journal_probe = journal_probe or (lambda: None)
         self.controller = controller
@@ -325,7 +327,7 @@ class FakeMigrationHub:
                         ]
                     },
                 }
-                for name in names + ["local-cluster"]
+                for name in names + (["local-cluster"] if self.serve_local_cluster else [])
             ]
             return {
                 "kind": "ManagedClusterList",

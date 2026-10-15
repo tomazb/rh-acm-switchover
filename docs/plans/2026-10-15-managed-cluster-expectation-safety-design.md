@@ -180,14 +180,20 @@ with the same code, `inventory_unreadable`. The Python caller is the coordinator
 Collection caller is the module operation.
 
 The two share no code. The Collection's primary ManagedCluster discovery read in
-`roles/preflight/tasks/discover_resources.yml` becomes `acm_k8s_read_outcome`, under the
-same fact name (`acm_primary_managed_clusters_info`, which still exposes `resources`). Other
-preflight consumers of that fact are untouched.
+`roles/preflight/tasks/discover_resources.yml` becomes `acm_k8s_read_outcome`. The read
+registers privately with `no_log`. Its published outcome is `{read_status, resources,
+resource_version}` and never echoes module arguments. That outcome becomes the derivation
+input and `acm_primary_managed_clusters_info` for the other preflight checks. The two
+managed-clusters backup checks report `error` on an unreadable outcome instead of passing over
+an empty one.
 
 The pre-existing pre-seed seam is narrowed to non-live modes. An executing run always reads
-the live primary, as the MultiClusterHub identity reads already do. This follows the AGENTS
-execution-time discovery rule: the derived expectation decides which destination state the
-mutating phases accept. Python always reads live.
+the live primary and derives from that read's own register. Extra vars outrank registered
+results and `set_fact`, so an extra var named `acm_primary_managed_clusters_info` can never
+stand in for the derivation input. This follows the AGENTS execution-time discovery rule: the
+derived expectation decides which destination state the mutating phases accept. Python always
+reads live. The same execute-mode seam on the other discovery facts is pre-existing and
+tracked separately; this slice does not change it.
 
 Parity tests hold the two derivation functions and the two activation decisions equal over
 shared cases. Required cases cover every row of both tables above, plus pagination

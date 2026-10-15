@@ -1263,20 +1263,6 @@ class SecondaryActivation:
                     raise FatalError(f"Journaled {key} child {entry['name']} was replaced or changed")
         logger.info("Completion evidence for %s revalidated", restore["name"])
 
-    def _list_restored_managed_cluster_names(
-        self,
-        name_cache: Optional[Dict[str, List[str]]] = None,
-        force_refresh: bool = False,
-    ) -> List[str]:
-        """Return non-local ManagedCluster names currently visible on the secondary hub."""
-        if name_cache is not None and not force_refresh and "non_local_names" in name_cache:
-            return list(name_cache["non_local_names"])
-
-        _, names = self._read_restored_inventory()
-        if name_cache is not None:
-            name_cache["non_local_names"] = list(names)
-        return names
-
     def _read_restored_inventory(self) -> Tuple[bool, List[str]]:
         """One strict secondary ManagedCluster read: whether it is empty, and its non-local names."""
         outcome = self.secondary.list_managed_clusters_strict()

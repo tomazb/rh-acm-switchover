@@ -95,3 +95,15 @@ def test_python_refuses_every_non_success_read_as_inventory_unreadable(outcome):
     (failure,) = validator.reporter.critical_failures()
     assert "inventory_unreadable" in failure["message"]
     assert outcome.reason in failure["message"]
+
+
+def test_python_refuses_a_missing_primary_outside_restore_only():
+    """No primary read is never zero names; the collection refuses an absent read the same way."""
+    validator = PreflightValidator.__new__(PreflightValidator)
+    validator.restore_only = False
+    validator.primary = None
+    validator.reporter = ValidationReporter()
+
+    assert validator._derive_expected_managed_cluster_names() == []
+    (failure,) = validator.reporter.critical_failures()
+    assert "inventory_unreadable" in failure["message"]

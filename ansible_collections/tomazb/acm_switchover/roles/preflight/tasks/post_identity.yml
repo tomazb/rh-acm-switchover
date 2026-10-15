@@ -78,7 +78,7 @@
       tomazb.acm_switchover.acm_migration_evidence:
         operation: expected_managed_clusters
         inputs:
-          mc_read: "{{ acm_primary_managed_clusters_info | default({}) }}"
+          mc_read: "{{ _acm_primary_managed_clusters_derivation_read | default({}) }}"
       register: _acm_expected_managed_clusters
       when:
         - acm_switchover_preflight_summary.passed

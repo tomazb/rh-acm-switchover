@@ -107,8 +107,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   incomplete or malformed read, a nameless member or a repeated name now fails preflight
   (`ManagedCluster inventory` / `preflight-managed-cluster-inventory`) instead of deriving zero
   expected clusters, which with an omitted floor could admit an empty destination. The collection's
-  executing preflight always reads the primary inventory live and refuses a pre-supplied
-  `acm_primary_managed_clusters_info` (an extra var would otherwise shadow the live read). A
+  executing preflight always reads the primary inventory live and derives from that read's own
+  register, which an extra var named `acm_primary_managed_clusters_info` cannot replace; the
+  dependent backup checks report `error` rather than pass over an unreadable inventory. A
   nameless destination ManagedCluster is now malformed at activation as at post-activation. Activation now applies
   post-activation's `inventory_empty` rule: with recorded names, a waiver plus
   `--min-managed-clusters 0` no longer admits a destination with no ManagedCluster at all, so a run

@@ -37,6 +37,14 @@
       }}
   when: not (acm_switchover_operation.restore_only | default(false))
 
+# The primary ManagedCluster read is strict (#340): an unreadable one is never zero clusters, so
+# the two checks below report an error instead of passing over an empty inventory.
+- name: Record whether the primary ManagedCluster inventory is readable
+  ansible.builtin.set_fact:
+    _acm_primary_managed_clusters_unreadable: >-
+      {{ ((acm_primary_managed_clusters_info | default({})).read_status | default('error')) != 'ok' }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
 - name: Identify joined primary ManagedClusters
   ansible.builtin.set_fact:
     _acm_primary_joined_managed_clusters: >-
@@ -85,7 +93,9 @@
           {
             "id": "preflight-managed-clusters-backup-completed",
             "severity": "critical",
-            "status": "pass"
+            "status": "error"
+              if (_acm_primary_managed_clusters_unreadable | bool)
+              else "pass"
               if (
                 (_acm_primary_joined_managed_clusters | default([]) | length) == 0
                 or (
@@ -94,7 +104,9 @@
                 )
               )
               else "fail",
-            "message": "no joined ManagedClusters found (only local-cluster)"
+            "message": "primary ManagedCluster inventory is unreadable"
+              if (_acm_primary_managed_clusters_unreadable | bool)
+              else "no joined ManagedClusters found (only local-cluster)"
               if (_acm_primary_joined_managed_clusters | default([]) | length) == 0
               else (
                 "latest managed-clusters backup "
@@ -181,10 +193,14 @@
           {
             "id": "preflight-managed-clusters-after-latest-backup",
             "severity": "critical",
-            "status": "pass"
+            "status": "error"
+              if (_acm_primary_managed_clusters_unreadable | bool)
+              else "pass"
               if (_acm_primary_clusters_after_latest_backup | default([]) | length) == 0
               else "fail",
-            "message": "no joined ManagedClusters were imported after the latest managed-clusters backup"
+            "message": "primary ManagedCluster inventory is unreadable"
+              if (_acm_primary_managed_clusters_unreadable | bool)
+              else "no joined ManagedClusters were imported after the latest managed-clusters backup"
               if (_acm_primary_clusters_after_latest_backup | default([]) | length) == 0
               else "clusters imported after latest backup will be lost: " + (_acm_primary_clusters_after_latest_backup | default([]) | join(', ')),
             "details": {
