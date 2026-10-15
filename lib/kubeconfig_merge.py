@@ -8,19 +8,30 @@ failure aborts the whole merge with a sanitized reason code, the file path and, 
 error, the line and column - never the parser message, the offending line, or key
 material, because a kubeconfig line can be a token or a private key.
 
-Duplicate entry names, endpoint matching and snapshot-built clients are R4-06 PR 2 and 3.
+R4-06 PR 2 (docs/plans/2026-10-15-r4-06-current-base-amendment.md §3) adds the duplicate-name
+rule across the whole KUBECONFIG chain: identical entries (equal parsed values, compared
+with their types) resolve first-wins; a (kind, name) group with more than one distinct
+variant refuses the whole merge with every occurrence located and labelled, never shown.
+`!!set` values, recursive aliases and any other non-tree value are refused, so accepted
+input is always a finite tree the comparison is defined on. Snapshot-built clients are
+R4-06 PR 3.
 """
 
+import datetime
+import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
 from lib.exceptions import SwitchoverError
 
+logger = logging.getLogger("acm_switchover")
+
 DEFAULT_KUBECONFIG_PATH = "~/.kube/config"
 _SECTIONS = (("clusters", "cluster"), ("contexts", "context"), ("users", "user"))
 _MERGE_TAG = "tag:yaml.org,2002:merge"
+_SET_TAG = "tag:yaml.org,2002:set"
 _READ_CHUNK = 64 * 1024
 
 
@@ -46,14 +57,100 @@ def load_merged_kubeconfig(kubeconfig_env: Optional[str], size_limit: int) -> Di
     """Load, validate and merge every kubeconfig file, or raise SwitchoverError.
 
     Entries keep their file and in-file order. Nothing is merged unless every file loads
-    and validates: a mutating path never runs on a partial view.
+    and validates: a mutating path never runs on a partial view. Duplicate names are
+    resolved by the amendment §3 rule before anything is returned, so every returned
+    (kind, name) is unique.
     """
-    merged: Dict[str, List[Dict[str, Any]]] = {"contexts": [], "clusters": [], "users": []}
+    occurrences: Dict[str, List[Tuple[Dict[str, Any], str, int]]] = {"contexts": [], "clusters": [], "users": []}
     for path in kubeconfig_paths(kubeconfig_env):
         document = _load_document(path, size_limit)
         for section, _member in _SECTIONS:
-            merged[section].extend(document.get(section) or [])
-    return merged
+            for index, entry in enumerate(document.get(section) or []):
+                occurrences[section].append((entry, path, index))
+    return {section: _resolve_duplicates(section, entries) for section, entries in occurrences.items()}
+
+
+class CanonicalForms:
+    """Type-tagged structural identity for parsed YAML values (amendment §3), by hash-consing.
+
+    ``key(value)`` returns a small integer; two values get the same integer exactly when they
+    are equal parsed values compared with their types: formatting never matters, ``1``,
+    ``true``, ``"1"`` and ``1.0`` are distinct, equal floats (``0.0``/``-0.0``) and the same
+    instant at different UTC offsets are equal, and every NaN is one value. Each node is
+    interned from its children's integers, so nested shared aliases cost linear work, and
+    comparing two forms is one integer comparison however deep they are.
+    """
+
+    def __init__(self) -> None:
+        self._ids: dict = {}
+        self._by_object: dict = {}
+
+    def _intern(self, form) -> int:
+        return self._ids.setdefault(form, len(self._ids))
+
+    def key(self, value) -> int:
+        if isinstance(value, bool):
+            return self._intern(("bool", value))
+        if isinstance(value, int):
+            return self._intern(("int", value))
+        if isinstance(value, float):
+            return self._intern(("float", 1, 0.0) if value != value else ("float", 0, value))
+        if isinstance(value, str):
+            return self._intern(("str", value))
+        if isinstance(value, bytes):
+            return self._intern(("bytes", value))
+        if value is None:
+            return self._intern(("null",))
+        if isinstance(value, datetime.datetime):
+            aware = value.tzinfo is not None
+            instant = value.astimezone(datetime.timezone.utc) if aware else value
+            return self._intern(("datetime", aware, instant.isoformat()))
+        if isinstance(value, datetime.date):
+            return self._intern(("date", value.isoformat()))
+        if id(value) in self._by_object:
+            return self._by_object[id(value)][0]
+        if isinstance(value, list):
+            form: tuple = ("list", tuple(self.key(item) for item in value))
+        elif isinstance(value, dict):
+            form = ("map", tuple(sorted((self.key(key), self.key(item)) for key, item in value.items())))
+        else:
+            raise TypeError(f"no canonical form for {type(value).__name__}")
+        identifier = self._intern(form)
+        # Keep the object alive with its id so the id cannot be reused within this run.
+        self._by_object[id(value)] = (identifier, value)
+        return identifier
+
+
+_KINDS = {"clusters": "cluster", "contexts": "context", "users": "user"}
+
+
+def _resolve_duplicates(section: str, entries: List[Tuple[Dict[str, Any], str, int]]) -> List[Dict[str, Any]]:
+    """First-wins for identical duplicates; refuse a group with more than one variant."""
+    groups: Dict[str, List[Tuple[Dict[str, Any], str, int]]] = {}
+    forms = CanonicalForms()
+    for occurrence in entries:
+        groups.setdefault(occurrence[0]["name"], []).append(occurrence)
+    conflicts = []
+    for name, group in groups.items():
+        variants: List[Any] = []
+        labels = []
+        for entry, path, index in group:
+            form = forms.key(entry)
+            if form not in variants:
+                variants.append(form)
+            labels.append(f"{path}[{index}] (variant {variants.index(form) + 1})")
+        if len(variants) > 1:
+            conflicts.append(f"{_KINDS[section]} {name!r} at " + ", ".join(labels))
+        elif len(group) > 1:
+            logger.debug(
+                "Identical kubeconfig %s %r defined %d times; the first definition is used",
+                _KINDS[section],
+                name,
+                len(group),
+            )
+    if conflicts:
+        raise SwitchoverError("kubeconfig_duplicate_conflict: " + "; ".join(conflicts))
+    return [group[0][0] for group in groups.values()]
 
 
 def _failure(code: str, path: str, detail: str = "") -> SwitchoverError:
@@ -77,14 +174,47 @@ def _load_document(path: str, size_limit: int) -> Dict[str, Any]:
         failure = _failure("duplicate_yaml_key", path, _position(exc.mark))
     except _MergeKey as exc:
         failure = _failure("yaml_invalid", path, _position(exc.mark) + " (YAML merge keys are not supported)")
+    except _SetValue as exc:
+        failure = _failure("structure_invalid", path, _position(exc.mark) + " (YAML sets are not supported)")
     except yaml.YAMLError as exc:
         failure = _failure("yaml_invalid", path, _position(getattr(exc, "problem_mark", None)))
     except Exception:  # noqa: BLE001 - any constructor error (`!!int <v>`, `!!bool <v>`, `!!int ''`) quotes input
         failure = _failure("yaml_invalid", path)
     if failure is not None:
         raise failure
+    _require_tree(document, path)
     _validate(document, path)
     return document
+
+
+_TREE_SCALARS = (str, int, float, bool, bytes, datetime.date, type(None))
+
+
+def _require_tree(value: Any, path: str, ancestors: Optional[set] = None, done: Optional[set] = None) -> None:
+    """Refuse a recursive alias or any value outside mappings, lists and plain scalars.
+
+    PyYAML builds a recursive alias (`&a [*a]`) as a self-containing object; `!!omap` and
+    `!!pairs` build tuples. Neither has a defined duplicate comparison (amendment §3).
+    """
+    if isinstance(value, _TREE_SCALARS):
+        return
+    if not isinstance(value, (dict, list)):
+        raise _failure("structure_invalid", path, " (unsupported YAML value type)")
+    ancestors = set() if ancestors is None else ancestors
+    done = set() if done is None else done
+    if id(value) in ancestors:
+        raise _failure("structure_invalid", path, " (recursive YAML alias)")
+    if id(value) in done:
+        return  # a shared alias already checked: each node is walked once
+    ancestors.add(id(value))
+    for item in value.items() if isinstance(value, dict) else value:
+        if isinstance(value, dict):
+            _require_tree(item[0], path, ancestors, done)
+            _require_tree(item[1], path, ancestors, done)
+        else:
+            _require_tree(item, path, ancestors, done)
+    ancestors.discard(id(value))
+    done.add(id(value))
 
 
 def _read_bounded(path: str, size_limit: int) -> bytes:
@@ -133,6 +263,12 @@ class _MergeKey(Exception):
         self.mark = mark
 
 
+class _SetValue(Exception):
+    def __init__(self, mark: Any) -> None:
+        super().__init__("set value")
+        self.mark = mark
+
+
 class _UniqueKeyLoader(yaml.SafeLoader):
     """SafeLoader that refuses a repeated mapping key instead of keeping the last value,
     and refuses `<<` merge keys.
@@ -156,6 +292,12 @@ class _UniqueKeyLoader(yaml.SafeLoader):
             except TypeError:
                 pass  # an unhashable key is refused by the base constructor
         return super().construct_mapping(node, deep=deep)
+
+    def construct_yaml_set(self, node):
+        raise _SetValue(node.start_mark)
+
+
+_UniqueKeyLoader.add_constructor(_SET_TAG, _UniqueKeyLoader.construct_yaml_set)
 
 
 def _validate(document: Any, path: str) -> None:

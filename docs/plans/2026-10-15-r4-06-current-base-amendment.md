@@ -78,6 +78,7 @@ The two pass a pair as equal under different conditions:
     the collection already does.
   - PR 2 records the change in `usage.md` and the CHANGELOG and pins the new source with a
     test.
+
   For example, Python's unanchored regex turns `HTTPS://hub/https://other:6443` into
   `HTTPS://hub/other`, so it called that URL equal to `HTTPS://hub/other`. The
   collection regex calls the pair unequal. For pairs whose canonical hosts differ, the

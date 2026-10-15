@@ -101,6 +101,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Klusterlet endpoint identity (R4-06 PR 2, #355; Python + Collection).** A managed cluster is
+  inspected only after its target is proven, and only a genuinely different hub host is
+  remediated (`docs/plans/2026-10-15-r4-06-current-base-amendment.md`):
+  - endpoints are compared as complete normalized URLs (scheme, case-insensitive host,
+    canonical IPv6, default port equal to an omitted one, path without trailing `/`);
+    malformed or credential-bearing URLs are rejected and never echoed;
+  - a klusterlet hub that differs only in scheme, port or path, or that the previous
+    hostname-only comparison called equal, is `unverified` (`endpoint_mismatch_unverified`):
+    never verified, never auto-remediated, no bypass;
+  - the name-only context fallback is removed: without a usable ManagedCluster API URL the
+    cluster fails with `endpoint_unavailable`, retryably, and nothing is inspected;
+  - **behavior change:** the expected hub is now each cluster's `<cluster>-import` bootstrap
+    server in both form factors. The Python CLI previously expected the `--secondary-context`
+    server: a cluster without a usable import secret now fails
+    (`expected_endpoint_unavailable`) instead of passing, and a klusterlet on a genuinely
+    different host from the import secret is remediated, as the collection already did;
+  - every spoke client is bound to the proven URL before any read (`client_endpoint_mismatch`);
+  - any unverified, failed or timed-out cluster fails the step before any remediation in the
+    run, in both form factors;
+  - Python: spoke contexts are selected by URL from the validated merge (first context for one
+    cluster entry, `context_ambiguous` for distinct entries); a differing duplicate name
+    anywhere in `KUBECONFIG` fails with `kubeconfig_duplicate_conflict`, identical ones are used
+    once; YAML sets and recursive aliases are refused;
+  - Collection: each mapped kubeconfig is validated, its selected context's server must equal
+    the ManagedCluster URL (`target_identity_mismatch`), `:` paths are refused, the remediate
+    module re-reads the URL and re-classifies before mutating (two phases; any refused cluster
+    blocks the batch), pending clusters are no longer remediated for being pending, and the
+    klusterlet worker counts are capped at 32.
+
+  Recorded as by-design input-model differences in `coexistence.md`; no parity-status, RBAC or
+  support-boundary change. The pre-fix completion-marker residual stays tracked in #352.
 - **Klusterlet verification no longer skips silently on a bad kubeconfig (R4-06 PR 1 / GLM-H3, #349,
   Python).** Post-activation used to skip the klusterlet wrong-hub gate, report success and
   checkpoint the step whenever the local kubeconfig could not be loaded or the new hub's API server

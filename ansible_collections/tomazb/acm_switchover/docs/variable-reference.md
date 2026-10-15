@@ -66,8 +66,21 @@ neither the names nor the count floor is derived from this mapping.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `<cluster>.kubeconfig` | str | optional | Managed-cluster kubeconfig path for direct klusterlet probe/remediation and managed-cluster RBAC validation |
-| `<cluster>.context` | str | optional | Managed-cluster kubeconfig context. If omitted, the kubeconfig current context is used for RBAC validation and module calls |
+| `<cluster>.kubeconfig` | str | optional | Managed-cluster kubeconfig path for direct klusterlet probe/remediation and managed-cluster RBAC validation. One file; a path containing `:` is refused (`kubeconfig_path_unsupported`) |
+| `<cluster>.context` | str | optional | Managed-cluster kubeconfig context. If omitted, the file's `current-context` is used and must name exactly one context (`context_ambiguous` otherwise); a named context that does not exist is `context_missing` |
+
+The mapping says which clusters the collection inspects directly; it is not proof
+of which cluster a context reaches. Before the klusterlet modules read anything
+through a mapped context, they validate the mapped file (the same size, YAML and
+structure rules as the Python CLI, plus first-wins for identical duplicate names
+and `kubeconfig_duplicate_conflict` for differing ones). They then require the
+selected context's `cluster.server` to equal the ManagedCluster's own
+`spec.managedClusterClientConfigs[].url`, read fresh from the secondary hub. A
+different host is `target_identity_mismatch`; the same host with a different
+scheme, port or path is `endpoint_mismatch_unverified`; a missing URL is
+`endpoint_unavailable`. Each failure fails that cluster only, before any
+managed-cluster client is built. See `docs/operations/usage.md`
+(Post-activation klusterlet remediation, Endpoint identity).
 
 ### `acm_switchover_features`
 
@@ -95,8 +108,8 @@ neither the names nor the count floor is derived from this mapping.
 | `checkpoint.path` | str | `.state/switchover.json` | Checkpoint JSON path; validated by the safe-path policy before controller-side reads or writes |
 | `checkpoint.reset` | bool | `false` | Start a fresh checkpoint from `preflight` and ignore existing checkpoint content |
 | `checkpoint.reset_from` | phase name or empty string | `""` | Remove the named phase and every downstream phase from `completed_phases`. With a migration journal, `activation`, `post_activation`, or `finalization` keeps and revalidates it (for example `post_activation` re-runs post-activation when a completed `post_activation` marker lacks its evidence), and `preflight` or `primary_prep` is refused |
-| `concurrency.klusterlet_probe_workers` | int | `10` | Maximum concurrent klusterlet probe workers; set to `1` for sequential probing |
-| `concurrency.klusterlet_remediation_workers` | int | `10` | Maximum concurrent klusterlet remediation workers; set to `1` for sequential remediation |
+| `concurrency.klusterlet_probe_workers` | int | `10` | Maximum concurrent klusterlet probe workers (at most 32); set to `1` for sequential probing |
+| `concurrency.klusterlet_remediation_workers` | int | `10` | Maximum concurrent klusterlet remediation workers (at most 32); set to `1` for sequential remediation |
 | `timeouts.klusterlet_request_seconds` | int | `30` | Per Kubernetes API request timeout for direct klusterlet probe/remediation calls |
 | `timeouts.klusterlet_worker_seconds` | int | `180` | Worker future timeout window for each parallel klusterlet probe/remediation batch |
 | `timeouts.klusterlet_recheck_seconds` | int | `300` | Total post-remediation wait for klusterlet hub secret convergence before failing persistent wrong-hub results |
@@ -183,7 +196,8 @@ Each role publishes a typed result fact. All facts persist in play scope and are
 | `summary.total` | int | Total number of ManagedClusters evaluated |
 | `summary.pending` | list[str] | Names of clusters not yet joined or available |
 | `klusterlet_probe.results` | list[dict] | Per-cluster klusterlet hub comparison results |
-| `klusterlet_probe.wrong_hub_clusters` | list[str] | Clusters whose klusterlet kubeconfig still points at a different hub |
+| `klusterlet_probe.wrong_hub_clusters` | list[str] | Clusters whose klusterlet kubeconfig still points at a different hub (a different host; the only result that is remediated) |
+| `klusterlet_probe.unverified_clusters` | list[str] | Clusters whose hub endpoint could not be proven (for example `endpoint_mismatch_unverified`, `expected_endpoint_unavailable`, `client_endpoint_mismatch`); also listed in `failed_clusters`, and never remediated |
 | `klusterlet_probe.skipped_clusters` | list[str] | Clusters skipped because direct klusterlet probing could not run, commonly because no managed-cluster kubeconfig was supplied |
 | `klusterlet_remediation.results` | list[dict] | Per-cluster remediation steps and status |
 | `klusterlet_remediation.failed_clusters` | list[str] | Clusters where remediation failed; non-empty fails post-activation after the klusterlet re-check |
@@ -193,8 +207,8 @@ Each role publishes a typed result fact. All facts persist in play scope and are
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `acm_switchover_managed_clusters` | dict | `{}` | Optional managed-cluster kubeconfigs used for preflight managed-cluster RBAC validation plus klusterlet probe and remediation |
-| `acm_switchover_execution.concurrency.klusterlet_probe_workers` | int | `10` | Maximum concurrent klusterlet probe workers; set to `1` for sequential probing |
-| `acm_switchover_execution.concurrency.klusterlet_remediation_workers` | int | `10` | Maximum concurrent klusterlet remediation workers; set to `1` for sequential remediation |
+| `acm_switchover_execution.concurrency.klusterlet_probe_workers` | int | `10` | Maximum concurrent klusterlet probe workers (at most 32); set to `1` for sequential probing |
+| `acm_switchover_execution.concurrency.klusterlet_remediation_workers` | int | `10` | Maximum concurrent klusterlet remediation workers (at most 32); set to `1` for sequential remediation |
 | `acm_switchover_execution.timeouts.klusterlet_request_seconds` | int | `30` | Per Kubernetes API request timeout for direct klusterlet probe/remediation calls |
 | `acm_switchover_execution.timeouts.klusterlet_worker_seconds` | int | `180` | Worker future timeout window for each parallel klusterlet probe/remediation batch |
 | `acm_switchover_execution.timeouts.klusterlet_recheck_seconds` | int | `300` | Total post-remediation wait for klusterlet hub secret convergence before failing persistent wrong-hub results |
@@ -209,6 +223,15 @@ direct klusterlet probing/remediation because the collection has no managed
 cluster kubeconfig to reach them. That skip is non-fatal only when
 ManagedCluster readiness already passed; if the cluster is still pending, the
 ManagedCluster verification result remains the blocking failure.
+
+Remediation re-proves each requested cluster in the same invocation and changes
+only the clusters it has just found `wrong_hub`; the requested names authorize
+nothing. If any requested cluster is `failed` or `unverified`, no cluster in the
+batch is changed, and the wrong-hub peers report
+`remediation_blocked_by_unproven_cluster`. The module then fails whatever
+`klusterlet.strict_remediation` says; that toggle still governs only failures of
+attempted mutations. Refusal results carry a `detail` field with the mapped path and
+entry locations, never file content.
 
 Klusterlet worker future timeouts are treated as failed cluster results even when
 `klusterlet.strict_remediation` is `false`, because a timed-out worker means the

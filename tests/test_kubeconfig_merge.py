@@ -291,9 +291,52 @@ def test_absent_sections_and_an_absent_user_are_accepted(tmp_path):
     assert merged == {"contexts": [{"name": "c", "context": {"cluster": "k"}}], "clusters": [], "users": []}
 
 
-def test_repeated_entries_are_merged_in_order_unchanged(tmp_path):
-    """Duplicate-name policy is R4-06 PR 2 (§2); this slice keeps today's ordered merge."""
+def test_conflicting_duplicates_across_files_refuse_the_whole_merge(tmp_path):
+    """Amendment §3: a (kind, name) group with two variants anywhere in the chain fails."""
     a = _write(tmp_path / "a.yaml", _doc("same", "https://one:6443"))
     b = _write(tmp_path / "b.yaml", _doc("same", "https://two:6443"))
+    with pytest.raises(SwitchoverError) as excinfo:
+        load_merged_kubeconfig(f"{a}:{b}", DEFAULT_KUBECONFIG_SIZE)
+    message = str(excinfo.value)
+    assert message.startswith("kubeconfig_duplicate_conflict: ")
+    assert f"{a}[0] (variant 1)" in message and f"{b}[0] (variant 2)" in message
+    assert "https://" not in message.replace(str(tmp_path), "")
+
+
+def test_identical_duplicates_across_files_resolve_first_wins(tmp_path):
+    a = _write(tmp_path / "a.yaml", _doc("same", "https://one:6443"))
+    b = _write(tmp_path / "b.yaml", "clusters:\n- cluster:\n    server: https://one:6443\n  name: same\n")
     merged = load_merged_kubeconfig(f"{a}:{b}", DEFAULT_KUBECONFIG_SIZE)
-    assert [c["cluster"]["server"] for c in merged["clusters"]] == ["https://one:6443", "https://two:6443"]
+    assert [c["name"] for c in merged["clusters"]] == ["same"]
+
+
+def test_every_occurrence_of_a_conflicting_group_is_located(tmp_path):
+    """Three occurrences with two variants: all three are reported, each labelled."""
+    a = _write(tmp_path / "a.yaml", _doc("same", "https://one:6443"))
+    b = _write(tmp_path / "b.yaml", _doc("same", "https://one:6443"))
+    c = _write(tmp_path / "c.yaml", _doc("same", "https://two:6443"))
+    with pytest.raises(SwitchoverError) as excinfo:
+        load_merged_kubeconfig(f"{a}:{b}:{c}", DEFAULT_KUBECONFIG_SIZE)
+    message = str(excinfo.value)
+    assert f"{a}[0] (variant 1)" in message
+    assert f"{b}[0] (variant 1)" in message
+    assert f"{c}[0] (variant 2)" in message
+
+
+def test_a_conflict_in_one_kind_is_reported_with_its_kind(tmp_path):
+    a = _write(tmp_path / "a.yaml", "users:\n- {name: u, user: {token: one}}\n")
+    b = _write(tmp_path / "b.yaml", "users:\n- {name: u, user: {token: two}}\n")
+    with pytest.raises(SwitchoverError) as excinfo:
+        load_merged_kubeconfig(f"{a}:{b}", DEFAULT_KUBECONFIG_SIZE)
+    assert "user 'u' at" in str(excinfo.value)
+    assert "one" not in str(excinfo.value).replace(str(tmp_path), "")
+
+
+def test_a_yaml_set_is_refused_with_its_position(tmp_path):
+    """Amendment §3: `!!set` has no defined duplicate comparison; the refusal names where it is."""
+    path = _write(tmp_path / "set.yaml", "clusters: []\nusers: !!set {a, b}\n")
+    with pytest.raises(SwitchoverError) as excinfo:
+        load_merged_kubeconfig(path, DEFAULT_KUBECONFIG_SIZE)
+    assert str(excinfo.value) == (
+        f"kubeconfig_load_failed (structure_invalid): {path} line 2 column 8 (YAML sets are not supported)"
+    )

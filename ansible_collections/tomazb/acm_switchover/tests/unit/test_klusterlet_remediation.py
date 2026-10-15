@@ -131,14 +131,22 @@ def test_klusterlet_verify_fallback_ignores_skipped_prefixed_result():
     assert "else (acm_cluster_verify_result | default({}))" in expression
 
 
-def test_fix_klusterlet_fallback_uses_legacy_pending_when_prefixed_result_is_skipped():
-    """The fix task must fall back on legacy pending when the prefixed result has no pending key."""
-    content = (POST_ACTIVATION_TASKS / "fix_klusterlet.yml").read_text()
+def test_remediation_candidates_are_fresh_wrong_hub_probe_results_only():
+    """R4-06 PR 2 (amendment §2.6 rule 4): a pending cluster is never remediated for being pending.
 
-    assert (
-        "acm_switchover_cluster_verify_result.pending | default(acm_cluster_verify_result.pending | default([]))"
-        in content
+    Only the initial probe's own `wrong_hub` result nominates a cluster, and the fix task has
+    no pending-list fallback; acm_klusterlet_remediate then re-proves `wrong_hub` itself.
+    """
+    tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text())
+    select_task = next(
+        task for task in tasks if task.get("name") == "Select fresh wrong-hub klusterlet remediation candidates"
     )
+    expression = select_task["ansible.builtin.set_fact"]["_klusterlet_remediation_candidates"]
+
+    assert "_klusterlet_initial_probe_result" in expression and "wrong_hub_clusters" in expression
+    assert "pending" not in expression
+    fix_content = (POST_ACTIVATION_TASKS / "fix_klusterlet.yml").read_text()
+    assert ".pending" not in fix_content
 
 
 def test_verify_klusterlet_reprobes_after_remediation():
@@ -293,3 +301,20 @@ def test_klusterlet_module_has_required_operations():
     assert "BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME" in content, "Must handle bootstrap hub kubeconfig secret"
     assert "patch_namespaced_deployment" in content, "Must restart klusterlet deployment"
     assert "MANAGED_CLUSTER_AGENT_NAMESPACE" in content, "Must reference agent namespace"
+
+
+def test_verify_klusterlet_requires_every_remediated_cluster_to_re_verify():
+    """Codex PR 2 review: a repaired cluster whose hub secrets vanish must not pass as `skipped`."""
+    tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text())
+    fail_task = next(
+        task
+        for task in tasks
+        if "ansible.builtin.fail" in task and "_klusterlet_remediation_result.failed_clusters" in _when_text(task)
+    )
+    when = _when_text(fail_task)
+
+    compact = " ".join(when.split())
+    assert (
+        "(_klusterlet_remediation_result.remediated_clusters | default([]))"
+        " | difference((_klusterlet_post_remediation_probe_result | default({})).verified_clusters | default([]))"
+    ) in compact
