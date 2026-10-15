@@ -421,6 +421,12 @@ def test_an_import_secret_replaced_after_verification_is_never_applied(run, repl
     build.assert_not_called()
     assert spoke.mutations == []
     assert "hunter2" not in caplog.text
+    expected_reason = {
+        "https://alice:hunter2@api.new-hub.example:6443": "expected_endpoint_malformed",
+        OLD_HUB: "expected_endpoint_changed",
+    }
+    reasons = [record.args[1] for record in caplog.records if record.msg.startswith("Not reconnecting klusterlet")]
+    assert reasons in ([expected_reason.get(_bootstrap_server(replacement), "expected_endpoint_unavailable")],)
 
 
 def test_a_loader_error_on_reconnect_is_logged_without_its_text(run, caplog):
@@ -446,3 +452,10 @@ def test_the_import_manifest_scan_stops_at_the_bootstrap_secret():
 
     assert _bootstrap_server_from_import(manifest) == (True, NEW_HUB)
     assert _bootstrap_server_from_import("kind: [unclosed\n---\n" + bootstrap) == (False, None)
+
+
+def _bootstrap_server(import_secret):
+    from modules.post_activation import _bootstrap_server_from_import
+
+    found, server = _bootstrap_server_from_import(base64.b64decode(import_secret["data"]["import.yaml"]).decode())
+    return server if found else None

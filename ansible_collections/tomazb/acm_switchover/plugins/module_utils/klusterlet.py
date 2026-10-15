@@ -871,9 +871,37 @@ def remediate_klusterlets(
     secondary_client = None
     managed_cluster_reader = None
     if any((managed_clusters.get(cluster) or {}).get("kubeconfig") for cluster in candidates):
-        secondary_client, managed_cluster_reader = _hub_clients(
-            secondary_hub, core_client_factory, reader_factory, request_timeout_value
-        )
+        try:
+            secondary_client, managed_cluster_reader = _hub_clients(
+                secondary_hub, core_client_factory, reader_factory, request_timeout_value
+            )
+        except Exception as exc:  # noqa: BLE001 - loader text can quote credentials; never re-raise it
+            reason = error_summary(exc)
+            results = [
+                (
+                    _result(cluster, "failed", _mark_pending_not_run(_new_steps()), reason=reason)
+                    if (managed_clusters.get(cluster) or {}).get("kubeconfig")
+                    else _result(
+                        cluster,
+                        "skipped",
+                        {key: "skipped" for key in _new_steps()},
+                        reason="no_managed_cluster_kubeconfig",
+                    )
+                )
+                for cluster in candidates
+            ]
+            failed_clusters = [item["cluster"] for item in results if item["status"] == "failed"]
+            return {
+                "changed": False,
+                "failed": True,
+                "workers": worker_count,
+                "results": results,
+                "failed_clusters": failed_clusters,
+                "unverified_clusters": [],
+                "skipped_clusters": [item["cluster"] for item in results if item["status"] == "skipped"],
+                "remediated_clusters": [],
+                "msg": "Klusterlet remediation failed for cluster(s): " + ", ".join(failed_clusters),
+            }
     timeout_steps = {
         "import_secret_read": "timeout",
         "bootstrap_secret_deleted": "not_run",

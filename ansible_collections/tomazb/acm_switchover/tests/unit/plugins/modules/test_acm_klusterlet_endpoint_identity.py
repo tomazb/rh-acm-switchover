@@ -629,3 +629,25 @@ def test_only_a_wrong_hub_candidate_gets_a_workload_client(mapped):
     assert _status(result, "a")[0] == "verified" and _status(result, "b")[0] == "remediated"
     assert [kubeconfig for kubeconfig, _context in fleet.constructions].count(path_a) == 1
     assert [kubeconfig for kubeconfig, _context in fleet.constructions].count(path_b) == 2
+
+
+def test_a_hub_client_setup_failure_in_remediation_is_sanitized(mapped):
+    """CodeRabbit PR 356: the remediation setup path must not hand loader text to fail_json."""
+    path = mapped()
+
+    def factory(kubeconfig, context=None):
+        raise ValueError("token: SECRETLEAK")
+
+    result = remediate_klusterlets(
+        secondary_hub={"kubeconfig": "hub"},
+        managed_clusters={"a": {"kubeconfig": path}, "u": {}},
+        pending_clusters=["a", "u"],
+        core_client_factory=factory,
+        apps_client_factory=factory,
+        managed_cluster_reader_factory=Hub().reader_factory,
+    )
+
+    assert result["failed"] is True and result["failed_clusters"] == ["a"]
+    assert _status(result, "a") == ("failed", "ValueError")
+    assert _status(result, "u") == ("skipped", "no_managed_cluster_kubeconfig")
+    assert "SECRETLEAK" not in repr(result)

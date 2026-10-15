@@ -27,6 +27,7 @@ from lib.constants import (
     DISABLE_AUTO_IMPORT_ANNOTATION,
     INITIAL_CLUSTER_WAIT_TIMEOUT,
     KLUSTERLET_API_READ_TIMEOUT,
+    KLUSTERLET_REASON_EXPECTED_ENDPOINT_CHANGED,
     KLUSTERLET_RECHECK_INTERVAL,
     KLUSTERLET_RECHECK_TIMEOUT,
     KLUSTERLET_RESULT_FAILED,
@@ -1252,10 +1253,16 @@ class PostActivationVerification:
             # and classified, or a replaced secret could write an unvalidated hub (amendment §2.4).
             found, manifest_server = _bootstrap_server_from_import(import_yaml)
             if not found or not normalized_equal(manifest_server, expected_hub):
+                if not found:
+                    refusal = REASON_EXPECTED_ENDPOINT_UNAVAILABLE
+                elif parse_endpoint(manifest_server)[0] is None:
+                    refusal = REASON_EXPECTED_ENDPOINT_MALFORMED
+                else:
+                    refusal = KLUSTERLET_REASON_EXPECTED_ENDPOINT_CHANGED
                 logger.warning(
                     "Not reconnecting klusterlet for %s: the import secret changed after verification (%s)",
                     cluster_name,
-                    REASON_EXPECTED_ENDPOINT_MALFORMED if found else REASON_EXPECTED_ENDPOINT_UNAVAILABLE,
+                    refusal,
                 )
                 return False
 
@@ -1667,14 +1674,6 @@ def _bootstrap_server_from_import(import_yaml: str) -> Tuple[bool, Any]:
         if (document.get("metadata") or {}).get("name") != "bootstrap-hub-kubeconfig":
             continue
         return _server_from_kubeconfig_b64((document.get("data") or {}).get("kubeconfig"))
-    for document in documents:
-        if not isinstance(document, dict) or document.get("kind") != "Secret":
-            continue
-        if (document.get("metadata") or {}).get("name") != "bootstrap-hub-kubeconfig":
-            continue
-        encoded = (document.get("data") or {}).get("kubeconfig")
-        if not isinstance(encoded, str) or not encoded:
-            return False, None
         try:
             kubeconfig_data = yaml.safe_load(base64.b64decode(encoded).decode("utf-8"))
         except Exception:  # noqa: BLE001
