@@ -191,8 +191,8 @@ secondary. The read uses `hub: primary` and key `primary_managedclusters`. That 
 
 So an executing run always reads the live primary, as Python always does. This follows the
 AGENTS execution-time discovery rule: the derived expectation decides which destination state
-the mutating phases accept. The published outcome is the derivation input, and it is also
-`acm_primary_managed_clusters_info` for the other preflight checks.
+the mutating phases accept. The seam publishes the outcome as `acm_primary_managed_clusters_info`.
+That one fact is both the derivation input and the input to the other preflight checks.
 
 The two managed-clusters backup checks are unchanged. In both form factors they still consume
 the ManagedCluster inventory fail-open, which is pre-existing behavior outside this slice. They
@@ -208,9 +208,10 @@ itself shadowable. More directly, an operator who controls extra vars can set th
 fact `acm_switchover_expected_managed_cluster_names` to `[]` without touching the read at all.
 The collection's supported input surface is the grouped `acm_switchover_*` namespaces
 (`variable-reference.md`). Result facts, discovery facts and `_acm_*` internals are outputs,
-and setting them is unsupported. This slice guarantees what is enforceable in a playbook:
-every executing run performs the live strict read, and no test seam is honoured outside
-dry_run/validate.
+and setting them is unsupported. This slice guarantees what is enforceable in a playbook.
+Every executing run performs the live strict primary read, and that read's test seam
+(`migration_reads`) is honoured only in dry_run/validate. Other pre-existing test seams that
+are honoured in every mode are outside this slice (#346).
 
 Parity tests hold the two derivation functions and the two activation decisions equal over
 shared cases. Required cases cover every row of both tables above, plus pagination

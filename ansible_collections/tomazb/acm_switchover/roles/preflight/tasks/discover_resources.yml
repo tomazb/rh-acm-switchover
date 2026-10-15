@@ -183,12 +183,7 @@
       api_version: cluster.open-cluster-management.io/v1
       kind: ManagedCluster
       resource_name: managedclusters
-    _acm_read_fact: _acm_primary_managed_clusters_derivation_read
-  when: not (acm_switchover_operation.restore_only | default(false))
-
-- name: Publish the primary ManagedCluster inventory for the other preflight checks
-  ansible.builtin.set_fact:
-    acm_primary_managed_clusters_info: "{{ _acm_primary_managed_clusters_derivation_read }}"
+    _acm_read_fact: acm_primary_managed_clusters_info
   when: not (acm_switchover_operation.restore_only | default(false))
 
 - name: Read primary hub ManagedCluster backups when not pre-seeded by tests

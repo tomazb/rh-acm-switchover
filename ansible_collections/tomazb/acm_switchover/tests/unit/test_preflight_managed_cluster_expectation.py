@@ -134,9 +134,12 @@ class TestPrimaryManagedClusterDiscovery:
             "kind": "ManagedCluster",
             "resource_name": "managedclusters",
         }
-        assert self.read["vars"]["_acm_read_fact"] == "_acm_primary_managed_clusters_derivation_read"
-        assert "restore_only" in _when_text(self.read)
+        assert self.read["vars"]["_acm_read_fact"] == "acm_primary_managed_clusters_info"
         assert not [t for t in self.tasks if (t.get("kubernetes.core.k8s_info") or {}).get("kind") == "ManagedCluster"]
+
+    @pytest.mark.parametrize(("restore_only", "reads"), [(False, True), (True, False)])
+    def test_every_switchover_reads_the_primary_and_restore_only_never_does(self, restore_only, reads):
+        assert _holds(self.read["when"], {"acm_switchover_operation": {"restore_only": restore_only}}) is reads
 
     @pytest.mark.parametrize(("hub", "expected"), [("primary", "/kc/primary"), (None, "/kc/secondary")])
     def test_the_seam_reads_the_named_hub_and_defaults_to_the_destination(self, hub, expected):
@@ -177,13 +180,29 @@ class TestPrimaryManagedClusterDiscovery:
         templar = Templar(loader=DataLoader(), variables=variables)
         assert (str(templar.template(trust_as_template(resolve))).strip() == "True") is overridden
 
-    def test_the_other_preflight_checks_see_the_strict_read(self):
-        publish = next(
-            t for t in self.tasks if "acm_primary_managed_clusters_info" in (t.get("ansible.builtin.set_fact") or {})
+    @pytest.mark.parametrize("overridden", [False, True])
+    def test_the_published_read_never_carries_the_module_arguments(self, overridden):
+        """The fact preflight derives from holds only the outcome, never the echoed kubeconfig/context."""
+        publish = self.seam[-1]["ansible.builtin.set_fact"]["{{ _acm_read_fact }}"]
+        live = {
+            "changed": False,
+            "read_status": "ok",
+            "resources": [{"metadata": {"name": "a"}}],
+            "resource_version": "3",
+            "invocation": {"module_args": {"kubeconfig": "/secret/path", "context": "ctx"}},
+        }
+        seeded = {"read_status": "ok", "resources": [], "resource_version": "1"}
+        variables = {
+            "_acm_read": {"key": "primary_managedclusters"},
+            "_acm_read_overridden": overridden,
+            "_acm_live_read": {"skipped": True} if overridden else live,
+            "acm_switchover_test_overrides": {"migration_reads": {"primary_managedclusters": seeded}},
+        }
+        rendered = Templar(loader=DataLoader(), variables=variables).template(trust_as_template(publish))
+        assert set(rendered) == {"read_status", "resources", "resource_version"}
+        assert rendered == (
+            seeded if overridden else {k: live[k] for k in ("read_status", "resources", "resource_version")}
         )
-        assert self.tasks.index(publish) > self.tasks.index(self.read)
-        value = publish["ansible.builtin.set_fact"]["acm_primary_managed_clusters_info"]
-        assert value == "{{ _acm_primary_managed_clusters_derivation_read }}"
 
 
 class TestDerivation:
@@ -207,7 +226,17 @@ class TestDerivation:
             == "expected_managed_clusters"
         ]
         inputs = derive["tomazb.acm_switchover.acm_migration_evidence"]["inputs"]
-        assert "_acm_primary_managed_clusters_derivation_read" in inputs["mc_read"]
+        assert inputs["mc_read"] == "{{ acm_primary_managed_clusters_info | default({}) }}"
+        assert (
+            _holds(
+                derive["when"],
+                {
+                    "acm_switchover_preflight_summary": {"passed": True},
+                    "acm_switchover_operation": {"restore_only": True},
+                },
+            )
+            is False
+        )
         assert "restore_only" in _when_text(derive)
 
     def test_no_fail_open_filter_derives_names_from_the_raw_resources(self):

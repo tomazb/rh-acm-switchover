@@ -707,7 +707,7 @@ do not set them in an operator run.
 | `_acm_mc_readiness_poll_delays` | `roles/post_activation/tasks/verify_managed_clusters.yml` (bounded readiness wait) | `[0] + [30] * 20` |
 | `_acm_cleanup_poll_delays` | `roles/finalization/tasks/cleanup_journaled_restore.yml` (absence poll waits) | the shared `cleanup_schedule` poll delays |
 | `_acm_cleanup_poll_timeout` | `roles/finalization/tasks/cleanup_journaled_restore.yml` (elapsed absence-poll deadline) | the shared `cleanup_schedule` poll timeout (300 seconds) |
-| `acm_switchover_test_overrides.migration_reads` | `roles/activation/tasks/strict_read.yml` and `read_frozen_backups.yml` (pre-seeded strict-read results keyed by read) | none; honoured only in `dry_run` and `validate`, so an executing run always reads the live hub |
+| `acm_switchover_test_overrides.migration_reads` | `roles/activation/tasks/strict_read.yml` and `read_frozen_backups.yml` (pre-seeded strict-read results keyed by read; preflight's primary ManagedCluster read uses key `primary_managedclusters`) | none; honoured only in `dry_run` and `validate`, so an executing run always reads the live hub |
 
 ## Manual Integration Testing
 
