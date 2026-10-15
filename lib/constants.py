@@ -140,11 +140,19 @@ DEFAULT_KUBECONFIG_SIZE = 10 * 1024 * 1024  # 10MB
 
 def kubeconfig_size_limit(raw: Optional[str]) -> int:
     """Resolve the kubeconfig size limit from an ACM_KUBECONFIG_MAX_SIZE value."""
-    try:
-        value = int(raw) if raw is not None else 0
-    except ValueError:
+    if raw is None:
         return DEFAULT_KUBECONFIG_SIZE
-    return value if value > 0 else DEFAULT_KUBECONFIG_SIZE
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value > 0:
+        return value
+    # An override can no longer disable the limit (formerly `0` or negative meant unlimited).
+    logging.getLogger("acm_switchover").warning(
+        "ACM_KUBECONFIG_MAX_SIZE must be a positive byte count; using the default %d bytes", DEFAULT_KUBECONFIG_SIZE
+    )
+    return DEFAULT_KUBECONFIG_SIZE
 
 
 MAX_KUBECONFIG_SIZE = kubeconfig_size_limit(os.environ.get("ACM_KUBECONFIG_MAX_SIZE"))

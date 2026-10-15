@@ -174,14 +174,38 @@ PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----MIIEpAIBAAKCAQEAsecretkeymaterial"
     ],
 )
 def test_a_load_failure_never_leaks_key_material(tmp_path, state, monkeypatch, caplog, content):
-    """Design §1: only a reason code, the file path and a line/column are ever reported."""
+    """Design §1: only a reason code, the file path and a line/column are ever reported -
+    through verify(), which logs the failure and records it in the persisted state."""
     monkeypatch.setenv("KUBECONFIG", _write(tmp_path / "secrets.yaml", content))
     pav = _pav(state)
 
-    with caplog.at_level("DEBUG"):
-        with pytest.raises(SwitchoverError) as exc:
-            pav._verify_klusterlet_connections()
+    with caplog.at_level("DEBUG"), patch.object(pav, "_load_post_activation_journal"), patch.object(
+        pav, "_post_activation_waiver"
+    ), patch.object(pav, "_verify_managed_clusters_connected"):
+        assert pav.verify() is False
 
-    rendered = str(exc.value) + caplog.text + json.dumps(copy.deepcopy(state.state), default=str)
+    errors = state.state.get("errors") or []
+    assert any("kubeconfig_load_failed" in json.dumps(error) for error in errors), errors
+    rendered = caplog.text + json.dumps(copy.deepcopy(state.state), default=str)
     assert SECRET_TOKEN not in rendered and "SUPERSECRET" not in rendered
     assert "PRIVATE KEY" not in rendered and "secretkeymaterial" not in rendered
+
+
+def test_verify_never_records_key_material_from_a_constructor_error(tmp_path, monkeypatch, caplog):
+    """A YAML constructor error (e.g. `!!int <token>`) quotes the scalar; verify() logs and records
+    the failure into state, so the sanitized message is the only thing that may reach either."""
+    bad = _write(tmp_path / "tag.yaml", f"users:\n- name: u\n  user: {{token: !!int {SECRET_TOKEN}}}\n")
+    monkeypatch.setenv("KUBECONFIG", bad)
+    state = Mock()
+    state.is_step_completed.return_value = False
+    state.step.side_effect = lambda name, logger=None: _RealStep()
+    pav = PostActivationVerification(secondary_client=_secondary(), state_manager=state, has_observability=False)
+
+    with caplog.at_level("DEBUG"), patch.object(pav, "_load_post_activation_journal"), patch.object(
+        pav, "_post_activation_waiver"
+    ), patch.object(pav, "_verify_managed_clusters_connected"):
+        assert pav.verify() is False
+
+    (message, _phase), _ = state.add_error.call_args
+    assert "kubeconfig_load_failed (yaml_invalid)" in message
+    assert "SUPERSECRET" not in message + caplog.text and SECRET_TOKEN not in message + caplog.text
