@@ -29,14 +29,15 @@
         else (acm_cluster_verify_result | default({}))
       }}
 
-- name: Combine pending and wrong-hub klusterlet remediation candidates
+# R4-06 PR 2 (amendment 2026-10-15 §2.6 rule 4): a cluster is a remediation candidate only
+# when its own fresh probe classified it `wrong_hub`. A cluster-verify `pending` cluster is
+# not remediated for being pending; every mapped pending cluster was probed above, and
+# acm_klusterlet_remediate re-proves identity and `wrong_hub` before any mutation.
+- name: Select fresh wrong-hub klusterlet remediation candidates
   ansible.builtin.set_fact:
     _klusterlet_remediation_candidates: >-
       {{
-        (
-          (_klusterlet_cluster_verify_result.pending | default([]))
-          + ((_klusterlet_initial_probe_result | default({})).wrong_hub_clusters | default([]))
-        )
+        ((_klusterlet_initial_probe_result | default({})).wrong_hub_clusters | default([]))
         | unique
         | list
       }}

@@ -6,6 +6,7 @@ import base64
 import builtins
 import threading
 import time
+from types import SimpleNamespace
 from typing import NoReturn
 
 import pytest
@@ -31,6 +32,62 @@ from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_klusterlet_re
     remediate_klusterlets,
 )
 
+# R4-06 PR 2: a mapped cluster is inspected only after its identity is proven - a fresh
+# ManagedCluster read whose URL equals the mapped kubeconfig's server, and a spoke client
+# bound to that endpoint. The fixture below gives every pre-PR 2 test that proof, so each
+# keeps testing what it tested; the endpoint-identity tests below vary it on purpose.
+SPOKE_URL = "https://api.spoke.example:6443"
+MAPPED_KUBECONFIG_LABELS = ("cluster-a", "cluster-b", "cluster-c", "managed")
+
+
+def _spoke_kubeconfig(server: str = SPOKE_URL) -> dict:
+    return {
+        "apiVersion": "v1",
+        "clusters": [{"name": "spoke", "cluster": {"server": server}}],
+        "contexts": [
+            {"name": name, "context": {"cluster": "spoke", "user": "admin"}}
+            for name in ("spoke-admin", "ctx-a", "ctx-b")
+        ],
+        "users": [{"name": "admin", "user": {"token": "t"}}],
+        "current-context": "spoke-admin",
+    }
+
+
+def _managed_cluster(url: str | None = SPOKE_URL) -> dict:
+    configs = [{"url": url}] if url else []
+    return {"metadata": {"name": "x"}, "spec": {"managedClusterClientConfigs": configs}}
+
+
+class ManagedClusterReads:
+    """A fake hub: ManagedCluster objects by name, and every read made."""
+
+    def __init__(self, objects: dict | None = None, default: dict | None = None):
+        self.objects = objects or {}
+        self.default = default
+        self.reads: list[str] = []
+
+    def factory(self, kubeconfig: str, context: str | None, request_timeout):
+        return self.read
+
+    def read(self, name: str):
+        self.reads.append(name)
+        if name in self.objects:
+            value = self.objects[name]
+            if isinstance(value, Exception):
+                raise value
+            return value
+        return self.default
+
+
+@pytest.fixture(autouse=True)
+def mapped_cluster_identity(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    for label in MAPPED_KUBECONFIG_LABELS:
+        (tmp_path / label).write_text(yaml.safe_dump(_spoke_kubeconfig()))
+    reads = ManagedClusterReads(default=_managed_cluster())
+    monkeypatch.setattr(klusterlet_utils, "build_managed_cluster_reader", reads.factory)
+    return reads
+
 
 class FakeApiError(Exception):
     def __init__(self, status: int, reason: str = ""):
@@ -40,6 +97,8 @@ class FakeApiError(Exception):
 
 
 class FakeCoreClient:
+    api_client = SimpleNamespace(configuration=SimpleNamespace(host=SPOKE_URL))
+
     def __init__(
         self,
         secrets: dict[tuple[str, str], dict] | None = None,
@@ -90,6 +149,8 @@ class FakeCoreClient:
 
 
 class FakeAppsClient:
+    api_client = SimpleNamespace(configuration=SimpleNamespace(host=SPOKE_URL))
+
     def __init__(self, fail_patch: bool = False):
         self.fail_patch = fail_patch
         self.patched: list[tuple[str, str, dict]] = []
@@ -140,6 +201,15 @@ def _hub_secret(server: str, name: str = HUB_KUBECONFIG_SECRET_NAME) -> dict:
         },
         "metadata": {"name": name},
     }
+
+
+def _wrong_hub_spoke(**kwargs) -> FakeCoreClient:
+    """A spoke whose klusterlet is connected to the old hub: a genuine, fresh `wrong_hub`."""
+    spoke = FakeCoreClient(**kwargs)
+    spoke.secrets[(MANAGED_CLUSTER_AGENT_NAMESPACE, HUB_KUBECONFIG_SECRET_NAME)] = _hub_secret(
+        "https://old.example:6443"
+    )
+    return spoke
 
 
 def test_probe_reports_verified_wrong_hub_and_skipped_clusters():
@@ -369,11 +439,14 @@ def test_remediation_reports_missing_import_secret_as_best_effort_failure():
         apps_client_factory=_new_fake_apps_client,
     )
 
+    # Without an import secret there is no expected endpoint (amendment §2.4): the cluster
+    # is unverified and never inspected; non-strict mode still reports it as failed.
     assert result["failed"] is False
     assert result["failed_clusters"] == ["cluster-a"]
-    assert result["results"][0]["status"] == "failed"
-    assert result["results"][0]["steps"]["import_secret_read"] == "missing"
-    assert "pending" not in result["results"][0]["steps"].values()
+    assert result["unverified_clusters"] == ["cluster-a"]
+    assert result["results"][0]["status"] == "unverified"
+    assert result["results"][0]["reason"] == "expected_endpoint_unavailable"
+    assert set(result["results"][0]["steps"].values()) == {"not_run"}
 
 
 def test_remediation_patches_and_restarts_klusterlet_in_default_namespace():
@@ -484,7 +557,7 @@ def test_remediation_failed_patch_keeps_existing_bootstrap_secret_and_skips_rest
 
 def test_remediation_creates_absent_bootstrap_secret_without_delete_attempt():
     secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})
-    managed = FakeCoreClient()
+    managed = _wrong_hub_spoke()
     apps = FakeAppsClient()
 
     def core_client_factory(kubeconfig: str, context: str | None = None):
@@ -514,7 +587,7 @@ def test_remediation_creates_absent_bootstrap_secret_without_delete_attempt():
 
 def test_remediation_retries_patch_after_create_conflict():
     secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})
-    managed = FakeCoreClient(create_conflict=True)
+    managed = _wrong_hub_spoke(create_conflict=True)
     apps = FakeAppsClient()
     patch_attempts = 0
 
@@ -566,9 +639,8 @@ def test_remediation_patches_bootstrap_secret_from_manifest_namespace():
     docs[0]["metadata"]["namespace"] = custom_namespace
     import_secret["data"]["import.yaml"] = base64.b64encode(yaml.safe_dump_all(docs).encode("utf-8")).decode("ascii")
     secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): import_secret})
-    managed = FakeCoreClient(
-        {(custom_namespace, BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME): _hub_secret("https://old.example:6443")}
-    )
+    managed = _wrong_hub_spoke()
+    managed.secrets[(custom_namespace, BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME)] = _hub_secret("https://old.example:6443")
     apps = FakeAppsClient()
 
     def core_client_factory(kubeconfig: str, context: str | None = None):
@@ -688,8 +760,8 @@ def test_remediation_preserves_best_effort_partial_failure():
         }
     )
     managed_clients = {
-        "cluster-a": FakeCoreClient(),
-        "cluster-b": FakeCoreClient(fail_create=True),
+        "cluster-a": _wrong_hub_spoke(),
+        "cluster-b": _wrong_hub_spoke(fail_create=True),
     }
     apps = FakeAppsClient()
     calls = {"hub": 0}
@@ -730,7 +802,7 @@ def test_remediation_strict_mode_fails_partial_failure():
     secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})
 
     def core_client_factory(kubeconfig: str, context: str | None = None) -> FakeCoreClient:
-        return secondary if kubeconfig == "hub" else FakeCoreClient(fail_create=True)
+        return secondary if kubeconfig == "hub" else _wrong_hub_spoke(fail_create=True)
 
     result = remediate_klusterlets(
         secondary_hub={"kubeconfig": "hub"},

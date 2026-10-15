@@ -4,17 +4,8 @@
 
 - name: Identify clusters eligible for remediation
   ansible.builtin.set_fact:
-    _klusterlet_remediation_requested: >-
-      {{
-        (
-          _klusterlet_remediation_candidates
-          | default(
-              acm_switchover_cluster_verify_result.pending | default(acm_cluster_verify_result.pending | default([]))
-            )
-        )
-        | unique
-        | list
-      }}
+    # Only fresh wrong-hub probe results (verify_klusterlet.yml); never a pending list.
+    _klusterlet_remediation_requested: "{{ _klusterlet_remediation_candidates | default([]) | unique | list }}"
 
 - name: Filter clusters eligible for remediation to those with kubeconfigs
   ansible.builtin.set_fact:
