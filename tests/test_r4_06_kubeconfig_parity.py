@@ -29,7 +29,9 @@ def _python(path):
         match = re.match(r"(kubeconfig_load_failed \([a-z_]+\)|kubeconfig_duplicate_conflict)", str(exc))
         assert match, str(exc)
         return match.group(1), None
-    return "ok", {section: [entry["name"] for entry in merged[section]] for section in ("clusters", "contexts", "users")}
+    return "ok", {
+        section: [entry["name"] for entry in merged[section]] for section in ("clusters", "contexts", "users")
+    }
 
 
 def _collection(path):
@@ -37,7 +39,9 @@ def _collection(path):
         document = load_kubeconfig_file(str(path), LIMIT)
     except KubeconfigFileError as exc:
         return exc.reason, None
-    return "ok", {section: [entry["name"] for entry in document[section]] for section in ("clusters", "contexts", "users")}
+    return "ok", {
+        section: [entry["name"] for entry in document[section]] for section in ("clusters", "contexts", "users")
+    }
 
 
 @pytest.mark.parametrize("row", VECTORS["single_file"], ids=lambda row: row["case"])

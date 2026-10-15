@@ -39,9 +39,7 @@ def test_canonicalization_vector(impl, row):
 def test_classification_vector(impl, row):
     assert impl.classify_hub(row["expected"], row["observed"]) == (row["outcome"], row["reason"])
     if row["py_legacy_equal"] is not None:
-        assert (impl.py_legacy_host(row["expected"]) == impl.py_legacy_host(row["observed"])) is row[
-            "py_legacy_equal"
-        ]
+        assert (impl.py_legacy_host(row["expected"]) == impl.py_legacy_host(row["observed"])) is row["py_legacy_equal"]
         assert (impl.col_legacy_host(row["expected"]) == impl.col_legacy_host(row["observed"])) is row[
             "col_legacy_equal"
         ]

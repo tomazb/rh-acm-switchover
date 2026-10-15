@@ -178,9 +178,7 @@ def classify_hub(expected: Any, observed: Any) -> Tuple[str, Optional[str]]:
         return RESULT_UNVERIFIED, REASON_ENDPOINT_MALFORMED
     if expected_endpoint == observed_endpoint:
         return RESULT_VERIFIED, None
-    if canonical_host(expected_endpoint) != canonical_host(observed_endpoint) and not legacy_equal(
-        expected, observed
-    ):
+    if canonical_host(expected_endpoint) != canonical_host(observed_endpoint) and not legacy_equal(expected, observed):
         return RESULT_WRONG_HUB, None
     return RESULT_UNVERIFIED, REASON_ENDPOINT_MISMATCH_UNVERIFIED
 
