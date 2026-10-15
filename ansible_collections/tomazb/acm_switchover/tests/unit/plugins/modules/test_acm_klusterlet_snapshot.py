@@ -306,8 +306,10 @@ def test_the_wait_loop_keeps_the_first_snapshot(world, monkeypatch):
 
     def converging_read(name, namespace, **kwargs):
         reads["count"] += 1
-        if reads["count"] == 2:
+        if reads["count"] == 1:
+            # After the first observation, before the next poll would capture anything again.
             (creds / "token").write_bytes(b"replaced-token\n")
+        if reads["count"] == 2:
             spoke.secrets[(MANAGED_CLUSTER_AGENT_NAMESPACE, HUB_KUBECONFIG_SECRET_NAME)] = SpokeApi._hub(NEW_HUB)
         return real_read(name, namespace, **kwargs)
 
@@ -413,3 +415,23 @@ def test_a_cleanup_failure_fails_the_module_result(world, monkeypatch):
     assert _status(result) == ("verified", None)
     assert result["failed"] is True and result["credential_cleanup_failed"] is True
     assert "credential_cleanup_failed" in result["msg"]
+
+
+@pytest.mark.parametrize(
+    "reason", ["client_construction_failed", "tls_verification_unproven", "client_endpoint_mismatch"]
+)
+def test_a_construction_refusal_is_unverified_as_in_python(world, reason):
+    """Every snapshot refusal, before or after construction, is `unverified` in both form factors."""
+
+    def refusing_factory(snapshot, material_dir, api_url, request_timeout=None):
+        raise snapshot_module.SnapshotError(reason)
+
+    result = probe_klusterlet_connections(
+        secondary_hub={"kubeconfig": "hub"},
+        managed_clusters={"a": {"kubeconfig": world["kubeconfig"]()}},
+        core_client_factory=_hub_factory({"a": SPOKE}),
+        managed_cluster_reader_factory=Hub({"a": SPOKE}).reader_factory,
+        spoke_core_factory=refusing_factory,
+    )
+    assert _status(result) == ("unverified", reason)
+    assert result["unverified_clusters"] == ["a"]
