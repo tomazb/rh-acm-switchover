@@ -1677,15 +1677,3 @@ def _bootstrap_server_from_import(import_yaml: str) -> Tuple[bool, Any]:
         if (document.get("metadata") or {}).get("name") != "bootstrap-hub-kubeconfig":
             continue
         return _server_from_kubeconfig_b64((document.get("data") or {}).get("kubeconfig"))
-        try:
-            kubeconfig_data = yaml.safe_load(base64.b64decode(encoded).decode("utf-8"))
-        except Exception:  # noqa: BLE001
-            return False, None
-        clusters = kubeconfig_data.get("clusters") if isinstance(kubeconfig_data, dict) else None
-        if not isinstance(clusters, list) or not clusters or not isinstance(clusters[0], dict):
-            return False, None
-        cluster_info = clusters[0].get("cluster")
-        if not isinstance(cluster_info, dict) or "server" not in cluster_info:
-            return False, None
-        return True, cluster_info["server"]
-    return False, None
