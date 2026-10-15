@@ -435,3 +435,21 @@ def test_a_construction_refusal_is_unverified_as_in_python(world, reason):
     )
     assert _status(result) == ("unverified", reason)
     assert result["unverified_clusters"] == ["a"]
+
+
+def test_the_probe_removes_its_material_when_it_raises(world, monkeypatch):
+    """The exception path also removes the invocation's credential directory."""
+    world["spokes"][SPOKE] = SpokeApi(NEW_HUB)
+
+    def exploding_settle(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(klusterlet_utils, "_probe_until_settled", exploding_settle)
+    with pytest.raises(RuntimeError, match="boom"):
+        probe_klusterlet_connections(
+            secondary_hub={"kubeconfig": "hub"},
+            managed_clusters={"a": {"kubeconfig": world["kubeconfig"]()}},
+            core_client_factory=_hub_factory({"a": SPOKE}),
+            managed_cluster_reader_factory=Hub({"a": SPOKE}).reader_factory,
+        )
+    assert world["dirs"] and not os.path.exists(world["dirs"][0])

@@ -340,3 +340,15 @@ def test_an_uppercase_scheme_still_gets_its_ca(impl, tmp_path):
         assert configuration.ssl_ca_cert and os.path.dirname(configuration.ssl_ca_cert) == private
     finally:
         impl.remove_private_dir(private)
+
+
+@pytest.mark.parametrize("impl", IMPLEMENTATIONS)
+def test_a_relative_path_is_never_resolved_against_the_working_directory(impl, tmp_path, monkeypatch):
+    """The file exists in the working directory, and is still refused: no source, no resolution."""
+    (tmp_path / "ca.crt").write_bytes(CA)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(impl.SnapshotError) as excinfo:
+        impl.build_snapshot(
+            "c", {"server": SERVER, "certificate-authority": "ca.crt"}, None, {"token": "t"}, None, "u", LIMIT
+        )
+    assert excinfo.value.reason == "credential_unreadable"

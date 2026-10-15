@@ -1205,6 +1205,7 @@ class PostActivationVerification:
         logger.info("Verifying klusterlet connections to new hub...")
 
         kubeconfig_data = self._load_kubeconfig_data()
+        self._klusterlet_changed = set()
         # Every spoke client of this run is built from credentials materialized here
         # (amendment §6); the directory outlives every worker and is always removed.
         self._spoke_material_dir = new_private_dir()

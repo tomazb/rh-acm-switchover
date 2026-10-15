@@ -44,7 +44,7 @@ REASON_CLIENT_CONSTRUCTION_FAILED = "client_construction_failed"
 REASON_CREDENTIAL_CLEANUP_FAILED = "credential_cleanup_failed"
 
 _READ_CHUNK = 64 * 1024
-_TOKEN_TRAILING_WHITESPACE = " \t\r\n"
+_TRAILING_ASCII_WHITESPACE = " \t\r\n"
 _FILE_FIELDS = (
     ("cluster", "certificate-authority", "ca"),
     ("user", "client-certificate", "cert"),
@@ -178,7 +178,7 @@ def _token(user: dict[str, Any], base_dir: str, size_limit: int) -> str | None:
             token = raw.decode("utf-8")
         except UnicodeDecodeError:
             raise SnapshotError(REASON_CREDENTIAL_UNREADABLE) from None
-        token = token.rstrip(_TOKEN_TRAILING_WHITESPACE)
+        token = token.rstrip(_TRAILING_ASCII_WHITESPACE)
         if not token:
             raise SnapshotError(REASON_CREDENTIAL_EMPTY)
         return token
