@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 
 import yaml
-from kubernetes import client, config
+from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from lib.constants import (
@@ -58,7 +58,6 @@ from lib.constants import (
     kubeconfig_size_override_ignored,
 )
 from lib.endpoint_identity import (
-    REASON_CLIENT_ENDPOINT_MISMATCH,
     REASON_EXPECTED_ENDPOINT_MALFORMED,
     REASON_EXPECTED_ENDPOINT_UNAVAILABLE,
     REASON_NO_CONTEXT,
@@ -71,7 +70,15 @@ from lib.endpoint_identity import (
 )
 from lib.exceptions import FatalError, SwitchoverError
 from lib.kube_client import KubeClient
-from lib.kubeconfig_merge import load_merged_kubeconfig
+from lib.kubeconfig_merge import load_merged_kubeconfig_with_sources
+from lib.kubeconfig_snapshot import (
+    SnapshotError,
+    SpokeSnapshot,
+    build_api_client,
+    build_snapshot,
+    new_private_dir,
+    remove_private_dir,
+)
 from lib.migration_evidence import MigrationEvidenceError
 from lib.migration_post_activation import (
     managed_cluster_readiness,
@@ -134,6 +141,10 @@ class PostActivationVerification:
         # True once a journaled or newly journaled waiver covers the post-activation name check.
         self._names_waived = False
         self._cached_managed_clusters: Optional[List[Dict]] = None  # Cache for managed clusters
+        # R4-06 PR 3: where each merged kubeconfig entry came from, and the private
+        # directory that holds this run's materialized spoke credentials.
+        self._kubeconfig_sources: Dict[Tuple[str, str], str] = {}
+        self._spoke_material_dir: Optional[str] = None
 
     def _step(self, step_name: str) -> AbstractContextManager:
         """Guard one step; a dry-run consults completion markers but never records one.
@@ -873,12 +884,14 @@ class PostActivationVerification:
         cluster_name: str,
         cluster_api_url: Optional[str],
         url_reason: Optional[str],
-    ) -> Tuple[str, str, Optional[str], Optional[str], Optional[str], Optional[str]]:
-        """``(cluster, result, context, expected_hub, api_url, reason)`` for one cluster.
+    ) -> Tuple[str, str, Any, Optional[str], Optional[str], Optional[str]]:
+        """``(cluster, result, snapshot, expected_hub, api_url, reason)`` for one cluster.
 
         Every refusal before the spoke client exists - no usable URL, an ambiguous or
         near-matching context, an unusable expected endpoint - leaves the cluster
-        uninspected (amendment §2.5, §2.4). There is no name-only fallback.
+        uninspected (amendment §2.5, §2.4). There is no name-only fallback. The cluster's
+        snapshot (amendment §6) is captured once here and is the only source of every spoke
+        client this run builds for it: probe, remediation and re-check.
         """
         try:
             if cluster_api_url is None:
@@ -896,11 +909,14 @@ class PostActivationVerification:
             )
             expected_hub, expected_reason = self._expected_hub_endpoint(cluster_name)
             if expected_hub is None:
-                return (cluster_name, KLUSTERLET_RESULT_UNVERIFIED, context_name, None, None, expected_reason)
-            result, reason = self._check_klusterlet_connection(
-                context_name, cluster_name, expected_hub, cluster_api_url
-            )
-            return (cluster_name, result, context_name, expected_hub, cluster_api_url, reason)
+                return (cluster_name, KLUSTERLET_RESULT_UNVERIFIED, None, None, None, expected_reason)
+            try:
+                snapshot = self._spoke_snapshot(kubeconfig_data, context_name)
+            except SnapshotError as refusal:
+                # Credentials or TLS settings that cannot be proven: no client is ever built.
+                return (cluster_name, KLUSTERLET_RESULT_UNVERIFIED, None, None, None, refusal.reason)
+            result, reason = self._check_klusterlet_connection(snapshot, cluster_name, expected_hub, cluster_api_url)
+            return (cluster_name, result, snapshot, expected_hub, cluster_api_url, reason)
         except Exception as exc:
             logger.debug("Error checking klusterlet for %s: %s", cluster_name, type(exc).__name__)
             return (cluster_name, KLUSTERLET_RESULT_FAILED, None, None, None, None)
@@ -972,7 +988,7 @@ class PostActivationVerification:
             for (
                 cluster_name,
                 result,
-                context_name,
+                snapshot,
                 expected_hub,
                 api_url,
                 reason,
@@ -980,7 +996,7 @@ class PostActivationVerification:
                 if result == KLUSTERLET_RESULT_VERIFIED:
                     verified.append(cluster_name)
                 elif result == KLUSTERLET_RESULT_WRONG_HUB:
-                    wrong_hub.append(_WrongHub(cluster_name, context_name, expected_hub, api_url))
+                    wrong_hub.append(_WrongHub(cluster_name, snapshot, expected_hub, api_url))
                 elif result == KLUSTERLET_RESULT_UNVERIFIED:
                     unverified.append((cluster_name, reason or "unverified"))
                 elif result == KLUSTERLET_RESULT_WORKER_TIMEOUT:
@@ -990,14 +1006,16 @@ class PostActivationVerification:
                 else:
                     unreachable.append(cluster_name)
         finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+            # A timed-out worker can still be using this run's credential files; it finishes
+            # before they are removed (amendment §2.8). Its result stays the timeout.
+            executor.shutdown(wait=True, cancel_futures=True)
 
         return verified, wrong_hub, unreachable, timed_out, failed, unverified
 
     def _fix_klusterlet_target(
-        self, cluster_name: str, context_name: str, api_url: str, expected_hub: str
+        self, cluster_name: str, snapshot: Any, api_url: str, expected_hub: str
     ) -> Tuple[str, bool]:
-        success = self._force_klusterlet_reconnect(cluster_name, context_name, api_url, expected_hub)
+        success = self._force_klusterlet_reconnect(cluster_name, snapshot, api_url, expected_hub)
         return (cluster_name, success)
 
     def _fix_wrong_hub_klusterlets(self, wrong_hub: "List[_WrongHub]") -> Tuple[List[str], List[str]]:
@@ -1008,7 +1026,7 @@ class PostActivationVerification:
         try:
             fix_future_fallbacks = {
                 executor.submit(
-                    self._fix_klusterlet_target, target.cluster, target.context, target.api_url, target.expected_hub
+                    self._fix_klusterlet_target, target.cluster, target.snapshot, target.api_url, target.expected_hub
                 ): (target.cluster, False)
                 for target in wrong_hub
             }
@@ -1025,17 +1043,27 @@ class PostActivationVerification:
             # thread, so wait for bounded API calls to exit before reporting.
             executor.shutdown(wait=True, cancel_futures=True)
 
+        # A worker that finished after its timeout is still a failure, but what it really
+        # did is reported, never the placeholder (amendment §2.8).
+        for future, (cluster_name, _fallback) in fix_future_fallbacks.items():
+            if cluster_name in fix_failed and future.done() and not future.cancelled() and future.exception() is None:
+                if future.result()[1]:
+                    logger.warning(
+                        "Klusterlet remediation for %s completed after the worker timeout: the cluster was "
+                        "changed, but it is reported as failed and must be re-verified",
+                        cluster_name,
+                    )
         return fixed, fix_failed
 
     def _recheck_klusterlet_target(
         self,
         cluster_name: str,
-        context_name: str,
+        snapshot: Any,
         expected_hub: str,
         api_url: str,
     ) -> Tuple[str, str]:
         try:
-            result, _reason = self._check_klusterlet_connection(context_name, cluster_name, expected_hub, api_url)
+            result, _reason = self._check_klusterlet_connection(snapshot, cluster_name, expected_hub, api_url)
             return (cluster_name, result)
         except Exception as exc:
             logger.debug("Error re-checking klusterlet for %s: %s", cluster_name, type(exc).__name__)
@@ -1053,7 +1081,7 @@ class PostActivationVerification:
                 executor.submit(
                     self._recheck_klusterlet_target,
                     target.cluster,
-                    target.context,
+                    target.snapshot,
                     target.expected_hub,
                     target.api_url,
                 ): (target.cluster, KLUSTERLET_RESULT_UNREACHABLE)
@@ -1068,7 +1096,7 @@ class PostActivationVerification:
                 elif result != KLUSTERLET_RESULT_VERIFIED:
                     current_unverified.append(cluster_name)
         finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+            executor.shutdown(wait=True, cancel_futures=True)
 
         return current_wrong_hub, current_unverified
 
@@ -1174,7 +1202,16 @@ class PostActivationVerification:
         logger.info("Verifying klusterlet connections to new hub...")
 
         kubeconfig_data = self._load_kubeconfig_data()
+        # Every spoke client of this run is built from credentials materialized here
+        # (amendment §6); the directory outlives every worker and is always removed.
+        self._spoke_material_dir = new_private_dir()
+        try:
+            self._verify_klusterlet_targets(kubeconfig_data)
+        finally:
+            remove_private_dir(self._spoke_material_dir)
+            self._spoke_material_dir = None
 
+    def _verify_klusterlet_targets(self, kubeconfig_data: Dict) -> None:
         cluster_targets = self._klusterlet_cluster_targets()
         if not cluster_targets:
             logger.info("No managed clusters to verify klusterlet connections")
@@ -1214,9 +1251,7 @@ class PostActivationVerification:
                 ", ".join(unreachable),
             )
 
-    def _force_klusterlet_reconnect(
-        self, cluster_name: str, context_name: str, api_url: str, expected_hub: str
-    ) -> bool:
+    def _force_klusterlet_reconnect(self, cluster_name: str, snapshot: Any, api_url: str, expected_hub: str) -> bool:
         """
         Force a managed cluster's klusterlet to reconnect to the new hub.
 
@@ -1233,7 +1268,8 @@ class PostActivationVerification:
 
         Args:
             cluster_name: Name of the ManagedCluster
-            context_name: Kubeconfig context to use for connecting to the cluster
+            snapshot: The cluster's credential snapshot (amendment §6); the client is
+                built from it alone, never from the kubeconfig files
             api_url: The ManagedCluster API URL the context was proven against; the
                 client must be bound to it before anything is written
             expected_hub: The expected hub endpoint the classification validated; the
@@ -1268,7 +1304,7 @@ class PostActivationVerification:
 
             # Build isolated per-context clients once; all steps share the same
             # ApiClient so no further global kubeconfig mutation is needed.
-            v1, apps_v1 = self._build_managed_cluster_clients(context_name, api_url)
+            v1, apps_v1 = self._build_managed_cluster_clients(snapshot, api_url)
 
             # Step 2: Apply the import manifest to update the bootstrap secret
             bootstrap_namespace = self._apply_import_manifest(v1, import_yaml, cluster_name)
@@ -1280,12 +1316,8 @@ class PostActivationVerification:
             logger.info("Force-reconnected klusterlet for %s", cluster_name)
             return True
 
-        except _ClientEndpointMismatch:
-            logger.warning(
-                "Not reconnecting klusterlet for %s: its client is not bound to the proven endpoint (%s)",
-                cluster_name,
-                REASON_CLIENT_ENDPOINT_MISMATCH,
-            )
+        except SnapshotError as refusal:
+            logger.warning("Not reconnecting klusterlet for %s: %s", cluster_name, refusal.reason)
             return False
         except Exception as e:
             # Never the exception text: the client loader re-reads kubeconfig files, and a
@@ -1298,31 +1330,43 @@ class PostActivationVerification:
             )
             return False
 
-    def _build_managed_cluster_clients(self, context_name: str, api_url: str) -> tuple:
-        """Build isolated per-context CoreV1Api and AppsV1Api for a managed cluster.
+    def _build_managed_cluster_clients(self, snapshot: SpokeSnapshot, api_url: str) -> tuple:
+        """Build isolated CoreV1Api and AppsV1Api for a managed cluster from its snapshot.
 
-        Creates an ApiClient bound to the named context without mutating global
-        kubernetes configuration. Safe to call from concurrent threads.
-
-        The client loader re-reads the KUBECONFIG files, so before anything uses the
-        client its host must normalize equal to the endpoint the validated merge proved
-        (amendment §2.7). Otherwise no client is returned and nothing is read or written.
-
-        Args:
-            context_name: Kubeconfig context name
-            api_url: The ManagedCluster API URL the context was proven against
-
-        Returns:
-            Tuple of (CoreV1Api, AppsV1Api) bound to the named context
+        The client is constructed from the snapshot's captured credentials only, materialized
+        in this run's private directory, with the selected context named explicitly; it must
+        prove effective TLS verification, its own credential material and the proven endpoint
+        before it is returned (amendment §6, §2.7). The kubeconfig files are never re-read.
 
         Raises:
-            config.ConfigException: If context does not exist in kubeconfig
-            _ClientEndpointMismatch: If the built client is bound to another endpoint
+            SnapshotError: a sanitized refusal; no client is returned and nothing is read
         """
-        api_client = config.new_client_from_config(context=context_name, persist_config=False)
-        if not normalized_equal(getattr(api_client.configuration, "host", None), api_url):
-            raise _ClientEndpointMismatch()
+        if self._spoke_material_dir is None:
+            raise SnapshotError("client_construction_failed")
+        api_client = build_api_client(snapshot, self._spoke_material_dir, api_url)
         return client.CoreV1Api(api_client=api_client), client.AppsV1Api(api_client=api_client)
+
+    def _spoke_snapshot(self, kubeconfig_data: Dict, context_name: str) -> SpokeSnapshot:
+        """Capture the selected context from the validated merge (amendment §6), or raise."""
+        context = next(entry for entry in kubeconfig_data.get("contexts", []) if entry["name"] == context_name)
+        body = context.get("context") or {}
+        cluster_name = body.get("cluster")
+        user_name = body.get("user") or None
+        cluster = next(entry for entry in kubeconfig_data.get("clusters", []) if entry["name"] == cluster_name)
+        user = next((entry for entry in kubeconfig_data.get("users", []) if entry["name"] == user_name), None)
+        return build_snapshot(
+            context_name,
+            cluster.get("cluster") or {},
+            self._source_dir("clusters", cluster_name),
+            (user.get("user") or {}) if user is not None else None,
+            self._source_dir("users", user_name) if user_name else "",
+            user_name,
+            MAX_KUBECONFIG_SIZE,
+        )
+
+    def _source_dir(self, section: str, name: Optional[str]) -> str:
+        source = self._kubeconfig_sources.get((section, name or ""))
+        return os.path.dirname(source) if source else os.getcwd()
 
     def _expected_hub_endpoint(self, cluster_name: str) -> Tuple[Optional[str], Optional[str]]:
         """The expected hub endpoint for one cluster (amendment §2.4), or the reason it is unusable.
@@ -1530,10 +1574,13 @@ class PostActivationVerification:
                 "(the kubeconfig size limit can no longer be disabled)",
                 MAX_KUBECONFIG_SIZE,
             )
-        return load_merged_kubeconfig(os.environ.get("KUBECONFIG"), MAX_KUBECONFIG_SIZE)
+        merged, self._kubeconfig_sources = load_merged_kubeconfig_with_sources(
+            os.environ.get("KUBECONFIG"), MAX_KUBECONFIG_SIZE
+        )
+        return merged
 
     def _check_klusterlet_connection(  # noqa: C901
-        self, context_name: str, cluster_name: str, expected_hub: str, api_url: str
+        self, snapshot: Any, cluster_name: str, expected_hub: str, api_url: str
     ) -> Tuple[str, Optional[str]]:
         """
         Check if a managed cluster's klusterlet is connected to the expected hub.
@@ -1543,7 +1590,7 @@ class PostActivationVerification:
         dynamically-loaded kubeconfig contexts.
 
         Args:
-            context_name: Kubeconfig context name to use for connecting
+            snapshot: The cluster's credential snapshot; the client is built from it alone
             cluster_name: ManagedCluster name (for logging)
             expected_hub: Expected hub API server URL (amendment §2.4)
             api_url: The ManagedCluster API URL the context was proven against
@@ -1557,10 +1604,10 @@ class PostActivationVerification:
         """
         try:
             # Build an isolated per-context client; does not mutate global config.
-            v1, _ = self._build_managed_cluster_clients(context_name, api_url)
-        except _ClientEndpointMismatch:
-            logger.debug("Klusterlet client for %s is not bound to the proven endpoint", cluster_name)
-            return KLUSTERLET_RESULT_UNVERIFIED, REASON_CLIENT_ENDPOINT_MISMATCH
+            v1, _ = self._build_managed_cluster_clients(snapshot, api_url)
+        except SnapshotError as refusal:
+            logger.debug("No klusterlet client for %s: %s", cluster_name, refusal.reason)
+            return KLUSTERLET_RESULT_UNVERIFIED, refusal.reason
         except Exception as e:
             logger.debug("Failed to build klusterlet client for %s: %s", cluster_name, type(e).__name__)
             return KLUSTERLET_RESULT_FAILED, None
@@ -1619,13 +1666,9 @@ class _WrongHub(NamedTuple):
     """A cluster classified `wrong_hub`: everything its repair and re-check must reuse."""
 
     cluster: str
-    context: str
+    snapshot: Any
     expected_hub: str
     api_url: str
-
-
-class _ClientEndpointMismatch(Exception):
-    """The client loader bound a spoke client to an endpoint the validated merge did not prove."""
 
 
 def _server_from_kubeconfig_b64(encoded: Any) -> Tuple[bool, Any]:

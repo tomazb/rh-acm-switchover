@@ -24,6 +24,8 @@ from kubernetes.client.rest import ApiException
 # Add parent to path to import modules directly
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import kubernetes.config.kube_config as kube_config_module
+
 import modules.post_activation as post_activation_module
 from lib.constants import (
     CLUSTER_VERIFY_INTERVAL,
@@ -36,6 +38,7 @@ from lib.constants import (
     OBSERVABILITY_POD_LABEL_SELECTOR,
 )
 from lib.exceptions import SwitchoverError
+from lib.kubeconfig_snapshot import SnapshotError, build_snapshot
 from lib.strict_read import StrictReadOutcome
 from lib.utils import StateManager
 from lib.waiter import WaitConditionResult
@@ -67,6 +70,21 @@ def create_mock_step_context(is_step_completed_func, mark_step_completed_func):
 
 
 HERMETIC_HUB_SERVER = "https://api.new-hub.example:6443"
+
+
+def _fake_api_client(host, token="t"):
+    """An ApiClient double that satisfies every snapshot assertion except, possibly, the host."""
+    configuration = SimpleNamespace(
+        host=host,
+        verify_ssl=True,
+        ssl_ca_cert=None,
+        cert_file=None,
+        key_file=None,
+        auth_settings=lambda: {"BearerToken": {"value": f"Bearer {token}"}},
+    )
+    return SimpleNamespace(configuration=configuration)
+
+
 SPOKE_URL = "https://api.test-cluster:6443"
 
 
@@ -157,30 +175,40 @@ def post_verify_no_obs(mock_secondary_client, mock_state_manager):
 class TestPostActivationVerification:
     """Tests for PostActivationVerification class."""
 
-    def test_build_managed_cluster_clients_disables_kubeconfig_persistence(
-        self, mock_secondary_client, mock_state_manager
+    def test_build_managed_cluster_clients_builds_from_the_snapshot_alone(
+        self, mock_secondary_client, mock_state_manager, tmp_path
     ):
-        """Per-context clients should not persist refreshed credentials back to kubeconfig."""
+        """R4-06 PR 3: the client comes from the snapshot dict, the context named, never persisted."""
         verify = PostActivationVerification(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
             has_observability=False,
         )
-        api_client = Mock(name="api_client")
-        api_client.configuration.host = "https://API.spoke:6443"
+        verify._spoke_material_dir = str(tmp_path)
+        snapshot = build_snapshot(
+            "managed-context",
+            {"server": "https://api.spoke:6443"},
+            str(tmp_path),
+            {"token": "t"},
+            str(tmp_path),
+            "u",
+            4096,
+        )
         core_v1 = Mock(name="core_v1")
         apps_v1 = Mock(name="apps_v1")
 
         with patch(
-            "modules.post_activation.config.new_client_from_config",
-            return_value=api_client,
+            "lib.kubeconfig_snapshot.config.new_client_from_config_dict",
+            wraps=kube_config_module.new_client_from_config_dict,
         ) as new_client:
             with patch("modules.post_activation.client.CoreV1Api", return_value=core_v1) as core_ctor:
                 with patch("modules.post_activation.client.AppsV1Api", return_value=apps_v1) as apps_ctor:
-                    result = verify._build_managed_cluster_clients("managed-context", "https://api.spoke:6443")
+                    result = verify._build_managed_cluster_clients(snapshot, "https://API.spoke:6443/")
 
-        new_client.assert_called_once_with(context="managed-context", persist_config=False)
-        core_ctor.assert_called_once_with(api_client=api_client)
+        assert new_client.call_args.kwargs == {"context": "managed-context", "persist_config": False}
+        assert "current-context" not in new_client.call_args.args[0]
+        api_client = core_ctor.call_args.kwargs["api_client"]
+        assert api_client.configuration.host == "https://api.spoke:6443"
         apps_ctor.assert_called_once_with(api_client=api_client)
         assert result == (core_v1, apps_v1)
 
@@ -188,25 +216,46 @@ class TestPostActivationVerification:
         "host", ["https://api.spoke:443", "http://api.spoke:6443", "https://api.other:6443", None, "api.spoke:6443"]
     )
     def test_a_client_bound_to_another_endpoint_is_never_returned(
-        self, mock_secondary_client, mock_state_manager, host
+        self, mock_secondary_client, mock_state_manager, host, tmp_path
     ):
-        """Amendment §2.7: the loader re-reads files, so the built client must be bound to the proven endpoint."""
+        """Amendment §2.7 stays a defense-in-depth assertion on snapshot-built clients."""
         verify = PostActivationVerification(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
             has_observability=False,
         )
-        api_client = Mock(name="api_client")
-        api_client.configuration.host = host
+        verify._spoke_material_dir = str(tmp_path)
+        snapshot = build_snapshot(
+            "managed-context",
+            {"server": "https://api.spoke:6443"},
+            str(tmp_path),
+            {"token": "t"},
+            str(tmp_path),
+            "u",
+            4096,
+        )
 
-        with patch("modules.post_activation.config.new_client_from_config", return_value=api_client):
+        with patch("lib.kubeconfig_snapshot.config.new_client_from_config_dict", return_value=_fake_api_client(host)):
             with patch("modules.post_activation.client.CoreV1Api") as core_ctor:
                 with patch("modules.post_activation.client.AppsV1Api") as apps_ctor:
-                    with pytest.raises(post_activation_module._ClientEndpointMismatch):
-                        verify._build_managed_cluster_clients("managed-context", "https://api.spoke:6443")
+                    with pytest.raises(SnapshotError) as excinfo:
+                        verify._build_managed_cluster_clients(snapshot, "https://api.spoke:6443")
 
+        assert excinfo.value.reason == "client_endpoint_mismatch"
         core_ctor.assert_not_called()
         apps_ctor.assert_not_called()
+
+    def test_no_client_is_built_outside_a_verification_run(self, mock_secondary_client, mock_state_manager, tmp_path):
+        verify = PostActivationVerification(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            has_observability=False,
+        )
+        snapshot = build_snapshot(
+            "c", {"server": "https://h:6443"}, str(tmp_path), {"token": "t"}, str(tmp_path), "u", 64
+        )
+        with pytest.raises(SnapshotError):
+            verify._build_managed_cluster_clients(snapshot, "https://h:6443")
 
     def test_klusterlet_verification_never_bypasses_the_kubeconfig_size_limit(
         self, mock_secondary_client, mock_state_manager, hermetic_kubeconfig
@@ -2454,7 +2503,7 @@ class TestCheckKlusterletConnection:
     def test_a_client_bound_elsewhere_is_unverified_with_zero_reads(self, mock_secondary_client, mock_state_manager):
         """Amendment §2.7: `client_endpoint_mismatch` happens after construction and before any read."""
         pav = _make_pav(mock_secondary_client, mock_state_manager)
-        pav._build_managed_cluster_clients = Mock(side_effect=post_activation_module._ClientEndpointMismatch())
+        pav._build_managed_cluster_clients = Mock(side_effect=SnapshotError("client_endpoint_mismatch"))
 
         result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443", SPOKE_URL)
         assert (result, reason) == ("unverified", "client_endpoint_mismatch")
