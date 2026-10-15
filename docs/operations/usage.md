@@ -353,6 +353,21 @@ or incomplete embedded kubeconfig data as non-fatal skips, but managed-cluster
 client construction failures, non-404 secret API errors, transport failures, and
 unexpected probe exceptions now fail post-activation.
 
+The local kubeconfig that Python uses to find managed-cluster contexts is loaded
+fail-closed. Every file named in `KUBECONFIG` (or `~/.kube/config` when
+`KUBECONFIG` is unset) must exist, be readable, be at most the size limit
+(10 MiB; `ACM_KUBECONFIG_MAX_SIZE` can raise or lower it but not disable it),
+parse as YAML without duplicate keys or `<<` merge keys, and have a valid
+kubeconfig structure (an absent or `null` section and an empty `user`/`cluster`
+in a context are accepted as kubectl writes them). The
+secondary-hub context must also resolve to an API server. Otherwise the
+klusterlet step fails with `kubeconfig_load_failed (<reason>)` (reason one of
+`missing`, `unreadable`, `oversized`, `yaml_invalid`, `duplicate_yaml_key`,
+`structure_invalid`) or a "cannot determine the new hub API server" error. The
+step is not recorded as complete, so a resume runs it again after you fix the
+kubeconfig. Remove stale entries from `KUBECONFIG` rather than relying on them
+being skipped.
+
 In the Ansible collection, direct klusterlet probes and remediations default to
 10 worker threads, 30-second Kubernetes request timeouts, and 180-second
 worker future timeout windows for each probe/remediation batch. After remediation,

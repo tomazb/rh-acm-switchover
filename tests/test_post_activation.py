@@ -66,6 +66,34 @@ def create_mock_step_context(is_step_completed_func, mark_step_completed_func):
     return mock_step
 
 
+HERMETIC_HUB_SERVER = "https://api.new-hub.example:6443"
+
+
+@pytest.fixture(autouse=True)
+def hermetic_kubeconfig(tmp_path, monkeypatch):
+    """Every test here reads a known kubeconfig, never the developer's ~/.kube/config.
+
+    The klusterlet gate fails closed on an unloadable kubeconfig or an undeterminable
+    new-hub endpoint (GLM-H3, #349), so a test may not depend on the machine it runs on.
+    The hub context matches the mock secondary client's ``secondary-ctx``; it holds no
+    spoke contexts, so spokes are the documented non-fatal "no context" skip.
+    """
+    path = tmp_path / "hermetic-kubeconfig.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v1",
+                "clusters": [{"name": "new-hub", "cluster": {"server": HERMETIC_HUB_SERVER}}],
+                "contexts": [{"name": "secondary-ctx", "context": {"cluster": "new-hub", "user": "admin"}}],
+                "users": [{"name": "admin", "user": {"token": "fixture-token"}}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KUBECONFIG", str(path))
+    return path
+
+
 @pytest.fixture
 def mock_secondary_client():
     """Create a mock KubeClient for secondary hub.
@@ -75,6 +103,7 @@ def mock_secondary_client():
     exactly those items as a positively complete inventory.
     """
     client = Mock()
+    client.context = "secondary-ctx"
     client.list_managed_clusters_strict.side_effect = lambda: StrictReadOutcome.from_items(
         client.list_custom_resources(group="cluster.open-cluster-management.io", version="v1", plural="managedclusters")
     )
@@ -153,19 +182,22 @@ class TestPostActivationVerification:
         apps_ctor.assert_called_once_with(api_client=api_client)
         assert result == (core_v1, apps_v1)
 
-    def test_klusterlet_verification_bypasses_kubeconfig_size_limit(self, mock_secondary_client, mock_state_manager):
-        """Klusterlet verification should bypass kubeconfig size limits."""
+    def test_klusterlet_verification_never_bypasses_the_kubeconfig_size_limit(
+        self, mock_secondary_client, mock_state_manager, hermetic_kubeconfig
+    ):
+        """The klusterlet gate applies the standard size limit; there is no bypass (#349)."""
         verify = PostActivationVerification(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
             has_observability=False,
         )
 
-        with patch.object(verify, "_get_hub_api_server", return_value="https://new-hub"):
-            with patch.object(verify, "_load_kubeconfig_data", return_value={}) as mock_load:
-                verify._verify_klusterlet_connections()
+        with patch("modules.post_activation.MAX_KUBECONFIG_SIZE", 16):
+            with patch.object(verify, "_check_klusterlet_targets") as check:
+                with pytest.raises(SwitchoverError, match=r"kubeconfig_load_failed \(oversized\)"):
+                    verify._verify_klusterlet_connections()
 
-        mock_load.assert_called_with(max_size=0)
+        check.assert_not_called()
 
     @patch("modules.post_activation.wait_for_condition")
     def test_verify_success_with_observability(
@@ -1519,7 +1551,7 @@ users:
         assert "cluster2" in cluster_names
 
     def test_load_kubeconfig_missing_file(self, mock_secondary_client, mock_state_manager, tmp_path):
-        """Test graceful handling of missing kubeconfig file."""
+        """A missing KUBECONFIG entry aborts the whole load (fail-closed, design §1, #349)."""
         existing = tmp_path / "exists"
         existing.write_text("""
 apiVersion: v1
@@ -1538,27 +1570,37 @@ users: []
             has_observability=False,
         )
 
-        # One existing, one missing - should still work
+        # One existing, one missing: no partial view is ever returned
         with patch.dict("os.environ", {"KUBECONFIG": f"{existing}:{missing}"}):
-            data = verify._load_kubeconfig_data()
-
-        assert len(data["clusters"]) == 1
-        assert data["clusters"][0]["name"] == "exists"
+            with pytest.raises(SwitchoverError, match=r"kubeconfig_load_failed \(missing\).*does_not_exist"):
+                verify._load_kubeconfig_data()
 
     def test_load_kubeconfig_default_path(self, mock_secondary_client, mock_state_manager, tmp_path):
-        """Test falling back to default ~/.kube/config when KUBECONFIG not set."""
+        """With KUBECONFIG unset, ~/.kube/config is the one file read."""
+        (tmp_path / ".kube").mkdir()
+        (tmp_path / ".kube" / "config").write_text(_kubeconfig_yaml(clusters=[{"name": "dflt", "cluster": {}}]))
         verify = PostActivationVerification(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
             has_observability=False,
         )
 
-        # Clear KUBECONFIG to test default path behavior
-        with patch.dict("os.environ", {}, clear=True):
-            # This will try ~/.kube/config which may or may not exist
-            # The method should not raise an exception
+        with patch.dict("os.environ", {"HOME": str(tmp_path)}):
+            os.environ.pop("KUBECONFIG", None)
             data = verify._load_kubeconfig_data()
-            assert isinstance(data, dict)
+        assert [c["name"] for c in data["clusters"]] == ["dflt"]
+
+    def test_load_kubeconfig_missing_default_path_aborts(self, mock_secondary_client, mock_state_manager, tmp_path):
+        verify = PostActivationVerification(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            has_observability=False,
+        )
+
+        with patch.dict("os.environ", {"HOME": str(tmp_path)}):
+            os.environ.pop("KUBECONFIG", None)
+            with pytest.raises(SwitchoverError, match=r"kubeconfig_load_failed \(missing\).*\.kube/config"):
+                verify._load_kubeconfig_data()
 
 
 # ---------------------------------------------------------------------------
@@ -1786,23 +1828,27 @@ class TestKlusterletParallelVerification:
                             with pytest.raises(SwitchoverError, match="Klusterlet remediation failed"):
                                 pav._verify_klusterlet_connections()
 
-    def test_no_hub_api_server_skips(self, mock_secondary_client, mock_state_manager):
-        """If hub API server can't be determined, skip verification."""
+    def test_no_hub_api_server_fails_instead_of_skipping(self, mock_secondary_client, mock_state_manager):
+        """GLM-H3 (#349): an undeterminable new-hub endpoint fails the gate before any cluster work."""
         pav = _make_pav(mock_secondary_client, mock_state_manager)
 
         with patch.object(pav, "_get_hub_api_server", return_value=""):
-            with patch.object(pav, "_load_kubeconfig_data") as mock_load:
-                pav._verify_klusterlet_connections()
+            with patch.object(pav, "_load_kubeconfig_data", return_value={"contexts": [], "clusters": [], "users": []}):
+                with patch.object(pav, "_check_klusterlet_connection") as mock_check:
+                    with pytest.raises(SwitchoverError, match="new hub API server"):
+                        pav._verify_klusterlet_connections()
 
-        mock_load.assert_not_called()
+        mock_check.assert_not_called()
 
-    def test_no_kubeconfig_skips(self, mock_secondary_client, mock_state_manager):
-        """If kubeconfig can't be loaded, skip verification."""
+    def test_unloadable_kubeconfig_fails_instead_of_skipping(self, mock_secondary_client, mock_state_manager):
+        """GLM-H3 (#349): a load failure propagates; no cluster is checked."""
         pav = _make_pav(mock_secondary_client, mock_state_manager)
 
-        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
-            with patch.object(pav, "_load_kubeconfig_data", return_value={}):
-                with patch.object(pav, "_check_klusterlet_connection") as mock_check:
+        with patch.object(
+            pav, "_load_kubeconfig_data", side_effect=SwitchoverError("kubeconfig_load_failed (missing): x")
+        ):
+            with patch.object(pav, "_check_klusterlet_connection") as mock_check:
+                with pytest.raises(SwitchoverError, match="kubeconfig_load_failed"):
                     pav._verify_klusterlet_connections()
 
         mock_check.assert_not_called()
@@ -1996,181 +2042,80 @@ class TestKlusterletParallelVerification:
 # ========================================================================
 @pytest.mark.unit
 class TestKubeconfigLoading:
-    """Tests for _load_kubeconfig_data caching, size limits, errors."""
+    """The klusterlet kubeconfig load is fail-closed and uncached (design §1, #349).
 
-    def test_cache_hit_returns_cached_data(self, mock_secondary_client, mock_state_manager, tmp_path):
-        """Second call should return cached data when mtime unchanged."""
+    The detailed contract lives in tests/test_kubeconfig_merge.py; these tests pin the
+    PostActivationVerification seam: every call re-reads the files (no stale cache), the
+    module size limit applies with no bypass, and a bad file raises instead of being skipped.
+    """
+
+    def test_every_load_rereads_the_files(self, mock_secondary_client, mock_state_manager, tmp_path):
         cfg = tmp_path / "config"
-        cfg.write_text(
-            _kubeconfig_yaml(
-                clusters=[{"name": "c1", "cluster": {"server": "https://c1:6443"}}],
-                contexts=[{"name": "ctx-c1", "context": {"cluster": "c1"}}],
-            )
-        )
-
+        cfg.write_text(_kubeconfig_yaml(clusters=[{"name": "c1", "cluster": {"server": "https://c1:6443"}}]))
         pav = _make_pav(mock_secondary_client, mock_state_manager)
 
         with patch.dict("os.environ", {"KUBECONFIG": str(cfg)}):
             first = pav._load_kubeconfig_data()
-            second = pav._load_kubeconfig_data()
-
-        assert first is second  # same object = cache hit
-
-    def test_cache_invalidated_on_mtime_change(self, mock_secondary_client, mock_state_manager, tmp_path):
-        """Cache should be invalidated when file mtime changes."""
-        cfg = tmp_path / "config"
-        cfg.write_text(
-            _kubeconfig_yaml(
-                clusters=[{"name": "c1", "cluster": {"server": "https://c1:6443"}}],
-            )
-        )
-
-        pav = _make_pav(mock_secondary_client, mock_state_manager)
-
-        with patch.dict("os.environ", {"KUBECONFIG": str(cfg)}):
-            first = pav._load_kubeconfig_data()
-            # Simulate file modification
-            time.sleep(0.05)
             cfg.write_text(
                 _kubeconfig_yaml(
                     clusters=[
                         {"name": "c1", "cluster": {"server": "https://c1:6443"}},
                         {"name": "c2", "cluster": {"server": "https://c2:6443"}},
-                    ],
+                    ]
                 )
             )
             second = pav._load_kubeconfig_data()
 
-        assert len(second["clusters"]) == 2
-        assert first is not second
+        assert [c["name"] for c in first["clusters"]] == ["c1"]
+        assert [c["name"] for c in second["clusters"]] == ["c1", "c2"]
 
-    def test_cache_invalidated_on_file_deletion(self, mock_secondary_client, mock_state_manager, tmp_path):
-        """Cache should be invalidated when a kubeconfig file is deleted."""
+    def test_a_deleted_file_is_never_served_from_a_cache(self, mock_secondary_client, mock_state_manager, tmp_path):
         cfg = tmp_path / "config"
-        cfg.write_text(
-            _kubeconfig_yaml(
-                clusters=[{"name": "c1", "cluster": {"server": "https://c1:6443"}}],
-            )
-        )
-
+        cfg.write_text(_kubeconfig_yaml(clusters=[{"name": "c1", "cluster": {"server": "https://c1:6443"}}]))
         pav = _make_pav(mock_secondary_client, mock_state_manager)
 
         with patch.dict("os.environ", {"KUBECONFIG": str(cfg)}):
-            first = pav._load_kubeconfig_data()
-            assert len(first["clusters"]) == 1
-
+            assert len(pav._load_kubeconfig_data()["clusters"]) == 1
             cfg.unlink()
-            second = pav._load_kubeconfig_data()
+            with pytest.raises(SwitchoverError, match=r"kubeconfig_load_failed \(missing\)"):
+                pav._load_kubeconfig_data()
 
-        assert len(second["clusters"]) == 0
-        assert first is not second
-
-    def test_force_reload_bypasses_cache(self, mock_secondary_client, mock_state_manager, tmp_path):
-        """force_reload=True should bypass cache even when mtime unchanged."""
+    def test_the_size_limit_applies_with_no_bypass(self, mock_secondary_client, mock_state_manager, tmp_path):
         cfg = tmp_path / "config"
-        cfg.write_text(
-            _kubeconfig_yaml(
-                clusters=[{"name": "c1", "cluster": {"server": "https://c1:6443"}}],
-            )
-        )
-
-        pav = _make_pav(mock_secondary_client, mock_state_manager)
-
-        with patch.dict("os.environ", {"KUBECONFIG": str(cfg)}):
-            first = pav._load_kubeconfig_data()
-            second = pav._load_kubeconfig_data(force_reload=True)
-
-        assert first is not second
-        assert second["clusters"][0]["name"] == "c1"
-
-    def test_size_limit_enforcement(self, mock_secondary_client, mock_state_manager, tmp_path):
-        """Files exceeding max_size should be skipped."""
-        cfg = tmp_path / "config"
-        # Create a file larger than 100 bytes
         cfg.write_text("x" * 200)
-
         pav = _make_pav(mock_secondary_client, mock_state_manager)
 
         with patch.dict("os.environ", {"KUBECONFIG": str(cfg)}):
-            data = pav._load_kubeconfig_data(max_size=100)
+            with patch("modules.post_activation.MAX_KUBECONFIG_SIZE", 100):
+                with pytest.raises(SwitchoverError, match=r"kubeconfig_load_failed \(oversized\)"):
+                    pav._load_kubeconfig_data()
 
-        assert data["clusters"] == []
-
-    def test_size_bypass_with_zero(self, mock_secondary_client, mock_state_manager, tmp_path):
-        """max_size=0 should bypass size check entirely."""
-        cfg = tmp_path / "config"
-        cfg.write_text(
-            _kubeconfig_yaml(
-                clusters=[{"name": "big", "cluster": {"server": "https://big:6443"}}],
-            )
-        )
-
-        pav = _make_pav(mock_secondary_client, mock_state_manager)
-
-        with patch.dict("os.environ", {"KUBECONFIG": str(cfg)}):
-            data = pav._load_kubeconfig_data(max_size=0)
-
-        assert len(data["clusters"]) == 1
-
-    def test_yaml_parse_error_skips_file(self, mock_secondary_client, mock_state_manager, tmp_path):
-        """Invalid YAML should be skipped gracefully."""
+    def test_invalid_yaml_aborts_instead_of_being_skipped(self, mock_secondary_client, mock_state_manager, tmp_path):
         bad = tmp_path / "bad.yaml"
         bad.write_text("{{{{invalid yaml")
-
         good = tmp_path / "good.yaml"
-        good.write_text(
-            _kubeconfig_yaml(
-                clusters=[{"name": "ok", "cluster": {"server": "https://ok:6443"}}],
-            )
-        )
-
+        good.write_text(_kubeconfig_yaml(clusters=[{"name": "ok", "cluster": {"server": "https://ok:6443"}}]))
         pav = _make_pav(mock_secondary_client, mock_state_manager)
 
         with patch.dict("os.environ", {"KUBECONFIG": f"{bad}:{good}"}):
-            data = pav._load_kubeconfig_data()
+            with pytest.raises(SwitchoverError, match=r"kubeconfig_load_failed \(yaml_invalid\).*bad\.yaml"):
+                pav._load_kubeconfig_data()
 
-        assert len(data["clusters"]) == 1
-        assert data["clusters"][0]["name"] == "ok"
-
-    def test_oserror_skips_file(self, mock_secondary_client, mock_state_manager, tmp_path):
-        """OSError during open should be handled gracefully."""
+    def test_an_os_error_aborts_instead_of_being_skipped(self, mock_secondary_client, mock_state_manager, tmp_path):
         cfg = tmp_path / "config"
-        cfg.write_text(
-            _kubeconfig_yaml(
-                clusters=[{"name": "c1", "cluster": {"server": "https://c1:6443"}}],
-            )
-        )
-
+        cfg.write_text(_kubeconfig_yaml(clusters=[{"name": "c1", "cluster": {"server": "https://c1:6443"}}]))
         pav = _make_pav(mock_secondary_client, mock_state_manager)
-
         original_open = open
 
         def patched_open(path, *args, **kwargs):
             if str(path) == str(cfg):
-                raise OSError("permission denied")
+                raise PermissionError("permission denied")
             return original_open(path, *args, **kwargs)
 
         with patch.dict("os.environ", {"KUBECONFIG": str(cfg)}):
             with patch("builtins.open", side_effect=patched_open):
-                data = pav._load_kubeconfig_data()
-
-        assert data["clusters"] == []
-
-    def test_explicit_max_size_positive(self, mock_secondary_client, mock_state_manager, tmp_path):
-        """Explicit positive max_size should set the limit."""
-        cfg = tmp_path / "config"
-        content = _kubeconfig_yaml(
-            clusters=[{"name": "c1", "cluster": {"server": "https://c1:6443"}}],
-        )
-        cfg.write_text(content)
-
-        pav = _make_pav(mock_secondary_client, mock_state_manager)
-
-        # File should fit in large limit
-        with patch.dict("os.environ", {"KUBECONFIG": str(cfg)}):
-            data = pav._load_kubeconfig_data(max_size=100000)
-
-        assert len(data["clusters"]) == 1
+                with pytest.raises(SwitchoverError, match=r"kubeconfig_load_failed \(unreadable\)"):
+                    pav._load_kubeconfig_data()
 
 
 # ========================================================================
@@ -2864,8 +2809,7 @@ class TestGetHubApiServer:
             ],
         }
 
-        with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
-            result = pav._get_hub_api_server()
+        result = pav._get_hub_api_server(kube_data)
 
         assert result == "https://api.hub.example.com:6443"
 
@@ -2873,8 +2817,7 @@ class TestGetHubApiServer:
         """Empty kubeconfig should return empty string."""
         pav = _make_pav(mock_secondary_client, mock_state_manager)
 
-        with patch.object(pav, "_load_kubeconfig_data", return_value={}):
-            result = pav._get_hub_api_server()
+        result = pav._get_hub_api_server({})
 
         assert result == ""
 
@@ -2887,19 +2830,20 @@ class TestGetHubApiServer:
             "clusters": [{"name": "other-cluster", "cluster": {"server": "https://other:6443"}}],
         }
 
-        with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
-            result = pav._get_hub_api_server()
+        result = pav._get_hub_api_server(kube_data)
 
         assert result == ""
 
-    def test_exception_returns_empty(self, mock_secondary_client, mock_state_manager):
-        """Exception during hub API server lookup should return empty string."""
+    def test_a_non_string_server_is_not_an_endpoint(self, mock_secondary_client, mock_state_manager):
+        """A server that is not a string resolves to "" (the caller then fails the gate)."""
         pav = _make_pav(mock_secondary_client, mock_state_manager)
 
-        with patch.object(pav, "_load_kubeconfig_data", side_effect=RuntimeError("disk error")):
-            result = pav._get_hub_api_server()
+        kube_data = {
+            "contexts": [{"name": "secondary-ctx", "context": {"cluster": "hub-cluster"}}],
+            "clusters": [{"name": "hub-cluster", "cluster": {"server": 6443}}],
+        }
 
-        assert result == ""
+        assert pav._get_hub_api_server(kube_data) == ""
 
     def test_context_found_but_cluster_missing(self, mock_secondary_client, mock_state_manager):
         """Context references a cluster not in clusters list should return empty."""
@@ -2910,8 +2854,7 @@ class TestGetHubApiServer:
             "clusters": [{"name": "different-cluster", "cluster": {"server": "https://x:6443"}}],
         }
 
-        with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
-            result = pav._get_hub_api_server()
+        result = pav._get_hub_api_server(kube_data)
 
         assert result == ""
 

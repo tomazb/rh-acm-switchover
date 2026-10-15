@@ -25,7 +25,6 @@ from lib.constants import (
     CLUSTER_VERIFY_INTERVAL,
     CLUSTER_VERIFY_MAX_WORKERS,
     CLUSTER_VERIFY_TIMEOUT,
-    DEFAULT_KUBECONFIG_SIZE,
     DELETE_REQUEST_TIMEOUT,
     DISABLE_AUTO_IMPORT_ANNOTATION,
     INITIAL_CLUSTER_WAIT_TIMEOUT,
@@ -56,9 +55,11 @@ from lib.constants import (
     SECRET_VISIBILITY_TIMEOUT,
     THANOS_COMPACTOR_LABEL_SELECTOR,
     THANOS_COMPACTOR_STATEFULSET,
+    kubeconfig_size_override_ignored,
 )
 from lib.exceptions import FatalError, SwitchoverError
 from lib.kube_client import KubeClient
+from lib.kubeconfig_merge import load_merged_kubeconfig
 from lib.migration_evidence import MigrationEvidenceError
 from lib.migration_post_activation import (
     managed_cluster_readiness,
@@ -121,10 +122,6 @@ class PostActivationVerification:
         # True once a journaled or newly journaled waiver covers the post-activation name check.
         self._names_waived = False
         self._cached_managed_clusters: Optional[List[Dict]] = None  # Cache for managed clusters
-        # Kubeconfig caching to reduce repeated file I/O (findings #10)
-        self._kubeconfig_cache: Optional[Dict] = None
-        self._kubeconfig_paths: List[str] = []
-        self._kubeconfig_mtime: Dict[str, float] = {}
 
     def _step(self, step_name: str) -> AbstractContextManager:
         """Guard one step; a dry-run consults completion markers but never records one.
@@ -237,7 +234,9 @@ class PostActivationVerification:
                     logger.info("Waiting for ManagedClusters to reconnect after klusterlet fix...")
                     self._verify_managed_clusters_connected()
 
-        # Optional: Verify klusterlet connections (non-blocking)
+        # Verify klusterlet connections even when the clusters connected (wrong-hub drift check).
+        # A per-cluster missing context is a non-fatal skip; an unloadable kubeconfig or an
+        # undeterminable new-hub endpoint fails the step (GLM-H3, #349).
         # This may have already been done above if clusters didn't connect initially
         if not klusterlet_step_checked:
             with self._step("verify_klusterlet_connections") as should_run:
@@ -1111,24 +1110,25 @@ class PostActivationVerification:
         1. Patching or creating the bootstrap-hub-kubeconfig secret on the managed cluster
         2. Restarting the klusterlet deployment
 
-        If we can't connect to a managed cluster (no context available), we log a
-        warning but don't fail the switchover. If a wrong-hub klusterlet is
-        remediated, the post-remediation re-check is strict: failed remediation,
-        persistent wrong-hub state, or an unverifiable re-check fails
-        post-activation instead of reporting success.
+        If a managed cluster has no matching kubeconfig context, that cluster is
+        skipped with a log message (non-fatal). The gate itself never skips: a
+        kubeconfig that cannot be loaded and validated, or a new-hub endpoint that
+        cannot be determined from it, raises SwitchoverError before any cluster is
+        read, so verify() fails and this step is not checkpointed (GLM-H3, #349).
+        If a wrong-hub klusterlet is remediated, the post-remediation re-check is
+        strict: failed remediation, persistent wrong-hub state, or an unverifiable
+        re-check fails post-activation instead of reporting success.
         """
 
         logger.info("Verifying klusterlet connections to new hub...")
 
-        new_hub_server = self._get_hub_api_server()
+        kubeconfig_data = self._load_kubeconfig_data()
+        new_hub_server = self._get_hub_api_server(kubeconfig_data)
         if not new_hub_server:
-            logger.warning("Could not determine new hub API server URL, skipping klusterlet verification")
-            return
-
-        kubeconfig_data = self._load_kubeconfig_data(max_size=0)
-        if not kubeconfig_data:
-            logger.warning("Could not load kubeconfig, skipping klusterlet verification")
-            return
+            raise SwitchoverError(
+                f"Cannot determine the new hub API server from kubeconfig context {self.secondary.context!r}; "
+                "the klusterlet wrong-hub verification cannot run"
+            )
 
         cluster_targets = self._klusterlet_cluster_targets()
         if not cluster_targets:
@@ -1398,156 +1398,36 @@ class PostActivationVerification:
         except ApiException as e:
             logger.warning("Failed to restart klusterlet on %s: %s", cluster_name, e)
 
-    def _get_hub_api_server(self) -> str:
-        """Get the API server URL for the new hub.
+    def _get_hub_api_server(self, kubeconfig_data: Dict) -> str:
+        """The new hub's API server URL from the validated kubeconfig merge, or "".
 
-        Note: Uses max_size=0 to bypass kubeconfig size limits since this is a
-        critical operation for klusterlet verification. Large kubeconfigs in
-        multi-context environments must still be readable for hub lookup.
+        The hub client was built from the same KUBECONFIG and the secondary context, so a
+        missing context, cluster or server means the merge cannot identify the new hub.
         """
-        try:
-            # Bypass size check (max_size=0) for critical hub lookup
-            kubeconfig_data = self._load_kubeconfig_data(max_size=0)
-            if not kubeconfig_data:
+        for ctx in kubeconfig_data.get("contexts", []):
+            if ctx.get("name") == self.secondary.context:
+                cluster_name = (ctx.get("context") or {}).get("cluster")
+                for cluster in kubeconfig_data.get("clusters", []):
+                    if cluster.get("name") == cluster_name:
+                        server = (cluster.get("cluster") or {}).get("server")
+                        return server if isinstance(server, str) else ""
                 return ""
-
-            # Find the context matching secondary
-            for ctx in kubeconfig_data.get("contexts", []):
-                if ctx.get("name") == self.secondary.context:
-                    cluster_name = ctx.get("context", {}).get("cluster")
-                    # Find the cluster with matching name
-                    for cluster in kubeconfig_data.get("clusters", []):
-                        if cluster.get("name") == cluster_name:
-                            return cluster.get("cluster", {}).get("server", "")
-        except Exception as e:
-            logger.debug("Error getting hub API server: %s", e)
-
         return ""
 
-    def _load_kubeconfig_data(self, max_size: Optional[int] = None, force_reload: bool = False) -> dict:  # noqa: C901
-        """Load and merge kubeconfig data from all KUBECONFIG paths.
+    def _load_kubeconfig_data(self) -> Dict:
+        """Load, validate and merge every KUBECONFIG file once, or raise SwitchoverError.
 
-        Handles the KUBECONFIG environment variable which can contain multiple
-        colon-separated paths (e.g., '/path/one:/path/two:~/.kube/config').
-        Contexts, clusters, and users are merged from all files.
-
-        Uses caching to avoid repeated file I/O when called multiple times.
-        Cache is invalidated if any kubeconfig file has been modified.
-
-        Args:
-            max_size: Maximum file size in bytes. If None, uses MAX_KUBECONFIG_SIZE.
-                     If 0 or negative, bypasses size check entirely (for critical operations).
-            force_reload: If True, bypass cache and reload from files.
-
-        Returns:
-            Merged kubeconfig data dict with contexts, clusters, and users.
+        Fail-closed (design 2026-07-29 section 1, #349): a missing, unreadable, oversized,
+        invalid or structurally malformed file aborts the klusterlet step before any
+        cluster is read; the size limit cannot be bypassed.
         """
-        try:
-            # Check if we can use cached data
-            if not force_reload and self._kubeconfig_cache is not None:
-                # Verify no files have been modified since caching
-                cache_valid = True
-                for path in self._kubeconfig_paths:
-                    if os.path.exists(path):
-                        current_mtime = os.path.getmtime(path)
-                        if self._kubeconfig_mtime.get(path, 0) != current_mtime:
-                            cache_valid = False
-                            break
-                    else:
-                        # File was deleted
-                        cache_valid = False
-                        break
-
-                if cache_valid:
-                    return self._kubeconfig_cache
-            kubeconfig_env = os.environ.get("KUBECONFIG", "")
-            if kubeconfig_env:
-                # Split on colon (Unix path separator for KUBECONFIG)
-                paths = [p.strip() for p in kubeconfig_env.split(":") if p.strip()]
-            else:
-                paths = [os.path.expanduser("~/.kube/config")]
-
-            # Determine size limit: use provided max_size, or default to MAX_KUBECONFIG_SIZE
-            if max_size is not None:
-                if max_size <= 0:
-                    # Bypass size check for critical operations
-                    size_limit = None
-                    check_size = False
-                else:
-                    size_limit = max_size
-                    check_size = True
-            elif MAX_KUBECONFIG_SIZE <= 0:
-                # Size checking disabled via environment variable
-                size_limit = None
-                check_size = False
-            else:
-                size_limit = MAX_KUBECONFIG_SIZE
-                check_size = True
-
-            # Merge kubeconfig data from all paths
-            merged: dict = {"contexts": [], "clusters": [], "users": []}
-
-            for path in paths:
-                expanded_path = os.path.expanduser(path)
-                if not os.path.exists(expanded_path):
-                    logger.debug(
-                        "Kubeconfig path does not exist: %s",
-                        os.path.basename(expanded_path),
-                    )
-                    continue
-
-                try:
-                    # Check file size before loading to prevent memory exhaustion
-                    if check_size:
-                        kubeconfig_size = os.path.getsize(expanded_path)
-                        if kubeconfig_size > size_limit:
-                            logger.warning(
-                                "Kubeconfig file too large: %s (%d bytes, max %d bytes). Skipping.",
-                                os.path.basename(expanded_path),
-                                kubeconfig_size,
-                                size_limit,
-                            )
-                            continue
-                    else:
-                        # Size check bypassed - log warning but continue loading
-                        # Only warn if size checking is meaningful (MAX_KUBECONFIG_SIZE > 0)
-                        # and file exceeds the default limit (not the overridden value)
-                        if MAX_KUBECONFIG_SIZE > 0:
-                            kubeconfig_size = os.path.getsize(expanded_path)
-                            if kubeconfig_size > DEFAULT_KUBECONFIG_SIZE:
-                                logger.warning(
-                                    "Kubeconfig file large: %s (%d bytes, exceeds default limit %d bytes). "
-                                    "Loading anyway for critical operation.",
-                                    os.path.basename(expanded_path),
-                                    kubeconfig_size,
-                                    DEFAULT_KUBECONFIG_SIZE,
-                                )
-
-                    with open(expanded_path) as f:
-                        data = yaml.safe_load(f) or {}
-                        merged["contexts"].extend(data.get("contexts", []))
-                        merged["clusters"].extend(data.get("clusters", []))
-                        merged["users"].extend(data.get("users", []))
-                except (OSError, yaml.YAMLError) as e:
-                    logger.debug(
-                        "Error loading kubeconfig %s: %s",
-                        os.path.basename(expanded_path),
-                        e,
-                    )
-                    continue
-
-            # Update cache with loaded data and file modification times
-            self._kubeconfig_cache = merged
-            self._kubeconfig_paths = [os.path.expanduser(p) for p in paths]
-            self._kubeconfig_mtime = {
-                path: os.path.getmtime(path) for path in self._kubeconfig_paths if os.path.exists(path)
-            }
-
-            return merged
-
-        except Exception as e:
-            logger.debug("Error loading kubeconfig: %s", e)
-            return {}
+        if kubeconfig_size_override_ignored(os.environ.get("ACM_KUBECONFIG_MAX_SIZE")):
+            logger.warning(
+                "ACM_KUBECONFIG_MAX_SIZE must be a positive byte count; using the default %d bytes "
+                "(the kubeconfig size limit can no longer be disabled)",
+                MAX_KUBECONFIG_SIZE,
+            )
+        return load_merged_kubeconfig(os.environ.get("KUBECONFIG"), MAX_KUBECONFIG_SIZE)
 
     def _find_context_by_api_url(self, kubeconfig_data: dict, api_url: str, cluster_name: str) -> str:
         """

@@ -4,6 +4,7 @@ import logging
 import math
 import os
 import re
+from typing import Optional
 
 # Exit codes
 EXIT_SUCCESS = 0
@@ -131,19 +132,37 @@ KLUSTERLET_RESULT_NO_CONTEXT = "no_context"
 # Parallel cluster verification settings
 CLUSTER_VERIFY_MAX_WORKERS = 10
 
-# Maximum kubeconfig file size (10MB default) to prevent memory exhaustion
-# Can be overridden via ACM_KUBECONFIG_MAX_SIZE environment variable (bytes)
-# Set to 0 or negative to disable size checking
+# Maximum kubeconfig file size (10MB default, inclusive) to prevent memory exhaustion.
+# ACM_KUBECONFIG_MAX_SIZE (bytes) may raise or lower it but never disable it: an absent,
+# non-numeric, zero, or negative value resolves to the default (design 2026-07-29 §1).
 DEFAULT_KUBECONFIG_SIZE = 10 * 1024 * 1024  # 10MB
-try:
-    _env_size = os.environ.get("ACM_KUBECONFIG_MAX_SIZE")
-    if _env_size is not None:
-        MAX_KUBECONFIG_SIZE = int(_env_size)
-    else:
-        MAX_KUBECONFIG_SIZE = DEFAULT_KUBECONFIG_SIZE
-except (ValueError, TypeError):
-    # Invalid value in environment variable, use default
-    MAX_KUBECONFIG_SIZE = DEFAULT_KUBECONFIG_SIZE
+
+
+def kubeconfig_size_limit(raw: Optional[str]) -> int:
+    """Resolve the kubeconfig size limit from an ACM_KUBECONFIG_MAX_SIZE value."""
+    if raw is None:
+        return DEFAULT_KUBECONFIG_SIZE
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    return value if value > 0 else DEFAULT_KUBECONFIG_SIZE
+
+
+def kubeconfig_size_override_ignored(raw: Optional[str]) -> bool:
+    """True when ACM_KUBECONFIG_MAX_SIZE is set but cannot be honoured (it never disables the limit).
+
+    Reported by the caller at load time, through the run's configured logging.
+    """
+    if raw is None:
+        return False
+    try:
+        return int(raw) <= 0
+    except ValueError:
+        return True
+
+
+MAX_KUBECONFIG_SIZE = kubeconfig_size_limit(os.environ.get("ACM_KUBECONFIG_MAX_SIZE"))
 
 # Namespaces
 BACKUP_NAMESPACE = "open-cluster-management-backup"
