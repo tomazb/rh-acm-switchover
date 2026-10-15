@@ -96,8 +96,14 @@ All in `modules/post_activation.py`:
     **before** `_remediate_wrong_hub_klusterlets`.
   - The remediation re-check uses `classify_hub` against the import-secret endpoint.
 - **Log sanitization:** every URL log line goes through `redact`.
+- **Observed-server extractor:** the same absent / present-invalid / unreadable split as
+  the collection. A present `server` that is not a string is now `endpoint_malformed`,
+  not a skip, and unreadable YAML stays `unreachable`.
 - **Tests:**
   - invert the name-fallback, port-tolerance and hostname tests;
+  - migrate the tests that assert the old expected-hub source
+    (`tests/test_post_activation_kubeconfig_integrity.py`) or a skip for a non-string
+    server (`tests/test_post_activation.py`);
   - assert zero constructions and zero reads for every pre-construction refusal (A§7
     PR 2 item 4);
   - pair an unverified cluster with a wrong-hub peer and assert zero mutation (item 5);
@@ -108,16 +114,37 @@ All in `modules/post_activation.py`:
 
 ### Task 4: collection probe, remediation and role (A§2.3, A§2.6, A§2.7, A§2.8)
 
-- **`plugins/module_utils/klusterlet.py`, `probe_one_cluster`:**
-  1. read the ManagedCluster fresh through the secondary client and apply the URL rule;
-  2. refuse a `:` path;
-  3. load the file with `kubeconfig_file`, select the context and prove identity;
-  4. build the client, still path-based in PR 2, through the validated literal file, and
-     check the client endpoint;
-  5. classify the hub;
-  6. return sanitized result fields.
-- **`remediate_one_cluster`:** run the same proof and classification inside the same
-  invocation, on the client it mutates with, and mutate only on `wrong_hub`.
+- **Hub-side adapter.** The secondary hub client is currently a secret-only
+  `CoreV1Client` protocol. Extend the hub-side factory with a ManagedCluster reader: a
+  strict `get` of `managedclusters/<name>`, the same API verb family the role already
+  uses. Both modules can then read the URL fresh.
+  - Hub construction stays path-based through the secondary hub mapping (unchanged).
+    Only spoke clients move to snapshots, in PR 3.
+  - Under the AGENTS RBAC cross-surface review, check that `managedclusters` `get` is
+    already in every operator and validator matrix, including `acm_rbac_validate`.
+    It is, so nothing is added.
+- **`plugins/module_utils/klusterlet.py`, `probe_one_cluster`.** The order is binding.
+  Every refusal in steps 1–4 happens before any spoke client exists.
+  1. Read the ManagedCluster fresh through the hub adapter and apply the URL rule.
+  2. Read the import secret through the hub client, and validate the expected endpoint
+     under A§2.4.
+  3. Refuse a `:` path.
+  4. Load the file with `kubeconfig_file`, select the context and prove identity.
+  5. Build the spoke client, still path-based in PR 2, through the validated literal
+     file, and check the client endpoint.
+  6. Read the observed hub secret. Its extractor separates three cases:
+     - absent: no key, or no secret, which skips as today;
+     - present but invalid: `null`, `false`, `0`, `""` or another non-string or
+       malformed value, which is `endpoint_malformed`;
+     - unreadable YAML, which stays `failed` as today.
+  7. Classify the hub (A§2.3) and return sanitized result fields.
+- **`remediate_klusterlets` runs in two phases.**
+  1. **Prepare.** Run steps 1–7 for every candidate in the batch, in parallel and
+     read-only.
+  2. **Mutate.** Only if every candidate classified as `wrong_hub` do the patch and
+     restart run, each on the client that cluster prepared. A refusal discovered while
+     preparing (for example a fresh `unverified`) means zero mutation for the whole
+     batch, which matches the run-wide barrier in A§2.8.
 - **`normalize_workers`:** cap at 32 with an actionable message.
 - **Modules:** the argument specs are unchanged. The status vocabulary gains reasons, and
   `unverified` reasons are reported under `failed_clusters` with their reason.
@@ -133,7 +160,13 @@ All in `modules/post_activation.py`:
   - client endpoint mismatch;
   - zero constructions and reads for refusals;
   - the worker cap and its scale test;
-  - static role tests for the candidate rule.
+  - static role tests for the candidate rule;
+  - a mixed batch: one fresh `unverified` and one `wrong_hub` peer gives zero mutation;
+  - expected endpoint missing or malformed: zero spoke constructions and zero reads.
+- **Fixture migration.** The current fakes use nonexistent kubeconfig paths and carry no
+  client configuration. Replace them with valid temp-file kubeconfigs, endpoint-aware
+  fake clients exposing `configuration.host`, a fake ManagedCluster reader, and fakes
+  for fresh-read failures.
 
 ### Task 5: documentation and recording (A§7 PR 2 item 11)
 
@@ -213,9 +246,13 @@ All in `modules/post_activation.py`:
 
 ### Task 3: collection wiring
 
-- **Factories take the snapshot**
-  (`build_core_v1_client(snapshot, context)` / `build_apps_v1_client(...)`), and the
-  path forms are removed from the repair path.
+- **Spoke factories take the snapshot.**
+  - New spoke-only factories, `build_spoke_core_client(snapshot, context)` and
+    `build_spoke_apps_client(...)`, construct from a dict under a process-wide lock.
+  - Before any read they assert the effective `verify_ssl` and run the client endpoint
+    check.
+  - Hub-client construction is unchanged and stays separate.
+  - The path forms are removed from the spoke repair path.
 - **Per invocation:** probe and remediate build a snapshot and a private directory. The
   executor waits for workers, and timed-out clusters keep their real `changed` value and
   progress.
@@ -227,8 +264,19 @@ All in `modules/post_activation.py`:
 
 ### Task 4: minimum-client CI lane (A§6)
 
-- Add a matrix lane pinning `kubernetes==28.*` to the root and collection unit workflows.
-  It runs the real-loader snapshot, credential, token, TLS and cleanup regressions.
+- **A dedicated job, not a new matrix value.** The collection compatibility guard
+  (`tests/unit/test_compatibility_contract.py`) allows only the `min` and `current`
+  lanes.
+  - Add a separate `kubernetes-min-client` job to `.github/workflows/ci-cd.yml`. It runs
+    on Python 3.11, pins `kubernetes==28.*`, and runs the real-loader snapshot,
+    credential, token, TLS and cleanup regressions from both form factors (root tests
+    plus the collection unit tests for `kubeconfig_snapshot`).
+  - Artifact names include the client version, so the job's uploads cannot collide
+    with the existing ones.
+  - The job first runs a dependency-resolution smoke check, which asserts the installed
+    client version.
+  - Update `compatibility.md` and `docs/development/ci.md`. If the guard enumerates jobs,
+    update it too.
 - No support-boundary change: the declared floor stays `>=28.0.0`, and the lane verifies
   it.
 
@@ -242,3 +290,28 @@ All in `modules/post_activation.py`:
 - **Gates:** as in PR 2, plus the minimum-client lane. Exact-head kill-condition mutations
   for capture, rejections, explicit context, the lock and cleanup, and the snapshot
   threading in each form factor.
+
+## Acceptance-to-test mapping
+
+The test file named for each item is the one that must hold the item's regression; every
+new or changed test lives in the named file.
+
+| Item | Python | Collection / shared |
+| --- | --- | --- |
+| PR 2 #1 shared vectors | `tests/test_r4_06_endpoint_parity.py` | `tests/fixtures/r4_06_endpoint_vectors.json`; collection `tests/unit/plugins/module_utils/test_endpoint_identity.py` |
+| PR 2 #2 same-host mismatch, zero mutation | `tests/test_post_activation_endpoint_identity.py` (new) | `tests/unit/plugins/modules/test_acm_klusterlet_modules.py` |
+| PR 2 #3 missing URL: no lookup, no construction, retry | `tests/test_post_activation_endpoint_identity.py`, `tests/test_post_activation_kubeconfig_integrity.py` (StateManager retry) | `test_acm_klusterlet_modules.py`; `tests/unit/test_klusterlet_remediation.py` (role retry and failure) |
+| PR 2 #4 never inspected (pre- and post-construction) | `tests/test_post_activation_endpoint_identity.py` (construction and read counters) | `test_acm_klusterlet_modules.py` (counters on fakes) |
+| PR 2 #5 mixed-peer barrier | `tests/test_post_activation_endpoint_identity.py` | `test_acm_klusterlet_modules.py` (two-phase batch) |
+| PR 2 #6 discovery, duplicates, import-secret expected hub | `tests/test_post_activation_endpoint_identity.py`, `tests/test_kubeconfig_merge.py` | shared duplicate vectors |
+| PR 2 #7 collection mapping and remediation, stale URL | — | `test_acm_klusterlet_modules.py`, `tests/unit/plugins/module_utils/test_kubeconfig_file.py` (new), `tests/unit/test_klusterlet_remediation.py` |
+| PR 2 #8 client endpoint check | `tests/test_post_activation_endpoint_identity.py` | `test_acm_klusterlet_modules.py` |
+| PR 2 #9 sanitization (results and logs) | `tests/test_post_activation_endpoint_identity.py` (caplog) | `test_acm_klusterlet_modules.py` (module results) |
+| PR 2 #10 worker cap | — | `test_acm_klusterlet_modules.py`; `tests/test_documentation_guardrails.py` (doc) |
+| PR 2 #11 recording | `tests/test_documentation_guardrails.py` where it applies | — |
+| PR 3 #1 snapshot binding across stages | `tests/test_post_activation_snapshot.py` (new) | `tests/unit/plugins/module_utils/test_kubeconfig_snapshot.py` (new), `test_acm_klusterlet_modules.py` |
+| PR 3 #2 explicit context | `tests/test_post_activation_snapshot.py` | `test_kubeconfig_snapshot.py` |
+| PR 3 #3 rejections, including real-loader non-boolean TLS; plain user proceeds | `tests/test_kubeconfig_snapshot.py` (new) | `test_kubeconfig_snapshot.py`; shared byte vectors `tests/fixtures/r4_06_credential_vectors.json` |
+| PR 3 #4 temp files, cache isolation, concurrency, cleanup ordering | `tests/test_post_activation_snapshot.py` | `test_acm_klusterlet_modules.py` |
+| PR 3 #5 no leakage (logs, results, state, errors) | `tests/test_post_activation_snapshot.py` | `test_acm_klusterlet_modules.py` |
+| PR 3 #6 minimum-client lane | `.github/workflows/ci-cd.yml` job `kubernetes-min-client` | same job |
