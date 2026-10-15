@@ -387,8 +387,16 @@ def test_endpoint_logs_carry_only_canonical_values(run, caplog):
     with pytest.raises(SwitchoverError):
         _verify(pav, fleet)
 
-    assert "https://api.new-hub.example:443" in caplog.text
-    assert "https://api.new-hub.example:6443" in caplog.text
+    hub_lines = [record.args for record in caplog.records if record.msg.startswith("Cluster %s klusterlet hub")]
+    assert hub_lines == [
+        (
+            "a",
+            "https://api.new-hub.example:443",
+            "https://api.new-hub.example:6443",
+            "unverified",
+            " (endpoint_mismatch_unverified)",
+        )
+    ]
 
 
 @pytest.mark.parametrize(
