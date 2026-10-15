@@ -103,6 +103,35 @@ def post_activation_waiver(
     return {"waiver": record, "record": True}
 
 
+def expected_managed_cluster_names(items: Any) -> List[str]:
+    """Derive the expected non-local ManagedCluster names from one strict primary inventory.
+
+    ``items`` are the members of a positively complete strict LIST; the caller refuses any
+    other read outcome as ``inventory_unreadable`` before calling (#340, design 2026-10-15
+    E1). A member without a name and a repeated name each refuse the whole derivation,
+    because a member silently dropped here lowers the expected set and, with no explicit
+    floor, the floor that admits an empty destination. A complete inventory that is empty
+    or holds only local-cluster is a legitimate zero.
+    """
+    if not isinstance(items, list):
+        raise MigrationEvidenceError("malformed_inventory", "the primary ManagedCluster inventory is not a list")
+    names: List[str] = []
+    seen = set()
+    for item in items:
+        metadata = item.get("metadata") if isinstance(item, dict) else None
+        name = metadata.get("name") if isinstance(metadata, dict) else None
+        if not _non_empty_str(name):
+            raise MigrationEvidenceError("malformed_inventory", "a primary ManagedCluster has no name")
+        if name in seen:
+            raise MigrationEvidenceError(
+                "duplicate_managed_cluster", f"the primary inventory lists ManagedCluster {name} twice"
+            )
+        seen.add(name)
+        if name != LOCAL_CLUSTER_NAME:
+            names.append(name)
+    return sorted(names)
+
+
 def managed_cluster_readiness(
     *, items: Any, expected_names: Any, min_managed_clusters: Any, names_waived: Any
 ) -> Dict[str, Any]:

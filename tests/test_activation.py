@@ -506,14 +506,46 @@ class TestMinManagedClusters:
             str(refused.value) == "Expected at least 3 ManagedCluster(s) after restore, but found only 1: ['cluster-a']"
         )
 
-    def test_unenforced_names_with_zero_floor_allow_an_empty_hub(self, mock_secondary_client, mock_state_manager):
-        """With a zero floor and no enforced names an empty hub is informational only."""
+    def test_unenforced_recorded_names_with_zero_floor_refuse_an_empty_hub(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """#340 E2: recorded names that are not enforced (the waiver) never make an empty hub
+        acceptable; that is the inventory_empty refusal post-activation also applies."""
         mock_secondary_client.list_custom_resources.return_value = []
         act = SecondaryActivation(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
             min_managed_clusters=0,
             expected_managed_cluster_names=["cluster-a"],
+            enforce_expected_managed_cluster_names=False,
+        )
+
+        with pytest.raises(FatalError, match="inventory_empty"):
+            act._verify_managed_clusters_restored()
+
+    def test_unenforced_recorded_names_with_zero_floor_accept_a_local_cluster_only_hub(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """With the name check lifted and a zero floor, a non-empty inventory is informational only."""
+        mock_secondary_client.list_custom_resources.return_value = [{"metadata": {"name": "local-cluster"}}]
+        act = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            min_managed_clusters=0,
+            expected_managed_cluster_names=["cluster-a"],
+            enforce_expected_managed_cluster_names=False,
+        )
+
+        act._verify_managed_clusters_restored()
+
+    def test_zero_floor_without_recorded_names_allows_an_empty_hub(self, mock_secondary_client, mock_state_manager):
+        """Unchanged: nothing recorded and a zero floor permit an empty destination."""
+        mock_secondary_client.list_custom_resources.return_value = []
+        act = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            min_managed_clusters=0,
+            expected_managed_cluster_names=[],
             enforce_expected_managed_cluster_names=False,
         )
 

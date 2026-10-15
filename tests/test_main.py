@@ -2886,20 +2886,23 @@ class TestPreflightPhase:
     def test_preflight_records_critical_result_when_expected_cluster_inventory_fails(
         self,
     ):
+        from lib.strict_read import StrictReadOutcome
         from modules.preflight import ValidationReporter
         from modules.preflight_coordinator import PreflightValidator
 
         validator = PreflightValidator.__new__(PreflightValidator)
         validator.restore_only = False
         validator.primary = Mock()
-        validator.primary.list_custom_resources.side_effect = ApiException(status=403, reason="Forbidden")
+        # A 403 on the strict LIST is a read failure, never an empty inventory (#340 E1).
+        validator.primary.list_managed_clusters_strict.return_value = StrictReadOutcome.error("read_failed")
         validator.reporter = ValidationReporter()
 
         assert validator._derive_expected_managed_cluster_names() == []
         failures = validator.reporter.critical_failures()
         assert len(failures) == 1
         assert failures[0]["check"] == "ManagedCluster inventory"
-        assert "403 Forbidden" in failures[0]["message"]
+        assert "inventory_unreadable" in failures[0]["message"]
+        validator.primary.list_custom_resources.assert_not_called()
 
     def test_run_phase_preflight_persists_expected_managed_clusters_from_primary(self, tmp_path):
         from lib.run_record import RunRecord

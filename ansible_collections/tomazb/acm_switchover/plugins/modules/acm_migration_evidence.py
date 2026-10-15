@@ -18,7 +18,8 @@ description:
   - A step that produces a migration journal transition returns the complete validated
     C(candidate); the role persists it only through C(checkpoint_phase) C(status=update).
   - A refusal fails the task with the operator message the Python CLI raises for the same
-    decision. Always reports C(changed=false).
+    decision, except C(expected_managed_clusters), which returns it as a decision. Always
+    reports C(changed=false).
 options:
   operation:
     description: The transaction step to decide.
@@ -43,6 +44,7 @@ options:
       - completion_poll
       - create_body
       - deletion_poll
+      - expected_managed_clusters
       - freeze
       - frozen_backups
       - journal_matches
@@ -79,6 +81,9 @@ options:
         unless they are supplied.
       - C(managed_cluster_readiness) takes C(mc_read) instead of the inventory items, and
         C(post_activation_waiver) journals the collection's waiver variable as the C(flag).
+      - C(expected_managed_clusters) takes the strict primary ManagedCluster read as C(mc_read)
+        and, unlike the other steps, returns a refused derivation as a decision
+        (C(derivable=false)) instead of failing, so preflight records it as a critical result.
       - The cleanup steps and the old-hub evidence gate C(old_hub_evidence) take the strict read of
         the journaled Restore locator as C(live_read) instead of the object, C(cleanup_generic_restores)
         the strict Restore list as
@@ -133,6 +138,27 @@ write:
   returned: >-
     for post_activation_names_evidence, post_activation_completion and teardown_revalidated
   type: bool
+derivable:
+  description: Whether a positively complete primary inventory derived the expectation.
+  returned: for expected_managed_clusters
+  type: bool
+code:
+  description: The stable refusal code of a refused derivation, otherwise null.
+  returned: for expected_managed_clusters
+  type: str
+message:
+  description: The sanitized preflight result message for the derivation.
+  returned: for expected_managed_clusters
+  type: str
+names:
+  description: The sorted expected non-local ManagedCluster names, or null when refused.
+  returned: for expected_managed_clusters
+  type: list
+  elements: str
+count:
+  description: The number of expected names, or null when refused.
+  returned: for expected_managed_clusters
+  type: int
 """
 
 import time  # noqa: E402
@@ -158,6 +184,38 @@ def _checked(requirement: Callable[..., None], *args, **kwargs) -> dict:
     """A requirement step: it refuses or it passes with nothing to return."""
     requirement(*args, **kwargs)
     return {}
+
+
+def _expected_managed_clusters(inputs: dict) -> dict:
+    """The preflight derivation as a decision the role records as a critical result (#340 E1).
+
+    A refusal is returned, not raised, so preflight reports it like every other validation
+    finding (PreflightValidator._derive_expected_managed_cluster_names); it is never zero names.
+    """
+    mc_read = inputs.get("mc_read")
+    status = mc_read.get("read_status") if isinstance(mc_read, dict) else None
+    try:
+        if status != "ok":
+            raise MigrationEvidenceError(
+                "inventory_unreadable",
+                f"the primary ManagedCluster inventory is not positively complete ({status or 'no read'})",
+            )
+        names = post_activation.expected_managed_cluster_names(mc_read.get("resources"))
+    except MigrationEvidenceError as exc:
+        return {
+            "derivable": False,
+            "code": exc.code,
+            "message": f"Cannot derive the expected ManagedClusters from the primary hub ({exc})",
+            "names": None,
+            "count": None,
+        }
+    return {
+        "derivable": True,
+        "code": None,
+        "message": f"primary hub inventory expects {len(names)} non-local ManagedCluster(s)",
+        "names": names,
+        "count": len(names),
+    }
 
 
 _OPERATIONS: Dict[str, Callable[[dict], dict]] = {
@@ -195,6 +253,7 @@ _OPERATIONS: Dict[str, Callable[[dict], dict]] = {
     "post_activation_waiver": lambda inputs: post_activation.post_activation_waiver(
         flag=transaction.WAIVER_FLAG, **_with_time(_with_default(inputs, "requested"), "journaled_at")
     ),
+    "expected_managed_clusters": _expected_managed_clusters,
     "managed_cluster_readiness": lambda inputs: post_activation.managed_cluster_readiness(
         items=transaction.strict_list(inputs["mc_read"], "ManagedCluster inventory"),
         expected_names=inputs["expected_names"],

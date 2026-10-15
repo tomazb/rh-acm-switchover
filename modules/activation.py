@@ -1272,6 +1272,13 @@ class SecondaryActivation:
         if name_cache is not None and not force_refresh and "non_local_names" in name_cache:
             return list(name_cache["non_local_names"])
 
+        _, names = self._read_restored_inventory()
+        if name_cache is not None:
+            name_cache["non_local_names"] = list(names)
+        return names
+
+    def _read_restored_inventory(self) -> Tuple[bool, List[str]]:
+        """One strict secondary ManagedCluster read: whether it is empty, and its non-local names."""
         outcome = self.secondary.list_managed_clusters_strict()
         if not outcome.is_success:
             raise FatalError(f"ManagedCluster inventory read failed ({outcome.status.value}: {outcome.reason})")
@@ -1280,9 +1287,16 @@ class SecondaryActivation:
             name = mc.get("metadata", {}).get("name")
             if name and name != LOCAL_CLUSTER_NAME:
                 names.append(name)
-        if name_cache is not None:
-            name_cache["non_local_names"] = list(names)
-        return names
+        return not outcome.items, names
+
+    def _refuses_empty_destination(self, inventory_empty: bool) -> bool:
+        """#340 E2: an empty destination is accepted only when no expected name was recorded.
+
+        The waiver lifts only the name check; it never turns recorded names into "nothing
+        expected", so this holds whether or not the names are enforced (post-activation's
+        inventory_empty rule).
+        """
+        return inventory_empty and bool(self.expected_managed_cluster_names)
 
     def _wait_for_managed_clusters_restored(self, timeout: int, enforce_names: bool = True) -> None:
         """Wait for full-restore ManagedCluster resources before enforcing the minimum.
@@ -1290,13 +1304,14 @@ class SecondaryActivation:
         enforce_names False is the journaled activation waiver: it lifts only the name check.
         """
         enforce = self.enforce_expected_managed_cluster_names and enforce_names
-        # A zero floor has nothing to wait for only when no expected name is enforced (AC25).
-        if self.min_managed_clusters == 0 and not (enforce and self.expected_managed_cluster_names):
+        # A zero floor has nothing to wait for only when no expected name was recorded (AC25,
+        # #340 E2): a waived name check still waits for a non-empty inventory.
+        if self.min_managed_clusters == 0 and not self.expected_managed_cluster_names:
             self._verify_managed_clusters_restored(enforce_names=enforce_names)
             return
 
         def _poll_managed_clusters():
-            non_local_clusters = self._list_restored_managed_cluster_names()
+            inventory_empty, non_local_clusters = self._read_restored_inventory()
             count = len(non_local_clusters)
             missing_expected = sorted(set(self.expected_managed_cluster_names) - set(non_local_clusters))
             if enforce and missing_expected:
@@ -1304,6 +1319,8 @@ class SecondaryActivation:
                     f"found {count}/{self.min_managed_clusters} ManagedCluster(s); "
                     f"missing expected: {missing_expected}"
                 )
+            if self._refuses_empty_destination(inventory_empty):
+                return WaitConditionResult.pending("no ManagedClusters found")
             if count >= self.min_managed_clusters:
                 return WaitConditionResult.complete(f"found {count} ManagedCluster(s): {', '.join(non_local_clusters)}")
             return WaitConditionResult.pending(
@@ -1333,7 +1350,7 @@ class SecondaryActivation:
         name check, never the count floor.
         """
         logger.info("Verifying ManagedCluster resources were restored...")
-        non_local_clusters = self._list_restored_managed_cluster_names()
+        inventory_empty, non_local_clusters = self._read_restored_inventory()
         count = len(non_local_clusters)
         enforce = self.enforce_expected_managed_cluster_names and enforce_names
 
@@ -1345,6 +1362,12 @@ class SecondaryActivation:
             )
 
         if self.min_managed_clusters == 0:
+            if self._refuses_empty_destination(inventory_empty):
+                raise FatalError(
+                    "No ManagedClusters found after restore (inventory_empty): expected ManagedCluster(s) "
+                    f"{', '.join(self.expected_managed_cluster_names)} were recorded, and a waiver lifts only "
+                    "the name check, never an empty destination"
+                )
             if count == 0:
                 logger.warning(
                     "No non-local ManagedClusters found after restore "

@@ -7,6 +7,7 @@ from kubernetes.client.rest import ApiException
 
 from lib import argocd as argocd_lib
 from lib.exceptions import ValidationError
+from lib.strict_read import StrictReadOutcome
 from modules.preflight_coordinator import PreflightValidator
 
 
@@ -22,6 +23,7 @@ def _build_validator(
     primary.namespace_exists.return_value = True
     secondary.namespace_exists.return_value = True
     primary.list_custom_resources.return_value = []
+    primary.list_managed_clusters_strict.return_value = StrictReadOutcome.from_items([])
 
     validator = PreflightValidator(
         primary_client=primary,

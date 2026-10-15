@@ -2311,6 +2311,7 @@ DOCS = {
     "J": "2026-07-29-migration-evidence-design.md",
     "A": "2026-08-27-r4-04-current-base-design-amendment.md",
     "C": "2026-09-30-r4-04-controller-child-evidence-amendment.md",
+    "E": "2026-10-15-managed-cluster-expectation-safety-design.md",
 }
 
 
@@ -4882,6 +4883,33 @@ prcase("readiness-expected-names-malformed-blocks", AB, err("malformed_expected_
 prcase("readiness-negative-floor-blocks", AB, err("malformed_expectation"), minimum=-1)
 prcase("readiness-boolean-floor-blocks", AB, err("malformed_expectation"), minimum=True)
 prcase("readiness-waiver-flag-malformed-blocks", AB, err("malformed_expectation"), waived="yes")
+
+# #340 E1: the expected set is derived only from the members of a positively complete strict
+# primary LIST (the callers refuse every other read outcome as inventory_unreadable); a
+# malformed or repeated member refuses the whole derivation instead of lowering it.
+fn = "expected_managed_cluster_names"
+PE = drefs(ALL, "E:40-92")
+
+
+def pecase(case_id, items, expect):
+    case(case_id, ALL, PE, fn, {"items": items}, expect)
+
+
+pecase("expected-names-empty-inventory-is-zero", [], ok([]))
+pecase("expected-names-local-cluster-only-is-zero", [LOCAL], ok([]))
+pecase("expected-names-sorted-non-local", [mcl("cluster-b"), LOCAL, mcl("cluster-a")], ok(NAMES))
+pecase("expected-names-readiness-ignored", [mcl("cluster-a", available="False", joined=None)], ok(["cluster-a"]))
+pecase("expected-names-items-not-a-list-blocks", {"items": []}, err("malformed_inventory"))
+pecase("expected-names-items-absent-blocks", None, err("malformed_inventory"))
+pecase("expected-names-nameless-member-blocks", [mcl("cluster-a"), {"metadata": {}}], err("malformed_inventory"))
+pecase("expected-names-empty-name-blocks", [mcl("cluster-a"), {"metadata": {"name": ""}}], err("malformed_inventory"))
+pecase(
+    "expected-names-non-string-name-blocks", [mcl("cluster-a"), {"metadata": {"name": 7}}], err("malformed_inventory")
+)
+pecase("expected-names-metadata-not-object-blocks", [mcl("cluster-a"), {"metadata": "x"}], err("malformed_inventory"))
+pecase("expected-names-non-object-member-blocks", [mcl("cluster-a"), "cluster-b"], err("malformed_inventory"))
+pecase("expected-names-duplicate-blocks", [mcl("cluster-a"), mcl("cluster-a")], err("duplicate_managed_cluster"))
+pecase("expected-names-duplicate-local-blocks", [LOCAL, LOCAL], err("duplicate_managed_cluster"))
 
 fn = "post_activation_names_evidence"
 PN = drefs(ALL, "J:446-470", "J:543-552")

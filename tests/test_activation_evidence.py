@@ -105,6 +105,7 @@ class FakeHub:
         self.create_override = None
         self.after_mutation = None
         self.managed_clusters = ["cluster-a"]
+        self.local_cluster = True
         self.controller = None
         self._rv = 2000
 
@@ -151,7 +152,7 @@ class FakeHub:
     def list_managed_clusters_strict(self):
         if "list:managedclusters" in self.failures:
             return self.failures["list:managedclusters"]
-        names = self.managed_clusters + ["local-cluster"]
+        names = self.managed_clusters + (["local-cluster"] if self.local_cluster else [])
         return StrictReadOutcome.from_items([{"metadata": {"name": name}} for name in names])
 
     def create_custom_resource(self, group, version, plural, body, namespace=None):
@@ -1103,6 +1104,43 @@ class TestCompletionEvidence:
         with pytest.raises(FatalError, match="at least 2"):
             _wait(activation)
         assert RunRecord(state).migration_backups()["restore"]["completed_at"] is None
+
+    @pytest.mark.parametrize("kind", KINDS)
+    def test_a_waiver_with_a_zero_floor_never_admits_an_empty_destination(self, state, kind):
+        """#340 E2: recorded names + zero floor + a covering waiver + no ManagedCluster at all
+        refuses as inventory_empty, exactly as post-activation decides; the waiver lifts only
+        the name check and never turns "names were expected" into "nothing was expected"."""
+        waiver = {"scope": "both", "actor": "ops@example.com", "reason": "stale list", "request_id": None}
+        hub, activation = _mutated(state, kind, waiver=waiver, expected=("cluster-a", "cluster-b"))
+        activation.min_managed_clusters = 0
+        hub.managed_clusters = []
+        hub.local_cluster = False
+        complete(hub, RESTORE_NAMES[kind], version="2.14.3", kind=kind)
+        with pytest.raises(FatalError, match="inventory_empty"):
+            _wait(activation)
+        assert RunRecord(state).migration_backups()["restore"]["completed_at"] is None
+
+    @pytest.mark.parametrize("kind", KINDS)
+    def test_a_waiver_with_a_zero_floor_accepts_a_local_cluster_only_destination(self, state, kind):
+        """A non-empty destination satisfies the zero floor once the name check is waived."""
+        waiver = {"scope": "both", "actor": "ops@example.com", "reason": "stale list", "request_id": None}
+        hub, activation = _mutated(state, kind, waiver=waiver, expected=("cluster-a", "cluster-b"))
+        activation.min_managed_clusters = 0
+        hub.managed_clusters = []
+        complete(hub, RESTORE_NAMES[kind], version="2.14.3", kind=kind)
+        _wait(activation)
+        assert RunRecord(state).migration_backups()["restore"]["completed_at"] is not None
+
+    @pytest.mark.parametrize("kind", KINDS)
+    def test_a_zero_floor_with_nothing_expected_still_admits_an_empty_destination(self, state, kind):
+        """Unchanged: a strictly derived zero with an explicit zero floor permits an empty hub."""
+        hub, activation = _mutated(state, kind, expected=())
+        activation.min_managed_clusters = 0
+        hub.managed_clusters = []
+        hub.local_cluster = False
+        complete(hub, RESTORE_NAMES[kind], version="2.14.3", kind=kind)
+        _wait(activation)
+        assert RunRecord(state).migration_backups()["restore"]["completed_at"] is not None
 
     def test_a_post_activation_waiver_does_not_cover_activation(self, state):
         waiver = {"scope": "post_activation", "actor": "ops@example.com", "reason": "stale", "request_id": None}

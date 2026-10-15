@@ -254,7 +254,10 @@ def _seed_fixture_defaults(vars_payload: dict) -> None:
     }
     vars_payload.setdefault("acm_primary_dpa_info", reconciled_dpa)
     vars_payload.setdefault("acm_secondary_dpa_info", reconciled_dpa)
-    vars_payload.setdefault("acm_primary_managed_clusters_info", {"resources": []})
+    # A strict acm_k8s_read_outcome result (#340): the preflight derivation refuses any other shape.
+    vars_payload.setdefault(
+        "acm_primary_managed_clusters_info", {"read_status": "ok", "resources": [], "resource_version": "1"}
+    )
     _seed_phase_local_facts(vars_payload)
     _seed_migration_reads(vars_payload, execution_mode)
 

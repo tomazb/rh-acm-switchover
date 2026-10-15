@@ -160,3 +160,77 @@ def test_restore_only_configured_clusters_never_become_expected_names(tmp_path, 
         items=items, expected_names=collection_names, min_managed_clusters=collection_min, names_waived=False
     )
     assert (collection["ready"], collection["code"]) == (python["ready"], python["code"])
+
+
+# --- #340 E2: activation never accepts what post-activation structurally refuses -------------
+
+PHASE_INVENTORIES = {
+    "empty": [],
+    "local-cluster-only": [_cluster("local-cluster")],
+    "expected-present": [_cluster("local-cluster"), _cluster("cluster-a")],
+    "other-cluster": [_cluster("local-cluster"), _cluster("cluster-z")],
+}
+EXPECTATIONS = [
+    pytest.param([], False, id="nothing-recorded"),
+    pytest.param(["cluster-a"], False, id="names-enforced"),
+    pytest.param(["cluster-a"], True, id="names-waived"),
+]
+
+
+def _python_activation_accepts(tmp_path, items, names, waived, minimum):
+    from unittest.mock import Mock
+
+    from lib.exceptions import FatalError
+    from lib.strict_read import StrictReadOutcome
+    from modules.activation import SecondaryActivation
+
+    secondary = Mock()
+    secondary.list_managed_clusters_strict.return_value = StrictReadOutcome.from_items(items)
+    state = StateManager(str(tmp_path / "phase-state.json"))
+    activation = SecondaryActivation(
+        secondary,
+        state,
+        method="passive",
+        min_managed_clusters=minimum,
+        expected_managed_cluster_names=names,
+        enforce_expected_managed_cluster_names=bool(names),
+    )
+    try:
+        activation._verify_managed_clusters_restored(enforce_names=not waived)
+    except FatalError:
+        return False
+    return True
+
+
+def _collection_activation_accepts(items, names, waived, minimum):
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils import migration_activation as col
+
+    read = {"read_status": "ok", "resources": items, "resource_version": "1"}
+    try:
+        col.verify_managed_clusters(
+            mc_read=read, expected_names=names, min_managed_clusters=minimum, enforce=bool(names) and not waived
+        )
+    except col.ActivationRefused:
+        return False
+    return True
+
+
+@pytest.mark.parametrize("minimum", [0, 1])
+@pytest.mark.parametrize(("names", "waived"), EXPECTATIONS)
+@pytest.mark.parametrize("inventory", sorted(PHASE_INVENTORIES))
+def test_activation_never_accepts_an_inventory_post_activation_structurally_refuses(
+    tmp_path, inventory, names, waived, minimum
+):
+    """Every cluster here is Available and Joined, so post-activation can refuse only on the
+    inventory shape (names, floor, emptiness). For the same effective expectation, an inventory
+    activation accepts must also be ready at post-activation, in both form factors."""
+    items = PHASE_INVENTORIES[inventory]
+    python_accepts = _python_activation_accepts(tmp_path, items, names, waived, minimum)
+    collection_accepts = _collection_activation_accepts(items, names, waived, minimum)
+    assert python_accepts == collection_accepts
+
+    python = py_readiness(items=items, expected_names=names, min_managed_clusters=minimum, names_waived=waived)
+    collection = col_readiness(items=items, expected_names=names, min_managed_clusters=minimum, names_waived=waived)
+    assert (python["ready"], python["code"]) == (collection["ready"], collection["code"])
+    if python_accepts:
+        assert python["ready"], (inventory, names, waived, minimum, python["code"])

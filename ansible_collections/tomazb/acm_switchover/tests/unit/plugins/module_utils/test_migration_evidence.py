@@ -70,6 +70,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_jo
     validate_waiver_request,
 )
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.migration_post_activation import (
+    expected_managed_cluster_names,
     managed_cluster_readiness,
     post_activation_completion,
     post_activation_names_evidence,
@@ -118,6 +119,7 @@ FUNCTIONS: Dict[str, Callable[..., Any]] = {
     "rfc3339_ns": rfc3339_ns,
     "go_normalize": go_normalize,
     "validate_backup_projection": validate_backup_projection,
+    "expected_managed_cluster_names": expected_managed_cluster_names,
     "managed_cluster_readiness": managed_cluster_readiness,
     "post_activation_completion": post_activation_completion,
     "post_activation_names_evidence": post_activation_names_evidence,
