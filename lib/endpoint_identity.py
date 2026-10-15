@@ -119,6 +119,10 @@ def _split_authority(authority: str) -> Tuple[str, Optional[str], Optional[str]]
     if authority.count(":") > 1:
         return "", None, "brackets"  # an unbracketed IPv6 literal
     host, colon, port_text = authority.partition(":")
+    if not host.isascii():
+        # Unicode case folding can map a non-ASCII letter onto ASCII (U+212A KELVIN SIGN -> "k");
+        # an IDN must be written in its ASCII (punycode) form.
+        return "", None, "invalid"
     host = host.lower()
     if not host:
         return "", None, "invalid"

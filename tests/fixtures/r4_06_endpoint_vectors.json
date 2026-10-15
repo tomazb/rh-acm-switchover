@@ -1,5 +1,5 @@
 {
-  "_comment": "R4-06 PR 2 shared endpoint vectors (amendment 2026-10-15 \u00a72.1-\u00a72.3, \u00a75). Hand-authored; both lib/endpoint_identity.py and the collection's plugins/module_utils/endpoint_identity.py must agree with every row. canonical is scheme://host:port/path with default ports explicit.",
+  "_comment": "R4-06 PR 2 shared endpoint vectors (amendment 2026-10-15 §2.1-§2.3, §5). Hand-authored; both lib/endpoint_identity.py and the collection's plugins/module_utils/endpoint_identity.py must agree with every row. canonical is scheme://host:port/path with default ports explicit.",
   "canonicalization": [
     {
       "input": "https://api.hub.example.com:6443",
@@ -236,6 +236,14 @@
     {
       "input": "https://h*st",
       "reject": "invalid"
+    },
+    {
+      "input": "https://api.Kube.example:6443",
+      "reject": "invalid"
+    },
+    {
+      "input": "https://xn--bcher-kva.example:6443",
+      "canonical": "https://xn--bcher-kva.example:6443"
     }
   ],
   "classification": [
