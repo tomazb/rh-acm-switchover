@@ -2,7 +2,9 @@
 
 **Date:** 2026-07-29
 **Branch:** `ansible` (spec branch `docs/thermos-safety-specs`)
-**Status:** approved design, awaiting implementation plan
+**Status:** approved design, awaiting implementation plan. **Amended 2026-10-15** by
+[`2026-10-15-r4-06-current-base-amendment.md`](2026-10-15-r4-06-current-base-amendment.md)
+(operator decisions for PR 2/PR 3); where they differ, the amendment wins.
 **Origin:** cross-validation of main-branch safety specs against `ansible` @ `0bf55db9`,
 independently revalidated (Codex). This design **extends planned slice `SSA-03`**
 (`SSA-PY2` hostname collapse, zero/multi-match failures, `SSA-A6` worker cap) with the
