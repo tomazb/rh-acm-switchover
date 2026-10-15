@@ -301,3 +301,17 @@ def test_klusterlet_module_has_required_operations():
     assert "BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME" in content, "Must handle bootstrap hub kubeconfig secret"
     assert "patch_namespaced_deployment" in content, "Must restart klusterlet deployment"
     assert "MANAGED_CLUSTER_AGENT_NAMESPACE" in content, "Must reference agent namespace"
+
+
+def test_verify_klusterlet_requires_every_remediated_cluster_to_re_verify():
+    """Codex PR 2 review: a repaired cluster whose hub secrets vanish must not pass as `skipped`."""
+    tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text())
+    fail_task = next(
+        task
+        for task in tasks
+        if "ansible.builtin.fail" in task and "_klusterlet_remediation_result.failed_clusters" in _when_text(task)
+    )
+    when = _when_text(fail_task)
+
+    assert "_klusterlet_remediation_result.remediated_clusters" in when
+    assert "difference" in when and "verified_clusters" in when

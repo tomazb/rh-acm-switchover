@@ -12,6 +12,7 @@ and any unproven cluster blocks every mutation in the batch.
 from __future__ import annotations
 
 import base64
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timezone
@@ -201,11 +202,16 @@ def read_secret(
 
 
 def error_summary(exc: Exception) -> str:
+    """A result-safe summary: the HTTP status and reason, or only the exception type.
+
+    Never the message: the client loader re-reads kubeconfig files, and a YAML constructor
+    error quotes the offending value, which can be a token or a private key.
+    """
     status = getattr(exc, "status", None)
     reason = getattr(exc, "reason", None)
     if status is not None:
-        return f"status={status} reason={reason or exc.__class__.__name__}"
-    return f"{exc.__class__.__name__}: {exc}"
+        return f"status={status} reason={reason if isinstance(reason, str) else exc.__class__.__name__}"
+    return exc.__class__.__name__
 
 
 def secret_data(secret: dict | object | None) -> dict:
@@ -308,15 +314,23 @@ def _client_host(api: object) -> object:
 class _Refusal(Exception):
     """A per-cluster refusal decided before any spoke read or mutation."""
 
-    def __init__(self, status: str, reason: str) -> None:
+    def __init__(self, status: str, reason: str, detail: str = "") -> None:
         super().__init__(reason)
         self.status = status
         self.reason = reason
+        self.detail = detail
+
+    def result(self, cluster_name: str) -> dict:
+        result = {"cluster": cluster_name, "status": self.status, "reason": self.reason}
+        if self.detail:
+            result["detail"] = self.detail
+        return result
 
 
 def _prove_target(
     cluster_name: str,
-    managed: dict,
+    kubeconfig: str,
+    context: str | None,
     managed_cluster_reader: ManagedClusterReader,
     secondary_client: CoreV1Client,
     request_timeout: int | float | None,
@@ -351,10 +365,11 @@ def _prove_target(
         raise _Refusal("unverified", REASON_EXPECTED_ENDPOINT_MALFORMED)
 
     try:
-        document = load_kubeconfig_file(managed.get("kubeconfig") or "")
-        context_name, cluster_entry = select_context(document, managed.get("context"))
+        document = load_kubeconfig_file(kubeconfig)
+        context_name, cluster_entry = select_context(document, context)
     except KubeconfigFileError as exc:
-        raise _Refusal("failed", exc.reason) from None
+        # Location only (path, line/column, entry names, indexes, variants), never content.
+        raise _Refusal("failed", exc.reason, f"{kubeconfig}: {exc.detail}" if exc.detail else kubeconfig) from None
     mapped_server = (cluster_entry or {}).get("cluster", {}).get("server")
     identity_reason = prove_target_identity(api_url, mapped_server)
     if identity_reason:
@@ -364,7 +379,10 @@ def _prove_target(
 
 def _bound_spoke_client(factory: Callable, kubeconfig: str, context: str, api_url: str):
     """A spoke client whose host is the proven endpoint (amendment §2.7), or a refusal."""
-    api = factory(kubeconfig, context)
+    try:
+        api = factory(kubeconfig, context)
+    except Exception as exc:  # noqa: BLE001 - the loader re-reads files; its errors can quote credentials
+        raise _Refusal("failed", f"client_construction_failed ({exc.__class__.__name__})") from None
     if not normalized_equal(_client_host(api), api_url):
         raise _Refusal("unverified", REASON_CLIENT_ENDPOINT_MISMATCH)
     return api
@@ -429,7 +447,9 @@ def probe_one_cluster(
     the proven endpoint before anything is read through it.
     """
     managed = managed_clusters.get(cluster_name) or {}
-    kubeconfig = managed.get("kubeconfig") or ""
+    # `~` is expanded once, for validation and client construction alike, as the client
+    # loader would expand it.
+    kubeconfig = os.path.expanduser(managed.get("kubeconfig") or "")
     if not kubeconfig:
         return {
             "cluster": cluster_name,
@@ -445,12 +465,12 @@ def probe_one_cluster(
 
     try:
         context_name, api_url, expected_hub, _import_yaml = _prove_target(
-            cluster_name, managed, managed_cluster_reader, secondary_client, request_timeout
+            cluster_name, kubeconfig, managed.get("context"), managed_cluster_reader, secondary_client, request_timeout
         )
         managed_client = _bound_spoke_client(core_client_factory, kubeconfig, context_name, api_url)
         return _classify_spoke(cluster_name, managed_client, expected_hub, request_timeout)
     except _Refusal as refusal:
-        return {"cluster": cluster_name, "status": refusal.status, "reason": refusal.reason}
+        return refusal.result(cluster_name)
     except Exception as exc:
         return {
             "cluster": cluster_name,
@@ -625,7 +645,7 @@ def prepare_one_cluster(
     """
     steps = _new_steps()
     managed = managed_clusters.get(cluster_name) or {}
-    kubeconfig = managed.get("kubeconfig") or ""
+    kubeconfig = os.path.expanduser(managed.get("kubeconfig") or "")
     if not kubeconfig:
         steps = {key: "skipped" for key in steps}
         return _result(cluster_name, "skipped", steps, reason="no_managed_cluster_kubeconfig")
@@ -634,7 +654,7 @@ def prepare_one_cluster(
 
     try:
         context_name, api_url, expected_hub, import_yaml = _prove_target(
-            cluster_name, managed, managed_cluster_reader, secondary_client, request_timeout
+            cluster_name, kubeconfig, managed.get("context"), managed_cluster_reader, secondary_client, request_timeout
         )
         steps["import_secret_read"] = "ok"
         bootstrap_doc = bootstrap_secret_doc(import_yaml)
@@ -650,7 +670,10 @@ def prepare_one_cluster(
         apps_client = _bound_spoke_client(apps_client_factory, kubeconfig, context_name, api_url)
         probe = _classify_spoke(cluster_name, managed_core, expected_hub, request_timeout)
     except _Refusal as refusal:
-        return _result(cluster_name, refusal.status, _mark_pending_not_run(steps), reason=refusal.reason)
+        result = _result(cluster_name, refusal.status, _mark_pending_not_run(steps), reason=refusal.reason)
+        if refusal.detail:
+            result["detail"] = refusal.detail
+        return result
     except Exception as exc:
         return _result(cluster_name, "failed", _mark_pending_not_run(steps), reason=error_summary(exc))
 
@@ -926,7 +949,9 @@ def remediate_klusterlets(
     changed = any(item.get("changed") for item in results)
     worker_timeout_prefix = WORKER_TIMEOUT_REASON_TEMPLATE.partition("{")[0]
     worker_timeout_failures = any(item.get("reason", "").startswith(worker_timeout_prefix) for item in results)
-    failed = worker_timeout_failures or (strict and bool(failed_clusters))
+    # An unproven candidate blocks the batch and fails the module whatever `strict` says
+    # (amendment §2.8); `strict` still governs failures of attempted mutations.
+    failed = worker_timeout_failures or bool(refused) or (strict and bool(failed_clusters))
     result = {
         "changed": changed,
         "failed": failed,

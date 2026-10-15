@@ -78,6 +78,7 @@
       Klusterlet remediation failed after re-check;
       failed remediation={{ _klusterlet_remediation_result.failed_clusters | default([]) | join(', ') | default('none', true) }};
       still wrong hub={{ ((_klusterlet_post_remediation_probe_result | default({})).wrong_hub_clusters | default([])) | join(', ') | default('none', true) }};
+      remediated but not re-verified={{ (_klusterlet_remediation_result.remediated_clusters | default([])) | difference((_klusterlet_post_remediation_probe_result | default({})).verified_clusters | default([])) | join(', ') | default('none', true) }};
       skipped={{ ((_klusterlet_post_remediation_probe_result | default({})).skipped_clusters | default([])) | join(', ') | default('none', true) }}.
       Skipped clusters without managed-cluster kubeconfigs are non-fatal when ManagedCluster readiness passed.
   when:
@@ -85,6 +86,9 @@
     - >
       (_klusterlet_remediation_result.failed_clusters | default([]) | length) > 0
       or (((_klusterlet_post_remediation_probe_result | default({})).wrong_hub_clusters | default([])) | length) > 0
+      or ((_klusterlet_remediation_result.remediated_clusters | default([]))
+          | difference((_klusterlet_post_remediation_probe_result | default({})).verified_clusters | default([]))
+          | length) > 0
 
 - name: Record that klusterlet remediation was attempted
   ansible.builtin.set_fact:

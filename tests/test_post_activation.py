@@ -955,7 +955,7 @@ metadata:
   name: bootstrap-hub-kubeconfig
   namespace: open-cluster-management-agent
 data:
-  kubeconfig: dGVzdAo=
+  kubeconfig: Y2x1c3RlcnM6Ci0gY2x1c3Rlcjoge3NlcnZlcjogJ2h0dHBzOi8vYXBpLm5ldy1odWIuZXhhbXBsZTo2NDQzJ30K
 """
         mock_secondary_client.get_secret.return_value = {
             "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
@@ -970,7 +970,7 @@ data:
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
         with patch("modules.post_activation.wait_for_condition", return_value=True):
-            result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
+            result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL, HERMETIC_HUB_SERVER)
 
         assert result is True
         verify._build_managed_cluster_clients.assert_called_once_with("test-context", SPOKE_URL)
@@ -991,7 +991,7 @@ metadata:
   name: bootstrap-hub-kubeconfig
   namespace: open-cluster-management-agent
 data:
-  kubeconfig: dGVzdAo=
+  kubeconfig: Y2x1c3RlcnM6Ci0gY2x1c3Rlcjoge3NlcnZlcjogJ2h0dHBzOi8vYXBpLm5ldy1odWIuZXhhbXBsZTo2NDQzJ30K
 """
         mock_secondary_client.get_secret.return_value = {
             "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
@@ -1002,7 +1002,7 @@ data:
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
         with patch("modules.post_activation.wait_for_condition", return_value=True):
-            result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
+            result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL, HERMETIC_HUB_SERVER)
 
         assert result is True
         mock_v1.delete_namespaced_secret.assert_not_called()
@@ -1023,7 +1023,7 @@ metadata:
   name: bootstrap-hub-kubeconfig
   namespace: open-cluster-management-agent
 data:
-  kubeconfig: dGVzdAo=
+  kubeconfig: Y2x1c3RlcnM6Ci0gY2x1c3Rlcjoge3NlcnZlcjogJ2h0dHBzOi8vYXBpLm5ldy1odWIuZXhhbXBsZTo2NDQzJ30K
 """
         mock_secondary_client.get_secret.return_value = {
             "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
@@ -1034,7 +1034,7 @@ data:
         mock_v1.patch_namespaced_secret.side_effect = ApiException(status=403, reason="Forbidden")
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
-        result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
+        result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL, HERMETIC_HUB_SERVER)
 
         assert result is False
         mock_v1.delete_namespaced_secret.assert_not_called()
@@ -1054,7 +1054,7 @@ metadata:
   name: bootstrap-hub-kubeconfig
   namespace: open-cluster-management-agent
 data:
-  kubeconfig: dGVzdAo=
+  kubeconfig: Y2x1c3RlcnM6Ci0gY2x1c3Rlcjoge3NlcnZlcjogJ2h0dHBzOi8vYXBpLm5ldy1odWIuZXhhbXBsZTo2NDQzJ30K
 """
         mock_secondary_client.get_secret.return_value = {
             "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
@@ -1066,7 +1066,7 @@ data:
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
         with patch("modules.post_activation.wait_for_condition", return_value=True):
-            result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
+            result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL, HERMETIC_HUB_SERVER)
 
         assert result is True
         mock_v1.delete_namespaced_secret.assert_not_called()
@@ -1091,7 +1091,7 @@ metadata:
     app: klusterlet
 type: Opaque
 data:
-  kubeconfig: dGVzdAo=
+  kubeconfig: Y2x1c3RlcnM6Ci0gY2x1c3Rlcjoge3NlcnZlcjogJ2h0dHBzOi8vYXBpLm5ldy1odWIuZXhhbXBsZTo2NDQzJ30K
 """
         mock_secondary_client.get_secret.return_value = {
             "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
@@ -1103,7 +1103,10 @@ data:
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
         with patch("modules.post_activation.wait_for_condition", return_value=True):
-            assert verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL) is True
+            assert (
+                verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL, HERMETIC_HUB_SERVER)
+                is True
+            )
 
         create = mock_v1.create_namespaced_secret.call_args
         assert create.kwargs["namespace"] == "open-cluster-management-agent"
@@ -1128,7 +1131,7 @@ metadata:
   creationTimestamp: 2025-01-01T00:00:00Z
 type: Opaque
 data:
-  kubeconfig: dGVzdAo=
+  kubeconfig: Y2x1c3RlcnM6Ci0gY2x1c3Rlcjoge3NlcnZlcjogJ2h0dHBzOi8vYXBpLm5ldy1odWIuZXhhbXBsZTo2NDQzJ30K
 """
         mock_secondary_client.get_secret.return_value = {
             "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
@@ -1140,7 +1143,10 @@ data:
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
         with patch("modules.post_activation.wait_for_condition", return_value=True):
-            assert verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL) is True
+            assert (
+                verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL, HERMETIC_HUB_SERVER)
+                is True
+            )
 
         body = mock_v1.create_namespaced_secret.call_args.kwargs["body"]
         api = ApiClient()
@@ -1177,7 +1183,7 @@ metadata:
 type: Opaque
 immutable: false
 data:
-  kubeconfig: dGVzdAo=
+  kubeconfig: Y2x1c3RlcnM6Ci0gY2x1c3Rlcjoge3NlcnZlcjogJ2h0dHBzOi8vYXBpLm5ldy1odWIuZXhhbXBsZTo2NDQzJ30K
 stringData:
   extra: value
 """
@@ -1191,7 +1197,10 @@ stringData:
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
         with patch("modules.post_activation.wait_for_condition", return_value=True):
-            assert verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL) is True
+            assert (
+                verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL, HERMETIC_HUB_SERVER)
+                is True
+            )
 
         body = mock_v1.create_namespaced_secret.call_args.kwargs["body"]
         assert ApiClient().sanitize_for_serialization(body) == yaml.safe_load(import_docs)
@@ -1209,7 +1218,7 @@ metadata:
   name: bootstrap-hub-kubeconfig
   namespace: open-cluster-management-agent
 data:
-  kubeconfig: dGVzdAo=
+  kubeconfig: Y2x1c3RlcnM6Ci0gY2x1c3Rlcjoge3NlcnZlcjogJ2h0dHBzOi8vYXBpLm5ldy1odWIuZXhhbXBsZTo2NDQzJ30K
 """
         mock_secondary_client.get_secret.return_value = {
             "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
@@ -1225,7 +1234,7 @@ data:
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
         with patch("modules.post_activation.wait_for_condition", return_value=True):
-            result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
+            result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL, HERMETIC_HUB_SERVER)
 
         assert result is True
         mock_v1.delete_namespaced_secret.assert_not_called()
@@ -1246,7 +1255,7 @@ metadata:
   name: bootstrap-hub-kubeconfig
   namespace: custom-agent
 data:
-  kubeconfig: dGVzdAo=
+  kubeconfig: Y2x1c3RlcnM6Ci0gY2x1c3Rlcjoge3NlcnZlcjogJ2h0dHBzOi8vYXBpLm5ldy1odWIuZXhhbXBsZTo2NDQzJ30K
 """
         mock_secondary_client.get_secret.return_value = {
             "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
@@ -1256,7 +1265,7 @@ data:
         mock_apps_v1 = Mock()
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
-        result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
+        result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL, HERMETIC_HUB_SERVER)
 
         assert result is True
         mock_v1.patch_namespaced_secret.assert_called_once()
@@ -1290,7 +1299,7 @@ data:
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
         with patch("modules.post_activation.wait_for_condition", return_value=True):
-            result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
+            result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL, HERMETIC_HUB_SERVER)
 
         assert result is False
         mock_v1.patch_namespaced_secret.assert_not_called()
@@ -1302,7 +1311,7 @@ data:
         verify = self._make_verify(mock_secondary_client, mock_state_manager)
         mock_secondary_client.get_secret.return_value = None
 
-        result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
+        result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL, HERMETIC_HUB_SERVER)
 
         assert result is False
 
@@ -1319,7 +1328,7 @@ metadata:
   name: bootstrap-hub-kubeconfig
   namespace: open-cluster-management-agent
 data:
-  kubeconfig: dGVzdAo=
+  kubeconfig: Y2x1c3RlcnM6Ci0gY2x1c3Rlcjoge3NlcnZlcjogJ2h0dHBzOi8vYXBpLm5ldy1odWIuZXhhbXBsZTo2NDQzJ30K
 """
         mock_secondary_client.get_secret.return_value = {
             "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
@@ -1331,7 +1340,7 @@ data:
         mock_v1.create_namespaced_secret.side_effect = ApiException(status=403, reason="Forbidden")
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
-        result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
+        result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL, HERMETIC_HUB_SERVER)
 
         assert result is False
         mock_apps_v1.patch_namespaced_deployment.assert_not_called()
@@ -1349,7 +1358,7 @@ metadata:
   name: bootstrap-hub-kubeconfig
   namespace: open-cluster-management-agent
 data:
-  kubeconfig: dGVzdAo=
+  kubeconfig: Y2x1c3RlcnM6Ci0gY2x1c3Rlcjoge3NlcnZlcjogJ2h0dHBzOi8vYXBpLm5ldy1odWIuZXhhbXBsZTo2NDQzJ30K
 """
         mock_secondary_client.get_secret.return_value = {
             "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
@@ -1360,7 +1369,7 @@ data:
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
         with patch("modules.post_activation.wait_for_condition", return_value=False):
-            result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
+            result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL, HERMETIC_HUB_SERVER)
 
         assert result is False
         mock_apps_v1.patch_namespaced_deployment.assert_not_called()
@@ -1392,7 +1401,7 @@ metadata:
   name: bootstrap-hub-kubeconfig
   namespace: open-cluster-management-agent
 data:
-  kubeconfig: dGVzdAo=
+  kubeconfig: Y2x1c3RlcnM6Ci0gY2x1c3Rlcjoge3NlcnZlcjogJ2h0dHBzOi8vYXBpLm5ldy1odWIuZXhhbXBsZTo2NDQzJ30K
 """
         mock_secondary_client.get_secret.return_value = {
             "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
@@ -1405,7 +1414,11 @@ data:
             with ThreadPoolExecutor(max_workers=2) as executor:
                 futures = [
                     executor.submit(
-                        verify._force_klusterlet_reconnect, f"cluster-{i}", ctx, f"https://api.cluster-{i}:6443"
+                        verify._force_klusterlet_reconnect,
+                        f"cluster-{i}",
+                        ctx,
+                        f"https://api.cluster-{i}:6443",
+                        HERMETIC_HUB_SERVER,
                     )
                     for i, ctx in enumerate(contexts)
                 ]
@@ -2026,7 +2039,7 @@ class TestKlusterletParallelVerification:
                 return set(), futures
             return futures, set()
 
-        def slow_reconnect(_cluster_name, _context_name, _api_url):
+        def slow_reconnect(_cluster_name, _context_name, _api_url, _expected_hub):
             time.sleep(0.05)
             remediation_exited.set()
             return True
@@ -2747,7 +2760,7 @@ class TestForceKlusterletReconnectException:
 
         mock_secondary_client.get_secret.side_effect = ApiException(status=500)
 
-        result = pav._force_klusterlet_reconnect("c1", "ctx-c1", "https://api.c1:6443")
+        result = pav._force_klusterlet_reconnect("c1", "ctx-c1", "https://api.c1:6443", HERMETIC_HUB_SERVER)
         assert result is False
 
     def test_generic_exception_returns_false(self, mock_secondary_client, mock_state_manager):
@@ -2756,7 +2769,7 @@ class TestForceKlusterletReconnectException:
 
         mock_secondary_client.get_secret.side_effect = RuntimeError("connection reset")
 
-        result = pav._force_klusterlet_reconnect("c1", "ctx-c1", "https://api.c1:6443")
+        result = pav._force_klusterlet_reconnect("c1", "ctx-c1", "https://api.c1:6443", HERMETIC_HUB_SERVER)
         assert result is False
 
     def test_missing_import_yaml_data_returns_false(self, mock_secondary_client, mock_state_manager):
@@ -2765,7 +2778,7 @@ class TestForceKlusterletReconnectException:
 
         mock_secondary_client.get_secret.return_value = {"data": {"import.yaml": ""}}
 
-        result = pav._force_klusterlet_reconnect("c1", "ctx-c1", "https://api.c1:6443")
+        result = pav._force_klusterlet_reconnect("c1", "ctx-c1", "https://api.c1:6443", HERMETIC_HUB_SERVER)
         assert result is False
 
 

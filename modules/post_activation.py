@@ -994,8 +994,10 @@ class PostActivationVerification:
 
         return verified, wrong_hub, unreachable, timed_out, failed, unverified
 
-    def _fix_klusterlet_target(self, cluster_name: str, context_name: str, api_url: str) -> Tuple[str, bool]:
-        success = self._force_klusterlet_reconnect(cluster_name, context_name, api_url)
+    def _fix_klusterlet_target(
+        self, cluster_name: str, context_name: str, api_url: str, expected_hub: str
+    ) -> Tuple[str, bool]:
+        success = self._force_klusterlet_reconnect(cluster_name, context_name, api_url, expected_hub)
         return (cluster_name, success)
 
     def _fix_wrong_hub_klusterlets(self, wrong_hub: List[Tuple[str, str, str, str]]) -> Tuple[List[str], List[str]]:
@@ -1005,8 +1007,8 @@ class PostActivationVerification:
         executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
         try:
             fix_future_fallbacks = {
-                executor.submit(self._fix_klusterlet_target, name, context_name, api_url): (name, False)
-                for name, context_name, _expected_hub, api_url in wrong_hub
+                executor.submit(self._fix_klusterlet_target, name, context_name, api_url, expected_hub): (name, False)
+                for name, context_name, expected_hub, api_url in wrong_hub
             }
             for cluster_name, success in self._collect_klusterlet_future_results(
                 fix_future_fallbacks,
@@ -1207,7 +1209,9 @@ class PostActivationVerification:
                 ", ".join(unreachable),
             )
 
-    def _force_klusterlet_reconnect(self, cluster_name: str, context_name: str, api_url: str) -> bool:
+    def _force_klusterlet_reconnect(
+        self, cluster_name: str, context_name: str, api_url: str, expected_hub: str
+    ) -> bool:
         """
         Force a managed cluster's klusterlet to reconnect to the new hub.
 
@@ -1227,6 +1231,8 @@ class PostActivationVerification:
             context_name: Kubeconfig context to use for connecting to the cluster
             api_url: The ManagedCluster API URL the context was proven against; the
                 client must be bound to it before anything is written
+            expected_hub: The expected hub endpoint the classification validated; the
+                re-read import manifest must still carry it, or nothing is written
 
         Returns:
             True if successful, False otherwise
@@ -1237,6 +1243,16 @@ class PostActivationVerification:
             # Step 1: Get the import secret from the new hub
             import_yaml = self._get_import_secret(cluster_name)
             if not import_yaml:
+                return False
+            # The manifest is re-read here; it must still name the endpoint that was validated
+            # and classified, or a replaced secret could write an unvalidated hub (amendment §2.4).
+            found, manifest_server = _bootstrap_server_from_import(import_yaml)
+            if not found or not normalized_equal(manifest_server, expected_hub):
+                logger.warning(
+                    "Not reconnecting klusterlet for %s: the import secret changed after verification (%s)",
+                    cluster_name,
+                    REASON_EXPECTED_ENDPOINT_MALFORMED if found else REASON_EXPECTED_ENDPOINT_UNAVAILABLE,
+                )
                 return False
 
             # Build isolated per-context clients once; all steps share the same
@@ -1261,7 +1277,14 @@ class PostActivationVerification:
             )
             return False
         except Exception as e:
-            logger.warning("Failed to force-reconnect klusterlet for %s: %s", cluster_name, e)
+            # Never the exception text: the client loader re-reads kubeconfig files, and a
+            # constructor error quotes the offending value (a token or a key).
+            logger.warning(
+                "Failed to force-reconnect klusterlet for %s: %s%s",
+                cluster_name,
+                type(e).__name__,
+                f" status={e.status}" if isinstance(e, ApiException) else "",
+            )
             return False
 
     def _build_managed_cluster_clients(self, context_name: str, api_url: str) -> tuple:
@@ -1478,7 +1501,7 @@ class PostActivationVerification:
             )
             logger.debug("Triggered klusterlet restart on %s", cluster_name)
         except ApiException as e:
-            logger.warning("Failed to restart klusterlet on %s: %s", cluster_name, e)
+            logger.warning("Failed to restart klusterlet on %s: status=%s reason=%s", cluster_name, e.status, e.reason)
 
     def _load_kubeconfig_data(self) -> Dict:
         """Load, validate and merge every KUBECONFIG file once, or raise SwitchoverError.

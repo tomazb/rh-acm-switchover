@@ -8,6 +8,7 @@ tests/fixtures/r4_06_kubeconfig_vectors.json (amendment §5).
 import json
 import pathlib
 import re
+import time
 
 import pytest
 
@@ -65,3 +66,40 @@ def test_failures_never_carry_file_content(row, tmp_path):
         except (SwitchoverError, KubeconfigFileError) as exc:
             assert "https://" not in str(exc)
             assert exc.__context__ is None
+
+
+@pytest.mark.parametrize("load", [_python, _collection], ids=["python", "collection"])
+def test_nested_shared_aliases_load_in_linear_time(load, tmp_path):
+    """Codex PR 2 review: each alias level doubled the work; memoization keeps it linear."""
+    lines = ["a0: &a0 [x, y]"]
+    for level in range(1, 30):
+        lines.append(f"a{level}: &a{level} [*a{level - 1}, *a{level - 1}]")
+    lines.append("users:\n- {name: u, user: {deep: *a29}}\n- {name: u, user: {deep: *a29}}")
+    path = tmp_path / "kubeconfig"
+    path.write_text("\n".join(lines) + "\n")
+
+    started = time.monotonic()
+    result, names = load(path)
+
+    assert result == "ok" and names["users"] == ["u"]
+    assert time.monotonic() - started < 5
+
+
+@pytest.mark.parametrize("load", [_python, _collection], ids=["python", "collection"])
+def test_independent_identical_chains_compare_in_linear_time(load, tmp_path):
+    """Two separately built anchor chains with equal content are identical without full expansion."""
+    lines = []
+    for chain in ("a", "b"):
+        lines.append(f"{chain}0: &{chain}0 [x, y]")
+        for level in range(1, 30):
+            lines.append(f"{chain}{level}: &{chain}{level} [*{chain}{level - 1}, *{chain}{level - 1}]")
+    lines.append("users:\n- {name: u, user: {deep: *a29}}\n- {name: u, user: {deep: *b29}}")
+    path = tmp_path / "kubeconfig"
+    path.write_text("\n".join(lines) + "\n")
+
+    started = time.monotonic()
+    result, names = load(path)
+
+    assert result == "ok" and names["users"] == ["u"]
+    assert time.monotonic() - started < 5
+

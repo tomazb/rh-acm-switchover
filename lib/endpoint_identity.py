@@ -85,9 +85,12 @@ def parse_endpoint(value: Any) -> Tuple[Optional[Endpoint], Optional[str]]:
     if port_text is None:
         port = _DEFAULT_PORTS[scheme]
     else:
-        if not _PORT_RE.match(port_text) or not 1 <= int(port_text) <= 65535:
+        # Bound the significant digits before int(): an arbitrarily long digit string would
+        # otherwise raise instead of being classified.
+        significant = port_text.lstrip("0")
+        if not _PORT_RE.match(port_text) or len(significant) > 5 or not 1 <= int(significant or "0") <= 65535:
             return None, "port"
-        port = int(port_text)
+        port = int(significant)
     path, code = _normalize_path(path)
     if code:
         return None, code

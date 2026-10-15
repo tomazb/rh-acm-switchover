@@ -372,7 +372,7 @@ def test_reconnect_never_writes_through_a_client_bound_elsewhere(run):
     with patch("modules.post_activation.config.new_client_from_config", return_value=api_client), patch(
         "modules.post_activation.client.CoreV1Api", return_value=spoke
     ), patch("modules.post_activation.client.AppsV1Api", return_value=spoke):
-        assert pav._force_klusterlet_reconnect("a", "ctx-a", "https://api.a:6443") is False
+        assert pav._force_klusterlet_reconnect("a", "ctx-a", "https://api.a:6443", NEW_HUB) is False
 
     assert spoke.reads == 0 and spoke.mutations == []
 
@@ -389,3 +389,41 @@ def test_endpoint_logs_carry_only_canonical_values(run, caplog):
 
     assert "https://api.new-hub.example:443" in caplog.text
     assert "https://api.new-hub.example:6443" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        _import_secret("https://alice:hunter2@api.new-hub.example:6443"),
+        _import_secret(OLD_HUB),
+        {"data": {"import.yaml": _b64("kind: ConfigMap\n")}},
+    ],
+)
+def test_an_import_secret_replaced_after_verification_is_never_applied(run, replacement, caplog):
+    """Codex PR 2 review: the reconnect path re-reads the manifest; it must still carry the validated hub."""
+    pav, _state = run(_kubeconfig([]), [])
+    spoke = FakeSpoke(OLD_HUB)
+    pav.secondary.get_secret.side_effect = None
+    pav.secondary.get_secret.return_value = replacement
+    caplog.set_level(logging.DEBUG, logger="acm_switchover")
+
+    with patch.object(pav, "_build_managed_cluster_clients", return_value=(spoke, spoke)) as build:
+        assert pav._force_klusterlet_reconnect("a", "ctx-a", "https://api.a:6443", NEW_HUB) is False
+
+    build.assert_not_called()
+    assert spoke.mutations == []
+    assert "hunter2" not in caplog.text
+
+
+def test_a_loader_error_on_reconnect_is_logged_without_its_text(run, caplog):
+    """The client loader re-reads files; a constructor error quotes the offending credential."""
+    pav, _state = run(_kubeconfig([]), [])
+    pav.secondary.get_secret.side_effect = None
+    pav.secondary.get_secret.return_value = _import_secret(NEW_HUB)
+    caplog.set_level(logging.DEBUG, logger="acm_switchover")
+
+    with patch.object(pav, "_build_managed_cluster_clients", side_effect=ValueError("token: SECRETLEAK")):
+        assert pav._force_klusterlet_reconnect("a", "ctx-a", "https://api.a:6443", NEW_HUB) is False
+
+    assert "SECRETLEAK" not in caplog.text
+    assert "ValueError" in caplog.text

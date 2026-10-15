@@ -268,7 +268,7 @@ def test_a_failed_managed_cluster_read_is_a_failure_not_an_absent_url(mapped):
 
     status, reason = _status(_probe(fleet, {"a": {"kubeconfig": path}}))
 
-    assert status == "failed" and "hub unreachable" in reason
+    assert (status, reason) == ("failed", "RuntimeError")
     assert fleet.constructions == []
 
 
@@ -514,3 +514,87 @@ def test_an_unreadable_import_manifest_is_an_unavailable_expected_endpoint(mappe
 
     assert _status(probe) == ("unverified", "expected_endpoint_unavailable")
     assert "s3cr3t" not in repr(probe) and fleet.constructions == []
+
+
+def test_a_refused_batch_fails_the_module_even_without_strict(mapped):
+    path = mapped()
+    fleet = Fleet(Hub(), {path: Spoke(hub_server="https://api.new-hub.example:443")})
+
+    result = _remediate(fleet, {"a": {"kubeconfig": path}}, strict=False)
+
+    assert result["failed"] is True and "a" in result["msg"]
+    assert fleet.writes() == []
+
+
+def test_a_loader_error_never_reaches_the_result():
+    """The client loader re-reads files; a constructor error quotes the offending credential."""
+
+    def leaking_factory(kubeconfig, context=None):
+        if kubeconfig == "hub":
+            return Hub()
+        raise ValueError("could not determine a constructor for token SECRETLEAK")
+
+    hub = Hub()
+    result = probe_klusterlet_connections(
+        secondary_hub={"kubeconfig": "hub"},
+        managed_clusters={"a": {"kubeconfig": "/nonexistent"}},
+        workers=1,
+        core_client_factory=leaking_factory,
+        managed_cluster_reader_factory=hub.reader_factory,
+    )
+    assert "SECRETLEAK" not in repr(result)
+
+
+def test_a_spoke_loader_error_is_a_sanitized_construction_failure(mapped):
+    path = mapped()
+    hub = Hub()
+
+    def factory(kubeconfig, context=None):
+        if kubeconfig == "hub":
+            return hub
+        raise ValueError("token: SECRETLEAK")
+
+    result = probe_klusterlet_connections(
+        secondary_hub={"kubeconfig": "hub"},
+        managed_clusters={"a": {"kubeconfig": path}},
+        workers=1,
+        core_client_factory=factory,
+        managed_cluster_reader_factory=hub.reader_factory,
+    )
+
+    assert _status(result) == ("failed", "client_construction_failed (ValueError)")
+    assert "SECRETLEAK" not in repr(result)
+
+
+def test_a_refusal_carries_location_provenance_without_content(mapped):
+    path = mapped(
+        text=yaml.safe_dump(
+            {
+                "clusters": [
+                    {"name": "spoke", "cluster": {"server": SPOKE}},
+                    {"name": "spoke", "cluster": {"server": "https://api.evil.example:6443"}},
+                ],
+                "contexts": [{"name": "c", "context": {"cluster": "spoke"}}],
+                "current-context": "c",
+            }
+        )
+    )
+    fleet = Fleet(Hub(), {})
+
+    item = _probe(fleet, {"a": {"kubeconfig": path}})["results"][0]
+
+    assert (item["status"], item["reason"]) == ("failed", "kubeconfig_duplicate_conflict")
+    assert item["detail"] == f"{path}: cluster 'spoke' at [0] (variant 1), [1] (variant 2)"
+    assert "evil" not in repr(item)
+
+
+def test_a_home_relative_mapped_path_is_expanded_for_validation_and_construction(mapped, monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    (home / ".kube").mkdir(parents=True)
+    (home / ".kube" / "spoke").write_text(yaml.safe_dump(_kubeconfig()))
+    monkeypatch.setenv("HOME", str(home))
+    expanded = str(home / ".kube" / "spoke")
+    fleet = Fleet(Hub(), {expanded: Spoke(NEW_HUB)})
+
+    assert _status(_probe(fleet, {"a": {"kubeconfig": "~/.kube/spoke"}})) == ("verified", None)
+    assert fleet.constructions == [(expanded, "spoke-admin")]

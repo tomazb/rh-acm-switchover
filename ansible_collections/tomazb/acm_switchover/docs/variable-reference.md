@@ -228,7 +228,10 @@ Remediation re-proves each requested cluster in the same invocation and changes
 only the clusters it has just found `wrong_hub`; the requested names authorize
 nothing. If any requested cluster is `failed` or `unverified`, no cluster in the
 batch is changed, and the wrong-hub peers report
-`remediation_blocked_by_unproven_cluster`.
+`remediation_blocked_by_unproven_cluster`. The module then fails whatever
+`klusterlet.strict_remediation` says; that toggle still governs only failures of
+attempted mutations. Refusal results carry a `detail` field with the mapped path and
+entry locations, never file content.
 
 Klusterlet worker future timeouts are treated as failed cluster results even when
 `klusterlet.strict_remediation` is `false`, because a timed-out worker means the

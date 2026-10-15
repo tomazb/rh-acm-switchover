@@ -86,3 +86,23 @@ def test_rejected_values_are_never_echoed():
 )
 def test_collection_target_identity_proof(url, server, reason):
     assert col.prove_target_identity(url, server) == reason
+
+
+@pytest.mark.parametrize("impl", IMPLEMENTATIONS)
+@pytest.mark.parametrize(
+    ("port", "expected"),
+    [
+        ("0" * 5000 + "443", "https://h:443"),
+        ("9" * 5000, None),
+        ("0" * 5000, None),
+        ("65535", "https://h:65535"),
+        ("065536", None),
+    ],
+    ids=["long-leading-zeros", "long-digits", "all-zeros", "max", "over-max"],
+)
+def test_any_digit_port_is_classified_without_raising(impl, port, expected):
+    endpoint, code = impl.parse_endpoint(f"https://h:{port}")
+    if expected:
+        assert (str(endpoint), code) == (expected, None)
+    else:
+        assert (endpoint, code) == (None, "port")

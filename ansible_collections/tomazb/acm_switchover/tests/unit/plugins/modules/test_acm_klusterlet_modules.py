@@ -324,7 +324,8 @@ def test_probe_reports_client_exception_as_failed_result():
     assert result["failed_clusters"] == ["cluster-a"]
     assert result["skipped_clusters"] == []
     assert result["results"][0]["status"] == "failed"
-    assert "managed client failed" in result["results"][0]["reason"]
+    # Never the exception text: a loader error can quote a credential (PR 2 review).
+    assert result["results"][0]["reason"] == "client_construction_failed (RuntimeError)"
 
 
 def test_probe_waits_until_wrong_hub_secret_converges(monkeypatch):
@@ -440,8 +441,9 @@ def test_remediation_reports_missing_import_secret_as_best_effort_failure():
     )
 
     # Without an import secret there is no expected endpoint (amendment §2.4): the cluster
-    # is unverified and never inspected; non-strict mode still reports it as failed.
-    assert result["failed"] is False
+    # is unverified and never inspected, and an unproven candidate fails the module even in
+    # non-strict mode (amendment §2.8).
+    assert result["failed"] is True
     assert result["failed_clusters"] == ["cluster-a"]
     assert result["unverified_clusters"] == ["cluster-a"]
     assert result["results"][0]["status"] == "unverified"
@@ -747,7 +749,7 @@ def test_remediation_unexpected_failure_after_secret_apply_still_reports_changed
     # so the cluster result must not claim the remediation left no changes.
     assert managed.patched, "precondition: secret apply must happen before the failure"
     assert result["results"][0]["status"] == "failed"
-    assert "clock unavailable" in result["results"][0]["reason"]
+    assert result["results"][0]["reason"] == "RuntimeError"
     assert result["results"][0]["changed"] is True
     assert result["changed"] is True
 

@@ -70,33 +70,55 @@ def load_merged_kubeconfig(kubeconfig_env: Optional[str], size_limit: int) -> Di
     return {section: _resolve_duplicates(section, entries) for section, entries in occurrences.items()}
 
 
-def canonical_value(value: Any) -> Any:
-    """A type-tagged, order-independent form of a parsed YAML value (amendment §3).
+class CanonicalForms:
+    """Type-tagged structural identity for parsed YAML values (amendment §3), by hash-consing.
 
-    Two values are identical exactly when their canonical forms are equal: formatting
-    never creates a conflict, and `1`, `true`, `"1"` and `1.0` are all distinct.
+    ``key(value)`` returns a small integer; two values get the same integer exactly when they
+    are equal parsed values compared with their types: formatting never matters, ``1``,
+    ``true``, ``"1"`` and ``1.0`` are distinct, equal floats (``0.0``/``-0.0``) and the same
+    instant at different UTC offsets are equal, and every NaN is one value. Each node is
+    interned from its children's integers, so nested shared aliases cost linear work, and
+    comparing two forms is one integer comparison however deep they are.
     """
-    if isinstance(value, bool):
-        return ("bool", value)
-    if isinstance(value, int):
-        return ("int", value)
-    if isinstance(value, float):
-        return ("float", repr(value))
-    if isinstance(value, str):
-        return ("str", value)
-    if isinstance(value, bytes):
-        return ("bytes", value)
-    if value is None:
-        return ("null",)
-    if isinstance(value, datetime.datetime):
-        return ("datetime", value.isoformat())
-    if isinstance(value, datetime.date):
-        return ("date", value.isoformat())
-    if isinstance(value, list):
-        return ("list", tuple(canonical_value(item) for item in value))
-    if isinstance(value, dict):
-        return ("map", tuple(sorted((canonical_value(key), canonical_value(item)) for key, item in value.items())))
-    raise TypeError(f"no canonical form for {type(value).__name__}")
+
+    def __init__(self) -> None:
+        self._ids: dict = {}
+        self._by_object: dict = {}
+
+    def _intern(self, form) -> int:
+        return self._ids.setdefault(form, len(self._ids))
+
+    def key(self, value) -> int:
+        if isinstance(value, bool):
+            return self._intern(("bool", value))
+        if isinstance(value, int):
+            return self._intern(("int", value))
+        if isinstance(value, float):
+            return self._intern(("float", 1, 0.0) if value != value else ("float", 0, value))
+        if isinstance(value, str):
+            return self._intern(("str", value))
+        if isinstance(value, bytes):
+            return self._intern(("bytes", value))
+        if value is None:
+            return self._intern(("null",))
+        if isinstance(value, datetime.datetime):
+            aware = value.tzinfo is not None
+            instant = value.astimezone(datetime.timezone.utc) if aware else value
+            return self._intern(("datetime", aware, instant.isoformat()))
+        if isinstance(value, datetime.date):
+            return self._intern(("date", value.isoformat()))
+        if id(value) in self._by_object:
+            return self._by_object[id(value)][0]
+        if isinstance(value, list):
+            form = ("list", tuple(self.key(item) for item in value))
+        elif isinstance(value, dict):
+            form = ("map", tuple(sorted((self.key(key), self.key(item)) for key, item in value.items())))
+        else:
+            raise TypeError(f"no canonical form for {type(value).__name__}")
+        identifier = self._intern(form)
+        # Keep the object alive with its id so the id cannot be reused within this run.
+        self._by_object[id(value)] = (identifier, value)
+        return identifier
 
 
 _KINDS = {"clusters": "cluster", "contexts": "context", "users": "user"}
@@ -105,6 +127,7 @@ _KINDS = {"clusters": "cluster", "contexts": "context", "users": "user"}
 def _resolve_duplicates(section: str, entries: List[Tuple[Dict[str, Any], str, int]]) -> List[Dict[str, Any]]:
     """First-wins for identical duplicates; refuse a group with more than one variant."""
     groups: Dict[str, List[Tuple[Dict[str, Any], str, int]]] = {}
+    forms = CanonicalForms()
     for occurrence in entries:
         groups.setdefault(occurrence[0]["name"], []).append(occurrence)
     conflicts = []
@@ -112,7 +135,7 @@ def _resolve_duplicates(section: str, entries: List[Tuple[Dict[str, Any], str, i
         variants: List[Any] = []
         labels = []
         for entry, path, index in group:
-            form = canonical_value(entry)
+            form = forms.key(entry)
             if form not in variants:
                 variants.append(form)
             labels.append(f"{path}[{index}] (variant {variants.index(form) + 1})")
@@ -167,7 +190,7 @@ def _load_document(path: str, size_limit: int) -> Dict[str, Any]:
 _TREE_SCALARS = (str, int, float, bool, bytes, datetime.date, type(None))
 
 
-def _require_tree(value: Any, path: str, ancestors: Optional[set] = None) -> None:
+def _require_tree(value: Any, path: str, ancestors: Optional[set] = None, done: Optional[set] = None) -> None:
     """Refuse a recursive alias or any value outside mappings, lists and plain scalars.
 
     PyYAML builds a recursive alias (`&a [*a]`) as a self-containing object; `!!omap` and
@@ -178,16 +201,20 @@ def _require_tree(value: Any, path: str, ancestors: Optional[set] = None) -> Non
     if not isinstance(value, (dict, list)):
         raise _failure("structure_invalid", path, " (unsupported YAML value type)")
     ancestors = set() if ancestors is None else ancestors
+    done = set() if done is None else done
     if id(value) in ancestors:
         raise _failure("structure_invalid", path, " (recursive YAML alias)")
+    if id(value) in done:
+        return  # a shared alias already checked: each node is walked once
     ancestors.add(id(value))
     for item in value.items() if isinstance(value, dict) else value:
         if isinstance(value, dict):
-            _require_tree(item[0], path, ancestors)
-            _require_tree(item[1], path, ancestors)
+            _require_tree(item[0], path, ancestors, done)
+            _require_tree(item[1], path, ancestors, done)
         else:
-            _require_tree(item, path, ancestors)
+            _require_tree(item, path, ancestors, done)
     ancestors.discard(id(value))
+    done.add(id(value))
 
 
 def _read_bounded(path: str, size_limit: int) -> bytes:
