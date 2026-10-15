@@ -70,8 +70,11 @@ The two pass a pair as equal under different conditions:
 - `legacy_equal(a, b) = py_legacy_host(a) == py_legacy_host(b) or col_legacy_host(a) == col_legacy_host(b)`.
 - Either comparator having called the pair equal is enough. This is the only reading under
   which no pair that either form factor used to verify can newly become `wrong_hub`.
-  For example, `HTTPS://hub/https://other` was verified against `https://other` by
-  Python's unanchored regex.
+  For example, Python's unanchored regex turns `HTTPS://hub/https://other:6443` into
+  `HTTPS://hub/other`, so it called that URL equal to `HTTPS://hub/other`. The
+  collection regex calls the pair unequal. For pairs whose canonical hosts differ, the
+  two comparators have not been seen to disagree on validated URLs; the OR is kept as a
+  defensive bound, and the vectors pin every comparator output.
 
 ### 2.3 Hub-endpoint classification (both form factors)
 
@@ -93,10 +96,16 @@ comparator called the pair equal. Every other mismatch goes to operator review. 
 | IPv6 literals that the old regex collapsed (`[2001`) | `unverified` |
 | case-only difference in the host | `verified` (it normalizes equal, which removes a remediation the case-sensitive regex caused) |
 
-An **absent** observation stays the documented non-fatal skip (`usage.md` §Post-activation
-klusterlet remediation): no hub secret, no `server` key, or embedded kubeconfig YAML that
-cannot be read. These are Python `unreachable` and collection `skipped`, with their
-existing reasons. Only a *present* string that fails §2.1 is `endpoint_malformed`.
+The observed server falls into one of three categories, each handled separately:
+
+- **Absent:** no hub secret, no `data.kubeconfig`, or no `server` key. This stays the
+  documented non-fatal skip (Python `unreachable`, collection `skipped`), with the
+  existing reasons.
+- **Unreadable:** the embedded kubeconfig YAML cannot be parsed. Each form factor keeps
+  its existing outcome, so Python returns `unreachable` (a skip) and the collection
+  returns `failed`. That is a pre-existing difference, recorded, and not changed here.
+- **Present but invalid:** a `server` value that is present but is not a string, or is a
+  string that fails §2.1. This is `unverified`, reason `endpoint_malformed`.
 
 ### 2.4 Expected hub endpoint: one source in both form factors (amends July §3)
 
@@ -158,9 +167,12 @@ Per non-local ManagedCluster:
    `no_managed_cluster_kubeconfig`, unchanged and non-fatal. The mapping defines which
    clusters the collection verifies, and nothing is discovered automatically. This is
    where the collection differs from Python, which checks every cluster.
-2. **Mapped cluster.** The file is loaded under §4 and the context is selected. Then the
-   ManagedCluster URL (rule 1 of §2.5) must normalize equal to the mapped context's
-   `cluster.server`. Otherwise the cluster is `failed`, with zero inspection and zero
+2. **Mapped cluster.**
+   - First, the ManagedCluster URL (rule 1 of §2.5) must be usable. If it is not, the
+     cluster fails with `endpoint_unavailable` or `endpoint_malformed`, without opening
+     the mapped file.
+   - Then the file is loaded under §4 and the context is selected.
+   - The URL must then normalize equal to the mapped context's `cluster.server`. Otherwise the cluster is `failed`, with zero inspection and zero
    mutation, for one of these reasons:
    - `endpoint_unavailable`: no URL;
    - `endpoint_malformed`: either side fails §2.1;
@@ -172,9 +184,13 @@ Per non-local ManagedCluster:
 4. **Re-proof in every invocation.** Probe, remediation and re-probe are separate module
    invocations. Each one loads the mapped file afresh, selects the context, and re-proves
    identity under rule 2.
+   - **Fresh URL evidence:** each invocation reads the ManagedCluster URL itself, with a
+     strict read through the secondary hub client (ManagedCluster `get`/`list` are
+     already granted). It never takes URLs from facts an earlier task published, so no
+     caller-owned freshness contract is needed (AGENTS §Execution-time discovery).
    - **`acm_klusterlet_remediate`** re-classifies the hub endpoint (§2.3) on the same
      in-memory snapshot it mutates with, and mutates only when that classification is
-     `wrong_hub`. Its inputs gain the per-cluster ManagedCluster URLs.
+     `wrong_hub`.
    - A caller that passes names without that evidence gets zero mutation.
    - The role's pending-cluster path (`verify_klusterlet.yml` adds cluster-verify
      `pending` clusters to the remediation candidates) is covered by the same rule. A
@@ -209,8 +225,11 @@ cluster is `unverified`, reason `client_endpoint_mismatch`, with no read and no 
 Python does not checkpoint the step, using the PR 1 mechanism.
 
 **Workers.** Remediation workers finish before results are returned and before any
-credential cleanup (§6). The collection's executor currently returns without waiting;
-PR 3 changes that.
+credential cleanup (§6). A cluster whose worker timed out is still reported as `failed`,
+but its `changed` value and its progress come from the worker's real result once the
+worker finishes, never from a placeholder. The collection's executor currently returns
+without waiting and reports placeholder results for timed-out futures; PR 3 changes
+both.
 
 **Stable reason codes:**
 
@@ -248,7 +267,9 @@ PR 3 changes that.
   - mapping keys are compared with their types and sorted by `(type, value)`;
   - lists are compared in order.
 
-  The comparison never fails on any value the PR 1 loader accepts.
+  PR 2 extends the loader (both form factors) to refuse `!!set` values and recursive
+  aliases with `structure_invalid`. Accepted input is then always a finite tree of
+  mappings, lists and scalars, and the comparison is defined on every such value.
 
 ## 4. Collection per-file validation (Decision 1)
 
@@ -319,9 +340,12 @@ July §4 stands except where it is reconciled below.
   - an empty `*-data` field, or a `*-data` field present beside an empty one;
   - a user reference to a missing user entry (`credential_unsupported`; an anonymous
     client is never built);
-  - a selected cluster with `insecure-skip-tls-verify: true`, an `http` server,
-    `tls-server-name` or `proxy-url` (`tls_verification_unproven`). URL identity proves
-    nothing without TLS verification against the captured CA.
+  - a selected cluster with `insecure-skip-tls-verify` set to anything except absent or
+    boolean `false`, an `http` server, `tls-server-name` or `proxy-url`
+    (`tls_verification_unproven`). The client loader treats a string such as `"false"`
+    as truthy, which turns verification off. After construction, and before any read,
+    the client's effective `verify_ssl` must be true. URL identity proves nothing
+    without TLS verification against the captured CA.
 - **Mutation barrier (July §5).** A secret read through a spoke client, and any secret
   patch, secret create or deployment patch, happens only after resolution, snapshot
   construction and the §2.7 client endpoint check have succeeded for that cluster. A
@@ -361,9 +385,16 @@ Acceptance:
      clusters.
 
    Name-only context collisions never select a context.
-4. **Never inspected.** For every `unverified` reason that §2.8 marks as uninspected,
-   tests assert **zero spoke client constructions and zero spoke reads**, not only zero
-   mutations.
+4. **Never inspected.**
+   - Refusals decided before any client exists (`endpoint_unavailable`,
+     `endpoint_malformed` on the URL or the mapped server, `endpoint_mismatch_unverified`
+     in discovery or identity, `context_ambiguous`, `context_missing`,
+     `target_identity_mismatch`, `kubeconfig_*`, `expected_endpoint_*`): tests assert
+     **zero spoke client constructions and zero spoke reads**.
+   - `client_endpoint_mismatch` happens after construction: tests assert **zero spoke
+     reads and zero mutations**.
+   - A discovery regression shows that an unrelated IPv6 literal (the old regex
+     collapsed it to `[2001`) gives `no_context`, not a failing near-match.
 5. **Remediation ordering.** Any `unverified` or `failed` cluster blocks all remediation in
    that run, in both form factors. A test pairs an unverified cluster with a genuine
    wrong-hub peer and asserts zero mutation.
@@ -374,7 +405,9 @@ Acceptance:
    - Distinct cluster entries for one server give `context_ambiguous`.
    - The expected hub comes from the import secret: a remediation that writes the
      import-secret server re-verifies as `verified`.
-7. **Collection mapping and remediation.**
+7. **Collection mapping and remediation** (including a stale-URL regression: the
+   ManagedCluster URL changes between the probe and the remediate invocation, and
+   remediation uses the fresh value).
    - A mapped file that is invalid, carries a conflicting duplicate, has an ambiguous or
      missing context, or has a `:` path fails that cluster with zero inspection and zero
      mutation.
@@ -419,8 +452,13 @@ Acceptance:
    They assert that the captured content is used and that no post-capture file read
    occurs.
 2. **Explicit context.** A `current-context` pointing elsewhere never changes the target.
-3. **Rejections.** Every §6 rejection gives zero mutation. A plain user in the same
-   merge proceeds.
+3. **Rejections.** Every §6 pre-construction rejection gives zero spoke client
+   constructions, zero reads and zero mutations. This includes non-boolean
+   `insecure-skip-tls-verify` values, checked with the real loader. A plain user in the
+   same merge proceeds.
+   - A timed-out remediation worker that mutates after the timeout is reported with its
+     real `changed` state, and the credential directory is removed only after it
+     finishes.
 4. **Temp files.** Temp files appear only in the invocation's private directory, which is
    removed after its workers finish. A pre-populated loader cache (for example from the
    hub client's identical CA) is never consulted. Concurrent workers construct clients
@@ -442,5 +480,6 @@ Acceptance:
   - No new remediation flag. Repairing a newly detected mismatch needs a separately
     designed, identity-verified mechanism, which this amendment does not provide.
   - No identity-attestation API call.
-  - **RBAC unchanged.** The same spoke and hub calls are made through different clients,
-    and the remediate module's new inputs come from data the role has already read.
+  - **RBAC unchanged.** The same spoke and hub calls are made through different clients.
+    The remediate module's fresh ManagedCluster read uses `get`/`list` verbs that every
+    operator and validator role already grants.
