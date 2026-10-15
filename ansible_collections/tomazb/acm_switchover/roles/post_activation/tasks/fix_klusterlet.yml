@@ -22,7 +22,7 @@
 - name: Skip klusterlet fix when no remediation candidates have kubeconfigs
   ansible.builtin.debug:
     msg: >-
-      No klusterlet remediation possible — pending clusters
+      No klusterlet remediation possible — wrong-hub clusters
       {{ _klusterlet_remediation_requested | default([]) | join(', ') }}
       do not have entries in acm_switchover_managed_clusters
   when: _klusterlet_fix_candidates | length == 0

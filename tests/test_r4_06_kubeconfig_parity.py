@@ -102,4 +102,3 @@ def test_independent_identical_chains_compare_in_linear_time(load, tmp_path):
 
     assert result == "ok" and names["users"] == ["u"]
     assert time.monotonic() - started < 5
-

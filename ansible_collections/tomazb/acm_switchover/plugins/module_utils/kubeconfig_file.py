@@ -237,7 +237,7 @@ class CanonicalForms:
         if id(value) in self._by_object:
             return self._by_object[id(value)][0]
         if isinstance(value, list):
-            form = ("list", tuple(self.key(item) for item in value))
+            form: tuple = ("list", tuple(self.key(item) for item in value))
         elif isinstance(value, dict):
             form = ("map", tuple(sorted((self.key(key), self.key(item)) for key, item in value.items())))
         else:

@@ -427,3 +427,14 @@ def test_a_loader_error_on_reconnect_is_logged_without_its_text(run, caplog):
 
     assert "SECRETLEAK" not in caplog.text
     assert "ValueError" in caplog.text
+
+
+def test_the_import_manifest_scan_stops_at_the_bootstrap_secret():
+    """code-review PR 2: the rest of the manifest is never parsed for the endpoint lookup."""
+    from modules.post_activation import _bootstrap_server_from_import
+
+    bootstrap = base64.b64decode(_import_secret(NEW_HUB)["data"]["import.yaml"]).decode()
+    manifest = bootstrap + "\n---\nkind: Deployment\nspec: [unclosed\n"
+
+    assert _bootstrap_server_from_import(manifest) == (True, NEW_HUB)
+    assert _bootstrap_server_from_import("kind: [unclosed\n---\n" + bootstrap) == (False, None)

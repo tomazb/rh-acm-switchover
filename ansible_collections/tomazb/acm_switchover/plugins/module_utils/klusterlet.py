@@ -229,22 +229,22 @@ def decode_b64_text(value: str) -> str:
 def hub_server_from_b64(kubeconfig_b64: str) -> tuple[bool, object]:
     """``(present, server)`` from a base64 hub kubeconfig (amendment §2.3).
 
-    Absent - no kubeconfig, an empty document, no clusters, or no ``server`` key - is
-    ``(False, None)``. A present ``server`` is returned unvalidated, so a null, empty or
-    non-string value is classified as malformed rather than skipped. Undecodable or
-    structurally unreadable YAML raises, which the probe reports as ``failed`` (the
-    collection's existing outcome for unreadable embedded YAML).
+    Absent - no kubeconfig, a document that is not a mapping, no clusters, a cluster that
+    is not a mapping, or no ``server`` key - is ``(False, None)``, as in Python. A present
+    ``server`` is returned unvalidated, so a null, empty or non-string value is classified as
+    malformed rather than skipped. Undecodable or unparseable YAML raises, which the caller
+    reports as ``failed`` (the collection's recorded outcome for unreadable embedded YAML).
     """
     if not kubeconfig_b64:
         return False, None
     kubeconfig = yaml.safe_load(decode_b64_text(kubeconfig_b64))
-    if kubeconfig is None:
+    if not isinstance(kubeconfig, dict):
         return False, None
-    clusters = kubeconfig.get("clusters") or []
-    if not clusters:
+    clusters = kubeconfig.get("clusters")
+    if not isinstance(clusters, list) or not clusters or not isinstance(clusters[0], dict):
         return False, None
-    cluster = clusters[0].get("cluster", {})
-    if "server" not in cluster:
+    cluster = clusters[0].get("cluster")
+    if not isinstance(cluster, dict) or "server" not in cluster:
         return False, None
     return True, cluster["server"]
 
@@ -334,8 +334,8 @@ def _prove_target(
     managed_cluster_reader: ManagedClusterReader,
     secondary_client: CoreV1Client,
     request_timeout: int | float | None,
-) -> tuple[str, str, str, str]:
-    """Amendment §2.4/§2.6: ``(context, api_url, expected_hub, import_yaml_b64)``, or raise.
+) -> tuple[str, str, str, dict]:
+    """Amendment §2.4/§2.6: ``(context, api_url, expected_hub, bootstrap_secret_doc)``, or raise.
 
     Everything here happens before any spoke client exists: a fresh ManagedCluster read,
     the URL rule, the expected hub from the import secret, the mapped file's validation,
@@ -356,9 +356,11 @@ def _prove_target(
     )
     import_yaml = secret_data(import_secret).get("import.yaml", "")
     try:
-        present, expected_hub = hub_server_from_b64(bootstrap_kubeconfig_from_import(import_yaml))
+        bootstrap_doc = bootstrap_secret_doc(import_yaml)
+        encoded = ((bootstrap_doc or {}).get("data") or {}).get("kubeconfig", "") or ""
+        present, expected_hub = hub_server_from_b64(encoded)
     except Exception:  # noqa: BLE001 - parser messages can quote secret material; never report them
-        present, expected_hub = False, None
+        bootstrap_doc, present, expected_hub = None, False, None
     if not present:
         raise _Refusal("unverified", REASON_EXPECTED_ENDPOINT_UNAVAILABLE)
     if not isinstance(expected_hub, str) or parse_endpoint(expected_hub)[0] is None:
@@ -374,7 +376,8 @@ def _prove_target(
     identity_reason = prove_target_identity(api_url, mapped_server)
     if identity_reason:
         raise _Refusal("failed", identity_reason)
-    return context_name, api_url, expected_hub, import_yaml
+    # The document classified here is the one remediation applies: one read, one parse.
+    return context_name, api_url, expected_hub, bootstrap_doc or {}
 
 
 def _bound_spoke_client(factory: Callable, kubeconfig: str, context: str, api_url: str):
@@ -464,7 +467,7 @@ def probe_one_cluster(
         }
 
     try:
-        context_name, api_url, expected_hub, _import_yaml = _prove_target(
+        context_name, api_url, expected_hub, _bootstrap_doc = _prove_target(
             cluster_name, kubeconfig, managed.get("context"), managed_cluster_reader, secondary_client, request_timeout
         )
         managed_client = _bound_spoke_client(core_client_factory, kubeconfig, context_name, api_url)
@@ -653,22 +656,18 @@ def prepare_one_cluster(
         return _result(cluster_name, "failed", _mark_pending_not_run(steps), reason="secondary_hub_client_unavailable")
 
     try:
-        context_name, api_url, expected_hub, import_yaml = _prove_target(
+        context_name, api_url, expected_hub, bootstrap_doc = _prove_target(
             cluster_name, kubeconfig, managed.get("context"), managed_cluster_reader, secondary_client, request_timeout
         )
         steps["import_secret_read"] = "ok"
-        bootstrap_doc = bootstrap_secret_doc(import_yaml)
-        if not bootstrap_doc:
-            steps["bootstrap_secret_applied"] = "missing"
-            return _result(
-                cluster_name,
-                "failed",
-                _mark_pending_not_run(steps),
-                reason="bootstrap_secret_missing_from_import",
-            )
         managed_core = _bound_spoke_client(core_client_factory, kubeconfig, context_name, api_url)
-        apps_client = _bound_spoke_client(apps_client_factory, kubeconfig, context_name, api_url)
         probe = _classify_spoke(cluster_name, managed_core, expected_hub, request_timeout)
+        # Only a cluster about to be mutated needs a workload client.
+        apps_client = (
+            _bound_spoke_client(apps_client_factory, kubeconfig, context_name, api_url)
+            if probe["status"] == "wrong_hub"
+            else None
+        )
     except _Refusal as refusal:
         result = _result(cluster_name, refusal.status, _mark_pending_not_run(steps), reason=refusal.reason)
         if refusal.detail:

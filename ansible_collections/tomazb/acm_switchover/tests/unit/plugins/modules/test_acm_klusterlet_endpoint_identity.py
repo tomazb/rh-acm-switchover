@@ -598,3 +598,34 @@ def test_a_home_relative_mapped_path_is_expanded_for_validation_and_construction
 
     assert _status(_probe(fleet, {"a": {"kubeconfig": "~/.kube/spoke"}})) == ("verified", None)
     assert fleet.constructions == [(expanded, "spoke-admin")]
+
+
+@pytest.mark.parametrize(
+    "document", ["[]\n", "''\n", "0\n", "clusters: {}\n", "clusters: [x]\n", "clusters: [{cluster: x}]\n"]
+)
+def test_a_non_mapping_hub_kubeconfig_is_absent_as_in_python(mapped, document):
+    """code-review PR 2: these used to raise AttributeError and fail the cluster; Python skips them."""
+    path = mapped()
+    spoke = Spoke(hub_server=None)
+    spoke.secrets[(MANAGED_CLUSTER_AGENT_NAMESPACE, HUB_KUBECONFIG_SECRET_NAME)] = {
+        "data": {"kubeconfig": base64.b64encode(document.encode()).decode()}
+    }
+    fleet = Fleet(Hub(), {path: spoke})
+
+    assert _status(_probe(fleet, {"a": {"kubeconfig": path}})) == ("skipped", "hub_server_unavailable")
+
+
+def test_only_a_wrong_hub_candidate_gets_a_workload_client(mapped):
+    path_a = mapped("a.kubeconfig")
+    path_b = mapped("b.kubeconfig", document=_kubeconfig(server="https://api.spoke-b.example:6443"))
+    hub = Hub(urls={"a": SPOKE, "b": "https://api.spoke-b.example:6443"})
+    fleet = Fleet(
+        hub,
+        {path_a: Spoke(hub_server=NEW_HUB), path_b: Spoke(hub_server=OLD_HUB, host="https://api.spoke-b.example:6443")},
+    )
+
+    result = _remediate(fleet, {"a": {"kubeconfig": path_a}, "b": {"kubeconfig": path_b}}, pending=("a", "b"))
+
+    assert _status(result, "a")[0] == "verified" and _status(result, "b")[0] == "remediated"
+    assert [kubeconfig for kubeconfig, _context in fleet.constructions].count(path_a) == 1
+    assert [kubeconfig for kubeconfig, _context in fleet.constructions].count(path_b) == 2
