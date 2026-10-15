@@ -123,14 +123,12 @@ def _field_content(entry: dict[str, Any], field: str, base_dir: str, size_limit:
         value = entry[data_key]
         if not isinstance(value, str):
             raise SnapshotError(REASON_CREDENTIAL_UNREADABLE)
-        if not value:
-            # An empty *-data shadows the file path in the client loader: no credential at all.
-            raise SnapshotError(REASON_CREDENTIAL_EMPTY)
         try:
             content = base64.b64decode(value, validate=True)
         except (binascii.Error, ValueError):
             raise SnapshotError(REASON_CREDENTIAL_UNREADABLE) from None
         if not content:
+            # An empty *-data shadows the file path in the client loader: no credential at all.
             raise SnapshotError(REASON_CREDENTIAL_EMPTY)
         return content
     if field in entry:
